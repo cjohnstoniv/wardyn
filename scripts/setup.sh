@@ -77,9 +77,7 @@ WARDYN_BEDROCK_SET=false
 if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN; then
   ok "Claude CLI logged in on this host ($(command -v claude)) — host mode can use it directly"
 elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
-  ok "Claude is set up for AWS Bedrock on this host — model access is via Bedrock, not a Claude login"
-  $WARDYN_BEDROCK_SET \
-    || warn "Bedrock needs wardynd config: export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL (a cross-region inference-profile id), then add aws-access-key-id/aws-secret-access-key (or a bedrock-api-key) in the UI's Connect-a-model step."
+  ok "Claude is set up for AWS Bedrock on this host — model access is via Bedrock, not a Claude login (auto-configured below in local mode)."
 elif $HAVE_CLAUDE; then
   warn "Claude CLI present but no model auth detected — run 'claude login', use an API key, or configure AWS Bedrock (export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL)."
 else
@@ -158,6 +156,9 @@ elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
     if [ -z "$br_region" ] && [ -t 0 ]; then printf "  AWS region (e.g. us-east-1): "; read -r br_region || br_region=""; fi
     if [ -n "$br_region" ] && [ -n "$br_model" ]; then
       export WARDYN_BEDROCK_REGION="$br_region" WARDYN_BEDROCK_MODEL="$br_model"
+      # These are boot-time wardynd config, so a wardynd that's ALREADY running
+      # must be restarted to pick them up — otherwise the config is a no-op.
+      MODEL_CONFIG_APPLIED=true
       case "$br_mode" in
         mount)
           export WARDYN_BEDROCK_AWS_DIR="$HOME/.aws"
@@ -212,17 +213,33 @@ URL="http://localhost:${WARDYN_UP_PORT:-8080}"
 RUNDIR="${HOME}/.wardyn"; mkdir -p "$RUNDIR"
 PIDFILE="${RUNDIR}/host-wardynd.pid"; LOGFILE="${RUNDIR}/host-wardynd.log"
 
-# Already running? Don't double-launch a second wardynd on the same port.
+# Already running? A running wardynd won't pick up boot-time config we just set
+# (e.g. the Bedrock region/model/mount env), so if we applied model config this
+# run, RESTART it; otherwise leave it as-is and don't double-launch on the port.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
-  ok "Wardyn is already running (host mode) — PID $(cat "$PIDFILE"), UI ${URL}."
-  ok "Stop it with:  make stop-host"
-  exit 0
+  if [ "${MODEL_CONFIG_APPLIED:-false}" = true ]; then
+    info "Applying the new model config — restarting the running host wardynd (PID $(cat "$PIDFILE"))…"
+    kill "$(cat "$PIDFILE")" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    for _ in $(seq 1 10); do
+      [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ] || break
+      sleep 1
+    done
+  else
+    ok "Wardyn is already running (host mode) — PID $(cat "$PIDFILE"), UI ${URL}."
+    ok "Stop it with:  make stop-host"
+    exit 0
+  fi
 fi
 
 # Guard: if Wardyn already answers on :8080 (started elsewhere, no pidfile), don't
 # launch a doomed second wardynd that just logs "address already in use".
 if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ]; then
-  ok "Wardyn is already responding at ${URL} — leaving it as-is. (Stop: make stop-host)"
+  if [ "${MODEL_CONFIG_APPLIED:-false}" = true ]; then
+    warn "Wardyn is already running but was NOT started by this installer (no pidfile), so I can't safely restart it to apply the new model config. Stop it and re-run: make stop-host && make setup"
+  else
+    ok "Wardyn is already responding at ${URL} — leaving it as-is. (Stop: make stop-host)"
+  fi
   exit 0
 fi
 
