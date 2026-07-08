@@ -344,7 +344,17 @@ func (p *Provider) audit(ctx context.Context, runID uuid.UUID, actor, action, jt
 // keyID derives a stable JWKS kid from the public key: base64url of the
 // SHA-256 of the marshaled EC point.
 func keyID(pub *ecdsa.PublicKey) string {
-	pt := elliptic.Marshal(pub.Curve, pub.X, pub.Y) //nolint:staticcheck // stable, deterministic thumbprint input
+	// Uncompressed SEC1 point bytes (0x04||X||Y) as the stable, deterministic
+	// thumbprint input, via crypto/ecdh (elliptic.Marshal is deprecated). The
+	// encoding is byte-identical, so the derived kid is unchanged. ECDH() only
+	// errors for a non-ECDH curve; the issuer key is always P-256 (ES256), so
+	// fall back to the equivalent deprecated encoding rather than panic.
+	if ep, err := pub.ECDH(); err == nil {
+		sum := sha256.Sum256(ep.Bytes())
+		return base64.RawURLEncoding.EncodeToString(sum[:])
+	}
+	//lint:ignore SA1019 unreachable for the P-256 issuer key; equivalent stable encoding
+	pt := elliptic.Marshal(pub.Curve, pub.X, pub.Y)
 	sum := sha256.Sum256(pt)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }

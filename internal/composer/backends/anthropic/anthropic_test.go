@@ -249,7 +249,7 @@ func TestPropose_StructuredOutputs(t *testing.T) {
 	assertValidProposal(t, p)
 
 	// Request shaping: model, system prompt, user message, structured-output schema.
-	if got, _ := rec.body["model"]; got != "claude-sonnet-4-5" {
+	if got := rec.body["model"]; got != "claude-sonnet-4-5" {
 		t.Errorf("request model = %v, want claude-sonnet-4-5", got)
 	}
 	sys, ok := rec.body["system"].([]any)

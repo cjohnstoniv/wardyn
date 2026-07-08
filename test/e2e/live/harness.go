@@ -106,8 +106,8 @@ func newHarness(t *testing.T) *harness {
 // ── /healthz + confinement classes ──────────────────────────────────────────
 
 type healthz struct {
-	Status            string   `json:"status"`
-	ConfinementClass  []string `json:"confinement_classes"`
+	Status            string            `json:"status"`
+	ConfinementClass  []string          `json:"confinement_classes"`
 	ConfinementSubstr map[string]string `json:"confinement_substrates"`
 }
 
@@ -330,16 +330,21 @@ func (h *harness) buildManualPolicy(task Task, class, wsDir string, wantModel, i
 	if wantModel {
 		mounts = append(mounts, h.subscriptionMounts()...)
 	}
+	// Default unattended posture: an unknown host HARD-denies (always_deny — never
+	// blocks on an approval nobody will answer). The egress-boundary task instead
+	// uses deny_with_review so a denied host is HELD with a clean 403 (the
+	// documented e2e.sh behavior its grader asserts) + an egress.pending audit
+	// event, without blocking the short probe. (first_use_approval became a
+	// three-mode enum; legacy true→deny_with_review, false→always_deny.)
+	firstUse := types.FirstUseAlwaysDeny
+	if task.Name == "egress-boundary" {
+		firstUse = types.FirstUseDenyWithReview
+	}
 	spec := types.RunPolicySpec{
 		MinConfinementClass: types.ConfinementClass(class),
 		AllowedDomains:      egressForTask(task, wantModel),
-		// Default unattended posture: an unknown host HARD-denies (never blocks on
-		// an approval nobody will answer). The egress-boundary task instead uses
-		// first-use-approval so a denied host is HELD with a clean 403 (the
-		// documented e2e.sh behavior its grader asserts) + an egress.pending audit
-		// event, without blocking the short probe.
-		FirstUseApproval: task.Name == "egress-boundary",
-		WorkspaceMounts:  mounts,
+		FirstUseApproval:    firstUse,
+		WorkspaceMounts:     mounts,
 	}
 	if interactive {
 		spec.AutoStopAfterSec = -1 // never reap an idle interactive sandbox
@@ -595,7 +600,7 @@ func (h *harness) expectFailClosed(class string) {
 		ConfinementClass: class,
 		InlinePolicy: &types.RunPolicySpec{
 			MinConfinementClass: types.ConfinementClass(class),
-			FirstUseApproval:    false,
+			FirstUseApproval:    types.FirstUseAlwaysDeny,
 		},
 	})
 	if err == nil {

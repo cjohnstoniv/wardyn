@@ -40,9 +40,12 @@ func TestConformanceDocker(t *testing.T) {
 
 	sub, err := docker.New(docker.Config{
 		// busybox doubles as the proxy image so no real wardyn-proxy binary is
-		// required for the conformance gate. The proxy process will exit quickly,
-		// but that is sufficient for lifecycle/capability assertions.
+		// required for the conformance gate. busybox's default `sh` would exit
+		// immediately (leaving the sidecar with no per-run network IP, failing
+		// CreateSandbox), so keep it alive — the sidecar only needs to exist on
+		// the network for the runner-contract assertions, not to relay traffic.
 		ProxyImage: "busybox:latest",
+		ProxyCmd:   []string{"sleep", "infinity"},
 	})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)

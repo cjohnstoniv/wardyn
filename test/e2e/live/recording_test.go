@@ -50,7 +50,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 	openSpec := types.RunPolicySpec{
 		MinConfinementClass: types.ConfinementClass(best),
 		AllowAllEgress:      true,
-		FirstUseApproval:    false,
+		FirstUseApproval:    types.FirstUseAlwaysDeny,
 		WorkspaceMounts: []types.WorkspaceMount{
 			{Source: openWS, Target: workspaceTarget, ReadOnly: boolPtr(false)},
 		},
@@ -75,8 +75,8 @@ func TestLive_RecordingReplay(t *testing.T) {
 	if ip.AllowAllEgress {
 		t.Errorf("synthesized profile must force allow_all_egress OFF")
 	}
-	if !ip.FirstUseApproval {
-		t.Errorf("synthesized profile must force first_use_approval ON (unrecorded hosts escalate)")
+	if ip.FirstUseApproval == types.FirstUseAlwaysDeny || ip.FirstUseApproval == "" {
+		t.Errorf("synthesized profile must force first_use_approval to ESCALATE unrecorded hosts (got %q; want deny_with_review or wait_for_review)", ip.FirstUseApproval)
 	}
 	t.Logf("synthesized profile: allow_all=%v first_use_approval=%v allowed_domains=%v",
 		ip.AllowAllEgress, ip.FirstUseApproval, ip.AllowedDomains)
@@ -97,7 +97,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 		MinConfinementClass: types.ConfinementClass(best),
 		AllowedDomains:      []string{"github.com"}, // the recorded behavior
 		AllowAllEgress:      false,
-		FirstUseApproval:    false,
+		FirstUseApproval:    types.FirstUseAlwaysDeny,
 		WorkspaceMounts: []types.WorkspaceMount{
 			{Source: replayWS, Target: workspaceTarget, ReadOnly: boolPtr(false)},
 		},

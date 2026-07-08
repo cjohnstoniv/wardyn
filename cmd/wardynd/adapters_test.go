@@ -30,7 +30,7 @@ func TestRunMarker(t *testing.T) {
 	}
 	// Deterministic: the same run id always yields the same marker (else
 	// RevokeRun would write a row IsRevoked could never find).
-	if runMarker(a) != runMarker(a) {
+	if m1, m2 := runMarker(a), runMarker(a); m1 != m2 {
 		t.Fatal("runMarker must be deterministic for a given run id")
 	}
 	// Unique per run: distinct run ids must not collide on the jti PK.
