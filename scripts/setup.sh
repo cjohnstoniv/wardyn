@@ -190,8 +190,19 @@ fi
 # Ensure the local binaries + UI are built (host mode serves ./bin/wardynd + ui/dist).
 if [ ! -x ./bin/wardynd ] || [ ! -f ./ui/dist/index.html ]; then
   hd "Building wardynd + UI (first run)"
-  go build -tags docker -o bin/wardynd ./cmd/wardynd && go build -o bin/wardyn ./cmd/wardyn
-  ( cd ui && pnpm build )
+  # go.mod pins `toolchain go1.26.4`, so the default GOTOOLCHAIN=auto tries to
+  # FETCH that toolchain — which a corporate proxy that blocks the public Go
+  # proxy denies, even though the locally-installed Go already satisfies the
+  # `go 1.26` directive. Retry with GOTOOLCHAIN=local (use the installed Go, no
+  # download) so a proxied/offline host still builds.
+  if ! (go build -tags docker -o bin/wardynd ./cmd/wardynd && go build -o bin/wardyn ./cmd/wardyn); then
+    warn "go build failed (a proxy may be blocking the pinned toolchain fetch) — retrying with the locally-installed Go (GOTOOLCHAIN=local)…"
+    GOTOOLCHAIN=local go build -tags docker -o bin/wardynd ./cmd/wardynd
+    GOTOOLCHAIN=local go build -o bin/wardyn ./cmd/wardyn
+  fi
+  # `pnpm install` first (a fresh clone has no node_modules; behind a corp
+  # registry it also picks up ui/.npmrc) — matches the `make ui` target.
+  ( cd ui && pnpm install && pnpm build )
   ok "built"
 fi
 
@@ -248,9 +259,14 @@ fi
 
 hd "Launching wardynd (host mode) in the background on ${URL}"
 info "Runs as you, sees your Claude login, launches sandboxes on $(basename "$DSOCK")."
-# Detached: nohup + setsid so it survives this shell; run-host.sh exec's wardynd, so
-# the recorded PID IS wardynd. Logs stream to the logfile.
-setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+# Detached: nohup + </dev/null so it survives this shell. setsid gives it a fresh
+# session (belt-and-braces on Linux), but macOS/BSD has no setsid — nohup plus a
+# closed stdin detaches fine on its own, so only use setsid when it exists.
+if command -v setsid >/dev/null 2>&1; then
+  setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+else
+  nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+fi
 WPID=$!
 echo "$WPID" > "$PIDFILE"
 
