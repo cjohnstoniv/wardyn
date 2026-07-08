@@ -141,8 +141,11 @@ func run() error {
 		// (aws-access-key-id/aws-secret-access-key/aws-session-token), read at
 		// dispatch time since Bedrock's SigV4 request signing can't be
 		// proxy-injected. See internal/api.Config.BedrockRegion/BedrockModel.
-		bedrockRegion = flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty = Bedrock disabled.`)
-		bedrockModel  = flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code (a cross-region inference-profile id, e.g. "us.anthropic.claude-sonnet-4-5-...", not a bare foundation-model id). Requires -bedrock-region too.`)
+		bedrockRegion       = flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty = Bedrock disabled.`)
+		bedrockModel        = flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code (a cross-region inference-profile id, e.g. "us.anthropic.claude-sonnet-4-5-...", not a bare foundation-model id). Requires -bedrock-region too.`)
+		bedrockAWSDir       = flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `HOST MODE ONLY: bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself, including auto-refreshing AWS SSO. Avoids pasting static aws-access-key-id/-secret secrets (which expire under SSO). Leave empty for team/compose deployments.`)
+		bedrockAWSProfile   = flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Only used with -bedrock-aws-dir.`)
+		bedrockAWSSSORegion = flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", `optional: AWS SSO region whose oidc.<r>/portal.sso.<r> endpoints the sandbox may reach to exchange an SSO token for role creds. Defaults to -bedrock-region. Only used with -bedrock-aws-dir.`)
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
@@ -549,6 +552,9 @@ func run() error {
 		AgentAnthropicModel:       *agentModel,
 		BedrockRegion:             *bedrockRegion,
 		BedrockModel:              *bedrockModel,
+		BedrockAWSConfigDir:       *bedrockAWSDir,
+		BedrockAWSProfile:         *bedrockAWSProfile,
+		BedrockAWSSSORegion:       *bedrockAWSSSORegion,
 		ProxyURL:                  *proxyURL,
 		Secrets:                   secrets,
 		MaskRegistry:              maskReg,

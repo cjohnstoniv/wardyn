@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -679,9 +680,10 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			sandboxEnv[k] = v
 		}
 		// Resident SigV4 creds must stay out of PTY/recording streams and any
-		// `agent-run --selftest` echo. Bearer mode holds only a placeholder, so
-		// there is nothing secret to mask (the real token lives in proxy memory).
-		if s.cfg.MaskRegistry != nil && !bedrock.bearer {
+		// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
+		// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
+		// neither has anything secret to mask here.
+		if s.cfg.MaskRegistry != nil && !bedrock.bearer && !bedrock.awsMount {
 			s.cfg.MaskRegistry.Add(run.ID, []byte(bedrock.env["AWS_ACCESS_KEY_ID"]))
 			s.cfg.MaskRegistry.Add(run.ID, []byte(bedrock.env["AWS_SECRET_ACCESS_KEY"]))
 			if tok := bedrock.env["AWS_SESSION_TOKEN"]; tok != "" {
@@ -694,13 +696,19 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			}
 		}
 		detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
-		if bedrock.bearer {
+		mode := "resident"
+		switch {
+		case bedrock.bearer:
 			detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
+			mode = "bearer"
+		case bedrock.awsMount:
+			detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
+			mode = "aws-dir-mount"
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"region": s.cfg.BedrockRegion, "model": s.cfg.BedrockModel, "hosts": bedrock.egressHosts,
-				"mode": map[bool]string{true: "bearer", false: "resident"}[bedrock.bearer], "detail": detail,
+				"mode": mode, "detail": detail,
 			})))
 	} else {
 		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
@@ -867,6 +875,19 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			// Safe default: omitted read_only => read-only. RW only on explicit
 			// read_only=false in the policy.
 			ReadOnly: wm.ReadOnlyOrDefault(),
+		})
+	}
+
+	// Host-mode Bedrock ~/.aws mount (operator config, not agent-chosen; same trust
+	// and the same driver deny-list re-validation as the WorkspaceMounts above).
+	// READ-ONLY: the sandbox reads the SSO cache / config but can never write to the
+	// operator's host AWS state. Only set on the host-mode path (resolveBedrockAuth
+	// gated it on BedrockAWSConfigDir existing); never present for a team deployment.
+	if bedrockReady && bedrock.awsMount {
+		mounts = append(mounts, runner.Mount{
+			Source:   bedrock.awsMountSource,
+			Target:   sandboxAWSDir,
+			ReadOnly: true,
 		})
 	}
 
@@ -1492,6 +1513,13 @@ type bedrockAuth struct {
 	// creds are placed in env (SigV4 can't be proxy-injected).
 	bearer      bool
 	runtimeHost string // bedrock-runtime host (MITM+inject target in bearer mode)
+	// awsMount selects the host-mode ~/.aws bind-mount path: the SDK resolves
+	// credentials (incl. auto-refreshing AWS SSO) from the read-only mount, so no
+	// static keys are stored and none are resident in env. awsMountSource is the
+	// host dir to bind read-only at /home/agent/.aws. Mutually exclusive with the
+	// resident-key path; bearer still wins over it.
+	awsMount       bool
+	awsMountSource string
 }
 
 // bedrockRuntimeHost is the regional Bedrock DATA-PLANE host claude-code's
@@ -1506,6 +1534,20 @@ func bedrockRuntimeHost(region string) string {
 func bedrockControlHost(region string) string {
 	return fmt.Sprintf("bedrock.%s.amazonaws.com", region)
 }
+
+// ssoEgressHosts are the AWS IAM Identity Center (SSO) endpoints the sandbox SDK
+// must reach to exchange a cached SSO token for role credentials: oidc.<r> for
+// token refresh and portal.sso.<r> for GetRoleCredentials. Only needed on the
+// ~/.aws-mount path; region is the SSO region (may differ from the Bedrock one).
+func ssoEgressHosts(ssoRegion string) []string {
+	return []string{
+		fmt.Sprintf("oidc.%s.amazonaws.com", ssoRegion),
+		fmt.Sprintf("portal.sso.%s.amazonaws.com", ssoRegion),
+	}
+}
+
+// sandboxAWSDir is where the host ~/.aws is bind-mounted read-only in the run.
+const sandboxAWSDir = "/home/agent/.aws"
 
 // resolveBedrockAuth decides whether this run should authenticate to Claude via
 // Amazon Bedrock and, if so, returns the sandbox env additions (the
@@ -1551,6 +1593,33 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// overwrites the Authorization header with the real token on the wire.
 		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
 		return bedrockAuth{env: env, egressHosts: hosts, ready: true, bearer: true, runtimeHost: runtimeHost}
+	}
+
+	// HOST-MODE ~/.aws MOUNT: bind the operator's host ~/.aws read-only into the
+	// sandbox and let the AWS SDK resolve credentials itself — including AWS SSO /
+	// IAM Identity Center sessions it refreshes on demand, so a short-lived login
+	// never goes stale and nothing is stored in Wardyn. No resident static keys.
+	// Opt-in + host-mode-only (BedrockAWSConfigDir is set only by run-host.sh /
+	// setup.sh); fail SAFE to the next path if the dir doesn't exist on this host.
+	if s.cfg.BedrockAWSConfigDir != "" {
+		if st, err := os.Stat(s.cfg.BedrockAWSConfigDir); err == nil && st.IsDir() {
+			env := base()
+			// Point the SDK at the mount explicitly (robust even if HOME isn't
+			// /home/agent for some exec path); no AWS_ACCESS_KEY_ID — the SDK
+			// resolves from the mounted config + SSO cache.
+			env["AWS_CONFIG_FILE"] = sandboxAWSDir + "/config"
+			env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
+			if s.cfg.BedrockAWSProfile != "" {
+				env["AWS_PROFILE"] = s.cfg.BedrockAWSProfile
+			}
+			ssoRegion := s.cfg.BedrockAWSSSORegion
+			if ssoRegion == "" {
+				ssoRegion = s.cfg.BedrockRegion
+			}
+			hosts = append(hosts, ssoEgressHosts(ssoRegion)...)
+			return bedrockAuth{env: env, egressHosts: hosts, ready: true,
+				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir}
+		}
 	}
 
 	// FALLBACK: resident SigV4 access keys. SigV4 signs each request in-process, so

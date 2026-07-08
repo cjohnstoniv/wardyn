@@ -211,6 +211,29 @@ type Config struct {
 	// entirely; a subscription-mode run always takes priority over Bedrock.
 	BedrockRegion string
 	BedrockModel  string
+	// BedrockAWSConfigDir, when set, bind-mounts a host AWS config directory
+	// (a `~/.aws`) READ-ONLY into the sandbox at /home/agent/.aws, so the AWS
+	// SDK inside the run resolves credentials itself — including short-lived AWS
+	// SSO / IAM Identity Center sessions, which it refreshes on demand. This is
+	// the HOST-MODE alternative to pasting static aws-access-key-id/-secret
+	// secrets (which expire under SSO and must be re-pasted): with the mount,
+	// `aws sso login` on the host is enough and nothing is stored in Wardyn.
+	// It is OFF by default and only set by the host-mode installer (run-host.sh
+	// / setup.sh) — a team/compose deployment never sets it, so a shared service
+	// never mounts an operator's ambient cloud credentials (invariant 1). It is
+	// the deliberate host-mode residency tradeoff already accepted for the
+	// ~/.claude subscription mount. Empty = disabled. Takes precedence over the
+	// resident static-key path but not over a bedrock-api-key bearer.
+	BedrockAWSConfigDir string
+	// BedrockAWSProfile, when set, is passed as AWS_PROFILE into the sandbox so
+	// the SDK selects a named profile from the mounted config (common with SSO:
+	// `aws sso login --profile X`). Only meaningful with BedrockAWSConfigDir.
+	BedrockAWSProfile string
+	// BedrockAWSSSORegion is the AWS region whose SSO endpoints (oidc.<r>,
+	// portal.sso.<r>) the sandbox is allowed to reach so the SDK can exchange an
+	// SSO token for role credentials. It often differs from BedrockRegion.
+	// Empty defaults to BedrockRegion. Only meaningful with BedrockAWSConfigDir.
+	BedrockAWSSSORegion string
 	// Secrets is the at-rest secret store. It backs the admin secret-management
 	// endpoints (PUT/DELETE/list — values are NEVER readable via the API) and
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
