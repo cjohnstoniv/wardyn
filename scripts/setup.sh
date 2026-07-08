@@ -62,9 +62,29 @@ if $HAVE_KATA; then ok "Vault (Kata microVM) — registered"; elif $HAVE_KVM; th
 
 HAVE_CLAUDE=false; command -v claude >/dev/null 2>&1 && HAVE_CLAUDE=true
 CLAUDE_LOGGED_IN=false; [ -f "$HOME/.claude/.credentials.json" ] && CLAUDE_LOGGED_IN=true
-if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN; then ok "Claude CLI logged in on this host ($(command -v claude)) — host mode can use it directly"
-elif $HAVE_CLAUDE; then warn "Claude CLI present but not logged in — run 'claude login' (or use an API key)"
-else info "No Claude CLI on PATH (fine for team/compose mode with brokered keys)"; fi
+# A Bedrock-configured Claude authenticates via AWS, NOT an OAuth login file — so
+# an absent .credentials.json is not "not logged in" when Bedrock is in use. Detect
+# it (CLAUDE_CODE_USE_BEDROCK in env or ~/.claude/settings.json, or an operator who
+# already set the wardynd Bedrock config) so we don't wrongly demand `claude login`.
+CLAUDE_BEDROCK=false
+case "${CLAUDE_CODE_USE_BEDROCK:-}" in 1|true|TRUE|True|yes) CLAUDE_BEDROCK=true;; esac
+if ! $CLAUDE_BEDROCK && [ -f "$HOME/.claude/settings.json" ] \
+   && grep -Eq '"CLAUDE_CODE_USE_BEDROCK"[[:space:]]*:[[:space:]]*"?(1|true|yes)"?' "$HOME/.claude/settings.json" 2>/dev/null; then
+  CLAUDE_BEDROCK=true
+fi
+WARDYN_BEDROCK_SET=false
+[ -n "${WARDYN_BEDROCK_REGION:-}" ] && [ -n "${WARDYN_BEDROCK_MODEL:-}" ] && WARDYN_BEDROCK_SET=true
+if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN; then
+  ok "Claude CLI logged in on this host ($(command -v claude)) — host mode can use it directly"
+elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
+  ok "Claude is set up for AWS Bedrock on this host — model access is via Bedrock, not a Claude login"
+  $WARDYN_BEDROCK_SET \
+    || warn "Bedrock needs wardynd config: export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL (a cross-region inference-profile id), then add aws-access-key-id/aws-secret-access-key (or a bedrock-api-key) in the UI's Connect-a-model step."
+elif $HAVE_CLAUDE; then
+  warn "Claude CLI present but no model auth detected — run 'claude login', use an API key, or configure AWS Bedrock (export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL)."
+else
+  info "No Claude CLI on PATH (fine for team/compose mode with brokered keys)"
+fi
 
 # ── barrier install guidance (sudo — never run silently) ─────────────────────
 missing_barriers=()
@@ -109,11 +129,19 @@ if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN; then
   # Default (sentinel) staging: the sandbox copy is inert; host mode proxy-injects a
   # live, host-refreshed token on the wire — so nothing sensitive stays resident and
   # it never goes stale. (Matches run-host.sh's inject-on default.)
-  ./scripts/stage-claude-creds.sh >/dev/null 2>&1 \
-    && ok "Claude subscription staged (proxy-inject) — the setup screen shows model access GREEN, no re-login." \
-    || warn "Could not stage creds (continuing; you can add an API key in the UI)."
+  if ./scripts/stage-claude-creds.sh >/dev/null 2>&1; then
+    ok "Claude subscription staged (proxy-inject) — the setup screen shows model access GREEN, no re-login."
+  else
+    warn "Could not stage creds (continuing; you can add an API key in the UI)."
+  fi
+elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
+  if $WARDYN_BEDROCK_SET; then
+    ok "AWS Bedrock configured (region + model set). Finish by adding aws-access-key-id/aws-secret-access-key (or a bedrock-api-key) in the UI's Connect-a-model step."
+  else
+    warn "Claude uses AWS Bedrock here, but wardynd isn't pointed at it yet. Export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL (inference-profile id) and re-run, then add the AWS creds in the UI. No 'claude login' needed."
+  fi
 else
-  warn "No host Claude login — model access will show 'needs setup' until you 'claude login' or add a key."
+  warn "No host model auth — the setup screen will show 'needs setup' until you 'claude login', add an API key, or configure AWS Bedrock."
 fi
 
 # Ensure the local binaries + UI are built (host mode serves ./bin/wardynd + ui/dist).
