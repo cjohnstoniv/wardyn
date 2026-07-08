@@ -135,10 +135,49 @@ if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN; then
     warn "Could not stage creds (continuing; you can add an API key in the UI)."
   fi
 elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
-  if $WARDYN_BEDROCK_SET; then
-    ok "AWS Bedrock configured (region + model set). Finish by adding aws-access-key-id/aws-secret-access-key (or a bedrock-api-key) in the UI's Connect-a-model step."
+  # Auto-detect the host's Bedrock setup and offer to configure Wardyn end to end —
+  # region, model, and creds — so the operator doesn't hand-run `wardyn secret set`.
+  br_region="${WARDYN_BEDROCK_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-}}}"
+  if [ -z "$br_region" ] && command -v aws >/dev/null 2>&1; then br_region="$(aws configure get region 2>/dev/null || true)"; fi
+  br_model="${WARDYN_BEDROCK_MODEL:-${ANTHROPIC_MODEL:-}}"
+  if [ -z "$br_model" ] && [ -f "$HOME/.claude/settings.json" ]; then
+    br_model="$(grep -oE '"ANTHROPIC_MODEL"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.claude/settings.json" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/')"
+  fi
+  # Cred style: a host ~/.aws (SSO or static-file) → read-only mount (no paste, SSO
+  # auto-refreshes). Else static creds in the env → import them as Wardyn secrets.
+  br_mode=none
+  if [ -d "$HOME/.aws" ]; then br_mode=mount
+  elif [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then br_mode=static-env; fi
+  say "  Detected AWS Bedrock for Claude:"
+  say "    region: ${br_region:-<not found>}   model: ${br_model:-<not found>}   creds: ${br_mode}"
+  auto=y
+  if [ -t 0 ]; then printf "  Auto-configure Wardyn to use this Bedrock setup? [Y/n]: "; read -r a || a=""; case "$a" in n|N|no|No) auto=n;; esac
+  else info "non-interactive: auto-configuring Bedrock (set WARDYN_SETUP_MODE / vars to control)"; fi
+  if [ "$auto" = y ]; then
+    if [ -z "$br_model" ] && [ -t 0 ]; then printf "  Bedrock model id (cross-region inference-profile, e.g. us.anthropic.claude-sonnet-4-5-...): "; read -r br_model || br_model=""; fi
+    if [ -z "$br_region" ] && [ -t 0 ]; then printf "  AWS region (e.g. us-east-1): "; read -r br_region || br_region=""; fi
+    if [ -n "$br_region" ] && [ -n "$br_model" ]; then
+      export WARDYN_BEDROCK_REGION="$br_region" WARDYN_BEDROCK_MODEL="$br_model"
+      case "$br_mode" in
+        mount)
+          export WARDYN_BEDROCK_AWS_DIR="$HOME/.aws"
+          [ -n "${AWS_PROFILE:-}" ] && export WARDYN_BEDROCK_AWS_PROFILE="$AWS_PROFILE"
+          ok "Bedrock via read-only ~/.aws mount — the sandbox SDK resolves your creds (SSO auto-refreshes). Nothing stored, nothing to paste."
+          [ "$(id -u)" = "1000" ] || warn "Host uid $(id -u) ≠ sandbox agent uid 1000 — the agent may not read 0600 files under ~/.aws. If a run can't auth, use static keys or run 'chmod -R a+rX ~/.aws'."
+          ;;
+        static-env)
+          BR_IMPORT_STATIC=true  # values live in the env; imported after wardynd is healthy
+          ok "Bedrock region+model set — your AWS_ACCESS_KEY_ID/SECRET will be imported as Wardyn secrets once the daemon is up."
+          ;;
+        none)
+          warn "Region+model set, but no ~/.aws dir and no AWS creds in the env. Run 'aws sso login' (or 'aws configure'), or add creds in the UI's Connect-a-model step."
+          ;;
+      esac
+    else
+      warn "Bedrock needs both a region and a model id — skipping auto-config; set them in the UI's Connect-a-model step."
+    fi
   else
-    warn "Claude uses AWS Bedrock here, but wardynd isn't pointed at it yet. Export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL (inference-profile id) and re-run, then add the AWS creds in the UI. No 'claude login' needed."
+    info "Skipped Bedrock auto-config — configure it in the UI's Connect-a-model step."
   fi
 else
   warn "No host model auth — the setup screen will show 'needs setup' until you 'claude login', add an API key, or configure AWS Bedrock."
@@ -207,6 +246,21 @@ if $healthy; then
   { command -v wslview  >/dev/null 2>&1 && wslview  "$URL"; } >/dev/null 2>&1 \
     || { command -v explorer.exe >/dev/null 2>&1 && explorer.exe "$URL"; } >/dev/null 2>&1 \
     || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } >/dev/null 2>&1 || true
+  # Import static AWS creds detected earlier (mount mode needs none — the SDK reads
+  # the ~/.aws mount). Local host mode has no admin token, so the CLI just works.
+  if [ "${BR_IMPORT_STATIC:-false}" = true ]; then
+    info "Importing your AWS credentials into Wardyn's secret store…"
+    export WARDYN_URL="$URL"
+    printf '%s' "$AWS_ACCESS_KEY_ID"     | ./bin/wardyn secret set aws-access-key-id     >/dev/null 2>&1 && \
+    printf '%s' "$AWS_SECRET_ACCESS_KEY" | ./bin/wardyn secret set aws-secret-access-key >/dev/null 2>&1 \
+      && ok "AWS credentials imported — Bedrock model access should show GREEN." \
+      || warn "Could not import AWS creds automatically — add them in the UI's Connect-a-model step."
+    if [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+      printf '%s' "$AWS_SESSION_TOKEN" | ./bin/wardyn secret set aws-session-token >/dev/null 2>&1 \
+        && info "AWS session token imported (STS/AssumeRole)." \
+        || warn "Could not import the AWS session token — add it in the UI if your creds are STS."
+    fi
+  fi
   hd "Wardyn is up (host mode) — your terminal is free"
   ok "UI     ${URL}   (opening in your browser)"
   ok "PID    ${WPID}   (${PIDFILE})"

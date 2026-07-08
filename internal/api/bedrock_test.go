@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -143,6 +144,102 @@ func TestResolveBedrockAuth_OptionalSessionToken(t *testing.T) {
 	}
 	if ba.env["AWS_SESSION_TOKEN"] != "FQoGZXIvYXdzEtemp-session-token" {
 		t.Errorf("AWS_SESSION_TOKEN = %q, want the stored session token", ba.env["AWS_SESSION_TOKEN"])
+	}
+}
+
+// TestResolveBedrockAuth_AWSDirMount: host-mode ~/.aws mount path. When
+// BedrockAWSConfigDir names an existing dir and no bearer secret is present, the
+// run gets the mount (NO resident static keys in env), the SDK-config env pointing
+// at the mount, and the SSO egress hosts so the SDK can exchange an SSO token.
+func TestResolveBedrockAuth_AWSDirMount(t *testing.T) {
+	dir := t.TempDir() // a real, existing dir so the os.Stat fail-safe passes
+	s := &Server{cfg: Config{
+		BedrockRegion:       "us-east-1",
+		BedrockModel:        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		BedrockAWSConfigDir: dir,
+		BedrockAWSProfile:   "bedrock-sso",
+		Secrets:             &memSecrets{m: map[string][]byte{}}, // NO static keys stored
+	}}
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	if !ba.ready || !ba.awsMount {
+		t.Fatalf("ready=%v awsMount=%v, want both true", ba.ready, ba.awsMount)
+	}
+	if ba.bearer {
+		t.Fatal("bearer=true on the mount path; want false")
+	}
+	if ba.awsMountSource != dir {
+		t.Errorf("awsMountSource = %q, want %q", ba.awsMountSource, dir)
+	}
+	// No resident credentials of any kind in env.
+	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"} {
+		if _, ok := ba.env[k]; ok {
+			t.Errorf("env[%q] present on the mount path; want absent (SDK reads the mount, nothing resident)", k)
+		}
+	}
+	if ba.env["AWS_CONFIG_FILE"] != "/home/agent/.aws/config" || ba.env["AWS_SHARED_CREDENTIALS_FILE"] != "/home/agent/.aws/credentials" {
+		t.Errorf("SDK config env not pointed at the mount: config=%q creds=%q", ba.env["AWS_CONFIG_FILE"], ba.env["AWS_SHARED_CREDENTIALS_FILE"])
+	}
+	if ba.env["AWS_PROFILE"] != "bedrock-sso" {
+		t.Errorf("AWS_PROFILE = %q, want the configured profile", ba.env["AWS_PROFILE"])
+	}
+	hosts := strings.Join(ba.egressHosts, ",")
+	for _, h := range []string{"bedrock-runtime.us-east-1.amazonaws.com", "oidc.us-east-1.amazonaws.com", "portal.sso.us-east-1.amazonaws.com"} {
+		if !strings.Contains(hosts, h) {
+			t.Errorf("egress hosts %v missing %q (needed for SSO cred exchange)", ba.egressHosts, h)
+		}
+	}
+}
+
+// TestResolveBedrockAuth_AWSDirMountMissingFailsSafe: a configured mount dir that
+// doesn't exist must NOT enable the mount — it fails safe to the next path (here,
+// no static keys → not ready), never mounting a nonexistent source.
+func TestResolveBedrockAuth_AWSDirMountMissingFailsSafe(t *testing.T) {
+	s := &Server{cfg: Config{
+		BedrockRegion:       "us-east-1",
+		BedrockModel:        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		BedrockAWSConfigDir: "/nonexistent/path/dot-aws",
+		Secrets:             &memSecrets{m: map[string][]byte{}},
+	}}
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true)
+	if ba.ready || ba.awsMount {
+		t.Fatalf("ready=%v awsMount=%v for a nonexistent mount dir; want both false (fail safe)", ba.ready, ba.awsMount)
+	}
+}
+
+// TestResolveBedrockAuth_BearerBeatsMount: a bedrock-api-key bearer (never-resident)
+// wins even when the ~/.aws mount is also configured.
+func TestResolveBedrockAuth_BearerBeatsMount(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{cfg: Config{
+		BedrockRegion:       "us-east-1",
+		BedrockModel:        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		BedrockAWSConfigDir: dir,
+		Secrets:             &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("bearer-xyz")}},
+	}}
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true)
+	if !ba.bearer || ba.awsMount {
+		t.Fatalf("bearer=%v awsMount=%v, want bearer preferred over the mount", ba.bearer, ba.awsMount)
+	}
+}
+
+// TestResolveBedrockAuth_AWSSSORegionOverride: when the SSO region differs from the
+// Bedrock region, the SSO egress hosts use the SSO region, not the Bedrock one.
+func TestResolveBedrockAuth_AWSSSORegionOverride(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{cfg: Config{
+		BedrockRegion:       "us-west-2",
+		BedrockModel:        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		BedrockAWSConfigDir: dir,
+		BedrockAWSSSORegion: "us-east-1",
+		Secrets:             &memSecrets{m: map[string][]byte{}},
+	}}
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true)
+	hosts := strings.Join(ba.egressHosts, ",")
+	if !strings.Contains(hosts, "portal.sso.us-east-1.amazonaws.com") {
+		t.Errorf("SSO egress %v should use the SSO region us-east-1", ba.egressHosts)
+	}
+	if !strings.Contains(hosts, "bedrock-runtime.us-west-2.amazonaws.com") {
+		t.Errorf("bedrock egress %v should use the bedrock region us-west-2", ba.egressHosts)
 	}
 }
 
