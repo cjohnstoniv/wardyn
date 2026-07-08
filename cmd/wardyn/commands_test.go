@@ -1,0 +1,527 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// These tests drive the real cobra command tree built by rootCmd() end to end:
+// they set argv, point --url at an httptest server, and assert the request the
+// command actually produced (method/path/body) plus flag/env precedence,
+// default values, and how API errors surface as a non-nil Execute() error
+// (which main() turns into exit code 1). Everything is hermetic — the only
+// "network" is a localhost httptest server.
+
+// recordedReq is what the command-test server captures about a request.
+type recordedReq struct {
+	method string
+	path   string
+	query  string
+	auth   string
+	body   []byte
+}
+
+// cmdServer is an httptest server that records every request it receives and
+// replies with a canned status + JSON body.
+type cmdServer struct {
+	*httptest.Server
+	mu   sync.Mutex
+	reqs []recordedReq
+}
+
+func (s *cmdServer) last() recordedReq {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.reqs) == 0 {
+		return recordedReq{}
+	}
+	return s.reqs[len(s.reqs)-1]
+}
+
+// newCmdServer starts a server that replies with respStatus and respBody for
+// every request. respBody is JSON-encoded when non-nil.
+func newCmdServer(t *testing.T, respStatus int, respBody any) *cmdServer {
+	t.Helper()
+	cs := &cmdServer{}
+	cs.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		cs.mu.Lock()
+		cs.reqs = append(cs.reqs, recordedReq{
+			method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
+			auth: r.Header.Get("Authorization"), body: body,
+		})
+		cs.mu.Unlock()
+		if respBody != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(respStatus)
+			_ = json.NewEncoder(w).Encode(respBody)
+			return
+		}
+		w.WriteHeader(respStatus)
+	}))
+	t.Cleanup(cs.Close)
+	return cs
+}
+
+// execCmd runs the wardyn root command with the given args, discarding output.
+// It returns the error Execute() would return (which main() maps to exit 1).
+func execCmd(t *testing.T, args ...string) error {
+	t.Helper()
+	root := rootCmd()
+	root.SetArgs(args)
+	root.SetOut(&strings.Builder{})
+	root.SetErr(&strings.Builder{})
+	return root.Execute()
+}
+
+// --------------------------------------------------------------------------
+// run command
+// --------------------------------------------------------------------------
+
+func TestRunCmd_BuildsCreateRequest(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
+		ID: uuid.New(), State: types.RunPending, ConfinementClass: types.CC2,
+	})
+
+	err := execCmd(t, "run",
+		"--url", srv.URL, "--token", "tok",
+		"--repo", "org/name", "--agent", "claude-code",
+		"--task", "do the thing", "--policy", "pol-9",
+		"--confinement", "CC2", "--interactive")
+	if err != nil {
+		t.Fatalf("run command returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/runs" {
+		t.Errorf("got %s %s, want POST /api/v1/runs", got.method, got.path)
+	}
+	if got.auth != "Bearer tok" {
+		t.Errorf("auth = %q, want Bearer tok", got.auth)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if body["repo"] != "org/name" || body["agent"] != "claude-code" || body["task"] != "do the thing" {
+		t.Errorf("run body repo/agent/task wrong: %v", body)
+	}
+	if body["policy_id"] != "pol-9" || body["confinement_class"] != "CC2" || body["interactive"] != true {
+		t.Errorf("run body policy/confinement/interactive wrong: %v", body)
+	}
+}
+
+// run requires --repo and --agent; missing them must fail BEFORE any request.
+func TestRunCmd_RequiresRepoAndAgent(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code")
+	if err == nil {
+		t.Fatal("expected error when --repo missing, got nil")
+	}
+	if !strings.Contains(err.Error(), "--repo and --agent are required") {
+		t.Errorf("error = %q, want the required-flags message", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (validation must short-circuit)", n)
+	}
+}
+
+// --------------------------------------------------------------------------
+// runs list command
+// --------------------------------------------------------------------------
+
+func TestRunsListCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{
+		{ID: uuid.New(), Agent: "claude-code", Repo: "o/r", State: types.RunRunning},
+	})
+
+	if err := execCmd(t, "runs", "list", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("runs list returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/runs" {
+		t.Errorf("got %s %s, want GET /api/v1/runs", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// approve / deny commands
+// --------------------------------------------------------------------------
+
+func TestApproveCmd_PostsApproveWithReason(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.ApprovalRequest{
+		ID: uuid.New(), State: types.ApprovalApproved,
+	})
+
+	err := execCmd(t, "approve", "ap-42", "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
+	if err != nil {
+		t.Fatalf("approve returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/approvals/ap-42/approve" {
+		t.Errorf("got %s %s, want POST /api/v1/approvals/ap-42/approve", got.method, got.path)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if body["reason"] != "ok by me" {
+		t.Errorf("reason body = %v, want %q", body["reason"], "ok by me")
+	}
+}
+
+func TestDenyCmd_PostsDeny(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.ApprovalRequest{
+		ID: uuid.New(), State: types.ApprovalDenied,
+	})
+
+	if err := execCmd(t, "deny", "ap-7", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("deny returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/approvals/ap-7/deny" {
+		t.Errorf("got %s %s, want POST /api/v1/approvals/ap-7/deny", got.method, got.path)
+	}
+}
+
+// approve/deny take exactly one positional arg.
+func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
+	if err := execCmd(t, "approve", "--token", "tok"); err == nil {
+		t.Error("expected error when approval id is missing, got nil")
+	}
+}
+
+// --------------------------------------------------------------------------
+// audit command
+// --------------------------------------------------------------------------
+
+func TestAuditCmd_BuildsQuery(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+
+	if err := execCmd(t, "audit", "--run", "run-55", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("audit returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/audit" {
+		t.Errorf("got %s %s, want GET /api/v1/audit", got.method, got.path)
+	}
+	if got.query != "run_id=run-55" {
+		t.Errorf("query = %q, want run_id=run-55", got.query)
+	}
+}
+
+// audit requires --run; without it the command fails before any request.
+func TestAuditCmd_RequiresRun(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
+
+	err := execCmd(t, "audit", "--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Fatal("expected error when --run missing, got nil")
+	}
+	if !strings.Contains(err.Error(), "--run is required") {
+		t.Errorf("error = %q, want --run is required", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0", n)
+	}
+}
+
+// --------------------------------------------------------------------------
+// kill command
+// --------------------------------------------------------------------------
+
+func TestKillCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusAccepted, nil)
+
+	if err := execCmd(t, "kill", "run-77", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("kill returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/runs/run-77/kill" {
+		t.Errorf("got %s %s, want POST /api/v1/runs/run-77/kill", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// secret commands (set via --value, ls, rm)
+// --------------------------------------------------------------------------
+
+func TestSecretSetCmd_WithValueFlag(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	err := execCmd(t, "secret", "set", "gh-token", "--value", "s3cr3t", "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("secret set returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPut || got.path != "/api/v1/secrets/gh-token" {
+		t.Errorf("got %s %s, want PUT /api/v1/secrets/gh-token", got.method, got.path)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if body["value"] != "s3cr3t" {
+		t.Errorf("value body = %v, want s3cr3t", body["value"])
+	}
+}
+
+// An empty value (no --value, nothing on stdin) is rejected without a request.
+// We force the empty-stdin path by providing --value="" explicitly is not
+// possible (it is the zero value), so we rely on the set command reading stdin;
+// here we exercise the ls/rm requests which do not need stdin, and cover the
+// empty-value guard at the helper level in secret_test.go.
+
+func TestSecretLsCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string][]string{"names": {"alpha", "beta"}})
+
+	if err := execCmd(t, "secret", "ls", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("secret ls returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/secrets" {
+		t.Errorf("got %s %s, want GET /api/v1/secrets", got.method, got.path)
+	}
+}
+
+func TestSecretRmCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	if err := execCmd(t, "secret", "rm", "gh-token", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("secret rm returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodDelete || got.path != "/api/v1/secrets/gh-token" {
+		t.Errorf("got %s %s, want DELETE /api/v1/secrets/gh-token", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// policy commands (list/get/delete; create/update via -f file)
+// --------------------------------------------------------------------------
+
+func TestPolicyListCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.RunPolicy{
+		{ID: uuid.New(), Name: "default", Spec: types.RunPolicySpec{MinConfinementClass: types.CC2}},
+	})
+
+	if err := execCmd(t, "policy", "list", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy list returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/policies" {
+		t.Errorf("got %s %s, want GET /api/v1/policies", got.method, got.path)
+	}
+}
+
+func TestPolicyGetCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "p"})
+
+	if err := execCmd(t, "policy", "get", "p-1", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy get returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/policies/p-1" {
+		t.Errorf("got %s %s, want GET /api/v1/policies/p-1", got.method, got.path)
+	}
+}
+
+func TestPolicyDeleteCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	if err := execCmd(t, "policy", "delete", "p-3", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy delete returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodDelete || got.path != "/api/v1/policies/p-3" {
+		t.Errorf("got %s %s, want DELETE /api/v1/policies/p-3", got.method, got.path)
+	}
+}
+
+func TestPolicyCreateCmd_FromFile(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "from-file"})
+
+	// A full-body JSON file ({"name":..., "spec":{...}}).
+	dir := t.TempDir()
+	file := dir + "/policy.json"
+	writeFile(t, file, `{"name":"from-file","spec":{"min_confinement_class":"CC2","first_use_approval":true}}`)
+
+	if err := execCmd(t, "policy", "create", "-f", file, "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy create returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/policies" {
+		t.Errorf("got %s %s, want POST /api/v1/policies", got.method, got.path)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatalf("create body not JSON: %v", err)
+	}
+	if body["name"] != "from-file" {
+		t.Errorf("name = %v, want from-file", body["name"])
+	}
+	spec, _ := body["spec"].(map[string]any)
+	if spec["min_confinement_class"] != "CC2" {
+		t.Errorf("spec min_confinement_class = %v, want CC2", spec["min_confinement_class"])
+	}
+}
+
+func TestPolicyUpdateCmd_NameOverride(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "renamed"})
+
+	dir := t.TempDir()
+	file := dir + "/policy.json"
+	// A bare spec (no top-level "name"); --name must supply it.
+	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
+
+	if err := execCmd(t, "policy", "update", "p-2", "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy update returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPut || got.path != "/api/v1/policies/p-2" {
+		t.Errorf("got %s %s, want PUT /api/v1/policies/p-2", got.method, got.path)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if body["name"] != "renamed" {
+		t.Errorf("name = %v, want renamed (the --name override)", body["name"])
+	}
+}
+
+// create requires -f; cobra MarkFlagRequired must reject its absence.
+func TestPolicyCreateCmd_RequiresFile(t *testing.T) {
+	if err := execCmd(t, "policy", "create", "--token", "tok"); err == nil {
+		t.Error("expected error when -f is missing, got nil")
+	}
+}
+
+// A bare-spec file with no name and no --name override must error.
+func TestPolicyCreateCmd_NameRequired(t *testing.T) {
+	dir := t.TempDir()
+	file := dir + "/policy.json"
+	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
+
+	err := execCmd(t, "policy", "create", "-f", file, "--token", "tok")
+	if err == nil {
+		t.Fatal("expected error when no name is provided, got nil")
+	}
+	if !strings.Contains(err.Error(), "policy name is required") {
+		t.Errorf("error = %q, want policy name is required", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// flag / env precedence + defaults
+// --------------------------------------------------------------------------
+
+// When WARDYN_URL is set and no --url flag is given, the command targets the env
+// URL. When --url is also given, the flag wins.
+func TestURL_FlagOverridesEnv(t *testing.T) {
+	envSrv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
+	flagSrv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
+
+	t.Setenv("WARDYN_URL", envSrv.URL)
+	t.Setenv("WARDYN_ADMIN_TOKEN", "env-tok")
+
+	// No --url: env URL is used.
+	if err := execCmd(t, "runs", "list"); err != nil {
+		t.Fatalf("runs list (env url) error: %v", err)
+	}
+	if got := envSrv.last(); got.path != "/api/v1/runs" || got.auth != "Bearer env-tok" {
+		t.Errorf("env-url request wrong: path=%s auth=%s", got.path, got.auth)
+	}
+
+	// --url given: flag URL wins over env, and so does --token.
+	if err := execCmd(t, "runs", "list", "--url", flagSrv.URL, "--token", "flag-tok"); err != nil {
+		t.Fatalf("runs list (flag url) error: %v", err)
+	}
+	if got := flagSrv.last(); got.path != "/api/v1/runs" || got.auth != "Bearer flag-tok" {
+		t.Errorf("flag-url request wrong: path=%s auth=%s", got.path, got.auth)
+	}
+}
+
+// With no WARDYN_ADMIN_TOKEN and no --token, do() proceeds WITHOUT an
+// Authorization header rather than erroring client-side — a loopback wardynd in
+// LOCAL HOST MODE accepts unauthenticated requests; an auth-gated server returns
+// a clear 401 instead.
+func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
+	t.Setenv("WARDYN_ADMIN_TOKEN", "")
+
+	if err := execCmd(t, "runs", "list", "--url", srv.URL); err != nil {
+		t.Fatalf("expected no-token request to proceed (local mode), got error: %v", err)
+	}
+	if got := srv.last(); got.auth != "" {
+		t.Errorf("expected NO Authorization header without a token, got %q", got.auth)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 1 {
+		t.Errorf("server saw %d requests, want 1", n)
+	}
+}
+
+// envOr returns the default when the var is unset OR empty, and the value
+// otherwise — this is the resolution behind the --url default.
+func TestEnvOr(t *testing.T) {
+	t.Setenv("WARDYN_URL", "")
+	if got := cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"); got != "http://localhost:8080" {
+		t.Errorf("envOr(empty) = %q, want default", got)
+	}
+	t.Setenv("WARDYN_URL", "http://example:9000")
+	if got := cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"); got != "http://example:9000" {
+		t.Errorf("envOr(set) = %q, want the env value", got)
+	}
+}
+
+// The --url default is the localhost fallback when WARDYN_URL is unset.
+func TestURL_DefaultWhenUnset(t *testing.T) {
+	t.Setenv("WARDYN_URL", "")
+	root := rootCmd()
+	f := root.PersistentFlags().Lookup("url")
+	if f == nil {
+		t.Fatal("url flag not registered")
+	}
+	if f.DefValue != "http://localhost:8080" {
+		t.Errorf("url default = %q, want http://localhost:8080", f.DefValue)
+	}
+}
+
+// --------------------------------------------------------------------------
+// error surfacing: a non-2xx API response makes Execute() return non-nil
+// (which main maps to exit code 1).
+// --------------------------------------------------------------------------
+
+func TestCmd_APIErrorSurfacesNonNil(t *testing.T) {
+	srv := newCmdServer(t, http.StatusInternalServerError, map[string]string{"error": "boom"})
+
+	err := execCmd(t, "runs", "list", "--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Fatal("expected Execute() to return an error on a 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error = %q, want it to carry the 500 status", err)
+	}
+}
+
+func TestCmd_UnknownCommandErrors(t *testing.T) {
+	if err := execCmd(t, "definitely-not-a-command"); err == nil {
+		t.Error("expected error for unknown subcommand, got nil")
+	}
+}

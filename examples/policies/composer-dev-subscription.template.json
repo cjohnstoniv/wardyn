@@ -1,0 +1,60 @@
+{
+  "__comment": "TEMPLATE — do not point WARDYN_DEFAULT_POLICY at this file. scripts/stage-claude-creds.sh copies ~/.claude[.json] to read-only staging copies OUTSIDE the repo and generates the real policy (default ~/.wardyn/composer-dev-subscription.json) by replacing __WARDYN_CRED_DIR__ with the staging dir. The mount sources are machine-specific, which is why no committed example may carry real paths. This is composer-dev.json plus: (1) '*.anthropic.com' listed VERBATIM (the composer clamp's allowlist intersection is exact-string, so the subscription egress survives only if the ceiling lists it literally), and (2) the two operator-blessed Claude credential mounts that a composed run receives ONLY on the per-run 'Use my Claude subscription' opt-in. It deliberately sets no llm_inspection: subscription transport is an opaque tunnel, and require_inspectable_llm+active-mode without intercept_tls fail-closes at dispatch. HONESTY NOTE: subscription mode makes the (copied) long-lived OAuth credential RESIDENT in the sandbox for the run, reachable-host exfil surface = *.anthropic.com; the api-key path keeps the secret proxy-side. ~/.claude.json also carries MCP config/history — read-only copies mitigate tampering, not reading.",
+  "allowed_domains": [
+    "api.anthropic.com",
+    "*.anthropic.com",
+    "api.openai.com",
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "*.githubusercontent.com",
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "ghcr.io"
+  ],
+  "denied_domains": [],
+  "first_use_approval": "deny_with_review",
+  "allowed_methods": [],
+  "min_confinement_class": "CC1",
+  "eligible_grants": [
+    {
+      "kind": "api_key",
+      "scope": {
+        "host": "api.anthropic.com",
+        "header": "x-api-key",
+        "format": "%s",
+        "secret_name": "anthropic-api-key"
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": false
+    },
+    {
+      "kind": "github_token",
+      "scope": {
+        "repos": [],
+        "permissions": {
+          "contents": "write",
+          "pull_requests": "write"
+        }
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": true
+    }
+  ],
+  "workspace_mounts": [
+    {
+      "source": "__WARDYN_CRED_DIR__/.claude",
+      "target": "/home/agent/.claude",
+      "read_only": true
+    },
+    {
+      "source": "__WARDYN_CRED_DIR__/.claude.json",
+      "target": "/home/agent/.claude.json",
+      "read_only": true
+    }
+  ],
+  "auto_stop_after_sec": 0
+}

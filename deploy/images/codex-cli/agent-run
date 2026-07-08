@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# /usr/local/bin/agent-run — Wardyn agent launcher for Codex CLI.
+#
+# CONTRACT (all agent images must implement this interface):
+#   Usage: agent-run "<task text>"
+#   Usage: agent-run --selftest
+#
+# Normal mode:
+#   If WARDYN_REPO_URL is set and ~/work has no git repo yet, shallow-clones it
+#   into ~/work/<reponame> through the governed egress path (the only route out
+#   is wardyn-proxy; HTTPS_PROXY already points at it, so git CONNECT-tunnels
+#   through the proxy and is subject to the run's egress allowlist).  Private
+#   repos authenticate via the system gitconfig credential helper
+#   (wardyn-git-helper), which mints a brokered token; no GitHub token is ever in
+#   env (invariant 1) — only the non-secret clone URL is passed.  Clone failure is
+#   a governance signal, not a hard error: it is logged to stderr and the task
+#   still runs (some tasks need no repo).
+#
+#   CALLER-AUTH GATE: before any git runs, provision_git_helper_secret writes a
+#   per-run secret to a 0400 agent-owned file and exports WARDYN_GIT_HELPER_SECRET
+#   for THIS process tree only (the clone + the exec'd agent inherit it; a
+#   separate `wardyn attach` exec / non-descendant process does not).  The
+#   credential helper requires that presented secret to match the file before it
+#   emits a token, so a stray in-sandbox process cannot exfiltrate a GitHub token
+#   merely by speaking git's credential protocol.  Residual: code running AS the
+#   agent uid can still read the 0400 file and obtain the token (see the helper's
+#   package doc) — this raises the bar, it is not full isolation.
+#   Then changes to the cloned repo directory (or any pre-existing git repo
+#   discovered under ~/work, or ~/work itself), runs codex in non-interactive
+#   exec mode for one task, and exits with the CLI's exit code.
+#
+# --selftest mode (no API key needed):
+#   Verifies required binaries and prints env wiring, including the repo wiring
+#   (WARDYN_REPO_URL/WARDYN_REPO_SLUG) and whether a workspace repo is already
+#   present.  Stays key-free and side-effect-free: it NEVER clones.  Used by e2e
+#   validation without a live task.
+#
+# LLM credential note:
+#   Codex CLI reads OPENAI_API_KEY from env.  Wardyn does NOT set this in the
+#   sandbox (secrets never in env, invariant 1).  Operators configure an api_key
+#   CredentialGrant; the proxy mints the key at startup and injects it into
+#   requests to api.openai.com via an InjectionRule.  A /wardyn/llm/openai route
+#   (analogous to the Anthropic route) is planned for v0.5.
+set -euo pipefail
+
+# Shared functions (install_mitm_ca, install_artifact_config,
+# provision_git_helper_secret, clone_one, dispatch_repo_clones,
+# resolve_workdir) — identical across every agent image's agent-run.
+source /usr/local/bin/agent-run-lib.sh
+
+# ── selftest ─────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--selftest" ]]; then
+    echo "=== wardyn agent-run selftest (codex-cli) ==="
+    ok=1
+    for bin in wardyn-rec wardyn-git-helper git codex; do
+        if command -v "$bin" >/dev/null 2>&1; then
+            echo "  FOUND   $bin ($(command -v "$bin"))"
+        else
+            echo "  MISSING $bin"
+            ok=0
+        fi
+    done
+    echo "--- env wiring ---"
+    echo "  HTTP_PROXY=${HTTP_PROXY:-<unset>}"
+    echo "  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
+    echo "  NO_PROXY=${NO_PROXY:-<unset>}"
+    echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
+    echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
+    echo "  OPENAI_API_KEY=${OPENAI_API_KEY:+<set (${#OPENAI_API_KEY} chars)>}${OPENAI_API_KEY:-<unset — expected; proxy injects via grant>}"
+    echo "--- repo wiring (selftest never clones) ---"
+    echo "  WARDYN_REPO_URL=${WARDYN_REPO_URL:-<unset (no repo to clone)>}"
+    echo "  WARDYN_REPO_SLUG=${WARDYN_REPO_SLUG:-<unset>}"
+    if [ -n "$(find "${HOME}/work" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | head -1)" ]; then
+        echo "  workspace repo: PRESENT (a .git exists under ~/work)"
+    else
+        echo "  workspace repo: ABSENT (would clone WARDYN_REPO_URL if set)"
+    fi
+    echo "--- git credential helper ---"
+    echo "  WARDYN_GIT_PAT_GRANTS=${WARDYN_GIT_PAT_GRANTS:-<unset (no git_pat grants)>}"
+    git config --system --get credential.helper 2>/dev/null \
+        && echo "  OK (system config, global)" || echo "  MISSING (system gitconfig not wired)"
+    # Caller-auth gate (selftest never provisions — that happens at task time):
+    if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
+        echo "  caller-auth gate: ACTIVE at task time (a git grant is present; agent-run will provision WARDYN_GIT_HELPER_SECRET + a 0400 secret file)"
+    else
+        echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
+    fi
+    if [[ $ok -eq 1 ]]; then
+        echo "=== selftest PASS ==="
+        exit 0
+    else
+        echo "=== selftest FAIL ==="
+        exit 1
+    fi
+fi
+
+# ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
+# Interactive counterpart to task mode: prepare the workspace (MITM CA, artifact
+# config, git-helper secret, CLONE the repo into ~/work) then hold open for
+# `wardyn attach`, so the attach shell isn't empty. (No SSH lane in the codex image.)
+if [[ "${1:-}" == "--idle" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    install_mitm_ca
+    prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
+    install_artifact_config
+    provision_git_helper_secret
+    workdir="${HOME}/work"
+    mkdir -p "$workdir"
+    dispatch_repo_clones
+    resolve_workdir  # prefer the cloned repo dir as the attach landing dir
+    # Attach-readiness markers (see attach-bashrc.sh): ~/.bashrc waits for prep-done
+    # then cd's into workdir, so a mid-clone attach never shows an empty ~/work.
+    mkdir -p "$HOME/.wardyn"
+    printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
+    : > "$HOME/.wardyn/prep-done"
+    echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
+    exec sleep infinity
+fi
+
+# ── normal task mode ─────────────────────────────────────────────────────────
+task="${1:-}"
+if [[ -z "$task" ]]; then
+    echo "agent-run: task text is required (usage: agent-run '<task>')" >&2
+    exit 1
+fi
+
+# Install the per-run TLS-MITM CA (no-op unless WARDYN_MITM_CA_PEM is set) before
+# any model call.
+install_mitm_ca
+prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
+
+# Materialize any operator-configured artifact-registry redirect config (no-op
+# unless WARDYN_ARTIFACT_CONFIG_B64 is set) before clone/install.
+install_artifact_config
+
+# Provision the git credential helper caller-auth secret BEFORE any git runs
+# (the clone below and the agent's own git both need it).  Called directly so the
+# WARDYN_GIT_HELPER_SECRET export survives into this shell.  No-op without a grant.
+provision_git_helper_secret
+
+workdir="${HOME}/work"
+mkdir -p "$workdir"
+
+# Clone the run's repo(s) into the workspace (WARDYN_REPOS preferred, legacy
+# WARDYN_REPO_URL fallback) — see clone_one/dispatch_repo_clones in
+# agent-run-lib.sh.
+dispatch_repo_clones
+
+# Prefer a cloned/discovered repo workspace if one exists below ~/work; falls
+# back to ~/work when no .git is found (see resolve_workdir in agent-run-lib.sh).
+resolve_workdir
+
+cd "$workdir"
+
+# Governed SCAN run: walk the cloned/mounted workspace and upload ScanFacts to the
+# brokered scan-results route, then exit. No agent/model invocation (read-only scan).
+if [[ "${WARDYN_SCAN_ONLY:-}" == "1" ]]; then
+    export WARDYN_WORKSPACE_DIR="${WARDYN_WORKSPACE_DIR:-$workdir}"
+    echo "agent-run: scan-only mode — running wardyn-scan over ${WARDYN_WORKSPACE_DIR}" >&2
+    exec wardyn-scan
+fi
+
+# Run Codex CLI in non-interactive exec mode.
+# `codex exec "<prompt>"` runs a single task without REPL interaction.
+# The exit code from `codex` propagates to the caller.
+exec codex exec "$task"

@@ -1,0 +1,324 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Command wardyn-tetragon-ingest is the host-scoped eBPF GROUND-TRUTH sidecar:
+// the SECOND of Wardyn's three advertised audit streams. It tails Tetragon's
+// line-delimited JSON export, correlates each kernel event to a Wardyn run via
+// the container label wardyn.run-id (by listing docker containers labelled
+// wardyn.managed=true), maps a bounded event subset to types.AuditEvent
+// (internal/groundtruth), and POSTs batches to the control plane's
+// POST /api/v1/internal/groundtruth endpoint with a host-sensor bearer token.
+// The control plane records them append-only — so they land in Postgres AND fan
+// to every SIEM sink with ZERO new fanout code, keyed on run_id and
+// discriminated by a kernel.* action prefix + data.stream="ebpf".
+//
+// DEPENDENCY CHOICE (documented): this binary consumes Tetragon's JSON EXPORT
+// stream rather than the Tetragon gRPC client, keeping go.mod free of
+// github.com/cilium/tetragon. It correlates by shelling out to `docker ps`
+// rather than importing the docker client, keeping this in the default build
+// with no new module dependencies (see correlator.go).
+//
+// HONESTY: this is DETECTION, not prevention. It is a HOST sensor that sees ALL
+// containers on the host; it keeps only wardyn-managed AGENT containers and
+// drops the rest. Events it cannot correlate to a run are sent with run_id NULL
+// + correlation="unmapped" — never silently dropped, because blindness must be
+// visible. It emits a periodic kernel.sensor.heartbeat (run_id NULL) so
+// /healthz can report ebpf_groundtruth=healthy ONLY while events are arriving.
+// Host eBPF is blind inside CC3/Kata guests; for such runs a one-time
+// kernel.sensor.blind event is emitted (data.reason=cc3-kata-host-ebpf-blind).
+package main
+
+import (
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+)
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("wardyn-tetragon-ingest: %v", err)
+	}
+}
+
+func run() error {
+	var (
+		exportPath   = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
+		controlURL   = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
+		token        = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
+		blindRuns    = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
+		heartbeatStr = flagEnv("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", "30s", "sensor heartbeat interval")
+		refreshStr   = flagEnv("refresh", "WARDYN_GROUNDTRUTH_REFRESH", "15s", "container->run index refresh interval")
+		statsStr     = flagEnv("stats", "WARDYN_GROUNDTRUTH_STATS", "60s", "how often to log throughput/drop stats")
+		bufferSize   = flagIntEnv("buffer", "WARDYN_GROUNDTRUTH_BUFFER", 4096, "event buffer size before backpressure drops")
+		batchSize    = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
+	)
+	flag.Parse()
+
+	if strings.TrimSpace(*token) == "" {
+		// Fail closed: an unauthenticated sensor must not start. Without the
+		// token every POST would 401 and the stream would silently produce
+		// nothing while looking alive.
+		return fmt.Errorf("missing host-sensor token: set -token / WARDYN_GROUNDTRUTH_TOKEN (aud=wardyn-groundtruth)")
+	}
+
+	heartbeatIval := mustDuration(*heartbeatStr, 30*time.Second)
+	refreshIval := mustDuration(*refreshStr, 15*time.Second)
+	statsIval := mustDuration(*statsStr, 60*time.Second)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	sink := newEventSink(*controlURL, *token, *bufferSize, *batchSize, 2*time.Second, client)
+	defer func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sink.close(shutCtx)
+	}()
+
+	// Container->run correlator. Throttle on-miss refreshes to half the ticker.
+	corr := newDockerCorrelator(nil, refreshIval/2)
+	if err := corr.Refresh(ctx); err != nil {
+		// Non-fatal: the daemon may not be reachable yet (compose ordering).
+		// Everything correlates as unmapped until the first successful refresh —
+		// visible blindness, not a crash.
+		log.Printf("wardyn-tetragon-ingest: initial container index refresh failed: %v (continuing; events correlate as unmapped until docker is reachable)", err)
+	}
+	mapper := groundtruth.NewMapper(corr)
+
+	// One-time blindness events for CC3/Kata runs the host sensor cannot see.
+	for _, rs := range splitCSV(*blindRuns) {
+		runID, perr := uuid.Parse(rs)
+		if perr != nil {
+			log.Printf("wardyn-tetragon-ingest: skipping invalid blind run id %q: %v", rs, perr)
+			continue
+		}
+		sink.emit(groundtruth.BlindEvent(runID, "cc3-kata-host-ebpf-blind"))
+		log.Printf("wardyn-tetragon-ingest: emitted kernel.sensor.blind for run %s", runID)
+	}
+
+	// Background loops: heartbeat, index refresh, stats.
+	go heartbeatLoop(ctx, sink, heartbeatIval)
+	go refreshLoop(ctx, corr, refreshIval)
+	go statsLoop(ctx, sink, statsIval)
+
+	log.Printf("wardyn-tetragon-ingest: tailing %s -> %s/api/v1/internal/groundtruth (heartbeat=%s)", *exportPath, *controlURL, heartbeatIval)
+
+	// Tail the export. Returns on ctx cancellation.
+	tailExport(ctx, *exportPath, mapper, sink)
+	log.Printf("wardyn-tetragon-ingest: shutdown (posted=%d dropped=%d)", sink.postedCount(), sink.droppedCount())
+	return nil
+}
+
+// tailExport follows the JSONL export file, mapping each line and emitting the
+// mapped events. It re-opens the file on truncation/rotation and waits for it to
+// appear if it does not exist yet (Tetragon may start after this sidecar).
+func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, sink *eventSink) {
+	var (
+		f      *os.File
+		reader *bufio.Reader
+		// rotationPending is set when a rotation was detected but the new file
+		// was not yet visible to reopen: the NEXT successful open must then seek
+		// to START (the post-rotation file is entirely unread), closing the race
+		// window instead of falling back to SeekEnd and dropping its head.
+		rotationPending bool
+	)
+	// seekEnd=true only on the INITIAL open, so we do not replay an existing
+	// large historical log on startup. A rotation reopen must seek to START:
+	// the new file's beginning is unread ground-truth data — seeking to end
+	// there would silently drop every event written before we noticed the
+	// rotation, a security-signal loss.
+	openFile := func(seekEnd bool) bool {
+		nf, err := os.Open(path)
+		if err != nil {
+			return false
+		}
+		if seekEnd {
+			_, _ = nf.Seek(0, io.SeekEnd)
+		} else {
+			_, _ = nf.Seek(0, io.SeekStart)
+		}
+		f = nf
+		reader = bufio.NewReader(f)
+		return true
+	}
+	defer func() {
+		if f != nil {
+			_ = f.Close()
+		}
+	}()
+
+	for ctx.Err() == nil {
+		if f == nil {
+			// Initial / post-read-error reopen seeks to END (don't replay an
+			// existing historical log). But if a rotation was detected and its
+			// new file only just became visible, seek to START so its head is
+			// not skipped.
+			if !openFile(!rotationPending) {
+				if sleepCtx(ctx, time.Second) {
+					return
+				}
+				continue
+			}
+			if rotationPending {
+				log.Printf("wardyn-tetragon-ingest: reopened rotated export %s at offset 0", path)
+			} else {
+				log.Printf("wardyn-tetragon-ingest: opened export %s", path)
+			}
+			rotationPending = false
+		}
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			processLine(line, mapper, sink)
+		}
+		if err == io.EOF {
+			// Detect rotation/truncation: if the file shrank, reopen at the
+			// START of the new file — its beginning is unread data we must not
+			// skip. If the new file is not visible yet, mark rotationPending so
+			// the f==nil retry path also seeks to START once it appears (no head
+			// drop), rather than falling back to SeekEnd.
+			if rotated(f, path) {
+				_ = f.Close()
+				if !openFile(false) {
+					f = nil
+					rotationPending = true
+					if sleepCtx(ctx, 250*time.Millisecond) {
+						return
+					}
+				} else {
+					log.Printf("wardyn-tetragon-ingest: reopened rotated export %s at offset 0", path)
+				}
+				continue
+			}
+			if sleepCtx(ctx, 250*time.Millisecond) {
+				return
+			}
+			continue
+		}
+		if err != nil {
+			// Read error: reopen on next loop.
+			_ = f.Close()
+			f = nil
+			if sleepCtx(ctx, time.Second) {
+				return
+			}
+		}
+	}
+}
+
+// processLine maps one export line and emits the result. Unmapped events are
+// still emitted (run_id NULL) — visible blindness.
+func processLine(line []byte, mapper *groundtruth.Mapper, sink *eventSink) {
+	line = []byte(strings.TrimSpace(string(line)))
+	if len(line) == 0 {
+		return
+	}
+	ev, ok := mapper.MapLine(line)
+	if !ok {
+		// Unrecorded kind or filtered (non-sensitive) write: not an error.
+		return
+	}
+	sink.emit(ev)
+}
+
+// rotated reports whether the file at path is a different/truncated file than
+// the open handle (log rotation): the on-disk size is smaller than our offset.
+func rotated(f *os.File, path string) bool {
+	cur, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return true
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false // file gone momentarily; keep our handle and retry
+	}
+	return fi.Size() < cur
+}
+
+func heartbeatLoop(ctx context.Context, sink *eventSink, ival time.Duration) {
+	// Emit one immediately so /healthz flips to healthy as soon as the sensor
+	// is up and reachable, then on the interval. Each beat carries the current
+	// cumulative drop count so /healthz can surface the gap size.
+	beat := func() { sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount())) }
+	beat()
+	t := time.NewTicker(ival)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			beat()
+		}
+	}
+}
+
+func refreshLoop(ctx context.Context, corr *dockerCorrelator, ival time.Duration) {
+	t := time.NewTicker(ival)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := corr.Refresh(ctx); err != nil {
+				log.Printf("wardyn-tetragon-ingest: container index refresh failed: %v", err)
+			}
+		}
+	}
+}
+
+func statsLoop(ctx context.Context, sink *eventSink, ival time.Duration) {
+	t := time.NewTicker(ival)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			log.Printf("wardyn-tetragon-ingest: stats posted=%d dropped=%d", sink.postedCount(), sink.droppedCount())
+		}
+	}
+}
+
+// sleepCtx sleeps for d or until ctx is done; returns true if ctx was done.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+// flagEnv/flagIntEnv/splitCSV are shared with cmd/wardynd via internal/cliutil
+// (previously duplicated here — this file's own comment called them "mirror
+// wardynd's").
+var (
+	flagEnv    = cliutil.FlagEnv
+	flagIntEnv = cliutil.FlagIntEnv
+	splitCSV   = cliutil.SplitCSV
+)
+
+func mustDuration(s string, def time.Duration) time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(s)); err == nil {
+		return d
+	}
+	return def
+}

@@ -1,0 +1,95 @@
+{
+  "name": "burntsushi-walkdir",
+  "kind": "repo",
+  "source": "BurntSushi/walkdir",
+  "ref": "6fd031c82ba5a4204b4ce6eae73dacb00dc072ec",
+  "status": "ready",
+  "approved_egress": [
+    "github.com",
+    "index.crates.io",
+    "static.crates.io"
+  ],
+  "record_results": {
+    "test": {
+      "mode": "auto",
+      "steps": [
+        {
+          "stage": "test",
+          "command": "cargo test",
+          "exit_code": 0,
+          "duration_ms": 2170
+        }
+      ],
+      "run_id": "67732db9-edf4-4f4f-8398-ccd103214f83",
+      "status": "recorded",
+      "caveats": [
+        "secret masking is seed-ahead only: a secret this open run touched that was never declared to Wardyn is NOT masked in logs or observations \u2014 treat raw output as sensitive"
+      ],
+      "started_at": "2026-07-07T02:06:02.181211563Z",
+      "finished_at": "2026-07-07T02:06:12.223743257Z",
+      "observations": {
+        "domains": [
+          {
+            "host": "github.com",
+            "methods": [
+              "CONNECT"
+            ],
+            "deny_count": 0,
+            "allow_count": 1,
+            "pending_count": 0
+          },
+          {
+            "host": "index.crates.io",
+            "methods": [
+              "CONNECT"
+            ],
+            "deny_count": 0,
+            "allow_count": 1,
+            "pending_count": 0
+          },
+          {
+            "host": "static.crates.io",
+            "methods": [
+              "CONNECT"
+            ],
+            "deny_count": 0,
+            "allow_count": 1,
+            "pending_count": 0
+          },
+          {
+            "host": "wardynd",
+            "methods": [
+              "PUT"
+            ],
+            "deny_count": 0,
+            "allow_count": 4,
+            "pending_count": 0
+          }
+        ]
+      },
+      "egress_promoted": true
+    }
+  },
+  "verify_result": {
+    "ok": true,
+    "ran": true,
+    "done": true,
+    "steps": [
+      {
+        "stage": "build",
+        "command": "cargo build",
+        "exit_code": 0,
+        "duration_ms": 883
+      },
+      {
+        "stage": "test",
+        "command": "cargo test",
+        "exit_code": 0,
+        "duration_ms": 1543
+      }
+    ],
+    "total": 2
+  },
+  "verified_profile_hash": null,
+  "verified_at": "2026-07-07T02:06:17.230752Z"
+}

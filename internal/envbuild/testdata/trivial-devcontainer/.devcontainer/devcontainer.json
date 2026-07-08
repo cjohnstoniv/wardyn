@@ -1,0 +1,4 @@
+{
+  "name": "wardyn-smoke",
+  "image": "alpine:3.19"
+}

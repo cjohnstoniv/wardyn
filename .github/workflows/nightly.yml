@@ -1,0 +1,139 @@
+name: Nightly (full-stack e2e)
+
+# Heavy, Docker-dependent suites that are too slow for every PR: the live
+# security e2e (test/e2e/e2e.sh) and the Postgres/docker-tagged report suites.
+# Runs nightly and on manual dispatch. Failures here are real regressions in the
+# end-to-end security invariants (L0 egress, metadata block, kill cascade,
+# brokered credentials, recording delivery).
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 07:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Docker available
+        run: docker --version
+      - name: Live security e2e (compose stack)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        run: make test-e2e
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-results
+          path: test/e2e/RESULTS.md
+
+  # Live TASK e2e: real sandboxes run the test/e2e/tasks corpus and are graded on
+  # final workspace STATE (did the agent actually do the work?), plus per-tier
+  # allow/block confinement, interactive PTY, and recording-replay. The $0 oracle
+  # lane only (no model): the real-model lane is opt-in and needs a subscription/
+  # key not available in CI. On native docker the proxy->control-plane egress
+  # callback routes, so the recording-replay synthesis allowlist is populated too.
+  task-e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Docker available
+        run: docker --version
+      - name: Live task e2e (real sandboxes + graders, oracle lane)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        run: make test-e2e-live
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-e2e-live-results
+          path: test/e2e/RESULTS.md
+
+  # Full Playwright UI e2e (every screen + the AI Run Composer) against a real
+  # wardynd + Postgres backend serving the built UI. The PR `ui-e2e` job runs the
+  # same suite; nightly re-runs it with full browser retries as a regression net
+  # and is the home for heavier UI-e2e additions. Uses a NAMED Postgres container
+  # ("wardyn-test-pg") because scripts/e2e-backend.sh seeds run-state fixtures and
+  # the composer's approval fixtures via `docker exec`.
+  ui-e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Start Postgres (named container for the seeder)
+        run: |
+          docker run -d --name wardyn-test-pg \
+            -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
+            -p 55432:5432 postgres:16-alpine
+          for i in $(seq 1 30); do docker exec wardyn-test-pg pg_isready -U wardyn && break || sleep 1; done
+      - name: Install UI deps + Playwright chromium
+        working-directory: ui
+        run: pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium
+      - name: Playwright UI e2e (all screens + composer, fresh seed per spec)
+        run: ./scripts/run-ui-e2e.sh
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-playwright-report
+          path: |
+            ui/playwright-report/**
+            ui/test-results/**
+
+  integration-pg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Postgres-gated integration suite (with reports)
+        env:
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        run: make test-report-pg
+      - name: Upload PG test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg-test-reports
+          path: test/reports/go/pg/**

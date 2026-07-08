@@ -1,0 +1,356 @@
+# Wardyn compose demo. Two CI-tested deployment paths exist (anti-Gitpod
+# constraint): this one and deploy/helm/wardyn. This stack stands up Postgres,
+# Dex (human SSO IdP), and wardynd built WITH the docker runner so it can launch
+# real governed sandboxes on the host Docker daemon.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# DAEMON-TRUST TRADEOFF (loud, on purpose):
+#   The wardynd service bind-mounts /var/run/docker.sock. That grants wardynd
+#   root-equivalent control of the host Docker daemon — it can create, inspect,
+#   and destroy ANY container on the host, not just Wardyn's. This is acceptable
+#   ONLY for a local, single-tenant demo on a machine you trust. Do NOT expose
+#   this stack to untrusted networks or run it multi-tenant. The production path
+#   is Kubernetes (deploy/helm/wardyn), where the runner uses scoped RBAC and no
+#   host socket is shared. See ARCHITECTURE.md "Deployment surface".
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Defaults below are demo-grade secrets. Override via a sibling .env file or the
+# shell environment for anything beyond a laptop demo.
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: wardyn-postgres
+    # Loopback-only publish so a HOST-MODE wardynd (run outside compose, e.g. to use
+    # the resident `claude` CLI composer backend) can reach the same database.
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: wardyn
+      POSTGRES_DB: wardyn
+      POSTGRES_PASSWORD: wardyn-dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wardyn -d wardyn"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - wardyn
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.40.0
+    container_name: wardyn-dex
+    # Opt-in: human SSO is OFF by default (`make setup` / `scripts/up.sh up`
+    # starts only postgres+wardynd with WARDYN_LOCAL_MODE=true and an empty
+    # OIDC issuer). Bring dex up explicitly with `docker compose --profile sso
+    # up` (or name it: `docker compose up dex` — explicit names always start
+    # regardless of active profiles).
+    profiles: ["sso"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    # NOTE: dex config env-expansion is NOT used here. Both the client secret and
+    # the demo password hash are LITERALS in dex.yaml. Enabling DEX_EXPAND_ENV
+    # would corrupt the bcrypt hash ($2a$/$10$ segments read as undefined vars),
+    # and leaving it off (the observed default) means an injected ${DEX_CLIENT_SECRET}
+    # is never substituted and every token exchange fails with "invalid client_secret".
+    # To rotate the secret, edit dex.yaml AND WARDYN_OIDC_CLIENT_SECRET below together.
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+    healthcheck:
+      # Dex serves an OIDC discovery doc once ready.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5556/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - wardyn
+
+  wardynd:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.wardynd
+    image: wardyn/wardynd:demo
+    container_name: wardyn-api
+    # The docker runner needs to reach the host daemon to create sandboxes.
+    # Run as root inside the container so it can open the bind-mounted socket
+    # (demo only; see the DAEMON-TRUST note above).
+    user: root
+    environment:
+      WARDYN_PG_DSN: "postgres://wardyn:wardyn-dev@postgres:5432/wardyn?sslmode=disable"
+      WARDYN_LISTEN: ":8080"
+      # Transport security (TLS). The demo serves PLAIN HTTP on localhost; wardynd
+      # logs a loud WARNING at boot. For any non-localhost deployment, add TLS via
+      # ONE of the two options below (see this directory's README "Transport
+      # security"). Leave BOTH unset for the plain-HTTP demo — Secure cookies are
+      # never sent over plain HTTP and would break the demo login.
+      #
+      # (a) Built-in TLS: bind-mount your cert+key and point wardynd at them
+      #     (both must be set together; one alone fails closed at boot). Cookies
+      #     are then marked Secure automatically.
+      # WARDYN_TLS_CERT: "/certs/tls.crt"
+      # WARDYN_TLS_KEY: "/certs/tls.key"
+      #
+      # (b) TLS terminates at an upstream reverse proxy that forwards plain HTTP
+      #     to wardynd: set this so cookies are marked Secure even though wardynd
+      #     itself speaks plain HTTP.
+      # WARDYN_TLS_TERMINATED: "true"
+      WARDYN_ADMIN_TOKEN: "${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
+      # LOCAL HOST MODE (single-developer machine): set WARDYN_LOCAL_MODE=true to
+      # bypass the public-API login entirely — open http://localhost:8080 and spawn
+      # agents with NO SSO/Dex and NO token. Actions are attributed to
+      # WARDYN_LOCAL_OPERATOR (default: the container OS user). Run-token auth for
+      # the sidecars is UNAFFECTED. wardynd logs a WARNING because the bind is not
+      # loopback (the published port is reachable on your host); fine for a single
+      # dev machine behind a firewall. Leave false to keep the token/SSO demo.
+      WARDYN_LOCAL_MODE: "${WARDYN_LOCAL_MODE:-false}"
+      WARDYN_LOCAL_OPERATOR: "${WARDYN_LOCAL_OPERATOR:-}"
+      WARDYN_RUNNER: "docker"
+      WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:demo"
+      WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
+      # Devcontainer image builds — OPT-IN, OFF by default. Workspace import
+      # VERIFY needs the detected toolchain (Go/Node/…) present in the image; the
+      # base agent image has none, so without a built devcontainer a verify of a
+      # real repo fails "command not found" (exit 127). Enable with WARDYN_ENVBUILD=true
+      # PLUS one commit path:
+      #   - WARDYN_ENVBUILD_CACHE_REPO=<oci-ref>  (PREFERRED: safe daemonless push), or
+      #   - WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK=true (DANGEROUS: bind-mounts the host
+      #     docker.sock into the untrusted-code BUILD container — a host-root-escape
+      #     risk; trusted single-host dev ONLY, an explicit operator choice — never
+      #     defaulted on).
+      WARDYN_ENVBUILD: "${WARDYN_ENVBUILD:-false}"
+      WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK: "${WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK:-false}"
+      WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-}"
+      # CC1 (runc) demo policy: plain Docker hosts without gVisor (CC2) can still
+      # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json
+      # on a CC2-capable host (the default.json policy demands CC2).
+      WARDYN_DEFAULT_POLICY: "${WARDYN_DEFAULT_POLICY:-/examples/policies/demo.json}"
+      # AI Run Composer: a JSON registry ({default,backends}) the New Run wizard
+      # uses to turn a plain-English task into a proposed sandbox spec. Empty
+      # DISABLES the composer (the wizard's "Describe your task" tab is hidden). Set
+      # it (shell export or a deploy/compose/.env file — copy .env.example) to enable.
+      # Ready-made configs: ../../examples/composer-configs/ (fake, claude-cli-opus,
+      # anthropic-api, openai-api). No-API-key demo backend (deterministic):
+      #   WARDYN_COMPOSER_CONFIG='{"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}'
+      # Real suggestions (needs an api key in the secret store):
+      #   WARDYN_COMPOSER_CONFIG='{"default":"claude","backends":[{"name":"claude","wire":"anthropic","transport":"api","model":"claude-opus-4-8","api_key_secret":"anthropic-api-key"}]}'
+      WARDYN_COMPOSER_CONFIG: "${WARDYN_COMPOSER_CONFIG:-}"
+      WARDYN_RECORDING_DIR: "/data/recordings"
+      # Recording delivery: wardyn-rec uploads finished casts through the
+      # proxy's brokered route (run-token injected proxy-side; cross-run
+      # uploads 403 at the control plane). No shared volume is mounted into
+      # agent containers — a shared mount would have no cross-run isolation
+      # since all agent images run the same uid. WARDYN_RECORDING_MOUNT remains
+      # available as an opt-in single-host fallback with that documented caveat.
+      # Secret-store age identity. Left EMPTY by default: wardynd generates an
+      # ephemeral key on boot (secrets do NOT persist across restarts — fine for
+      # a demo). For persistence set WARDYN_AGE_KEY to your OWN key from
+      # `age-keygen`. wardynd fails closed if given the old publicly-known demo
+      # key. Never bake a real key into a committed file.
+      WARDYN_AGE_KEY: "${WARDYN_AGE_KEY:-}"
+      WARDYN_AUDIT_SINKS: '${WARDYN_AUDIT_SINKS:-{"file":{"path":"/data/audit/audit.log","max_bytes":10485760,"keep":3}}}'
+      # Human SSO via Dex. PUBLIC issuer (browser-facing, published on the host)
+      # is localhost:5556; wardynd reaches Dex server-side at the internal docker
+      # hostname dex:5556 and rewrites localhost:5556 -> dex:5556 for
+      # discovery/token/JWKS. SSO therefore works in the browser with NO
+      # /etc/hosts edit. (Dex's issuer in dex.yaml must match the public URL.)
+      # Empty by default (SSO opt-in, see the `dex` service's `profiles: [sso]`
+      # note above) — wardynd only configures OIDC when this is non-empty, and
+      # fails closed on discovery failure once it IS set, so the default path
+      # must never point at an issuer that isn't running. Set it (and start
+      # dex) via `docker compose --profile sso up` for the SSO/Dex demo.
+      WARDYN_OIDC_ISSUER: "${WARDYN_OIDC_ISSUER:-}"
+      WARDYN_OIDC_INTERNAL_ISSUER: "${WARDYN_OIDC_INTERNAL_ISSUER:-http://dex:5556}"
+      WARDYN_OIDC_CLIENT_ID: "wardyn"
+      WARDYN_OIDC_CLIENT_SECRET: "${WARDYN_OIDC_CLIENT_SECRET:-wardyn-oidc-secret}"
+      WARDYN_OIDC_REDIRECT_URL: "http://localhost:8080/auth/callback"
+      WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
+      # Agent image overrides: map agent-name -> OCI image ref. The demo tags
+      # are produced by `make agent-images` or `docker compose --profile build-only build`.
+      WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:demo\",\"codex-cli\":\"wardyn/agent-codex-cli:demo\"}}"
+      # Subscription auth mode. Proxy-side OAuth injection needs wardynd to run
+      # where the operator's ~/.claude + `claude` binary live (host mode) so it
+      # can mint/refresh the live token. The COMPOSE wardynd is distroless and
+      # has neither, so injection can only fail-lazily and crash the per-run
+      # proxy when it tries to resolve the subscription-oauth secret. `off`
+      # selects RESIDENT-COPY: a run that mounts ~/.claude uses those creds
+      # directly (stage them fresh with `WARDYN_SUBSCRIPTION_INJECT=off
+      # scripts/stage-claude-creds.sh`). This is the correct default for compose.
+      WARDYN_SUBSCRIPTION_INJECT: "${WARDYN_SUBSCRIPTION_INJECT:-off}"
+      # AWS Bedrock as a third Claude transport (enterprise: no direct Anthropic
+      # egress, billed via AWS). Set region + a cross-region INFERENCE-PROFILE id
+      # (NOT a bare model id) to enable; Claude runs then use Bedrock automatically
+      # (precedence: subscription > bedrock > api-key). Credentials come from the
+      # SECRET STORE (add via the Setup UI or the secrets API), not env:
+      #   - PREFERRED (never-resident): a `bedrock-api-key` bearer token — proxy-
+      #     injected as Authorization: Bearer into bedrock-runtime, like an api key.
+      #   - or SigV4 access keys `aws-access-key-id` + `aws-secret-access-key`
+      #     (+ optional `aws-session-token`) — these are RESIDENT in the sandbox env
+      #     (SigV4 signs in-process; see threatmodel). Region/model change needs a
+      #     wardynd restart (creds are live-addable).
+      # WARDYN_BEDROCK_REGION: "${WARDYN_BEDROCK_REGION:-}"
+      # WARDYN_BEDROCK_MODEL: "${WARDYN_BEDROCK_MODEL:-}"
+    volumes:
+      # Daemon trust: see the loud note at the top of this file.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - recordings:/data/recordings
+      - audit:/data/audit
+    ports:
+      # Loopback-only: WARDYN_LOCAL_MODE bypasses login entirely, so this must
+      # never be reachable beyond the host. Override the host-side port with
+      # WARDYN_UP_PORT (matches scripts/up.sh's doctor/healthz-wait).
+      - "127.0.0.1:${WARDYN_UP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # required: false — dex is opt-in (profile "sso"); without it, Compose
+      # would otherwise refuse to start wardynd at all when dex isn't part of
+      # the active profile set ("depends on undefined service"). With SSO on,
+      # this still waits for dex to be healthy before wardynd starts.
+      dex:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/wardyn", "runs", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      wardyn:
+        # Browser-facing issuer is http://dex:5556; this alias lets the demo work
+        # when the operator maps `dex` -> 127.0.0.1 in /etc/hosts for UI login.
+        aliases:
+          - wardynd
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # eBPF GROUND-TRUTH TIER (the SECOND of Wardyn's three audit streams).
+  #
+  # `tetragon` is a PRIVILEGED host eBPF sensor (the upstream image). It loads
+  # the TracingPolicies in ./tetragon-policies and EXPORTS kernel events as
+  # line-delimited JSON to the shared `tetragon_export` volume.
+  # `wardyn-tetragon-ingest` tails that JSON, correlates each event to a Wardyn
+  # run by listing docker containers labelled wardyn.managed=true, maps a bounded
+  # subset to audit events, and POSTs them to wardynd's
+  # POST /api/v1/internal/groundtruth (which records them append-only -> Postgres
+  # AND every SIEM sink, with zero new fanout code).
+  #
+  # This tier is OPTIONAL. On a host WITHOUT it (omit the `groundtruth` profile),
+  # wardynd's /healthz reports ebpf_groundtruth=unavailable — honest degradation,
+  # never a silent claim. Start the tier with:
+  #   docker compose --profile groundtruth up -d tetragon wardyn-tetragon-ingest
+  # after seeding WARDYN_GROUNDTRUTH_TOKEN (see below).
+  #
+  # TOKEN SEEDING (host-sensor auth): the ingest sidecar authenticates with a
+  # token whose audience is "wardyn-groundtruth" (audit-write-only; it can never
+  # mint or approve). Obtain one from the running control plane and export it
+  # before starting this tier:
+  #   export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
+  #     /usr/local/bin/wardynd -print-groundtruth-token \
+  #     -dsn "$WARDYN_PG_DSN" -age-key "$WARDYN_AGE_KEY")
+  # (The token has the provider's 1h TTL; re-mint on rotation. The wardynd image
+  # bundles the wardynd binary, so the same image mints it.)
+  # ───────────────────────────────────────────────────────────────────────────
+  tetragon:
+    image: quay.io/cilium/tetragon:v1.1.2
+    container_name: wardyn-tetragon
+    profiles: ["groundtruth"]
+    # Host eBPF sensor: needs privileged + host PID/cgroup + kernel mounts.
+    privileged: true
+    pid: host
+    network_mode: host
+    command:
+      - --export-filename=/var/log/tetragon/tetragon.log
+      - --tracing-policy-dir=/etc/tetragon/tetragon.tp.d
+    volumes:
+      # JSON export shared with the ingest sidecar.
+      - tetragon_export:/var/log/tetragon
+      # TracingPolicies (tcp_connect + sensitive-file-write).
+      - ./tetragon-policies:/etc/tetragon/tetragon.tp.d:ro
+      # Kernel/BPF/cgroup host mounts the sensor requires.
+      - /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf:ro
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /sys/fs/cgroup:/sys/fs/cgroup
+      - /proc:/procRoot:ro
+
+  wardyn-tetragon-ingest:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.tetragon-ingest
+    image: wardyn/wardyn-tetragon-ingest:demo
+    container_name: wardyn-tetragon-ingest
+    profiles: ["groundtruth"]
+    environment:
+      WARDYN_TETRAGON_EXPORT: "/var/log/tetragon/tetragon.log"
+      WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
+      # Host-sensor token (aud=wardyn-groundtruth). REQUIRED — the sidecar fails
+      # closed at boot if unset. Seed it per the TOKEN SEEDING note above.
+      WARDYN_GROUNDTRUTH_TOKEN: "${WARDYN_GROUNDTRUTH_TOKEN:-}"
+      WARDYN_GROUNDTRUTH_HEARTBEAT: "30s"
+      # Comma-separated run ids the host sensor is blind to (CC3/Kata); a
+      # kernel.sensor.blind event is emitted once per id at boot.
+      WARDYN_GROUNDTRUTH_BLIND_RUNS: "${WARDYN_GROUNDTRUTH_BLIND_RUNS:-}"
+    volumes:
+      # Read the Tetragon JSON export.
+      - tetragon_export:/var/log/tetragon:ro
+      # Read the host docker socket to list wardyn-managed containers for
+      # correlation. Daemon-trust tradeoff applies (see the top-of-file note);
+      # the sidecar only ever runs `docker ps` (read-only listing).
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      wardynd:
+        condition: service_healthy
+      tetragon:
+        condition: service_started
+    networks:
+      - wardyn
+
+  # proxy is built here but not run as a long-lived service: the docker runner
+  # launches one wardyn-proxy container per run from the wardyn/wardyn-proxy
+  # image. This stanza exists so `docker compose build` produces that image.
+  proxy-image:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.proxy
+    image: wardyn/wardyn-proxy:demo
+    # Never started; build-only. `command: true` would still require an entry,
+    # so we park it under a profile that the demo never activates.
+    profiles: ["build-only"]
+    command: ["--help"]
+
+  # agent-claude-code and agent-codex-cli are build-only stanzas: the docker
+  # runner launches agent containers on demand; these entries exist so
+  # `docker compose --profile build-only build` produces the tagged images.
+  # Both are parked under the build-only profile (never started by the demo).
+  agent-claude-code:
+    build:
+      context: ../..
+      dockerfile: deploy/images/claude-code/Dockerfile
+    image: wardyn/agent-claude-code:demo
+    profiles: ["build-only"]
+    command: ["sleep", "infinity"]
+
+  agent-codex-cli:
+    build:
+      context: ../..
+      dockerfile: deploy/images/codex-cli/Dockerfile
+    image: wardyn/agent-codex-cli:demo
+    profiles: ["build-only"]
+    command: ["sleep", "infinity"]
+
+volumes:
+  postgres_data:
+  recordings:
+    # Explicit name so the docker runner can mount the SAME volume into agent
+    # containers by name (compose would otherwise prefix it with the project).
+    name: wardyn-recordings
+  audit:
+  # Tetragon JSON export shared between the tetragon sensor (writer) and the
+  # wardyn-tetragon-ingest sidecar (reader). Part of the groundtruth profile.
+  tetragon_export:
+
+networks:
+  wardyn:
+    name: wardyn-internal
+    driver: bridge

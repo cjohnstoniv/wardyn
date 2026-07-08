@@ -1,0 +1,217 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// apiClient is a thin JSON client for the wardynd public API.
+type apiClient struct {
+	baseURL string
+	token   string
+}
+
+func (c *apiClient) do(ctx context.Context, method, path string, body any, out any) error {
+	// No token is fine against a LOCAL HOST MODE wardynd (it bypasses public-API
+	// auth on a loopback bind). Against an auth-gated server the request simply
+	// gets a clear 401 instead of a client-side error.
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode request: %w", err)
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	url := strings.TrimRight(c.baseURL, "/") + path
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+	}
+	if out != nil && len(data) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+	}
+	return nil
+}
+
+// API helper methods mirroring the REST contract.
+
+func (c *apiClient) createRun(ctx context.Context, req createRunBody) (types.AgentRun, error) {
+	var run types.AgentRun
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs", req, &run)
+	return run, err
+}
+
+func (c *apiClient) listRuns(ctx context.Context) ([]types.AgentRun, error) {
+	var runs []types.AgentRun
+	err := c.do(ctx, http.MethodGet, "/api/v1/runs", nil, &runs)
+	return runs, err
+}
+
+func (c *apiClient) killRun(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/runs/"+id+"/kill", nil, nil)
+}
+
+func (c *apiClient) listApprovals(ctx context.Context, state string) ([]types.ApprovalRequest, error) {
+	path := "/api/v1/approvals"
+	if state != "" {
+		path += "?state=" + state
+	}
+	var out []types.ApprovalRequest
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *apiClient) decideApproval(ctx context.Context, id string, approve bool, reason string) (types.ApprovalRequest, error) {
+	verb := "deny"
+	if approve {
+		verb = "approve"
+	}
+	var out types.ApprovalRequest
+	err := c.do(ctx, http.MethodPost, "/api/v1/approvals/"+id+"/"+verb, map[string]string{"reason": reason}, &out)
+	return out, err
+}
+
+func (c *apiClient) audit(ctx context.Context, runID string) ([]types.AuditEvent, error) {
+	var out []types.AuditEvent
+	err := c.do(ctx, http.MethodGet, "/api/v1/audit?run_id="+runID, nil, &out)
+	return out, err
+}
+
+// profileResp is the decoded POST /runs/{id}/profile reply (Recording Mode): the
+// synthesized least-privilege sandbox profile plus the observations it was built
+// from. Only the fields the CLI renders/saves are modeled.
+type profileResp struct {
+	Proposed struct {
+		InlinePolicy types.RunPolicySpec `json:"inline_policy"`
+	} `json:"proposed"`
+	OverallRisk  string `json:"overall_risk"`
+	Observations struct {
+		Domains []struct {
+			Host    string   `json:"host"`
+			Methods []string `json:"methods"`
+		} `json:"domains"`
+		ExecArgv0s []string `json:"exec_argv0s"`
+		Anomalies  []string `json:"anomalies"`
+	} `json:"observations"`
+	Warnings []string `json:"warnings"`
+}
+
+func (c *apiClient) synthesizeProfile(ctx context.Context, runID string) (profileResp, error) {
+	var out profileResp
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID+"/profile", nil, &out)
+	return out, err
+}
+
+// recordTaskResp is the decoded POST /workspaces/{id}/record reply.
+type recordTaskResp struct {
+	RecordRunID string   `json:"record_run_id"`
+	TaskKey     string   `json:"task_key"`
+	Mode        string   `json:"mode"`
+	Detail      string   `json:"detail"`
+	Warnings    []string `json:"warnings"`
+}
+
+func (c *apiClient) recordWorkspaceTask(ctx context.Context, wsID, taskKey, mode string) (recordTaskResp, error) {
+	body := map[string]string{"task_key": taskKey}
+	if mode != "" {
+		body["mode"] = mode
+	}
+	var out recordTaskResp
+	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID+"/record", body, &out)
+	return out, err
+}
+
+// createRunBody is the POST /runs body.
+type createRunBody struct {
+	Agent            string `json:"agent"`
+	Repo             string `json:"repo"`
+	Task             string `json:"task"`
+	PolicyID         string `json:"policy_id,omitempty"`
+	ConfinementClass string `json:"confinement_class,omitempty"`
+	// Interactive comes up idle (no agent task exec'd) for `wardyn attach`.
+	Interactive bool `json:"interactive,omitempty"`
+}
+
+// policyBody is the POST/PUT /policies body: a name plus the RunPolicySpec.
+type policyBody struct {
+	Name string              `json:"name"`
+	Spec types.RunPolicySpec `json:"spec"`
+}
+
+func (c *apiClient) listPolicies(ctx context.Context) ([]types.RunPolicy, error) {
+	var out []types.RunPolicy
+	err := c.do(ctx, http.MethodGet, "/api/v1/policies", nil, &out)
+	return out, err
+}
+
+func (c *apiClient) getPolicy(ctx context.Context, id string) (types.RunPolicy, error) {
+	var out types.RunPolicy
+	err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id, nil, &out)
+	return out, err
+}
+
+func (c *apiClient) createPolicy(ctx context.Context, body policyBody) (types.RunPolicy, error) {
+	var out types.RunPolicy
+	err := c.do(ctx, http.MethodPost, "/api/v1/policies", body, &out)
+	return out, err
+}
+
+func (c *apiClient) updatePolicy(ctx context.Context, id string, body policyBody) (types.RunPolicy, error) {
+	var out types.RunPolicy
+	err := c.do(ctx, http.MethodPut, "/api/v1/policies/"+id, body, &out)
+	return out, err
+}
+
+func (c *apiClient) deletePolicy(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/policies/"+id, nil, nil)
+}
+
+func (c *apiClient) putSecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/secrets/"+name, map[string]string{"value": value}, nil)
+}
+
+func (c *apiClient) deleteSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/secrets/"+name, nil, nil)
+}
+
+func (c *apiClient) listSecrets(ctx context.Context) ([]string, error) {
+	var out struct {
+		Names []string `json:"names"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/secrets", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Names, nil
+}

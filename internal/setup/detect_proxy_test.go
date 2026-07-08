@@ -1,0 +1,442 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package setup
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// ─── maskProxyURL ────────────────────────────────────────────────────────────
+
+func TestMaskProxyURL(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         string
+		wantMasked string
+		wantCred   bool
+	}{
+		{"userpass", "http://user:pass@proxy.corp:8080", "http://user:***@proxy.corp:8080", true},
+		{"user_only", "http://user@proxy.corp:8080", "http://user@proxy.corp:8080", true},
+		{"no_creds_scheme", "http://proxy.corp:8080", "http://proxy.corp:8080", false},
+		{"no_creds_bare", "proxy.corp:8080", "proxy.corp:8080", false},
+		{"bare_userpass", "user:pass@proxy.corp:8080", "user:***@proxy.corp:8080", true},
+		{"no_proxy_list_untouched", "localhost,127.0.0.1,.corp.internal", "localhost,127.0.0.1,.corp.internal", false},
+		{"empty", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			masked, hasCred := maskProxyURL(tc.in)
+			if masked != tc.wantMasked {
+				t.Errorf("maskProxyURL(%q) value = %q, want %q", tc.in, masked, tc.wantMasked)
+			}
+			if hasCred != tc.wantCred {
+				t.Errorf("maskProxyURL(%q) hasCred = %v, want %v", tc.in, hasCred, tc.wantCred)
+			}
+			// The raw password must never appear in the masked output.
+			if tc.wantCred {
+				if u, _ := parseURLPassword(tc.in); u != "" && contains(masked, u) {
+					t.Errorf("masked output %q leaks raw password %q", masked, u)
+				}
+			}
+		})
+	}
+}
+
+// parseURLPassword extracts a raw password from a test fixture URL for the
+// leak-check above (test-only helper; production code never does this).
+func parseURLPassword(raw string) (string, bool) {
+	if idx := indexByte(raw, ':'); idx >= 0 {
+		if at := indexByte(raw, '@'); at > idx {
+			// crude but sufficient for the fixed test fixtures above
+			for _, prefix := range []string{"http://", "https://"} {
+				if len(raw) > len(prefix) && raw[:len(prefix)] == prefix {
+					raw = raw[len(prefix):]
+					break
+				}
+			}
+			userinfo := raw[:indexByte(raw, '@')]
+			if i := indexByte(userinfo, ':'); i >= 0 {
+				return userinfo[i+1:], true
+			}
+		}
+	}
+	return "", false
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+func contains(haystack, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// ─── env vars ────────────────────────────────────────────────────────────────
+
+func TestDetectEnvProxyCandidates_LowercasePreferredAndMismatch(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", "http://upper.proxy:8080")
+	t.Setenv("http_proxy", "http://lower.proxy:8080")
+	t.Setenv("https_proxy", "http://only-lower.proxy:8443")
+	t.Setenv("NO_PROXY", "localhost")
+
+	candidates, mismatches := detectEnvProxyCandidates()
+
+	if len(mismatches) != 1 || mismatches[0] != "HTTP_PROXY/http_proxy" {
+		t.Fatalf("mismatches = %v, want [HTTP_PROXY/http_proxy]", mismatches)
+	}
+
+	byCategory := map[string]proxyCandidate{}
+	for _, c := range candidates {
+		byCategory[c.category] = c
+	}
+	if got := byCategory["http"].value; got != "http://lower.proxy:8080" {
+		t.Errorf("http candidate = %q, want the LOWERCASE value", got)
+	}
+	if got := byCategory["https"].value; got != "http://only-lower.proxy:8443" {
+		t.Errorf("https candidate = %q, want %q", got, "http://only-lower.proxy:8443")
+	}
+	if got := byCategory["no"].value; got != "localhost" {
+		t.Errorf("no candidate = %q, want %q", got, "localhost")
+	}
+	if _, ok := byCategory["all"]; ok {
+		t.Errorf("all_proxy candidate present but ALL_PROXY/all_proxy were never set")
+	}
+	for _, c := range candidates {
+		if c.source != ProxySourceEnv {
+			t.Errorf("candidate %+v source = %q, want %q", c, c.source, ProxySourceEnv)
+		}
+	}
+}
+
+func clearProxyEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range envProxyKeys {
+		t.Setenv(k.upper, "")
+		os.Unsetenv(k.upper)
+		t.Setenv(k.lower, "")
+		os.Unsetenv(k.lower)
+	}
+}
+
+// ─── shell profiles ──────────────────────────────────────────────────────────
+
+func TestDetectShellProxyCandidates_TempProfileAndCredentialMasking(t *testing.T) {
+	home := t.TempDir()
+	bashrc := "# some comment\nexport HTTP_PROXY=\"http://user:secretpass@corp.proxy:8080\"\nexport NO_PROXY=localhost,127.0.0.1\n"
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte(bashrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates := detectShellProxyCandidates(home)
+
+	var http, no *proxyCandidate
+	for i := range candidates {
+		switch candidates[i].category {
+		case "http":
+			http = &candidates[i]
+		case "no":
+			no = &candidates[i]
+		}
+	}
+	if http == nil {
+		t.Fatal("no http candidate found from the temp .bashrc")
+	}
+	if http.source != ProxySourceShell {
+		t.Errorf("http candidate source = %q, want %q", http.source, ProxySourceShell)
+	}
+	if got := http.value; got != "http://user:secretpass@corp.proxy:8080" {
+		t.Errorf("raw shell candidate value = %q (masking happens at newProxySetting, not here)", got)
+	}
+	// The setting built from this candidate must mask the credential.
+	setting := newProxySetting(http.value, http.source, http.detail)
+	if !setting.HasCredentials {
+		t.Error("HasCredentials = false, want true (bashrc value carries user:pass)")
+	}
+	if want := "http://user:***@corp.proxy:8080"; setting.Value != want {
+		t.Errorf("masked setting value = %q, want %q", setting.Value, want)
+	}
+	if contains(setting.Value, "secretpass") {
+		t.Errorf("masked setting value %q leaks the raw password", setting.Value)
+	}
+	if no == nil || no.value != "localhost,127.0.0.1" {
+		t.Errorf("no candidate = %+v, want value localhost,127.0.0.1", no)
+	}
+}
+
+func TestDetectShellProxyCandidates_MissingFilesTolerated(t *testing.T) {
+	// A home dir with no profile files at all must not error or panic.
+	home := t.TempDir()
+	if candidates := detectShellProxyCandidates(home); len(candidates) != 0 {
+		// It's fine if system-wide /etc/environment or /etc/profile.d happen to
+		// declare a proxy on the box running this test; just prove home-relative
+		// files being absent didn't blow up. Nothing further to assert here.
+		t.Logf("got %d candidate(s) from system-wide files (tolerated): %+v", len(candidates), candidates)
+	}
+}
+
+// ─── git config ──────────────────────────────────────────────────────────────
+
+func TestDetectGitProxyConfig_FakeExec(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		if name != "git" {
+			t.Fatalf("unexpected command %q", name)
+		}
+		if len(args) == 4 && args[3] == "http.proxy" {
+			return []byte("http://git.proxy:8080\n"), nil
+		}
+		// https.proxy unset: git exits 1.
+		return nil, &exec.ExitError{}
+	}
+
+	cfg := detectGitProxyConfig()
+	if cfg == nil {
+		t.Fatal("detectGitProxyConfig() = nil, want a config with http.proxy set")
+	}
+	if cfg.HTTPProxy == nil || cfg.HTTPProxy.Value != "http://git.proxy:8080" {
+		t.Errorf("HTTPProxy = %+v, want value http://git.proxy:8080", cfg.HTTPProxy)
+	}
+	if cfg.HTTPSProxy != nil {
+		t.Errorf("HTTPSProxy = %+v, want nil (https.proxy was never set)", cfg.HTTPSProxy)
+	}
+}
+
+func TestDetectGitProxyConfig_NeitherSet(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		return nil, &exec.ExitError{}
+	}
+	if cfg := detectGitProxyConfig(); cfg != nil {
+		t.Errorf("detectGitProxyConfig() = %+v, want nil", cfg)
+	}
+}
+
+// ─── tool configs ────────────────────────────────────────────────────────────
+
+func TestDetectToolConfigs_TempHome(t *testing.T) {
+	home := t.TempDir()
+
+	mustWrite(t, filepath.Join(home, ".npmrc"), "registry=https://registry.npmjs.org/\nhttps-proxy=http://npm.proxy:8080\n")
+	mustWrite(t, filepath.Join(home, ".config", "pip", "pip.conf"), "[global]\nindex-url = https://pypi.org/simple\nproxy = http://pip.proxy:8080\n")
+	mustWrite(t, filepath.Join(home, ".cargo", "config.toml"), "[http]\nproxy = \"http://cargo.proxy:8080\"\n[source.crates-io]\nreplace-with = \"corp\"\n")
+	mustWrite(t, filepath.Join(home, ".m2", "settings.xml"),
+		"<settings><proxies><proxy><id>corp</id><active>true</active><host>maven.proxy</host><port>8080</port></proxy></proxies></settings>")
+
+	// apt: point the package var at a temp dir instead of the real /etc.
+	origApt := aptConfDir
+	defer func() { aptConfDir = origApt }()
+	aptConfDir = t.TempDir()
+	mustWrite(t, filepath.Join(aptConfDir, "01proxy"), `Acquire::http::Proxy "http://apt.proxy:8080";`+"\n")
+
+	got := detectToolConfigs(home)
+	byTool := map[string]HostProxyToolConfig{}
+	for _, tc := range got {
+		byTool[tc.Tool] = tc
+	}
+
+	want := map[string]string{
+		"npm":   "http://npm.proxy:8080",
+		"pip":   "http://pip.proxy:8080",
+		"cargo": "http://cargo.proxy:8080",
+		"maven": "maven.proxy:8080",
+		"apt":   "http://apt.proxy:8080",
+	}
+	for tool, wantVal := range want {
+		tc, ok := byTool[tool]
+		if !ok {
+			t.Errorf("no %s tool config detected; got %+v", tool, got)
+			continue
+		}
+		if tc.Setting.Value != wantVal {
+			t.Errorf("%s setting = %q, want %q", tool, tc.Setting.Value, wantVal)
+		}
+		if tc.Setting.Source != ProxySourceTool {
+			t.Errorf("%s source = %q, want %q", tool, tc.Setting.Source, ProxySourceTool)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("detectToolConfigs returned %d entries, want %d: %+v", len(got), len(want), got)
+	}
+}
+
+func TestDetectToolConfigs_AbsentFilesProduceNoEntries(t *testing.T) {
+	home := t.TempDir() // empty — none of npm/pip/cargo/maven configs exist
+	origApt := aptConfDir
+	defer func() { aptConfDir = origApt }()
+	aptConfDir = t.TempDir() // empty dir too
+
+	if got := detectToolConfigs(home); len(got) != 0 {
+		t.Errorf("detectToolConfigs on an empty home = %+v, want no entries", got)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ─── OS-level parsing (pure — no real exec, safe on any box) ────────────────
+
+func TestSplitWindowsProxyServer(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  map[string]string
+	}{
+		{"bare", "corp.proxy:8080", map[string]string{"http": "corp.proxy:8080", "https": "corp.proxy:8080"}},
+		{"scheme_split", "http=corp.proxy:8080;https=corp.proxy:8443", map[string]string{"http": "corp.proxy:8080", "https": "corp.proxy:8443"}},
+		{"empty", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitWindowsProxyServer(tc.value, "detail")
+			gotMap := map[string]string{}
+			for _, c := range got {
+				gotMap[c.category] = c.value
+			}
+			if len(gotMap) != len(tc.want) {
+				t.Fatalf("splitWindowsProxyServer(%q) = %+v, want %+v", tc.value, gotMap, tc.want)
+			}
+			for k, v := range tc.want {
+				if gotMap[k] != v {
+					t.Errorf("category %q = %q, want %q", k, gotMap[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestParseWindowsRegistryProxyJSON(t *testing.T) {
+	raw := []byte(`{"ProxyServer":"http=corp.proxy:8080;https=corp.proxy:8443","ProxyEnable":1,"AutoConfigURL":"http://wpad.corp/proxy.pac"}`)
+	candidates, pac := parseWindowsRegistryProxyJSON(raw)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %+v, want 2 entries", candidates)
+	}
+	if pac == nil || pac.URL != "http://wpad.corp/proxy.pac" {
+		t.Fatalf("pac = %+v, want the wpad URL", pac)
+	}
+
+	// ProxyEnable=0 must suppress the proxy candidates (but PAC, if present in
+	// this fixture, is independent of ProxyEnable).
+	raw2 := []byte(`{"ProxyServer":"corp.proxy:8080","ProxyEnable":0,"AutoConfigURL":""}`)
+	candidates2, pac2 := parseWindowsRegistryProxyJSON(raw2)
+	if len(candidates2) != 0 {
+		t.Errorf("candidates2 = %+v, want none (ProxyEnable=0)", candidates2)
+	}
+	if pac2 != nil {
+		t.Errorf("pac2 = %+v, want nil", pac2)
+	}
+
+	// Malformed JSON must not panic or error out.
+	if c, p := parseWindowsRegistryProxyJSON([]byte("not json")); c != nil || p != nil {
+		t.Errorf("malformed JSON produced %+v / %+v, want nil/nil", c, p)
+	}
+}
+
+func TestParseNetshWinHTTPOutput(t *testing.T) {
+	direct := "Current WinHTTP proxy settings:\n\n    Direct access (no proxy server).\n"
+	if got := parseNetshWinHTTPOutput(direct); got != nil {
+		t.Errorf("direct-access output produced %+v, want nil", got)
+	}
+
+	proxied := "Current WinHTTP proxy settings:\n\n    Proxy Server(s) :  corp.proxy:8080\n    Bypass List     :  (none)\n"
+	got := parseNetshWinHTTPOutput(proxied)
+	if len(got) != 2 {
+		t.Fatalf("got = %+v, want 2 candidates (http+https)", got)
+	}
+}
+
+func TestParseScutilProxyOutput(t *testing.T) {
+	sample := `<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+  }
+  HTTPEnable : 1
+  HTTPPort : 8080
+  HTTPProxy : proxy.corp.com
+  HTTPSEnable : 1
+  HTTPSPort : 8443
+  HTTPSProxy : proxy.corp.com
+  ProxyAutoConfigEnable : 1
+  ProxyAutoConfigURLString : http://wpad.corp.com/proxy.pac
+}
+`
+	candidates, pac := parseScutilProxyOutput(sample)
+	byCategory := map[string]string{}
+	for _, c := range candidates {
+		byCategory[c.category] = c.value
+	}
+	if byCategory["http"] != "proxy.corp.com:8080" {
+		t.Errorf("http = %q, want proxy.corp.com:8080", byCategory["http"])
+	}
+	if byCategory["https"] != "proxy.corp.com:8443" {
+		t.Errorf("https = %q, want proxy.corp.com:8443", byCategory["https"])
+	}
+	if pac == nil || pac.URL != "http://wpad.corp.com/proxy.pac" {
+		t.Fatalf("pac = %+v, want the wpad URL", pac)
+	}
+}
+
+// ─── precedence merge ────────────────────────────────────────────────────────
+
+func TestWinningSetting_PrecedenceEnvBeatsShellBeatsOS(t *testing.T) {
+	candidates := []proxyCandidate{
+		{"http", "http://env.proxy:8080", ProxySourceEnv, "env"},
+		{"http", "http://shell.proxy:8080", ProxySourceShell, "shell"},
+		{"http", "http://os.proxy:8080", ProxySourceOS, "os"},
+		{"https", "http://shell.proxy:8443", ProxySourceShell, "shell"},
+		{"https", "http://os.proxy:8443", ProxySourceOS, "os"},
+		{"all", "http://os.proxy:9000", ProxySourceOS, "os"},
+	}
+	if got := winningSetting(candidates, "http"); got == nil || got.Value != "http://env.proxy:8080" || got.Source != ProxySourceEnv {
+		t.Errorf("http winner = %+v, want the env candidate", got)
+	}
+	if got := winningSetting(candidates, "https"); got == nil || got.Value != "http://shell.proxy:8443" || got.Source != ProxySourceShell {
+		t.Errorf("https winner = %+v, want the shell candidate (no env set)", got)
+	}
+	if got := winningSetting(candidates, "all"); got == nil || got.Source != ProxySourceOS {
+		t.Errorf("all winner = %+v, want the OS candidate (no env/shell set)", got)
+	}
+	if got := winningSetting(candidates, "no"); got != nil {
+		t.Errorf("no winner = %+v, want nil (nothing set)", got)
+	}
+}
+
+// ─── top-level smoke test ────────────────────────────────────────────────────
+
+// TestDetectHostProxy_NeverPanicsOrErrors is a smoke test: DetectHostProxy
+// must return successfully on any box, including one where powershell.exe,
+// netsh.exe, scutil, or git are all absent (every detector tolerates that).
+func TestDetectHostProxy_NeverPanicsOrErrors(t *testing.T) {
+	clearProxyEnv(t)
+	got := DetectHostProxy()
+	if detectionHasCredentials(got) && !got.HasCredentials {
+		t.Error("HasCredentials inconsistent with the per-field flags")
+	}
+}

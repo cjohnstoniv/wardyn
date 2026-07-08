@@ -1,0 +1,34 @@
+{
+  "allowed_domains": [
+    "api.anthropic.com",
+    "github.com",
+    "*.githubusercontent.com",
+    "proxy.golang.org",
+    "registry.npmjs.org"
+  ],
+  "denied_domains": [],
+  "first_use_approval": "deny_with_review",
+  "allowed_methods": [],
+  "min_confinement_class": "CC1",
+  "eligible_grants": [
+    {
+      "kind": "api_key",
+      "scope": {
+        "host": "api.anthropic.com",
+        "header": "x-api-key",
+        "format": "%s",
+        "secret_name": "anthropic-api-key"
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": false
+    }
+  ],
+  "auto_stop_after_sec": 0,
+  "llm_inspection": {
+    "mode": "alert",
+    "detect_secrets": true,
+    "workspace_secret_values": [],
+    "on_scanner_error": "pass",
+    "require_inspectable_llm": false
+  }
+}

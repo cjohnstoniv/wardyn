@@ -1,0 +1,457 @@
+#!/usr/bin/env bash
+# /usr/local/bin/agent-run — Wardyn agent launcher for Claude Code.
+#
+# CONTRACT (all agent images must implement this interface):
+#   Usage: agent-run "<task text>"
+#   Usage: agent-run --selftest
+#
+# Normal mode:
+#   If WARDYN_REPO_URL is set and ~/work has no git repo yet, shallow-clones it
+#   into ~/work/<reponame> through the governed egress path (the only route out
+#   is wardyn-proxy; HTTPS_PROXY already points at it, so git CONNECT-tunnels
+#   through the proxy and is subject to the run's egress allowlist).  Private
+#   repos authenticate via the system gitconfig credential helper
+#   (wardyn-git-helper), which mints a brokered token; no GitHub token is ever in
+#   env (invariant 1) — only the non-secret clone URL is passed.  Clone failure is
+#   a governance signal, not a hard error: it is logged to stderr and the task
+#   still runs (some tasks need no repo).
+#
+#   CALLER-AUTH GATE: before any git runs, provision_git_helper_secret writes a
+#   per-run secret to a 0400 agent-owned file and exports WARDYN_GIT_HELPER_SECRET
+#   for THIS process tree only (the clone + the exec'd agent inherit it; a
+#   separate `wardyn attach` exec / non-descendant process does not).  The
+#   credential helper requires that presented secret to match the file before it
+#   emits a token, so a stray in-sandbox process cannot exfiltrate a GitHub token
+#   merely by speaking git's credential protocol.  Residual: code running AS the
+#   agent uid can still read the 0400 file and obtain the token (see the helper's
+#   package doc) — this raises the bar, it is not full isolation.
+#   Then changes to the cloned repo directory (or any pre-existing git repo
+#   discovered under ~/work, or ~/work itself), runs claude in non-interactive
+#   single-task mode with text output, and exits with the CLI's exit code.
+#
+# --selftest mode (no API key needed):
+#   Verifies that the required binaries exist and prints the env wiring,
+#   including the repo wiring (WARDYN_REPO_URL/WARDYN_REPO_SLUG) and whether a
+#   workspace repo is already present.  Stays key-free and side-effect-free: it
+#   NEVER clones.  Used by e2e validation to confirm the image contract.
+#
+# Wardyn sandbox env (set by dispatch, not by this script):
+#   WARDYN_PROXY_URL        = http://wardyn-proxy:3128
+#   WARDYN_GITHUB_GRANT_ID  = <uuid> (if the run has a github_token grant)
+#   WARDYN_REPO_URL         = https github URL to clone (attacker-influenceable;
+#                             always quoted, used as-is, routed through the proxy)
+#   WARDYN_REPO_SLUG        = owner/repo (audit metadata; not used for the clone)
+#   HTTP_PROXY / HTTPS_PROXY = http://wardyn-proxy:3128
+#   NO_PROXY               = wardyn-proxy,localhost,127.0.0.1
+#   ANTHROPIC_BASE_URL     = http://wardyn-proxy:3128/wardyn/llm/anthropic
+#     (set in the image as the API-KEY default; agent-run overrides it per the
+#      detected auth mode below)
+#
+# Anthropic auth modes (detected at task time, just before exec'ing claude):
+#   subscription : ~/.claude holds resident OAuth creds (the wizard mounts the
+#                  host ~/.claude and ~/.claude.json into /home/agent).  Detected
+#                  by /home/agent/.claude/.credentials.json (or credentials.json).
+#                  ANTHROPIC_BASE_URL is UNSET so claude talks straight to
+#                  api.anthropic.com — the request CONNECT-tunnels out through
+#                  HTTPS_PROXY (wardyn-proxy) under the run's egress allowlist, and
+#                  the resident OAuth token is used as-is.  No API key is set.
+#   bedrock      : CLAUDE_CODE_USE_BEDROCK is set.  ANTHROPIC_BASE_URL is UNSET so
+#                  claude uses the Bedrock endpoint via HTTPS_PROXY + resident AWS
+#                  creds.  No Anthropic API key is set.
+#   apikey       : default.  ANTHROPIC_BASE_URL is kept (the proxy's inject
+#                  gateway /wardyn/llm/anthropic).  A placeholder ANTHROPIC_API_KEY
+#                  is exported if unset so claude actually emits an x-api-key the
+#                  proxy can strip and replace with the brokered real key.
+#
+# The run token is NEVER in the sandbox env (invariant 1).  The proxy holds it
+# and injects it only when forwarding internal API calls.
+set -euo pipefail
+
+# Shared functions (install_mitm_ca, install_artifact_config,
+# provision_git_helper_secret, clone_one, dispatch_repo_clones,
+# resolve_workdir) — identical across every agent image's agent-run.
+source /usr/local/bin/agent-run-lib.sh
+
+# ── anthropic auth-mode detection ─────────────────────────────────────────────
+# Decide how claude should authenticate to the model backend and wire the env
+# accordingly.  Echoes the chosen mode on stdout (callers capture it); also a
+# side-effect-FREE variant is used by --selftest below.  Three modes:
+#   subscription : resident OAuth creds present under ~/.claude
+#   bedrock      : CLAUDE_CODE_USE_BEDROCK set
+#   apikey       : default (proxy inject gateway)
+# Pure detection (no env mutation, safe for selftest):
+detect_anthropic_mode() {
+    if [[ -f "${HOME}/.claude/.credentials.json" \
+       || -f "${HOME}/.claude/credentials.json" ]]; then
+        echo "subscription"
+    elif [[ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ]]; then
+        echo "bedrock"
+    else
+        echo "apikey"
+    fi
+}
+
+# Apply the env wiring for the detected mode.  MUTATES the current shell's env,
+# so this MUST be called directly (not in a command substitution / subshell, or
+# the unset/export would be lost).  Sets the global ANTHROPIC_MODE for the caller
+# to read; emits nothing on stdout.
+apply_anthropic_mode() {
+    ANTHROPIC_MODE="$(detect_anthropic_mode)"
+    case "$ANTHROPIC_MODE" in
+        subscription)
+            # Resident OAuth creds: talk to api.anthropic.com directly through
+            # HTTPS_PROXY (wardyn-proxy CONNECT tunnel).  No API key.
+            unset ANTHROPIC_BASE_URL
+            ;;
+        bedrock)
+            # Bedrock endpoint via HTTPS_PROXY + resident AWS creds.  No API key.
+            unset ANTHROPIC_BASE_URL
+            ;;
+        apikey)
+            # Keep ANTHROPIC_BASE_URL (the proxy inject gateway).  Export a
+            # placeholder x-api-key if none is set so claude emits a request the
+            # proxy strips and re-injects the brokered real key into.
+            export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-wardyn-proxy-injected}"
+            ;;
+    esac
+}
+
+# ── SSH SCM lane (git-over-SSH clone via SSH-over-443) ────────────────────────
+# SSH is the DOCUMENTED EXCEPTION to Wardyn's no-resident-secret invariant: git's
+# SSH transport has NO credential-helper seam (git credential.helper is HTTP-only),
+# so — unlike a github_token / git_pat (brokered to the git helper, never on disk)
+# or an api_key (proxy-injected, never in the sandbox) — the private key MUST land
+# as a file the ssh client reads. We mint it from the broker at clone time, write
+# it 0400 agent-owned, use it for the clone through the wardyn-proxy CONNECT tunnel
+# to ssh.<provider>.com:443 (no port-22 egress), then WIPE it. The readable window
+# is the clone only; within it, code running AS the agent uid can read the key —
+# the same residual posture as WARDYN_GIT_HELPER_SECRET. See GrantSSHKey.
+#
+# WARDYN_SSH_GRANTS is a JSON object {host: grant_id} (non-secret grant ids), set
+# by dispatch. The key VALUE is never in env — it is minted via the proxy here.
+WARDYN_SSH_KEYFILES=()  # files to shred after the clone (keys + any known_hosts)
+
+# ssh_endpoint maps a supported SCM host to its SSH-over-443 "hostname port".
+# Returns non-zero for an unsupported host (only GitHub + Azure DevOps publish an
+# :443 SSH endpoint; a custom host would need port-22 egress, out of scope).
+ssh_endpoint() {  # $1=host
+    case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+        github.com|ssh.github.com)        echo "ssh.github.com 443" ;;
+        dev.azure.com|ssh.dev.azure.com)  echo "ssh.dev.azure.com 443" ;;
+        *) return 1 ;;
+    esac
+}
+
+# mint_ssh_key POSTs to the proxy's local broker mint route for an ssh_key grant
+# and writes the returned private key to $2 (0400) and, when the grant named a
+# known_hosts_secret_ref, the returned known_hosts to $3 (0644). The key material
+# streams curl->node->file (never on disk except the 0400 target; never logged).
+# NO_PROXY already excludes wardyn-proxy; --noproxy '*' makes curl dial the proxy
+# directly with an origin-form path so the proxy serves the route locally and
+# injects the run token (exactly as wardyn-git-helper does).
+mint_ssh_key() {  # $1=grant_id $2=key_out $3=known_hosts_out
+    local grant_id="$1" proxy="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
+    curl -fsS --noproxy '*' -X POST -H 'Content-Type: application/json' \
+        --data "{\"grant_id\":\"${grant_id}\"}" \
+        "${proxy%/}/wardyn/v1/credentials/mint" \
+    | KEY_OUT="$2" KH_OUT="$3" node -e '
+        const fs = require("fs");
+        let d = "";
+        process.stdin.on("data", c => d += c).on("end", () => {
+          let o; try { o = JSON.parse(d); } catch (e) { process.exit(4); }
+          if (!o.token) process.exit(3);
+          const key = o.token.endsWith("\n") ? o.token : o.token + "\n";
+          fs.writeFileSync(process.env.KEY_OUT, key, { mode: 0o400 });
+          if (o.known_hosts) fs.writeFileSync(process.env.KH_OUT, o.known_hosts, { mode: 0o644 });
+        });'
+}
+
+# provision_ssh_grants mints each ssh_key grant, writes the 0400 key + a per-host
+# ~/.ssh config stanza (HostName->ssh.<provider>.com:443, ProxyCommand corkscrew
+# via wardyn-proxy, IdentityFile, StrictHostKeyChecking=yes against the baked
+# /etc/ssh/ssh_known_hosts or an operator-supplied one), and points git at that
+# config via GIT_SSH_COMMAND. No-op without WARDYN_SSH_GRANTS. MUST be called
+# directly (the export must survive). Never echoes the key.
+provision_ssh_grants() {
+    [[ -n "${WARDYN_SSH_GRANTS:-}" ]] || return 0
+    if ! command -v ssh >/dev/null 2>&1 || ! command -v corkscrew >/dev/null 2>&1 \
+       || ! command -v node >/dev/null 2>&1; then
+        echo "agent-run: WARNING ssh/corkscrew/node not in image; SSH clone disabled this run" >&2
+        return 0
+    fi
+    local proxy purl proxy_host proxy_port
+    purl="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
+    purl="${purl#*://}"; purl="${purl%%/*}"
+    proxy_host="${purl%%:*}"; proxy_port="${purl##*:}"
+    [[ "$proxy_host" == "$purl" ]] && proxy_port=3128   # no ':port' present
+    [[ -n "$proxy_host" ]] || proxy_host="wardyn-proxy"
+
+    local ssh_dir="${HOME}/.ssh" cfg
+    cfg="${ssh_dir}/wardyn_ssh_config"
+    mkdir -p "$ssh_dir"; chmod 0700 "$ssh_dir"
+    : > "$cfg"; chmod 0600 "$cfg"
+
+    local host gid eps ep_host ep_port slug keyfile khfile ukh
+    while IFS=$'\t' read -r host gid; do
+        [[ -n "$host" && -n "$gid" ]] || continue
+        if ! eps="$(ssh_endpoint "$host")"; then
+            echo "agent-run: WARNING SSH host ${host} is not a supported SSH-over-443 provider; skipping" >&2
+            continue
+        fi
+        read -r ep_host ep_port <<< "$eps"
+        slug="$(printf '%s' "$host" | tr -c 'a-zA-Z0-9' '_')"
+        keyfile="${ssh_dir}/id_wardyn_${slug}"
+        khfile="${ssh_dir}/known_hosts_${slug}"
+        rm -f "$keyfile" "$khfile"
+        if ! mint_ssh_key "$gid" "$keyfile" "$khfile"; then
+            echo "agent-run: WARNING ssh_key mint failed for ${host} (egress or broker may have refused); SSH clone for it disabled" >&2
+            rm -f "$keyfile" "$khfile"
+            continue
+        fi
+        chmod 0400 "$keyfile" 2>/dev/null || true
+        WARDYN_SSH_KEYFILES+=("$keyfile")
+        # Prefer an operator-supplied known_hosts (grant's known_hosts_secret_ref);
+        # otherwise the image-baked file (authoritative for github.com / ADO).
+        ukh="/etc/ssh/ssh_known_hosts"
+        if [[ -s "$khfile" ]]; then
+            ukh="$khfile"
+            WARDYN_SSH_KEYFILES+=("$khfile")
+        else
+            rm -f "$khfile"
+        fi
+        printf '%s\n' \
+          "Host ${host}" \
+          "    HostName ${ep_host}" \
+          "    Port ${ep_port}" \
+          "    User git" \
+          "    IdentityFile ${keyfile}" \
+          "    IdentitiesOnly yes" \
+          "    StrictHostKeyChecking yes" \
+          "    UserKnownHostsFile ${ukh}" \
+          "    ProxyCommand corkscrew ${proxy_host} ${proxy_port} %h %p" \
+          "" >> "$cfg"
+        echo "agent-run: SSH SCM lane wired for ${host} -> ${ep_host}:${ep_port} (via wardyn-proxy CONNECT)" >&2
+    done < <(node -e 'const m=JSON.parse(process.env.WARDYN_SSH_GRANTS||"{}");for(const[h,g]of Object.entries(m))process.stdout.write(h+"\t"+g+"\n")')
+
+    if [[ ${#WARDYN_SSH_KEYFILES[@]} -gt 0 ]]; then
+        # -F our config: git-over-ssh clones of git@<host>:... transparently route
+        # to ssh.<provider>.com:443 through the proxy with the minted key.
+        export GIT_SSH_COMMAND="ssh -F ${cfg}"
+    fi
+}
+
+# wipe_ssh_grants shreds the minted key(s) + any known_hosts and removes the ssh
+# config + GIT_SSH_COMMAND. Called right after the clone (before exec) so the key
+# is resident for the clone only; also armed as an EXIT trap so a mid-clone abort
+# still wipes. Idempotent; never fatal.
+wipe_ssh_grants() {
+    local f
+    for f in "${WARDYN_SSH_KEYFILES[@]:-}"; do
+        [[ -n "$f" ]] || continue
+        shred -u "$f" 2>/dev/null || rm -f "$f"
+    done
+    WARDYN_SSH_KEYFILES=()
+    rm -f "${HOME}/.ssh/wardyn_ssh_config" 2>/dev/null || true
+    unset GIT_SSH_COMMAND || true
+}
+
+# ── selftest ─────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--selftest" ]]; then
+    echo "=== wardyn agent-run selftest (claude-code) ==="
+    ok=1
+    for bin in wardyn-rec wardyn-git-helper git claude; do
+        if command -v "$bin" >/dev/null 2>&1; then
+            echo "  FOUND   $bin ($(command -v "$bin"))"
+        else
+            echo "  MISSING $bin"
+            ok=0
+        fi
+    done
+    echo "--- env wiring ---"
+    echo "  ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-<unset>}"
+    echo "  HTTP_PROXY=${HTTP_PROXY:-<unset>}"
+    echo "  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
+    echo "  NO_PROXY=${NO_PROXY:-<unset>}"
+    echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
+    echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
+    echo "--- anthropic auth mode (selftest: detect only, no env change) ---"
+    selftest_mode="$(detect_anthropic_mode)"
+    echo "  detected mode: $selftest_mode"
+    echo "  CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK:-<unset>}"
+    if [[ -f "${HOME}/.claude/.credentials.json" ]]; then
+        echo "  ~/.claude creds: PRESENT (.credentials.json)"
+    elif [[ -f "${HOME}/.claude/credentials.json" ]]; then
+        echo "  ~/.claude creds: PRESENT (credentials.json)"
+    else
+        echo "  ~/.claude creds: ABSENT (no subscription OAuth creds mounted)"
+    fi
+    echo "--- repo wiring (selftest never clones) ---"
+    echo "  WARDYN_REPO_URL=${WARDYN_REPO_URL:-<unset (no repo to clone)>}"
+    echo "  WARDYN_REPO_SLUG=${WARDYN_REPO_SLUG:-<unset>}"
+    if [ -n "$(find "${HOME}/work" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | head -1)" ]; then
+        echo "  workspace repo: PRESENT (a .git exists under ~/work)"
+    else
+        echo "  workspace repo: ABSENT (would clone WARDYN_REPO_URL if set)"
+    fi
+    echo "--- git credential helper ---"
+    echo "  WARDYN_GIT_PAT_GRANTS=${WARDYN_GIT_PAT_GRANTS:-<unset (no git_pat grants)>}"
+    git config --system --get credential.helper 2>/dev/null \
+        && echo "  OK (system config, global)" || echo "  MISSING (system gitconfig not wired)"
+    # Caller-auth gate (selftest never provisions — that happens at task time):
+    if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
+        echo "  caller-auth gate: ACTIVE at task time (a git grant is present; agent-run will provision WARDYN_GIT_HELPER_SECRET + a 0400 secret file)"
+    else
+        echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
+    fi
+    echo "--- SSH SCM lane (selftest never mints/writes a key) ---"
+    echo "  WARDYN_SSH_GRANTS=${WARDYN_SSH_GRANTS:-<unset (no ssh_key grants)>}"
+    for sbin in ssh corkscrew; do
+        if command -v "$sbin" >/dev/null 2>&1; then
+            echo "  FOUND   $sbin ($(command -v "$sbin"))"
+        else
+            echo "  MISSING $sbin (SSH clone lane would be disabled this run)"
+        fi
+    done
+    if [[ -s /etc/ssh/ssh_known_hosts ]]; then
+        echo "  baked known_hosts: PRESENT ($(grep -c . /etc/ssh/ssh_known_hosts) host key line(s))"
+    else
+        echo "  baked known_hosts: ABSENT (StrictHostKeyChecking would fail closed)"
+    fi
+    if [[ -n "${WARDYN_SSH_GRANTS:-}" ]]; then
+        echo "  SSH SCM lane: ACTIVE at task time (agent-run mints a 0400 key, clones via ssh-over-443 through wardyn-proxy, then WIPES the key)"
+    else
+        echo "  SSH SCM lane: not provisioned (no ssh_key grant)"
+    fi
+    if [[ $ok -eq 1 ]]; then
+        echo "=== selftest PASS ==="
+        exit 0
+    else
+        echo "=== selftest FAIL ==="
+        exit 1
+    fi
+fi
+
+# ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
+# The interactive counterpart to task mode: prepare the workspace EXACTLY as task
+# mode does — install the MITM CA, artifact config, git-helper caller-auth secret,
+# SSH keys, and CLONE the run's repo(s) into ~/work — then hold the container open
+# for `wardyn attach`. Without this, an interactive run came up with an EMPTY ~/work
+# (the human attached to a bare shell with no repo). The human then drives claude in
+# the attach shell; the repo is already there.
+if [[ "${1:-}" == "--idle" ]]; then
+    : "${HOME:=/home/agent}"; export HOME  # robust ~ even if launched with HOME unset
+    install_mitm_ca
+    prepare_claude_config_dir  # writable CLAUDE_CONFIG_DIR (RO subscription mount)
+    install_artifact_config
+    provision_git_helper_secret
+    provision_ssh_grants
+    trap wipe_ssh_grants EXIT
+    workdir="${HOME}/work"
+    mkdir -p "$workdir"
+    dispatch_repo_clones
+    resolve_workdir  # prefer the cloned repo dir as the attach landing dir
+    wipe_ssh_grants
+    trap - EXIT
+    # Attach-readiness markers: ~/.bashrc waits for prep-done then cd's into workdir,
+    # so an attach shell that lands mid-clone never shows an empty ~/work. prep-done
+    # is written LAST + unconditionally (even if the clone failed) so attach never hangs.
+    mkdir -p "$HOME/.wardyn"
+    printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
+    : > "$HOME/.wardyn/prep-done"
+    echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
+    exec sleep infinity
+fi
+
+# ── normal task mode ─────────────────────────────────────────────────────────
+task="${1:-}"
+if [[ -z "$task" ]]; then
+    echo "agent-run: task text is required (usage: agent-run '<task>')" >&2
+    exit 1
+fi
+
+# Install the per-run TLS-MITM CA (no-op unless WARDYN_MITM_CA_PEM is set) before
+# claude makes any model call, so its TLS handshake to api.anthropic.com (when
+# MITM-intercepted) trusts the proxy's leaf.
+install_mitm_ca
+
+# Give claude-code a WRITABLE config dir when the subscription creds are mounted
+# read-only (dispatch sets CLAUDE_CONFIG_DIR); no-op otherwise.
+prepare_claude_config_dir
+
+# Materialize any operator-configured artifact-registry redirect config (no-op
+# unless WARDYN_ARTIFACT_CONFIG_B64 is set) before the clone/install/verify below.
+install_artifact_config
+
+# Provision the git credential helper caller-auth secret BEFORE any git runs
+# (the clone below and the agent's own git both need it).  Called directly so the
+# WARDYN_GIT_HELPER_SECRET export survives into this shell.  No-op without a grant.
+provision_git_helper_secret
+
+# SSH SCM lane: mint the resident SSH key(s) + wire GIT_SSH_COMMAND before the
+# clone (no-op without WARDYN_SSH_GRANTS).  Arm an EXIT trap so a mid-clone abort
+# still wipes the key; the success path wipes explicitly right after the clone.
+provision_ssh_grants
+trap wipe_ssh_grants EXIT
+
+workdir="${HOME}/work"
+mkdir -p "$workdir"
+
+# Clone the run's repo(s) into the workspace (WARDYN_REPOS preferred, legacy
+# WARDYN_REPO_URL fallback) — see clone_one/dispatch_repo_clones in
+# agent-run-lib.sh.
+dispatch_repo_clones
+
+# WIPE the resident SSH key(s) now that the clone is done: the agent process
+# below never needs them (clone-only SSH lane), so the readable-key window is the
+# clone only.  Disarm the EXIT trap since we have wiped explicitly (the exec'd
+# agent/scan/verify replaces this process, so the EXIT trap would not fire anyway).
+wipe_ssh_grants
+trap - EXIT
+
+# Prefer a cloned/discovered repo workspace if one exists below ~/work; falls
+# back to ~/work when no .git is found (see resolve_workdir in agent-run-lib.sh).
+resolve_workdir
+
+cd "$workdir"
+
+# Governed SCAN run: walk the cloned/mounted workspace and upload ScanFacts to the
+# brokered scan-results route (the proxy injects the run token), then exit. No
+# agent/model invocation happens — this is a read-only file scan.
+if [[ "${WARDYN_SCAN_ONLY:-}" == "1" ]]; then
+    export WARDYN_WORKSPACE_DIR="${WARDYN_WORKSPACE_DIR:-$workdir}"
+    echo "agent-run: scan-only mode — running wardyn-scan over ${WARDYN_WORKSPACE_DIR}" >&2
+    exec wardyn-scan
+fi
+
+# Governed VERIFY run: run the operator-approved setup commands (install/build/
+# test) over the cloned/mounted workspace and upload the VerifyResult, then exit.
+# No agent/model invocation. Secrets are proxy-injected (never resident), so the
+# setup commands reach their registries through wardyn-proxy without any secret
+# in the sandbox env.
+if [[ "${WARDYN_VERIFY_ONLY:-}" == "1" ]]; then
+    export WARDYN_WORKSPACE_DIR="${WARDYN_WORKSPACE_DIR:-$workdir}"
+    echo "agent-run: verify-only mode — running wardyn-verify over ${WARDYN_WORKSPACE_DIR}" >&2
+    exec wardyn-verify
+fi
+
+# Detect how claude should authenticate and wire ANTHROPIC_BASE_URL / API key
+# accordingly (subscription OAuth creds, Bedrock, or the proxy inject gateway).
+# apply_anthropic_mode mutates THIS shell's env and sets $ANTHROPIC_MODE.
+ANTHROPIC_MODE=""
+apply_anthropic_mode
+echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
+
+# Run Claude Code in non-interactive single-task (print) mode.
+# Flags per public CLI conventions as of claude-code v2.x:
+#   -p "<prompt>"                   non-interactive prompt mode (no REPL)
+#   --output-format text            plain-text output (not JSON stream)
+#   --dangerously-skip-permissions  run every tool WITHOUT per-call approval —
+#     REQUIRED for autonomy: a batch run has no human to approve the agent's
+#     edit/bash tools, so without this claude stalls/exits on the first gated
+#     tool (the fence-e2e "claude exit 1" rough edge). SAFE here because Wardyn
+#     IS the boundary: default-deny egress, proxy-injected (never resident)
+#     credentials, confinement class, and an append-only audit trail govern
+#     everything the agent does. The agent runs as uid 1000 (USER agent), so the
+#     CLI's refuse-to-skip-as-root guard does not trip.
+# The exit code from `claude` propagates to the caller.
+exec claude -p "$task" --output-format text --dangerously-skip-permissions

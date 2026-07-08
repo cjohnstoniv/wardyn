@@ -1,0 +1,14 @@
+Wardyn
+
+Copyright 2025 The Wardyn Authors
+
+This distribution includes third-party open-source components that are
+distributed under their own licenses. Go module dependencies and bundled UI
+dependencies are predominantly licensed under Apache-2.0, MIT, and BSD-style
+licenses. The asciinema recorder binary is licensed under the GNU General Public
+License (GPL) and is invoked only as an external subprocess by the wardyn-rec
+component; it is never compiled into or dynamically linked with Wardyn.
+Continuous integration gates Go dependency licenses (`go-licenses check`, which
+fails the build on forbidden or restricted license types); per-dependency
+attribution for Go modules can be regenerated locally with
+`go-licenses report ./...`.

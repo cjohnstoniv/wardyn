@@ -1,0 +1,23 @@
+# Wardyn e2e task — multi-file-feature
+name: multi-file-feature
+agent: claude-code
+needs_model: true
+interactive: false
+launch: both
+tiers: [CC1, CC2, CC3]
+grader_image: python:3.12-alpine   # stdlib unittest only — no network
+prompt: |
+  This is a tiny notes CLI: cli.py dispatches sub-commands to storage.py, which
+  persists notes as JSON in notes.json.
+
+  Add a "search" sub-command:
+
+    python3 cli.py search <term>
+
+  It must print every stored note that contains <term> as a case-insensitive
+  substring, one per line. Implement it across BOTH files:
+    * storage.py: add a search_notes(term) function (case-insensitive substring).
+    * cli.py: wire up the "search" sub-command to call it.
+
+  Do not break the existing "add" and "list" commands. An acceptance test lives in
+  test_search.py — run it with:  python3 -m unittest test_search

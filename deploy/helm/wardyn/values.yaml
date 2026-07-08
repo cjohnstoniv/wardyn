@@ -1,0 +1,122 @@
+# Default values for the Wardyn control-plane chart.
+# These are the inputs the templates/ consume; every key here has a safe default.
+
+# Optional name overrides (leave empty to derive from the release/chart name).
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/cjohnstoniv/wardynd
+  pullPolicy: IfNotPresent
+  # Defaults to .Chart.AppVersion when empty.
+  tag: "0.0.1"
+  # Names of imagePullSecrets for a private registry (list of {name: ...}).
+  pullSecrets: []
+
+replicas: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceAccount:
+  # Create a dedicated ServiceAccount for wardynd (recommended).
+  create: true
+  # Name to use; generated from the fullname when empty.
+  name: ""
+  annotations: {}
+  # wardynd does not call the API server in v0.x, so the projected token is
+  # unnecessary attack surface — do not auto-mount it by default.
+  automount: false
+
+postgres:
+  # Postgres DSN wiring. TWO modes (see templates/secret.yaml):
+  #   1. External Secret (recommended): set dsn.secretRef.name to a Secret you
+  #      created out-of-band; the chart references it and creates no Secret.
+  #   2. Inline demo: leave dsn.secretRef.name empty and set dsn.value; the
+  #      chart creates "<fullname>-secrets" (demo-grade — DSN lands in the
+  #      release history, do not use beyond a laptop).
+  dsn:
+    # Key (within the Secret) that holds the DSN string. wardynd reads WARDYN_PG_DSN.
+    key: dsn
+    secretRef:
+      # Name of an EXISTING Secret holding the DSN under `key` above.
+      # Empty => the chart creates one from `value` below.
+      name: wardyn-postgres-dsn
+    # Inline DSN, used only when secretRef.name is empty.
+    value: ""
+
+secrets:
+  # age X25519 identity (AGE-SECRET-KEY-...) for the secret store. Empty =>
+  # wardynd generates an ephemeral key at boot (secrets do not persist a restart).
+  # Used only by the chart-created Secret (inline mode).
+  ageKey: ""
+  # Set true when your EXTERNAL Secret (postgres.dsn.secretRef) ALSO carries an
+  # "age-key" entry you want injected as WARDYN_AGE_KEY.
+  ageKeyFromSecret: false
+
+# Extra environment variables for wardynd (name: value). Use this to wire OIDC
+# (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
+# policy (WARDYN_DEFAULT_POLICY), etc. See cmd/wardynd/main.go for the full list.
+env: {}
+
+# Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
+networkPolicy:
+  enabled: true
+  postgres:
+    # DB port wardynd is allowed to egress to.
+    port: 5432
+  ingress:
+    # List of NetworkPolicyPeer entries allowed to reach the HTTP port.
+    # Empty => allow from any pod in the namespace (narrow this in production).
+    from: []
+  egress:
+    # Additional NetworkPolicy egress rules (e.g. OIDC issuer, SIEM webhooks).
+    extra: []
+
+podAnnotations: {}
+
+# Pod-level security context. distroless:nonroot runs as uid/gid 65532.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level hardening: read-only root FS, drop all caps, no priv-esc.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Persistent recording/audit spool. Off by default (Postgres is the source of
+# truth; file sinks are optional). When enabled, point WARDYN_RECORDING_DIR (via
+# .env) inside mountPath.
+persistence:
+  enabled: false
+  mountPath: /data
+  size: 5Gi
+  storageClass: ""
+
+nodeSelector: {}
+affinity: {}
+tolerations: []
+
+# Cilium NetworkPolicy note:
+# When using Cilium on Kubernetes, egress policies are enforced at L3/L4 using
+# toFQDN rules for domain-based egress. These integrate with the wardyn-proxy
+# sidecar's L2 allowlist to provide defense in depth. Ensure Cilium is configured
+# with DNS proxy enabled for FQDN policies to function correctly.

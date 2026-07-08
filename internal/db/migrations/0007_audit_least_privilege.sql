@@ -1,0 +1,22 @@
+-- Least-privilege posture for the append-only audit_events log (N4, defense-in-depth).
+--
+-- The 0001/0004 triggers block UPDATE/DELETE/TRUNCATE at the ROW/STATEMENT
+-- level, but a role that OWNS audit_events can still DROP TRIGGER,
+-- ALTER TABLE ... DISABLE TRIGGER, or DROP TABLE to bypass the guard entirely.
+-- There is NO injection vector today; this hardens the deploy model.
+--
+-- Intended deploy model (role split):
+--   * A separate OWNER/migrator role runs migrations (WARDYN_PG_MIGRATE_DSN).
+--   * wardynd connects at runtime as a NON-owner app role that has only
+--     INSERT+SELECT on audit_events (and full DML elsewhere).
+-- Under that split, a compromised app role cannot issue the DDL above.
+--
+-- HONEST residual: REVOKE binds only when wardynd connects as a NON-owner role.
+-- A table OWNER (single-DSN mode, or if the app role owns the table) bypasses
+-- REVOKE and retains implicit privileges — so single-DSN deploys get NO DDL
+-- protection from this migration (unchanged from before). The migration supplies
+-- the grants; the deploy supplies the role split. We deliberately do NOT create
+-- LOGIN roles or passwords here (that is deploy/infra territory).
+--
+-- Idempotent: REVOKE of a privilege that was never granted is a no-op.
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM PUBLIC;

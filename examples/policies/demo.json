@@ -1,0 +1,25 @@
+{
+  "allowed_domains": [
+    "github.com",
+    "*.githubusercontent.com",
+    "proxy.golang.org"
+  ],
+  "denied_domains": [],
+  "first_use_approval": "deny_with_review",
+  "allowed_methods": [],
+  "min_confinement_class": "CC1",
+  "eligible_grants": [
+    {
+      "kind": "github_token",
+      "scope": {
+        "repos": [],
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": true
+    }
+  ],
+  "auto_stop_after_sec": 0
+}

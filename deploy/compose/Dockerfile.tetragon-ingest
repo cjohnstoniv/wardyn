@@ -1,0 +1,29 @@
+# wardyn-tetragon-ingest: the host-scoped eBPF GROUND-TRUTH sidecar (the SECOND
+# of Wardyn's three audit streams). It tails Tetragon's JSON export, correlates
+# kernel events to Wardyn runs by listing docker containers labelled
+# wardyn.managed=true, and POSTs mapped events to the control plane's
+# POST /api/v1/internal/groundtruth with a host-sensor bearer token.
+#
+# DEPENDENCY NOTE: this binary consumes Tetragon's JSON EXPORT (not the gRPC
+# client) and shells out to `docker ps` for correlation (not the docker client
+# library) — so it stays in the default build with no new module deps. Because
+# it shells out to `docker`, the runtime image is NOT distroless: it needs the
+# docker CLI and a shell on PATH. We use alpine + the docker-cli package.
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-tetragon-ingest ./cmd/wardyn-tetragon-ingest
+
+FROM alpine:3.20
+
+# docker-cli: the sidecar shells out to `docker ps` against the bind-mounted
+# host socket to build its container-id -> run-id index.
+RUN apk add --no-cache docker-cli ca-certificates
+
+COPY --from=builder /out/wardyn-tetragon-ingest /usr/local/bin/wardyn-tetragon-ingest
+
+ENTRYPOINT ["/usr/local/bin/wardyn-tetragon-ingest"]

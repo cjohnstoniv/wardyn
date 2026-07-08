@@ -1,0 +1,13 @@
+apiVersion: v2
+name: wardyn
+description: Governance control plane for coding agents
+type: application
+version: 0.0.1
+appVersion: 0.0.1
+keywords:
+  - governance
+  - agents
+  - security
+  - audit
+maintainers:
+  - name: Wardyn Authors

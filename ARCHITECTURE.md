@@ -1,0 +1,237 @@
+# Wardyn architecture
+
+> Wardyn governs workload run-identity and tokens. "Wardyn" is a working name —
+> a formal trademark clearance is still pending and the name may change before a
+> 1.0. Module path `github.com/cjohnstoniv/wardyn` (personal namespace for now).
+
+**Thesis:** the open-source governance control plane for coding agents —
+identity, controls, and audit are the product; the sandbox is a pluggable
+commodity. Apache-2.0 everything; no `enterprise/` directory; CNCF Sandbox is
+the governance target.
+
+> **Status markers.** Controls below are tagged **[shipped]** /
+> **[v0.2 — building]** / **[v0.5+ — planned]**, matching
+> [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md); an untagged item
+> is shipped.
+
+## Components
+
+| Binary | Role |
+|---|---|
+| `wardynd` | Control plane: REST API, embedded web UI, policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
+| `wardyn-runner` | Data plane: implements `internal/runner.Runner` with the `docker/` driver **[shipped]** and `k8s/` driver **[v0.5+ — planned]**. |
+| `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection. Same binary on both targets. |
+| `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |
+| `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
+| `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
+| `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
+| `wardyn-verify` | In-sandbox verify runner: replays a recorded session confined (default-deny egress + live approvals). |
+| `wardyn` | CLI: `wardyn run`, `wardyn approve`, `wardyn audit`, `wardyn policy`. |
+
+How they fit together (same diagram as the README):
+
+```mermaid
+flowchart LR
+  operator(["Human operator"])
+  cli["wardyn CLI"]
+  operator -->|"UI — SSO or no-login local mode"| wardynd
+  cli -->|"WARDYN_ADMIN_TOKEN"| wardynd
+  subgraph control["Control plane (trusted)"]
+    direction TB
+    wardynd["wardynd<br/>REST API + embedded UI<br/>policy engine / approval FSM<br/>token broker / audit ingest"]
+    pg[("Postgres<br/>append-only audit")]
+    wardynd --> pg
+  end
+  subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
+    direction TB
+    agent["Coding agent<br/>claude-code / codex-cli"] -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
+    rec["wardyn-rec<br/>PTY recorder"]
+  end
+  wardynd -->|"launch: wardyn-runner (docker driver)"| sandbox
+  proxy -->|"allowlisted L7, creds injected on the wire"| net(("Internet / APIs"))
+  proxy -.->|"egress decision log"| wardynd
+  rec -.->|"masked session cast (brokered via proxy)"| proxy
+```
+
+The trusted control plane launches each agent into an untrusted, gatewayless
+sandbox whose only path out is the `wardyn-proxy` sidecar; sidecars stream
+decisions and session casts back into the append-only audit log.
+
+## The four nouns (`internal/types`)
+
+`AgentRun`, `RunPolicy`, `CredentialGrant` (eligibility), `ApprovalRequest`.
+On Kubernetes these surface as CRDs; on Docker they are the same
+Postgres-backed objects. One vocabulary everywhere.
+
+An `AgentRun` moves through these states (`internal/types/types.go`,
+transitions in `internal/api/runs.go` — state changes are compare-and-swap
+via `UpdateRunStateIf`, so a kill can never resurrect a finished run):
+
+```mermaid
+stateDiagram-v2
+  [*] --> PENDING: create run
+  PENDING --> STARTING: dispatch
+  PENDING --> FAILED: build error (before dispatch)
+  STARTING --> RUNNING: sandbox up
+  STARTING --> FAILED: launch error
+  RUNNING --> COMPLETED: agent exit 0
+  RUNNING --> FAILED: agent error / container lost
+  RUNNING --> STOPPED: idle auto-stop
+  PENDING --> KILLED: kill switch
+  STARTING --> KILLED: kill switch
+  RUNNING --> KILLED: kill switch
+  COMPLETED --> [*]
+  FAILED --> [*]
+  KILLED --> [*]
+  STOPPED --> [*]
+```
+
+A run is created `PENDING`, dispatches through `STARTING` into `RUNNING`, and
+ends in exactly one terminal state — `COMPLETED`, `FAILED`, `STOPPED`, or
+`KILLED` (the kill switch can fire from any live state).
+`WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
+forward-compatibility values; no transition produces them today.
+
+## Security invariants (every contributor and subagent MUST preserve these)
+
+1. **Secrets never enter the sandbox.** No secret in env, disk, or args.
+   Late binding via the broker; third-party API credentials are injected
+   proxy-side (`egress.InjectionRule`). Output masking of secret values on the
+   audit/recording/decision-log streams ships via `internal/secretmask`
+   (verbatim-match; the encoded/transformed-exfil residual is documented).
+   Masking is structurally **control-plane-side**, on the brokered upload
+   path only: the optional `WARDYN_RECORDING_MOUNT`/`wardyn-rec -out-dir`
+   shared-mount recording fallback bypasses the control plane and therefore
+   delivers **UNMASKED** casts — do not use it where recordings are
+   viewer-exposed (see `threatmodel/THREAT-MODEL.md` §4).
+   *(Scope note: the BROKERED credential — the GitHub/API token — is what never
+   lands in env/disk/args; it reaches `git` stdout-only via `wardyn-git-helper`.
+   The helper's per-run caller-auth gate value is a separate, low-value
+   authentication nonce, deliberately a 0400 agent-owned file + descendant-scoped
+   env, that gates — and is not — the credential; see `cmd/wardyn-git-helper`.)*
+2. **Approval mints the credential.** `CredentialGrant` = eligible;
+   the mint happens only in the SAME Postgres transaction that verifies
+   `approvals.state = 'APPROVED'` for this run+scope, and writes
+   `approvals.minted_jti` back. Tested invariant: minted scope ==
+   the scope the approver saw. No widening, ever.
+3. **L0 structural egress.** A sandbox has no default route; its only path
+   out is `wardyn-proxy`. `HTTP_PROXY`/`HTTPS_PROXY` are set for client
+   compatibility, but security does NOT rely on them: because the network is
+   gatewayless, an agent that ignores the proxy env vars (the documented Copilot
+   bypass class) has no route and reaches nothing. Private/link-local/metadata
+   IPs (169.254.169.254) are unconditionally blocked.
+4. **Per-run identity with full attribution.** Every token, commit, and
+   audit event carries `sub` (human), `act` (agent-run SPIFFE ID), and
+   `sponsor`. `actor_type` is first-class in audit. Enforcement points live
+   at the proxy/gateway/broker — never inside the agent loop.
+5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;
+   policy refuses what a substrate cannot enforce (Confinement Classes
+   CC1 runc / CC2 gVisor default / CC3 Kata). Embedded identity provider
+   refuses `cloud_sts` grants (SPIRE required). Residual risks are
+   published in `threatmodel/`, not hidden.
+6. **Audit is append-only and free.** Every mint/revoke/approval/policy
+   change/egress decision is an event. The Postgres trigger blocks
+   UPDATE/DELETE, so a written event can never be altered or erased. NOTE:
+   control-plane audit WRITES (identity mint/revoke, approval decide, broker
+   mint/revoke) are currently best-effort (`_ = rec.Record(...)`) — a Postgres
+   outage can drop one of these events before it's ever written; hardening
+   this path to fail-closed is in progress. (This is unlike the
+   ground-truth ingest path, which already fails closed.) SIEM export is
+   never paywalled.
+
+### Invariant 2, mechanically
+
+```mermaid
+sequenceDiagram
+  actor Op as Approver (human sub)
+  participant API as wardynd API
+  participant Sbx as Sandbox (proxy / git-helper)
+  participant Br as Token broker
+  participant DB as Postgres
+  participant M as Credential minter (e.g. GitHub App)
+  Note over API,DB: CredentialGrant = eligibility only, not issuance
+  Op->>API: POST /approvals/{id}/approve
+  API->>DB: approval state PENDING -> APPROVED (records the decision only)
+  Note over Sbx,Br: mint is PULL-based — triggered later by the run's own credential request
+  Sbx->>Br: MintForGrant(caller run identity, grantID)
+  Br->>DB: BEGIN
+  Br->>DB: read grant + approval (state must be APPROVED, minted_jti empty)
+  alt not approved, or already minted
+    DB-->>Br: no eligible row
+    Br-->>Sbx: refuse (no widening, no second mint)
+  else approved and unminted
+    DB-->>Br: the exact approved scope
+    Br->>M: mint short-lived credential (approved scope, 1h TTL)
+    M-->>Br: token
+    Br->>DB: UPDATE approvals SET minted_jti (only while still empty)
+    Br->>DB: COMMIT
+    Br-->>Sbx: minted (scope == what the approver saw)
+  end
+  Note over Br,Sbx: api_key grants are injected proxy-side — agent never sees them
+  Note over Br,Sbx: git tokens reach git via wardyn-git-helper stdout only
+```
+
+Approval records the human decision only; the credential is minted **later**,
+when the run's own proxy or git-helper requests it (`MintForGrant`) — inside
+the same Postgres transaction that re-verifies the `APPROVED` approval for that
+exact run and grant and claims `minted_jti`, so the minted scope always equals
+the approved scope and a grant can never mint twice.
+
+## Layered egress (identical semantics on both targets)
+
+L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftables
+/ NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path) **[v0.5+ — planned]**
+→ L2 wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
+**[v0.5+ — planned]**.
+
+## Deployment surface (anti-Gitpod constraint)
+
+Exactly TWO paths: `deploy/compose` (config-validated in CI; exercised
+end-to-end by the nightly full-stack e2e) and ONE blessed Helm chart
+`deploy/helm/wardyn` (`helm lint` + `helm template` render-checked in CI). No
+"your arbitrary K8s".
+
+The compose stack (`deploy/compose/docker-compose.yaml`):
+
+```mermaid
+flowchart TB
+  browser(["localhost:8080<br/>(WSL: opens in the Windows browser)"])
+  browser --> wardynd
+  subgraph net["compose network"]
+    postgres[("postgres")]
+    wardynd["wardynd :8080"]
+    dex["dex — SSO<br/>profile: sso (opt-in)"]
+    tetragon["tetragon<br/>profile: groundtruth (opt-in)"]
+    ingest["wardyn-tetragon-ingest<br/>profile: groundtruth"]
+    wardynd --> postgres
+    wardynd -.->|"WARDYN_LOCAL_MODE bypasses"| dex
+    tetragon --> ingest --> wardynd
+  end
+  subgraph images["build-only profile (images, not services)"]
+    imgs["proxy-image / agent-claude-code / agent-codex-cli"]
+  end
+  subgraph perrun["per-run sandboxes (gatewayless networks)"]
+    agent["agent container"] --- proxy["wardyn-proxy sidecar"]
+  end
+  wardynd -->|"docker API: create sandbox"| perrun
+  pgvol[("postgres_data")]
+  wvol[("recordings / audit")]
+  postgres --- pgvol
+  wardynd --- wvol
+```
+
+One `wardynd` service plus Postgres is the whole control plane; Dex (SSO) and
+the Tetragon ground-truth sensor are opt-in profiles, agent/proxy images are a
+build-only profile, and every run gets its own gatewayless sandbox network.
+Postgres persists to the `postgres_data` volume; `wardynd` holds the
+`recordings` and `audit` volumes.
+
+## Parity rule
+
+The control plane contains zero target-specific code: only
+`internal/runner` subpackages may import Docker (and, when the k8s driver
+lands, Kubernetes) client libraries.
+`test/conformance` runs the full suite against the **docker** target in CI.
+There is no Kubernetes runner driver yet (**[v0.5 — planned]**); a feature is
+not done on Kubernetes until a real driver passes conformance against a live
+cluster.

@@ -1,0 +1,75 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.out
+.DS_Store
+vendor/
+
+# Node
+node_modules/
+package-lock.json
+.pnpm-store/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Development
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.tmp/
+
+# Docker
+docker-compose.override.yml
+
+# compiled binaries at repo root
+/wardyn
+/wardynd
+/wardyn-proxy
+/wardyn-rec
+/wardyn-runner
+/wardyn-git-helper
+/wardyn-tetragon-ingest
+
+# spikes benchmark build output (regenerable: cd spikes/spire/harness && go build)
+/spikes/spire/harness/spirebench
+
+# playwright/screenshot artifacts
+.playwright-mcp/
+/*.png
+
+# maintainer's local, non-OSS scratch (personal WSL-migration config, keys, scripts)
+/local/
+
+# Generated test-report artifacts (regenerable per run). Committed durable files:
+# test/reports/README.md, rollup.md, coverage-dashboard.md, and the per-component
+# review ledgers under test/reports/components/. Everything else is generated.
+test/reports/go/
+test/reports/ui/
+test/reports/e2e/
+test/reports/coverage/
+
+# Seeded e2e backend artifacts (scripts/e2e-backend.sh): built binaries, logs,
+# and the wardynd recording-store scratch dir.
+/.e2e-bin/
+/data/
+ui/test-results/
+ui/playwright-report/
+
+# Local hands-on instance artifacts (scripts/run-local.sh)
+/.local-bin/
+
+# real (non-.example) local composer configs must never be committed
+/examples/composer-configs/anthropic-api.json
+/examples/composer-configs/openai-api.json

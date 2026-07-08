@@ -1,0 +1,37 @@
+{
+  "allowed_domains": [
+    "api.anthropic.com",
+    "api.openai.com",
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "*.githubusercontent.com",
+    "registry.npmjs.org",
+    "registry.yarnpkg.com",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "crates.io",
+    "static.crates.io",
+    "index.crates.io"
+  ],
+  "denied_domains": [],
+  "first_use_approval": "deny_with_review",
+  "allowed_methods": [],
+  "min_confinement_class": "CC2",
+  "eligible_grants": [
+    {
+      "kind": "github_token",
+      "scope": {
+        "repos": [],
+        "permissions": {
+          "contents": "read"
+        }
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": true
+    }
+  ],
+  "auto_stop_after_sec": 0
+}

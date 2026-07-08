@@ -1,0 +1,25 @@
+# Wardyn e2e task — build-static-site
+# Schema is flat and simple (consumed by a Go orchestrator not yet written).
+name: build-static-site
+agent: claude-code
+needs_model: true
+interactive: false
+launch: both            # manual (direct dispatch) OR composer-authored run
+tiers: [CC1, CC2, CC3]  # sandbox-only work; eligible in every confinement tier
+grader_image: python:3.12-alpine
+prompt: |
+  Build a small static website for a fictional business, "Larkspur Coffee Roasters",
+  in the current working directory. Create exactly two files:
+
+    - index.html
+    - style.css
+
+  Requirements:
+    * An <h1> whose text contains "Larkspur Coffee Roasters".
+    * A <nav> with at least 3 links: Home, Menu, Contact.
+    * A <section id="menu"> that lists at least 3 coffee items. Each item must be
+      a list element or carry class="menu-item".
+    * index.html must link the stylesheet with <link rel="stylesheet" href="style.css">.
+    * style.css must set a body font-family and define a .menu-item rule.
+
+  Keep it clean, semantic HTML. No JavaScript, no external assets or CDNs.
