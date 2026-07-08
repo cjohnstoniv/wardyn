@@ -19,27 +19,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// pgPoolReal returns the actual *pgxpool.Pool so we can pass it to store
-// functions. The interface return above is just to allow t.Skip before import.
-func pgPoolReal(t *testing.T) interface{ Close() } {
-	t.Helper()
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres integration tests")
-	}
-	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
 func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 	dsn := os.Getenv("WARDYN_TEST_PG")
 	if dsn == "" {

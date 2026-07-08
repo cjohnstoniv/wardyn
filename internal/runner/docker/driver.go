@@ -41,6 +41,12 @@ type Config struct {
 	// /usr/local/bin/wardyn-proxy inside the sidecar (v0 dev convenience). The
 	// sidecar's entrypoint is then forced to run it.
 	ProxyBinaryHostPath string
+	// ProxyCmd, when set, overrides the proxy sidecar container command. Empty in
+	// production (the wardyn-proxy image's own long-running entrypoint runs). Used
+	// by the conformance gate to keep a bare placeholder proxy image (e.g. busybox,
+	// whose default `sh` exits immediately) alive long enough to obtain a per-run
+	// network IP, so the runner contract can be exercised without a real proxy.
+	ProxyCmd []string
 	// InternalNetwork is the name of the pre-existing bridge network that
 	// connects the wardyn-proxy sidecars to the control plane. The proxy joins
 	// it; the agent never does. Defaults to "wardyn-internal".
@@ -287,6 +293,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
 		proxyCfg.Entrypoint = []string{"/usr/local/bin/wardyn-proxy"}
+	}
+	if len(d.cfg.ProxyCmd) > 0 {
+		proxyCfg.Cmd = d.cfg.ProxyCmd
 	}
 	proxyHost := &container.HostConfig{
 		// Proxy attaches to the internal net at create; it is NOT NetworkMode

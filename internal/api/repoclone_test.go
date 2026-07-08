@@ -28,7 +28,7 @@ func TestRepoFieldSafe(t *testing.T) {
 		"octocat/Hello\rWorld",   // carriage return
 		"octocat/Hello\x00World", // NUL
 		"octocat/Repo name",      // non-breaking space (Unicode whitespace)
-		"octocat/Reponame",      // NEL (C1 control)
+		"octocat/Repo\u0085name", // NEL (C1 control)
 		"octocat/Repo\x1bname",   // ESC (C0 control)
 		"octocat/Repo name",      // ASCII space (would break the git argv)
 	}

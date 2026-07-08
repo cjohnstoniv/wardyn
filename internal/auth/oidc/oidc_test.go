@@ -115,25 +115,6 @@ func (e *idpEnv) newAuth(t *testing.T, allowedDomains []string) *writoidc.Authen
 	return auth
 }
 
-// newTestAuthenticator constructs an Authenticator without a custom token endpoint
-// (used for tests that don't exercise the callback flow).
-func newTestAuthenticator(t *testing.T, idpURL, clientID string, allowedDomains []string) *writoidc.Authenticator {
-	t.Helper()
-	cfg := writoidc.Config{
-		IssuerURL:           idpURL,
-		ClientID:            clientID,
-		ClientSecret:        "test-secret",
-		RedirectURL:         "http://localhost:8080/auth/callback",
-		AllowedEmailDomains: allowedDomains,
-	}
-	ctx := gooidc.ClientContext(context.Background(), &http.Client{})
-	auth, err := writoidc.New(ctx, cfg, testHMACKey)
-	if err != nil {
-		t.Fatalf("writoidc.New: %v", err)
-	}
-	return auth
-}
-
 // ─── TestLoginHandlerSetsStateCookies ────────────────────────────────────────
 
 func TestLoginHandlerSetsStateCookies(t *testing.T) {

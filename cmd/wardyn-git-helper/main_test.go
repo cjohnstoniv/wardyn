@@ -34,16 +34,6 @@ func newFakeProxy(t *testing.T, mux *http.ServeMux) *fakeProxy {
 
 func (f *fakeProxy) URL() string { return f.srv.URL }
 
-// directClient returns an *http.Client that makes plain requests to the fake
-// proxy server (Proxy nil — no env proxy interference). This mirrors what the
-// real helper does.
-func directClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{Proxy: nil},
-		Timeout:   5 * time.Second,
-	}
-}
-
 // -- helpers ------------------------------------------------------------------
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
