@@ -100,28 +100,11 @@ running agent. It provides:
 
 ## Architecture at a glance
 
-```mermaid
-flowchart LR
-  operator(["Human operator"])
-  cli["wardyn CLI"]
-  operator -->|"UI — SSO or no-login local mode"| wardynd
-  cli -->|"WARDYN_ADMIN_TOKEN"| wardynd
-  subgraph control["Control plane (trusted)"]
-    direction TB
-    wardynd["wardynd<br/>REST API + embedded UI<br/>policy engine / approval FSM<br/>token broker / audit ingest"]
-    pg[("Postgres<br/>append-only audit")]
-    wardynd --> pg
-  end
-  subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
-    direction TB
-    agent["Coding agent<br/>claude-code / codex-cli"] -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
-    rec["wardyn-rec<br/>PTY recorder"]
-  end
-  wardynd -->|"launch: wardyn-runner (docker driver)"| sandbox
-  proxy -->|"allowlisted L7, creds injected on the wire"| net(("Internet / APIs"))
-  proxy -.->|"egress decision log"| wardynd
-  rec -.->|"masked session cast (brokered via proxy)"| proxy
-```
+<!-- Designed in the "Wardyn Architecture Diagrams" Figma file; the code-true,
+     CI-label-checked mermaid version of this and the other diagrams lives in
+     ARCHITECTURE.md and threatmodel/THREAT-MODEL.md. Regenerate from Figma if
+     the component set changes. -->
+![Wardyn system overview: a trusted control plane (wardynd + Postgres) launches each coding agent into an untrusted, gatewayless per-run sandbox whose only path off-host is the wardyn-proxy egress sidecar](docs/img/architecture.png)
 
 A trusted control plane (`wardynd` + Postgres) launches each agent into an
 untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy`
@@ -322,16 +305,7 @@ any time — it's read-only. To deliberately start from an **empty Runs list**,
 
 ### The local access model in one picture
 
-```mermaid
-flowchart TB
-  subgraph host["Your machine — everything YOU can do is the hard ceiling"]
-    subgraph ceiling["Wardyn policy ceiling — what the operator allows at all"]
-      subgraph run["One run's grant — the MINIMUM its task needs"]
-        g["repo-scoped, short-lived minted credential<br/>this task's egress allowlist<br/>only onboarded workspace mounts"]
-      end
-    end
-  end
-```
+![The local access model: your machine is the hard ceiling — everything you can do bounds everything a sandbox can; the Wardyn policy ceiling clamps that down; and each run receives only the minimal subset (scoped credential, task egress allowlist, onboarded mounts) its task needs](docs/img/access-model.png)
 
 On your desktop, Wardyn never *adds* power: a sandbox can at most reach what
 you — the operating user on this machine — already can, the operator policy
