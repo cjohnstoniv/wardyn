@@ -236,26 +236,47 @@ if ! grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "$AGE_ENV" 2>/dev/null; then
   fi
 fi
 
-# Need a Postgres. Reuse the compose one (publishes 127.0.0.1:5432) if not already up.
-if ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
-  info "Starting Postgres (compose, loopback :5432)…"
-  docker compose -f deploy/compose/docker-compose.yaml up -d postgres >/dev/null 2>&1 || true
-fi
-# Wait until it actually accepts connections — a FRESH volume runs initdb first, and
-# wardynd exits if it connects mid-init ("unexpected EOF"). Poll pg_isready.
-info "Waiting for Postgres to accept connections…"
-pg_ok=false
-for _ in $(seq 1 60); do
-  if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_isready -U wardyn -d wardyn >/dev/null 2>&1; then
-    pg_ok=true; break
-  fi
-  sleep 1
-done
-$pg_ok && ok "Postgres ready" || warn "Postgres not ready after 60s — wardynd may fail to connect; check 'docker compose ps postgres'."
-
 URL="http://localhost:${WARDYN_UP_PORT:-8080}"
 RUNDIR="${HOME}/.wardyn"; mkdir -p "$RUNDIR"
 PIDFILE="${RUNDIR}/host-wardynd.pid"; LOGFILE="${RUNDIR}/host-wardynd.log"
+
+# ensure_postgres: bring up the compose Postgres (loopback :5432) and wait for it.
+# A FRESH volume runs initdb first; wardynd exits if it connects mid-init, so poll.
+ensure_postgres() {
+  if ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
+    info "Starting Postgres (compose, loopback :5432)…"
+    docker compose -f deploy/compose/docker-compose.yaml up -d postgres >/dev/null 2>&1 || true
+  fi
+  info "Waiting for Postgres to accept connections…"
+  local ok_pg=false
+  for _ in $(seq 1 60); do
+    if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_isready -U wardyn -d wardyn >/dev/null 2>&1; then
+      ok_pg=true; break
+    fi
+    sleep 1
+  done
+  $ok_pg && ok "Postgres ready" || warn "Postgres not ready after 60s — wardynd may fail to connect; check 'docker compose ps postgres'."
+}
+
+# launch_wardynd: start wardynd detached and wait for /healthz. Sets WPID + healthy.
+# nohup + </dev/null detaches; setsid (Linux only) adds a fresh session (macOS lacks it).
+launch_wardynd() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+  else
+    nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+  fi
+  WPID=$!
+  echo "$WPID" > "$PIDFILE"
+  healthy=false
+  for _ in $(seq 1 45); do
+    if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ]; then healthy=true; break; fi
+    kill -0 "$WPID" 2>/dev/null || break
+    sleep 1
+  done
+}
+
+ensure_postgres
 
 # Already running? A running wardynd won't pick up boot-time config we just set
 # (e.g. the Bedrock region/model/mount env), so if we applied model config this
@@ -289,24 +310,21 @@ fi
 
 hd "Launching wardynd (host mode) in the background on ${URL}"
 info "Runs as you, sees your Claude login, launches sandboxes on $(basename "$DSOCK")."
-# Detached: nohup + </dev/null so it survives this shell. setsid gives it a fresh
-# session (belt-and-braces on Linux), but macOS/BSD has no setsid — nohup plus a
-# closed stdin detaches fine on its own, so only use setsid when it exists.
-if command -v setsid >/dev/null 2>&1; then
-  setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
-else
-  nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
-fi
-WPID=$!
-echo "$WPID" > "$PIDFILE"
+launch_wardynd
 
-# Wait for healthy — but stop early if the process dies (so we surface the log).
-healthy=false
-for _ in $(seq 1 45); do
-  if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ]; then healthy=true; break; fi
-  kill -0 "$WPID" 2>/dev/null || break
-  sleep 1
-done
+# Auto-recover from a stale secret store: if wardynd can't decrypt secrets a PRIOR
+# run seeded with a now-lost throwaway key ("age decrypt: no identity matched any
+# of the recipients"), the only fix is to wipe local data and re-seed with the
+# persistent key we just ensured. That store is unrecoverable and worthless, so do
+# it automatically — once (announced, not silent).
+if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 2>/dev/null; then
+  warn "Stale secret store from an earlier run (encrypted with a lost throwaway key) — resetting local data and retrying once…"
+  kill "$WPID" 2>/dev/null || true; rm -f "$PIDFILE"
+  docker compose -f deploy/compose/docker-compose.yaml down -v >/dev/null 2>&1 || true
+  ensure_postgres
+  launch_wardynd
+  $healthy && ok "Recovered — wardynd re-seeded the secret store with the persistent age key."
+fi
 
 if $healthy; then
   { command -v wslview  >/dev/null 2>&1 && wslview  "$URL"; } >/dev/null 2>&1 \
@@ -339,10 +357,9 @@ else
   warn "Full log: ${LOGFILE}"
   if grep -q 'no identity matched any of the recipients' "$LOGFILE" 2>/dev/null; then
     warn ""
-    warn "^ The secret store in Postgres was encrypted with a DIFFERENT age key (an earlier"
-    warn "  run used a throwaway key). A persistent key is now in ${AGE_ENV:-deploy/compose/.env};"
-    warn "  wipe the local data so it re-seeds with that key:"
-    warn "    make stop-host && docker compose -f deploy/compose/docker-compose.yaml down -v && make setup"
+    warn "^ Still can't decrypt the secret store even after an automatic reset — something is"
+    warn "  holding stale data, or the persistent key in ${AGE_ENV:-deploy/compose/.env} is wrong."
+    warn "  Try a full manual reset: make stop-host && docker compose -f deploy/compose/docker-compose.yaml down -v && make setup"
   fi
   exit 1
 fi
