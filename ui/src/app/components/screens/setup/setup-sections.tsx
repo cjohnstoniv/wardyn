@@ -389,7 +389,14 @@ export function LlmAccess({
   // reused verbatim so this row can never disagree with the check — the same
   // discipline the Claude subscription row applies to llmProviderDetail.
   const bedrock = status.bedrock ?? { creds_present: false };
-  const bedrockReady = !!bedrock.region && !!bedrock.model && bedrock.creds_present;
+  // Prefer the server-computed readiness (accounts for the ~/.aws mount and bearer
+  // credential sources, not just resident keys); fall back to the old derivation
+  // only for an older daemon that predates `ready`.
+  const bedrockReady =
+    bedrock.ready ??
+    (!!bedrock.region &&
+      !!bedrock.model &&
+      (bedrock.creds_present || !!bedrock.aws_mount || !!bedrock.bearer_present));
   const bedrockDetail =
     status.checks.find((c) => c.id === "bedrock_provider")?.detail ??
     "An enterprise path via AWS — no direct Anthropic egress, billed via AWS.";
@@ -461,7 +468,13 @@ export function LlmAccess({
   // ready vs needs-creds). "Connected" = the family has at least one usable path.
   const claudeSubDetected = !!claude?.logged_in;
   const claudeInstalled = !!claude?.installed;
-  const bedrockConfigured = !!(bedrock.region || bedrock.model || bedrock.creds_present);
+  const bedrockConfigured = !!(
+    bedrock.region ||
+    bedrock.model ||
+    bedrock.creds_present ||
+    bedrock.aws_mount ||
+    bedrock.bearer_present
+  );
   const codexDetected = !!codex?.logged_in;
   const codexInstalled = !!codex?.installed;
   const anthropicConnected = anthropic || claudeSubDetected || bedrockReady;
