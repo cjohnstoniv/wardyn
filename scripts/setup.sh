@@ -220,7 +220,12 @@ fi
 # secrets a prior run seeded ("age decrypt: no identity matched any of the
 # recipients") — it fails to start. Mirror what the team path (scripts/up.sh) does.
 AGE_ENV="deploy/compose/.env"
-mkdir -p "$(dirname "$AGE_ENV")"; touch "$AGE_ENV"
+mkdir -p "$(dirname "$AGE_ENV")"
+# The age key is the secret-store MASTER key (it decrypts every stored secret), so
+# this file must be owner-only. Create it 0600 (umask) and hard-enforce 0600 even
+# if it pre-existed with looser perms — before any secret is written to it.
+(umask 077; touch "$AGE_ENV")
+chmod 600 "$AGE_ENV" 2>/dev/null || true
 if ! grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "$AGE_ENV" 2>/dev/null; then
   _age="$(./bin/wardynd -gen-age-key 2>/dev/null | grep -E '^AGE-SECRET-KEY-' | head -1 || true)"
   if [ -n "$_age" ]; then
