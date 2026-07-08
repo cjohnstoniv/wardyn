@@ -137,12 +137,20 @@ elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
   # region, model, and creds — so the operator doesn't hand-run `wardyn secret set`.
   br_region="${WARDYN_BEDROCK_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-}}}"
   if [ -z "$br_region" ] && command -v aws >/dev/null 2>&1; then br_region="$(aws configure get region 2>/dev/null || true)"; fi
-  br_model="${WARDYN_BEDROCK_MODEL:-${ANTHROPIC_MODEL:-}}"
+  # Model id: Claude Code on Bedrock sets one of these (env, or ~/.claude/settings.json's
+  # env block). Prefer an explicit pin, then the everyday Sonnet default, then Opus/Haiku/
+  # fast. A value may be a cross-region inference-profile id (us.anthropic.claude-…) OR an
+  # application-inference-profile ARN (arn:aws:bedrock:…:inference-profile/…) — both are
+  # accepted by wardynd; a bare foundation-model id is not.
+  BR_MODEL_VARS="ANTHROPIC_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_SMALL_FAST_MODEL"
+  br_model="${WARDYN_BEDROCK_MODEL:-}"
+  for _mv in $BR_MODEL_VARS; do [ -n "$br_model" ] && break; br_model="${!_mv:-}"; done
   if [ -z "$br_model" ] && [ -f "$HOME/.claude/settings.json" ]; then
-    # `|| true`: with `set -euo pipefail`, a no-match grep (settings.json has no
-    # ANTHROPIC_MODEL — common for Bedrock, where the model comes from elsewhere)
-    # exits non-zero and would abort the whole installer. We just want "" then.
-    br_model="$(grep -oE '"ANTHROPIC_MODEL"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.claude/settings.json" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' || true)"
+    for _mv in $BR_MODEL_VARS; do
+      [ -n "$br_model" ] && break
+      # `|| true`: a no-match grep under `set -euo pipefail` would abort the installer.
+      br_model="$(grep -oE "\"$_mv\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" "$HOME/.claude/settings.json" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' || true)"
+    done
   fi
   # Cred style: a host ~/.aws (SSO or static-file) → read-only mount (no paste, SSO
   # auto-refreshes). Else static creds in the env → import them as Wardyn secrets.
@@ -204,6 +212,23 @@ if [ ! -x ./bin/wardynd ] || [ ! -f ./ui/dist/index.html ]; then
   # registry it also picks up ui/.npmrc) — matches the `make ui` target.
   ( cd ui && pnpm install && pnpm build )
   ok "built"
+fi
+
+# Persist a stable secret-store age key so secrets in Postgres survive restarts.
+# Host mode reads WARDYN_AGE_KEY from deploy/compose/.env (run-host.sh); WITHOUT a
+# persisted key, wardynd mints a throwaway one each run and then can't decrypt the
+# secrets a prior run seeded ("age decrypt: no identity matched any of the
+# recipients") — it fails to start. Mirror what the team path (scripts/up.sh) does.
+AGE_ENV="deploy/compose/.env"
+mkdir -p "$(dirname "$AGE_ENV")"; touch "$AGE_ENV"
+if ! grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "$AGE_ENV" 2>/dev/null; then
+  _age="$(./bin/wardynd -gen-age-key 2>/dev/null | grep -E '^AGE-SECRET-KEY-' | head -1 || true)"
+  if [ -n "$_age" ]; then
+    printf 'WARDYN_AGE_KEY=%s\n' "$_age" >> "$AGE_ENV"
+    ok "Minted a persistent secret-store age key → ${AGE_ENV} (secrets survive restarts)."
+  else
+    warn "Could not mint an age key; secrets may not persist across restarts."
+  fi
 fi
 
 # Need a Postgres. Reuse the compose one (publishes 127.0.0.1:5432) if not already up.
@@ -307,5 +332,12 @@ else
   warn "wardynd did not become healthy — last log lines:"
   tail -n 15 "$LOGFILE" 2>/dev/null | sed 's/^/    /'
   warn "Full log: ${LOGFILE}"
+  if grep -q 'no identity matched any of the recipients' "$LOGFILE" 2>/dev/null; then
+    warn ""
+    warn "^ The secret store in Postgres was encrypted with a DIFFERENT age key (an earlier"
+    warn "  run used a throwaway key). A persistent key is now in ${AGE_ENV:-deploy/compose/.env};"
+    warn "  wipe the local data so it re-seeds with that key:"
+    warn "    make stop-host && docker compose -f deploy/compose/docker-compose.yaml down -v && make setup"
+  fi
   exit 1
 fi
