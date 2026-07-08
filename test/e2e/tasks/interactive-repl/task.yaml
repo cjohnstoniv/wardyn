@@ -1,0 +1,26 @@
+# Wardyn e2e task — interactive-repl
+# The sandbox just idles (Cmd=sleep infinity); the ORCHESTRATOR drives the PTY
+# over the WS-attach channel. There is no solution.sh execution inside the
+# sandbox and no model — grading is stream-based in the orchestrator (an
+# acknowledged exception to the file-state grader contract; see README.md).
+name: interactive-repl
+agent: claude-code
+needs_model: false
+interactive: true
+launch: manual
+tiers: [CC1, CC2, CC3]
+grader_image: alpine:3.20   # grade.sh is a trivial placeholder; real grading is stream-based
+
+# The orchestrator (TestLive_Interactive) attaches via WS-PTY and drives a
+# sequence like the one below, asserting each expectation against the PTY output
+# stream (NOT the workspace); it then KILLS the run to tear the sandbox down
+# (interactive runs idle, so there is no self-exit/eof step).
+expects:
+  - send: "echo wardyn-pty-$((6*7))\n"
+    expect_contains: "wardyn-pty-42"
+  # In-PTY positive control: an ALLOWED host succeeds through the proxy.
+  - send: "curl ... https://github.com/ && printf WOK\n"
+    expect_contains: "WOK"
+  # In-PTY negative egress probe: a denied host must be held by the proxy (403).
+  - send: "curl -sS -o /dev/null -m 12 -w '%{http_code}' -x http://wardyn-proxy:3128 https://evil.example.com/\n"
+    expect_contains: "403"

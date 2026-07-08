@@ -1,0 +1,11 @@
+-- Denormalize the run's primary host workspace directory onto the run row.
+--
+-- A run's workspace mounts live inside the (possibly inline, possibly stored)
+-- RunPolicySpec; an inline-policy run does NOT persist its spec, so there was no
+-- durable way to tell that two active runs operate on the SAME host directory.
+-- The owner's model is a fleet of INDEPENDENT agents, and spawning two against one
+-- host directory should be DISCOURAGED (warned), not silently allowed. This column
+-- records the primary local workspace source at create time so a cheap collision
+-- check (ListRuns + compare) can warn. Empty for git-clone / ephemeral runs.
+-- Additive + idempotent; default '' preserves existing rows.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workspace_path TEXT NOT NULL DEFAULT '';

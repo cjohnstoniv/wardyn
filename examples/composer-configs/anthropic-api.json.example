@@ -1,0 +1,12 @@
+{
+  "default": "claude",
+  "backends": [
+    {
+      "name": "claude",
+      "wire": "anthropic",
+      "transport": "api",
+      "model": "claude-opus-4-8",
+      "api_key_secret": "anthropic-api-key"
+    }
+  ]
+}

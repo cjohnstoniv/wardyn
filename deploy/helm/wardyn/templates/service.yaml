@@ -1,0 +1,20 @@
+{{/*
+Service fronting wardynd. Targets the container's HTTP port by name ("http") so
+the port number can change in values without breaking the Service. wardynd serves
+the API, the embedded web UI, and /healthz all on this single port.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wardyn.fullname" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "wardyn.selectorLabels" . | nindent 4 }}

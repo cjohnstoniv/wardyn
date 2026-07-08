@@ -1,0 +1,13 @@
+{
+  "default": "claude",
+  "backends": [
+    {
+      "name": "claude",
+      "wire": "cli",
+      "transport": "claude",
+      "model": "claude-opus-4-8",
+      "enabled": true,
+      "timeout_seconds": 120
+    }
+  ]
+}

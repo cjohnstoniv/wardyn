@@ -1,0 +1,2 @@
+# Seed workspace for egress-boundary is empty — solution.sh writes the evidence
+# files (allowed_code.txt, denied_code.txt, metadata_rc.txt) here at run time.

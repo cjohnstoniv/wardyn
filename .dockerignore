@@ -1,0 +1,19 @@
+# Keep the Docker build context small and reproducible. Node/Go build outputs
+# and local artifacts must never be copied into image builds — the Dockerfiles
+# install/build them cleanly inside their own stages.
+ui/node_modules
+ui/dist
+**/node_modules
+.git
+bin/
+dist/
+data/
+spikes/
+test/e2e/fixtures/**/*.cast
+*.log
+# Compiled binaries that may sit at the repo root from local `go build`.
+/wardynd
+/wardyn
+/wardyn-proxy
+/wardyn-rec
+/wardyn-runner

@@ -1,0 +1,18 @@
+# Wardyn e2e task — egress-boundary
+# The oracle IS the task: solution.sh runs as the agent process and probes the
+# governed egress boundary through the proxy, writing evidence files into the
+# workspace. No coding model is involved.
+name: egress-boundary
+agent: oracle
+needs_model: false
+interactive: false
+launch: manual
+tiers: [CC1, CC2, CC3]
+grader_image: alpine:3.20
+prompt: |
+  (oracle task) Probe the egress boundary from inside the sandbox and record the
+  results as files in the workspace: allowed_code.txt, denied_probe.txt,
+  metadata_rc.txt. See solution.sh.
+# NOTE: the grader below only checks the in-workspace EVIDENCE files. The audit-side
+# assertions (proxy egress.deny events for the denied host) are checked by the Go
+# orchestrator against the audit log, not by this grader.

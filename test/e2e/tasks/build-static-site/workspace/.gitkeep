@@ -1,0 +1,2 @@
+# Seed workspace for build-static-site is intentionally empty — the agent builds
+# index.html + style.css from scratch here. This file only keeps the dir in git.

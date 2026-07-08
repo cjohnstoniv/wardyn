@@ -1,0 +1,12 @@
+{
+  "default": "gpt",
+  "backends": [
+    {
+      "name": "gpt",
+      "wire": "openai",
+      "transport": "api",
+      "model": "gpt-4.1",
+      "api_key_secret": "openai-api-key"
+    }
+  ]
+}

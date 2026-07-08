@@ -1,0 +1,17 @@
+# wardyn-proxy: the L2 per-workspace egress sidecar. The docker runner launches
+# one of these per run as the agent sandbox's ONLY route off the per-run
+# internal network (L0 structural egress). Pure-Go static build.
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-proxy ./cmd/wardyn-proxy
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=builder /out/wardyn-proxy /usr/local/bin/wardyn-proxy
+
+ENTRYPOINT ["/usr/local/bin/wardyn-proxy"]

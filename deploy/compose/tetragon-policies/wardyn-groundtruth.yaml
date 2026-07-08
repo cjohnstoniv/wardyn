@@ -1,0 +1,54 @@
+# Wardyn eBPF ground-truth TracingPolicy.
+#
+# This narrows what the kernel sensor REPORTS so the JSON export the ingest
+# sidecar tails carries only the events Wardyn's ground-truth stream maps:
+#   - tcp_connect       -> kernel.network.connect
+#   - sensitive file write -> kernel.file.write
+#
+# process_exec needs NO policy here: Tetragon emits process_exec / process_exit
+# unconditionally from its base sensor, so kernel.process.exec (and the
+# ld-linux loader flag derived from it) works with this policy plus the base
+# sensor. The ingest sidecar applies a SECOND, in-process narrowing (the
+# sensitive-path allowlist in internal/groundtruth) on top of what arrives, so a
+# coarse kprobe here is fine.
+#
+# HONESTY: this is a DETECTION policy. It has NO `action: Override` / Sigkill —
+# it never blocks. Kernel exec-blocking has a documented ld-linux/mmap bypass
+# (the "Ona Veto" lesson); Wardyn flags loaders (data.loader=true) rather than
+# claiming to prevent them. The real boundary is structural (L0 no-route +
+# no-resident-credentials), enforced out of band.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: wardyn-groundtruth
+spec:
+  kprobes:
+    # ── Outbound TCP connect -> kernel.network.connect ────────────────────────
+    - call: "tcp_connect"
+      syscall: false
+      args:
+        - index: 0
+          type: "sock"
+
+    # ── Sensitive file write -> kernel.file.write ─────────────────────────────
+    # security_file_permission fires on file access with the requested mask; the
+    # mask arg lets us select writes (MAY_WRITE = 2). The ingest sidecar then
+    # applies the sensitive-path allowlist, so this kprobe can be broad.
+    - call: "security_file_permission"
+      syscall: false
+      return: true
+      args:
+        - index: 0
+          type: "file"   # exported as file_arg.path -> EventData.path
+        - index: 1
+          type: "int"    # access mask (MAY_WRITE etc.)
+      returnArg:
+        index: 0
+        type: "int"
+      selectors:
+        - matchArgs:
+            # Only writes (mask has the MAY_WRITE bit). 2 == MAY_WRITE.
+            - index: 1
+              operator: "Mask"
+              values:
+                - "2"

@@ -1,0 +1,11 @@
+-- Persist whether a run was created INTERACTIVE (human-driven via `wardyn attach`)
+-- vs non-interactive (the agent task is exec'd and watched to completion).
+--
+-- dispatch already BRANCHES on interactive at sandbox-creation time (interactive
+-- runs come up RUNNING but idle, awaiting an attach; non-interactive runs exec the
+-- agent task and start a completion watcher), but the flag was never stored — so
+-- after creation nothing could distinguish an idle-awaiting-attach interactive run
+-- from a task-running one. The UI/CLI could not surface it and the attach path
+-- could not guard on it. This column makes interactive a first-class, queryable
+-- property of a run. Additive + idempotent; default false preserves existing rows.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS interactive BOOLEAN NOT NULL DEFAULT false;

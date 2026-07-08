@@ -1,0 +1,398 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// PermissionWizard — the New Run flow. A multi-step Dialog that composes the
+// CANONICAL wire contract and, on launch, optionally persists the spec as a named
+// policy (createPolicy) then creates the run (createRun) with inline_policy.
+import * as React from "react";
+import { ArrowLeft, ArrowRight, KeyRound, Loader2, Rocket } from "lucide-react";
+import type { AgentRun, ConfinementClass, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { api } from "../../../lib/api";
+import { getErrorMessage as msg } from "../../../lib/format";
+import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
+import { parseMissingSecret, surfaceRunWarnings } from "./run-warnings";
+import { Button } from "../../ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../ui/dialog";
+import { StepIndicator } from "./step-shell";
+import { StepBasics } from "./step-basics";
+import { StepAccess } from "./step-access";
+import { StepEgress } from "./step-egress";
+import { StepConfinement } from "./step-confinement";
+import { StepReview } from "./step-review";
+import { AddSecretDialog } from "../secrets";
+import { AddWorkspaceDialog } from "../workspaces";
+import {
+  WIZARD_STEPS,
+  applyProfileSpecToState,
+  buildSpec,
+  initialWizardState,
+  validateStep,
+  type WizardState,
+  type WizardStepId,
+} from "./wizard-types";
+
+export function PermissionWizard({
+  open,
+  onOpenChange,
+  onCreated,
+  initialState,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onCreated: (run: AgentRun) => void;
+  // When provided (e.g. "Edit in wizard" from a composer proposal) the wizard
+  // opens prefilled with this state instead of a clean default. The confinement-
+  // class floor probe still runs, but it does NOT overwrite a prefilled state.
+  initialState?: WizardState;
+}) {
+  const [stepIdx, setStepIdx] = React.useState(0);
+  const [state, setState] = React.useState<WizardState>(
+    () => initialState ?? initialWizardState("CC1"),
+  );
+  // null = the health probe hasn't resolved yet — StepConfinement renders
+  // "Checking…" instead of a definitive (and possibly false) hardware reason.
+  const [availableClasses, setAvailableClasses] = React.useState<string[] | null>(null);
+  const [secrets, setSecrets] = React.useState<string[]>([]);
+  const [secretsLoading, setSecretsLoading] = React.useState(false);
+  const [addSecretOpen, setAddSecretOpen] = React.useState(false);
+  // Prefill + retry wiring for the launch-error "add the missing secret" fix
+  // below (H3, ported from compose-review.tsx / 926da19): addSecretName seeds
+  // AddSecretDialog's name field; retryingSecretFix marks that THIS open came
+  // from the fix button, so onSaved re-launches instead of just patching state.
+  const [addSecretName, setAddSecretName] = React.useState("");
+  const [retryingSecretFix, setRetryingSecretFix] = React.useState(false);
+  const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = React.useState(false);
+  // Workspaces whose recorded egress has already been merged into the Egress step,
+  // so re-merging never fights the operator trimming a host. Reset per dialog-open.
+  const mergedWs = React.useRef<Set<string>>(new Set());
+  const [addWorkspaceOpen, setAddWorkspaceOpen] = React.useState(false);
+  const [launching, setLaunching] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  // A launch failure that names a not-yet-stored secret (H1: the stored/default
+  // policy path now 422s on this too, same as inline) — offers the same
+  // one-click fix the composer review panel does.
+  const missingSecret = React.useMemo(() => parseMissingSecret(error), [error]);
+
+  const step = WIZARD_STEPS[stepIdx];
+  const patch = React.useCallback(
+    (p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })),
+    [],
+  );
+
+  const loadSecrets = React.useCallback(() => {
+    setSecretsLoading(true);
+    api
+      .listSecrets()
+      .then(setSecrets)
+      .catch(() => setSecrets([]))
+      .finally(() => setSecretsLoading(false));
+  }, []);
+
+  const loadWorkspaces = React.useCallback(() => {
+    setWorkspacesLoading(true);
+    api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]))
+      .finally(() => setWorkspacesLoading(false));
+  }, []);
+
+  // Recorded-profile fast-track: selecting a profile (a workspace recording) loads
+  // its synthesized least-privilege spec (api.profileRun) into steps 2-4. Profiles
+  // are tied to the workspace by BEING its recordings — no name/policy matching.
+  const [profileLoading, setProfileLoading] = React.useState(false);
+  const applyProfile = async (runId: string, key: string) => {
+    setProfileLoading(true);
+    setError(null);
+    try {
+      const p = await api.profileRun(runId);
+      patch(applyProfileSpecToState(state, p.proposed.inline_policy, workspaces, key));
+    } catch (e) {
+      setError("Couldn't load that recorded profile: " + msg(e));
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  // On open: probe runner capabilities (confinement gating) + load secret names.
+  // With no prefilled initialState, reset to a clean state whose default barrier is
+  // the operator's persisted Getting-started pick if this host still runs it, else
+  // the strongest available tier (resolveDefaultCc) — prefer-strongest/persisted,
+  // aligning with the Getting-started selection ring, not a prefer-weakest floor. With a
+  // prefilled initialState (e.g. "Edit in wizard" from a composer proposal) seed
+  // that state and DON'T overwrite it from the probe — the proposal already carries
+  // its confinement class.
+  React.useEffect(() => {
+    if (!open) return;
+    setStepIdx(0);
+    setError(null);
+    setLaunching(false);
+    mergedWs.current = new Set();
+    if (initialState) setState(initialState);
+    setAvailableClasses(null);
+    let alive = true;
+    api
+      .health()
+      .then((h) => {
+        if (!alive) return;
+        const classes = (h.confinement_classes ?? []).filter(Boolean);
+        setAvailableClasses(classes);
+        if (initialState) return; // keep the prefilled proposal verbatim
+        setState(initialWizardState(resolveDefaultCc(getDefaultCc(), classes as ConfinementClass[])));
+      })
+      .catch(() => {
+        // Probe failed — fail closed to the universal CC1 floor rather than
+        // leaving the picker in "Checking…" forever.
+        if (alive) setAvailableClasses(["CC1"]);
+      });
+    loadSecrets();
+    loadWorkspaces();
+    return () => {
+      alive = false;
+    };
+  }, [open, loadSecrets, loadWorkspaces, initialState]);
+
+  // When a workspace is selected, load its recorded profile's egress (approved_egress
+  // ∪ scanned registries) into the Egress step so a new run VISIBLY inherits the
+  // recording — the operator sees the hosts and can trim them. Merge-once per
+  // workspace (mergedWs) so trimming doesn't snap back. The server unions the same
+  // set at launch (referencedWorkspaces → unionWorkspaceEgress); this surfaces it.
+  React.useEffect(() => {
+    if (workspaces.length === 0) return;
+    const add = new Set<string>();
+    for (const sel of state.workspaces) {
+      if (mergedWs.current.has(sel.workspaceId)) continue;
+      const w = workspaces.find((x) => x.id === sel.workspaceId);
+      if (!w) continue;
+      mergedWs.current.add(sel.workspaceId);
+      for (const h of w.approved_egress ?? []) add.add(h);
+      const prof = (w.profile ?? {}) as WorkspaceProfile;
+      for (const h of prof.egress_domains ?? []) add.add(h);
+    }
+    if (add.size === 0) return;
+    patch({ allowedDomains: Array.from(new Set([...state.allowedDomains, ...add])) });
+  }, [state.workspaces, workspaces, state.allowedDomains, patch]);
+
+  const stepError = validateStep(step.id, state);
+  const isLast = stepIdx === WIZARD_STEPS.length - 1;
+
+  const goNext = () => {
+    if (stepError) {
+      setError(stepError);
+      return;
+    }
+    setError(null);
+    setStepIdx((i) => Math.min(i + 1, WIZARD_STEPS.length - 1));
+  };
+  const goBack = () => {
+    setError(null);
+    setStepIdx((i) => Math.max(i - 1, 0));
+  };
+  // Fast-track a selected saved profile straight to Review (skips Access/Egress/
+  // Confinement, which the profile already populated). The Review step + launch still
+  // validate the full spec, so nothing unsafe is skipped — only the manual clicks.
+  const goToReview = () => {
+    if (stepError) {
+      setError(stepError);
+      return;
+    }
+    setError(null);
+    setStepIdx(WIZARD_STEPS.findIndex((s) => s.id === "review"));
+  };
+  const jumpTo = (id: WizardStepId) => {
+    const idx = WIZARD_STEPS.findIndex((s) => s.id === id);
+    if (idx <= stepIdx) {
+      setError(null);
+      setStepIdx(idx);
+    }
+  };
+
+  const launch = async () => {
+    // Re-validate every step before launch so a skipped requirement can't slip in.
+    for (const s of WIZARD_STEPS) {
+      const err = validateStep(s.id, state);
+      if (err) {
+        setError(err);
+        setStepIdx(WIZARD_STEPS.findIndex((w) => w.id === s.id));
+        return;
+      }
+    }
+    setError(null);
+    setLaunching(true);
+    try {
+      const { run, inline_policy } = buildSpec(state, workspaces);
+      if (state.saveAsProfile && state.profileName.trim()) {
+        // Persist the composed spec as a named policy (best-effort companion to
+        // the run; the run still carries inline_policy so it's self-contained).
+        await api.createPolicy(state.profileName.trim(), inline_policy);
+      }
+      const created = await api.createRun({ ...run, inline_policy });
+      setLaunching(false);
+      onOpenChange(false);
+      onCreated(created);
+      // Advisory POST /runs warnings (e.g. a workspace-dir collision): the run
+      // already launched, so surface them without blocking.
+      surfaceRunWarnings(created);
+    } catch (e) {
+      setError((e as Error).message || "Failed to launch run.");
+      setLaunching(false);
+    }
+  };
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="flex max-h-[88vh] flex-col gap-0 sm:max-w-2xl lg:max-w-5xl xl:max-w-6xl">
+          <DialogHeader className="border-b border-border pb-4">
+            <DialogTitle>New run</DialogTitle>
+            <DialogDescription>
+              Compose the agent's permission envelope. The run is launched under an inline policy —
+              no admin pre-provisioning required.
+            </DialogDescription>
+            <div className="pt-3">
+              <StepIndicator current={step.id} onJump={jumpTo} />
+            </div>
+          </DialogHeader>
+
+          <div className="scroll-thin -mx-1 flex-1 overflow-y-auto px-1 py-4">
+            {step.id === "basics" && (
+              <StepBasics
+                state={state}
+                patch={patch}
+                workspaces={workspaces}
+                workspacesLoading={workspacesLoading}
+                profileLoading={profileLoading}
+                onSelectProfile={applyProfile}
+                onClearProfile={() => patch({ selectedProfile: undefined })}
+                onAddWorkspace={() => setAddWorkspaceOpen(true)}
+              />
+            )}
+            {step.id === "access" && (
+              <StepAccess
+                state={state}
+                patch={patch}
+                secrets={secrets}
+                secretsLoading={secretsLoading}
+                onAddSecret={() => {
+                  // A manual open (not the launch-error fix below) — blank name.
+                  setAddSecretName("");
+                  setRetryingSecretFix(false);
+                  setAddSecretOpen(true);
+                }}
+              />
+            )}
+            {step.id === "egress" && <StepEgress state={state} patch={patch} />}
+            {step.id === "confinement" && (
+              <StepConfinement
+                state={state}
+                patch={patch}
+                availableClasses={availableClasses}
+                minClass={initialState?.confinementClass}
+              />
+            )}
+            {step.id === "review" && (
+              <StepReview state={state} patch={patch} workspaces={workspaces} />
+            )}
+          </div>
+
+          {error && (
+            <div
+              className="mb-3 space-y-2 rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger"
+              data-testid="wizard-launch-error"
+            >
+              <p>{error}</p>
+              {missingSecret && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={() => {
+                    setAddSecretName(missingSecret);
+                    setRetryingSecretFix(true);
+                    setAddSecretOpen(true);
+                  }}
+                >
+                  <KeyRound className="size-3.5" /> Add the “{missingSecret}” secret
+                </Button>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between border-t border-border pt-4">
+            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={launching}>
+              Cancel
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={goBack} disabled={stepIdx === 0 || launching}>
+                <ArrowLeft className="size-4" /> Back
+              </Button>
+              {isLast ? (
+                <Button onClick={launch} disabled={launching}>
+                  {launching ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Rocket className="size-4" />
+                  )}
+                  Launch run
+                </Button>
+              ) : step.id === "basics" && state.selectedProfile ? (
+                // Fast-track: a saved profile populated steps 2-4 — skip straight to Review.
+                <Button onClick={goToReview} disabled={!!stepError}>
+                  Review now <ArrowRight className="size-4" />
+                </Button>
+              ) : (
+                <Button onClick={goNext} disabled={!!stepError}>
+                  Next <ArrowRight className="size-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AddSecretDialog
+        open={addSecretOpen}
+        onOpenChange={setAddSecretOpen}
+        existingNames={secrets}
+        initialName={addSecretName}
+        onSaved={(name) => {
+          loadSecrets();
+          if (retryingSecretFix) {
+            // The launch-error fix: wizard state already names this secret
+            // correctly (the grant referencing it just didn't exist yet) — retry
+            // the same launch instead of patching state (H3, mirrors
+            // new-run-dialog.tsx's approveLaunch-on-save for compose-review).
+            setRetryingSecretFix(false);
+            void launch();
+          } else {
+            patch({ llmSecretName: name });
+          }
+        }}
+      />
+
+      <AddWorkspaceDialog
+        open={addWorkspaceOpen}
+        onOpenChange={setAddWorkspaceOpen}
+        onSaved={(ws) => {
+          // Auto-attach the newly onboarded workspace so the operator doesn't
+          // have to re-open the picker to select what they just added.
+          patch({ workspaces: [...state.workspaces, { workspaceId: ws.id }] });
+          loadWorkspaces();
+          // Best-effort scan (matches the Workspaces screen): a local dir reaches
+          // "ready" inline, a repo launches its governed scan run — so the inline
+          // path isn't left stuck in pending_scan. Refresh once it settles.
+          api.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
+        }}
+      />
+    </>
+  );
+}

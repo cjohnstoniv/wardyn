@@ -1,0 +1,50 @@
+# wardynd control plane, built WITH the docker runner (-tags docker) so the
+# compose demo can actually launch sandboxes via the host Docker daemon.
+#
+# DAEMON-TRUST TRADEOFF (read this): the wardynd service in docker-compose.yaml
+# bind-mounts /var/run/docker.sock so the docker runner can create sibling
+# containers (the agent sandbox + wardyn-proxy sidecar). Mounting the host
+# docker socket grants wardynd root-equivalent control of the host Docker
+# daemon. This is acceptable ONLY for a local single-tenant demo. The blessed
+# production path is the Kubernetes target (deploy/helm/wardyn), where the
+# runner talks to the API server with scoped RBAC and no socket is shared.
+# Never expose this compose stack to untrusted networks or multi-tenant use.
+
+# Stage 1: build the React admin UI (Runs / Approvals / Audit / Replay).
+FROM node:22-bookworm-slim AS ui
+WORKDIR /ui
+# Pin pnpm to the lockfile's generator. Copy manifests first for layer caching.
+RUN npm install -g pnpm@9
+COPY ui/package.json ui/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY ui/ ./
+# Produces /ui/dist (tsc && vite build). The UI calls /api/v1 same-origin, so
+# no base-URL config is needed — wardynd serves it on the same port.
+RUN pnpm build
+
+# Stage 2: build the Go binaries.
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# Pure-Go build (CGO off) so the binary runs on distroless static. The docker
+# client and syslog sink are pure Go; -tags docker compiles in the runner.
+RUN CGO_ENABLED=0 GOOS=linux go build -tags docker -o /out/wardynd ./cmd/wardynd \
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=builder /out/wardynd /wardynd
+COPY --from=builder /out/wardyn /usr/local/bin/wardyn
+# Ship the example policies so -default-policy resolves inside the image.
+COPY --from=builder /build/examples/policies /examples/policies
+# Ship the built UI and serve it by default (overridable via WARDYN_UI_DIR).
+COPY --from=ui /ui/dist /srv/ui
+ENV WARDYN_UI_DIR=/srv/ui
+
+EXPOSE 8080
+
+ENTRYPOINT ["/wardynd"]

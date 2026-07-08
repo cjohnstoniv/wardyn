@@ -1,0 +1,40 @@
+# Wardyn e2e task — github-issue-fix
+# The workspace is a plain local directory (no .git). The prompt is styled as a
+# GitHub issue; the acceptance test that encodes the fix is HIDDEN (heldout/,
+# NOT in the workspace) so an agent cannot game a visible test.
+name: github-issue-fix
+agent: claude-code
+needs_model: true
+interactive: false
+launch: both
+tiers: [CC1, CC2, CC3]
+grader_image: python:3.12-alpine   # stdlib unittest only — no network
+prompt: |
+  Issue #42: slugify() in textutil.py is broken
+
+  slugify() is supposed to turn an arbitrary title into a URL slug, but it has two
+  bugs:
+    1. It CRASHES on any non-ASCII input (e.g. "Café") instead of transliterating
+       accented characters down to plain ASCII.
+    2. It collapses runs of separators incorrectly, leaving doubled dashes
+       (e.g. "a  b" becomes "a--b" instead of "a-b").
+
+  Expected behaviour (spec):
+
+    >>> slugify("Hello World")
+    'hello-world'
+    >>> slugify("Café Münchraum")     # accents folded to ASCII
+    'cafe-munchraum'
+    >>> slugify("Ünïcödé")            # must NOT raise
+    'unicode'
+    >>> slugify("a  b")               # runs of separators collapse to one dash
+    'a-b'
+    >>> slugify("--Hey--There--")     # leading/trailing/doubled dashes trimmed
+    'hey-there'
+    >>> slugify("Wow!!!")             # trailing punctuation dropped
+    'wow'
+    >>> slugify("")
+    ''
+
+  Fix textutil.py so slugify() matches the spec. The function name and signature
+  must stay the same.

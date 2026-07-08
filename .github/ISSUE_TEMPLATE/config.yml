@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/cjohnstoniv/wardyn/security/advisories/new
+    about: >
+      Do NOT file security vulnerabilities as public issues. Use GitHub private
+      vulnerability reporting instead. See SECURITY.md for full details,
+      including scope, out-of-scope residual risks, and what to include in your
+      report.

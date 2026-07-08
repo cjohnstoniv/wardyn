@@ -1,0 +1,79 @@
+#!/bin/sh
+# /usr/local/bin/agent-run — Wardyn ORACLE agent launcher.
+#
+# The oracle is a deterministic stand-in for a coding agent, used by the e2e task
+# corpus (test/e2e/tasks/). It runs a task's scripted, known-good SOLUTION as the
+# agent process so the harness can prove each task is solvable and that its grader
+# scores the intended final workspace state as PASS. It is also the agent process
+# for tasks that ARE a script (e.g. egress-boundary), where the solution is the
+# probe itself.
+#
+# CONTRACT (matches the real agent-run interface; see deploy/images/README.md):
+#   agent-run "<task>"    <task> is the PATH TO solution.sh, RELATIVE TO THE
+#                         WORKSPACE (e.g. ".wardyn-task/solution.sh"). The harness
+#                         copies the task's solution.sh into the seed workspace
+#                         before launch. agent-run cds into the workspace and runs
+#                         `sh "<task>"`, exiting with its code (the completion
+#                         watcher maps exit 0 -> COMPLETED).
+#   agent-run --selftest  verify sh/curl/python3 exist; print PASS; exit 0. No
+#                         network, no side effects. Used by e2e image validation.
+#
+# The workspace is bind-mounted by the driver. Its mount target depends on the
+# policy's WorkspaceMounts (the composer uses /home/agent/work), so we cd into the
+# FIRST existing of /home/agent/work, /work, /workspace and run the solution there.
+#
+# No LLM, no git broker, no network — UNLESS the task's own solution.sh makes a
+# request, which is then subject to the run's egress policy via wardyn-proxy
+# (HTTP_PROXY/HTTPS_PROXY are set by dispatch, exactly as for the real images).
+set -u
+
+# ── selftest ─────────────────────────────────────────────────────────────────
+if [ "${1:-}" = "--selftest" ]; then
+    echo "=== wardyn agent-run selftest (oracle) ==="
+    ok=1
+    for bin in sh curl python3; do
+        if command -v "$bin" >/dev/null 2>&1; then
+            echo "  FOUND   $bin ($(command -v "$bin"))"
+        else
+            echo "  MISSING $bin"
+            ok=0
+        fi
+    done
+    if [ "$ok" -eq 1 ]; then
+        echo "=== selftest PASS ==="
+        exit 0
+    else
+        echo "=== selftest FAIL ==="
+        exit 1
+    fi
+fi
+
+# ── normal task mode ─────────────────────────────────────────────────────────
+task="${1:-}"
+if [ -z "$task" ]; then
+    echo "agent-run: task (path to solution.sh, relative to workspace) is required" >&2
+    exit 1
+fi
+
+# cd into the first workspace mount that exists (target varies by policy).
+workdir=""
+for d in /home/agent/work /work /workspace; do
+    if [ -d "$d" ]; then
+        workdir="$d"
+        break
+    fi
+done
+if [ -z "$workdir" ]; then
+    echo "agent-run: no workspace dir found (looked in /home/agent/work /work /workspace)" >&2
+    exit 1
+fi
+cd "$workdir" || { echo "agent-run: cannot cd $workdir" >&2; exit 1; }
+
+if [ ! -f "$task" ]; then
+    echo "agent-run: solution script not found at $workdir/$task" >&2
+    exit 1
+fi
+
+echo "agent-run: oracle running '$task' in $workdir" >&2
+sh "$task"
+exit $?

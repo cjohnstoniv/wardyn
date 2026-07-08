@@ -1,0 +1,13 @@
+# Wardyn e2e task — fix-failing-test
+name: fix-failing-test
+agent: claude-code
+needs_model: true
+interactive: false
+launch: both
+tiers: [CC1, CC2, CC3]
+grader_image: python:3.12-alpine   # stdlib unittest only — grader needs NO network
+prompt: |
+  The tests in test_pricing.py are failing. Fix the bug in pricing.py so that all
+  tests pass. Do NOT modify test_pricing.py — the bug is in pricing.py.
+
+  Run the tests with:  python3 -m unittest test_pricing
