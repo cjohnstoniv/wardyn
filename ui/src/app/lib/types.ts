@@ -758,6 +758,13 @@ export interface SetupBedrock {
   region?: string;
   model?: string;
   creds_present: boolean;
+  // Additional credential sources resolveBedrockAuth accepts (any one is enough).
+  // Optional for fixture-compat with an older daemon that predates them.
+  aws_mount?: boolean;
+  bearer_present?: boolean;
+  // Server-computed readiness (region+model+any credential source). Prefer this
+  // over re-deriving in the UI so the two gates can't drift.
+  ready?: boolean;
 }
 
 export interface SetupStatus {

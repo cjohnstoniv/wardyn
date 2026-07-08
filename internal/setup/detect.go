@@ -48,7 +48,13 @@ type Platform struct {
 func DetectCLIProviders() []CLIProvider {
 	home, _ := os.UserHomeDir()
 	return []CLIProvider{
-		detectProvider("claude", home, []string{".claude", ".claude.json"}),
+		// The subscription login signal is the OAuth token file
+		// ~/.claude/.credentials.json specifically — NOT the bare ~/.claude dir or
+		// ~/.claude.json, which also exist when Claude Code runs against Bedrock or
+		// an API key (no subscription). Keying on the dir false-positives those as
+		// "subscription logged in". Symmetric with codex's .codex/auth.json, and
+		// matches what internal/subscription reads.
+		detectProvider("claude", home, []string{filepath.Join(".claude", ".credentials.json")}),
 		detectProvider("codex", home, []string{filepath.Join(".codex", "auth.json")}),
 	}
 }
