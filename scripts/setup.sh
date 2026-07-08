@@ -139,7 +139,10 @@ elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
   if [ -z "$br_region" ] && command -v aws >/dev/null 2>&1; then br_region="$(aws configure get region 2>/dev/null || true)"; fi
   br_model="${WARDYN_BEDROCK_MODEL:-${ANTHROPIC_MODEL:-}}"
   if [ -z "$br_model" ] && [ -f "$HOME/.claude/settings.json" ]; then
-    br_model="$(grep -oE '"ANTHROPIC_MODEL"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.claude/settings.json" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/')"
+    # `|| true`: with `set -euo pipefail`, a no-match grep (settings.json has no
+    # ANTHROPIC_MODEL — common for Bedrock, where the model comes from elsewhere)
+    # exits non-zero and would abort the whole installer. We just want "" then.
+    br_model="$(grep -oE '"ANTHROPIC_MODEL"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.claude/settings.json" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' || true)"
   fi
   # Cred style: a host ~/.aws (SSO or static-file) → read-only mount (no paste, SSO
   # auto-refreshes). Else static creds in the env → import them as Wardyn secrets.
