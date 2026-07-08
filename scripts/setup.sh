@@ -240,22 +240,53 @@ URL="http://localhost:${WARDYN_UP_PORT:-8080}"
 RUNDIR="${HOME}/.wardyn"; mkdir -p "$RUNDIR"
 PIDFILE="${RUNDIR}/host-wardynd.pid"; LOGFILE="${RUNDIR}/host-wardynd.log"
 
-# ensure_postgres: bring up the compose Postgres (loopback :5432) and wait for it.
-# A FRESH volume runs initdb first; wardynd exits if it connects mid-init, so poll.
+# ensure_postgres: bring up the compose Postgres (loopback :5432) and wait until
+# it is HEALTHY. A FRESH volume runs initdb first (notably right after the stale-
+# store `down -v` recovery below); wardynd exits if it connects mid-init.
+# `up -d --wait` blocks on the service's compose healthcheck, which natively covers
+# that slow first-run initdb — a fixed-length poll races it and a silent `up`
+# failure would leave wardynd dialing a dead DB ("connection refused").
 ensure_postgres() {
-  if ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
-    info "Starting Postgres (compose, loopback :5432)…"
-    docker compose -f deploy/compose/docker-compose.yaml up -d postgres >/dev/null 2>&1 || true
+  info "Starting Postgres (compose, loopback :5432) and waiting for it to be healthy…"
+  local out
+  if out="$(docker compose -f deploy/compose/docker-compose.yaml up -d --wait --wait-timeout 150 postgres 2>&1)"; then
+    ok "Postgres ready"; return 0
   fi
-  info "Waiting for Postgres to accept connections…"
-  local ok_pg=false
-  for _ in $(seq 1 60); do
-    if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_isready -U wardyn -d wardyn >/dev/null 2>&1; then
-      ok_pg=true; break
-    fi
-    sleep 1
-  done
-  $ok_pg && ok "Postgres ready" || warn "Postgres not ready after 60s — wardynd may fail to connect; check 'docker compose ps postgres'."
+  # Network-ownership conflict: host-mode wardynd creates `wardyn-internal` itself
+  # (not via compose), so a compose `up` that attaches postgres to it fails
+  # instantly ("network ... was not created by compose"). If nothing is attached,
+  # drop the stray network so compose can recreate it labeled, then retry once —
+  # wardynd adopts compose's network on its next launch.
+  case "$out" in
+    *"not created by compose"*|*"incorrect label"*)
+      if [ "$(docker network inspect wardyn-internal -f '{{len .Containers}}' 2>/dev/null || echo 1)" = "0" ]; then
+        warn "Stray 'wardyn-internal' network (made by host-mode wardynd, not compose) — removing so compose can own it…"
+        docker network rm wardyn-internal >/dev/null 2>&1 || true
+        if out="$(docker compose -f deploy/compose/docker-compose.yaml up -d --wait --wait-timeout 150 postgres 2>&1)"; then
+          ok "Postgres ready"; return 0
+        fi
+      fi
+      ;;
+  esac
+  case "$out" in
+    *unknown*flag*|*--wait*)
+      # Pre-2.17 compose lacks --wait/--wait-timeout: fall back to a manual poll
+      # (longer than before so a fresh-volume initdb on a slow disk fits).
+      docker compose -f deploy/compose/docker-compose.yaml up -d postgres >/dev/null 2>&1 || true
+      local ok_pg=false
+      for _ in $(seq 1 120); do
+        if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_isready -U wardyn -d wardyn >/dev/null 2>&1; then
+          ok_pg=true; break
+        fi
+        sleep 1
+      done
+      $ok_pg && ok "Postgres ready" || warn "Postgres not ready after 120s — check 'docker compose -f deploy/compose/docker-compose.yaml ps postgres'."
+      ;;
+    *)
+      warn "Postgres did not become healthy: $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')"
+      warn "Inspect: docker compose -f deploy/compose/docker-compose.yaml ps postgres && docker compose -f deploy/compose/docker-compose.yaml logs postgres"
+      ;;
+  esac
 }
 
 # launch_wardynd: start wardynd detached and wait for /healthz. Sets WPID + healthy.
