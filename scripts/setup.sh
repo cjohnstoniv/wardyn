@@ -214,6 +214,31 @@ if [ ! -x ./bin/wardynd ] || [ ! -f ./ui/dist/index.html ]; then
   ok "built"
 fi
 
+# Build the per-run agent images if missing (first run only; slow). Host mode's
+# WARDYN_AGENT_IMAGES (run-host.sh) advertises these three; without them the very
+# first run fails at pull time ("registry: denied") on the local-only :demo tags,
+# because those tags exist in no registry. Docker is already confirmed reachable
+# above (setup exits early otherwise), so no extra guard is needed here. Progress
+# streams so a slow first-run build is visibly happening, not a silent hang.
+. scripts/lib/images.sh
+hd "Agent images (per-run sandboxes)"
+for _img in claude-code:wardyn/agent-claude-code:demo \
+            codex-cli:wardyn/agent-codex-cli:demo \
+            oracle:wardyn/agent-oracle:demo; do
+  _img_dir="${_img%%:*}"; _img_tag="${_img#*:}"
+  if image_missing "$_img_tag"; then
+    info "Building ${_img_tag} (first run; this can take several minutes)…"
+    if docker build -f "deploy/images/${_img_dir}/Dockerfile" -t "$_img_tag" .; then
+      ok "built ${_img_tag}"
+    else
+      warn "build failed for ${_img_tag} — runs naming this agent fail until 'make agent-images'"
+    fi
+  else
+    ok "present: ${_img_tag}"
+  fi
+done
+unset _img _img_dir _img_tag
+
 # Persist a stable secret-store age key so secrets in Postgres survive restarts.
 # Host mode reads WARDYN_AGE_KEY from deploy/compose/.env (run-host.sh); WITHOUT a
 # persisted key, wardynd mints a throwaway one each run and then can't decrypt the
@@ -376,6 +401,79 @@ if $healthy; then
         || warn "Could not import the AWS session token — add it in the UI if your creds are STS."
     fi
   fi
+
+  # Opt-in SCM credential import. SECURITY/PRIVACY: never copies a private key or
+  # PAT without explicit consent (an env flag or an interactive yes; default No).
+  # Detects a host GitHub/Azure DevOps PAT (env) and a private ~/.ssh key, and —
+  # only when the operator opts in — stores them in Wardyn's ENCRYPTED secret store
+  # under the documented convention (git-pat-<host>, ssh-key-<host>, host dots→
+  # hyphens). The ssh-key-<host> secret is exactly what onboarding an SSH workspace
+  # consumes, so no manual grant is needed for that path.
+  scm_pat=""; scm_pat_host=""
+  if   [ -n "${GITHUB_PAT:-}" ];       then scm_pat="$GITHUB_PAT";       scm_pat_host="github.com"
+  elif [ -n "${GH_TOKEN:-}" ];         then scm_pat="$GH_TOKEN";         scm_pat_host="github.com"
+  elif [ -n "${AZURE_DEVOPS_PAT:-}" ]; then scm_pat="$AZURE_DEVOPS_PAT"; scm_pat_host="dev.azure.com"
+  elif [ -n "${ADO_PAT:-}" ];          then scm_pat="$ADO_PAT";          scm_pat_host="dev.azure.com"
+  fi
+  scm_key=""
+  for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
+    [ -f "$k" ] && { scm_key="$k"; break; }
+  done
+  # Canonical provider hosts to register the SSH key under (the common case is
+  # github.com). Override e.g. WARDYN_SCM_SSH_HOSTS="github.com dev.azure.com".
+  scm_ssh_hosts="${WARDYN_SCM_SSH_HOSTS:-github.com}"
+
+  if [ -n "$scm_pat" ] || [ -n "$scm_key" ]; then
+    scm_plan=""
+    [ -n "$scm_pat" ] && scm_plan="${scm_plan}    · ${scm_pat_host} PAT (env) → secret git-pat-${scm_pat_host//./-}\n"
+    if [ -n "$scm_key" ]; then
+      for h in $scm_ssh_hosts; do
+        scm_plan="${scm_plan}    · ${scm_key} → secret ssh-key-${h//./-}\n"
+      done
+    fi
+
+    scm_do=false
+    if [ "${WARDYN_IMPORT_SCM:-}" = 1 ]; then
+      scm_do=true
+    elif [ -t 0 ] && [ -t 1 ]; then
+      hd "Import host git credentials into Wardyn? (lets agents clone private repos)"
+      printf '%b' "$scm_plan"
+      warn "These are copied into Wardyn's ENCRYPTED store on this host."
+      printf "  Import now? [y/N] "
+      read -r scm_ans || scm_ans=""
+      case "$scm_ans" in y|Y|yes|YES) scm_do=true;; esac
+    else
+      info "Detected host git credentials — set WARDYN_IMPORT_SCM=1 to import them into Wardyn's secret store (skipped)."
+    fi
+
+    if $scm_do; then
+      export WARDYN_URL="$URL"
+      hd "Importing SCM credentials into Wardyn's secret store"
+      if [ -n "$scm_pat" ]; then
+        scm_n="git-pat-${scm_pat_host//./-}"
+        printf '%s' "$scm_pat" | ./bin/wardyn secret set "$scm_n" >/dev/null 2>&1 \
+          && ok "stored ${scm_n}" || warn "could not store ${scm_n}"
+      fi
+      if [ -n "$scm_key" ]; then
+        # Refuse a passphrase-protected key: agents run ssh non-interactively, so an
+        # encrypted key would hang the clone. `ssh-keygen -y -P ""` fails on one
+        # (covers classic-PEM and OpenSSH-v1 formats; a text grep would not).
+        if ssh-keygen -y -P "" -f "$scm_key" >/dev/null 2>&1; then
+          for h in $scm_ssh_hosts; do
+            scm_n="ssh-key-${h//./-}"
+            ./bin/wardyn secret set "$scm_n" < "$scm_key" >/dev/null 2>&1 \
+              && ok "stored ${scm_n} (from ${scm_key})" || warn "could not store ${scm_n}"
+          done
+        else
+          warn "${scm_key} looks passphrase-protected — skipped (agents clone non-interactively; an encrypted key would hang). Use an unencrypted deploy key."
+        fi
+      fi
+      info "Reference a git-pat-<host> secret from an SCM grant (New Run wizard or a stored policy). Onboarding an SSH workspace consumes ssh-key-<host> automatically."
+      [ -n "$scm_key" ] && warn "An SSH identity now lives in Wardyn's encrypted store on this host (the store's age key persists across restarts)."
+    fi
+  fi
+  unset scm_pat scm_pat_host scm_key scm_ssh_hosts scm_plan scm_do scm_ans scm_n h k
+
   hd "Wardyn is up (host mode) — your terminal is free"
   ok "UI     ${URL}   (opening in your browser)"
   ok "PID    ${WPID}   (${PIDFILE})"
