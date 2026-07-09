@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { SetupStatus, Workspace, WorkspaceProfile } from "../../../lib/types";
 
 // The Import panel is driven entirely off api + the workspace status, so the api
 // is mocked and each test hands in a workspace at a known status to assert the
@@ -23,6 +23,7 @@ const setApprovedEgressMock = vi.fn();
 const finalizeWorkspaceMock = vi.fn();
 const listComposerBackendsMock = vi.fn();
 const suggestVerifyFixMock = vi.fn();
+const getSetupStatusMock = vi.fn();
 
 // The AI-diagnose affordance is composer-gated + hidden by default
 // (COMPOSER_UI_ENABLED=false); force the flag on so its retained code stays covered.
@@ -41,6 +42,7 @@ vi.mock("../../../lib/api", () => ({
     finalizeWorkspace: (...a: unknown[]) => finalizeWorkspaceMock(...a),
     listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
     suggestVerifyFix: (...a: unknown[]) => suggestVerifyFixMock(...a),
+    getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a),
     // Referenced by the embedded Add* dialogs only when opened; present so a
     // stray effect never throws "undefined is not a function".
     createWorkspace: vi.fn(),
@@ -68,6 +70,26 @@ function ws(over: Partial<Workspace> = {}, profile: WorkspaceProfile = {}): Work
   };
 }
 
+// Minimal SetupStatus fixture (mirrors setup-screen.test.tsx's baseStatus) — no
+// LLM path by default, so RecordPane's model-readiness warning renders unless a
+// test opts a provider/secret/composer backend in via overrides.
+function setupStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+  return {
+    ready: false,
+    checks: [],
+    auth: { mode: "local", local_loopback: true },
+    runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] },
+    composer: { enabled: false, backends: [] },
+    providers: [{ tool: "claude", installed: true, logged_in: false }],
+    secrets: { present: [], github_app: false },
+    age_key: { durable: false },
+    restart_required: false,
+    has_runs: false,
+    platform: { os: "linux", wsl: false, kvm: true },
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   listWorkspacesMock.mockResolvedValue([]);
@@ -76,6 +98,9 @@ beforeEach(() => {
   // Composer OFF by default so the deterministic-flow tests above don't render the
   // AI affordance; the AI-diagnosis suite below opts in per test.
   listComposerBackendsMock.mockResolvedValue([]);
+  // M18: no LLM path by default (see setupStatus()); the M18 suite below opts a
+  // provider in to prove the warning is driven by /setup/status, not composer.
+  getSetupStatusMock.mockResolvedValue(setupStatus());
 });
 
 // A verify_failed workspace, ready for the Verify pane's fix affordances.
@@ -419,5 +444,72 @@ describe("ImportWorkspaceDialog — agentic verify diagnosis (AI)", () => {
     expect(await screen.findByTestId("verify-fix")).toBeInTheDocument();
     expect(screen.queryByTestId("verify-ai-fix")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /diagnose with ai/i })).not.toBeInTheDocument();
+  });
+});
+
+// M17: the Verify pane's one-click "approve a denied host" fix used to PUT
+// straight to setApprovedEgress — skipping the same untrusted-content confirm
+// the Workspaces screen enforces for the identical action (the host name came
+// from a run's observed/denied egress, not something the operator typed).
+describe("ImportWorkspaceDialog — egress approvals confirm before applying (M17)", () => {
+  it("does not call setApprovedEgress until the confirm dialog is accepted", async () => {
+    getWorkspaceMock.mockResolvedValue(failedWs());
+    getObservedEgressMock.mockResolvedValue({ denied: ["evil.example.com"], runs_examined: 3 });
+    setApprovedEgressMock.mockResolvedValue(failedWs());
+    render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /suggest a fix from denied egress/i }));
+    await user.click(await screen.findByRole("button", { name: /^approve$/i }));
+
+    // The confirm dialog names the host and blocks the write until accepted.
+    expect(await screen.findByText(/approve egress to evil\.example\.com/i)).toBeInTheDocument();
+    expect(setApprovedEgressMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["evil.example.com"]));
+  });
+
+  it("cancelling the confirm dialog leaves the host unapproved", async () => {
+    getWorkspaceMock.mockResolvedValue(failedWs());
+    getObservedEgressMock.mockResolvedValue({ denied: ["evil.example.com"], runs_examined: 3 });
+    render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /suggest a fix from denied egress/i }));
+    await user.click(await screen.findByRole("button", { name: /^approve$/i }));
+    await screen.findByText(/approve egress to evil\.example\.com/i);
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(setApprovedEgressMock).not.toHaveBeenCalled();
+  });
+});
+
+// M18: Record's "no model configured" warning used to be wired to composer
+// detection (force-disabled by COMPOSER_UI_ENABLED=false in prod), so it fired
+// even with a connected subscription or API key. It must instead reflect GET
+// /setup/status (hasLlmPath) — independent of the composer signal.
+describe("ImportWorkspaceDialog — Record model-readiness reflects /setup/status, not composer (M18)", () => {
+  it("shows the connected note when a provider is logged in, even with no composer backend", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
+    getSetupStatusMock.mockResolvedValue(
+      setupStatus({ providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+    );
+    render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /next: record/i }));
+    expect(await screen.findByText(/configured model provider/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no model provider is configured/i)).not.toBeInTheDocument();
+  });
+
+  it("still warns when /setup/status reports no provider, key, or composer backend", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
+    // default setupStatus() (from beforeEach) has no logged-in provider/secret.
+    render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /next: record/i }));
+    expect(await screen.findByText(/no model provider is configured/i)).toBeInTheDocument();
   });
 });

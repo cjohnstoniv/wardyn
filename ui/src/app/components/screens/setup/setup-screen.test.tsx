@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -242,6 +242,43 @@ describe("SetupScreen", () => {
     expect(screen.getByText("creds")).toBeInTheDocument(); // per-setting has_credentials
     expect(screen.getByText("http_proxy")).toBeInTheDocument(); // env_case_mismatch chip
     expect(screen.getByText("credential")).toBeInTheDocument(); // top-level has_credentials prompt
+  });
+
+  // M21: the corporate-baseline step badges used to gate on check.status ===
+  // "ok", but the backend hardcodes host_proxy/scm_provider/artifact_repo to
+  // "info" forever — so the badge could never read "Configured" even once the
+  // operator had actually wired up the matching SiteConfig field. The badge
+  // must derive readiness from SiteConfig itself instead.
+  it("M21: shows Configured for host proxy / SCM / artifact steps once their SiteConfig field is set", async () => {
+    getSiteConfigMock.mockReset().mockResolvedValue({
+      upstream_proxy_secret_ref: "corp-proxy",
+      scm_hosts: ["git.corp.example.com"],
+      artifact_overrides: { npm: { base_url: "https://artifactory.corp.example.com/npm" } },
+    });
+    render(<SetupScreen onDone={() => {}} />);
+
+    await screen.findByText("Fence");
+    // Every check the backend reports for these three ids stays "info" (never
+    // "ok") — the rail badge must not depend on that to say "Configured".
+    const hostProxyBtn = await screen.findByRole("button", { name: /host proxy/i });
+    const scmBtn = screen.getByRole("button", { name: /scm provider/i });
+    const artifactBtn = screen.getByRole("button", { name: /artifact redirect/i });
+    expect(within(hostProxyBtn).getByText("Configured")).toBeInTheDocument();
+    expect(within(scmBtn).getByText("Configured")).toBeInTheDocument();
+    expect(within(artifactBtn).getByText("Configured")).toBeInTheDocument();
+  });
+
+  it("still shows Optional for the corporate-baseline steps with no SiteConfig set", async () => {
+    // beforeEach's getSiteConfigMock already resolves {} — nothing configured.
+    render(<SetupScreen onDone={() => {}} />);
+
+    await screen.findByText("Fence");
+    const hostProxyBtn = await screen.findByRole("button", { name: /host proxy/i });
+    const scmBtn = screen.getByRole("button", { name: /scm provider/i });
+    const artifactBtn = screen.getByRole("button", { name: /artifact redirect/i });
+    expect(within(hostProxyBtn).getByText("Optional")).toBeInTheDocument();
+    expect(within(scmBtn).getByText("Optional")).toBeInTheDocument();
+    expect(within(artifactBtn).getByText("Optional")).toBeInTheDocument();
   });
 
   it("'Finish later' (the single exit verb) dismisses setup and calls onDone", async () => {

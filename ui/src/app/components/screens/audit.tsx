@@ -52,6 +52,12 @@ import { cn } from "../ui/utils";
 // first N (truncated)" indicator. Keep this in sync with the server's page cap.
 const AUDIT_PAGE_CAP = 500;
 
+// M20 fix: a run_id-filtered query hits a DIFFERENT, higher server cap
+// (QueryAuditEvents's default limit=1000, vs QueryRecentAuditEvents's 500 for
+// the unfiltered/global view) — a long-running/chatty run's OWN trail can still
+// truncate at this cap. Keep in sync with the server's per-run page cap.
+const RUN_AUDIT_PAGE_CAP = 1000;
+
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
 const AUDIT_POLL_MS = 5000;
@@ -234,7 +240,7 @@ export function AuditScreen() {
       .listAudit(runFilter || undefined)
       .then((r) => {
         setEvents(r);
-        setTruncated(r.length >= AUDIT_PAGE_CAP);
+        setTruncated(r.length >= (runFilter ? RUN_AUDIT_PAGE_CAP : AUDIT_PAGE_CAP));
         setStatus("ready");
       })
       .catch(() => setStatus("error"));
@@ -249,7 +255,7 @@ export function AuditScreen() {
       .listAudit(runFilter || undefined)
       .then((r) => {
         setEvents(r);
-        setTruncated(r.length >= AUDIT_PAGE_CAP);
+        setTruncated(r.length >= (runFilter ? RUN_AUDIT_PAGE_CAP : AUDIT_PAGE_CAP));
       })
       .catch(() => {
         /* transient poll failure — keep the last good view, retry next tick */
@@ -383,17 +389,29 @@ export function AuditScreen() {
         />
       )}
 
-      {/* MEDIUM fix: when the window is capped, say so explicitly — otherwise the
-          operator may believe they're seeing the full log when they're not.
-          Filtering by a specific run pulls that run's complete trail server-side,
-          so the indicator only matters for the unfiltered/global view. Only the
-          real page cap is stated — no invented retention/pruning numbers. */}
-      {status === "ready" && truncated && !runFilter && (
+      {/* MEDIUM/M20 fix: when the window is capped, say so explicitly — otherwise
+          the operator may believe they're seeing the full log when they're not.
+          Filtering by a specific run pulls that run's complete trail server-side
+          (a HIGHER cap, RUN_AUDIT_PAGE_CAP, than the global page), but a long-
+          running/chatty run can still hit ITS cap — this used to be suppressed
+          unconditionally whenever runFilter was set, silently hiding that this
+          run's own trail was cut off too. Only the real page cap is stated — no
+          invented retention/pruning numbers. */}
+      {status === "ready" && truncated && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
           <AlertTriangle className="size-3.5 shrink-0" />
           <span>
-            Showing the first {AUDIT_PAGE_CAP} events (truncated) — older events may have rolled off this
-            window. Filter by a run to see that run's full trail (up to 1,000 events).
+            {runFilter ? (
+              <>
+                Showing the first {RUN_AUDIT_PAGE_CAP} events for this run (truncated) — older events for
+                this run may have rolled off.
+              </>
+            ) : (
+              <>
+                Showing the first {AUDIT_PAGE_CAP} events (truncated) — older events may have rolled off this
+                window. Filter by a run to see that run's full trail (up to {RUN_AUDIT_PAGE_CAP} events).
+              </>
+            )}
           </span>
         </div>
       )}

@@ -101,14 +101,28 @@ function ttlPhrase(scope: Scope): string {
   return min >= 1 ? ` for ${min} minute${min === 1 ? "" : "s"}` : ` for ${sec} seconds`;
 }
 
-type CredentialKind = "git_pat" | "github_token" | "api_key" | "generic";
-// Order matters: api_key's scope ALSO carries secret_name (the broker requires
-// it), so the api_key discriminators (header/format) must be checked before the
-// git_pat fallback — otherwise every api_key approval renders the git_pat
-// banner, which claims the agent's process can read the key (the opposite of
-// api_key's proxy-side injection design).
+type CredentialKind = "git_pat" | "github_token" | "api_key" | "ssh_key" | "generic";
+// H7 fix: requested_scope never carries the grant KIND (ApprovalRequest.kind is
+// only the wire-level "credential"/"egress_domain"/"tool_call"), so this stays a
+// key-sniffing heuristic. Order matters:
+//  - key_secret_ref is UNIQUE to ssh_key (broker.sshKeyScope) — must be checked
+//    before the git_pat fallback, or every ssh_key approval (a resident,
+//    agent-readable PRIVATE KEY, not a PAT) rendered the git_pat banner.
+//  - api_key's scope ALSO carries secret_name (the broker requires it), so the
+//    api_key discriminators (header/format) must be checked before the git_pat
+//    fallback — otherwise every api_key approval renders the git_pat banner,
+//    which claims the agent's process can read the key (the opposite of
+//    api_key's proxy-side injection design).
+// ponytail: a MINIMAL api_key scope ({host,secret_name} only, header/format
+// omitted since the broker defaults them) is indistinguishable from a minimal
+// git_pat scope ({host,secret_name}, username omitted) by keys alone — genuine
+// wire-format ambiguity, not fixable client-side. We bias the fallback toward
+// git_pat: it's the safer direction (never under-claim exposure) and the only
+// in-app path that produces a truly minimal scope today (git_pat with a blank
+// username field). Upgrade path: expose the real GrantKind on ApprovalRequest.
 function credentialKind(scope: Scope): CredentialKind {
   if ("repos" in scope || "permissions" in scope) return "github_token";
+  if ("key_secret_ref" in scope) return "ssh_key";
   if ("header" in scope || "format" in scope) return "api_key";
   if ("secret_name" in scope || "username" in scope) return "git_pat";
   return "generic";
@@ -130,7 +144,7 @@ function grantsWrite(scope: Scope): boolean {
 function capabilityLabel(kind: ApprovalKind, scope: Scope): string | undefined {
   if (kind !== "credential") return undefined;
   const ck = credentialKind(scope);
-  if (ck === "git_pat") return "grants git write";
+  if (ck === "git_pat" || ck === "ssh_key") return "grants git write";
   if (ck === "github_token" && grantsWrite(scope)) return "grants write";
   return undefined;
 }
@@ -145,6 +159,7 @@ function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       const ck = credentialKind(scope);
       const host = str(scope, "host");
       if (ck === "git_pat") return host ? `Hand git a token for ${host}` : "Hand git an access token";
+      if (ck === "ssh_key") return host ? `Write an SSH key for ${host}` : "Write a private SSH key to disk";
       if (ck === "github_token") {
         const repos = Array.isArray(scope.repos) ? scope.repos.filter((r) => typeof r === "string") : [];
         return repos.length ? `Mint a GitHub token for ${repos[0]}` : "Mint a GitHub token";
@@ -191,6 +206,17 @@ function deriveBanner(kind: ApprovalKind, scope: Scope): Banner {
           // PAT itself is a long-lived operator secret Wardyn cannot expire or
           // down-scope — never claim otherwise here.
           blast: `${CAPABILITY.gitPatLine} Wardyn can't expire or down-scope a PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
+        };
+      }
+      if (ck === "ssh_key") {
+        return {
+          what: `A private SSH key${host ? ` for ${host}` : ""} is written to disk in the sandbox for a git-over-SSH clone${ttl}.`,
+          // ssh_key has no credential-helper seam (git's SSH transport can't
+          // take an injected credential), so unlike a brokered credential the
+          // key MUST become a resident file the agent's process can read
+          // during the clone — and, like a PAT, Wardyn can't expire or
+          // down-scope it from its side.
+          blast: `${CAPABILITY.sshKeyLine} Wardyn can't expire or down-scope it — it stays live until you revoke it on ${host ?? "the git host"}.`,
         };
       }
       if (ck === "github_token") {

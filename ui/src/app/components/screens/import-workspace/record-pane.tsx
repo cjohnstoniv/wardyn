@@ -48,7 +48,7 @@ export function RecordPane({
   confined = false,
   notice,
   busyTask,
-  composerEnabled,
+  modelReady,
   onRecord,
   onDoneRecording,
   onPromoteEgress,
@@ -66,9 +66,14 @@ export function RecordPane({
   notice: { status: number; detail?: string } | null;
   // The session key currently being kicked (disables its button).
   busyTask: string | null;
-  // Whether a model/harness provider is configured — a session runs the agent, so
-  // without one the agent's model calls would be denied. Drives the warning.
-  composerEnabled: boolean;
+  // M18 fix: whether the operator has ANY working model/LLM path (subscription
+  // login, a stored provider key, or a real composer backend) — a session runs
+  // the agent, so without one the agent's model calls would be denied. Drives
+  // the warning. This is derived from GET /setup/status (hasLlmPath), NOT
+  // composer-backend detection: the composer UI is force-disabled
+  // (COMPOSER_UI_ENABLED=false) so that signal is always false and used to warn
+  // even with a perfectly good connected subscription or API key.
+  modelReady: boolean;
   // Start (or re-start) a session by NAME; the server slugs it to the record key.
   onRecord: (name: string) => void;
   // Interactive "Done recording" — kills the run; the backend captures on termination.
@@ -118,7 +123,7 @@ export function RecordPane({
       </p>
 
       {/* Model-access note: a session runs the agent, so it uses the configured provider. */}
-      {composerEnabled ? (
+      {modelReady ? (
         <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
           <Info className="mt-0.5 size-4 shrink-0 text-primary" />
           <p>

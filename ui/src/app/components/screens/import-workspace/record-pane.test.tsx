@@ -57,7 +57,7 @@ const noop = () => {};
 function renderPane(
   over: Partial<Workspace> = {},
   handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {},
-  composerEnabled = true,
+  modelReady = true,
   confined = false,
 ) {
   return render(
@@ -66,7 +66,7 @@ function renderPane(
       confined={confined}
       notice={null}
       busyTask={null}
-      composerEnabled={composerEnabled}
+      modelReady={modelReady}
       onRecord={handlers.onRecord ?? noop}
       onDoneRecording={handlers.onDoneRecording ?? noop}
       onPromoteEgress={handlers.onPromoteEgress ?? noop}
@@ -95,12 +95,12 @@ describe("RecordPane — header, CC1 banner, model note", () => {
     expect(screen.queryByTestId("record-cc1-banner")).not.toBeInTheDocument();
   });
 
-  it("notes the configured model provider when composer is enabled", () => {
+  it("notes the configured model provider when a model path is ready", () => {
     renderPane({}, {}, true);
     expect(screen.getByText(/configured model provider/i)).toBeInTheDocument();
   });
 
-  it("warns when no model provider is configured", () => {
+  it("warns when no model path is ready", () => {
     renderPane({}, {}, false);
     expect(screen.getByText(/no model provider is configured/i)).toBeInTheDocument();
   });

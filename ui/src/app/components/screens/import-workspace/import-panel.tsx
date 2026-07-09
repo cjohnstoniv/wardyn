@@ -36,6 +36,7 @@ import { usePoll } from "../../../lib/use-poll";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { getErrorMessage as msg } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
+import { hasLlmPath } from "../onboarding/intro";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Checkbox } from "../../ui/checkbox";
@@ -48,6 +49,7 @@ import {
 } from "../../ui/dialog";
 import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
+import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { StepIndicator, OptionCard } from "../new-run/step-shell";
 import { AddWorkspaceDialog, WorkspaceNeedsPanel } from "../workspaces";
 import { AddSecretDialog } from "../secrets";
@@ -100,6 +102,13 @@ export function ImportWorkspaceDialog({
   // affordance on the Verify step (detected the same way new-run-dialog does: an
   // empty backend list means the composer is off / suggest-fix would 404).
   const [composerEnabled, setComposerEnabled] = React.useState(false);
+  // M18 fix: Record's "no model configured" warning used to be driven by
+  // composerEnabled too — but COMPOSER_UI_ENABLED is force-disabled, so that
+  // signal is always false and the warning fired even with a connected
+  // subscription or a stored provider key. Derive it instead from GET
+  // /setup/status via hasLlmPath (the same readiness check Getting Started
+  // uses), which is composer-independent.
+  const [llmReady, setLlmReady] = React.useState(false);
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
   const [addSecretName, setAddSecretName] = React.useState("");
 
@@ -117,6 +126,15 @@ export function ImportWorkspaceDialog({
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   // Suggested "save as is" policy name (workspace + recording) for the profile drawer.
   const [profileName, setProfileName] = React.useState<string | undefined>(undefined);
+  // M17 fix: the Record/Verify panes' one-click (approveHost) and bulk
+  // (promoteEgress) egress approvals used to PUT straight to the API — skipping
+  // the same untrusted-content confirm the Workspaces screen enforces for the
+  // identical action (the host names come from a workspace's own files or a
+  // run's observed egress, neither of which is trusted). Route both through
+  // one pending-confirm gate so every caller gets it for free.
+  const [pendingConfirm, setPendingConfirm] = React.useState<{ hosts: string[]; run: () => void } | null>(
+    null,
+  );
   const openProfile = (id: string, name?: string) => {
     setProfileRunId(id);
     setProfileName(name);
@@ -166,6 +184,14 @@ export function ImportWorkspaceDialog({
       .catch(() => setComposerEnabled(false));
   }, []);
 
+  // M18 fix: Record's model-readiness warning (see llmReady above).
+  const loadLlmReadiness = React.useCallback(() => {
+    api
+      .getSetupStatus()
+      .then((s) => setLlmReady(hasLlmPath(s)))
+      .catch(() => setLlmReady(false));
+  }, []);
+
   // Reset all transient state on each open; resume from the workspace's status
   // when a workspaceId is handed in.
   React.useEffect(() => {
@@ -189,6 +215,7 @@ export function ImportWorkspaceDialog({
     scanFired.current = null;
     loadSecrets();
     loadComposer();
+    loadLlmReadiness();
     if (workspaceId) {
       setStep("scan"); // provisional; refined by loadWs once the status is known
       void loadWs(workspaceId, true);
@@ -196,7 +223,7 @@ export function ImportWorkspaceDialog({
       setStep("source");
       api.listWorkspaces().then(setExisting).catch(() => setExisting([]));
     }
-  }, [open, workspaceId, loadWs, loadSecrets, loadComposer]);
+  }, [open, workspaceId, loadWs, loadSecrets, loadComposer, loadLlmReadiness]);
 
   // Poll the single workspace while it's mid-flight server-side (scanning /
   // building / verifying) — paused otherwise so a settled workspace isn't polled.
@@ -322,6 +349,17 @@ export function ImportWorkspaceDialog({
     }
   };
 
+  // M17 fix: gate both the single-host and bulk approve actions behind the
+  // same untrusted-content confirm the Workspaces screen already enforces
+  // (ConfirmEgressDialog below) — these wrappers are what Record/Verify get as
+  // onApproveHost/onPromoteEgress; the raw approveHost/promoteEgress above only
+  // ever run after the operator confirms.
+  const requestApproveHost = (host: string) => setPendingConfirm({ hosts: [host], run: () => void approveHost(host) });
+  const requestPromoteEgress = (taskKey: string) => {
+    if (!ws) return;
+    setPendingConfirm({ hosts: newEgressHosts(ws, taskKey), run: () => void promoteEgress(taskKey) });
+  };
+
   const doFinalize = async () => {
     if (!wsId) return;
     setFinalizing(true);
@@ -417,11 +455,11 @@ export function ImportWorkspaceDialog({
                 ws={ws}
                 notice={recordNotice}
                 busyTask={recordBusyTask}
-                composerEnabled={composerEnabled}
+                modelReady={llmReady}
                 onRecord={(name) => doRecord(name, false)}
                 onDoneRecording={doneRecording}
-                onPromoteEgress={promoteEgress}
-                onApproveHost={approveHost}
+                onPromoteEgress={requestPromoteEgress}
+                onApproveHost={requestApproveHost}
                 onOpenProfile={openProfile}
               />
             )}
@@ -439,7 +477,7 @@ export function ImportWorkspaceDialog({
                   notice={verifyNotice}
                   composerEnabled={composerEnabled}
                   onVerify={doVerify}
-                  onApproveHost={approveHost}
+                  onApproveHost={requestApproveHost}
                   onBackToConfigure={() => setStep("configure")}
                   onContinueFinalize={() => setStep("finalize")}
                 />
@@ -449,11 +487,11 @@ export function ImportWorkspaceDialog({
                   confined
                   notice={recordNotice}
                   busyTask={recordBusyTask}
-                  composerEnabled={composerEnabled}
+                  modelReady={llmReady}
                   onRecord={(name) => doRecord(name, true)}
                   onDoneRecording={doneRecording}
-                  onPromoteEgress={promoteEgress}
-                  onApproveHost={approveHost}
+                  onPromoteEgress={requestPromoteEgress}
+                  onApproveHost={requestApproveHost}
                   onOpenProfile={openProfile}
                 />
               ))}
@@ -529,6 +567,19 @@ export function ImportWorkspaceDialog({
         runId={profileRunId}
         suggestedName={profileName}
         onClose={() => setProfileRunId(null)}
+      />
+
+      {/* M17: the same untrusted-content confirm Workspaces enforces, gating
+          Record/Verify's one-click (requestApproveHost) and bulk
+          (requestPromoteEgress) egress approvals above. */}
+      <ConfirmEgressDialog
+        hosts={pendingConfirm?.hosts ?? null}
+        onOpenChange={(o) => !o && setPendingConfirm(null)}
+        onConfirm={() => {
+          const run = pendingConfirm?.run;
+          setPendingConfirm(null);
+          run?.();
+        }}
       />
     </>
   );

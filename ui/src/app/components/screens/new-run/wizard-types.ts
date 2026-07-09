@@ -328,7 +328,7 @@ export function buildSpec(
       workspaceMounts.push({
         source: dir,
         target: "/home/agent/.claude",
-        read_only: false,
+        read_only: true,
       });
       // Mount the sibling ~/.claude.json (the host stores it next to the dir).
       const jsonPath = claudeJsonSibling(dir);
@@ -336,7 +336,7 @@ export function buildSpec(
         workspaceMounts.push({
           source: jsonPath,
           target: "/home/agent/.claude.json",
-          read_only: false,
+          read_only: true,
         });
       }
     }
