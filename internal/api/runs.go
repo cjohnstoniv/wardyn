@@ -1760,14 +1760,34 @@ func repoFieldSafe(s string) bool {
 // credential helper (wardyn-git-helper) and the demo egress allowlist are
 // GitHub-scoped, so cross-host cloning of a bare slug is out of scope for now;
 // pass a full https:// URL (and allowlist its host) to clone elsewhere.
+//
+// SSH: an ssh://[user@]host/… or scp-form user@host:path clone URL is accepted
+// ONLY when the host is a supported SSH-over-443 provider (sshOver443Endpoint:
+// GitHub / Azure DevOps). The URL passes through VERBATIM — the agent-run sandbox
+// (not this URL) supplies the minted key, known_hosts and the :443 ProxyCommand;
+// the run's ssh_key grant (maybeSSHKeyGrant) authorizes it. Any other transport
+// (file://, git's ext::/fd:: helpers, an unsupported SSH host, or an explicit
+// non-443 SSH port) fails closed.
 func repoCloneURL(slug string) string {
 	if strings.Contains(slug, "://") {
-		// Passthrough is restricted to http(s): other transports (ssh://,
-		// file://, git's ext::/fd:: helpers) would either bypass the egress
-		// proxy or run a helper command — out of the v0.1 governed scope.
-		// Fail closed: an unsupported scheme yields no clone URL.
 		if strings.HasPrefix(slug, "https://") || strings.HasPrefix(slug, "http://") {
 			return slug
+		}
+		if strings.HasPrefix(slug, "ssh://") {
+			if host, ok := sshCloneHost(slug); ok {
+				if _, ok := sshOver443Endpoint(host); ok {
+					return slug
+				}
+			}
+		}
+		return ""
+	}
+	// scp-form user@host:path — has '@' and ':' but no scheme.
+	if strings.ContainsRune(slug, '@') && strings.ContainsRune(slug, ':') {
+		if host, ok := sshCloneHost(slug); ok {
+			if _, ok := sshOver443Endpoint(host); ok {
+				return slug
+			}
 		}
 		return ""
 	}
@@ -1915,6 +1935,58 @@ func sshOver443Endpoint(host string) (endpoint string, ok bool) {
 		return "ssh.github.com:443", true
 	case "dev.azure.com", "ssh.dev.azure.com":
 		return "ssh.dev.azure.com:443", true
+	}
+	return "", false
+}
+
+// sshCloneHost extracts the host git will dial from an SSH clone URL — either
+// ssh://[user@]host[:port]/path or scp-form [user@]host:path. It does NOT validate
+// the host is a supported provider (callers gate on sshOver443Endpoint). ok=false
+// for a non-SSH string or an explicit non-443 ssh:// port (a port-22 URL would
+// override the sandbox's Port-443 ssh_config and defeat the SSH-over-443 egress
+// lane, so it fails closed here).
+func sshCloneHost(raw string) (host string, ok bool) {
+	if strings.HasPrefix(raw, "ssh://") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" {
+			return "", false
+		}
+		if p := u.Port(); p != "" && p != "443" {
+			return "", false
+		}
+		return strings.ToLower(u.Hostname()), true
+	}
+	if strings.Contains(raw, "://") {
+		return "", false // some other scheme, not scp-form
+	}
+	// scp-form: [user@]host:path — exactly one host, then ':' then a non-empty path.
+	s := raw
+	if at := strings.IndexByte(s, '@'); at >= 0 {
+		s = s[at+1:]
+	}
+	colon := strings.IndexByte(s, ':')
+	if colon <= 0 || colon == len(s)-1 {
+		return "", false
+	}
+	host = strings.ToLower(s[:colon])
+	if strings.ContainsAny(host, "/@") {
+		return "", false
+	}
+	return host, true
+}
+
+// canonicalSSHKeySecret maps a supported SSH host (either the primary or its
+// ssh.<host> form) to the canonical ssh-key-<host-slug> secret name — the SAME
+// convention setup.sh's SCM import writes and setup.go documents. Keying the
+// secret off the canonical provider (not the raw URL host) is what lets an
+// operator store ONE `ssh-key-github-com` and clone either github.com or
+// ssh.github.com URL forms.
+func canonicalSSHKeySecret(host string) (secretName string, ok bool) {
+	switch strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), ".")) {
+	case "github.com", "ssh.github.com":
+		return "ssh-key-github-com", true
+	case "dev.azure.com", "ssh.dev.azure.com":
+		return "ssh-key-dev-azure-com", true
 	}
 	return "", false
 }

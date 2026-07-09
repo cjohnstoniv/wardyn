@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	neturl "net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -226,9 +227,16 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			runID.String(), outcome, mustJSON(extra)))
 	}
 
-	// A repo carrying its OWN devcontainer: respect it, build from the repo.
+	// A repo carrying its OWN devcontainer: respect it, build from the repo — UNLESS
+	// the source is an SSH URL. The image builder (envbuilder) clones with no minted
+	// key / known_hosts / :443 ProxyCommand — only the agent-run sandbox has that
+	// wiring — so an SSH devcontainer build would fail auth. Fall through to a
+	// generated toolchain image; agent-run still clones the repo itself using the
+	// run's ssh_key grant (the repo's own devcontainer is just not built in v1).
 	if primary.Kind == types.WorkspaceKindRepo && p.HasDevcontainer {
-		if url := repoCloneURL(primary.Source); url != "" {
+		if _, ssh := sshCloneHost(primary.Source); ssh {
+			buildAudit("skipped", map[string]any{"source": "repo-devcontainer", "reason": "ssh-source-not-buildable-by-image-builder"})
+		} else if url := repoCloneURL(primary.Source); url != "" {
 			tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
 			if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, primary.Ref, tag); err == nil {
 				buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
@@ -324,12 +332,14 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		AutoStopAfterSec: 3600,
 	}
 	var ghGrantID *uuid.UUID
+	var sshGrants map[string]string
 	if ws.Kind == types.WorkspaceKindRepo {
 		run.Repo = ws.Source
 		if u := repoCloneURL(ws.Source); u != "" {
 			if grant := s.maybeGitHubReadGrant(ctx, runID, now, u); grant != nil {
 				ghGrantID = grant
 			}
+			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
 		}
 	} else {
 		policy.WorkspaceMounts = []types.WorkspaceMount{{Source: ws.Source, Target: composerWorkspaceTarget}}
@@ -347,7 +357,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws); ok {
 		image = built
 	}
-	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, nil, nil, false, commands)
+	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, nil, false, commands)
 	if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
 		created = refreshed
 	}
@@ -469,12 +479,14 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
 	}
 	var ghGrantID *uuid.UUID
+	var sshGrants map[string]string
 	if ws.Kind == types.WorkspaceKindRepo {
 		run.Repo = ws.Source
 		if u := repoCloneURL(ws.Source); u != "" {
 			if grant := s.maybeGitHubReadGrant(ctx, runID, now, u); grant != nil {
 				ghGrantID = grant
 			}
+			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
 		}
 	} else {
 		policy.WorkspaceMounts = []types.WorkspaceMount{{Source: ws.Source, Target: composerWorkspaceTarget}}
@@ -559,7 +571,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var plan json.RawMessage
-	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, nil, injections, interactive, plan)
+	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, injections, interactive, plan)
 	if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
 		created = refreshed
 	}
@@ -585,6 +597,46 @@ func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now 
 		return nil
 	}
 	return &gid
+}
+
+// maybeSSHKeyGrant synthesizes a run-scoped ssh_key grant for an SSH/scp clone
+// URL — the SSH analog of maybeGitHubReadGrant — so onboarding an SSH workspace
+// needs no manually-created grant. It returns the host→grant-id map dispatch
+// marshals into WARDYN_SSH_GRANTS (nil when the source isn't an SSH URL to a
+// supported provider, or the operator hasn't stored the ssh-key-<host> secret).
+// The grant's host is the host git actually dials (so the sandbox ssh_config
+// stanza matches), while key_secret_ref is the CANONICAL ssh-key-<host> secret
+// (so either the github.com or ssh.github.com URL form resolves one stored key).
+func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) map[string]string {
+	host, ok := sshCloneHost(cloneURL)
+	if !ok {
+		return nil
+	}
+	if _, ok := sshOver443Endpoint(host); !ok {
+		return nil
+	}
+	secretName, ok := canonicalSSHKeySecret(host)
+	if !ok {
+		return nil
+	}
+	// Only synthesize a grant when the key is actually present — otherwise the
+	// clone would fail; the onboarding guard (below) rejects that case up front.
+	names, err := s.listUserSecretNames(ctx)
+	if err != nil {
+		return nil
+	}
+	if !slices.Contains(names, secretName) {
+		return nil
+	}
+	gid := uuid.New()
+	scope, _ := json.Marshal(map[string]any{"host": host, "key_secret_ref": secretName})
+	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+		ID: gid, RunID: runID, CreatedAt: now,
+		Spec: types.GrantSpec{Kind: types.GrantSSHKey, Scope: scope, TTLSeconds: 600},
+	}); gerr != nil {
+		return nil
+	}
+	return map[string]string{host: gid.String()}
 }
 
 // reconcileWorkspaceRun is called when a governed scan/verify run reaches a
@@ -818,6 +870,8 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	// GitHubMinter is configured; a PUBLIC repo clones credential-free regardless.
 	// Non-GitHub private hosts would need a git_pat grant (a further follow-up).
 	ghGrantID := s.maybeGitHubReadGrant(ctx, runID, now, url)
+	// SSH clone URL: synthesize the ssh_key grant + surface it as WARDYN_SSH_GRANTS.
+	sshGrants := s.maybeSSHKeyGrant(ctx, runID, now, url)
 
 	// Minimal scan policy: allow only the git host(s) the clone needs + a short
 	// auto-stop. No workspace mounts, no subscription — wardyn-scan uploads to the
@@ -829,7 +883,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	}
 
 	image := agentImage("claude-code", s.cfg.AgentImages)
-	s.dispatch(ctx, created, id.Token, image, scanPolicy, ghGrantID, nil, nil, nil, false)
+	s.dispatch(ctx, created, id.Token, image, scanPolicy, ghGrantID, nil, sshGrants, nil, false)
 	if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
 		created = refreshed
 	}
@@ -842,6 +896,19 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 // deny-list underneath.
 func scanEgressDomains(cloneURL string) []string {
 	doms := []string{"github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com"}
+	// SSH/scp clone URL: add the PORT-QUALIFIED SSH-over-443 endpoint
+	// (ssh.github.com:443) so it matches ONLY :443 — not the bare host, which would
+	// match any port. Mirrors handleCreateRun's sshEgress lane. neturl.Parse cannot
+	// parse scp-form, so this must come first.
+	if host, ok := sshCloneHost(cloneURL); ok {
+		// A git-over-SSH clone needs ONLY the :443 endpoint — the ADO REST bundle
+		// (dev.azure.com / *.visualstudio.com) is the git_pat HTTPS lane, not this
+		// one. Matches handleCreateRun's sshEgress (endpoint only). Least privilege.
+		if ep, ok := sshOver443Endpoint(host); ok {
+			doms = append(doms, ep)
+		}
+		return doms
+	}
 	if u, err := neturl.Parse(cloneURL); err == nil && u.Hostname() != "" {
 		host := u.Hostname() // strips any :port
 		found := false
