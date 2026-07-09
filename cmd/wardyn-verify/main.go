@@ -153,6 +153,13 @@ func runStep(dir string, c workspacescan.SetupCommand) workspacescan.VerifyStepR
 	collector := newRollingCollector(logHeadCap, logTailCap)
 	cmd.Stdout = collector
 	cmd.Stderr = collector
+	// A lingering background child (e.g. the command backgrounds a daemon that
+	// inherits the stdout/stderr pipes) would otherwise hold Wait() open
+	// forever even after our own process exits or the context is canceled —
+	// the per-command timeout above bounds the context, not the pipe read.
+	// WaitDelay makes Wait() give up on the pipe copies 10s after the process
+	// itself exits, so the step always terminates.
+	cmd.WaitDelay = 10 * time.Second
 
 	start := time.Now()
 	err := cmd.Run()

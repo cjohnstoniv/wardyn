@@ -306,12 +306,29 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 // rides the existing scoped ApprovedEgress lane + audit, so the subsequent
 // confined Verify (which unions ApprovedEgress) is widened automatically.
 // Nothing is ever auto-applied: this endpoint IS the operator's click.
+//
+// Optional {"hosts": [...]} narrows promotion to a SUBSET the operator picked
+// (e.g. reviewing an allow-all recording's observed set and approving only
+// what they recognize instead of the whole thing wholesale): every requested
+// host must be a member of the recording's promotable set or the request is
+// rejected outright; omitted keeps promoting the full promotable set.
 func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
 		return
 	}
 	taskKey := chi.URLParam(r, "task")
+	var req struct {
+		Hosts []string `json:"hosts"`
+	}
+	if r.ContentLength != 0 {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if derr := dec.Decode(&req); derr != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body: "+derr.Error())
+			return
+		}
+	}
 	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
 	if notFoundIf(w, err, "workspace") {
 		return
@@ -336,12 +353,24 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// a direct allowlist entry would let future confined sandboxes reach the
 	// API surface beyond the proxy's brokered routes.
 	selfHost := controlPlaneHost(s.cfg.ControlPlaneURL)
-
-	merged := map[string]struct{}{}
-	for _, d := range ws.ApprovedEgress {
-		merged[d] = struct{}{}
+	// The LLM model-provider host(s) (api.anthropic.com, …) are HARNESS
+	// plumbing modelProviderEgress already unions into EVERY session, and the
+	// baseline clone hosts (scanEgressDomains) are wired into every scan/verify
+	// for free — neither is a workspace-specific need, and a promotion here is
+	// a PERMANENT per-workspace ApprovedEgress entry. Skip both, exactly like
+	// selfHost above.
+	skipHost := map[string]struct{}{}
+	for _, h := range modelProviderEgress(s.cfg.DefaultPolicy) {
+		skipHost[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
 	}
-	var promoted []string
+	for _, h := range scanEgressDomains(repoCloneURL(ws.Source)) {
+		skipHost[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
+	}
+
+	// promotable is every host this recording could ever offer up: observed
+	// with at least one ALLOW decision, a valid approve-lane host shape, and
+	// not plumbing (selfHost / model-provider / baseline clone).
+	promotable := map[string]struct{}{}
 	for _, d := range res.Observations.Domains {
 		if d.AllowCount <= 0 {
 			continue // denied/pending-only: never promote past what the open run got
@@ -350,14 +379,47 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		if selfHost != "" && host == selfHost {
 			continue
 		}
+		if _, skip := skipHost[host]; skip {
+			continue
+		}
 		if !workspacescan.ValidApprovedHost(host) {
 			continue // e.g. an IP literal or junk — the approve lane wouldn't take it either
 		}
-		if _, dup := merged[host]; dup {
+		promotable[host] = struct{}{}
+	}
+
+	// wantHosts is what THIS request actually promotes: the full promotable
+	// set, unless the operator narrowed it to a validated subset.
+	var wantHosts []string
+	if req.Hosts != nil {
+		for _, h := range req.Hosts {
+			h = strings.ToLower(strings.TrimSpace(h))
+			if h == "" {
+				continue
+			}
+			if _, ok := promotable[h]; !ok {
+				writeError(w, http.StatusUnprocessableEntity, "host "+h+" was not observed+allowed in this recording — cannot promote")
+				return
+			}
+			wantHosts = append(wantHosts, h)
+		}
+	} else {
+		for h := range promotable {
+			wantHosts = append(wantHosts, h)
+		}
+	}
+
+	merged := map[string]struct{}{}
+	for _, d := range ws.ApprovedEgress {
+		merged[d] = struct{}{}
+	}
+	var promoted []string
+	for _, h := range wantHosts {
+		if _, dup := merged[h]; dup {
 			continue
 		}
-		merged[host] = struct{}{}
-		promoted = append(promoted, host)
+		merged[h] = struct{}{}
+		promoted = append(promoted, h)
 	}
 	domains := make([]string, 0, len(merged))
 	for d := range merged {
@@ -369,20 +431,13 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if len(promoted) > 0 {
-		if _, serr := s.cfg.Store.SetWorkspaceApprovedEgress(r.Context(), id, domains); serr != nil {
-			writeError(w, http.StatusInternalServerError, "set approved egress: "+serr.Error())
-			return
-		}
-		s.recordAudit(r.Context(), s.auditEvent(&res.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.egress.approve", id.String(), "success", mustJSON(map[string]any{
-				"domains": promoted, "source": "record:" + taskKey,
-			})))
-	}
-	res.EgressPromoted = true
-	// Guarded on `recorded`: if a re-record superseded this capture between the
+	// M4: the record-entry CAS runs FIRST — only once it succeeds do we apply
+	// the ApprovedEgress widening. A CAS miss (the recording changed
+	// concurrently) must leave egress untouched, not widen-then-409. Guarded
+	// on `recorded`: if a re-record superseded this capture between the
 	// operator's read and the click, the marker (and the response) must not
 	// resurrect the stale entry.
+	res.EgressPromoted = true
 	updated, applied, perr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded)
 	if perr != nil {
 		writeError(w, http.StatusInternalServerError, "persist promotion marker: "+perr.Error())
@@ -391,6 +446,19 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	if !applied {
 		writeError(w, http.StatusConflict, "recording changed concurrently (re-record in progress?) — reload and retry")
 		return
+	}
+
+	if len(promoted) > 0 {
+		wsAfter, serr := s.cfg.Store.SetWorkspaceApprovedEgress(r.Context(), id, domains)
+		if serr != nil {
+			writeError(w, http.StatusInternalServerError, "set approved egress: "+serr.Error())
+			return
+		}
+		updated.ApprovedEgress = wsAfter.ApprovedEgress
+		s.recordAudit(r.Context(), s.auditEvent(&res.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+			"workspace.egress.approve", id.String(), "success", mustJSON(map[string]any{
+				"domains": promoted, "source": "record:" + taskKey,
+			})))
 	}
 	writeJSON(w, http.StatusOK, updated)
 }

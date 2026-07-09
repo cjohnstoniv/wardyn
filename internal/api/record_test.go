@@ -267,11 +267,11 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 // recordSessionKey slugs an operator-chosen session name into a stable map key.
 func TestRecordSessionKey_Slugs(t *testing.T) {
 	cases := map[string]string{
-		"build & test":     "build-test",
+		"build & test":      "build-test",
 		"  Agent Dev Loop ": "agent-dev-loop",
-		"deploy/dry-run":   "deploy-dry-run",
-		"***":              "",
-		"":                 "",
+		"deploy/dry-run":    "deploy-dry-run",
+		"***":               "",
+		"":                  "",
 	}
 	for in, want := range cases {
 		if got := recordSessionKey(in); got != want {
@@ -397,6 +397,79 @@ func TestPromoteRecordEgress_GuardMissConflicts(t *testing.T) {
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("code = %d, want 409 when the recording changed concurrently; body=%s", w.Code, w.Body.String())
+	}
+	// M4: the record-entry CAS runs BEFORE the egress widening, so a CAS miss
+	// must leave ApprovedEgress untouched — not widen-then-409.
+	if len(fake.ws.ApprovedEgress) != 0 {
+		t.Errorf("approved egress = %v, want untouched (empty) on a CAS miss", fake.ws.ApprovedEgress)
+	}
+}
+
+// TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts is the M2
+// self-check: the model-provider host modelProviderEgress unions into EVERY
+// session (harness plumbing, not a task need) and the baseline clone hosts
+// every scan/verify gets for free must never become a PERMANENT per-workspace
+// ApprovedEgress entry, even though both show up as genuinely ALLOWED in the
+// capture (the sandbox really did reach them).
+func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},    // genuine app need → promote
+		{Host: "api.anthropic.com", AllowCount: 5}, // harness/model-provider plumbing → never
+		{Host: "github.com", AllowCount: 2},        // baseline clone host → never
+	}}
+	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+		Status: types.WorkspaceScanned,
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
+		})}}
+	h := newHarness(t)
+	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
+		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake,
+		DefaultPolicy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}})
+
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.ws.ApprovedEgress) != 1 || fake.ws.ApprovedEgress[0] != "api.stripe.com" {
+		t.Errorf("approved = %v, want only [api.stripe.com] (model-provider + baseline clone hosts must never be promoted)",
+			fake.ws.ApprovedEgress)
+	}
+}
+
+// TestPromoteRecordEgress_HostSubset is the M3 self-check: an optional
+// {"hosts": [...]} narrows promotion to a validated subset instead of the
+// recording's entire observed-allowed set going in wholesale.
+func TestPromoteRecordEgress_HostSubset(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "evil.example.com", AllowCount: 1},
+	}}
+	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+		Status: types.WorkspaceScanned,
+		RecordResults: mustJSON(map[string]RecordTaskResult{
+			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
+		})}}
+	srv := newVerifySrv(t, fake)
+	url := "/api/v1/workspaces/" + wsID.String() + "/record/build/promote-egress"
+
+	// A host that wasn't observed+allowed in this recording → reject, nothing promoted.
+	if w := do(t, srv, http.MethodPost, url, adminToken, `{"hosts":["not-observed.example.com"]}`); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unrecognized host: code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.ws.ApprovedEgress) != 0 {
+		t.Fatalf("a rejected subset must not widen anything, got %v", fake.ws.ApprovedEgress)
+	}
+
+	// A valid subset promotes ONLY that subset, leaving the rest un-approved.
+	if w := do(t, srv, http.MethodPost, url, adminToken, `{"hosts":["api.stripe.com"]}`); w.Code != http.StatusOK {
+		t.Fatalf("valid subset: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.ws.ApprovedEgress) != 1 || fake.ws.ApprovedEgress[0] != "api.stripe.com" {
+		t.Errorf("approved = %v, want only [api.stripe.com] (evil.example.com excluded from the requested subset)",
+			fake.ws.ApprovedEgress)
 	}
 }
 
