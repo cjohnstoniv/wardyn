@@ -396,7 +396,10 @@ func run() error {
 	}
 
 	var run runner.Runner
-	runnerTarget := "docker"
+	// M31: reflect the ACTUAL resolved runner. Previously hardcoded to "docker"
+	// before the switch, so /healthz reported the sandbox component Selected=docker
+	// even under -runner none (runs actually stay PENDING) — a truthfulness gap.
+	runnerTarget := "none"
 	switch *runnerSel {
 	case "docker":
 		d, derr := newDockerRunner(*proxyImage, confRuntimes)
@@ -404,6 +407,7 @@ func run() error {
 			return fmt.Errorf("docker runner: %w", derr)
 		}
 		run = d
+		runnerTarget = "docker"
 		log.Printf("wardynd: docker runner enabled (proxy image %q)", *proxyImage)
 	case "none", "":
 		log.Printf("wardynd: no runner selected; runs stay PENDING (headless API-only)")
