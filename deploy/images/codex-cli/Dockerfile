@@ -32,6 +32,20 @@ FROM golang:1.26 AS builder
 
 WORKDIR /build
 
+# Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the
+# pinned-toolchain self-upgrade fetch (blocked behind a TLS-MITM proxy); the
+# optional corp CA (host-staged deploy/images/corp-ca.pem, gitignored) is added to
+# the system trust so `go mod download` can verify the module proxy through
+# corporate MITM. The README.md companion makes the COPY succeed when the
+# corp-ca.pem* glob matches nothing.
+ENV GOTOOLCHAIN=local
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+RUN if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates; \
+    fi
+
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -51,9 +65,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         asciinema \
     && rm -rf /var/lib/apt/lists/*
 
+# Corporate build support (no-ops on OSS): install the optional corp CA into the
+# system + node trust so `npm install -g` can verify registry TLS through a corp
+# MITM proxy. The proxy/registry knobs are build-only ARGs (NOT ENV) — a persistent
+# proxy ENV would leak into agent RUNS, whose only egress is wardyn-proxy.
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+RUN if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates; \
+    fi
+ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
+
 # Install Codex CLI globally.
 # Package name: @openai/codex  (installs the `codex` binary).
-RUN npm install -g @openai/codex
+ARG NPM_REGISTRY=
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
+ && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
+ && npm install -g @openai/codex
 
 # The node:22-bookworm-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory so the sandbox contract
