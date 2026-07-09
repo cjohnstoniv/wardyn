@@ -410,16 +410,22 @@ func (s *Server) routes() chi.Router {
 			// (capability disclosure) and must never sit on the public /healthz.
 			r.Get("/setup/status", s.handleSetupStatus)
 
-			// Policy management (admin-gated config). Every spec is validated
-			// before it is persisted (fail closed); writes are audited.
+			// Policy management (gated to authenticated humans — a valid SSO
+			// session or the admin token; dedicated admin-role gating is
+			// planned, so today ANY authenticated human in OIDC mode can CRUD
+			// policies, not just admins). Every spec is validated before it is
+			// persisted (fail closed); writes are audited.
 			r.Post("/policies", s.handleCreatePolicy)
 			r.Get("/policies", s.handleListPolicies)
 			r.Get("/policies/{id}", s.handleGetPolicy)
 			r.Put("/policies/{id}", s.handleUpdatePolicy)
 			r.Delete("/policies/{id}", s.handleDeletePolicy)
 
-			// Workspace management (admin-gated onboarding of local dirs + repos a
-			// run may attach — plan core B1). Create/update validate the source the
+			// Workspace management (onboarding of local dirs + repos a run may
+			// attach — plan core B1), gated to authenticated humans (SSO session
+			// or admin token); dedicated admin-role gating is planned, so today
+			// ANY authenticated human in OIDC mode can CRUD workspaces, not just
+			// admins. Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
 			// repoCloneURL); writes are audited. Scan is a separate, currently-stub

@@ -216,8 +216,11 @@ The primary way to onboard real work: **record** a named interactive session in
 a workspace (with model access), then rerun it as a governed profile — the New
 Run dialog offers the workspace's recorded sessions as fast-track profiles, and
 a recorded profile's observed egress is loaded into the run's allowlist for
-review. **Verify** replays a recording inside a confined sandbox (default-deny
-egress + live approvals) to prove the profile works before you rely on it.
+review. **Verify** does NOT replay the recorded session itself — it launches a
+separate confined run (default-deny egress + live approvals) that executes the
+workspace's operator-approved setup commands (install/build/test/lint) in the
+built devcontainer image, to prove the environment/build works before you rely
+on the profile.
 
 ### AI Run Composer (optional, UI currently hidden)
 
@@ -458,7 +461,7 @@ kind — today only the Docker target runs functionally (see Status below).
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `/api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source, upload raw `ScanFacts` to the control plane (profile derivation happens server-side). |
-| `wardyn-verify` | In-sandbox verify runner: replays a recorded session confined (default-deny egress + live approvals) and reports the result. |
+| `wardyn-verify` | In-sandbox verify runner: executes the workspace's operator-approved setup commands (install/build/test/lint) in the built devcontainer image under confinement (default-deny egress + live approvals) and reports the result. It does NOT replay a recorded PTY session — see "Recorded profiles → governed reruns" below for that. |
 | `wardyn` | CLI: `wardyn run`, `wardyn approve`, `wardyn audit`, `wardyn policy`, `wardyn setup wall\|vault`. |
 
 ---

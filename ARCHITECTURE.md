@@ -25,7 +25,7 @@ the governance target.
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
-| `wardyn-verify` | In-sandbox verify runner: replays a recorded session confined (default-deny egress + live approvals). |
+| `wardyn-verify` | In-sandbox verify runner: executes the workspace's operator-approved setup commands (install/build/test/lint) in the built devcontainer image under confinement and reports the result — it does NOT replay a recorded PTY session. |
 | `wardyn` | CLI: `wardyn run`, `wardyn approve`, `wardyn audit`, `wardyn policy`. |
 
 How they fit together (same diagram as the README):
@@ -94,10 +94,19 @@ forward-compatibility values; no transition produces them today.
 
 ## Security invariants (every contributor and subagent MUST preserve these)
 
-1. **Secrets never enter the sandbox.** No secret in env, disk, or args.
+1. **Secrets never enter the sandbox — with two named, bounded exceptions.**
    Late binding via the broker; third-party API credentials are injected
-   proxy-side (`egress.InjectionRule`). Output masking of secret values on the
-   audit/recording/decision-log streams ships via `internal/secretmask`
+   proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
+   disk, or args. Two documented residuals break that rule deliberately: an
+   `ssh_key` grant materializes a RESIDENT private key (written 0400,
+   descendant-scoped, wiped after clone), and Bedrock **access-key** mode
+   (as opposed to the preferred, never-resident bearer mode) places
+   `aws-access-key-id`/`aws-secret-access-key` in the sandbox env because
+   SigV4 request-signing happens in-process and cannot be proxy-injected. Both
+   are bounded (output-masked, withheld from non-model runs) and named honestly
+   rather than hidden — see `threatmodel/THREAT-MODEL.md` §5.1a. Output masking
+   of secret values on the audit/recording/decision-log streams ships via
+   `internal/secretmask`
    (verbatim-match; the encoded/transformed-exfil residual is documented).
    Masking is structurally **control-plane-side**, on the brokered upload
    path only: the optional `WARDYN_RECORDING_MOUNT`/`wardyn-rec -out-dir`
@@ -120,10 +129,14 @@ forward-compatibility values; no transition produces them today.
    gatewayless, an agent that ignores the proxy env vars (the documented env-var
    bypass class) has no route and reaches nothing. Private/link-local/metadata
    IPs (169.254.169.254) are unconditionally blocked.
-4. **Per-run identity with full attribution.** Every token, commit, and
-   audit event carries `sub` (human), `act` (agent-run SPIFFE ID), and
-   `sponsor`. `actor_type` is first-class in audit. Enforcement points live
-   at the proxy/gateway/broker — never inside the agent loop.
+4. **Per-run identity with full attribution.** The minted run identity token
+   (`identity.Claims`) carries the full delegation chain: `sub` (human), `act`
+   (agent-run SPIFFE ID), and `sponsor`. `AuditEvent`, however, has a single
+   `Actor` field (`actor_type` + one string — human sub, agent SPIFFE ID, or
+   component name); today's mint/egress audit events record only `act` (the
+   agent's SPIFFE ID) there, not a separate `sub`/`sponsor` pair per event.
+   Enforcement points live at the proxy/gateway/broker — never inside the
+   agent loop.
 5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;
    policy refuses what a substrate cannot enforce (Confinement Classes
    CC1 runc / CC2 gVisor default / CC3 Kata). Embedded identity provider
@@ -133,11 +146,18 @@ forward-compatibility values; no transition produces them today.
    change/egress decision is an event. The Postgres trigger blocks
    UPDATE/DELETE, so a written event can never be altered or erased. NOTE:
    control-plane audit WRITES (identity mint/revoke, approval decide, broker
-   mint/revoke) are currently best-effort (`_ = rec.Record(...)`) — a Postgres
-   outage can drop one of these events before it's ever written; hardening
-   this path to fail-closed is in progress. (This is unlike the
-   ground-truth ingest path, which already fails closed.) SIEM export is
-   never paywalled.
+   mint/revoke) are still best-effort — the call site is fire-and-forget
+   (`_ = rec.Record(...)`, not wrapped in the mint transaction), so a write can
+   still fail. What H9 changed: the shared recorder chain is now
+   `maskingRecorder → spoolingRecorder → auditRec`, and every audit writer
+   (API, broker, identity, approvals, sweeper) shares it — so when the primary
+   Postgres write fails, the (already-masked) event is spooled to a durable
+   local append-only JSONL fallback (`WARDYN_AUDIT_SPOOL`) instead of being
+   silently lost, for EVERY writer, not just the API server. This is
+   durability via a local fallback, not a transactional guarantee — it is
+   still possible for a write and its spool append to both fail (logged
+   loudly when that happens). (The ground-truth ingest path is a stronger,
+   already fail-closed guarantee — see §4.) SIEM export is never paywalled.
 
 ### Invariant 2, mechanically
 
@@ -230,7 +250,12 @@ Postgres persists to the `postgres_data` volume; `wardynd` holds the
 
 The control plane contains zero target-specific code: only
 `internal/runner` subpackages may import Docker (and, when the k8s driver
-lands, Kubernetes) client libraries.
+lands, Kubernetes) client libraries — with one blessed exception:
+`internal/envbuild` (plus its narrow shared helper `internal/dockerutil`)
+legitimately imports the Docker client directly because it drives the
+coder/envbuilder devcontainer build as a Docker container
+(`internal/envbuild/doc.go`), a distinct concern from launching the agent
+sandbox itself.
 `test/conformance` runs the full suite against the **docker** target in CI.
 There is no Kubernetes runner driver yet (**[v0.5 — planned]**); a feature is
 not done on Kubernetes until a real driver passes conformance against a live

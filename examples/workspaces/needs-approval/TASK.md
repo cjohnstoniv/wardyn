@@ -3,9 +3,9 @@
 ## Governance control exercised
 
 First-use egress approval (L2 wardyn-proxy).  `example.com` is not in the
-demo allowlist.  With `first_use_approval: true` the proxy suspends the
-connection, raises an egress_domain ApprovalRequest, and waits.  The human
-operator can then:
+demo allowlist.  With `first_use_approval: "deny_with_review"` the proxy
+suspends the connection, raises an egress_domain ApprovalRequest, and waits.
+The human operator can then:
 
 - Approve: the connection is released; `example.com` is added to the session
   allowlist for the remainder of this run; egress.allow is audited.

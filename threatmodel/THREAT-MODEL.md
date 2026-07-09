@@ -88,7 +88,7 @@ invitation, not an embarrassment.
 | **B3 — Sandbox vs. MCP/tool gateway** | Separate enforcement plane from B2. A prior agent egress firewall was blind to MCP traffic; we treat tool egress as a first-class boundary. |
 | **B4 — Agent-run identity vs. token broker** | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in section 4. |
-| **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
+| **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID **[v0.5 — planned, arrives with SPIRE]**. Today: a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
 
 On a single-operator machine the trust boundaries compose into a strict
@@ -138,10 +138,10 @@ the L3 tool gateway planned at v0.5.
 
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
-| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox. Late-binding via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). NOTE: the optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. | B1, B2, B4 |
+| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with two named, bounded exceptions (see §5.1a): an `ssh_key` grant materializes a RESIDENT private key (written 0400, wiped after clone), and Bedrock access-key mode places `aws-access-key-id`/`aws-secret-access-key` in the sandbox env because SigV4 signing can't be proxy-injected. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). NOTE: the optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. | B1, B2, B4 |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | On the shipped Docker path this holds at **L0**: each run's network is `Internal:true` (gatewayless), so the sandbox has no off-host route and 169.254.169.254 is structurally unreachable **[shipped]**. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5 — planned]**. | L0 (L1 v0.5) |
-| MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). | L3, B3 |
+| MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5 — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; userns (`hostUsers:false`) + PSS-restricted + no hostPath are the Kubernetes path **[v0.5 — planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
 | Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[v0.5 — planned]** — the token is repo-scoped but NOT branch-scoped; the broker records the `wardyn/<run-id>/*` namespace as advisory metadata only and nothing enforces it on push yet (needs a push-ref-inspecting git-proxy or GitHub rulesets). | B4, B5, ID |
@@ -175,12 +175,13 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 2. **Domain fronting and exfil via dual-use allowlisted domains** are not closed
    below the optional L2 TLS-intercept+DLP tier. Hostname-only egress filtering
-   (CONNECT/SNI mode) is domain-frontable. The TLS-intercept tier is unbuilt
-   (v0.5 target); per-workspace ephemeral-CA injection into arbitrary agent
-   images, and QUIC/UDP/raw-TCP coverage, are unconfirmed. (Update: the
-   reverse-proxy *content-inspection* tier for the inspectable API-key LLM route
-   is now built — §5.1a — and reuses a channel-agnostic engine; the ephemeral-CA
-   TLS-MITM tier for opaque CONNECT remains the next phase.)
+   (CONNECT/SNI mode) is domain-frontable. The TLS-MITM tier itself is now
+   **shipped**, off by default, opt-in per policy (`intercept_tls`) — see §5.1a
+   for the exact contract — but its coverage is bounded: only operator-listed
+   MITM-eligible hosts (LLM hosts today) are intercepted, the full container
+   path is not yet live-validated (proven so far by an in-process test only),
+   and per-workspace ephemeral-CA injection into arbitrary agent images, plus
+   QUIC/UDP/raw-TCP coverage, remain unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual
    channel below the TLS-intercept tier.
@@ -404,9 +405,11 @@ These risks are tracked as explicit obligations, not ignored:
    the boundary. The real boundary is structural, enforced out-of-band.
 
 5. **Domain fronting and DNS-tunnel exfil are open below the optional
-   TLS-intercept tier, which is itself unbuilt.** The controls pillar's strongest
-   claim depends on an unbuilt layer. Per-workspace ephemeral-CA injection into
-   arbitrary agent images is unprototyped.
+   TLS-intercept tier.** The tier itself now SHIPS (off by default, opt-in per
+   policy — §5.1a), but only for operator-listed MITM-eligible hosts and not yet
+   live-validated end-to-end in a real container; most non-LLM HTTPS egress
+   stays opaque. Per-workspace ephemeral-CA injection into arbitrary agent
+   images is unprototyped.
 
 6. **Tier-1 hardened-runc is the only tier on hosts where nothing else installs,
    yet shares the host kernel.** Customers on tier-1 only get materially weaker
@@ -540,10 +543,10 @@ The following controls apply regardless of Confinement Class:
 
 | Control | Layer | What it closes |
 |---|---|---|
-| No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths **[shipped]** (the optional `-out-dir` recording fallback is unmasked — see §4) | AT-1.1: agent reading secrets from sandbox env/disk |
+| No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths **[shipped]** (the optional `-out-dir` recording fallback is unmasked, and `ssh_key`/Bedrock-access-key are named residual exceptions — see §4, §5.1a) | AT-1.1: agent reading secrets from sandbox env/disk |
 | Env-var proxy bypass defended | L0 (gatewayless network; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
 | Egress enforced outside the sandbox | L0/L1 | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
-| Two enforcement planes (network B2 + tool B3) | L2 + L3 | The MCP-blind-firewall class |
+| Two enforcement planes (network B2 + tool B3) | L2 **[shipped]** + L3 **[v0.5 — planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |
 | Approval mints credential | B5 coupling, ID + AU | Scope-widening between approval and issuance |
 | Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; the explicit-kill path teardown-first, non-kill stops win the state CAS first then revoke — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5 — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU | Insider hiding behind agent identity |
@@ -584,7 +587,7 @@ the CC3 host-eBPF blind spot surfaced explicitly rather than hidden.
 ```mermaid
 flowchart TB
   trig["Explicit kill: handleKillRun"]
-  trig --> s1["1 · Sandbox teardown<br/>runner StopSandbox"]
+  trig --> s1["1 · Sandbox teardown<br/>runner KillSandbox"]
   s1 --> s2["2 · Run-token deny-list<br/>embedded identity revocation"]
   s2 --> s3["3 · Broker credential revoke<br/>every minted credential for the run"]
   s3 --> s4["4 · Durable state transition<br/>compare-and-swap, can't resurrect a finished run"]

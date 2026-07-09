@@ -1,9 +1,9 @@
 # Wardyn Go SDK — Quickstart
 
-Import `github.com/cjohnstoniv/wardyn/pkg/client` (zero non-stdlib deps). The
-package is self-sufficient: every type its methods return or accept is named
-through `client.*` (e.g. `client.AgentRun`, `client.ApprovalPending`), so you
-never import `internal/types`.
+Import `github.com/cjohnstoniv/wardyn/pkg/client` (one non-stdlib dependency,
+`github.com/google/uuid`). The package is self-sufficient: every type its
+methods return or accept is named through `client.*` (e.g. `client.AgentRun`,
+`client.ApprovalPending`), so you never import `internal/types`.
 
 ```go
 package main
