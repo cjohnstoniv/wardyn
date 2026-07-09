@@ -73,7 +73,8 @@ test-report:
 test-report-pg:
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
 	./scripts/test-report.sh pg "Wardyn Postgres integration tests" \
-		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/...
+		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
+		./internal/api/... ./test/apie2e/...
 
 test-report-docker:
 	@echo "Running docker-tagged suite with reports (requires WARDYN_TEST_DOCKER=1)..."
@@ -126,11 +127,11 @@ test-e2e-subscription:
 
 govulncheck:
 	@echo "Running govulncheck..."
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
 staticcheck:
 	@echo "Running staticcheck..."
-	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
 lint:
 	@echo "Running go vet (default + docker tags)..."

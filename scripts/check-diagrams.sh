@@ -42,6 +42,7 @@ fi
 if [ -z "$CHROME" ]; then
   CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
 fi
+[ -n "$CHROME" ] || { echo "no chrome/chromium found for mermaid render"; exit 1; }
 MMDC_ARGS=()
 if [ -n "$CHROME" ]; then
   printf '{"executablePath": "%s", "args": ["--no-sandbox", "--disable-setuid-sandbox"]}\n' "$CHROME" > "$TMP/puppeteer.json"
