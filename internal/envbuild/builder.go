@@ -7,15 +7,21 @@
 package envbuild
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
@@ -64,7 +70,22 @@ const (
 	envBuildMemoryMB = "WARDYN_ENVBUILD_BUILD_MEMORY_MB"
 	envBuildCPUs     = "WARDYN_ENVBUILD_BUILD_CPUS"
 	envMaxContextMB  = "WARDYN_ENVBUILD_MAX_CONTEXT_MB"
+
+	// envToolsDir points at the host directory holding the runner tool binaries
+	// the finalize stage layers onto the built image (see Builder.ToolsDir).
+	envToolsDir = "WARDYN_ENVBUILD_TOOLS_DIR"
+
+	// envPushedRef overrides the FROM ref of the finalize stage when envbuilder's
+	// pushed image is not resolvable at the plain CacheRepo ref (see pushedBaseRef).
+	envPushedRef = "WARDYN_ENVBUILD_PUSHED_REF"
 )
+
+// requiredTools are the Wardyn runner binaries that MUST be present in a built
+// image for the runner to exec a task, verify, and broker git into it. The
+// finalize stage COPYs them (plus anything else in the tools dir, e.g.
+// agent-run-lib.sh) from the host ToolsDir; a build fails closed if any is
+// missing, because an image without them is unrunnable (H5).
+var requiredTools = []string{"agent-run", "wardyn-verify", "wardyn-git-helper"}
 
 // envbuilderDockerAPI is the narrow slice of the Docker client that Builder
 // needs. It mirrors the pattern in internal/runner/docker: the interface is
@@ -73,6 +94,7 @@ const (
 type envbuilderDockerAPI interface {
 	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
 	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
+	ImageBuild(ctx context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error)
 
 	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
@@ -95,24 +117,20 @@ type Builder struct {
 	// Defaults to defaultEnvbuilderImage.
 	EnvbuilderImage string
 
-	// CacheRepo is the optional OCI registry ref used by envbuilder for layer
-	// caching (ENVBUILDER_CACHE_REPO + ENVBUILDER_PUSH_IMAGE). When set, the
-	// build runs in registry PUSH mode and the host Docker socket is NOT mounted
-	// — this is the safe, daemonless path.
+	// CacheRepo is the OCI registry repository envbuilder pushes the built image
+	// to (ENVBUILDER_CACHE_REPO + ENVBUILDER_PUSH_IMAGE=true). Registry PUSH is
+	// the ONLY delivery path: kaniko-based envbuilder never talks to dockerd, so
+	// there is no local-daemon commit and no Docker socket is ever mounted. A
+	// build with an empty CacheRepo fails closed.
 	CacheRepo string
 
-	// AllowDockerSock opts in to the legacy single-host path that bind-mounts
-	// /var/run/docker.sock into the build container so envbuilder can commit the
-	// image into the local daemon.
-	//
-	// SECURITY: this is DANGEROUS and OFF by default. envbuilder executes
-	// repo-controlled build code (Dockerfile RUN, devcontainer feature install
-	// scripts, onCreate/updateContent commands); a writable Docker socket in that
-	// container is a trivial host-root escape (e.g. `docker run -v /:/host`).
-	// Only enable it for trusted, single-host dev (compose/kind) where you
-	// already trust the repo. Wired from WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK.
-	// Prefer CacheRepo (registry push mode) instead.
-	AllowDockerSock bool
+	// ToolsDir is the host directory holding Wardyn's runner tool binaries
+	// (agent-run, wardyn-verify, wardyn-git-helper — see requiredTools). After
+	// envbuilder pushes the base image, the finalize stage COPYs everything in
+	// this dir onto the image's PATH so the runner can exec/verify/record into
+	// the built image (H5). Empty => WARDYN_ENVBUILD_TOOLS_DIR. A build fails
+	// closed if the dir or any required tool is missing.
+	ToolsDir string
 
 	// BuildTimeout caps total build time. Zero uses defaultBuildTimeout.
 	BuildTimeout time.Duration
@@ -163,9 +181,9 @@ type BuildSpec struct {
 	// (ENVBUILDER_DEVCONTAINER_PATH). Optional; envbuilder default applies
 	// when empty.
 	DevcontainerPath string
-	// OutputImageTag is the local Docker image reference that the built image
-	// will be tagged as (ENVBUILDER_IMAGE_DEST). This is what callers pass to
-	// runner.SandboxSpec.Image after a successful build.
+	// OutputImageTag is the local Docker image reference the FINALIZE stage tags
+	// (FROM the pushed base + COPY runner tools). Build returns this tag; it is
+	// what callers pass to runner.SandboxSpec.Image after a successful build.
 	OutputImageTag string
 	// LogSink receives build log bytes streamed from the envbuilder container.
 	// If nil, build output is discarded.
@@ -198,10 +216,13 @@ func newWithClient(cli envbuilderDockerAPI, envbuilderImage, cacheRepo string) *
 	}
 }
 
-// Build runs envbuilder for the given spec and returns the local image reference
-// (== spec.OutputImageTag) on success.
+// Build runs envbuilder for the given spec, then finalizes the pushed base image
+// with Wardyn's runner tools, and returns the resolvable local image reference
+// (spec.OutputImageTag) on success.
 //
 // Constraints:
+//   - Registry PUSH is the only delivery path: fails closed when CacheRepo is
+//     empty (there is no local-daemon fallback).
 //   - Fails closed on any non-zero container exit code.
 //   - Cancelling ctx or exceeding BuildTimeout kills the build container before
 //     returning.
@@ -220,16 +241,16 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		return "", err
 	}
 
-	// Decide the image-delivery mechanism. Default to the safe, daemonless
-	// registry PUSH path; only fall back to the dangerous docker.sock mount when
-	// explicitly opted in; otherwise FAIL CLOSED rather than silently exposing
-	// the host daemon to untrusted build code.
-	pushMode := b.CacheRepo != ""
-	if !pushMode && !b.AllowDockerSock {
-		return "", fmt.Errorf("envbuild: refusing to build: no CacheRepo configured " +
-			"(registry push mode) and the docker.sock fallback is disabled. Set a " +
-			"cache/registry repo (recommended) or, for trusted single-host dev only, " +
-			"WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK=1")
+	// Registry PUSH is the only delivery path (the docker.sock fallback is
+	// retired). Fail closed with an actionable error when no registry is set.
+	if err := b.requireCacheRepo(); err != nil {
+		return "", err
+	}
+	// Preflight the finalize tool sources up front: a build that cannot produce a
+	// runnable image must fail fast, not after minutes of building.
+	toolsDir, err := b.validateToolsDir()
+	if err != nil {
+		return "", err
 	}
 
 	timeout := b.BuildTimeout
@@ -252,7 +273,7 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		Env:   env,
 		// envbuilder is the image entrypoint; Cmd is left nil intentionally.
 	}
-	hostCfg := b.hardenedHostConfig(pushMode)
+	hostCfg := b.hardenedHostConfig()
 
 	created, err := b.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
@@ -297,15 +318,18 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		}
 	}
 
-	return spec.OutputImageTag, nil
+	// envbuilder has pushed the base image to the registry. Layer Wardyn's runner
+	// tools onto it and return the resolvable local tag (H5).
+	return b.finalizeImage(ctx, b.pushedBaseRef(), spec.OutputImageTag, toolsDir, spec.LogSink)
 }
 
 // hardenedHostConfig builds the Docker HostConfig for the build container with
 // the untrusted-code blast-radius controls applied: a locked-down network mode
 // (default "none"), dropped privileges/capabilities, CPU/memory/PID resource
-// caps, and an optional writable-layer size cap. pushMode selects the safe
-// daemonless delivery (no socket) vs. the opt-in docker.sock mount.
-func (b *Builder) hardenedHostConfig(pushMode bool) *container.HostConfig {
+// caps, and an optional writable-layer size cap. No Docker socket is ever
+// mounted — kaniko-based envbuilder pushes to the registry and never talks to
+// dockerd, so the build container is never granted host-daemon access.
+func (b *Builder) hardenedHostConfig() *container.HostConfig {
 	mem := b.effectiveMemoryBytes()
 	pids := b.effectivePidsLimit()
 	hostCfg := &container.HostConfig{
@@ -315,15 +339,14 @@ func (b *Builder) hardenedHostConfig(pushMode bool) *container.HostConfig {
 		// in the build container gets NO network reachability (no exfiltration, no
 		// SSRF to host-local services, no fetching of second-stage payloads).
 		// Opt in via Builder.BuildNetwork / WARDYN_ENVBUILD_BUILD_NETWORK. NOTE:
-		// envbuilder needs the network to clone and to pull base images, so a
-		// functional build requires opting in — at which point the RUN steps share
-		// that network. Full RUN-step network isolation needs a BuildKit-style
-		// builder (--network=none for RUN only); see doc.go "Residual".
+		// envbuilder needs the network to clone, to pull base images, and to PUSH
+		// the built image to the cache registry, so a functional build requires
+		// opting in — at which point the RUN steps share that network. Full
+		// RUN-step network isolation needs a BuildKit-style builder (--network=none
+		// for RUN only); see doc.go "Residual".
 		NetworkMode: container.NetworkMode(b.effectiveBuildNetwork()),
 
-		// Drop privileges so a compromised build step has minimal capability,
-		// even on the opt-in socket path. (The socket itself is still a
-		// root-equivalent capability; CacheRepo push mode avoids it entirely.)
+		// Drop privileges so a compromised build step has minimal capability.
 		SecurityOpt: []string{"no-new-privileges"},
 		CapDrop:     []string{"ALL"},
 
@@ -345,14 +368,6 @@ func (b *Builder) hardenedHostConfig(pushMode bool) *container.HostConfig {
 		hostCfg.StorageOpt = map[string]string{"size": strconv.FormatInt(maxCtx, 10)}
 	}
 
-	if !pushMode {
-		// Opt-in, reduced-isolation single-host path: mount the Docker socket so
-		// envbuilder can commit the image into the local daemon. DANGEROUS — see
-		// Builder.AllowDockerSock. Only reached when AllowDockerSock is true.
-		// (Push mode needs no socket; buildEnv already set ENVBUILDER_PUSH_IMAGE
-		// from CacheRepo.)
-		hostCfg.Binds = []string{"/var/run/docker.sock:/var/run/docker.sock"}
-	}
 	return hostCfg
 }
 
@@ -526,10 +541,18 @@ func validateRepoRelPath(field, p string) error {
 // buildEnv constructs the envbuilder container environment from a BuildSpec.
 // This function is pure (no side effects) so spec->env mapping can be tested
 // without a Docker daemon.
+//
+// Delivery is registry PUSH: ENVBUILDER_CACHE_REPO + ENVBUILDER_PUSH_IMAGE=true
+// make kaniko push the built image to the registry (there is no
+// ENVBUILDER_IMAGE_DEST — that var does not exist in any envbuilder release).
+// ENVBUILDER_INIT_SCRIPT="exit 0" makes envbuilder's post-build exec return
+// immediately so the build container EXITS after the push; without it envbuilder
+// runs its default init ("sleep infinity") forever and the ContainerWait hangs
+// until the build times out.
 func buildEnv(spec BuildSpec, cacheRepo string) []string {
 	env := []string{
 		"ENVBUILDER_GIT_URL=" + spec.RepoURL,
-		"ENVBUILDER_IMAGE_DEST=" + spec.OutputImageTag,
+		"ENVBUILDER_INIT_SCRIPT=exit 0",
 	}
 	if spec.Ref != "" {
 		env = append(env, "ENVBUILDER_GIT_REF="+spec.Ref)
@@ -575,4 +598,192 @@ func (b *Builder) ensureImage(ctx context.Context, ref string) error {
 		}
 	}
 	return dockerutil.PullImage(ctx, b.cli, ref, "envbuild")
+}
+
+// requireCacheRepo enforces that a registry repository is configured. Registry
+// PUSH is the only delivery path since the docker.sock local-daemon fallback was
+// retired, so a build without a CacheRepo cannot deliver an image and must fail
+// closed with an actionable error.
+func (b *Builder) requireCacheRepo() error {
+	if strings.TrimSpace(b.CacheRepo) == "" {
+		return errors.New("envbuild: refusing to build: no cache/registry repo configured. " +
+			"Set WARDYN_ENVBUILD_CACHE_REPO (or -envbuild-cache-repo) to a writable OCI " +
+			"registry repository — envbuilder pushes the built image there and Wardyn " +
+			"finalizes it into a runnable local image")
+	}
+	return nil
+}
+
+// validateToolsDir resolves the runner-tools directory (Builder.ToolsDir, else
+// WARDYN_ENVBUILD_TOOLS_DIR) and fails closed unless every required tool is
+// present. This is the build-contract preflight: an image that lacks
+// agent-run / wardyn-verify / wardyn-git-helper cannot be exec'd or verified by
+// the runner, so producing one would hand back a broken tag (H5).
+func (b *Builder) validateToolsDir() (string, error) {
+	dir := strings.TrimSpace(b.ToolsDir)
+	if dir == "" {
+		dir = strings.TrimSpace(os.Getenv(envToolsDir))
+	}
+	if dir == "" {
+		return "", fmt.Errorf("envbuild: no runner-tools dir configured: set WARDYN_ENVBUILD_TOOLS_DIR "+
+			"to a directory containing %s so the built image is runnable by the runner",
+			strings.Join(requiredTools, ", "))
+	}
+	for _, name := range requiredTools {
+		p := filepath.Join(dir, name)
+		info, err := os.Stat(p)
+		if err != nil {
+			return "", fmt.Errorf("envbuild: required runner tool %q missing from tools dir %q: %w "+
+				"(a built image without it cannot be exec'd/verified by the runner)", name, dir, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("envbuild: required runner tool %q in %q is a directory, not a file", name, dir)
+		}
+	}
+	return dir, nil
+}
+
+// pushedBaseRef is the registry reference the finalize stage uses as its FROM
+// base: the image envbuilder pushed via ENVBUILDER_PUSH_IMAGE.
+//
+// ponytail: ASSUMPTION — envbuilder's push is resolvable at the plain CacheRepo
+// ref (resolving to :latest when CacheRepo carries no tag). envbuilder actually
+// tags the push with a content-addressed cache key (<CacheRepo>@sha256:<digest>)
+// that is not knowable host-side before the build, so this is the residual: if
+// your registry does not also expose the push at the CacheRepo ref, set
+// WARDYN_ENVBUILD_PUSHED_REF to the exact ref (or point CacheRepo at a tagged
+// repo). TestBuild_SmokeDockerd against a real registry validates the exact ref.
+// Upgrade path: parse the pushed ref from envbuilder's build log / a
+// GET_CACHED_IMAGE probe instead of assuming it.
+func (b *Builder) pushedBaseRef() string {
+	if v := strings.TrimSpace(os.Getenv(envPushedRef)); v != "" {
+		return v
+	}
+	return strings.TrimSpace(b.CacheRepo)
+}
+
+// finalizeImage runs the second-stage build (H5): FROM the image envbuilder
+// pushed, COPY Wardyn's runner tools onto PATH, and tag the result as the local
+// outputTag the runner will use. It runs on the host daemon with TRUSTED content
+// only (a FROM + COPY, no untrusted RUN), so it does not need the untrusted-code
+// build sandbox. Returns the resolvable local tag on success.
+func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer) (string, error) {
+	if strings.ContainsAny(baseRef, " \t\r\n\x00") {
+		return "", fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
+	}
+	tarCtx, err := buildFinalizeContext(baseRef, toolsDir)
+	if err != nil {
+		return "", err
+	}
+	resp, err := b.cli.ImageBuild(ctx, tarCtx, build.ImageBuildOptions{
+		Tags:        []string{outputTag},
+		Dockerfile:  "Dockerfile",
+		Remove:      true,
+		ForceRemove: true,
+		PullParent:  true, // pull the freshly pushed base from the registry
+	})
+	if err != nil {
+		return "", fmt.Errorf("envbuild: finalize image build (COPY runner tools): %w", err)
+	}
+	defer resp.Body.Close()
+	// ImageBuild returns nil even when the build fails; the failure (e.g. a bad
+	// FROM or a missing COPY source) arrives as an {"error":...} in the response
+	// stream, so draining it is how we detect it. This is the second half of the
+	// build-contract preflight.
+	if err := drainBuildResponse(resp.Body, logSink); err != nil {
+		return "", fmt.Errorf("envbuild: finalize image build failed: %w", err)
+	}
+	return outputTag, nil
+}
+
+// finalizeDockerfile is the trusted second-stage Dockerfile. It clears
+// ENTRYPOINT so the runner's Cmd (sleep infinity / agent-run) runs directly — an
+// inherited ENTRYPOINT would wrap it and tear the sandbox down immediately (the
+// agent-image contract). The tools land 0755 on PATH via the tar entry mode, so
+// no RUN chmod (and no shell in the base image) is required.
+func finalizeDockerfile(baseRef string) string {
+	return "FROM " + baseRef + "\n" +
+		"COPY tools/ /usr/local/bin/\n" +
+		"ENTRYPOINT []\n" +
+		"CMD []\n"
+}
+
+// buildFinalizeContext assembles the in-memory tar build context: the generated
+// Dockerfile plus every file in toolsDir staged under tools/ with an executable
+// mode so COPY preserves it.
+func buildFinalizeContext(baseRef, toolsDir string) (io.Reader, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	if err := writeTarFile(tw, "Dockerfile", []byte(finalizeDockerfile(baseRef)), 0o644); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(toolsDir)
+	if err != nil {
+		return nil, fmt.Errorf("envbuild: read tools dir %q: %w", toolsDir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue // ponytail: flat tools dir; nested dirs aren't part of the contract
+		}
+		data, err := os.ReadFile(filepath.Join(toolsDir, e.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("envbuild: read tool %q: %w", e.Name(), err)
+		}
+		// 0755 so COPY drops the tools onto PATH already executable (no RUN chmod).
+		if err := writeTarFile(tw, "tools/"+e.Name(), data, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("envbuild: finalize tar close: %w", err)
+	}
+	return &buf, nil
+}
+
+// writeTarFile writes one regular file into the tar with the given mode.
+func writeTarFile(tw *tar.Writer, name string, data []byte, mode int64) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeReg,
+		Name:     name,
+		Mode:     mode,
+		Size:     int64(len(data)),
+	}); err != nil {
+		return fmt.Errorf("envbuild: tar header %q: %w", name, err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		return fmt.Errorf("envbuild: tar write %q: %w", name, err)
+	}
+	return nil
+}
+
+// drainBuildResponse consumes the daemon's JSON build-output stream, forwarding
+// human-readable "stream" text to logSink (if any) and returning the first build
+// error reported in the stream.
+func drainBuildResponse(body io.Reader, logSink io.Writer) error {
+	dec := json.NewDecoder(body)
+	for {
+		var msg struct {
+			Stream      string `json:"stream"`
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("decode build stream: %w", err)
+		}
+		if logSink != nil && msg.Stream != "" {
+			_, _ = io.WriteString(logSink, msg.Stream)
+		}
+		if msg.Error != "" {
+			return errors.New(msg.Error)
+		}
+		if msg.ErrorDetail.Message != "" {
+			return errors.New(msg.ErrorDetail.Message)
+		}
+	}
 }

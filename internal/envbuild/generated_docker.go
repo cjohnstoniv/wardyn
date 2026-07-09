@@ -43,8 +43,8 @@ const (
 // output) instead of a git repository. It stages the files into a throwaway
 // host build context, bind-mounts that into the envbuilder container's
 // workspace folder, and drives the SAME hardened build path as Build (network
-// default-none, dropped caps, resource limits, force-remove, daemonless
-// CacheRepo push vs. the opt-in docker.sock fallback).
+// default-none, dropped caps, resource limits, force-remove, registry-push
+// delivery, and the finalize stage that layers Wardyn's runner tools on).
 //
 // It reuses every hardening knob on Builder; the only differences from Build
 // are the input surface (generated files vs. a git URL) and the delivery of
@@ -66,15 +66,14 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 		return "", err
 	}
 
-	// Same image-delivery decision as Build: default to the safe daemonless
-	// registry PUSH path; only fall back to the dangerous docker.sock mount when
-	// explicitly opted in; otherwise FAIL CLOSED.
-	pushMode := b.CacheRepo != ""
-	if !pushMode && !b.AllowDockerSock {
-		return "", fmt.Errorf("envbuild: refusing to build: no CacheRepo configured " +
-			"(registry push mode) and the docker.sock fallback is disabled. Set a " +
-			"cache/registry repo (recommended) or, for trusted single-host dev only, " +
-			"WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK=1")
+	// Same delivery model as Build: registry PUSH is the only path, so fail closed
+	// when no registry is configured. Preflight the finalize tool sources too.
+	if err := b.requireCacheRepo(); err != nil {
+		return "", err
+	}
+	toolsDir, err := b.validateToolsDir()
+	if err != nil {
+		return "", err
 	}
 
 	// Stage the generated files into a throwaway host directory that becomes the
@@ -102,14 +101,12 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 
 	cfg := &container.Config{
 		Image: b.EnvbuilderImage,
-		Env:   localBuildEnv(outputTag, b.CacheRepo),
+		Env:   localBuildEnv(b.CacheRepo),
 	}
-	hostCfg := b.hardenedHostConfig(pushMode)
-	// Layer the generated build context on top of whatever hardenedHostConfig
-	// already bound (nil in push mode; the docker.sock in the opt-in path). The
-	// host path is a throwaway temp dir of our own generated content, so mounting
-	// it does not widen the untrusted-code blast radius the way a real host path
-	// would.
+	hostCfg := b.hardenedHostConfig()
+	// Bind the generated build context (no socket is ever bound). The host path is
+	// a throwaway temp dir of our own generated content, so mounting it does not
+	// widen the untrusted-code blast radius the way a real host path would.
 	hostCfg.Binds = append(hostCfg.Binds, ctxDir+":"+localContextWorkspaceFolder)
 
 	created, err := b.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
@@ -143,17 +140,21 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 			return "", fmt.Errorf("envbuild: build failed with exit code %d", resp.StatusCode)
 		}
 	}
-	return outputTag, nil
+	// Layer Wardyn's runner tools onto the pushed base and return the local tag (H5).
+	return b.finalizeImage(ctx, b.pushedBaseRef(), outputTag, toolsDir, nil)
 }
 
 // localBuildEnv builds the envbuilder environment for a git-free local-context
 // build: no ENVBUILDER_GIT_URL (so envbuilder builds from the mounted workspace
-// folder rather than cloning), the image destination, and — when a CacheRepo is
-// set — the daemonless registry push vars. Pure, so it is unit-testable.
-func localBuildEnv(outputTag, cacheRepo string) []string {
+// folder rather than cloning), the registry PUSH vars, and ENVBUILDER_INIT_SCRIPT
+// so the container exits after the push (see buildEnv). There is no
+// ENVBUILDER_IMAGE_DEST (the var does not exist upstream); delivery is the
+// registry push, and Wardyn finalizes the local tag afterwards. Pure, so it is
+// unit-testable.
+func localBuildEnv(cacheRepo string) []string {
 	env := []string{
-		"ENVBUILDER_IMAGE_DEST=" + outputTag,
 		"ENVBUILDER_WORKSPACE_FOLDER=" + localContextWorkspaceFolder,
+		"ENVBUILDER_INIT_SCRIPT=exit 0",
 	}
 	if cacheRepo != "" {
 		env = append(env, "ENVBUILDER_CACHE_REPO="+cacheRepo)
