@@ -32,6 +32,8 @@ import {
 } from "lucide-react";
 import type {
   ConfinementClass,
+  HostProxyDetection,
+  HostProxySetting,
   SetupCheck,
   SetupCheckStatus,
   SetupStatus,
@@ -612,6 +614,99 @@ function RecheckButton({ onRecheck, rechecking }: { onRecheck: () => void; reche
   );
 }
 
+function ProxySettingRow({ label, setting }: { label: string; setting: HostProxySetting }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate font-mono text-foreground" title={setting.value}>
+          {setting.value}
+        </span>
+        <Chip tone="neutral">{setting.source}</Chip>
+        {setting.has_credentials && <Chip tone="warning">creds</Chip>}
+      </div>
+    </div>
+  );
+}
+
+// HostProxyBreakdown renders the masked host-proxy detection (setup.go host_proxy)
+// read-only. Values are already masked server-side. Renders nothing when the host
+// has no proxy configured (Go always emits at least {has_credentials:false}).
+function HostProxyBreakdown({ detection: d }: { detection: HostProxyDetection }) {
+  const envRows: Array<[string, HostProxySetting | undefined]> = [
+    ["HTTP_PROXY", d.http_proxy],
+    ["HTTPS_PROXY", d.https_proxy],
+    ["ALL_PROXY", d.all_proxy],
+    ["NO_PROXY", d.no_proxy],
+  ];
+  const git = d.git_proxy;
+  const hasEnv = envRows.some(([, s]) => s);
+  const hasGit = !!(git && (git.http_proxy || git.https_proxy));
+  const hasTools = !!(d.tool_configs && d.tool_configs.length);
+  const hasMismatch = !!(d.env_case_mismatch && d.env_case_mismatch.length);
+  if (!hasEnv && !hasGit && !hasTools && !d.pac && !hasMismatch) return null;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border p-3">
+      <p className="text-xs font-medium text-foreground">Detected on this host</p>
+      {hasEnv &&
+        envRows.map(([label, s]) => (s ? <ProxySettingRow key={label} label={label} setting={s} /> : null))}
+      {hasGit && (
+        <>
+          {git!.http_proxy && <ProxySettingRow label="git http.proxy" setting={git!.http_proxy} />}
+          {git!.https_proxy && <ProxySettingRow label="git https.proxy" setting={git!.https_proxy} />}
+        </>
+      )}
+      {hasTools &&
+        d.tool_configs!.map((t, i) => (
+          <div key={`${t.tool}-${i}`} className="flex items-center justify-between gap-2 text-xs">
+            <span className="shrink-0 text-muted-foreground">
+              {t.tool} <span className="opacity-70">({t.path})</span>
+            </span>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-mono text-foreground" title={t.setting.value}>
+                {t.setting.value}
+              </span>
+              <Chip tone="neutral">{t.setting.source}</Chip>
+            </div>
+          </div>
+        ))}
+      {d.pac && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="shrink-0 text-muted-foreground">PAC / auto-config</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate font-mono text-foreground" title={d.pac.url}>
+              {d.pac.url}
+            </span>
+            <Chip tone="warning" title="Never fetched — resolve the effective proxy manually">
+              manual
+            </Chip>
+          </div>
+        </div>
+      )}
+      {hasMismatch && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Env case mismatch:</span>
+          {d.env_case_mismatch!.map((m) => (
+            <Chip key={m} tone="warning" mono>
+              {m}
+            </Chip>
+          ))}
+        </div>
+      )}
+      {d.has_credentials && (
+        <div className="flex items-start gap-1.5 text-xs">
+          <Chip tone="warning">credential</Chip>
+          <span className="text-muted-foreground">
+            A proxy credential was detected (masked above). Store it as a secret below so runs can
+            authenticate to the upstream proxy.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HostProxyStep({
   status,
   onRecheck,
@@ -648,6 +743,8 @@ function HostProxyStep({
           <CheckRow check={check} />
         </ul>
       )}
+
+      {status.host_proxy && <HostProxyBreakdown detection={status.host_proxy} />}
 
       <Field
         label="Upstream proxy secret name"

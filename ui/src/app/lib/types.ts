@@ -767,6 +767,56 @@ export interface SetupBedrock {
   ready?: boolean;
 }
 
+// Host-proxy detection — mirrors internal/setup/detect_proxy.go. Every value is
+// masked server-side (embedded credentials stripped); has_credentials flags that
+// a credential WAS present in the raw value so the UI can prompt to store it as a
+// secret. Display-only — the UI never writes any of this back.
+export type HostProxySource =
+  | "env"
+  | "shell_profile"
+  | "git_config"
+  | "tool_config"
+  | "os"
+  // Forward-compat: tolerate a source a newer daemon emits.
+  | (string & {});
+
+export interface HostProxySetting {
+  value: string;
+  source: HostProxySource;
+  detail?: string;
+  has_credentials: boolean;
+}
+
+export interface HostProxyGitConfig {
+  http_proxy?: HostProxySetting;
+  https_proxy?: HostProxySetting;
+}
+
+export interface HostProxyToolConfig {
+  tool: string;
+  path: string;
+  setting: HostProxySetting;
+}
+
+export interface HostProxyPAC {
+  url: string;
+  source: HostProxySource;
+  detail?: string;
+}
+
+export interface HostProxyDetection {
+  http_proxy?: HostProxySetting;
+  https_proxy?: HostProxySetting;
+  all_proxy?: HostProxySetting;
+  no_proxy?: HostProxySetting;
+  // "UPPER/lower" env-var pairs whose values disagree (httpoxy hygiene warning).
+  env_case_mismatch?: string[];
+  git_proxy?: HostProxyGitConfig;
+  tool_configs?: HostProxyToolConfig[];
+  pac?: HostProxyPAC;
+  has_credentials: boolean;
+}
+
 export interface SetupStatus {
   ready: boolean;
   checks: SetupCheck[];
@@ -788,6 +838,9 @@ export interface SetupStatus {
   // daemon build that predates this field) rather than a required breaking
   // change to every existing SetupStatus fixture.
   bedrock?: SetupBedrock;
+  // Masked host-proxy detection (see HostProxyDetection). Optional for the same
+  // fixture-compat reason as `bedrock` — READY_FALLBACK and older daemons omit it.
+  host_proxy?: HostProxyDetection;
   // Whether wardynd itself sees a resident Claude login (host mode) vs is blind to
   // it (compose/container). host_like === false is why the LLM-access check reads
   // "no login" in compose even when the operator IS logged in on the host. Optional
