@@ -55,6 +55,7 @@ jobs:
         with:
           node-version: '22'
           cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
       - name: Docker available
         run: docker --version
       - name: Live task e2e (real sandboxes + graders, oracle lane)
@@ -93,7 +94,7 @@ jobs:
         run: |
           docker run -d --name wardyn-test-pg \
             -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
-            -p 55432:5432 postgres:16-alpine
+            -p 55432:5432 postgres:17
           for i in $(seq 1 30); do docker exec wardyn-test-pg pg_isready -U wardyn && break || sleep 1; done
       - name: Install UI deps + Playwright chromium
         working-directory: ui
@@ -137,3 +138,29 @@ jobs:
         with:
           name: pg-test-reports
           path: test/reports/go/pg/**
+
+  # Real-Docker envbuild/runner smoke test (the "E" / envbuild workstream).
+  # Unlike the PR-time `test-docker-tagged` job (ci.yml), this sets
+  # WARDYN_TEST_DOCKER=1 so the real-Docker-gated cases (internal/runner/docker
+  # network/integration tests, internal/envbuild's integration_test.go) actually
+  # exercise a live daemon instead of skipping. `test-report-docker` was
+  # previously invoked by NO workflow at all — this closes that gap.
+  docker-tagged-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Docker available
+        run: docker --version
+      - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        run: make test-report-docker
+      - name: Upload docker-tagged test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-tagged-live-reports
+          path: test/reports/go/docker/**

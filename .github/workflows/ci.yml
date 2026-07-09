@@ -111,7 +111,7 @@ jobs:
         run: |
           docker run -d --name wardyn-test-pg \
             -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
-            -p 55432:5432 postgres:16-alpine
+            -p 55432:5432 postgres:17
           for i in $(seq 1 30); do
             docker exec wardyn-test-pg pg_isready -U wardyn && break || sleep 1
           done
@@ -149,6 +149,9 @@ jobs:
           out=$(helm template wardyn ./deploy/helm/wardyn)
           echo "$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }
           echo "$out" | grep -q "kind: Service" || { echo "chart rendered no Service"; exit 1; }
+          echo "$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }
+          echo "$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }
+          echo "$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -171,9 +174,9 @@ jobs:
           go-version: '1.26'
 
       # ── docker conformance ──────────────────────────────────────────────────
-      - name: Set up Docker (for docker target)
+      - name: Docker smoke check (for docker target)
         if: matrix.target == 'docker'
-        run: docker --version
+        run: docker run --rm hello-world
 
       - name: Run conformance tests (docker)
         if: matrix.target == 'docker'
@@ -192,6 +195,62 @@ jobs:
         run: make test-conformance-stub
         # No continue-on-error: the stub contract tests must always pass.
 
+  # ── docker-tagged tests (fakeDocker; no real Docker daemon needed) ────────
+  # Proves confinement/egress invariants using the fake Docker client. This ran
+  # in NO per-PR workflow before (a HIGH finding) — only plain `go build/vet
+  # -tags docker` touched this tree, never the actual docker-tagged tests.
+  # WARDYN_TEST_DOCKER is deliberately left unset: the real-Docker-gated cases
+  # skip cleanly, leaving the fakeDocker-backed tests to run here.
+  test-docker-tagged:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: docker-tagged suite with reports (fakeDocker; no real daemon needed)
+        run: make test-report-docker
+      - name: Upload docker-tagged test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-reports
+          path: test/reports/go/docker/**
+
+  # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
+  # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
+  # test/apie2e) against a real Postgres. This ran in NO per-PR workflow
+  # before (a HIGH finding) — only the nightly `integration-pg` job exercised
+  # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
+  test-pg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Postgres-gated integration suite (with reports)
+        env:
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        run: make test-report-pg
+      - name: Upload PG test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg-test-reports
+          path: test/reports/go/pg/**
+
   # ── supply-chain: vulnerability scanning ──────────────────────────────────
   govulncheck:
     runs-on: ubuntu-latest
@@ -201,7 +260,7 @@ jobs:
         with:
           go-version: '1.26'
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   # ── supply-chain: static analysis ─────────────────────────────────────────
   staticcheck:
@@ -226,10 +285,15 @@ jobs:
         run: |
           BASE=${{ github.event.pull_request.base.sha }}
           if [ -z "$BASE" ]; then
-            # On push to main, just check HEAD commit.
-            COMMITS=$(git log -1 --format='%H')
+            # On push to main, just check HEAD commit. --no-merges keeps this
+            # consistent with the PR branch below (see next comment).
+            COMMITS=$(git log -1 --no-merges --format='%H')
           else
-            COMMITS=$(git log "$BASE"..HEAD --format='%H')
+            # checkout@v4 on pull_request lands on the ephemeral auto-generated
+            # merge commit, whose message has no Signed-off-by. --no-merges
+            # excludes that synthetic commit so only real contributor commits
+            # are checked (otherwise DCO fails on essentially every PR).
+            COMMITS=$(git log --no-merges "$BASE"..HEAD --format='%H')
           fi
           MISSING=0
           for sha in $COMMITS; do
@@ -300,8 +364,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install syft (SBOM generator)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.46.0/install.sh \
+            | sh -s -- -b /usr/local/bin v1.46.0
       - name: Generate SBOM (CycloneDX JSON)
         run: syft . -o cyclonedx-json > wardyn-sbom.cdx.json
       - name: Upload SBOM artifact
