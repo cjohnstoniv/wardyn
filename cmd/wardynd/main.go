@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -215,6 +216,23 @@ func run() error {
 			log.Printf("wardynd: LOCAL HOST MODE — public-API auth disabled; operator=%q (loopback bind %s). No SSO/token required.", localOp, *listen)
 		} else {
 			log.Printf("wardynd: WARNING LOCAL HOST MODE on a non-loopback bind %s — the UNAUTHENTICATED public API is reachable beyond localhost; ensure a host firewall or configure auth. operator=%q", *listen, localOp)
+		}
+
+		// Host-mode Bedrock auto-detect: region+model configured but NO credential
+		// source given (no -bedrock-aws-dir, no aws-*/bedrock-api-key secrets) — the
+		// exact "Needs setup" state where the operator already runs Claude on Bedrock
+		// via their host ~/.aws. Default the read-only mount to ~/.aws so the AWS SDK
+		// resolves their creds (SSO auto-refreshes) with nothing to paste. Host-mode
+		// only + fail-safe: only when ~/.aws actually exists, so resolveBedrockAuth
+		// still falls through cleanly otherwise.
+		if *bedrockRegion != "" && *bedrockModel != "" && *bedrockAWSDir == "" {
+			if home, herr := os.UserHomeDir(); herr == nil {
+				awsDir := filepath.Join(home, ".aws")
+				if st, serr := os.Stat(awsDir); serr == nil && st.IsDir() {
+					*bedrockAWSDir = awsDir
+					log.Printf("wardynd: host-mode Bedrock — no credential configured; auto-mounting %s read-only (the AWS SDK resolves your host creds, SSO auto-refreshes)", awsDir)
+				}
+			}
 		}
 	}
 
