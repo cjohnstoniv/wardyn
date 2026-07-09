@@ -87,7 +87,8 @@ export function ComposeReview({
   onEditInWizard: () => void;
   onCancel: () => void;
 }) {
-  const { proposed, risk_assessment, overall_risk, summary, warnings, llm_access } = result;
+  const { proposed, risk_assessment, overall_risk, summary, warnings, model_notes, llm_access } =
+    result;
   const { run, inline_policy } = proposed;
 
   // The llm_access checklist item's fix (if any) drives the no-model-access
@@ -221,6 +222,21 @@ export function ComposeReview({
             <ul className="mt-1 list-disc space-y-0.5 pl-4">
               {warnings.map((w, i) => (
                 <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* --- the model's OWN advisory notes (M7): untrusted prose, clearly NOT policy --- */}
+      {model_notes && model_notes.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+          <WandSparkles className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <div>
+            <span className="font-medium">Model notes (advisory — not enforced):</span>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {model_notes.map((n, i) => (
+                <li key={i}>{n}</li>
               ))}
             </ul>
           </div>

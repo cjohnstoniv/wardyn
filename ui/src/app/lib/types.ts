@@ -536,7 +536,12 @@ export interface ComposeResponse {
   risk_assessment: RiskItem[];
   overall_risk: RiskLevel;
   summary: string;
+  // DETERMINISTIC policy actions (what the engine did to the proposal). Rendered as
+  // "Tightened by policy:".
   warnings?: string[];
+  // The LLM's OWN advisory remarks — untrusted model prose, kept SEPARATE from
+  // `warnings` so it is never shown as an enforced policy action (M7).
+  model_notes?: string[];
   // Deterministic FINAL-state model-access verdict (compose.go reconcileLLMAccess).
   // provisioned=false ⇒ the run launches but its first model call 404s — the review
   // surfaces this as its OWN distinct destructive banner (non-blocking), separate from

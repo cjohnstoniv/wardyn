@@ -55,6 +55,16 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -740,6 +750,12 @@ function RunActions({
   onOpen: (id: string) => void;
   onKill: (id: string) => void;
 }) {
+  // M16 fix: the board's Kill action fired with no confirmation, unlike the
+  // identical action on Run Detail (AlertDialog-gated) — one misclick here
+  // killed a run with zero chance to back out. The dialog is rendered as a
+  // SIBLING of DropdownMenuContent (not nested inside it), controlled by its
+  // own state, so it survives the menu's close/unmount.
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
   return (
     <div onClick={(e) => e.stopPropagation()}>
       <DropdownMenu>
@@ -760,13 +776,37 @@ function RunActions({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={terminal}
-            onClick={() => onKill(run.id)}
+            onClick={() => setConfirmOpen(true)}
             className="text-danger focus:text-danger"
           >
             <Skull className="size-4" /> Kill run
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Kill {run.id}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This terminates the agent run, tears down the sandbox, and revokes any brokered
+              credentials. Enforcement stop — it is recorded in the audit trail. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmOpen(false);
+                onKill(run.id);
+              }}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              Kill run
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

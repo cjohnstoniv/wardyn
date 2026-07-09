@@ -92,6 +92,12 @@ export const CAPABILITY = {
   // git_pat grant must use THIS line, not brokerLine.
   gitPatLine:
     "A git access token is handed to git inside the sandbox — the agent's process can read it.",
+  // Honest exception (same shape as gitPatLine): an ssh_key grant writes a
+  // RESIDENT private key file for the sandbox's git-over-SSH client to read —
+  // git's SSH transport has no credential-helper seam, so the key can't be
+  // proxy-injected or brokered like github_token.
+  sshKeyLine:
+    "A private SSH key is written to disk in the sandbox — the agent's process can read it.",
 } as const;
 
 // Risk grades (D8) — deterministic, computed by Wardyn's rules (not the model).

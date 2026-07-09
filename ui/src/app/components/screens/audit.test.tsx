@@ -107,6 +107,38 @@ describe("AuditScreen", () => {
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
+  // M20: a run_id-filtered query hits a HIGHER server cap (1000, vs 500 for the
+  // unfiltered view) — but a long/chatty run's own trail can still hit it. This
+  // used to be suppressed unconditionally whenever a run filter was active.
+  it("M20: shows the truncation indicator for a run-filtered view capped at 1000", async () => {
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
+    const many = Array.from({ length: 1000 }, (_, i) =>
+      ev({ id: `r${i}`, run_id: "run_111", action: `act.${i}` }),
+    );
+    listAuditMock.mockResolvedValueOnce(many);
+    renderScreen();
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
+
+    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+
+    await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
+    expect(screen.getByText(/first 1000 events for this run/i)).toBeInTheDocument();
+  });
+
+  it("M20: does not show the truncation indicator for a run-filtered view below 1000", async () => {
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
+    renderScreen();
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
+
+    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+
+    await screen.findByText(/1 event/);
+    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
+  });
+
   it("filters by event kind via the Event facet select", async () => {
     listAuditMock.mockResolvedValue([
       ev({ id: "e1", action: "run.create" }),

@@ -112,6 +112,13 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     }
   }
 
+  // Confinement is WIZARD_STEPS[3] — three "Next" clicks from Basics.
+  async function goToConfinementStep(user: ReturnType<typeof userEvent.setup>) {
+    for (let i = 0; i < 3; i++) {
+      await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    }
+  }
+
   it("offers a one-click add-secret retry when create-run 422s on a missing secret, and relaunches on save", async () => {
     createRunMock
       .mockRejectedValueOnce(
@@ -206,6 +213,53 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     expect(await screen.findByRole("button", { name: /launch run/i })).toBeInTheDocument();
   });
 
+  it("M14: saves the named profile AFTER createRun succeeds, not before", async () => {
+    createRunMock.mockResolvedValue(createdRun);
+    createPolicyMock.mockResolvedValue({ id: "pol-1" });
+    render(
+      <PermissionWizard
+        open
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+        initialState={{ ...readyState(), saveAsProfile: true, profileName: "my-profile" }}
+      />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToLastStep(user);
+    await user.click(screen.getByRole("button", { name: /launch run/i }));
+
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalledWith("my-profile", expect.anything()));
+    // createRun must have resolved before createPolicy was ever invoked — the
+    // opposite order left a retry (after a failed createRun) re-hitting the
+    // policies-name UNIQUE constraint with an already-saved profile.
+    expect(createRunMock.mock.invocationCallOrder[0]).toBeLessThan(
+      createPolicyMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("M14: a failed createRun never creates the named policy, so a retry can't collide on the name", async () => {
+    createRunMock.mockRejectedValueOnce(new Error("some launch failure")).mockResolvedValueOnce(createdRun);
+    render(
+      <PermissionWizard
+        open
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+        initialState={{ ...readyState(), saveAsProfile: true, profileName: "my-profile" }}
+      />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToLastStep(user);
+    await user.click(screen.getByRole("button", { name: /launch run/i }));
+    await screen.findByTestId("wizard-launch-error");
+    expect(createPolicyMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /launch run/i }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(createPolicyMock).toHaveBeenCalledTimes(1));
+  });
+
   it("does not show the fix button for a launch error that doesn't name a missing secret", async () => {
     createRunMock.mockRejectedValueOnce(new Error("confinement_class CC1 is weaker than the policy minimum CC2"));
     render(
@@ -223,5 +277,42 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
 
     await screen.findByTestId("wizard-launch-error");
     expect(screen.queryByRole("button", { name: /add the .* secret/i })).toBeNull();
+  });
+
+  it("M19: an empty first health probe retries instead of rendering a definitive unavailable barrier", async () => {
+    // api.health() never rejects for real (see api.ts) — a failed/blip probe
+    // resolves {} (no confinement_classes), exactly like this first call.
+    healthMock
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ confinement_classes: ["CC1", "CC2", "CC3"] });
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToConfinementStep(user);
+
+    // Once the retry resolves with the real classes, CC2/CC3 must show enabled
+    // — never stuck on the false-negative "No Wall (gVisor) runtime" verdict
+    // the empty first probe would have produced pre-fix.
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText(/no wall \(gvisor\) runtime/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("M19: falls back to the CC1-only floor only once the probe stays empty after a retry", async () => {
+    healthMock.mockResolvedValue({}); // every call comes back empty
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToConfinementStep(user);
+
+    // Retries exactly once, then honestly settles into "unavailable" — it must
+    // not spin on "Checking…" forever nor commit before the retry runs.
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/no wall \(gvisor\) runtime/i)).toBeInTheDocument();
   });
 });

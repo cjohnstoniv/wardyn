@@ -61,6 +61,7 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { JsonBlock, Mono } from "../wardyn/code-block";
+import { ConfirmEgressDialog } from "../wardyn/confirm-egress-dialog";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -449,7 +450,7 @@ export function WorkspaceNeedsPanel({
   // confirm dialog (a suggested/observed host awaiting the untrusted-content
   // acknowledgement — one confirm shared by both promotion sources).
   const [busy, setBusy] = React.useState<string | null>(null);
-  const [pendingApprove, setPendingApprove] = React.useState<string | null>(null);
+  const [pendingApprove, setPendingApprove] = React.useState<string[] | null>(null);
   // Observed-but-denied egress is fetched lazily (the "Check run history" button)
   // so opening the panel never triggers a run-history read the operator didn't ask
   // for. null => not yet fetched; the section shows the button until then.
@@ -630,7 +631,7 @@ export function WorkspaceNeedsPanel({
                     host={h}
                     busy={busy}
                     action="approve"
-                    onClick={() => setPendingApprove(h)}
+                    onClick={() => setPendingApprove([h])}
                   />
                 ))}
               </ul>
@@ -667,7 +668,7 @@ export function WorkspaceNeedsPanel({
                   host={h}
                   busy={busy}
                   action="approve"
-                  onClick={() => setPendingApprove(h)}
+                  onClick={() => setPendingApprove([h])}
                 />
               ))}
             </ul>
@@ -711,31 +712,15 @@ export function WorkspaceNeedsPanel({
         </div>
       </details>
 
-      <AlertDialog open={!!pendingApprove} onOpenChange={(o) => !o && setPendingApprove(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Approve egress to {pendingApprove}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This host isn&apos;t approved for this workspace yet — it came from untrusted content (the
-              workspace&apos;s own files, or a run&apos;s denied egress). Approving allows every future run
-              that mounts this workspace to reach it.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                const host = pendingApprove;
-                setPendingApprove(null);
-                if (host) apply(host, [...approved, host]);
-              }}
-            >
-              <Check className="size-4" /> Approve host
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmEgressDialog
+        hosts={pendingApprove}
+        onOpenChange={(o) => !o && setPendingApprove(null)}
+        onConfirm={() => {
+          const host = pendingApprove?.[0];
+          setPendingApprove(null);
+          if (host) apply(host, [...approved, host]);
+        }}
+      />
     </div>
   );
 }

@@ -156,11 +156,23 @@ type StepBadge = { text: string; tone: "success" | "warning" | "neutral" };
 
 // Badge for a corporate-baseline step (Host Proxy / SCM Provider / Artifact
 // Redirect): always non-blocking (B8-style) — these backend checks are
-// "info"-tier today (never "fail"/"warn"), so a real "ok" is possible but rare;
-// the honest default is a neutral "Optional" nudge, never a red "Needs setup".
-function siteConfigBadge(status: SetupStatus, checkId: string): StepBadge {
-  const check = status.checks.find((c) => c.id === checkId);
-  return check?.status === "ok"
+// hardcoded "info"-tier (see hostProxyCheck/scm_provider/artifactRepoCheck in
+// internal/api/setup.go), never "ok", so a check.status==='ok' read could
+// NEVER show "Configured" even once the operator had wired it up (M21). The
+// badge instead derives readiness client-side from the actual SiteConfig field
+// each step's own body edits — the honest default stays a neutral "Optional"
+// nudge until that field is genuinely set.
+function siteConfigBadge(
+  cfg: SiteConfig | null,
+  checkId: "host_proxy" | "scm_provider" | "artifact_repo",
+): StepBadge {
+  const configured =
+    checkId === "host_proxy"
+      ? !!cfg?.upstream_proxy_secret_ref
+      : checkId === "scm_provider"
+        ? !!cfg?.scm_hosts?.length
+        : !!cfg?.artifact_overrides && Object.keys(cfg.artifact_overrides).length > 0;
+  return configured
     ? { text: "Configured", tone: "success" }
     : { text: "Optional", tone: "neutral" };
 }
@@ -169,6 +181,7 @@ function stepBadges(
   status: SetupStatus,
   r: Readiness,
   workspaces: Workspace[],
+  siteConfig: SiteConfig | null,
 ): Record<SetupStepId, StepBadge> {
   return {
     environment: r.barrierReady
@@ -177,9 +190,9 @@ function stepBadges(
     provider: r.llmReady
       ? { text: r.llmLabel ? `Ready · ${r.llmLabel}` : "Ready", tone: "success" }
       : { text: "Needs setup", tone: "warning" },
-    host_proxy: siteConfigBadge(status, "host_proxy"),
-    scm_provider: siteConfigBadge(status, "scm_provider"),
-    artifact_repo: siteConfigBadge(status, "artifact_repo"),
+    host_proxy: siteConfigBadge(siteConfig, "host_proxy"),
+    scm_provider: siteConfigBadge(siteConfig, "scm_provider"),
+    artifact_repo: siteConfigBadge(siteConfig, "artifact_repo"),
     // Recommended, not required (B8-style): onboarding a workspace lets a first run
     // touch your own code, but the ephemeral path still launches with none — so the
     // empty state is a neutral "Optional" nudge, never a red "Needs setup". (The
@@ -1383,8 +1396,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     }
   };
 
+  // M21: badges for the corporate-baseline steps read the actual SiteConfig
+  // (see siteConfigBadge) rather than the backend's always-"info" checks.
+  const { cfg: siteConfig } = useSiteConfig();
+
   const readiness = status ? deriveReadiness(status) : null;
-  const badges = status && readiness ? stepBadges(status, readiness, workspaces) : null;
+  const badges = status && readiness ? stepBadges(status, readiness, workspaces, siteConfig) : null;
   const done = status && readiness ? stepDone(status, readiness, workspaces) : null;
   const strongest = status ? strongestAvailable(status.runner.confinement_classes) : undefined;
   // Effective default-barrier selection: the explicit click if any, else the

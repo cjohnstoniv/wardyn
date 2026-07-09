@@ -140,20 +140,32 @@ export function PermissionWizard({
     if (initialState) setState(initialState);
     setAvailableClasses(null);
     let alive = true;
-    api
-      .health()
-      .then((h) => {
+    // M19 fix: api.health() never rejects — it swallows a fetch/parse failure
+    // into {} (see api.ts) — so the old .catch below was dead code, and an
+    // empty/failed probe fell straight into .then() instead. That was then
+    // read as a DEFINITIVE "this runner has zero barriers", rendering "No
+    // Wall/Vault runtime on this runner" even on a transient blip (the server
+    // side, handleHealthz, ALSO emits an empty confinement_classes list on its
+    // own Runner error path, not only for a genuinely CC1-only host). Empty
+    // means unknown, not confirmed-absent — retry once before ever committing
+    // to it; only a still-empty result after the retry settles into the
+    // documented CC1-only fallback below.
+    let retried = false;
+    const probe = () => {
+      api.health().then((h) => {
         if (!alive) return;
         const classes = (h.confinement_classes ?? []).filter(Boolean);
+        if (classes.length === 0 && !retried) {
+          retried = true;
+          probe();
+          return;
+        }
         setAvailableClasses(classes);
         if (initialState) return; // keep the prefilled proposal verbatim
         setState(initialWizardState(resolveDefaultCc(getDefaultCc(), classes as ConfinementClass[])));
-      })
-      .catch(() => {
-        // Probe failed — fail closed to the universal CC1 floor rather than
-        // leaving the picker in "Checking…" forever.
-        if (alive) setAvailableClasses(["CC1"]);
       });
+    };
+    probe();
     loadSecrets();
     loadWorkspaces();
     return () => {
@@ -230,12 +242,22 @@ export function PermissionWizard({
     setLaunching(true);
     try {
       const { run, inline_policy } = buildSpec(state, workspaces);
-      if (state.saveAsProfile && state.profileName.trim()) {
-        // Persist the composed spec as a named policy (best-effort companion to
-        // the run; the run still carries inline_policy so it's self-contained).
-        await api.createPolicy(state.profileName.trim(), inline_policy);
-      }
       const created = await api.createRun({ ...run, inline_policy });
+      if (state.saveAsProfile && state.profileName.trim()) {
+        // M14 fix: persist the named policy AFTER the run launches, not before.
+        // createPolicy used to run first, so a failed launch (e.g. the
+        // one-click missing-secret fix retrying) had already created the named
+        // policy — the retry's createPolicy call then hit the policies-name
+        // UNIQUE constraint and dead-ended. Best-effort companion to the run
+        // (the run itself carries inline_policy, so it's self-contained): a
+        // save-as-profile failure here (e.g. reusing an existing name) must
+        // not undo a run that already launched successfully.
+        try {
+          await api.createPolicy(state.profileName.trim(), inline_policy);
+        } catch {
+          /* best-effort — the run already launched */
+        }
+      }
       setLaunching(false);
       onOpenChange(false);
       onCreated(created);
