@@ -541,12 +541,6 @@ export const api = {
     return grantsFromRecords(await asJson<unknown>(res));
   },
 
-  // GET /api/v1/runs/{id}/egress — synthesized from audit egress.* events.
-  async getEgress(runId: string): Promise<EgressDecision[]> {
-    const events = await api.listAudit(runId);
-    return egressFromAudit(events);
-  },
-
   // GET /api/v1/approvals?state=<state>  (PENDING | APPROVED | DENIED | EXPIRED | "")
   async listApprovals(state: "PENDING" | "APPROVED" | "DENIED" | "EXPIRED" | "" = "PENDING"): Promise<ApprovalRequest[]> {
     const qs = state ? `?state=${encodeURIComponent(state)}` : "";

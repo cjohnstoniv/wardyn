@@ -195,23 +195,6 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
   };
 }
 
-// Recording-Mode prefill: an OPEN, allow-all-egress + INTERACTIVE run whose whole
-// point is to OBSERVE what an agent reaches for, so a least-privilege profile can
-// later be synthesized from it (POST /runs/{id}/profile). It reuses buildSpec
-// verbatim — we only flip mode=interactive, allowAllEgress=true (first-use
-// approval is inert under allow-all) and seed a profile name. The operator still
-// reviews/launches it through the normal wizard.
-export function recordingWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
-  return {
-    ...initialWizardState(defaultCc),
-    mode: "interactive",
-    allowAllEgress: true,
-    firstUseApproval: "always_deny",
-    saveAsProfile: true,
-    profileName: "recorded-profile",
-  };
-}
-
 // basename("/a/b/c") => "c"; tolerant of trailing slashes and bare paths.
 export function basename(path: string): string {
   const cleaned = path.replace(/\/+$/, "");

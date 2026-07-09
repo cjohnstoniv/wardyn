@@ -75,16 +75,3 @@ func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 
 	return out, nil
 }
-
-// ParseSinksAndFanout is a convenience wrapper that calls ParseSinks and wraps
-// the result in a Fanout. Returns (nil, nil) when cfgJSON enables no sinks.
-func ParseSinksAndFanout(cfgJSON []byte) (*Fanout, error) {
-	children, err := ParseSinks(cfgJSON)
-	if err != nil {
-		return nil, err
-	}
-	if len(children) == 0 {
-		return nil, nil
-	}
-	return NewFanout(children...), nil
-}
