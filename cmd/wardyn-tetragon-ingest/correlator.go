@@ -31,6 +31,11 @@ import (
 // It implements groundtruth.Correlator. The index is refreshed periodically AND
 // can be force-refreshed on a container-id miss (a freshly-started run's
 // container may not be in the last snapshot yet).
+// dockerRefreshTimeout bounds a single `docker ps` query so a wedged docker
+// daemon wedges only this call, not the caller (RunForContainer runs inline
+// on the tail loop via maybeRefresh).
+const dockerRefreshTimeout = 10 * time.Second
+
 type dockerCorrelator struct {
 	mu          sync.RWMutex
 	byContainer map[string]uuid.UUID // full + truncated (12-char) ids -> run
@@ -102,8 +107,12 @@ func (c *dockerCorrelator) lookupContainer(id string) (uuid.UUID, bool) {
 }
 
 // Refresh rebuilds the index from the docker daemon. Called on a ticker and on
-// throttled misses.
+// throttled misses (the latter with context.Background(), which has no
+// deadline of its own) — bound every call here so a wedged docker daemon can
+// only stall ingestion for dockerRefreshTimeout, not forever.
 func (c *dockerCorrelator) Refresh(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, dockerRefreshTimeout)
+	defer cancel()
 	containers, err := c.docker.managedContainers(ctx)
 	if err != nil {
 		return err

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -23,12 +24,18 @@ import (
 // seam so the refresh-on-401 path is testable and so the token can be re-read or
 // re-minted on demand instead of being frozen at boot.
 //
-// FINDING (HIGH): the sidecar used to read WARDYN_GROUNDTRUTH_TOKEN once at boot
-// and reuse it forever; the embedded identity mints with a fixed ~1h ceiling, so
-// after ~1h every POST to /api/v1/internal/groundtruth returned 401 and the
-// second audit stream silently died with no recovery. eventSink now fetches the
-// token through this source and, on a 401, re-fetches and retries once — so a
-// rotated/re-minted token is picked up automatically and the stream recovers.
+// FINDING (HIGH): the sidecar's embedded identity mints the bearer token with a
+// fixed ~1h ceiling. The default source below just re-reads
+// WARDYN_GROUNDTRUTH_TOKEN from the process environment on a 401 — but a
+// running container's environment is fixed at exec time and can never change,
+// so that path is INERT: it always returns the same stale value, and after
+// ~1h every POST 401s forever with no actual recovery. The real fix is
+// WARDYN_GROUNDTRUTH_TOKEN_FILE: when set, the source re-reads that file from
+// disk on every call (including the 401 refresh), so an operator/control-plane
+// process rewriting the file DOES rotate the live token and the stream
+// survives past the TTL. Use the file form for anything expected to outlive
+// ~1h; the plain env form only degrades gracefully (a persistent 401 is
+// counted as a drop, never retried forever).
 type tokenSource func() (string, error)
 
 // eventSink batches kernel AuditEvents and POSTs them to the control plane's
@@ -55,17 +62,27 @@ type eventSink struct {
 	closed bool
 }
 
-// newEventSink builds a sink from a STATIC boot token. The token is still
-// re-fetchable on 401 via the default source below, which simply re-reads the
-// same env var — so an out-of-band rotation of WARDYN_GROUNDTRUTH_TOKEN (e.g. by
-// the embedded identity helper updating the env/secret) is picked up on the next
-// 401 without restarting the sidecar. When the env is unchanged this degrades to
-// the prior behavior (the same token is returned), so a genuine persistent 401
-// is counted as a drop rather than retried forever.
+// newEventSink builds a sink from a STATIC boot token. If
+// WARDYN_GROUNDTRUTH_TOKEN_FILE is set, the source re-reads that file from
+// disk on every call (boot seed AND every 401 refresh), so an operator or the
+// control plane can rotate the live token by rewriting the file — this is the
+// only path that actually survives the ~1h token TTL. Without the file, the
+// source just re-reads WARDYN_GROUNDTRUTH_TOKEN, falling back to the boot
+// value; since a process's env can't change after exec, that path never
+// yields a new token, so a genuine persistent 401 is counted as a drop rather
+// than retried forever (it does NOT "recover").
 func newEventSink(controlPlaneURL, token string, bufferSize, batchSize int, flushIval time.Duration, client *http.Client) *eventSink {
-	// Default source: re-read WARDYN_GROUNDTRUTH_TOKEN, falling back to the boot
-	// value. This gives a refresh seam even without an injected minter.
 	src := func() (string, error) {
+		if path := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); path != "" {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read %s: %w", path, err)
+			}
+			if v := strings.TrimSpace(string(b)); v != "" {
+				return v, nil
+			}
+			return "", fmt.Errorf("%s is empty", path)
+		}
 		if v := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN")); v != "" {
 			return v, nil
 		}
@@ -184,36 +201,56 @@ type groundtruthBatch struct {
 	Events []types.AuditEvent `json:"events"`
 }
 
+// maxPostAttempts bounds the retry loop for transport errors / 5xx responses
+// (e.g. the control plane's 502 means "retry the batch") so a downed control
+// plane cannot retry forever; mirrors the shape of the 401-refresh-retry below
+// — a small, bounded number of attempts, never unlimited.
+const maxPostAttempts = 3
+
 func (s *eventSink) post(batch []types.AuditEvent) {
 	body, err := json.Marshal(groundtruthBatch{Events: batch})
 	if err != nil {
 		return
 	}
 
-	// First attempt uses the cached token.
-	status := s.doPost(body, s.currentToken())
+	backoff := 250 * time.Millisecond
+	for attempt := 1; attempt <= maxPostAttempts; attempt++ {
+		status := s.doPost(body, s.currentToken())
 
-	// On a 401 (expired/rotated aud token — the embedded identity mints with a
-	// fixed ~1h ceiling) refresh the token from the source and retry ONCE. If the
-	// refresh yields the same/invalid token the second attempt's 401 is counted
-	// as a drop, so we never loop forever and a genuine credential gap stays
-	// visible in the periodic stats line.
-	if status == http.StatusUnauthorized {
-		refreshed := s.refreshToken()
-		log.Printf("wardyn-tetragon-ingest: ground-truth token rejected (401); refreshed and retrying batch (%d)", len(batch))
-		status = s.doPost(body, refreshed)
-	}
+		// On a 401 (expired/rotated aud token — the embedded identity mints with a
+		// fixed ~1h ceiling) refresh the token from the source and retry ONCE. If
+		// the refresh yields the same/invalid token the second attempt's 401 falls
+		// into the non-retryable 4xx case below and is counted as a drop, so we
+		// never loop forever and a genuine credential gap stays visible in the
+		// periodic stats line.
+		if status == http.StatusUnauthorized {
+			refreshed := s.refreshToken()
+			log.Printf("wardyn-tetragon-ingest: ground-truth token rejected (401); refreshed and retrying batch (%d)", len(batch))
+			status = s.doPost(body, refreshed)
+		}
 
-	switch {
-	case status == 0:
-		// Transport error: best-effort drop so the loss is visible; never block
-		// the tail loop.
-		s.dropped.Add(uint64(len(batch)))
-	case status >= 300:
-		s.dropped.Add(uint64(len(batch)))
-		log.Printf("wardyn-tetragon-ingest: control plane rejected batch (%d): status %d", len(batch), status)
-	default:
-		s.posted.Add(uint64(len(batch)))
+		switch {
+		case status == 0 || status >= 500:
+			// Transport error or server error: KEEP the batch and retry with
+			// bounded exponential backoff — this stream is billed as
+			// tamper-proof, so a transient outage must not silently lose events.
+			if attempt == maxPostAttempts {
+				s.dropped.Add(uint64(len(batch)))
+				log.Printf("wardyn-tetragon-ingest: control plane batch failed after %d attempts (%d events): status %d", attempt, len(batch), status)
+				return
+			}
+			log.Printf("wardyn-tetragon-ingest: control plane batch retry %d/%d (%d events) after status %d", attempt, maxPostAttempts, len(batch), status)
+			time.Sleep(backoff)
+			backoff *= 2
+		case status >= 300:
+			// Client error (4xx): non-retryable, the batch itself is rejected.
+			s.dropped.Add(uint64(len(batch)))
+			log.Printf("wardyn-tetragon-ingest: control plane rejected batch (%d): status %d", len(batch), status)
+			return
+		default:
+			s.posted.Add(uint64(len(batch)))
+			return
+		}
 	}
 }
 

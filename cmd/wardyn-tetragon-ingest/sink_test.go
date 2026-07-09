@@ -111,6 +111,49 @@ func TestEventSink_RefreshesTokenOn401(t *testing.T) {
 	}
 }
 
+// TestEventSink_RetriesOn502KeepsBatch covers H10a: the sender used to
+// permanently DROP any batch on a non-2xx status (including a transient 502),
+// silently losing kernel events on a stream billed as tamper-proof. A 502
+// means "retry the batch" — assert the batch is kept and delivered once the
+// transient failure clears, not dropped after the first bad status.
+func TestEventSink_RetriesOn502KeepsBatch(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sink := newEventSink(srv.URL, "tok", 16, 8, 50*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+
+	sink.emit(types.AuditEvent{Action: "kernel.process.exec", Outcome: "success"})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if sink.postedCount() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sink.postedCount() < 1 {
+		t.Fatalf("batch dropped on transient 502 instead of retried: posted=%d dropped=%d calls=%d", sink.postedCount(), sink.droppedCount(), calls.Load())
+	}
+	if sink.droppedCount() != 0 {
+		t.Errorf("batch should not be counted as dropped after a successful retry: dropped=%d", sink.droppedCount())
+	}
+	if calls.Load() < 2 {
+		t.Errorf("expected at least 2 attempts (502 then 200), got %d", calls.Load())
+	}
+}
+
 // TestEventSink_StaticTokenStillWorks ensures the default (no-rotation) path is
 // preserved: a sink built from a constant token still posts successfully and a
 // genuine, persistent 401 is counted as a drop rather than retried forever.

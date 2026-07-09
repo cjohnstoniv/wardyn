@@ -235,8 +235,14 @@ func processLine(line []byte, mapper *groundtruth.Mapper, sink *eventSink) {
 	sink.emit(ev)
 }
 
-// rotated reports whether the file at path is a different/truncated file than
-// the open handle (log rotation): the on-disk size is smaller than our offset.
+// rotated reports whether the file at path is a different file than the open
+// handle (log rotation). Two independent signals are checked because either
+// alone can miss a rotation: a size shrink catches truncate-in-place, but an
+// atomic rename-and-recreate (the pattern this sidecar's own doc comment
+// describes) can leave the new file's size >= our offset — in that case the
+// old check would keep polling the orphaned, no-longer-written old inode
+// forever while new data piles up under the same path. Comparing inode
+// numbers (stable across a rename) catches that case too.
 func rotated(f *os.File, path string) bool {
 	cur, err := f.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -246,7 +252,23 @@ func rotated(f *os.File, path string) bool {
 	if err != nil {
 		return false // file gone momentarily; keep our handle and retry
 	}
-	return fi.Size() < cur
+	if fi.Size() < cur {
+		return true
+	}
+	openFI, err := f.Stat()
+	if err != nil {
+		return true
+	}
+	return inode(fi) != inode(openFI)
+}
+
+// inode extracts the inode number from a os.Stat/os.File.Stat result. Returns
+// 0 (a no-op comparison) if the platform doesn't expose *syscall.Stat_t.
+func inode(fi os.FileInfo) uint64 {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return st.Ino
+	}
+	return 0
 }
 
 func heartbeatLoop(ctx context.Context, sink *eventSink, ival time.Duration) {
