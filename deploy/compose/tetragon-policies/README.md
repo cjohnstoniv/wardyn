@@ -22,7 +22,7 @@ the PTY replay).
 
 These policies contain **no enforcement action** (`Sigkill` / `Override`). They
 observe and export; they never block. Kernel `execve` blocking has a documented
-`ld-linux`/`mmap` bypass (the "Ona Veto" lesson), so Wardyn FLAGS loader exec
+`ld-linux`/`mmap` bypass (the documented egress-veto overclaim lesson), so Wardyn FLAGS loader exec
 (`data.loader=true`) rather than claiming to prevent it. The real boundary is
 structural — L0 no-route egress + no-resident-credentials — enforced out of band
 by `wardyn-proxy` and the broker.

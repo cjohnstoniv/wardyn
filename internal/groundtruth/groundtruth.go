@@ -23,8 +23,9 @@
 // about exactly which fields we read.
 //
 // HONESTY: this stream is DETECTION, not prevention. The ld-linux/mmap
-// dynamic-linker bypass of execve hooks is real (the "Ona Veto" lesson) and is
-// surfaced (not hidden) via data.loader=true rather than suppressed; we never
+// dynamic-linker bypass of execve hooks is real (the documented egress-veto
+// overclaim lesson) and is surfaced (not hidden) via data.loader=true rather
+// than suppressed; we never
 // claim exec-blocking. Host eBPF is also blind inside CC3/Kata microVM guests —
 // callers must emit a one-time kernel.sensor.blind event for such runs.
 //

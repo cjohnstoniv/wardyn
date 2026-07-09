@@ -14,10 +14,10 @@ not prose license — report it.
 
 ## 0. Why We Publish This
 
-Every prior vendor in this space overclaimed. Ona marketed Veto as
+Every prior vendor in this space overclaimed. One marketed its egress veto as
 unbypassable, then its own red team documented the `ld-linux`/`mmap` bypass.
-Cursor shipped a sandbox-escape CVE. Copilot's firewall was blind to MCP
-traffic.
+Another shipped a sandbox-escape CVE. A third's egress firewall was blind to
+MCP traffic.
 
 This document states what Wardyn defends and — explicitly — what it does not.
 **Overclaiming is the industry failure mode we are designed to avoid.** If a
@@ -84,8 +84,8 @@ invitation, not an embarrassment.
 | Boundary | Description |
 |---|---|
 | **B1 — Sandbox vs. everything else** | The hard boundary. The agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata) and L0 structural network confinement. Every higher-layer control assumes the agent is hostile on this side. |
-| **B2 — Sandbox vs. egress proxy** | Sole network path out is the wardyn-proxy sidecar. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility, but the env-var-bypass (Copilot) class is defended structurally at L0 (gatewayless network → no route to bypass to), not by omitting the env var. Default-deny. |
-| **B3 — Sandbox vs. MCP/tool gateway** | Separate enforcement plane from B2. Copilot's firewall was blind to MCP traffic; we treat tool egress as a first-class boundary. |
+| **B2 — Sandbox vs. egress proxy** | Sole network path out is the wardyn-proxy sidecar. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility, but the env-var-bypass class is defended structurally at L0 (gatewayless network → no route to bypass to), not by omitting the env var. Default-deny. |
+| **B3 — Sandbox vs. MCP/tool gateway** | Separate enforcement plane from B2. A prior agent egress firewall was blind to MCP traffic; we treat tool egress as a first-class boundary. |
 | **B4 — Agent-run identity vs. token broker** | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in section 4. |
 | **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
@@ -139,9 +139,9 @@ the L3 tool gateway planned at v0.5.
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Secrets are never in the sandbox. Late-binding via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). NOTE: the optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. | B1, B2, B4 |
-| Env-var proxy bypass (Copilot class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
+| Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | On the shipped Docker path this holds at **L0**: each run's network is `Internal:true` (gatewayless), so the sandbox has no off-host route and 169.254.169.254 is structurally unreachable **[shipped]**. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5 — planned]**. | L0 (L1 v0.5) |
-| MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (Copilot firewall blindness designed out). | L3, B3 |
+| MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). | L3, B3 |
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; userns (`hostUsers:false`) + PSS-restricted + no hostPath are the Kubernetes path **[v0.5 — planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
 | Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[v0.5 — planned]** — the token is repo-scoped but NOT branch-scoped; the broker records the `wardyn/<run-id>/*` namespace as advisory metadata only and nothing enforces it on push yet (needs a push-ref-inspecting git-proxy or GitHub rulesets). | B4, B5, ID |
@@ -189,7 +189,7 @@ hiding them would repeat the failure mode we are designed to avoid.
    boundary is explicitly insufficient for LLM-generated code; this tier alone
    is published as the weakest. A kernel 0-day defeats the sandbox boundary. The
    gVisor sentry 0-day / compatibility-gap class similarly applies to CC2 (e.g.,
-   Cursor-style CVE-2026-22708 sandbox-escape class acknowledged).
+   the CVE-2026-22708 sandbox-escape class acknowledged).
 
    **go-landlock evaluated, not adopted (2026-07-06).** A belt-and-suspenders
    Landlock layer *underneath* CC1 was proposed and evaluated honestly against
@@ -222,7 +222,7 @@ hiding them would repeat the failure mode we are designed to avoid.
    small, honest addition at that point.
 
 5. **`ld-linux`/`mmap` dynamic-linker bypass of in-guest LSM/eBPF `execve`
-   hooks (the Ona Veto lesson).** Kernel exec-blocking is published as one
+   hooks (the documented egress-veto overclaim lesson).** Kernel exec-blocking is published as one
    detection layer with a documented bypass class, never a prevention guarantee.
    The shipped eBPF/Tetragon ground-truth stream FLAGS loader exec
    (`kernel.process.exec` with `data.loader=true` for `ld-linux*`/`ld-musl*`) so
@@ -313,7 +313,7 @@ postures:
   offset + count + masked placeholder only; never the matched bytes, never a
   reversible hash (the audit log is append-only and SIEM-fanned).
 
-**Wardyn may NOT claim (these would repeat the Ona/Veto overclaim):**
+**Wardyn may NOT claim (these would repeat the industry's egress-veto overclaim):**
 - "Prevents/blocks data exfiltration to the model," "exfil-proof," or "DLP." An
   agent can encode / split-across-turns / encrypt around any scanner — residual #1
   STANDS; this guardrail does not move it.
@@ -397,7 +397,7 @@ These risks are tracked as explicit obligations, not ignored:
 3. **The approval-gates-credential coupling (B5) is the thesis's most novel claim
    with no prior art.** Its security rests on chain integrity against the
    delegation-chain-splicing attack (IETF, March 2026) and on a risk classifier
-   whose accuracy is unmeasured. Overclaiming here would repeat Ona's mistake.
+   whose accuracy is unmeasured. Overclaiming here would repeat the industry's mistake.
 
 4. **In-guest enforcement carries the documented `ld-linux`/`mmap` bypass class.**
    Must be shipped and marketed strictly as defense-in-depth detection, never as
@@ -411,7 +411,7 @@ These risks are tracked as explicit obligations, not ignored:
 6. **Tier-1 hardened-runc is the only tier on hosts where nothing else installs,
    yet shares the host kernel.** Customers on tier-1 only get materially weaker
    isolation and must be told so explicitly, or the platform inherits
-   Cursor/Ona-style overclaim risk.
+   the industry's sandbox-overclaim risk.
 
 7. **A compromised platform operator can defeat audit integrity and policy in v1.**
    Acceptable for launch only if published honestly; hash-chained audit + signed
@@ -541,9 +541,9 @@ The following controls apply regardless of Confinement Class:
 | Control | Layer | What it closes |
 |---|---|---|
 | No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths **[shipped]** (the optional `-out-dir` recording fallback is unmasked — see §4) | AT-1.1: agent reading secrets from sandbox env/disk |
-| Env-var proxy bypass defended | L0 (gatewayless network; proxy env is compat-only, no route to bypass to) | Copilot bypass class |
+| Env-var proxy bypass defended | L0 (gatewayless network; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
 | Egress enforced outside the sandbox | L0/L1 | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
-| Two enforcement planes (network B2 + tool B3) | L2 + L3 | Copilot's MCP blindness |
+| Two enforcement planes (network B2 + tool B3) | L2 + L3 | The MCP-blind-firewall class |
 | Approval mints credential | B5 coupling, ID + AU | Scope-widening between approval and issuance |
 | Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; the explicit-kill path teardown-first, non-kill stops win the state CAS first then revoke — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5 — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU | Insider hiding behind agent identity |

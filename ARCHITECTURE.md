@@ -117,7 +117,7 @@ forward-compatibility values; no transition produces them today.
 3. **L0 structural egress.** A sandbox has no default route; its only path
    out is `wardyn-proxy`. `HTTP_PROXY`/`HTTPS_PROXY` are set for client
    compatibility, but security does NOT rely on them: because the network is
-   gatewayless, an agent that ignores the proxy env vars (the documented Copilot
+   gatewayless, an agent that ignores the proxy env vars (the documented env-var
    bypass class) has no route and reaches nothing. Private/link-local/metadata
    IPs (169.254.169.254) are unconditionally blocked.
 4. **Per-run identity with full attribution.** Every token, commit, and
@@ -184,7 +184,7 @@ L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftabl
 → L2 wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 **[v0.5+ — planned]**.
 
-## Deployment surface (anti-Gitpod constraint)
+## Deployment surface (anti-sprawl constraint)
 
 Exactly TWO paths: `deploy/compose` (config-validated in CI; exercised
 end-to-end by the nightly full-stack e2e) and ONE blessed Helm chart
