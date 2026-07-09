@@ -84,33 +84,42 @@ func run(args []string) error {
 			// No delivery: original fast-path — exec asciinema directly.
 			return execAsciinema(path, cast, agentArgv)
 		}
-		if err := runAsciinema(path, cast, agentArgv); err != nil {
+		exitCode, err := runAsciinema(path, cast, agentArgv)
+		if err != nil {
 			return err
 		}
-		// Recording delivery is best-effort and MUST NOT become the run's exit
-		// code: the agent already succeeded here (a non-zero agent exit os.Exit'd
-		// inside runAsciinema before reaching this point). A failed copy/upload
-		// (e.g. the proxy denies the brokered:recording route in host-mode) is a
-		// recording problem, not a task failure — log it and exit 0 so the runner
-		// sees the agent's real outcome.
+		// Delivery MUST run before we propagate the agent's exit code: a failed
+		// copy/upload (e.g. the proxy denies the brokered:recording route in
+		// host-mode) is a recording problem, not a task failure — log it and
+		// still exit with the agent's real outcome below.
 		if derr := deliver(cast, *runID, *outDir, *uploadURL, *runToken); derr != nil {
 			fmt.Fprintln(os.Stderr, "wardyn-rec: recording delivery failed (non-fatal):", derr)
+		}
+		if exitCode != 0 {
+			os.Exit(exitCode)
 		}
 		return nil
 	}
 
 	// Fallback: plain log capture.
 	log := logFile(*castDir, *runID)
-	if err := recordToLog(log, agentArgv); err != nil {
+	exitCode, err := recordToLog(log, agentArgv)
+	if err != nil {
 		return err
 	}
 	if *outDir == "" && *uploadURL == "" {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
 		return nil
 	}
 	// Best-effort delivery (see the asciinema path): never fail an otherwise
 	// successful agent run because the recording could not be copied/uploaded.
 	if derr := deliver(log, *runID, *outDir, *uploadURL, *runToken); derr != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-rec: recording delivery failed (non-fatal):", derr)
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 	return nil
 }
@@ -129,8 +138,11 @@ func execAsciinema(asciinemaPath, cast string, agentArgv []string) error {
 }
 
 // runAsciinema runs asciinema as a child process (not exec) so we can deliver
-// the cast file after it exits.
-func runAsciinema(asciinemaPath, cast string, agentArgv []string) error {
+// the cast file after it exits. The returned int is the agent's exit code (0
+// on success); the caller must run delivery before propagating it via
+// os.Exit, so a non-zero agent exit is reported here rather than exited
+// directly. A non-nil error means asciinema itself could not be run.
+func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	argv := buildAsciinemaArgv(asciinemaPath, cast, agentArgv)
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec
 	cmd.Stdin = os.Stdin
@@ -139,11 +151,11 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) error {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if asExit(err, &exitErr) {
-			os.Exit(exitErr.ExitCode())
+			return exitErr.ExitCode(), nil
 		}
-		return fmt.Errorf("asciinema: %w", err)
+		return 0, fmt.Errorf("asciinema: %w", err)
 	}
-	return nil
+	return 0, nil
 }
 
 func buildAsciinemaArgv(asciinemaPath, cast string, agentArgv []string) []string {
@@ -158,10 +170,12 @@ func buildAsciinemaArgv(asciinemaPath, cast string, agentArgv []string) []string
 
 // recordToLog runs the agent argv directly, tee-ing combined output to a log
 // file and the caller's stdout/stderr. Used when asciinema is unavailable.
-func recordToLog(logPath string, agentArgv []string) error {
+// The returned int is the agent's exit code (0 on success); see runAsciinema
+// for why a non-zero exit is returned rather than exited directly here.
+func recordToLog(logPath string, agentArgv []string) (int, error) {
 	f, err := os.Create(logPath)
 	if err != nil {
-		return fmt.Errorf("create log: %w", err)
+		return 0, fmt.Errorf("create log: %w", err)
 	}
 	defer f.Close()
 
@@ -172,11 +186,11 @@ func recordToLog(logPath string, agentArgv []string) error {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if asExit(err, &exitErr) {
-			os.Exit(exitErr.ExitCode())
+			return exitErr.ExitCode(), nil
 		}
-		return fmt.Errorf("run agent: %w", err)
+		return 0, fmt.Errorf("run agent: %w", err)
 	}
-	return nil
+	return 0, nil
 }
 
 // deliver copies/uploads the finished recording file. Both modes may be active.

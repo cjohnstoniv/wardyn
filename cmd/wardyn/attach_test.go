@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -101,9 +102,14 @@ func TestIsNormalClose(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "wrapped context canceled is clean (substring match)",
-			err:  errors.New("read: context canceled"),
+			name: "wrapped (%w) context canceled is clean via errors.Is",
+			err:  fmt.Errorf("read: %w", context.Canceled),
 			want: true,
+		},
+		{
+			name: "look-alike string is NOT clean (no substring guessing)",
+			err:  errors.New("read: context canceled"),
+			want: false,
 		},
 		{
 			name: "abnormal closure is a real error",
@@ -126,18 +132,22 @@ func TestIsNormalClose(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// runAttach token guard: must refuse before dialing when no token is set
+// runAttach token guard: an empty token must NOT be a client-side hard
+// refusal (H13) — local host-mode deployments run without a token, matching
+// apiClient.do. The dial is attempted and the server's 401 (if auth is
+// actually required) is the error signal instead.
 // --------------------------------------------------------------------------
 
-func TestRunAttach_NoTokenRefuses(t *testing.T) {
-	// No token => runAttach must fail fast with the no-token error and never
-	// attempt to dial the (here, bogus) URL.
+func TestRunAttach_NoTokenDialsAnyway(t *testing.T) {
+	// No token => runAttach must still attempt the dial rather than refusing
+	// client-side. Port 0 on loopback refuses the connection, so we assert the
+	// failure is a dial error, not the old hard-refusal message.
 	c := &apiClient{baseURL: "http://127.0.0.1:0"}
 	err := runAttach(context.Background(), c, "run-1")
 	if err == nil {
-		t.Fatal("expected no-token error, got nil")
+		t.Fatal("expected a dial error against the bogus address, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "no admin token") {
-		t.Errorf("error = %q, want no-admin-token message", got)
+	if got := err.Error(); strings.Contains(got, "no admin token") {
+		t.Errorf("error = %q, must not hard-refuse on empty token", got)
 	}
 }
