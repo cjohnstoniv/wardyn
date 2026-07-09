@@ -62,6 +62,7 @@ type fakeDocker struct {
 	failCreateContainer string // name prefix that should fail on create
 	failConnectNetwork  string // network name that should fail on connect
 	failNetworkCreate   bool
+	failImagePull       bool // ImagePull returns an error (image absent + unpullable)
 	infoErr             error
 
 	execs       map[string]bool // execID -> created
@@ -104,8 +105,11 @@ func (f *fakeDocker) ImageList(ctx context.Context, opts image.ListOptions) ([]i
 
 func (f *fakeDocker) ImagePull(ctx context.Context, ref string, opts image.PullOptions) (io.ReadCloser, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failImagePull {
+		return nil, fmt.Errorf("registry: denied")
+	}
 	f.images[ref] = true
-	f.mu.Unlock()
 	return io.NopCloser(strings.NewReader(`{"status":"pulled"}`)), nil
 }
 

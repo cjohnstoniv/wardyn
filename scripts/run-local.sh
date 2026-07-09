@@ -93,8 +93,9 @@ cmd_up() {
     if ! docker network inspect "$NET" >/dev/null 2>&1; then
       docker network create "$NET" >/dev/null 2>&1 || log "WARNING could not create control-plane network $NET"
     fi
-    # Ensure the proxy sidecar + claude-code agent images exist (build if missing —
-    # first run only; the agent image build is slow).
+    # Ensure the proxy sidecar + agent images exist (build if missing —
+    # first run only; the agent image build is slow). oracle is the e2e oracle
+    # image, advertised in WARDYN_AGENT_IMAGES below, so build it here too.
     if image_missing wardyn/wardyn-proxy:demo; then
       log "Building the wardyn-proxy sidecar image (first run)…"
       docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image >/dev/null 2>&1 \
@@ -104,6 +105,11 @@ cmd_up() {
       log "Building the claude-code agent image (first run; slow)…"
       docker build -q -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:demo . >/dev/null 2>&1 \
         || log "WARNING agent image build failed — runs may fail until 'make agent-images'"
+    fi
+    if image_missing wardyn/agent-oracle:demo; then
+      log "Building the oracle agent image (first run)…"
+      docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:demo . >/dev/null 2>&1 \
+        || log "WARNING oracle image build failed — oracle runs fail until 'make agent-images'"
     fi
     # Sandbox containers reach the host control plane via host.docker.internal (the
     # proxy sidecar maps it to the docker host gateway). Agent names → locally-built

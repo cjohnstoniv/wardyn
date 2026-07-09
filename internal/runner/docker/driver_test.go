@@ -34,6 +34,27 @@ func newTestDriver(f *fakeDocker) *Driver {
 	return newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 }
 
+// TestEnsureImage_MissingHintsMakeTarget locks in the actionable error: when an
+// agent image is absent locally and cannot be pulled (the demo tags live in no
+// registry), the failure names the fix rather than leaking a bare
+// "registry: denied".
+func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
+	f := newFakeDocker()
+	f.failImagePull = true // absent + unpullable
+	d := newTestDriver(f)
+
+	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:demo")
+	if err == nil {
+		t.Fatal("ensureImage on an absent, unpullable image: got nil error")
+	}
+	if !strings.Contains(err.Error(), "make agent-images") {
+		t.Errorf("error missing the fix hint: %v", err)
+	}
+	if !strings.Contains(err.Error(), "wardyn/agent-oracle:demo") {
+		t.Errorf("error missing the image ref: %v", err)
+	}
+}
+
 func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
