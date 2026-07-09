@@ -41,15 +41,26 @@ func TestBuild_SmokeDockerd(t *testing.T) {
 
 	tag := "wardyn-envbuild-smoke-test:latest"
 
-	b, err := New("", "") // use default envbuilder image
+	// Registry PUSH is the only delivery path, so the smoke test needs a writable
+	// registry to push to and a tools dir to finalize from.
+	cacheRepo := os.Getenv("WARDYN_TEST_CACHE_REPO")
+	if cacheRepo == "" {
+		t.Skip("set WARDYN_TEST_CACHE_REPO=<registry/repo> (a writable registry) to run the smoke test")
+	}
+	toolsDir := os.Getenv("WARDYN_TEST_TOOLS_DIR")
+	if toolsDir == "" {
+		t.Skip("set WARDYN_TEST_TOOLS_DIR=<dir with agent-run,wardyn-verify,wardyn-git-helper> to run the smoke test")
+	}
+
+	b, err := New("", cacheRepo) // use default envbuilder image
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	b.BuildTimeout = 10 * time.Minute
-	b.AllowDockerSock = true // single-host smoke test: commit image to local daemon
+	b.ToolsDir = toolsDir
 	// The build-time network now defaults to "none"; envbuilder needs the
-	// network to clone the fixture and pull the alpine base image, so the smoke
-	// test explicitly opts in (the deliberate trusted-repo trade-off).
+	// network to clone the fixture, pull the alpine base image, and PUSH the
+	// built image, so the smoke test explicitly opts in (trusted-repo trade-off).
 	b.BuildNetwork = "bridge"
 
 	var logs bytes.Buffer
