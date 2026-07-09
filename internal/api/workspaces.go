@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -124,6 +125,38 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ws)
 }
 
+// sshWorkspaceSourceReady returns a 400-worthy message when a repo workspace's
+// source is an SSH clone URL to a supported provider but the operator has not yet
+// stored the canonical ssh-key-<host> secret the clone needs — rejecting at
+// onboarding instead of accepting a workspace whose every scan/verify/record clone
+// would then fail. "" = fine (not an SSH source, or the secret is present). It runs
+// AFTER decodeWorkspaceRequest (which already rejects an SSH URL to an unsupported
+// host via repoCloneURL). Shared by create + update so switching an existing
+// workspace's source to SSH is covered too.
+func (s *Server) sshWorkspaceSourceReady(ctx context.Context, req workspaceRequest) string {
+	if req.Kind != types.WorkspaceKindRepo {
+		return ""
+	}
+	host, ok := sshCloneHost(req.Source)
+	if !ok {
+		return ""
+	}
+	secretName, ok := canonicalSSHKeySecret(host)
+	if !ok {
+		return ""
+	}
+	names, err := s.listUserSecretNames(ctx)
+	if err != nil {
+		// Don't hard-block onboarding on a transient secret-store read error; the
+		// run-time grant path still gates the actual clone.
+		return ""
+	}
+	if slices.Contains(names, secretName) {
+		return ""
+	}
+	return "SSH source needs the " + secretName + " secret first — store your private key via setup's SCM import or `wardyn secret set " + secretName + "`"
+}
+
 // handleCreateWorkspace validates the request and onboards a new workspace in
 // pending_scan status. Returns 201 with the created row, or 400 on an invalid
 // body/source. The real scan (populating Profile/ImageRef, flipping status to
@@ -132,6 +165,10 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	req, msg := decodeWorkspaceRequest(r)
 	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg := s.sshWorkspaceSourceReady(r.Context(), req); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -175,6 +212,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	req, msg := decodeWorkspaceRequest(r)
 	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg := s.sshWorkspaceSourceReady(r.Context(), req); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
