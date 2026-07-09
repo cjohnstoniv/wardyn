@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -88,13 +89,32 @@ func bearerToken(r *http.Request) (string, bool) {
 // "localhost", with an optional :port) blocks the rebinding class. Anything else
 // (public name, LAN IP, empty Host) is rejected.
 //
-// Residual (documented, not closed here): this blocks DNS rebinding but not
-// DIRECT blind CSRF — a malicious page can fire a no-cors POST straight at
-// http://127.0.0.1:<port>, which arrives with Host: 127.0.0.1 and passes this
-// gate credential-free in local mode (responses stay opaque, but a state-changing
-// POST still fires). Browser Private Network Access preflights mitigate it; a
-// stricter option is to also reject a present non-loopback Origin header. Local
-// mode is for a trusted single-dev machine — keep it loopback-published.
+// Direct blind CSRF is ALSO closed (M10): on a mutating method the local-mode gate
+// rejects a PRESENT non-loopback Origin header (see the handler below), so a
+// malicious page's no-cors POST straight at http://127.0.0.1:<port> — which carries
+// the attacker's Origin — is refused even though its Host is 127.0.0.1. CLI/API
+// clients send no Origin; the embedded UI is same-origin (loopback). Local mode is
+// still for a trusted single-dev machine — keep it loopback-published.
+// isMutatingMethod reports whether m is a state-changing HTTP method.
+func isMutatingMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// isLoopbackOrigin reports whether an Origin header value points at a loopback
+// host. A malformed or opaque origin (e.g. "null") is treated as NON-loopback so
+// a mutating request carrying it is rejected (fail closed).
+func isLoopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return isLoopbackHost(u.Host)
+}
+
 func isLoopbackHost(host string) bool {
 	h := host
 	// Strip an optional :port. SplitHostPort also removes IPv6 brackets; it errors
@@ -147,6 +167,19 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			if !isLoopbackHost(r.Host) {
 				writeError(w, http.StatusForbidden, "local mode: request Host is not loopback (DNS-rebinding guard)")
 				return
+			}
+			// Blind-CSRF guard (M10): a malicious page can fire a no-cors
+			// state-changing POST straight at http://127.0.0.1:<port>. It arrives with
+			// Host: 127.0.0.1 (passing the loopback gate above) yet carries the
+			// attacker's Origin. CLI/API clients send NO Origin; the embedded UI is
+			// served from wardynd itself, so its Origin is loopback. On a mutating
+			// method, reject a PRESENT non-loopback Origin — closing the direct
+			// blind-CSRF the DNS-rebinding guard alone leaves open.
+			if isMutatingMethod(r.Method) {
+				if origin := r.Header.Get("Origin"); origin != "" && !isLoopbackOrigin(origin) {
+					writeError(w, http.StatusForbidden, "local mode: cross-origin state-changing request rejected (CSRF guard)")
+					return
+				}
 			}
 			next.ServeHTTP(w, r.WithContext(withLocalPrincipal(r.Context(), op)))
 		})
