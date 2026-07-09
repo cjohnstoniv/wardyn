@@ -868,7 +868,14 @@ func (d *Driver) ensureImage(ctx context.Context, ref string) error {
 	if present {
 		return nil
 	}
-	return dockerutil.PullImage(ctx, d.cli, ref, "docker")
+	// imagePresent said false, so a pull failure means the image is genuinely
+	// absent locally (not a stale tag). The demo agent tags (wardyn/agent-*:demo)
+	// live in no registry, so name the fix rather than leaking a bare
+	// "registry: denied".
+	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
+		return fmt.Errorf("%w (image %q not present locally and pull failed — for the demo images run: make agent-images)", err, ref)
+	}
+	return nil
 }
 
 func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {

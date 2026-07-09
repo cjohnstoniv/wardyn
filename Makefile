@@ -35,7 +35,7 @@ help:
 	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
 	@echo "  compose-down          - Stop docker-compose stack"
 	@echo "  demo                  - End-to-end compose demo (build, up, run, audit)"
-	@echo "  agent-images          - Build both agent OCI images (claude-code + codex-cli)"
+	@echo "  agent-images          - Build the agent OCI images (claude-code + codex-cli + oracle)"
 	@echo "  test-drive            - Guided governance test-drive against a running compose stack"
 	@echo "                          (ARGS='--up' to bring the stack up first)"
 	@echo "  clean                 - Remove built binaries"
@@ -44,7 +44,8 @@ agent-images:
 	@echo "Building agent images (build context: repo root)..."
 	docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:demo .
 	docker build -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:demo   .
-	@echo "Agent images built: wardyn/agent-claude-code:demo  wardyn/agent-codex-cli:demo"
+	docker build -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:demo      .
+	@echo "Agent images built: wardyn/agent-claude-code:demo  wardyn/agent-codex-cli:demo  wardyn/agent-oracle:demo"
 
 build:
 	@echo "Building Go binaries..."
