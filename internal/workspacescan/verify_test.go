@@ -126,6 +126,40 @@ func TestDeriveVerifyResult_AttachesFailureHintFromFirstFailingStep(t *testing.T
 	}
 }
 
+// TestDeriveVerifyResult_MasksSecretShapedCommand is the M30 self-check: the
+// step Command field must be masked exactly like the log fields — an
+// uploaded command echoing a secret-shaped token must not survive verbatim.
+func TestDeriveVerifyResult_MasksSecretShapedCommand(t *testing.T) {
+	raw := VerifyResult{Steps: []VerifyStepResult{
+		{Stage: "install", Command: "curl -H 'Authorization: AKIAIOSFODNN7EXAMPLE' https://example.com", ExitCode: 0},
+	}}
+	got := DeriveVerifyResult(raw)
+	if strings.Contains(got.Steps[0].Command, "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("secret-shaped token leaked into masked command: %q", got.Steps[0].Command)
+	}
+	if !strings.Contains(got.Steps[0].Command, "masked") {
+		t.Errorf("expected a masked placeholder in the command, got %q", got.Steps[0].Command)
+	}
+}
+
+// TestDeriveVerifyResult_TruncatesUnterminatedPrivateKeyCommand covers the
+// clamp/mask ordering bug: clampLine's length cap can cut a pasted PRIVATE KEY
+// block in half before MaskSecretShaped ever sees it, leaving a BEGIN marker
+// with no END that pemBlockRE (which needs both) can't recognize — so the key
+// body must be truncated away instead of riding along unmasked.
+func TestDeriveVerifyResult_TruncatesUnterminatedPrivateKeyCommand(t *testing.T) {
+	body := strings.Repeat("SECRETKEYBYTES", 40) // long enough to blow past maxSetupCommandLen
+	cmd := "echo '-----BEGIN RSA PRIVATE KEY-----\n" + body
+	raw := VerifyResult{Steps: []VerifyStepResult{{Stage: "install", Command: cmd, ExitCode: 0}}}
+	got := DeriveVerifyResult(raw)
+	if strings.Contains(got.Steps[0].Command, "SECRETKEYBYTES") {
+		t.Errorf("unterminated private key body survived truncation: %q", got.Steps[0].Command)
+	}
+	if strings.Contains(got.Steps[0].Command, "BEGIN") {
+		t.Errorf("expected the BEGIN marker itself dropped too, got %q", got.Steps[0].Command)
+	}
+}
+
 func TestMaskSecretShaped_MultiLinePEM(t *testing.T) {
 	log := "setting up\n-----BEGIN RSA PRIVATE KEY-----\nMIIEabc123secretkeymaterial\nmoresecretbytes==\n-----END RSA PRIVATE KEY-----\ndone"
 	masked := MaskSecretShaped(log)

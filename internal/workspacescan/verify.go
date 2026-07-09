@@ -14,6 +14,10 @@ import (
 var (
 	pemBlockRE = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`)
 	gcpKeyRE   = regexp.MustCompile(`(?s)"private_key"\s*:\s*"[^"]*"`)
+	// pemBeginRE matches a PRIVATE KEY header with no closing check — used to
+	// catch a BEGIN marker whose END got cut off by the head/tail clamp (so
+	// pemBlockRE, which needs both ends, can't recognize and mask it).
+	pemBeginRE = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 )
 
 // verify.go — the VerifyResult shape a verify run (cmd/wardyn-verify) produces
@@ -102,7 +106,7 @@ func DeriveVerifyResult(raw VerifyResult) VerifyResult {
 		}
 		step := VerifyStepResult{
 			Stage:      stage,
-			Command:    clampLine(s.Command, maxSetupCommandLen),
+			Command:    maskCommand(s.Command),
 			Running:    s.Running,
 			ExitCode:   exit,
 			DurationMs: dur,
@@ -154,6 +158,22 @@ func classifyFailureHint(command string, exitCode int, logTail string) string {
 	default:
 		return ""
 	}
+}
+
+// maskCommand prepares an uploaded step's Command for storage: clamp it, then
+// mask secret-shaped tokens the same way the log fields are masked. The
+// command is ONLY ever the operator-approved setup command, but an untrusted
+// upload could still stuff a pasted secret into it — and clampLine's length
+// cap can cut a pasted PRIVATE KEY block in half, leaving a BEGIN marker with
+// no END that pemBlockRE (inside MaskSecretShaped) can't recognize as a whole
+// block. Drop everything from an unterminated BEGIN marker onward before
+// masking, so a half key can never ride along unmasked.
+func maskCommand(s string) string {
+	c := clampLine(s, maxSetupCommandLen)
+	if loc := pemBeginRE.FindStringIndex(c); loc != nil && !strings.Contains(c[loc[1]:], "-----END") {
+		c = c[:loc[0]] + "«private-key-truncated»"
+	}
+	return MaskSecretShaped(c)
 }
 
 // MaskSecretShaped replaces any high-precision leaked-value match (AWS/GitHub/

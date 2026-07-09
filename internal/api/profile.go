@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
@@ -61,6 +62,23 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 
 	obs := recordmode.Capture(events)
 	synth, synthWarns := recordmode.Synthesize(obs, grants, run)
+
+	// The control plane itself shows up in every capture (the sandbox's
+	// brokered result upload is a real, logged egress.allow) — same plumbing
+	// the promote-egress path (record.go) excludes via selfHost. A synthesized
+	// profile must not allowlist wardynd itself, even when the run's ceiling
+	// was allow-all.
+	if selfHost := controlPlaneHost(s.cfg.ControlPlaneURL); selfHost != "" {
+		var kept []string
+		for _, d := range synth.AllowedDomains {
+			if strings.ToLower(strings.TrimSpace(d)) == selfHost {
+				synthWarns = append(synthWarns, "host "+d+" is the Wardyn control plane itself; excluded from allowed_domains (plumbing, not a task need)")
+				continue
+			}
+			kept = append(kept, d)
+		}
+		synth.AllowedDomains = kept
+	}
 
 	// Clamp to the operator ceiling, validate, and deterministically grade —
 	// identical to the composer path (see compose.go) so a recording can never
