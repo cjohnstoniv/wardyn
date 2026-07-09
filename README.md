@@ -56,7 +56,7 @@ running agent. It provides:
   domain allowlist, method rules, proxy-side credential injection, first-use
   approval) → L3 MCP/tool gateway **[v0.5+ — planned]**. `HTTP_PROXY`/
   `HTTPS_PROXY` ARE set in the sandbox (for client compatibility), but the
-  documented Copilot env-var-bypass class is defended *structurally* at L0: each
+  documented env-var-bypass class is defended *structurally* at L0: each
   run's network is gatewayless (`Internal:true`), so an agent that ignores the
   proxy env vars has no default route and reaches nothing — the only path off-host
   is the `wardyn-proxy` sidecar. The bypass is designed out by the absence of a
