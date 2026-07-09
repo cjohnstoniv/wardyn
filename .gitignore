@@ -19,6 +19,9 @@ package-lock.json
 # Local npm registry config (may hold a corporate/private registry URL or token) — never commit
 .npmrc
 
+# Host-staged corp CA bundle for corporate-build image support (see deploy/images/README.md) — never commit
+deploy/images/corp-ca.pem
+
 # Environment
 .env
 .env.local
