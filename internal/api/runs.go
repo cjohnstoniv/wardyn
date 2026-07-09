@@ -1422,13 +1422,6 @@ func bestClass(classes []types.ConfinementClass) types.ConfinementClass {
 	return best
 }
 
-func classOrNone(c types.ConfinementClass) string {
-	if c == "" {
-		return "none"
-	}
-	return string(c)
-}
-
 // confinementSupported reports whether the runner advertises the EXACT class c.
 // Unlike a rank comparison, this is correct for non-contiguous capability sets:
 // CC2 (gVisor/runsc) and CC3 (Kata/krun) are independent runtimes, so a host may
