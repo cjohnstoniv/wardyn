@@ -187,21 +187,26 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	if len(ceiling) > 0 {
 		_ = json.Unmarshal(ceiling, &c)
 	}
-	// Repos: intersect to the ceiling. Deny-by-default (M6): an ABSENT or empty
-	// ceiling repo list grants NO repos, so an empty ceiling drops everything the
-	// proposal asked for. (Previously the intersection was guarded by
-	// `len(c.Repos) > 0`, so an empty ceiling meant "no limit" — the opposite of the
-	// egress arm's deny-by-default, letting LLM-proposed repos pass untouched.)
-	allowed := toSet(c.Repos)
-	kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
-	if len(dropped) > 0 {
-		*warns = append(*warns, fmt.Sprintf("github grant: dropped %d repo(s) outside operator scope", len(dropped)))
+	// Repos: intersect to the ceiling ONLY when the ceiling lists repos. An empty
+	// ceiling repo list is "no repo ALLOWLIST" (any repo), not deny-all — the
+	// proposal's repos are already ground to the workspace's ACTUAL detected remote
+	// by groundGitHubGrants before the clamp, so the repo identity is controlled by
+	// detection, and the operator restricts by PERMISSIONS (below), not by repo list.
+	// (Denying on an empty repo list would drop the legitimately-detected repo.)
+	if len(c.Repos) > 0 {
+		allowed := toSet(c.Repos)
+		kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
+		if len(dropped) > 0 {
+			*warns = append(*warns, fmt.Sprintf("github grant: dropped %d repo(s) outside operator scope", len(dropped)))
+		}
+		p.Repos = kept
 	}
-	p.Repos = kept
 	// Permissions: keep only those the ceiling allows, never above the ceiling
 	// level. Deny-by-default (M6): an absent/empty ceiling permission map grants NO
 	// permissions, so every proposed permission (incl. write/admin) is dropped —
 	// previously guarded by `c.Permissions != nil`, which let them pass untouched.
+	// This is the real M6 fix: the LLM can never obtain a permission the operator
+	// ceiling doesn't bless, even when the ceiling places no repo-level allowlist.
 	for perm, lvl := range p.Permissions {
 		cl, ok := c.Permissions[perm]
 		if !ok {

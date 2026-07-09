@@ -29,6 +29,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/composer/backends"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -188,6 +190,26 @@ func twoBackendRegistry(t *testing.T, result composer.Proposal) composer.Registr
 
 // postCompose drives POST /api/v1/runs/compose with the admin token and returns
 // the raw status + body so callers can decode 2xx or assert a 4xx/413.
+// onboardLocalDir onboards a local-dir workspace so a compose/run that mounts it
+// clears the onboarding gate (validateWorkspaceSources). Onboarding a local dir
+// does not require the path to exist on disk. (These compose tests predate the
+// onboarding gate; they never ran in CI, so they went stale — now that the apie2e
+// suite runs per-PR they onboard first, exercising the real onboard→compose flow.)
+func onboardLocalDir(t *testing.T, baseURL, path string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{
+		"name":   "ws-" + uuid.NewString(), // unique so a shared DB / re-run can't collide on the name
+		"kind":   "local_dir",
+		"source": path,
+	})
+	if err != nil {
+		t.Fatalf("marshal workspace: %v", err)
+	}
+	if st, raw := doAdmin(t, http.MethodPost, baseURL+"/api/v1/workspaces", body); st != http.StatusCreated {
+		t.Fatalf("onboard local dir %q: %d %s", path, st, raw)
+	}
+}
+
 func postCompose(t *testing.T, baseURL string, body composeReq) (int, []byte) {
 	t.Helper()
 	// A workspace is required; default to ephemeral so cases that don't exercise
@@ -376,13 +398,21 @@ func TestCompose_WorkspaceApplied(t *testing.T) {
 	}
 
 	// local read-WRITE: a single mount at the working dir; repo local:<base>; HIGH.
-	st, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceLocal, Path: "/home/dev/project", ReadWrite: true}})
+	// Use a unique temp path whose basename is "project" so the local:project label
+	// still holds while the onboarded source is unique per run (the local-dir source
+	// carries a UNIQUE index).
+	projDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	onboardLocalDir(t, h.srv.URL, projDir)
+	st, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceLocal, Path: projDir, ReadWrite: true}})
 	if st != http.StatusOK {
 		t.Fatalf("local rw: %d %s", st, raw)
 	}
 	cr = decodeCompose(t, raw)
 	ms := cr.Proposed.InlinePolicy.WorkspaceMounts
-	if len(ms) != 1 || ms[0].Source != "/home/dev/project" || ms[0].Target != "/home/agent/work" {
+	if len(ms) != 1 || ms[0].Source != projDir || ms[0].Target != "/home/agent/work" {
 		t.Fatalf("local mount not applied: %+v", ms)
 	}
 	if ms[0].ReadOnly == nil || *ms[0].ReadOnly {
@@ -396,7 +426,7 @@ func TestCompose_WorkspaceApplied(t *testing.T) {
 	}
 
 	// local read-only: mount read_only=true.
-	_, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceLocal, Path: "/home/dev/project"}})
+	_, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceLocal, Path: projDir}})
 	cr = decodeCompose(t, raw)
 	ms = cr.Proposed.InlinePolicy.WorkspaceMounts
 	if len(ms) != 1 || ms[0].ReadOnly == nil || !*ms[0].ReadOnly {
@@ -747,6 +777,7 @@ func TestCompose_LocalGitRemoteGrounding(t *testing.T) {
 	t.Run("github remote -> scoped to detected, not guessed", func(t *testing.T) {
 		dir := t.TempDir()
 		writeGitConfig(t, dir, "https://github.com/acme/realrepo.git")
+		onboardLocalDir(t, h.srv.URL, dir)
 		st, raw := postCompose(t, h.srv.URL, local(dir))
 		if st != http.StatusOK {
 			t.Fatalf("status = %d (%s)", st, raw)
@@ -763,6 +794,7 @@ func TestCompose_LocalGitRemoteGrounding(t *testing.T) {
 
 	t.Run("no git remote -> github token dropped", func(t *testing.T) {
 		dir := t.TempDir() // no .git
+		onboardLocalDir(t, h.srv.URL, dir)
 		st, raw := postCompose(t, h.srv.URL, local(dir))
 		if st != http.StatusOK {
 			t.Fatalf("status = %d (%s)", st, raw)
@@ -779,6 +811,7 @@ func TestCompose_LocalGitRemoteGrounding(t *testing.T) {
 	t.Run("non-github remote -> no token + warning", func(t *testing.T) {
 		dir := t.TempDir()
 		writeGitConfig(t, dir, "git@gitlab.com:acme/internal.git")
+		onboardLocalDir(t, h.srv.URL, dir)
 		st, raw := postCompose(t, h.srv.URL, local(dir))
 		if st != http.StatusOK {
 			t.Fatalf("status = %d (%s)", st, raw)
