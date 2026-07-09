@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,22 +58,23 @@ Authentication: WARDYN_ADMIN_TOKEN (or --token).
 //  4. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
 //  5. Runs the bidirectional pump until disconnect/EOF/Ctrl-C.
 func runAttach(ctx context.Context, c *apiClient, runID string) error {
-	if c.token == "" {
-		return fmt.Errorf("no admin token set (use --token or WARDYN_ADMIN_TOKEN)")
-	}
-
 	wsURL := buildWSURL(c.baseURL, runID)
 
-	// Dial the WebSocket with the bearer token in the HTTP Upgrade header.
+	// Dial the WebSocket with the bearer token in the HTTP Upgrade header, when
+	// one is configured (mirrors apiClient.do: local host-mode deployments run
+	// without a token, so an empty token is not a client-side error here either
+	// — let the server's 401 be the signal if auth is actually required).
 	// InsecureSkipVerify is intentionally NOT set on the client — the CLI is a
 	// CLI-origin connection (not a browser), but we still want TLS validation
 	// for wss:// URLs; the server's same-origin check does not apply to non-browser
 	// clients (no Origin header in the dial) so the accept will succeed as long as
 	// the token is valid.
+	var hdr http.Header
+	if c.token != "" {
+		hdr = http.Header{"Authorization": []string{"Bearer " + c.token}}
+	}
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"Authorization": []string{"Bearer " + c.token},
-		},
+		HTTPHeader: hdr,
 	})
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", wsURL, err)
@@ -242,9 +244,9 @@ func isNormalClose(err error) bool {
 		return true
 	}
 	// A context cancellation (from the other pump half ending cleanly) is also
-	// a normal detach scenario.
-	if strings.Contains(err.Error(), "context canceled") {
-		return true
-	}
-	return false
+	// a normal detach scenario. The pump halves share pumpCtx, and coder/websocket's
+	// conn.Read/conn.Write return ctx.Err() verbatim on cancellation (see
+	// read.go/write.go), so context.Canceled is a real sentinel here, not just
+	// a string — errors.Is is exact, no substring guessing needed.
+	return errors.Is(err, context.Canceled)
 }

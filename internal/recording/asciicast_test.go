@@ -77,6 +77,46 @@ func TestCastWriter_HeaderAndEvents(t *testing.T) {
 	}
 }
 
+// TestCastWriter_SplitRuneAcrossWrites is the regression test for a
+// multi-byte UTF-8 rune whose bytes straddle two adjacent PTY reads. Naively
+// converting each write's bytes to a string independently mangles the rune:
+// json.Marshal silently replaces each invalid fragment with U+FFFD, so
+// without buffering the reassembled output would read "hello ��!"
+// instead of "hello 世!".
+func TestCastWriter_SplitRuneAcrossWrites(t *testing.T) {
+	var buf bytes.Buffer
+	cw := NewCastWriter(&buf, 80, 24, time.Now())
+
+	full := "hello 世!"
+	b := []byte(full)
+	idx := strings.IndexRune(full, '世')
+	split := idx + 2 // first two of the rune's three UTF-8 bytes
+
+	if _, err := cw.Write(b[:split]); err != nil {
+		t.Fatalf("Write 1: %v", err)
+	}
+	if _, err := cw.Write(b[split:]); err != nil {
+		t.Fatalf("Write 2: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	var got strings.Builder
+	for _, ln := range lines[1:] { // skip the header line
+		var ev []json.RawMessage
+		if err := json.Unmarshal([]byte(ln), &ev); err != nil {
+			t.Fatalf("event not a JSON array: %v (%q)", err, ln)
+		}
+		var data string
+		if err := json.Unmarshal(ev[2], &data); err != nil {
+			t.Fatalf("event payload: %v (%q)", err, ln)
+		}
+		got.WriteString(data)
+	}
+	if got.String() != full {
+		t.Errorf("reassembled output = %q, want %q", got.String(), full)
+	}
+}
+
 func TestCastWriter_HadOutput(t *testing.T) {
 	var buf bytes.Buffer
 	cw := NewCastWriter(&buf, 80, 24, time.Now())
