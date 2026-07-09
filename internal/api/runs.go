@@ -190,11 +190,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "runner capabilities unavailable: "+cerr.Error())
 			return
 		}
-		best := bestClass(caps.ConfinementClasses)
-		if !confinementGE(best, enforced) {
+		// Membership, not rank (M8): CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
+		// INDEPENDENT runtimes, so a host can advertise a non-contiguous set (e.g. a
+		// Kata-only host advertises [CC1, CC3], no CC2). A rank check —
+		// confinementGE(best, enforced) — would let a CC2 demand pass on that host
+		// because CC3 outranks CC2, then fail at sandbox create with a raw docker
+		// error. Require the exact enforced class to be advertised. enforced=="" means
+		// no class is required (policy floor unset, no request) ⇒ any runner passes.
+		if enforced != "" && !confinementSupported(caps.ConfinementClasses, enforced) {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
-				"runner %q cannot enforce confinement_class %s (best available: %s)",
-				caps.Driver, enforced, classOrNone(best)))
+				"runner %q cannot enforce confinement_class %s (available: %s)",
+				caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
 			return
 		}
 	}
@@ -466,7 +472,32 @@ func (s *Server) dispatch(ctx context.Context, run types.AgentRun, runToken, ima
 // WorkspaceID (for the trusted result linkage), so verifyPlan is the
 // discriminator between scan-only and verify-only in the same dispatch.
 func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, runToken, image string, policy types.RunPolicySpec, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, injections []runner.InjectionGrant, interactive bool, verifyPlan json.RawMessage) {
-	_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunStarting)
+	// Client-disconnect isolation (M26): dispatch is invoked synchronously from the
+	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
+	// also fail the compensating StopSandbox below on the same dead ctx and orphan a
+	// live sandbox. Detach from cancellation (values preserved) so the whole
+	// provision → CAS → compensate sequence always completes. The completion watcher
+	// already runs on BaseCtx, not ctx.
+	ctx = context.WithoutCancel(ctx)
+
+	// KILL-RACE GUARD (entry): claim PENDING->STARTING conditionally. A
+	// POST /runs/{id}/kill landing in the pre-dispatch window (grant writes, the
+	// ListRuns scan, a minutes-long devcontainer build) CASes PENDING->KILLED and
+	// tears down identity/broker. A blind ->STARTING write here would RESURRECT that
+	// killed run: the later STARTING->RUNNING CAS would then apply and the run would
+	// boot and execute despite the 202 kill. So if the claim does not apply, the run
+	// is no longer PENDING (killed/stopped) — abort without dispatching. Every
+	// dispatch caller passes a freshly-created PENDING run.
+	claimed, cerr := s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunPending, types.RunStarting)
+	if cerr != nil || !claimed {
+		data := map[string]any{"note": "run left PENDING by a concurrent kill/stop before dispatch; dispatch aborted"}
+		if cerr != nil {
+			data["error"] = cerr.Error()
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
+			run.ID.String(), "failure", mustJSON(data)))
+		return
+	}
 
 	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
 	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
@@ -844,15 +875,20 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// block, which reslices `injections` in place.
 	injections = append(injections, artifactPlan.injections...)
 
-	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
-	// transport is opaque (subscription/OAuth WITHOUT intercept_tls). injectSub
-	// auto-enables MITM, so the transport is inspectable and this does not fire.
-	// The default (require_inspectable_llm=false) instead degrades visibly.
+	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved LLM
+	// transport is OPAQUE (M24). Opaque transports: (a) a subscription/OAuth transport
+	// that is NOT being MITM'd (injectSub / intercept_tls auto-enable MITM, making it
+	// inspectable); (b) SigV4 Bedrock via ~/.aws or resident keys — uninspectable by
+	// construction (we cannot re-sign a MITM'd SigV4 request), so only the Bedrock
+	// BEARER path (proxy-injected, MITM'd) is inspectable. Previously only the
+	// subscription case failed closed, silently exempting opaque Bedrock. The default
+	// (require_inspectable_llm=false) instead degrades visibly rather than failing.
 	if li := policy.LLMInspection; li != nil && li.RequireInspectableLLM &&
-		li.Mode != "" && !strings.EqualFold(li.Mode, "off") && subscription && !li.InterceptTLS && !injectSub {
+		li.Mode != "" && !strings.EqualFold(li.Mode, "off") &&
+		((subscription && !li.InterceptTLS && !injectSub) || (bedrockReady && !bedrock.bearer)) {
 		_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: subscription LLM transport is opaque; enable intercept_tls"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport"})))
 		return
 	}
 
@@ -974,7 +1010,10 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 
 	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
 	if err != nil {
-		_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
+		// Conditional: only mark FAILED if still STARTING. A kill landing between the
+		// entry claim and this failure moved the run to KILLED — don't clobber that
+		// terminal state (mirrors the STARTING->RUNNING guard below).
+		_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
@@ -1030,7 +1069,9 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error()})))
 			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
-			_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
+			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
+			// clobber it with FAILED.
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunRunning, types.RunFailed)
 			return
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
@@ -1071,6 +1112,14 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref string) {
 		base = context.Background()
 	}
 	go func() {
+		// Contain a panic in the detached watcher (e.g. a driver Wait bug) so it
+		// can't crash the daemon; record it for forensics (mirrors reconcileWatch).
+		defer func() {
+			if r := recover(); r != nil {
+				s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					runID.String(), "failure", mustJSON(map[string]any{"panic": fmt.Sprintf("%v", r)})))
+			}
+		}()
 		exitCode, werr := s.cfg.Runner.Wait(base, ref)
 		if werr != nil {
 			// Wait failed (ctx cancelled at shutdown, daemon stopping, or the
@@ -1378,6 +1427,33 @@ func classOrNone(c types.ConfinementClass) string {
 		return "none"
 	}
 	return string(c)
+}
+
+// confinementSupported reports whether the runner advertises the EXACT class c.
+// Unlike a rank comparison, this is correct for non-contiguous capability sets:
+// CC2 (gVisor/runsc) and CC3 (Kata/krun) are independent runtimes, so a host may
+// advertise one without the other and must not be treated as able to enforce a
+// class it does not actually provide (invariant 5, fail closed).
+func confinementSupported(classes []types.ConfinementClass, c types.ConfinementClass) bool {
+	for _, have := range classes {
+		if have == c {
+			return true
+		}
+	}
+	return false
+}
+
+// classesOrNone renders an advertised confinement set for error messages, or
+// "none" when the runner advertises no class.
+func classesOrNone(classes []types.ConfinementClass) string {
+	if len(classes) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(classes))
+	for i, c := range classes {
+		parts[i] = string(c)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // agentImage resolves an agent name to its OCI image. images is consulted first

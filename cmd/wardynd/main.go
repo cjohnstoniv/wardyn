@@ -299,7 +299,27 @@ func run() error {
 	// but NEVER reached file/webhook/syslog sinks. Wrapping auditRec here closes
 	// that gap while keeping masking applied. (The masking is byte-verbatim
 	// defense-in-depth — these events carry no raw secret today.)
-	maskedRec := maskingRecorder{inner: auditRec, reg: maskReg}
+	// Durable audit fallback (C1/H9): when the primary Postgres write fails, the
+	// event is spooled to a local append-only JSONL file so it is never silently
+	// lost. Constructed HERE — before the recorder chain — so it can sit BELOW
+	// masking and be shared by EVERY audit writer (API, broker, identity, approvals,
+	// sweeper), not just the API server. Best-effort: a spool that cannot be opened
+	// degrades to log-only, never blocking startup.
+	var auditFallback *api.AuditSpool
+	if strings.TrimSpace(*auditSpool) != "" {
+		af, aerr := api.NewAuditSpool(*auditSpool)
+		if aerr != nil {
+			log.Printf("wardynd: WARNING audit spool unavailable at %s: %v (failed audit writes will be logged only)", *auditSpool, aerr)
+		} else {
+			auditFallback = af
+			log.Printf("wardynd: audit fallback spool at %s", *auditSpool)
+		}
+	}
+	// Recorder chain: maskingRecorder → spoolingRecorder → auditRec (fanout → store).
+	// Masking is outermost so the spool (and the store, and the SIEM sinks) all
+	// receive the already-masked event — the H9 fix for the spool that previously
+	// wrote the PRE-masking event.
+	maskedRec := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
 
 	// Secret store (pluggable seam; default "pg" = age-encrypted Postgres column).
 	secrets, err := buildSecretStore(pool, *ageKey, *secretStoreSel)
@@ -488,21 +508,6 @@ func run() error {
 		"sandbox":       {Selected: runnerTarget, RecommendedProduction: "kata-cc3", Source: sourceOf(*runnerSel, "none")},
 	}
 
-	// Durable audit fallback (C1): when the primary Postgres audit write fails,
-	// the event is spooled to a local append-only JSONL file so it is never
-	// silently lost. Best-effort: a spool that cannot be opened degrades to
-	// log-only (failed writes are still logged loudly), never blocking startup.
-	var auditFallback *api.AuditSpool
-	if strings.TrimSpace(*auditSpool) != "" {
-		af, aerr := api.NewAuditSpool(*auditSpool)
-		if aerr != nil {
-			log.Printf("wardynd: WARNING audit spool unavailable at %s: %v (failed audit writes will be logged only)", *auditSpool, aerr)
-		} else {
-			auditFallback = af
-			log.Printf("wardynd: audit fallback spool at %s", *auditSpool)
-		}
-	}
-
 	// Subscription OAuth token provider: yields the operator's LIVE Anthropic
 	// access token from the resident ~/.claude so subscription runs are
 	// credentialed PROXY-SIDE (the sandbox holds an inert sentinel that never
@@ -535,7 +540,6 @@ func run() error {
 		Approvals:                 approvals,
 		Broker:                    brk,
 		Audit:                     auditRec,
-		AuditFallback:             auditFallback,
 		Runner:                    run,
 		AdminToken:                *adminToken,
 		LocalMode:                 effLocalMode,

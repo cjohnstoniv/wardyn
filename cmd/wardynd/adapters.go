@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
@@ -212,6 +213,38 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 		}
 	}
 	return m.inner.Record(ctx, ev)
+}
+
+// ─── spooling recorder ────────────────────────────────────────────────────────
+
+// spoolingRecorder wraps an audit.Recorder so that when the inner (durable) write
+// FAILS, the event is logged loudly and appended to a local append-only spool
+// instead of being silently lost (invariant 6, C1). It is placed BELOW
+// maskingRecorder in the chain, so the event it spools is already masked — closing
+// the H9 leak where the API server's recordAudit spooled the PRE-masking event
+// into audit-spool.jsonl. And because EVERY audit writer (API, broker, identity,
+// approvals, sweeper) shares this recorder, all of them inherit the durable
+// fallback — previously only the API server's recordAudit spooled, so broker
+// credential.mint / identity / approval writes were log-only-lost on a PG outage.
+type spoolingRecorder struct {
+	inner audit.Recorder
+	spool *api.AuditSpool // may be nil (spool unavailable) → log-only fallback
+}
+
+var _ audit.Recorder = spoolingRecorder{}
+
+func (r spoolingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	err := r.inner.Record(ctx, ev)
+	if err == nil {
+		return nil
+	}
+	log.Printf("wardynd: AUDIT WRITE FAILED action=%s actor=%s outcome=%s: %v", ev.Action, ev.Actor, ev.Outcome, err)
+	if r.spool != nil {
+		if ferr := r.spool.Append(ev); ferr != nil {
+			log.Printf("wardynd: AUDIT FALLBACK SPOOL FAILED action=%s: %v (EVENT LOST)", ev.Action, ferr)
+		}
+	}
+	return err
 }
 
 // ─── lifecycle adapters ───────────────────────────────────────────────────────

@@ -305,9 +305,24 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
 	}
 	runID := uuid.New()
+	// Atomically claim the workspace's serial import-step slot BEFORE dispatch (M1):
+	// CAS active_run_id from the value the caller observed (ws.ActiveRunID) to this
+	// run. Two concurrent verifies (or a verify racing a record) that both saw the
+	// slot free cannot both launch — the loser gets errImportStepBusy. This also
+	// establishes the fence the verify-result upload enforces (H6). Released on any
+	// pre-dispatch failure so a failed launch never bricks re-verify.
+	if _, claimed, cerr := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID); cerr != nil {
+		return types.AgentRun{}, fmt.Errorf("claim import-step slot: %w", cerr)
+	} else if !claimed {
+		return types.AgentRun{}, errImportStepBusy
+	}
+	release := func(e error) (types.AgentRun, error) {
+		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
+		return types.AgentRun{}, e
+	}
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("mint run identity: %w", err)
+		return release(fmt.Errorf("mint run identity: %w", err))
 	}
 	cc := s.cfg.DefaultPolicy.MinConfinementClass
 	if cc == "" {
@@ -347,7 +362,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("create verify run: %w", err)
+		return release(fmt.Errorf("create verify run: %w", err))
 	}
 
 	// Run IN the built devcontainer image (build it now if needed — this is
@@ -823,9 +838,24 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	}
 
 	runID := uuid.New()
+	// Claim the workspace's serial import-step slot BEFORE dispatch (H14): the scan
+	// self-heal in reconcileWorkspaceRun keys on ws.ActiveRunID == runID, so a scan
+	// that never claims the slot leaves that branch DEAD — a scan whose facts upload
+	// is lost (e.g. sandbox can't reach the control plane) then strands the workspace
+	// in `scanning` forever. Mirrors record/verify. Released on any pre-dispatch fail.
+	claimedWS, claimed, cerr := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID)
+	if cerr != nil {
+		return types.AgentRun{}, fmt.Errorf("claim import-step slot: %w", cerr)
+	} else if !claimed {
+		return types.AgentRun{}, errImportStepBusy
+	}
+	scanRelease := func(e error) (types.AgentRun, error) {
+		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
+		return types.AgentRun{}, e
+	}
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("mint run identity: %w", err)
+		return scanRelease(fmt.Errorf("mint run identity: %w", err))
 	}
 	// Confinement: inherit the operator's default floor. A scan is read-only,
 	// ephemeral, and holds no credentials; the operator's floor still governs.
@@ -851,7 +881,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("create scan run: %w", err)
+		return scanRelease(fmt.Errorf("create scan run: %w", err))
 	}
 
 	// Flip the workspace to `scanning` so the import UI's poll (which watches only the
@@ -860,7 +890,9 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	// and the UI never re-checks — the scan spinner hangs even after the scan finishes.
 	// Set BEFORE dispatch so a fast scan's `scanned` upload can't be regressed. Best
 	// effort: the scan still completes and sets `scanned` regardless of this update.
-	scanningWS := ws
+	// Use the post-claim workspace (active_run_id already == runID) as the base so
+	// this status write preserves the slot we just claimed (H14).
+	scanningWS := claimedWS
 	scanningWS.Status = types.WorkspaceScanning
 	_, _ = s.cfg.Store.UpdateWorkspace(ctx, ws.ID, scanningWS)
 
@@ -911,16 +943,20 @@ func scanEgressDomains(cloneURL string) []string {
 	}
 	if u, err := neturl.Parse(cloneURL); err == nil && u.Hostname() != "" {
 		host := u.Hostname() // strips any :port
-		found := false
-		for _, d := range doms {
-			if d == host {
-				found = true
-				break
-			}
-		}
-		if !found {
-			doms = append(doms, host)
+		if !isGitHubCloneHost(host) {
+			// M22: a non-GitHub HTTPS clone (ADO, GitLab, self-hosted git) needs ONLY
+			// its own host — the default GitHub bundle above is an unnecessary
+			// over-grant for a non-GitHub scan. GitHub hosts keep the full bundle
+			// (codeload / LFS / *.githubusercontent.com).
+			return []string{host}
 		}
 	}
 	return doms
+}
+
+// isGitHubCloneHost reports whether host is a GitHub clone/API host (github.com,
+// ssh.github.com, or a *.github.com subdomain), case-insensitively.
+func isGitHubCloneHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return h == "github.com" || h == "ssh.github.com" || strings.HasSuffix(h, ".github.com")
 }

@@ -29,7 +29,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
@@ -130,12 +129,11 @@ type Config struct {
 	Approvals ApprovalService
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
-	// Audit records control-plane-originated audit events.
+	// Audit records control-plane-originated audit events. The recorder handed in
+	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
+	// failed durable write is masked, logged loudly, and spooled to the local
+	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
-	// AuditFallback durably spools an audit event whose PRIMARY store write
-	// failed, so a security event is never silently lost when the database blips
-	// (C1). Nil disables spooling (a failed write is then only logged loudly).
-	AuditFallback *AuditSpool
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// AdminToken gates the public API (constant-time bearer compare). Empty
@@ -648,19 +646,12 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = s.cfg.Now().UTC()
 	}
-	if err := s.cfg.Audit.Record(ctx, ev); err != nil {
-		// C1: the audit log is the system of record — do NOT silently swallow a
-		// failed write (a credential.mint / run.kill / egress.deny event must never
-		// vanish while the run proceeds and reports success). Log loudly and spool
-		// the event to a durable local fallback so it can be replayed once the
-		// store recovers.
-		log.Printf("wardynd: AUDIT WRITE FAILED action=%s actor=%s outcome=%s: %v", ev.Action, ev.Actor, ev.Outcome, err)
-		if s.cfg.AuditFallback != nil {
-			if ferr := s.cfg.AuditFallback.Append(ev); ferr != nil {
-				log.Printf("wardynd: AUDIT FALLBACK SPOOL FAILED action=%s: %v (EVENT LOST)", ev.Action, ferr)
-			}
-		}
-	}
+	// Invariant 6, C1: the audit log is the system of record. A failed durable
+	// write is handled by the shared recorder chain (spoolingRecorder below
+	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
+	// event to the durable local fallback so it is never silently lost — for every
+	// audit writer, not just this one. So there is no API-layer-only spool here.
+	_ = s.cfg.Audit.Record(ctx, ev)
 }
 
 // auditEvent is a small constructor used across handlers.

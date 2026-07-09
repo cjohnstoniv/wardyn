@@ -17,3 +17,9 @@ test/e2e/fixtures/**/*.cast
 /wardyn-proxy
 /wardyn-rec
 /wardyn-runner
+# Secrets / local env files — NEVER copy into a build context (H4). deploy/compose/.env
+# holds the WARDYN_AGE_KEY secret-store MASTER key; a repo-root `COPY . .` (Dockerfile.wardynd,
+# Dockerfile.proxy, tetragon-ingest, the agent images) would otherwise layer it into builder
+# images/cache. The compose stack passes .env at RUNTIME (env_file), never at build.
+.env
+**/.env

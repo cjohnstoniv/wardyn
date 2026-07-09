@@ -85,7 +85,7 @@ func TestUploadVerifyResult_GreenSetsReadyVerified(t *testing.T) {
 	fake := &verifyStore{
 		hasRun: true,
 		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123"},
+		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123", ActiveRunID: &runID},
 	}
 	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
 	// A green upload (all steps exit 0).
@@ -102,6 +102,31 @@ func TestUploadVerifyResult_GreenSetsReadyVerified(t *testing.T) {
 	}
 	if fake.state.ActiveRunID != nil {
 		t.Error("active_run_id should be cleared after verify completes")
+	}
+}
+
+// H6: a late upload from a superseded/killed verify run (the workspace's
+// active_run_id now points at a DIFFERENT run) must be rejected with 409 and must
+// NOT finalize the workspace.
+func TestUploadVerifyResult_SupersededRunRejected(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New() // the stale run doing the upload
+	wsID := uuid.New()
+	active := uuid.New() // a DIFFERENT run now owns the workspace
+	tok := h.mintRunToken(t, runID)
+	fake := &verifyStore{
+		hasRun: true,
+		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
+		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123", ActiveRunID: &active},
+	}
+	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	body := `{"ran":true,"ok":true,"done":true,"total":1,"steps":[{"stage":"test","command":"npm test","exit_code":0}]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("superseded verify upload: code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if fake.state != nil {
+		t.Errorf("superseded upload must NOT write workspace state, got %+v", fake.state)
 	}
 }
 
@@ -122,7 +147,7 @@ func TestUploadVerifyResult_ProgressKeepsVerifying(t *testing.T) {
 	fake := &verifyStore{
 		hasRun: true,
 		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc"},
+		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc", ActiveRunID: &runID},
 	}
 	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
 	// A PROGRESS upload (done omitted/false): install done, build running.

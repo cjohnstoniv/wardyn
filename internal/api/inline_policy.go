@@ -128,6 +128,14 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 					return http.StatusUnprocessableEntity, errors.New(
 						"policy uses subscription LLM auth, but no subscription token provider is configured")
 				}
+				// Host pin (H2, write-time defense): the sentinel resolves to the
+				// operator's LIVE OAuth token and may only ever target Anthropic. Reject
+				// an authored grant that points it elsewhere (the inject sink also
+				// enforces this, fail-closed).
+				if !hostEqual(rule.Host, subscriptionInjectionHost) {
+					return http.StatusUnprocessableEntity, fmt.Errorf(
+						"subscription LLM auth may only target %s, not %q", subscriptionInjectionHost, rule.Host)
+				}
 				continue
 			}
 			needed = append(needed, rule.SecretName)

@@ -59,6 +59,7 @@ var deniedSourcePrefixes = []string{
 	"/run",
 	"/var/run",
 	"/var/lib/docker",
+	"/var/lib/containerd", // containerd state — root-equivalent, same as /var/lib/docker (M13)
 	"/etc",
 	"/boot",
 	"/root", // uid-0's home on a standard Linux host
@@ -155,9 +156,14 @@ func deniedSource(src string) error {
 	if src == "/" {
 		return fmt.Errorf("mount source %q (host root) is denied", src)
 	}
-	// A Docker socket anywhere is root-equivalent on the host.
-	if path.Base(src) == "docker.sock" {
-		return fmt.Errorf("mount source %q references the docker socket; denied", src)
+	// A container-runtime socket anywhere is root-equivalent on the host: mounting
+	// it lets the sandbox drive the daemon (launch privileged containers → escape).
+	// Denied by BASENAME so a socket at a non-standard path (outside the denied
+	// /run, /var/run prefixes) is caught too — docker, containerd, podman, cri-o
+	// (M13: previously only docker.sock was named).
+	switch path.Base(src) {
+	case "docker.sock", "containerd.sock", "podman.sock", "crio.sock":
+		return fmt.Errorf("mount source %q references a container-runtime socket; denied", src)
 	}
 	for _, p := range deniedSourcePrefixes {
 		if src == p || strings.HasPrefix(src, p+"/") {
