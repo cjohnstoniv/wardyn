@@ -118,7 +118,12 @@ type composeResponse struct {
 	RiskAssessment []composer.RiskItem `json:"risk_assessment"`
 	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
 	Summary        string              `json:"summary"`
-	Warnings       []string            `json:"warnings,omitempty"`
+	// Warnings are DETERMINISTIC policy actions (clamp/ground/workspace/confinement) —
+	// what the engine actually DID to the proposal. Shown as "Tightened by policy:".
+	Warnings []string `json:"warnings,omitempty"`
+	// ModelNotes are the LLM's OWN advisory remarks (prop.Warnings). Kept SEPARATE from
+	// Warnings so untrusted model prose is never displayed as an enforced policy action (M7).
+	ModelNotes []string `json:"model_notes,omitempty"`
 	// LLMAccess is the deterministic FINAL-state model-access verdict for a composed
 	// LLM run (reconcileLLMAccess). Provisioned=false means the run will launch but its
 	// first model call 404s — the review surfaces this as its OWN distinct destructive
@@ -566,7 +571,10 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	s.recordAudit(ctx, s.auditEvent(nil, principalType, principal,
 		"run.compose", run.Repo, "success", auditData))
 
-	warnings := append(append(append(append([]string{}, prop.Warnings...), groundWarns...), clampWarns...), wsWarns...)
+	// Deterministic policy actions only (M7): the LLM's own advisory prose
+	// (prop.Warnings) is carried in a SEPARATE ModelNotes field so untrusted model
+	// text is never rendered as an enforced "Tightened by policy:" action.
+	warnings := append(append(append([]string{}, groundWarns...), clampWarns...), wsWarns...)
 	if confWarn != "" {
 		warnings = append(warnings, confWarn)
 	}
@@ -577,6 +585,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 		OverallRisk:    overall,
 		Summary:        prop.Summary,
 		Warnings:       warnings,
+		ModelNotes:     prop.Warnings,
 		LLMAccess:      llmAccess,
 		SetupItems:     setupItems,
 	}

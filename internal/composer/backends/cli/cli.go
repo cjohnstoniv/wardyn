@@ -8,15 +8,17 @@
 // the CLI emits, and hands it to composer.ProposeWithRetry for the canonical
 // parse/validate/bounded-retry/fail-closed loop.
 //
-// Trust model: the child process runs read-only — no MUTATING tools (no edits,
-// writes, or command execution) — so a prompt-injected attachment cannot get the CLI
-// to take an action against the host. (Read-only tool use, e.g. file reads, may still
-// occur; it is bounded by a small --max-turns cap and is immaterial here — the CLI is used
-// purely as a structured-output text generator and its output is Grade+Clamped
-// downstream.) This is WARDYN-ENFORCED per tool by an explicit least-privilege flag,
-// NOT left to the CLI's ambient default: codex gets `--sandbox read-only
-// --ask-for-approval never`; claude gets `--permission-mode plan`. ANTHROPIC_API_KEY
-// is scrubbed from the child env for the claude tool so it uses the subscription
+// Trust model: the child runs on the CONTROL-PLANE host against UNTRUSTED input
+// (task text + attachments), so it must be able to take NO action against the host.
+// Wardyn enforces this per tool with explicit least-privilege flags, NOT the CLI's
+// ambient default: codex gets `--sandbox read-only --ask-for-approval never` (which
+// also blocks the network); claude gets `--permission-mode plan` PLUS an explicit
+// `--disallowedTools` denylist (composerDisallowedTools) — plan mode ALONE still
+// permits read-only tools including WebFetch/WebSearch (network) and host file
+// reads, so the denylist is what actually closes host file-exfiltration / SSRF from
+// a prompt-injected attachment (H12). The CLI is used purely as a structured-output
+// text generator; its output is Grade+Clamped downstream. ANTHROPIC_API_KEY is
+// scrubbed from the child env for the claude tool so it uses the subscription
 // session (never an API key) and never bills/leaks one.
 package cli
 
@@ -52,6 +54,16 @@ const defaultTimeout = 120 * time.Second
 // happen regardless of turn count, and the per-invocation timeout is the real
 // backstop on runaway analysis.
 const composerMaxTurns = "6"
+
+// composerDisallowedTools denies EVERY tool for the claude invocations. The
+// composer uses the CLI purely as a structured-output text generator — it needs
+// ZERO tools. `--permission-mode plan` blocks MUTATING tools but still permits
+// read-only ones — file Read/Glob/Grep and, crucially, WebFetch/WebSearch network
+// reads — so a prompt-injected attachment run on the CONTROL-PLANE host could
+// exfiltrate host file contents or reach the network. Denying the tools outright
+// closes that (H12). (codex needs no equivalent: `--sandbox read-only` fully
+// sandboxes it, blocking both writes and the network.)
+const composerDisallowedTools = "Read,Glob,Grep,Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,TodoWrite"
 
 // Config configures the CLI composer backend.
 type Config struct {
@@ -192,6 +204,7 @@ func (c *cliComposer) assistClaude(ctx context.Context, system, user string) (st
 		"--output-format", "json",
 		"--append-system-prompt", system,
 		"--permission-mode", "plan",
+		"--disallowedTools", composerDisallowedTools,
 		"--max-turns", composerMaxTurns,
 	}
 	if c.model != "" {
@@ -310,6 +323,7 @@ func (c *cliComposer) runClaude(ctx context.Context, schema map[string]any, syst
 		"--json-schema", string(schemaJSON),
 		"--append-system-prompt", system,
 		"--permission-mode", "plan",
+		"--disallowedTools", composerDisallowedTools,
 		"--max-turns", composerMaxTurns,
 	}
 	if c.model != "" {
