@@ -217,6 +217,33 @@ describe("SetupScreen", () => {
     expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
   });
 
+  it("host proxy step renders the masked detected-proxy breakdown when present", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        host_proxy: {
+          http_proxy: { value: "http://proxy.corp:3128", source: "env", has_credentials: true },
+          env_case_mismatch: ["http_proxy"],
+          has_credentials: true,
+        },
+      }),
+    );
+    render(<SetupScreen onDone={() => {}} />);
+
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> provider
+    await screen.findByText("Claude / Anthropic");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
+    expect(
+      await screen.findByRole("heading", { name: /corporate host proxy/i }),
+    ).toBeInTheDocument();
+
+    expect(screen.getByText("Detected on this host")).toBeInTheDocument();
+    expect(screen.getByText("http://proxy.corp:3128")).toBeInTheDocument();
+    expect(screen.getByText("creds")).toBeInTheDocument(); // per-setting has_credentials
+    expect(screen.getByText("http_proxy")).toBeInTheDocument(); // env_case_mismatch chip
+    expect(screen.getByText("credential")).toBeInTheDocument(); // top-level has_credentials prompt
+  });
+
   it("'Finish later' (the single exit verb) dismisses setup and calls onDone", async () => {
     const onDone = vi.fn();
     render(<SetupScreen onDone={onDone} />);
