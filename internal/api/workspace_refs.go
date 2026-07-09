@@ -36,11 +36,30 @@ var systemMountTargets = map[string]bool{
 // every user source is onboarded. The runner.ValidateMount deny-list still runs
 // underneath as defense-in-depth; this is a floor-RAISING allow-list on top.
 func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec) (int, error) {
-	// Fast path: nothing to gate if the run declares no user workspaces (a mount
-	// at a system target does not count).
+	// A mount at a system target (subscription creds) is exempt from the onboarding
+	// gate ONLY when its SOURCE matches the operator's TRUSTED ceiling (DefaultPolicy)
+	// entry for that target (H8). The exemption used to key on the target ALONE, so a
+	// user-authored inline/stored policy could name a system target with an ARBITRARY
+	// host source (e.g. /home/<user>/.ssh, even RW) and have it mounted un-onboarded.
+	// The operator stages creds and blesses the mount in DefaultPolicy
+	// (scripts/stage-claude-creds.sh + WARDYN_DEFAULT_POLICY), so the ceiling is the
+	// single source of truth for a legitimate system-mount source.
+	blessedSystemSrc := map[string]string{}
+	for _, wm := range s.cfg.DefaultPolicy.WorkspaceMounts {
+		if systemMountTargets[wm.Target] {
+			blessedSystemSrc[wm.Target] = wm.Source
+		}
+	}
+	isBlessedSystemMount := func(wm types.WorkspaceMount) bool {
+		src, ok := blessedSystemSrc[wm.Target]
+		return ok && src == wm.Source
+	}
+
+	// Fast path: nothing to gate if the run declares no user workspaces (a blessed
+	// system mount does not count).
 	hasUserMount := false
 	for _, wm := range spec.WorkspaceMounts {
-		if !systemMountTargets[wm.Target] {
+		if !isBlessedSystemMount(wm) {
 			hasUserMount = true
 			break
 		}
@@ -69,8 +88,8 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 	}
 
 	for _, wm := range spec.WorkspaceMounts {
-		if systemMountTargets[wm.Target] {
-			continue // system creds mount — exempt
+		if isBlessedSystemMount(wm) {
+			continue // operator-blessed system creds mount — exempt (H8: source-validated)
 		}
 		if !localSrc[wm.Source] {
 			return http.StatusUnprocessableEntity, fmt.Errorf(

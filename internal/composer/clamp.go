@@ -187,28 +187,31 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	if len(ceiling) > 0 {
 		_ = json.Unmarshal(ceiling, &c)
 	}
-	// Repos: intersect to the ceiling if the ceiling lists any.
-	if len(c.Repos) > 0 {
-		allowed := toSet(c.Repos)
-		kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
-		if len(dropped) > 0 {
-			*warns = append(*warns, fmt.Sprintf("github grant: dropped %d repo(s) outside operator scope", len(dropped)))
-		}
-		p.Repos = kept
+	// Repos: intersect to the ceiling. Deny-by-default (M6): an ABSENT or empty
+	// ceiling repo list grants NO repos, so an empty ceiling drops everything the
+	// proposal asked for. (Previously the intersection was guarded by
+	// `len(c.Repos) > 0`, so an empty ceiling meant "no limit" — the opposite of the
+	// egress arm's deny-by-default, letting LLM-proposed repos pass untouched.)
+	allowed := toSet(c.Repos)
+	kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
+	if len(dropped) > 0 {
+		*warns = append(*warns, fmt.Sprintf("github grant: dropped %d repo(s) outside operator scope", len(dropped)))
 	}
-	// Permissions: drop any not allowed by the ceiling; never exceed the ceiling level.
-	if c.Permissions != nil {
-		for perm, lvl := range p.Permissions {
-			cl, ok := c.Permissions[perm]
-			if !ok {
-				*warns = append(*warns, fmt.Sprintf("github grant: dropped permission %q (not in operator policy)", perm))
-				delete(p.Permissions, perm)
-				continue
-			}
-			if permRank(lvl) > permRank(cl) {
-				*warns = append(*warns, fmt.Sprintf("github grant: permission %q clamped %s→%s", perm, lvl, cl))
-				p.Permissions[perm] = cl
-			}
+	p.Repos = kept
+	// Permissions: keep only those the ceiling allows, never above the ceiling
+	// level. Deny-by-default (M6): an absent/empty ceiling permission map grants NO
+	// permissions, so every proposed permission (incl. write/admin) is dropped —
+	// previously guarded by `c.Permissions != nil`, which let them pass untouched.
+	for perm, lvl := range p.Permissions {
+		cl, ok := c.Permissions[perm]
+		if !ok {
+			*warns = append(*warns, fmt.Sprintf("github grant: dropped permission %q (not in operator policy)", perm))
+			delete(p.Permissions, perm)
+			continue
+		}
+		if permRank(lvl) > permRank(cl) {
+			*warns = append(*warns, fmt.Sprintf("github grant: permission %q clamped %s→%s", perm, lvl, cl))
+			p.Permissions[perm] = cl
 		}
 	}
 	b, err := json.Marshal(p)

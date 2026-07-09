@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -512,6 +513,12 @@ func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
 	// verify result / verified markers.
 	actorType, actor := actorFromRequest(r)
 	run, lerr := s.launchVerifyRun(r.Context(), actor, ws, ws.SetupCommands)
+	if errors.Is(lerr, errImportStepBusy) {
+		// Lost the serial-slot CAS to a run launched between our liveness check and
+		// the claim (M1) — surface as a clean 409, not a 500.
+		writeError(w, http.StatusConflict, "an import step is already running for this workspace")
+		return
+	}
 	if lerr != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"workspace.import.verify", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
@@ -727,6 +734,10 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 		actorType, actor := actorFromRequest(r)
 		run, lerr := s.launchScanRun(r.Context(), actor, ws)
+		if errors.Is(lerr, errImportStepBusy) {
+			writeError(w, http.StatusConflict, "an import step is already running for this workspace")
+			return
+		}
 		if lerr != nil {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))

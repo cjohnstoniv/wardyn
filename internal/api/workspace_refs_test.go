@@ -27,7 +27,16 @@ func TestValidateWorkspaceSources(t *testing.T) {
 		{Kind: types.WorkspaceKindLocalDir, Source: "/home/me/project"},
 		{Kind: types.WorkspaceKindRepo, Source: "octocat/Hello-World"},
 	}
-	srv := &Server{cfg: Config{Store: wsRefStore{ws: onboarded}}}
+	srv := &Server{cfg: Config{
+		Store: wsRefStore{ws: onboarded},
+		// The operator's TRUSTED ceiling blesses the subscription-cred system mounts
+		// with their real resident source; only a (source,target) that MATCHES the
+		// ceiling is exempt from onboarding (H8) — a system TARGET alone is not enough.
+		DefaultPolicy: types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
+			{Source: "/host/creds/.claude", Target: claudeCredTarget},
+			{Source: "/host/creds/.claude.json", Target: claudeCredJSONTarget},
+		}},
+	}}
 	ro := true
 	mount := func(src, tgt string) types.WorkspaceMount {
 		return types.WorkspaceMount{Source: src, Target: tgt, ReadOnly: &ro}
@@ -41,12 +50,16 @@ func TestValidateWorkspaceSources(t *testing.T) {
 		{"no user workspaces", types.RunPolicySpec{}, false},
 		{"onboarded local dir", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/home/me/project", "/home/agent/work")}}, false},
 		{"non-onboarded local dir rejected", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/home/me/other", "/home/agent/work")}}, true},
-		{"system .claude mount exempt", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/anything/creds/.claude", claudeCredTarget)}}, false},
-		{"system .claude.json mount exempt", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/anything/creds/.claude.json", claudeCredJSONTarget)}}, false},
+		{"system .claude mount exempt (blessed source)", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/host/creds/.claude", claudeCredTarget)}}, false},
+		{"system .claude.json mount exempt (blessed source)", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/host/creds/.claude.json", claudeCredJSONTarget)}}, false},
+		// H8: naming a system TARGET with an arbitrary UN-blessed host source (e.g.
+		// the host's ~/.ssh) must NOT be exempt — it falls through to the onboarding
+		// check and is rejected.
+		{"system target with un-blessed source rejected (H8)", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{mount("/home/attacker/.ssh", claudeCredTarget)}}, true},
 		{"onboarded repo", types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: "octocat/Hello-World"}}}, false},
 		{"non-onboarded repo rejected", types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: "evil/repo"}}}, true},
 		{"mixed onboarded (dir + system + repo)", types.RunPolicySpec{
-			WorkspaceMounts: []types.WorkspaceMount{mount("/home/me/project", "/home/agent/work"), mount("/x/creds/.claude", claudeCredTarget)},
+			WorkspaceMounts: []types.WorkspaceMount{mount("/home/me/project", "/home/agent/work"), mount("/host/creds/.claude", claudeCredTarget)},
 			WorkspaceRepos:  []types.WorkspaceRepo{{Repo: "octocat/Hello-World"}},
 		}, false},
 	}

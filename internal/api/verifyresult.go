@@ -95,6 +95,18 @@ func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// VERIFY fence (H6): only the workspace's CURRENT active run may write verify
+	// results. A late Done=true upload from a killed/reaped/superseded verify run
+	// must NOT finalize the workspace (flip verify_failed->ready, stamp
+	// VerifiedProfileHash/VerifiedAt) — nor may a superseded run's PROGRESS upload
+	// re-claim active_run_id. This mirrors the CAS fence the record lane above
+	// enforces via its recording-status match. launchVerifyRun claims active_run_id
+	// before dispatch (M1), so a legitimate in-flight run always matches.
+	if ws.ActiveRunID == nil || *ws.ActiveRunID != claims.RunID {
+		writeError(w, http.StatusConflict, "this run is not the workspace's active verify run (superseded, killed, or already finalized)")
+		return
+	}
+
 	// PROGRESS upload (Done=false): persist the partial result for the live UI but
 	// stay `verifying` and keep the in-flight run pointer — do NOT finalize.
 	if !result.Done {

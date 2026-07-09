@@ -5,9 +5,17 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// hostEqual compares two hostnames case-insensitively, ignoring a trailing dot
+// and surrounding whitespace (DNS names are case-insensitive; "host." == "host").
+func hostEqual(a, b string) bool {
+	norm := func(h string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), ".")) }
+	return norm(a) == norm(b)
+}
 
 // subscriptionOAuthSecret is the SENTINEL secret name (not a stored secret): an
 // api_key injection grant carrying it resolves to the operator's LIVE Anthropic
@@ -17,6 +25,12 @@ import (
 // sandbox holds only an inert sentinel, never a copy that goes stale. Defined
 // canonically in internal/types so recordmode + UI agree on the name.
 const subscriptionOAuthSecret = types.SubscriptionOAuthSecret
+
+// subscriptionInjectionHost is the ONLY host the subscription OAuth sentinel may
+// target. The sentinel resolves to the operator's LIVE Anthropic OAuth access
+// token, which has exactly one correct destination; injecting it anywhere else
+// would exfiltrate a long-lived operator credential (H2).
+const subscriptionInjectionHost = "api.anthropic.com"
 
 // injectionResponse carries the FORMATTED secret value the proxy injects.
 // ExpiresAt (unix ms, 0 = never) lets the proxy re-resolve a rotating credential
@@ -73,6 +87,20 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// lives only in proxy memory (masked from streams); the sandbox holds an inert
 	// sentinel. ExpiresAt is returned so the proxy re-resolves before it lapses.
 	if minted.Injection.SecretName == subscriptionOAuthSecret {
+		// HOST PIN (H2): fail closed unless the grant targets Anthropic. An
+		// authored/inline/recorded grant could set this sentinel's host to any
+		// egress-allowlisted host; because we force Authorization: Bearer <token>
+		// below with the operator's LIVE OAuth token, a non-Anthropic host would
+		// exfiltrate that token (in cleartext on a plain-HTTP allowlist entry). This
+		// is the single sink chokepoint that protects every caller; the policy
+		// validator rejects a mis-authored host earlier as defense-in-depth.
+		if !hostEqual(minted.Injection.Host, subscriptionInjectionHost) {
+			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+				"secret.read", subscriptionOAuthSecret, "failure",
+				mustJSON(map[string]any{"reason": "subscription-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID})))
+			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+subscriptionInjectionHost)
+			return
+		}
 		if s.cfg.SubscriptionToken == nil {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 				"secret.read", subscriptionOAuthSecret, "failure",
