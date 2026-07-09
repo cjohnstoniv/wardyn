@@ -3,16 +3,17 @@
 
 // Package identity defines the per-run workload identity contract.
 //
-// Two providers implement it:
-//   - embedded: SPIFFE-shaped JWT issuer (default; sub-ms mint, denylist+TTL
-//     revocation, runner-asserted attestation). A strict SPIFFE subset using
-//     go-spiffe types — never custom attestation or federation.
-//   - spire: real SPIRE (v0.5) — per-class warm parent entry + per-run child
-//     entries, cryptographic node attestation, entry-deletion revocation.
+// One provider implements it today, with a second planned:
+//   - embedded (shipped, default): SPIFFE-shaped JWT issuer (sub-ms mint,
+//     denylist+TTL revocation, runner-asserted attestation). A strict SPIFFE
+//     subset using go-spiffe types — never custom attestation or federation.
+//   - spire [v0.5 — planned, not yet implemented]: real SPIRE — per-class warm
+//     parent entry + per-run child entries, cryptographic node attestation,
+//     entry-deletion revocation. No internal/identity/spire package exists yet.
 //
 // INVARIANT (Confinement gating): cloud STS federation and hostile
-// multi-tenant workloads HARD-REQUIRE the spire provider. The embedded
-// provider must refuse to mint identities whose grants include
+// multi-tenant workloads HARD-REQUIRE the (not-yet-built) spire provider. The
+// embedded provider must refuse to mint identities whose grants include
 // types.GrantCloudSTS.
 package identity
 

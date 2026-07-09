@@ -13,9 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// policyCmd manages run policies in the control plane. Policies are admin-gated
-// config: the server validates every spec before persisting it (a bad spec is
-// rejected with HTTP 400). create/update read the policy body from a JSON file.
+// policyCmd manages run policies in the control plane. Policies are gated to
+// authenticated humans (SSO session or admin token) — dedicated admin-role
+// gating is planned, not yet enforced. The server validates every spec before
+// persisting it (a bad spec is rejected with HTTP 400). create/update read the
+// policy body from a JSON file.
 func policyCmd(client func() *apiClient) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "policy",

@@ -250,7 +250,8 @@ Defaults to prefer:
   (or another agent the operator offers). repo: the task's target repo if clear.
 - min_confinement_class: "CC2" (or "CC3" for risky/untrusted work); avoid "CC1".
 - egress: default-deny (list only the hosts the task needs in allowed_domains);
-  set first_use_approval=true; set allow_all_egress=false unless truly required.
+  set first_use_approval to "deny_with_review" or "wait_for_review" (never
+  "always_deny" as a default); set allow_all_egress=false unless truly required.
 - grants: request the minimum. For GitHub, prefer read; only request
   contents:write / pull_requests:write if the task must push or open a PR, and
   set requires_approval=true for any write-capable grant. Use api_key grants for

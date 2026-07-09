@@ -44,10 +44,13 @@ func main() {
 		log.Fatalf("wardyn-proxy: %v", err)
 	}
 
-	// Global kill-switch: WARDYN_LLM_SCAN=off forces outbound content inspection
-	// OFF regardless of policy. It can only DISABLE (fail-safe direction), never
-	// enable beyond what the policy authorizes — so an operator can hard-stop the
-	// feature fleet-wide without rewriting every run's policy.
+	// Per-proxy kill-switch: WARDYN_LLM_SCAN=off forces THIS proxy process's
+	// outbound content inspection OFF regardless of policy. It can only DISABLE
+	// (fail-safe direction), never enable beyond what the policy authorizes.
+	// NOTE: this is a per-proxy env read only — it is not wired into either
+	// deploy path (compose/Helm do not propagate it from a central config), so
+	// it is NOT a fleet-wide kill-switch today; an operator would need to set
+	// this env on every sidecar individually.
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))) {
 	case "off", "0", "false", "no", "disable", "disabled", "none":
 		if cfg.Policy.LLMInspection != nil {

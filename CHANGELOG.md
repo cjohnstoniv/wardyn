@@ -205,11 +205,17 @@ Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and L2 TLS-intercept remain v0.5
 - The lifecycle now sweeps stale `PENDING` approvals to `EXPIRED`.
 
 ### Security
-- **Audit log fails CLOSED, not open.** A failed primary (Postgres) audit write is
-  no longer silently swallowed: it is logged loudly and spooled to a durable local
-  append-only JSONL fallback (`WARDYN_AUDIT_SPOOL`), so a `credential.mint` /
-  `run.kill` / egress-deny event can never vanish while the run proceeds and reports
-  success.
+- **Audit log has a durable local fallback, and it now covers every writer.** A
+  failed primary (Postgres) audit write is no longer silently swallowed: it is
+  logged loudly and spooled to a durable local append-only JSONL fallback
+  (`WARDYN_AUDIT_SPOOL`). The spool now sits BELOW masking in a shared recorder
+  chain (`maskingRecorder` → `spoolingRecorder` → the store), so a
+  `credential.mint` / `run.kill` / egress-deny event is masked + durably
+  spooled for EVERY audit writer (API, broker, identity, approvals, sweeper) on
+  a Postgres outage — not just the API server as before. This is NOT a
+  transactional guarantee: the record call remains fire-and-forget at each call
+  site, so it narrows, but does not close, the window where an event could
+  still be lost (if both the primary write and the spool append fail).
 - **The kill-switch no longer lies.** If any teardown/revocation step fails, the
   run.kill audit records the TRUE outcome (`failure`, with a distinct
   `run.revoke/failure` event) and the API returns 500 so the operator/CLI retries —

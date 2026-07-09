@@ -38,8 +38,8 @@ export WARDYN_ADMIN_TOKEN=demo-admin-token
 ```
 
 The demo policy (`examples/policies/demo.json`) allowlists `github.com` and
-`*.githubusercontent.com` and enables `first_use_approval`.  That is the
-policy in force for all scenarios below unless noted otherwise.
+`*.githubusercontent.com` and sets `first_use_approval: "deny_with_review"`.
+That is the policy in force for all scenarios below unless noted otherwise.
 
 ## Scenario catalog
 

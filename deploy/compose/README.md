@@ -19,12 +19,15 @@ make setup    # doctor preflight, build, mint a secret key, bring up postgres+wa
 ```
 
 `make setup` (== `scripts/up.sh up`) is THE one command: it runs a read-only
-preflight (`make doctor`), builds the images, mints/persists a
+preflight (`make doctor`), builds the `wardynd` image, mints/persists a
 `WARDYN_AGE_KEY`, auto-picks a confinement policy, starts `postgres` +
-`wardynd` in **local mode** (no SSO/Dex, no bearer token — open
-<http://localhost:8080> directly), and opens it in your browser
-(`WARDYN_UP_NO_BROWSER=1` to skip). Run `make doctor` any time on its own —
-it's read-only. Tear down with `make compose-down`.
+`wardynd` in **local mode** (no SSO/Dex, no bearer token), and opens
+<http://localhost:8080> in your browser as soon as it's healthy
+(`WARDYN_UP_NO_BROWSER=1` to skip) — THEN builds the per-run images (sandbox
+proxy + agent images) in the background so first light is fast; a run can't
+launch until those finish (skip them with `WARDYN_UP_SKIP_RUN_IMAGES=1`). Run
+`make doctor` any time on its own — it's read-only. Tear down with
+`make compose-down`.
 
 - **WSL**: run `make setup` inside your WSL distro's shell; the UI opens in
   the Windows browser automatically.
@@ -74,8 +77,11 @@ and destroy *any* container on the host, not just Wardyn's. This is acceptable
 **only** for a local, single-tenant demo on a machine you trust.
 
 - **Never** expose this stack to untrusted networks or run it multi-tenant.
-- The production path is **Kubernetes** (`deploy/helm/wardyn`), where the runner
-  uses scoped RBAC and shares no host socket.
+- A future production path is **Kubernetes** (`deploy/helm/wardyn`), planned to
+  use scoped RBAC and share no host socket **[v0.5 — planned]** — there is no
+  Kubernetes runner driver yet, so the Helm chart cannot launch sandboxes
+  today. Right now this Docker/Compose data plane (with its docker.sock
+  daemon-trust tradeoff) is the only one that can actually run agents.
 
 See `ARCHITECTURE.md` → "Deployment surface".
 
