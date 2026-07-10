@@ -4,9 +4,11 @@
 package setup
 
 import (
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,54 +40,17 @@ func TestMaskProxyURL(t *testing.T) {
 			}
 			// The raw password must never appear in the masked output.
 			if tc.wantCred {
-				if u, _ := parseURLPassword(tc.in); u != "" && contains(masked, u) {
-					t.Errorf("masked output %q leaks raw password %q", masked, u)
+				parseTarget := tc.in
+				if !strings.Contains(tc.in, "://") {
+					parseTarget = "http://" + tc.in
+				}
+				u, _ := url.Parse(parseTarget)
+				if pw, ok := u.User.Password(); ok && pw != "" && strings.Contains(masked, pw) {
+					t.Errorf("masked output %q leaks raw password %q", masked, pw)
 				}
 			}
 		})
 	}
-}
-
-// parseURLPassword extracts a raw password from a test fixture URL for the
-// leak-check above (test-only helper; production code never does this).
-func parseURLPassword(raw string) (string, bool) {
-	if idx := indexByte(raw, ':'); idx >= 0 {
-		if at := indexByte(raw, '@'); at > idx {
-			// crude but sufficient for the fixed test fixtures above
-			for _, prefix := range []string{"http://", "https://"} {
-				if len(raw) > len(prefix) && raw[:len(prefix)] == prefix {
-					raw = raw[len(prefix):]
-					break
-				}
-			}
-			userinfo := raw[:indexByte(raw, '@')]
-			if i := indexByte(userinfo, ':'); i >= 0 {
-				return userinfo[i+1:], true
-			}
-		}
-	}
-	return "", false
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}
-
-func contains(haystack, needle string) bool {
-	if needle == "" {
-		return false
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // ─── env vars ────────────────────────────────────────────────────────────────
@@ -173,7 +138,7 @@ func TestDetectShellProxyCandidates_TempProfileAndCredentialMasking(t *testing.T
 	if want := "http://user:***@corp.proxy:8080"; setting.Value != want {
 		t.Errorf("masked setting value = %q, want %q", setting.Value, want)
 	}
-	if contains(setting.Value, "secretpass") {
+	if strings.Contains(setting.Value, "secretpass") {
 		t.Errorf("masked setting value %q leaks the raw password", setting.Value)
 	}
 	if no == nil || no.value != "localhost,127.0.0.1" {
