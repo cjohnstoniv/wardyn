@@ -6,22 +6,14 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { ComposeQuickReview, canLines, cantLines } from "./compose-quick-review";
-import { ComposeReview } from "./compose-review";
 import { CAPABILITY } from "../../wardyn/copy";
-import type { ComposeResponse, RunPolicySpec, ComposeRunProposal } from "../../../lib/types";
+import type { RunPolicySpec } from "../../../lib/types";
 
 // The CAN / CAN'T split is a PURE read-projection of the clamped inline_policy. It
 // must render honest lines — never "unrestricted" for allow_all_egress, never
-// dropping a raw egress host, grants amber (never a reassuring green check) — and
-// the HIGH-risk acknowledgment gate must stay reachable (not bypassable) inside the
-// full ComposeReview.
-
-const baseRun: ComposeRunProposal = {
-  agent: "claude-code",
-  repo: "",
-  task: "build a static site",
-  interactive: false,
-};
+// dropping a raw egress host, grants amber (never a reassuring green check). The
+// HIGH-risk acknowledgment gate (rendered inside the full ComposeReview) is
+// covered by compose-review.test.tsx.
 
 function renderQuick(policy: RunPolicySpec) {
   return render(<ComposeQuickReview inline_policy={policy} />);
@@ -133,54 +125,5 @@ describe("canLines / cantLines — grant honesty (D2)", () => {
     }).map((l) => l.text);
     expect(cant.some((t) => /sealed behind a Wall/i.test(t))).toBe(true);
     expect(cant.join(" ")).not.toMatch(/CC2/);
-  });
-});
-
-describe("ComposeQuickReview inside ComposeReview — high-risk gate", () => {
-  function highRiskResult(): ComposeResponse {
-    return {
-      kind: "proposal",
-      proposed: {
-        run: baseRun,
-        inline_policy: {
-          allowed_domains: [],
-          first_use_approval: "always_deny",
-          min_confinement_class: "CC1",
-          allow_all_egress: true,
-        },
-      },
-      risk_assessment: [
-        {
-          field: "min_confinement_class",
-          value: "CC1",
-          risk_level: "high",
-          rationale: "Permissive runc sandbox — weakest isolation.",
-        },
-      ],
-      overall_risk: "high",
-      summary: "A high-risk run.",
-    };
-  }
-
-  it("(d) a high-risk proposal still exposes the acknowledgment gate (not bypassable)", () => {
-    render(
-      <ComposeReview
-        result={highRiskResult()}
-        interactive={false}
-        acknowledged={false}
-        launching={false}
-        onInteractiveChange={() => {}}
-        onAcknowledge={() => {}}
-        onApproveLaunch={() => {}}
-        onEditInWizard={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-    // The gate is always rendered for a HIGH grade and launch stays disabled.
-    expect(screen.getByText(/high-risk configuration/i)).toBeInTheDocument();
-    expect(screen.getByRole("checkbox")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /approve & launch/i })).toBeDisabled();
-    // And the honest egress copy is present even at HIGH risk — never "unrestricted".
-    expect(document.body.textContent).not.toMatch(/unrestricted/i);
   });
 });
