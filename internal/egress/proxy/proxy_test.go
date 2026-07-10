@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -395,15 +394,7 @@ func TestConnectTunnelAllow(t *testing.T) {
 	}()
 
 	// Build a proxy whose dialer connects to the echo server regardless of IP.
-	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
-	p := newProxy(Options{
-		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
-		Sink:     sink,
-		Resolver: publicResolver{},
-		Dial:     redirectDial(ln.Addr().String()),
-	})
+	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}, ln.Addr().String(), nil, nil)
 
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
@@ -438,14 +429,8 @@ func TestConnectTunnelAllow(t *testing.T) {
 }
 
 func TestConnectTunnelDeny(t *testing.T) {
-	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
-	p := newProxy(Options{
-		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
-		Sink:     sink,
-		Resolver: publicResolver{},
-	})
+	// Deny is decided before any dial, so the upstream address is unused.
+	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}, "127.0.0.1:1", nil, nil)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
@@ -474,17 +459,9 @@ func TestConnectTunnelDeny(t *testing.T) {
 // dial-failed Deny and NO allow decision — the allow is emitted only after a
 // successful dial, so a failed dial can never over-report an allow.
 func TestConnectTunnelDialFailEmitsDenyNotAllow(t *testing.T) {
-	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
-	p := newProxy(Options{
-		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
-		Sink:     sink,
-		Resolver: publicResolver{},
-		Dial: func(context.Context, string, string) (net.Conn, error) {
-			return nil, errors.New("dial refused")
-		},
-	})
+	// "127.0.0.1:1" is the repo's dead-port convention: nothing listens there,
+	// so redirectDial's real dial fails and emits builtin:dial-failed itself.
+	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}, "127.0.0.1:1", nil, nil)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
