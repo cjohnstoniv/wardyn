@@ -1144,27 +1144,36 @@ function WorkspacesStep({
 // ------------------------------------------------------------
 function CredentialsStep({
   status,
-  appId,
-  onAppIdChange,
-  onSaveAppId,
-  savingAppId,
-  patHost,
-  onPatHostChange,
   onAddSecret,
-  onVerify,
-  verifying,
+  onRecheck,
+  rechecking,
 }: {
   status: SetupStatus;
-  appId: string;
-  onAppIdChange: (v: string) => void;
-  onSaveAppId: () => void;
-  savingAppId: boolean;
-  patHost: string;
-  onPatHostChange: (v: string) => void;
   onAddSecret: (name: string) => void;
-  onVerify: () => void;
-  verifying: boolean;
+  onRecheck: () => void;
+  rechecking: boolean;
 }) {
+  const [appId, setAppId] = React.useState("");
+  const [savingAppId, setSavingAppId] = React.useState(false);
+
+  const saveAppId = async () => {
+    const id = appId.trim();
+    if (!id) return;
+    setSavingAppId(true);
+    try {
+      await api.setSecret("github-app-id", id);
+      onRecheck();
+    } catch (e) {
+      // Without this catch a failed save is an unhandled rejection: the spinner
+      // stops with zero feedback and the operator believes the App ID saved.
+      toast.error("Failed to save App ID", {
+        description: getErrorMessage(e),
+      });
+    } finally {
+      setSavingAppId(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <p className="text-[13.5px] leading-relaxed text-muted-foreground">
@@ -1188,11 +1197,11 @@ function CredentialsStep({
             <Input
               id="setup-github-app-id"
               value={appId}
-              onChange={(e) => onAppIdChange(e.target.value)}
+              onChange={(e) => setAppId(e.target.value)}
               placeholder="123456"
               className="font-mono"
             />
-            <Button variant="outline" onClick={onSaveAppId} disabled={savingAppId || !appId.trim()}>
+            <Button variant="outline" onClick={saveAppId} disabled={savingAppId || !appId.trim()}>
               {savingAppId ? <Loader2 className="size-4 animate-spin" /> : "Save"}
             </Button>
           </div>
@@ -1201,8 +1210,8 @@ function CredentialsStep({
           <Button variant="outline" size="sm" onClick={() => onAddSecret("github-app-key")}>
             <KeyRound className="size-3.5" /> Add private key (PEM)
           </Button>
-          <Button variant="ghost" size="sm" onClick={onVerify} disabled={verifying}>
-            {verifying ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
+          <Button variant="ghost" size="sm" onClick={onRecheck} disabled={rechecking}>
+            {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
             Verify
           </Button>
         </div>
@@ -1215,17 +1224,8 @@ function CredentialsStep({
         </div>
         <p className="text-xs leading-snug text-muted-foreground">
           For a non-GitHub host (Azure DevOps, GitLab). The PAT is stored here as a named secret; it&apos;s
-          bound to a specific host per run in the New Run wizard&apos;s git-credential card — the host below
-          is informational only.
+          bound to a specific host per run in the New Run wizard&apos;s git-credential card.
         </p>
-        <Field label="Host (set per run in the wizard)" htmlFor="setup-pat-host">
-          <Input
-            id="setup-pat-host"
-            value={patHost}
-            onChange={(e) => onPatHostChange(e.target.value)}
-            placeholder="dev.azure.com"
-          />
-        </Field>
         <Button variant="outline" size="sm" onClick={() => onAddSecret("ado-pat")}>
           <KeyRound className="size-3.5" /> Add PAT
         </Button>
@@ -1314,9 +1314,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
   const [addSecretName, setAddSecretName] = React.useState("");
   const [newRunOpen, setNewRunOpen] = React.useState(false);
-  const [appId, setAppId] = React.useState("");
-  const [savingAppId, setSavingAppId] = React.useState(false);
-  const [patHost, setPatHost] = React.useState("");
   const [guide, setGuide] = React.useState<SetupGuide | null>(null);
   // Default-barrier pick (E3). Null until an explicit click — until then the
   // effective selection is the resolved default (persisted pick if this host runs
@@ -1371,24 +1368,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const openAddSecret = (name: string) => {
     setAddSecretName(name);
     setAddSecretOpen(true);
-  };
-
-  const saveAppId = async () => {
-    const id = appId.trim();
-    if (!id) return;
-    setSavingAppId(true);
-    try {
-      await api.setSecret("github-app-id", id);
-      await recheck();
-    } catch (e) {
-      // Without this catch a failed save is an unhandled rejection: the spinner
-      // stops with zero feedback and the operator believes the App ID saved.
-      toast.error("Failed to save App ID", {
-        description: getErrorMessage(e),
-      });
-    } finally {
-      setSavingAppId(false);
-    }
   };
 
   // M21: badges for the corporate-baseline steps read the actual SiteConfig
@@ -1531,15 +1510,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           {stepId === "credentials" && (
             <CredentialsStep
               status={status}
-              appId={appId}
-              onAppIdChange={setAppId}
-              onSaveAppId={saveAppId}
-              savingAppId={savingAppId}
-              patHost={patHost}
-              onPatHostChange={setPatHost}
               onAddSecret={openAddSecret}
-              onVerify={() => recheck(true)}
-              verifying={rechecking}
+              onRecheck={() => recheck(true)}
+              rechecking={rechecking}
             />
           )}
           {stepId === "review" && (
