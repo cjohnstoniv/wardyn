@@ -5,7 +5,6 @@
 
 import * as React from "react";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle } from "lucide-react";
-import { toast } from "sonner";
 import { api } from "../../lib/api";
 import { getErrorMessage } from "../../lib/format";
 import type { ComposerBackend } from "../../lib/types";
@@ -35,21 +34,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
 import { Mono } from "../wardyn/code-block";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY } from "../wardyn/copy";
 
 // Secret names are constrained server-side to a safe identifier set; mirror that
@@ -84,7 +74,6 @@ export function SecretsScreen() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<string | null>(null);
-  const [deleting, setDeleting] = React.useState(false);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -126,27 +115,6 @@ export function SecretsScreen() {
   }, []);
 
   const filtered = names.filter((n) => !query || n.toLowerCase().includes(query.toLowerCase()));
-
-  // MEDIUM fix: deletion used to fail silently — a rejected deleteSecret() (403,
-  // network drop, server error) left the operator believing the secret was gone
-  // while it still resolved for running agents. Surface the failure as a toast
-  // and keep the confirm dialog open so the operator can retry.
-  const confirmDelete = async () => {
-    if (!toDelete) return;
-    setDeleting(true);
-    try {
-      await api.deleteSecret(toDelete);
-      toast.success(`Secret “${toDelete}” deleted`);
-      setToDelete(null);
-      load();
-    } catch (e) {
-      toast.error(`Failed to delete secret “${toDelete}”`, {
-        description: getErrorMessage(e),
-      });
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
@@ -312,30 +280,17 @@ export function SecretsScreen() {
         initialName={rotateName ?? ""}
       />
 
-      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete secret “{toDelete}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Runs that reference this secret by name will no longer be able to resolve it. This
-              cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                confirmDelete();
-              }}
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
-            >
-              {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-              Delete secret
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteConfirmDialog
+        name={toDelete}
+        entity="secret"
+        description="Runs that reference this secret by name will no longer be able to resolve it. This cannot be undone."
+        onOpenChange={(o) => !o && setToDelete(null)}
+        onDelete={() => api.deleteSecret(toDelete!)}
+        onDeleted={() => {
+          setToDelete(null);
+          load();
+        }}
+      />
     </div>
   );
 }

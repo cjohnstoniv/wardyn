@@ -4,7 +4,6 @@
  */
 
 import * as React from "react";
-import { toast } from "sonner";
 import {
   UserCog,
   Plus,
@@ -51,16 +50,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
-import {
   Sheet,
   SheetContent,
   SheetHeader,
@@ -72,6 +61,7 @@ import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { RESIDUAL_PREFIX } from "../wardyn/copy";
+import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 // ComposeQuickReview is the composer wizard's CAN/CAN'T projection of a
 // RunPolicySpec — reused here instead of a second prose family, so a stored
 // policy reads in the exact same honest vocabulary as a proposed one.
@@ -121,7 +111,6 @@ export function PoliciesScreen() {
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
-  const [deleting, setDeleting] = React.useState(false);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -140,28 +129,6 @@ export function PoliciesScreen() {
     return !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q);
   });
 
-  // HONEST fix: this used to be a bare try/finally with no catch — a rejected
-  // deletePolicy() (403, network drop, server error) threw as an unhandled
-  // promise rejection and the operator was left believing the delete went
-  // through while the policy was still there. Surface the failure as a toast
-  // and keep the confirm dialog open so they can retry.
-  const confirmDelete = async () => {
-    if (!toDelete) return;
-    setDeleting(true);
-    try {
-      await api.deletePolicy(toDelete.id);
-      toast.success(`Policy “${toDelete.name}” deleted`);
-      setToDelete(null);
-      if (selected === toDelete.id) setSelected(null);
-      load();
-    } catch (e) {
-      toast.error(`Failed to delete policy “${toDelete.name}”`, {
-        description: getErrorMessage(e),
-      });
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
@@ -337,30 +304,18 @@ export function PoliciesScreen() {
         }}
       />
 
-      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete policy “{toDelete?.name}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This removes the policy from the control plane. Runs already created under it are
-              unaffected, but new runs can no longer reference it. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                confirmDelete();
-              }}
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
-            >
-              {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-              Delete policy
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteConfirmDialog
+        name={toDelete?.name ?? null}
+        entity="policy"
+        description="This removes the policy from the control plane. Runs already created under it are unaffected, but new runs can no longer reference it. This cannot be undone."
+        onOpenChange={(o) => !o && setToDelete(null)}
+        onDelete={() => api.deletePolicy(toDelete!.id)}
+        onDeleted={() => {
+          if (selected === toDelete?.id) setSelected(null);
+          setToDelete(null);
+          load();
+        }}
+      />
     </div>
   );
 }
