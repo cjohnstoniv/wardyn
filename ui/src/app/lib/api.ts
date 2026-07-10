@@ -287,7 +287,6 @@ const READY_FALLBACK: SetupStatus = {
   providers: [],
   secrets: { present: [], github_app: false },
   age_key: { durable: false },
-  restart_required: false,
   has_runs: false,
   platform: { os: "", wsl: false },
 };

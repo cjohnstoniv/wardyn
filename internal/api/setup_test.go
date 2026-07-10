@@ -151,44 +151,6 @@ func TestSetupStatus_Assembly(t *testing.T) {
 	}
 }
 
-// restart_required drift: an ENABLED boot-unresolved needs-key backend whose key
-// secret now appears in the live set => true (add-a-key-restart-to-apply). Absent
-// => false. A DISABLED backend NEVER sets it (a restart re-runs BuildRegistry,
-// which skips disabled backends, so "restart to apply" would be a lie).
-func TestSetupStatus_RestartRequiredDrift(t *testing.T) {
-	enabled := []ComposerBackendReadiness{
-		{Name: "be", Wire: "openai", Enabled: true, NeedsKey: true, KeySecret: "openai-key", KeyResolved: false},
-	}
-
-	// Enabled + key now present in the live secret set => restart_required true.
-	present := &memSecrets{m: map[string][]byte{"openai-key": []byte("sk")}}
-	srv := New(Config{Runner: &fakeRunner{}, Secrets: present, AdminToken: adminToken, ComposerBackends: enabled})
-	code, st := decodeSetup(t, srv, adminToken)
-	if code != http.StatusOK {
-		t.Fatalf("drift-present: code = %d", code)
-	}
-	if !st.RestartRequired || st.RestartReason == "" {
-		t.Errorf("expected restart_required with a reason; got %v %q", st.RestartRequired, st.RestartReason)
-	}
-
-	// Key still absent => no restart drift.
-	absent := &memSecrets{m: map[string][]byte{}}
-	srv2 := New(Config{Runner: &fakeRunner{}, Secrets: absent, AdminToken: adminToken, ComposerBackends: enabled})
-	if _, st2 := decodeSetup(t, srv2, adminToken); st2.RestartRequired {
-		t.Errorf("restart_required = true with the key absent, want false")
-	}
-
-	// DISABLED backend with the key present => still false (restart wouldn't apply
-	// it): the honesty guard. This is the case the review flagged.
-	disabled := []ComposerBackendReadiness{
-		{Name: "off", Wire: "openai", Enabled: false, NeedsKey: true, KeySecret: "openai-key", KeyResolved: false},
-	}
-	srv3 := New(Config{Runner: &fakeRunner{}, Secrets: present, AdminToken: adminToken, ComposerBackends: disabled})
-	if _, st3 := decodeSetup(t, srv3, adminToken); st3.RestartRequired {
-		t.Errorf("restart_required = true for a DISABLED backend, want false (restart wouldn't apply the key)")
-	}
-}
-
 // ready must be false (wizard opens) when the runner is nil.
 func TestSetupStatus_ReadyFalseWhenRunnerNil(t *testing.T) {
 	srv := New(Config{AdminToken: adminToken}) // Runner nil

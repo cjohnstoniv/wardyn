@@ -80,7 +80,6 @@ function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
     providers: [{ tool: "claude", installed: true, logged_in: false }],
     secrets: { present: [], github_app: false },
     age_key: { durable: false },
-    restart_required: false,
     has_runs: false,
     platform: { os: "linux", wsl: false, kvm: true },
     ...overrides,

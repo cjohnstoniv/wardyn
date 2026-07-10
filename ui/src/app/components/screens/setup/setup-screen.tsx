@@ -564,13 +564,6 @@ function ProviderStep({
         </p>
         <ComposerBackends status={status} onAddSecret={onAddSecret} />
       </section>
-
-      {status.restart_required && (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <AlertTriangle className="size-3.5 text-warning" />
-          restart wardynd to apply{status.restart_reason ? `: ${status.restart_reason}` : ""}.
-        </p>
-      )}
     </div>
   );
 }

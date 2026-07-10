@@ -20,7 +20,6 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
     providers: [],
     secrets: { present: [], github_app: false },
     age_key: { durable: true },
-    restart_required: false,
     has_runs: false,
     platform: { os: "linux", wsl: false },
     ...overrides,

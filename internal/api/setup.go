@@ -34,8 +34,8 @@ const (
 //
 // The handler (handleSetupStatus), its route registration inside the
 // humanOrAdminAuth group, provider/platform detection (internal/setup), and the
-// ready/restart_required computation are implemented in Workstream B. This file
-// (Task 0) only freezes the wire types so B and the UI build against one shape.
+// ready computation are implemented in Workstream B. This file (Task 0) only
+// freezes the wire types so B and the UI build against one shape.
 
 // SetupStatus is the aggregate readiness snapshot for GET /api/v1/setup/status.
 type SetupStatus struct {
@@ -58,12 +58,6 @@ type SetupStatus struct {
 	Secrets SetupSecrets `json:"secrets"`
 	// AgeKey reports whether the at-rest secret store survives a restart.
 	AgeKey SetupAgeKey `json:"age_key"`
-	// RestartRequired is true when a boot-only consumer (composer registry) has a
-	// newly-available secret that will not take effect until wardynd restarts.
-	// RestartReason names it. Run-time/mint-time secrets (api_key grants, git_pat,
-	// the lazy GitHub minter) never set this — they are live immediately.
-	RestartRequired bool   `json:"restart_required"`
-	RestartReason   string `json:"restart_reason,omitempty"`
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// Platform is the OS + WSL posture the environment-step copy keys off.
@@ -776,29 +770,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// restart_required: an ENABLED composer backend that needed a key it lacked at
-	// boot, whose key secret now exists in the live set => "add a key, restart to
-	// apply" (the composer registry is built once at boot). The lazy GitHub minter
-	// reads its secrets at mint time, so it never contributes here.
-	//
-	// The b.Enabled gate keeps the advice HONEST: a restart re-runs BuildRegistry,
-	// which skips DISABLED backends — so telling the operator to restart to pick up
-	// a key on a disabled backend would be a lie (the key would never take effect).
-	// ponytail: under today's fail-closed boot an ENABLED backend with an
-	// unresolvable key aborts boot (main.go BuildRegistry hard-fails) before the
-	// wizard is reachable, so in practice this signal is inert. It becomes live if
-	// boot ever degrades to skip-and-warn on an enabled unresolvable backend
-	// (deferred — that changes fail-closed boot semantics, an operator decision).
-	restartRequired := false
-	restartReason := ""
-	for _, b := range s.cfg.ComposerBackends {
-		if b.Enabled && b.NeedsKey && !b.KeyResolved && b.KeySecret != "" && present[b.KeySecret] {
-			restartRequired = true
-			restartReason = fmt.Sprintf("composer backend %q now has its API key secret %q, but the backend registry was built at boot — restart wardynd to apply", b.Name, b.KeySecret)
-			break
-		}
-	}
-
 	// has_runs: cheap existence check via the store.
 	// ponytail: reuses ListRuns (fine for a first-run wizard); a dedicated
 	// COUNT(*)/EXISTS is the upgrade if run volume ever makes this scan matter.
@@ -823,8 +794,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Providers:       providers,
 		Secrets:         sec,
 		AgeKey:          SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
-		RestartRequired: restartRequired,
-		RestartReason:   restartReason,
 		HasRuns:         hasRuns,
 		Platform:        SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
 		HostProxy:       hostProxy,

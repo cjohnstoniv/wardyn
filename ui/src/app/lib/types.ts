@@ -834,8 +834,6 @@ export interface SetupStatus {
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };
   age_key: { durable: boolean };
-  restart_required: boolean;
-  restart_reason?: string;
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
   // Optional: absent on an older/fallback status (e.g. READY_FALLBACK, or a
