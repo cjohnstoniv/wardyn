@@ -6,15 +6,12 @@ package api
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
-	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -35,39 +32,10 @@ func (e *errTeardownRunner) StopSandbox(context.Context, string) error { return 
 // live/routable container is abandoned forever (the run is now terminal, so the
 // next boot skips it) with no record. PG-gated.
 func TestReconcileFinalize_TeardownErrorAudited(t *testing.T) {
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed reconcile test")
-	}
-	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	audit := &recRecorder{}
-	idp, err := embedded.New(nil, "wardyn.local", embedded.NewMemRevocationStore(), audit)
-	if err != nil {
-		t.Fatalf("embedded.New: %v", err)
-	}
 	fr := &errTeardownRunner{fakeRunner: &fakeRunner{}, stopErr: errors.New("docker: no such container")}
-	srv := New(Config{
-		Store:           store.NewPG(pool),
-		Identity:        idp,
-		Approvals:       newFakeApprovals(),
-		Broker:          &fakeBroker{},
-		Audit:           audit,
-		Runner:          fr,
-		AdminToken:      adminToken,
-		TrustDomain:     "wardyn.local",
-		DefaultPolicy:   types.RunPolicySpec{MinConfinementClass: types.CC2},
-		ControlPlaneURL: "http://wardynd:8080",
-	})
+	srv, pool := pgHarnessWithRunner(t, fr)
+	audit := srv.cfg.Audit.(*recRecorder)
+	ctx := context.Background()
 
 	// A stranded RUNNING run with a sandbox ref (as a crash would leave it).
 	runID := uuid.New()

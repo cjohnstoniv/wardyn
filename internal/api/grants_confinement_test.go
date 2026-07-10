@@ -4,18 +4,13 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
-	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,47 +71,19 @@ func TestCreateRunRejectsWeakerConfinement(t *testing.T) {
 // ─── pool-backed end-to-end tests (WARDYN_TEST_PG) ──────────────────────────
 
 // pgHarness builds a Server wired to a real Postgres pool. Guarded by
-// WARDYN_TEST_PG; skipped cleanly when unset. Mirrors newHarness but with a
-// live store so the create-run / grants paths (which require a real store) run.
+// WARDYN_TEST_PG; skipped cleanly when unset (via pgHarnessWithRunner). Mirrors
+// newHarness but with a live store so the create-run / grants paths (which
+// require a real store) run.
 func pgHarness(t *testing.T) (*Server, *pgxpool.Pool) {
 	t.Helper()
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed api test")
-	}
-	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	audit := &recRecorder{}
-	idp, err := embedded.New(nil, "wardyn.local", embedded.NewMemRevocationStore(), audit)
-	if err != nil {
-		t.Fatalf("embedded.New: %v", err)
-	}
-	srv := New(Config{
-		Store:       store.NewPG(pool),
-		Identity:    idp,
-		Approvals:   newFakeApprovals(),
-		Broker:      &fakeBroker{},
-		Audit:       audit,
-		AdminToken:  adminToken,
-		TrustDomain: "wardyn.local",
-		DefaultPolicy: types.RunPolicySpec{
-			AllowedDomains:      []string{"api.anthropic.com"},
-			MinConfinementClass: types.CC2,
-			EligibleGrants: []types.GrantSpec{
-				{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/widgets"]}`), RequiresApproval: true},
-			},
+	srv, pool := pgHarnessWithRunner(t, nil)
+	srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		AllowedDomains:      []string{"api.anthropic.com"},
+		MinConfinementClass: types.CC2,
+		EligibleGrants: []types.GrantSpec{
+			{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/widgets"]}`), RequiresApproval: true},
 		},
-		ControlPlaneURL: "http://wardynd:8080",
-	})
+	}
 	return srv, pool
 }
 
