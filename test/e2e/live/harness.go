@@ -79,10 +79,12 @@ func newHarness(t *testing.T) *harness {
 	}
 	home, _ := os.UserHomeDir()
 	h := &harness{
-		t:         t,
-		base:      base,
-		token:     cliutil.EnvOr("WARDYN_ADMIN_TOKEN", "demo-admin-token"),
-		http:      &http.Client{Timeout: 60 * time.Second},
+		t:     t,
+		base:  base,
+		token: cliutil.EnvOr("WARDYN_ADMIN_TOKEN", "demo-admin-token"),
+		// 120s is a blanket backstop; every call site binds its own (shorter) ctx
+		// timeout — compose's 90s (a real model turn) is the longest of them.
+		http:      &http.Client{Timeout: 120 * time.Second},
 		tasksDir:  cliutil.EnvOr("WARDYN_E2E_TASKS_DIR", filepath.Join(repoRoot, "test", "e2e", "tasks")),
 		credsDir:  cliutil.EnvOr("WARDYN_E2E_CLAUDE_CREDS", filepath.Join(home, ".wardyn", "claude-creds")),
 		workRoot:  cliutil.EnvOr("WARDYN_E2E_WORK_ROOT", filepath.Join(home, ".wardyn", "e2e-work")),
@@ -238,27 +240,21 @@ func (h *harness) seedWorkspace(task Task, runLabel string, oracle bool) string 
 // (harmless; `make reset` clears them).
 func (h *harness) onboardLocalDir(dir string) {
 	h.t.Helper()
-	body, _ := json.Marshal(map[string]any{
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	status, raw, err := h.authedJSON(ctx, http.MethodPost, "/api/v1/workspaces", map[string]any{
 		"name":   "e2e-" + filepath.Base(dir),
 		"kind":   "local_dir",
 		"source": dir,
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.base+"/api/v1/workspaces", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
-	resp, err := h.http.Do(req)
 	if err != nil {
 		h.t.Fatalf("onboard local dir %s: %v", dir, err)
 	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
+	switch status {
 	case http.StatusOK, http.StatusCreated, http.StatusConflict:
 		return // created, or already onboarded (idempotent)
 	default:
-		raw, _ := readCapped(resp.Body)
-		h.t.Fatalf("onboard local dir %s: status %d: %s", dir, resp.StatusCode, raw)
+		h.t.Fatalf("onboard local dir %s: status %d: %s", dir, status, raw)
 	}
 }
 
@@ -390,29 +386,23 @@ type composeProposal struct {
 // compose calls POST /api/v1/runs/compose (not in the SDK) and returns the
 // proposal. useSubscription drives the per-run subscription opt-in.
 func (h *harness) compose(ctx context.Context, prompt, wsPath string, useSubscription bool) (composeProposal, error) {
-	body := map[string]any{
+	// Composer calls a real model; give it room.
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	status, raw, err := h.authedJSON(cctx, http.MethodPost, "/api/v1/runs/compose", map[string]any{
 		"prompt":           prompt,
 		"workspace":        map[string]any{"kind": "local", "path": wsPath, "read_write": true},
 		"mode":             "skip",
 		"use_subscription": useSubscription,
-	}
-	b, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.base+"/api/v1/runs/compose", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
-	// Composer calls a real model; give it room.
-	cl := &http.Client{Timeout: 90 * time.Second}
-	resp, err := cl.Do(req)
+	})
 	if err != nil {
 		return composeProposal{}, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		raw, _ := readCapped(resp.Body)
-		return composeProposal{}, fmt.Errorf("compose status %d: %s", resp.StatusCode, raw)
+	if status != 200 {
+		return composeProposal{}, fmt.Errorf("compose status %d: %s", status, raw)
 	}
 	var p composeProposal
-	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+	if err := json.Unmarshal(raw, &p); err != nil {
 		return composeProposal{}, err
 	}
 	return p, nil
@@ -636,10 +626,71 @@ func (h *harness) expectFailClosed(class string) {
 	}
 }
 
-// readCapped reads up to 4 KiB from an error-response body for diagnostics.
-func readCapped(r io.Reader) (string, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, 4096))
-	return string(raw), err
+// authedJSON does one authenticated JSON request against the harness base URL
+// and returns the status code and the full raw response body. It never fails
+// the test itself (a plain error return, not Fatal) — callers that need to tell
+// a backend flake from a real failure (e.g. launchComposer/isComposerBackendFlake)
+// depend on that. ctx carries the per-call timeout (compose needs longer than
+// the others: 90s for a real model turn vs. the usual 15-30s).
+func (h *harness) authedJSON(ctx context.Context, method, path string, body any) (status int, raw []byte, err error) {
+	var rd io.Reader = bytes.NewReader(nil)
+	if body != nil {
+		b, merr := json.Marshal(body)
+		if merr != nil {
+			return 0, nil, merr
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, h.base+path, rd)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	resp, err := h.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err = io.ReadAll(resp.Body)
+	return resp.StatusCode, raw, err
+}
+
+// recTry does one authenticated JSON request (30s timeout) and returns
+// (status, body) without failing the test — for steps that are best-effort
+// per topology.
+func (h *harness) recTry(t *testing.T, method, path string, body any) (int, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	status, raw, err := h.authedJSON(ctx, method, path, body)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return status, string(raw)
+}
+
+// recJSON does one authenticated JSON request and decodes into out (when
+// non-nil), failing the test unless the status is one of want. Thin wrapper
+// over recTry.
+func (h *harness) recJSON(t *testing.T, method, path string, body any, out any, want ...int) {
+	t.Helper()
+	status, raw := h.recTry(t, method, path, body)
+	okStatus := false
+	for _, w := range want {
+		if status == w {
+			okStatus = true
+			break
+		}
+	}
+	if !okStatus {
+		t.Fatalf("%s %s: status %d (want %v): %s", method, path, status, want, raw)
+	}
+	if out != nil {
+		if derr := json.Unmarshal([]byte(raw), out); derr != nil {
+			t.Fatalf("%s %s: decode: %v", method, path, derr)
+		}
+	}
 }
 
 // errorsIsDeadline reports whether err is a context deadline (a WS read timeout
