@@ -14,3 +14,12 @@ egress-approval round trip for ordinary `npm install`/`pip install`/`go get`/
 stays `"deny_with_review"` and the policy is still default-deny
 (`allow_all_egress` unset), so any domain outside this list still hits the
 approval flow, never a silent allow.
+
+## claude-llm.json / claude-llm-inspected.json
+
+Claude coding policies: Anthropic + GitHub + common registry egress, an
+`api_key` grant (no approval) plus an approval-gated `github_token` grant,
+`first_use_approval: "deny_with_review"`. The `-inspected` variant is the
+LLM-egress-inspection example: it adds `llm_inspection` (`mode: "alert"`,
+`detect_secrets: true`, `on_scanner_error: "pass"`) so prompt traffic to the
+model provider is scanned and alerts are logged without blocking.
