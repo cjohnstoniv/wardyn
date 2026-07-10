@@ -234,27 +234,15 @@ func TestLocalLLMNoRuleReturns404(t *testing.T) {
 }
 
 func TestLocalLLMInjectsAPIKeyAndStripsSandboxAuth(t *testing.T) {
-	var gotAuthz, gotXKey, gotHost, gotPath, gotBody string
 	// HTTPS upstream — the LLM route always dials https://api.anthropic.com.
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuthz = r.Header.Get("Authorization")
-		gotXKey = r.Header.Get("X-Api-Key")
-		gotHost = r.Host
-		gotPath = r.URL.Path
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, "llm-ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "llm-ok")
 
 	// Startup-minted Anthropic injection credential (same mechanism the
 	// forward-proxy path uses) — an x-api-key header for api.anthropic.com.
 	inj := staticInj(map[string]injectedHeader{
 		anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
 	})
-	// Trust the httptest TLS cert (it is not issued for api.anthropic.com).
-	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test-only seam
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream), inj, tlsCfg)
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv), inj, testInsecureTLSConfig)
 
 	rec := httptest.NewRecorder()
 	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(`{"hi":1}`))
@@ -268,20 +256,20 @@ func TestLocalLLMInjectsAPIKeyAndStripsSandboxAuth(t *testing.T) {
 	if rec.Body.String() != "llm-ok" {
 		t.Fatalf("body = %q", rec.Body.String())
 	}
-	if gotXKey != "BROKERED-KEY" {
-		t.Fatalf("upstream X-Api-Key = %q, want BROKERED-KEY (injected)", gotXKey)
+	if got := cu.header.Get("X-Api-Key"); got != "BROKERED-KEY" {
+		t.Fatalf("upstream X-Api-Key = %q, want BROKERED-KEY (injected)", got)
 	}
-	if gotAuthz != "" {
-		t.Fatalf("sandbox Authorization must be stripped, upstream saw %q", gotAuthz)
+	if got := cu.header.Get("Authorization"); got != "" {
+		t.Fatalf("sandbox Authorization must be stripped, upstream saw %q", got)
 	}
-	if gotHost != anthropicHost {
-		t.Fatalf("upstream Host = %q, want %q", gotHost, anthropicHost)
+	if cu.host != anthropicHost {
+		t.Fatalf("upstream Host = %q, want %q", cu.host, anthropicHost)
 	}
-	if gotPath != "/v1/messages" {
-		t.Fatalf("upstream path = %q, want /v1/messages", gotPath)
+	if cu.path != "/v1/messages" {
+		t.Fatalf("upstream path = %q, want /v1/messages", cu.path)
 	}
-	if gotBody != `{"hi":1}` {
-		t.Fatalf("upstream body = %q, want streamed verbatim", gotBody)
+	if cu.body != `{"hi":1}` {
+		t.Fatalf("upstream body = %q, want streamed verbatim", cu.body)
 	}
 	if d := lastDecision(t, buf); d.RuleSource != ruleSourceLLM || d.Decision != egress.Allow {
 		t.Fatalf("decision = %+v, want brokered:llm allow", d)

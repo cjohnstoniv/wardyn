@@ -77,7 +77,7 @@ func mitmProxy(t *testing.T, mode string, upstream *httptest.Server) (*Proxy, *b
 		MITMLLM:         true, // these tests exercise the intended LLM-MITM path (inspection/injection)
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(upstream)),
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // trust the httptest upstream
+		TLSClientConfig: testInsecureTLSConfig,
 	})
 	return p, buf, certPEM
 }
@@ -113,16 +113,9 @@ func agentMITMConn(t *testing.T, proxyURL string, caPEM []byte) *tls.Conn {
 }
 
 func TestMITMInspectsAndForwardsPreservingResidentCred(t *testing.T) {
-	var gotBody, gotAuth string
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		gotAuth = r.Header.Get("Authorization")
-		_, _ = io.WriteString(w, "llm-ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "llm-ok")
 
-	p, buf, caPEM := mitmProxy(t, "alert", upstream)
+	p, buf, caPEM := mitmProxy(t, "alert", cu.srv)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
@@ -144,13 +137,13 @@ func TestMITMInspectsAndForwardsPreservingResidentCred(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(rb) != "llm-ok" {
 		t.Fatalf("alert MITM must forward, got %d %q", resp.StatusCode, rb)
 	}
-	if gotBody != body {
+	if cu.body != body {
 		t.Fatalf("upstream body not forwarded intact")
 	}
 	// The agent's RESIDENT credential must be preserved (NOT stripped/injected) —
 	// MITM is inspect-only passthrough for the subscription path.
-	if gotAuth != "Bearer RESIDENT-OAUTH-TOKEN" {
-		t.Fatalf("MITM must preserve the resident credential, upstream saw %q", gotAuth)
+	if got := cu.header.Get("Authorization"); got != "Bearer RESIDENT-OAUTH-TOKEN" {
+		t.Fatalf("MITM must preserve the resident credential, upstream saw %q", got)
 	}
 	if !strings.Contains(buf.String(), ruleSourceLLMMITM) {
 		t.Fatalf("expected a scan:mitm decision, log=%s", buf.String())
@@ -164,16 +157,9 @@ func TestMITMInspectsAndForwardsPreservingResidentCred(t *testing.T) {
 // STRIPS the sandbox's sentinel credential and injects the live one — mirroring
 // the api-key local route. This is what makes the sandbox's inert sentinel work.
 func TestMITMInjectsLiveTokenAndStripsSentinel(t *testing.T) {
-	var gotAuth, gotBody string
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, "llm-ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "llm-ok")
 
-	p, _, caPEM := mitmProxy(t, "alert", upstream)
+	p, _, caPEM := mitmProxy(t, "alert", cu.srv)
 	// Subscription injection rule for the MITM host: swap the sandbox's inert
 	// sentinel credential for the live, host-refreshed token.
 	p.inject = staticInj(map[string]injectedHeader{
@@ -200,22 +186,18 @@ func TestMITMInjectsLiveTokenAndStripsSentinel(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(rb) != "llm-ok" {
 		t.Fatalf("MITM inject must forward, got %d %q", resp.StatusCode, rb)
 	}
-	if gotAuth != "Bearer BROKERED-LIVE-TOKEN" {
-		t.Fatalf("upstream Authorization = %q, want the injected live token (sentinel must be swapped)", gotAuth)
+	if got := cu.header.Get("Authorization"); got != "Bearer BROKERED-LIVE-TOKEN" {
+		t.Fatalf("upstream Authorization = %q, want the injected live token (sentinel must be swapped)", got)
 	}
-	if gotBody != body {
+	if cu.body != body {
 		t.Fatalf("upstream body not forwarded intact")
 	}
 }
 
 func TestMITMBlockRefusesOverTunnel(t *testing.T) {
-	reached := false
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "")
 
-	p, _, caPEM := mitmProxy(t, "block", upstream)
+	p, _, caPEM := mitmProxy(t, "block", cu.srv)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
@@ -239,7 +221,7 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 	if !strings.Contains(string(rb), "llm_content_blocked") {
 		t.Fatalf("block body = %q", rb)
 	}
-	if reached {
+	if cu.reached {
 		t.Fatal("blocked MITM request must not reach the upstream")
 	}
 }

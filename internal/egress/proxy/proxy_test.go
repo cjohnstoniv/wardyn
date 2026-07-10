@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -127,14 +128,11 @@ func TestPlainHTTPAllow(t *testing.T) {
 }
 
 func TestPlainHTTPDeny(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("upstream must not be reached on deny")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, false, "")
 
 	p, buf := newTestProxy(t, types.RunPolicySpec{
 		AllowedDomains: []string{"allowed.test"},
-	}, upstreamAddr(upstream), nil, nil)
+	}, upstreamAddr(cu.srv), nil, nil)
 
 	rec := httptest.NewRecorder()
 	req := mustProxyReq(t, http.MethodGet, "http://denied.test/")
@@ -143,21 +141,21 @@ func TestPlainHTTPDeny(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
+	if cu.reached {
+		t.Fatal("upstream must not be reached on deny")
+	}
 	if d := lastDecision(t, buf); d.Decision != egress.Deny {
 		t.Fatalf("decision = %q, want deny", d.Decision)
 	}
 }
 
 func TestPlainHTTPMethodDeny(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("upstream must not be reached when method denied")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, false, "")
 
 	p, _ := newTestProxy(t, types.RunPolicySpec{
 		AllowedDomains: []string{"allowed.test"},
 		AllowedMethods: []string{"GET"},
-	}, upstreamAddr(upstream), nil, nil)
+	}, upstreamAddr(cu.srv), nil, nil)
 
 	rec := httptest.NewRecorder()
 	req := mustProxyReq(t, http.MethodPost, "http://allowed.test/")
@@ -165,22 +163,20 @@ func TestPlainHTTPMethodDeny(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("POST should be denied: status = %d", rec.Code)
 	}
+	if cu.reached {
+		t.Fatal("upstream must not be reached when method denied")
+	}
 }
 
 func TestPlainHTTPInjection(t *testing.T) {
-	var gotAuth string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		_, _ = io.WriteString(w, "ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, false, "ok")
 
 	spec := types.RunPolicySpec{AllowedDomains: []string{"api.test", "*.wild.test"}}
 	inj := staticInj(map[string]injectedHeader{
 		"api.test": {name: "Authorization", value: "Bearer SEKRET"},
 	})
 
-	p, _ := newTestProxy(t, spec, upstreamAddr(upstream), nil, inj)
+	p, _ := newTestProxy(t, spec, upstreamAddr(cu.srv), nil, inj)
 
 	rec := httptest.NewRecorder()
 	req := mustProxyReq(t, http.MethodGet, "http://api.test/v1")
@@ -188,8 +184,8 @@ func TestPlainHTTPInjection(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if gotAuth != "Bearer SEKRET" {
-		t.Fatalf("injected header = %q, want Bearer SEKRET", gotAuth)
+	if got := cu.header.Get("Authorization"); got != "Bearer SEKRET" {
+		t.Fatalf("injected header = %q, want Bearer SEKRET", got)
 	}
 }
 
@@ -446,6 +442,47 @@ func TestConnectTunnelDialFailEmitsDenyNotAllow(t *testing.T) {
 }
 
 // --- helpers ---
+
+// testInsecureTLSConfig trusts any httptest TLS server's self-signed leaf.
+// Shared client-side TLSClientConfig for tests standing in an HTTPS upstream
+// or MITM CA store — never used against a real upstream.
+var testInsecureTLSConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test-only
+
+// capturedUpstream is a fake upstream server that records the one request it
+// receives (host/path/body/headers) and optionally flags that it was reached.
+type capturedUpstream struct {
+	srv     *httptest.Server
+	reached bool
+	header  http.Header
+	host    string
+	path    string
+	body    string
+}
+
+// captureUpstream starts a fake upstream (TLS if useTLS) that records the
+// request it receives and writes respBody back verbatim (if non-empty).
+func captureUpstream(t *testing.T, useTLS bool, respBody string) *capturedUpstream {
+	t.Helper()
+	cu := &capturedUpstream{}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cu.reached = true
+		cu.header = r.Header
+		cu.host = r.Host
+		cu.path = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		cu.body = string(b)
+		if respBody != "" {
+			_, _ = io.WriteString(w, respBody)
+		}
+	})
+	if useTLS {
+		cu.srv = httptest.NewTLSServer(h)
+	} else {
+		cu.srv = httptest.NewServer(h)
+	}
+	t.Cleanup(cu.srv.Close)
+	return cu
+}
 
 // startEcho starts a TCP echo server (stand-in for an opaque TLS upstream —
 // CONNECT tunnels carry opaque bytes) and returns its address.
