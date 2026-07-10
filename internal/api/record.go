@@ -90,9 +90,6 @@ type RecordTaskResult struct {
 	Status     string     `json:"status"` // recording | recorded | record_failed
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	// Steps is the auto-mode per-command outcome (re-derived, capped, masked —
-	// the same DeriveVerifyResult lane verify uses). Nil for interactive runs.
-	Steps []workspacescan.VerifyStepResult `json:"steps,omitempty"`
 	// Observations is the deterministic recordmode.Capture aggregate of what the
 	// run ACTUALLY used, computed server-side from its audit events at
 	// termination — never from a sandbox upload.

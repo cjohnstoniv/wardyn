@@ -309,7 +309,6 @@ export interface RecordResult {
   status: "recording" | "recorded" | "record_failed";
   started_at?: string;
   finished_at?: string;
-  steps?: VerifyStep[];
   observations?: ProfileObservations;
   secret_names_minted?: string[];
   egress_promoted?: boolean;

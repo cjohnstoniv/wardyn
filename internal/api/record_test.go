@@ -360,35 +360,6 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 	}
 }
 
-func TestUploadVerifyResult_LateRecordUploadCannotRevertCapture(t *testing.T) {
-	h := newHarness(t)
-	runID, wsID := uuid.New(), uuid.New()
-	tok := h.mintRunToken(t, runID)
-	// The workspace's CURRENT entry says `recording` (the handler's read), but
-	// the fake's saved blob — what the guarded write checks — says `recorded`:
-	// the capture landed between the handler's read and its write.
-	fake := &recordStore{
-		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
-		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
-	}
-	fake.saved = mustJSON(map[string]RecordTaskResult{
-		"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded},
-	})
-	srv := New(baseTestConfig(h, fake))
-
-	// The handler reads the workspace through GetWorkspace (which reflects
-	// saved = recorded) → 409 no in-flight recording. Either way, the entry
-	// must remain `recorded`.
-	body := `{"ran":true,"ok":false,"done":false,"steps":[{"stage":"build","command":"x","exit_code":0,"running":true}]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
-	if w.Code != http.StatusConflict && w.Code != http.StatusNoContent {
-		t.Fatalf("code = %d, want 409 (stale read) or 204 (guarded no-op)", w.Code)
-	}
-	if res := fake.savedResult(t, "build"); res.Status != recordStatusRecorded {
-		t.Fatalf("completed capture reverted to %q by a late upload", res.Status)
-	}
-}
-
 // staleReadStore serves a fixed stale workspace row from GetWorkspace while
 // delegating writes (and their guards) to the embedded recordStore. Used only
 // by TestPromoteRecordEgress_GuardMissConflicts below, to model the row the
@@ -517,29 +488,3 @@ func TestGetWorkspace_RepairsStaleRecordingOnRead(t *testing.T) {
 	}
 }
 
-func TestUploadVerifyResult_RecordRunLandsInRecordResultsOnly(t *testing.T) {
-	h := newHarness(t)
-	runID, wsID := uuid.New(), uuid.New()
-	tok := h.mintRunToken(t, runID)
-	fake := &recordStore{
-		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
-		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
-	}
-	srv := New(baseTestConfig(h, fake))
-
-	body := `{"ran":true,"ok":true,"done":false,"total":2,"steps":[{"stage":"install","command":"npm ci","exit_code":0,"running":true}]}`
-	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("code = %d, want 204; body=%s", w.Code, w.Body.String())
-	}
-	res := fake.savedResult(t, "build")
-	if len(res.Steps) != 1 || res.Steps[0].Command != "npm ci" {
-		t.Errorf("steps = %+v, want the streamed install step", res.Steps)
-	}
-	if res.Status != recordStatusRecording {
-		t.Errorf("status = %q, want still recording (only termination capture finalizes)", res.Status)
-	}
-	if fake.state != nil {
-		t.Error("record upload touched SetWorkspaceImportState — verify state must be unreachable from the record lane")
-	}
-}
