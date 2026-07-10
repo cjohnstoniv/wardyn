@@ -19,17 +19,15 @@ import (
 // masked control-plane-side before it becomes the workspace's authority.
 func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request) {
 	// Cross-run guard + TRUSTED run→workspace linkage, bound to run KIND: only a
-	// verify or record run may post a verify-shaped result (a scan run that got
-	// compromised can't smuggle one, and vice versa). A record run's upload
-	// lands in ITS OWN record_results lane — it can never touch verify_result,
-	// status, or the verified markers.
+	// verify run may post a verify-shaped result (a scan or record run that got
+	// compromised can't smuggle one, and vice versa) — it can never touch
+	// verify_result, status, or the verified markers of another run kind.
 	claims, run, ok := s.authSandboxRunUpload(w, r,
 		"run not found for verify upload", "run is not a governed workspace run", "run is not a verify run",
-		"workspace verify", "workspace record")
+		"workspace verify")
 	if !ok {
 		return
 	}
-	isRecord := run.Task == "workspace record"
 	wsID := *run.WorkspaceID
 
 	raw, ok := readCappedBody(w, r, maxScanResultUploadBytes, "verify result")
@@ -54,37 +52,6 @@ func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request
 	// Re-derive: cap/validate steps, mask secret-shaped tokens out of logs,
 	// recompute OK from exit codes (never trust the uploader's flag).
 	result := workspacescan.DeriveVerifyResult(uploaded)
-
-	// RECORD run: stream the per-step outcome into the task's record_results
-	// entry (live UI) and stop — the task stays `recording` until the run
-	// terminates and reconcileRecordRun captures the audit evidence. The
-	// workspace's verify state is untouchable from this lane by construction.
-	if isRecord {
-		taskKey := ""
-		var res RecordTaskResult
-		for k, v := range recordResultsMap(ws) {
-			if v.RunID == claims.RunID {
-				taskKey, res = k, v
-				break
-			}
-		}
-		if taskKey == "" || res.Status != recordStatusRecording {
-			writeError(w, http.StatusConflict, "no in-flight recording for this run")
-			return
-		}
-		res.Steps = result.Steps
-		if result.FailureHint != "" {
-			res.FailureHint = result.FailureHint
-		}
-		// Compare-and-set on `recording`: a late upload that races the terminal
-		// capture can never revert a completed entry — it just no-ops.
-		if _, _, perr := s.putRecordResult(r.Context(), wsID, taskKey, res, recordStatusRecording); perr != nil {
-			writeError(w, http.StatusInternalServerError, "persist record steps: "+perr.Error())
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 
 	// VERIFY fence (H6): only the workspace's CURRENT active run may write verify
 	// results. A late Done=true upload from a killed/reaped/superseded verify run

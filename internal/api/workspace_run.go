@@ -381,12 +381,12 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 //     weakCC reports when that best is still CC1 so callers warn loudly —
 //     refusing would make record unusable on Docker Desktop boxes.
 //
-// Auto mode execs wardyn-verify with the task's approved commands (unchanged
-// binary; the upload lands in record_results via the run.Task branch).
-// Interactive mode comes up idle for the attach terminal (bounded — an
-// abandoned OPEN-egress sandbox must not live forever); the operator's "Done
+// Sessions are always interactive: dispatch passes a nil verify plan, so no
+// record run ever execs wardyn-verify or uploads a verify result. The
+// sandbox comes up idle for the attach terminal (bounded — an abandoned
+// OPEN-egress sandbox must not live forever); the operator's "Done
 // recording" is the normal run kill, and capture happens at termination from
-// the audit events either way.
+// the audit events.
 //
 // LAUNCH ORDER (concurrency-load-bearing): (1) CAS-claim active_run_id — the
 // atomic serial gate; a concurrent step launch that also saw the slot free
