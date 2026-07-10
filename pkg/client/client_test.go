@@ -87,16 +87,6 @@ func TestCreateRun_Success(t *testing.T) {
 	}
 }
 
-func TestCreateRun_APIError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent and repo are required"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).CreateRun(context.Background(), client.CreateRunRequest{})
-	assertAPIError(t, err, http.StatusBadRequest)
-}
-
 // --------------------------------------------------------------------------
 // GetRun
 // --------------------------------------------------------------------------
@@ -121,17 +111,6 @@ func TestGetRun_Success(t *testing.T) {
 	if got.ID != id {
 		t.Errorf("got ID %v, want %v", got.ID, id)
 	}
-}
-
-func TestGetRun_NotFound(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).GetRun(context.Background(), id)
-	assertAPIError(t, err, http.StatusNotFound)
 }
 
 // --------------------------------------------------------------------------
@@ -199,17 +178,6 @@ func TestKillRun_Success(t *testing.T) {
 	if resp.State != types.RunKilled {
 		t.Errorf("got state %q, want KILLED", resp.State)
 	}
-}
-
-func TestKillRun_NotFound(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).KillRun(context.Background(), id)
-	assertAPIError(t, err, http.StatusNotFound)
 }
 
 // --------------------------------------------------------------------------
@@ -285,17 +253,6 @@ func TestApprove_Success(t *testing.T) {
 	}
 }
 
-func TestApprove_AlreadyDecided(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval already decided"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).Approve(context.Background(), id, "")
-	assertAPIError(t, err, http.StatusConflict)
-}
-
 // --------------------------------------------------------------------------
 // Deny
 // --------------------------------------------------------------------------
@@ -320,17 +277,6 @@ func TestDeny_Success(t *testing.T) {
 	if got.State != types.ApprovalDenied {
 		t.Errorf("got state %q, want DENIED", got.State)
 	}
-}
-
-func TestDeny_NotFound(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).Deny(context.Background(), id, "")
-	assertAPIError(t, err, http.StatusNotFound)
 }
 
 // --------------------------------------------------------------------------
@@ -366,18 +312,6 @@ func TestAuditEvents_Success(t *testing.T) {
 	if got[0].Action != "run.create" {
 		t.Errorf("got action %q, want run.create", got[0].Action)
 	}
-}
-
-func TestAuditEvents_BadRequest(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run_id query parameter is required"})
-	}))
-	defer srv.Close()
-
-	// A zero UUID is still a valid UUID syntactically; the server enforces
-	// the non-empty requirement at its layer. Exercise the error path here.
-	_, err := newTestClient(srv).AuditEvents(context.Background(), uuid.Nil)
-	assertAPIError(t, err, http.StatusBadRequest)
 }
 
 // --------------------------------------------------------------------------
@@ -491,16 +425,6 @@ func TestListSecrets_Success(t *testing.T) {
 	}
 }
 
-func TestListSecrets_APIError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "boom"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).ListSecrets(context.Background())
-	assertAPIError(t, err, http.StatusInternalServerError)
-}
-
 func TestSetSecret_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/secrets/anthropic-api-key" {
@@ -539,16 +463,6 @@ func TestSetSecret_NameEscaped(t *testing.T) {
 	}
 }
 
-func TestSetSecret_Reserved403(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "reserved"})
-	}))
-	defer srv.Close()
-
-	err := newTestClient(srv).SetSecret(context.Background(), "wardyn-signing-key", "x")
-	assertAPIError(t, err, http.StatusForbidden)
-}
-
 func TestDeleteSecret_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/secrets/old-key" {
@@ -562,16 +476,6 @@ func TestDeleteSecret_Success(t *testing.T) {
 	if err := newTestClient(srv).DeleteSecret(context.Background(), "old-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-func TestDeleteSecret_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "delete secret: not found"})
-	}))
-	defer srv.Close()
-
-	err := newTestClient(srv).DeleteSecret(context.Background(), "missing")
-	assertAPIError(t, err, http.StatusInternalServerError)
 }
 
 // --------------------------------------------------------------------------
@@ -700,6 +604,85 @@ func TestSuccessBody_LargerThan2KiB_DecodesFully(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Error paths (table-driven): each entry serves one error status from a
+// shared server and asserts the call surfaces it as a *client.APIError.
+// --------------------------------------------------------------------------
+
+func TestAPIErrorPaths(t *testing.T) {
+	id := uuid.New()
+	tests := []struct {
+		name   string
+		status int
+		call   func(*client.Client) error
+	}{
+		{"CreateRun_APIError", http.StatusBadRequest, func(c *client.Client) error {
+			_, err := c.CreateRun(context.Background(), client.CreateRunRequest{})
+			return err
+		}},
+		{"GetRun_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			_, err := c.GetRun(context.Background(), id)
+			return err
+		}},
+		{"KillRun_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			_, err := c.KillRun(context.Background(), id)
+			return err
+		}},
+		{"Approve_AlreadyDecided", http.StatusConflict, func(c *client.Client) error {
+			_, err := c.Approve(context.Background(), id, "")
+			return err
+		}},
+		{"Deny_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			_, err := c.Deny(context.Background(), id, "")
+			return err
+		}},
+		{"AuditEvents_BadRequest", http.StatusBadRequest, func(c *client.Client) error {
+			_, err := c.AuditEvents(context.Background(), uuid.Nil)
+			return err
+		}},
+		{"ListSecrets_APIError", http.StatusInternalServerError, func(c *client.Client) error {
+			_, err := c.ListSecrets(context.Background())
+			return err
+		}},
+		{"SetSecret_Reserved403", http.StatusForbidden, func(c *client.Client) error {
+			return c.SetSecret(context.Background(), "wardyn-signing-key", "x")
+		}},
+		{"DeleteSecret_NotFound", http.StatusInternalServerError, func(c *client.Client) error {
+			return c.DeleteSecret(context.Background(), "missing")
+		}},
+		{"ListGrants_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			_, err := c.ListGrants(context.Background(), id)
+			return err
+		}},
+		{"GetPolicy_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			_, err := c.GetPolicy(context.Background(), id)
+			return err
+		}},
+		{"CreatePolicy_BadRequest", http.StatusBadRequest, func(c *client.Client) error {
+			_, err := c.CreatePolicy(context.Background(), client.PolicyRequest{})
+			return err
+		}},
+		{"UpdatePolicy_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			_, err := c.UpdatePolicy(context.Background(), id, client.PolicyRequest{Name: "x"})
+			return err
+		}},
+		{"DeletePolicy_NotFound", http.StatusNotFound, func(c *client.Client) error {
+			return c.DeletePolicy(context.Background(), id)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, tt.status, map[string]string{"error": "test error"})
+			}))
+			defer srv.Close()
+
+			assertAPIError(t, tt.call(newTestClient(srv)), tt.status)
+		})
+	}
+}
+
+// --------------------------------------------------------------------------
 // Shared helpers
 // --------------------------------------------------------------------------
 
@@ -713,8 +696,9 @@ func checkAuth(t *testing.T, r *http.Request) {
 	}
 }
 
-// assertAPIError asserts err is a *APIError with the given HTTP status code.
-func assertAPIError(t *testing.T, err error, wantStatus int) {
+// assertAPIError asserts err is a *APIError with the given HTTP status code
+// and returns it for further assertions on Body/Error().
+func assertAPIError(t *testing.T, err error, wantStatus int) *client.APIError {
 	t.Helper()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -726,4 +710,5 @@ func assertAPIError(t *testing.T, err error, wantStatus int) {
 	if apiErr.Status != wantStatus {
 		t.Errorf("got Status %d, want %d", apiErr.Status, wantStatus)
 	}
+	return apiErr
 }
