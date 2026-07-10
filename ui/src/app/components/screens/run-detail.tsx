@@ -423,7 +423,7 @@ function OverviewTab({
                 <div className="text-sm font-semibold text-foreground">
                   Waiting for your confirmation
                 </div>
-                <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                   This run has {pending.length} pending approval{pending.length === 1 ? "" : "s"}. Review the
                   exact requested scope before you decide — nothing is minted until you approve.
                 </p>

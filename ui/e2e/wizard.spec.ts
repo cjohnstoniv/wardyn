@@ -177,10 +177,17 @@ test.describe("New Run wizard", () => {
     await expect(dlg.getByText("Doesn't stop:").first()).toBeVisible();
     await expect(dlg.getByText(/every run still gets Wardyn's egress filtering/i)).toBeVisible();
 
-    // Honesty: the CC1/CC2/CC3 wire codes and the raw substrate mechanism
-    // (gVisor/…) live ONLY in the operator tooltips — never as visible copy.
+    // Honesty: the CC1/CC2/CC3 wire codes never render as visible copy.
     await expect(dlg.getByText(/\bCC[123]\b/)).toHaveCount(0);
-    await expect(dlg.getByText(/gVisor/)).toHaveCount(0);
+    // The raw substrate mechanism (gVisor) appears ONLY inside the honest
+    // unavailability reason once the capability probe settles ("No Wall
+    // (gVisor) runtime on this runner…") — never in the tier labels or
+    // taglines. We assert on the settled DOM (probe resolved): the old
+    // toHaveCount(0) raced the probe and only passed when it happened to run
+    // before that legitimate unavailability reason rendered.
+    await expect(dlg.getByText("Unavailable here").first()).toBeVisible(); // probe settled
+    await expect(dlg.getByText(/gVisor/)).toHaveCount(1);
+    await expect(dlg.getByText(/No Wall \(gVisor\) runtime on this runner/)).toBeVisible();
   });
 
   test("unsupported barrier tiers are disabled by runner capability", async ({ page }) => {

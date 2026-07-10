@@ -10,7 +10,7 @@
 // ("Needs setup" for a fixable Wall, "Unavailable here" + the Kata reason for
 // Vault on a managed-VM Docker like Docker Desktop/WSL2).
 //
-// Selectors from setup-screen.tsx / setup-sections.tsx / status-chip.tsx.
+// Selectors from setup-screen.tsx / llm-access.tsx / status-chip.tsx.
 import { test, expect, liveOnly, gotoConsole, AUTH_HEADERS } from "./live-fixtures";
 
 liveOnly();
@@ -68,12 +68,11 @@ test.describe("Getting started (live)", () => {
     }
   });
 
-  // E1/E2/E3 additions — all Fence-only-safe: E2 asserts against whatever
+  // E2/E3 additions — both Fence-only-safe: E2 asserts against whatever
   // /setup/status actually reports (never a hardcoded tier), E3 proves persistence
-  // in this browser, and E1's matrix is host-independent.
-  test("substrate provenance, a saved default barrier, and the compare matrix (live)", async ({
-    page,
-  }) => {
+  // in this browser. (E1's compare-matrix dialog was removed from Getting Started —
+  // TierMatrixDialog still lives in the New Run wizard, covered by wizard.spec.ts.)
+  test("substrate provenance and a saved default barrier (live)", async ({ page }) => {
     await gotoConsole(page);
 
     const resp = await page.request.get("/api/v1/setup/status", { headers: AUTH_HEADERS });
@@ -96,28 +95,22 @@ test.describe("Getting started (live)", () => {
       await expect(main.getByText(/Running here as/).first()).toBeVisible();
     }
 
-    // E3 — persistence: clicking the ready Fence card saves it as the default
+    // E3 — persistence: selecting the ready Fence radio saves it as the default
     // barrier for new runs, proven by reading it back out of this browser's
-    // localStorage. Fence is always ready, so this is host-independent.
-    const fence = main.getByRole("button", { name: /Trying Wardyn out/ });
+    // localStorage. Fence is always ready, so this is host-independent. The
+    // protection-matrix picker is a radiogroup now (role=radio, aria-checked) —
+    // not a button with aria-pressed.
+    const fence = main.getByRole("radio", { name: /Fence/ });
     await fence.click();
-    await expect(fence).toHaveAttribute("aria-pressed", "true");
+    await expect(fence).toHaveAttribute("aria-checked", "true");
     const saved = await page.evaluate(() => localStorage.getItem("wardyn-default-confinement"));
     expect(saved).toBe("CC1");
-
-    // E1 — the compare matrix renders the same honest three-tier table on any host,
-    // with no wire code or raw substrate mechanism as visible copy (scoped to the
-    // dialog so the host's own setup checks behind it never interfere).
-    await main.getByRole("button", { name: /Compare all three/ }).click();
-    const matrix = page.getByRole("dialog", { name: /Compare the three barriers/ });
-    await expect(matrix.getByText(/Isolated from your files/).first()).toBeVisible();
-    await expect(matrix.getByText(/\bCC[123]\b/)).toHaveCount(0);
-    await expect(matrix.getByText(/gVisor/)).toHaveCount(0);
   });
 
   // P4 — the renamed Model/Harness Provider step (detection-driven family
-  // grouping) and the three enterprise steps (Host Proxy, SCM Provider, Artifact
-  // Redirect) render in order. Walked live so the new funnel structure is proven
+  // grouping) and the three enterprise steps (Host Proxy, Artifact Redirect, SCM
+  // Provider — the redesigned STEP_ORDER walks Artifact Redirect before SCM
+  // Provider) render in order. Walked live so the new funnel structure is proven
   // end to end against the real /setup/status + /site-config, not just in jsdom.
   test("the funnel exposes the provider families and the enterprise steps (live)", async ({
     page,
@@ -129,8 +122,12 @@ test.describe("Getting started (live)", () => {
     await expect(main.getByText("Pick your barrier")).toBeVisible();
 
     // The provider step was renamed "Provider" -> "Model/Harness Provider" (the
-    // stepper label is visible from the first step).
-    await expect(main.getByText("Model/Harness Provider")).toBeVisible();
+    // rail label is visible from the first step). Scoped to the rail's own nav
+    // landmark ("Setup steps") — the compact lg-only icon rail carries the same
+    // label text in a sr-only span, which would otherwise double-match a
+    // main-scoped getByText.
+    const rail = main.getByRole("navigation", { name: "Setup steps" });
+    await expect(rail.getByText("Model/Harness Provider")).toBeVisible();
 
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
 
@@ -142,14 +139,17 @@ test.describe("Getting started (live)", () => {
     await expect(main.getByText("Claude / Anthropic")).toBeVisible();
     await expect(main.getByText("OpenAI / Codex")).toBeVisible();
 
-    // -> Host Proxy -> SCM Provider -> Artifact Redirect: each new step's heading.
+    // -> Host Proxy -> Artifact Redirect -> SCM Provider: the redesigned
+    // STEP_ORDER walks the corporate phase (Host Proxy, Artifact Redirect)
+    // before the work phase's SCM Provider step — each new step's heading in
+    // that order.
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /corporate host proxy/i })).toBeVisible();
-    await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /source control provider/i })).toBeVisible();
     await nextBtn.click();
     await expect(
       main.getByRole("heading", { name: /artifact registry redirection/i }),
     ).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /source control provider/i })).toBeVisible();
   });
 });

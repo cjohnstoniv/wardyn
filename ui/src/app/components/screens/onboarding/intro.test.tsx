@@ -4,8 +4,9 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { render, screen } from "@testing-library/react";
 import type { SetupStatus } from "../../../lib/types";
-import { hasLlmPath, deriveReadiness } from "./intro";
+import { hasLlmPath, deriveReadiness, HowItWorksStrip } from "./intro";
 
 // A minimal-but-valid SetupStatus. The default `make setup` config is a single
 // `fake` (deterministic stub) composer backend + no CLI login + no key secret —
@@ -67,5 +68,14 @@ describe("deriveReadiness — must not overclaim a fake backend as a connected m
     const r = deriveReadiness(status({ composer: { enabled: true, default: "primary", backends: [realBackend] } }));
     expect(r.llmReady).toBe(true);
     expect(r.llmLabel).toBe("Composer backend ready");
+  });
+});
+
+describe("HowItWorksStrip — node 5 qualifier is design-law verbatim", () => {
+  it("renders the exact append-only audit qualifier string", () => {
+    render(<HowItWorksStrip />);
+    expect(
+      screen.getByText("Append-only audit; session replay where the runner supports it"),
+    ).toBeInTheDocument();
   });
 });

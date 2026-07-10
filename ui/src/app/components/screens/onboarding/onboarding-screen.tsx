@@ -5,12 +5,12 @@
 
 // OnboardingScreen — the first-boot WELCOME (redesign). The old 7-page tour is
 // collapsed into ONE glanceable intro (B1): a hero, the single 5-node
-// how-it-works strip (shared with the funnel's IntroPanel), live readiness chips
+// how-it-works strip (shared with the funnel shell's intro panel), live readiness chips
 // off the real SetupStatus, and two exits — Get set up / Skip. Rendered inside
 // the AppShell as the "Getting started" nav content; "Get set up" advances to the
 // setup funnel, "Skip" drops the operator into the console.
 import * as React from "react";
-import { ArrowRight, BrickWall, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, BrickWall, KeyRound, Shield } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -81,12 +81,15 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
   // confinement-class list.
   const strongest = status ? strongestAvailable(status.runner.confinement_classes) : undefined;
   const strongestLabel = strongest ? CC_META[strongest].label : CC_META.CC1.label;
+  // Barrier + Model only — no Composer chip (zero composer UI surfaces on the
+  // hero; deriveReadiness().composerReady is left untouched, just unused here).
   return (
-    <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-      <span className="text-xs text-muted-foreground">This host right now:</span>
-      {chip(BrickWall, !!readiness?.barrierReady, `Barrier: ${strongestLabel} ready`)}
-      {chip(KeyRound, !!readiness?.llmReady, readiness?.llmLabel ? `Model: ${readiness.llmLabel}` : "Model: ready")}
-      {chip(Sparkles, !!readiness?.composerReady, "Composer: ready")}
+    <div className="mt-8 w-full rounded-xl border border-border bg-muted/40 p-4 text-left">
+      <div className="mb-3 text-sm text-muted-foreground">This host right now:</div>
+      <div className="flex flex-wrap gap-2">
+        {chip(BrickWall, !!readiness?.barrierReady, `Barrier: ${strongestLabel} ready`)}
+        {chip(KeyRound, !!readiness?.llmReady, readiness?.llmLabel ? `Model: ${readiness.llmLabel}` : "Model: ready")}
+      </div>
     </div>
   );
 }
@@ -120,13 +123,13 @@ export function OnboardingScreen({
 
   return (
     <div className="mx-auto flex min-h-full max-w-[780px] flex-col items-center px-6 py-14 text-center">
-      <span className="flex size-16 items-center justify-center rounded-full border border-border bg-card text-primary">
-        <ShieldCheck className="size-8" />
+      <span className="inline-flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
+        <Shield className="size-6" aria-hidden />
       </span>
       <h1 className="mt-5 text-[2rem] font-semibold leading-tight tracking-tight text-foreground">
         Let agents work. Keep your keys.
       </h1>
-      <p className="mx-auto mt-3 max-w-[600px] text-[15px] leading-relaxed text-muted-foreground">
+      <p className="mx-auto mt-3 max-w-[600px] text-base leading-relaxed text-muted-foreground">
         <IntroBlurb />
       </p>
 
@@ -138,17 +141,15 @@ export function OnboardingScreen({
 
       <div className="mt-6 flex items-center gap-2.5">
         <Button onClick={onGetStarted}>
-          {ready ? "Finish setup" : "Get set up"} — about 2 minutes <ArrowRight className="size-4" />
+          {ready ? "Finish setup" : "Get set up — about 2 minutes"} <ArrowRight className="size-4" />
         </Button>
         <Button variant="outline" onClick={onSkip}>
           Skip to the console
         </Button>
       </div>
 
-      <p className="mt-6 max-w-[560px] text-[11.5px] leading-relaxed text-muted-foreground/70">
-        Shown once, on first boot. Everything here lives on under{" "}
-        <strong className="font-semibold text-muted-foreground">Getting started</strong> — it stays in the
-        sidebar until every check passes.
+      <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">
+        Shown once — everything lives on under “Getting started” in the sidebar.
       </p>
     </div>
   );

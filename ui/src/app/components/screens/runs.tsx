@@ -680,7 +680,7 @@ function RunsTable({
                 <TableCell>
                   <div className="flex min-w-0 items-center gap-2.5">
                     <AgentBadge agent={run.agent} withLabel={false} />
-                    <span className="block max-w-[320px] truncate text-[13.5px] font-medium text-foreground">
+                    <span className="block max-w-[320px] truncate text-sm font-medium text-foreground">
                       {run.task || "—"}
                     </span>
                   </div>
