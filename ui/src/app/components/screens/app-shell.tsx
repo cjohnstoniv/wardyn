@@ -35,7 +35,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { Avatar, AvatarFallback } from "../ui/avatar";
 import { ErrorBoundary } from "../wardyn/error-boundary";
 import { api } from "../../lib/api";
 import type { StatusKind } from "../wardyn/copy";
@@ -273,9 +272,7 @@ function TopBar({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent">
-              <Avatar className="size-7">
-                <AvatarFallback className="bg-secondary text-xs text-foreground">{initials(meta.principal)}</AvatarFallback>
-              </Avatar>
+              <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">{initials(meta.principal)}</span>
               <span className="hidden text-sm sm:block">{meta.principal.split("@")[0]}</span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />
             </button>

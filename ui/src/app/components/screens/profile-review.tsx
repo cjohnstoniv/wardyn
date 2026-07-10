@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import type { ProfileProposal, RiskItem, RunPolicySpec } from "../../lib/types";
 import { firstUseLabel } from "../../lib/types";
 import { api } from "../../lib/api";
+import { getErrorMessage } from "../../lib/format";
 import {
   Sheet,
   SheetContent,
@@ -80,7 +81,7 @@ export function ProfileReview({
       onSavedPolicy?.();
       onClose();
     } catch (e) {
-      toast.error("Failed to save policy", { description: (e as Error).message });
+      toast.error("Failed to save policy", { description: getErrorMessage(e) });
     } finally {
       setSavingAsIs(false);
     }
@@ -472,7 +473,7 @@ function SavePolicyDialog({
       toast.success(`Saved policy “${name.trim()}”`);
       onSaved();
     } catch (e) {
-      setError((e as Error).message || "Failed to save policy.");
+      setError(getErrorMessage(e) || "Failed to save policy.");
       setSaving(false);
     }
   };

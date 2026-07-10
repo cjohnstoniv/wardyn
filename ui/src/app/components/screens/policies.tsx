@@ -495,7 +495,7 @@ function PolicyEditor({
     try {
       spec = JSON.parse(specText) as RunPolicySpec;
     } catch (e) {
-      setError(`Spec is not valid JSON: ${(e as Error).message}`);
+      setError(`Spec is not valid JSON: ${getErrorMessage(e)}`);
       return;
     }
     setSaving(true);
@@ -508,7 +508,7 @@ function PolicyEditor({
       onSaved();
     } catch (e) {
       // Surface the server's validation message (HttpError carries the body).
-      setError((e as Error).message || "Failed to save policy.");
+      setError(getErrorMessage(e) || "Failed to save policy.");
       setSaving(false);
     }
   };
