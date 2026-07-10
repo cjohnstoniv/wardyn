@@ -112,9 +112,24 @@ func run() error {
 	}
 
 	// Background loops: heartbeat, index refresh, stats.
-	go heartbeatLoop(ctx, sink, heartbeatIval)
-	go refreshLoop(ctx, corr, refreshIval)
-	go statsLoop(ctx, sink, statsIval)
+	go func() {
+		// Emit one immediately so /healthz flips to healthy as soon as the
+		// sensor is up and reachable, then on the interval. Each beat carries
+		// the current cumulative drop count so /healthz can surface the gap
+		// size. Runs in its own goroutine so this initial beat never blocks
+		// startup on a control-plane POST.
+		beat := func() { sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount())) }
+		beat()
+		every(ctx, heartbeatIval, beat)
+	}()
+	go every(ctx, refreshIval, func() {
+		if err := corr.Refresh(ctx); err != nil {
+			log.Printf("wardyn-tetragon-ingest: container index refresh failed: %v", err)
+		}
+	})
+	go every(ctx, statsIval, func() {
+		log.Printf("wardyn-tetragon-ingest: stats posted=%d dropped=%d", sink.postedCount(), sink.droppedCount())
+	})
 
 	log.Printf("wardyn-tetragon-ingest: tailing %s -> %s/api/v1/internal/groundtruth (heartbeat=%s)", *exportPath, *controlURL, heartbeatIval)
 
@@ -271,12 +286,8 @@ func inode(fi os.FileInfo) uint64 {
 	return 0
 }
 
-func heartbeatLoop(ctx context.Context, sink *eventSink, ival time.Duration) {
-	// Emit one immediately so /healthz flips to healthy as soon as the sensor
-	// is up and reachable, then on the interval. Each beat carries the current
-	// cumulative drop count so /healthz can surface the gap size.
-	beat := func() { sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount())) }
-	beat()
+// every calls fn on every tick of ival until ctx is cancelled.
+func every(ctx context.Context, ival time.Duration, fn func()) {
 	t := time.NewTicker(ival)
 	defer t.Stop()
 	for {
@@ -284,35 +295,7 @@ func heartbeatLoop(ctx context.Context, sink *eventSink, ival time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			beat()
-		}
-	}
-}
-
-func refreshLoop(ctx context.Context, corr *dockerCorrelator, ival time.Duration) {
-	t := time.NewTicker(ival)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if err := corr.Refresh(ctx); err != nil {
-				log.Printf("wardyn-tetragon-ingest: container index refresh failed: %v", err)
-			}
-		}
-	}
-}
-
-func statsLoop(ctx context.Context, sink *eventSink, ival time.Duration) {
-	t := time.NewTicker(ival)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			log.Printf("wardyn-tetragon-ingest: stats posted=%d dropped=%d", sink.postedCount(), sink.droppedCount())
+			fn()
 		}
 	}
 }
