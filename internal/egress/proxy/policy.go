@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -352,46 +353,23 @@ var (
 )
 
 func init() {
-	for _, c := range []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
+	// Shared private/reserved core (internal/ipguard) + the proxy-only entries:
+	// unlike the composer transport (which spares loopback under its operator
+	// allowPrivate escape hatch), the proxy denies loopback/link-local always,
+	// so those ranges live in ITS table.
+	blockedV4 = append(ipguard.MustCIDRs(
 		"127.0.0.0/8",    // loopback
 		"169.254.0.0/16", // link-local incl. 169.254.169.254 metadata
-		"100.64.0.0/10",  // CGNAT (RFC6598)
-		"0.0.0.0/8",      // "this network"
-		"192.0.0.0/24",   // IETF protocol assignments
-		"198.18.0.0/15",  // benchmarking
-		"255.255.255.255/32",
-	} {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			panic("proxy: bad builtin CIDR " + c) // init-time programmer error only
-		}
-		blockedV4 = append(blockedV4, n)
-	}
-	for _, c := range []string{
+	), ipguard.PrivateReservedV4...)
+	blockedV6 = append(ipguard.MustCIDRs(
 		"::1/128",   // loopback
-		"fc00::/7",  // unique local (ULA)
 		"fe80::/10", // link-local
 		"::/128",    // unspecified
-	} {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			panic("proxy: bad builtin CIDR " + c)
-		}
-		blockedV6 = append(blockedV6, n)
-	}
-	for _, c := range []string{
+	), ipguard.UniqueLocalV6...)
+	nat64Prefixes = ipguard.MustCIDRs(
 		"64:ff9b::/96",   // well-known NAT64 (RFC 6052)
 		"64:ff9b:1::/48", // local-use NAT64 (RFC 8215)
-	} {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			panic("proxy: bad builtin CIDR " + c)
-		}
-		nat64Prefixes = append(nat64Prefixes, n)
-	}
+	)
 }
 
 // isBlockedIP reports whether ip is in an unconditionally-denied range.
