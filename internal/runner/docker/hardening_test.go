@@ -12,7 +12,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/system"
 	dockerseccomp "github.com/docker/docker/profiles/seccomp"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -611,12 +610,12 @@ func TestHardenedHostConfig_SeccompApparmor(t *testing.T) {
 // the default profile re-runs this check for free.
 func TestDockerDefaultSeccompProfile_BlocksIoUring(t *testing.T) {
 	profile := dockerseccomp.DefaultProfile()
-	if profile.DefaultAction != specs.ActErrno {
+	if profile.DefaultAction != "SCMP_ACT_ERRNO" {
 		t.Fatalf("Docker default seccomp profile defaultAction = %v, want ERRNO (default-deny) — the io_uring omission below only blocks it under default-deny", profile.DefaultAction)
 	}
 	blocked := map[string]bool{"io_uring_setup": true, "io_uring_enter": true, "io_uring_register": true}
 	for _, sc := range profile.Syscalls {
-		if sc.Action != specs.ActAllow {
+		if sc.Action != "SCMP_ACT_ALLOW" {
 			continue
 		}
 		for _, name := range sc.Names {
