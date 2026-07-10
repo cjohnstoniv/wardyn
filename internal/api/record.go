@@ -46,11 +46,9 @@ const (
 	recordStatusFailed    = "record_failed"
 )
 
-// Record run execution modes.
-const (
-	recordModeAuto        = "auto"
-	recordModeInteractive = "interactive"
-)
+// recordModeInteractive is the only record execution mode today (persisted on
+// RecordTaskResult.Mode); an unattended mode would add its own value.
+const recordModeInteractive = "interactive"
 
 // errImportStepBusy is returned when the serial import-step CAS claim loses —
 // another step (scan/verify/record) concurrently owns the workspace's slot.
@@ -197,7 +195,6 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name    string `json:"name"`
 		TaskKey string `json:"task_key"` // deprecated alias for name
-		Mode    string `json:"mode"`     // reserved; sessions are always interactive today
 		// Confined = a VERIFY session: default-deny egress limited to the approved
 		// set, to re-run the same steps under least privilege. Default false = a
 		// learning session with open egress (the Record step).
@@ -228,8 +225,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		key = recordVerifyKeyPrefix + key
 	}
 	// Sessions are interactive: the operator drives the real activity in the attach
-	// shell (build, test, run the agent) and stops the run to capture. (An
-	// unattended commands mode can layer on later via the reserved `mode` field.)
+	// shell (build, test, run the agent) and stops the run to capture.
 	mode := recordModeInteractive
 	if s.cfg.Runner == nil {
 		writeError(w, http.StatusServiceUnavailable, "record needs a configured runner (this control plane runs with -runner none; scan and configure still work)")

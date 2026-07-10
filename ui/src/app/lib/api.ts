@@ -777,7 +777,7 @@ export const api = {
     return (await asJson<VerifyFixSuggestion>(res)).suggestion ?? "";
   },
 
-  // POST /api/v1/workspaces/{id}/record { task_key, mode }. Kicks an OPEN
+  // POST /api/v1/workspaces/{id}/record { name, confined }. Kicks an OPEN
   // (allow-all-egress) recording sandbox for one task under the strongest available
   // confinement.
   //   202 -> { run_id }: recording started; poll the workspace for the outcome.

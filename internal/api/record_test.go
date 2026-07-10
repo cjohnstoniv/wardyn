@@ -146,7 +146,7 @@ func recordingWorkspace(wsID, runID uuid.UUID, task string) types.Workspace {
 		ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
 		ActiveRunID: &runID,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
-			task: {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecording},
+			task: {RunID: runID, Mode: "auto", Status: recordStatusRecording},
 		}),
 	}
 }
@@ -335,7 +335,7 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
 		RecordResults: mustJSON(map[string]RecordTaskResult{
-			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
 	srv := newVerifySrv(t, fake)
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
@@ -372,7 +372,7 @@ func TestUploadVerifyResult_LateRecordUploadCannotRevertCapture(t *testing.T) {
 		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 	}
 	fake.saved = mustJSON(map[string]RecordTaskResult{
-		"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded},
+		"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded},
 	})
 	srv := New(baseTestConfig(h, fake))
 
@@ -446,7 +446,7 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
-			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
 	h := newHarness(t)
 	cfg := baseTestConfig(h, fake)
@@ -475,7 +475,7 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
-			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
+			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
 	srv := newVerifySrv(t, fake)
 	url := "/api/v1/workspaces/" + wsID.String() + "/record/build/promote-egress"
