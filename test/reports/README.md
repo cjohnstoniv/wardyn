@@ -1,9 +1,9 @@
 # Test reports
 
 Detailed, regenerable test reports for the Wardyn platform. Every suite emits a
-human-readable Markdown report **and** machine-readable artifacts (JSON, JUnit
-XML, coverage) so results carry test-case descriptions, results, durations, and
-failure reasons — not just a pass/fail exit code.
+human-readable Markdown report **and** machine-readable coverage artifacts so
+results carry test-case descriptions, results, durations, and failure reasons
+— not just a pass/fail exit code.
 
 ## Layout
 
@@ -14,12 +14,10 @@ test/reports/
   coverage-dashboard.md     # coverage before/after per package (committed)
   go/<suite>/
     report.md               # per-test-case table + failure reasons (committed)
-    results.json            # structured summary (gitignored)
     test-output.json        # raw `go test -json` stream (gitignored)
     cover.out               # coverage profile (gitignored; *.out)
     coverage.html           # HTML coverage (gitignored)
     coverage-func.txt       # per-func coverage + total (gitignored)
-    junit.xml               # JUnit XML for CI (gitignored)
   ui/
     junit.xml               # vitest JUnit (gitignored)
     coverage/               # vitest v8 coverage html+lcov (gitignored)
@@ -46,5 +44,4 @@ cd ui && pnpm e2e                # Playwright (seeded backend) -> test/reports/e
 ```
 
 The Go report generator is `scripts/test-report.sh` (orchestration) +
-`scripts/test2md.py` (test2json → Markdown). Both are dependency-free except an
-optional `go-junit-report` (fetched via `go run` for the JUnit step).
+`scripts/test2md.py` (test2json → Markdown). Both are dependency-free.

@@ -27,7 +27,7 @@ help:
 	@echo "  test-e2e-ui           - Playwright UI e2e vs a seeded backend (needs Docker + chromium)"
 	@echo "  test-e2e-live         - Live TASK e2e: real sandboxes run the corpus, graded on state (needs Docker)"
 	@echo "  test-e2e-subscription - Live SUBSCRIPTION e2e: proxy-side inject-on attach + inject-off escape hatch (restarts wardynd)"
-	@echo "  test-report           - Go unit tests with detailed md/json/coverage/junit reports"
+	@echo "  test-report           - Go unit tests with detailed md/coverage reports"
 	@echo "  test-report-pg        - Postgres-gated suite with reports (needs WARDYN_TEST_PG)"
 	@echo "  test-report-docker    - docker-tagged suite with reports (needs WARDYN_TEST_DOCKER=1)"
 	@echo "  cover-check           - Run test-report and enforce COVER_MIN coverage floor"
@@ -63,7 +63,7 @@ test-docker:
 	@echo "Running Go tests (-tags docker)..."
 	go test -tags docker ./...
 
-# ── detailed test reports (markdown + JSON + coverage + JUnit) ──────────────
+# ── detailed test reports (markdown + coverage) ─────────────────────────────
 # Emits per-test-case reports under test/reports/go/<suite>/. See
 # scripts/test-report.sh and scripts/test2md.py.
 test-report:

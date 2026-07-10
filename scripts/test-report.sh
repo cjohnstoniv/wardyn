@@ -2,11 +2,9 @@
 # Run a Go test suite and emit detailed reports under test/reports/go/<suite>/:
 #   - test-output.json  : raw go test -json event stream
 #   - report.md         : human report (per-test result, duration, failure reason)
-#   - results.json      : structured summary (totals + per-test)
 #   - cover.out         : coverage profile
 #   - coverage.html     : HTML coverage (go tool cover)
 #   - coverage-func.txt : per-func coverage + total
-#   - junit.xml         : JUnit XML (best-effort; needs network for go-junit-report)
 #
 # Usage:
 #   scripts/test-report.sh <suite-name> "<report title>" [go test args/pkgs...]
@@ -34,9 +32,9 @@ go test -json -covermode=atomic -coverprofile="$OUT/cover.out" "${PKGS[@]}" \
   > "$OUT/test-output.json"
 GO_EXIT=$?
 
-# Detailed markdown + structured JSON from the event stream.
+# Detailed markdown from the event stream.
 python3 "$ROOT/scripts/test2md.py" --title "$TITLE" \
-  --out "$OUT/report.md" --json "$OUT/results.json" < "$OUT/test-output.json"
+  --out "$OUT/report.md" < "$OUT/test-output.json"
 
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
 if [ -s "$OUT/cover.out" ]; then
@@ -44,15 +42,6 @@ if [ -s "$OUT/cover.out" ]; then
   go tool cover -html="$OUT/cover.out" -o "$OUT/coverage.html" 2>/dev/null
   TOTAL=$(grep -E "^total:" "$OUT/coverage-func.txt" | awk '{print $NF}')
   echo ">> coverage total: ${TOTAL:-n/a}"
-fi
-
-# JUnit XML (best-effort: uses go-junit-report via `go run`, needs the proxy).
-if go run github.com/jstemmer/go-junit-report/v2@latest \
-     < "$OUT/test-output.json" > "$OUT/junit.xml" 2>/dev/null; then
-  echo ">> wrote $OUT/junit.xml"
-else
-  echo ">> (skipped junit.xml: go-junit-report unavailable offline)"
-  rm -f "$OUT/junit.xml"
 fi
 
 echo ">> reports in $OUT"
