@@ -5,10 +5,12 @@ package cli
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/composer/backends/composertest"
 )
 
 // TestClaude_Assist_NoSchema asserts the claude Assist path returns the wrapper's
@@ -28,7 +30,7 @@ func TestClaude_Assist_NoSchema(t *testing.T) {
 		t.Fatal("cli backend must implement composer.Assister")
 	}
 
-	got, err := as.Assist(context.Background(), sampleRequest(), "Can the agent reach GitHub?")
+	got, err := as.Assist(context.Background(), composertest.SampleRequest(), "Can the agent reach GitHub?")
 	if err != nil {
 		t.Fatalf("Assist: %v", err)
 	}
@@ -37,7 +39,7 @@ func TestClaude_Assist_NoSchema(t *testing.T) {
 	}
 
 	argv := fake.argv(t)
-	if contains(argv, "--json-schema") {
+	if slices.Contains(argv, "--json-schema") {
 		t.Error("Assist must NOT pass --json-schema (no structured output)")
 	}
 	// FIX #11: the assist path shells out to claude on the HOST too, so it must carry
@@ -72,7 +74,7 @@ func TestCodex_Assist_NoSchema(t *testing.T) {
 		t.Fatal("cli backend must implement composer.Assister")
 	}
 
-	got, err := as.Assist(context.Background(), sampleRequest(), "Can it edit my files?")
+	got, err := as.Assist(context.Background(), composertest.SampleRequest(), "Can it edit my files?")
 	if err != nil {
 		t.Fatalf("Assist: %v", err)
 	}
@@ -81,7 +83,7 @@ func TestCodex_Assist_NoSchema(t *testing.T) {
 	}
 
 	argv := fake.argv(t)
-	if contains(argv, "--output-schema") {
+	if slices.Contains(argv, "--output-schema") {
 		t.Error("Assist must NOT pass --output-schema (no structured output)")
 	}
 	if v, _ := flagValue(argv, "--sandbox"); v != "read-only" {
