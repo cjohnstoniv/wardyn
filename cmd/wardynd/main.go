@@ -557,7 +557,6 @@ func run() error {
 
 	srv := api.New(api.Config{
 		Store:                     store.NewPG(pool),
-		Pool:                      pool,
 		Identity:                  idp,
 		Approvals:                 approvals,
 		Broker:                    brk,

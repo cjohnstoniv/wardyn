@@ -346,7 +346,6 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 
 	cfg := api.Config{
 		Store:           store.NewPG(pool),
-		Pool:            pool,
 		Identity:        idp,
 		Approvals:       approvals,
 		Broker:          brk,

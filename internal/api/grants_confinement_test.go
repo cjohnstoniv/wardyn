@@ -77,7 +77,7 @@ func TestCreateRunRejectsWeakerConfinement(t *testing.T) {
 
 // pgHarness builds a Server wired to a real Postgres pool. Guarded by
 // WARDYN_TEST_PG; skipped cleanly when unset. Mirrors newHarness but with a
-// live store so the create-run / grants paths (which require s.cfg.Pool) run.
+// live store so the create-run / grants paths (which require a real store) run.
 func pgHarness(t *testing.T) (*Server, *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("WARDYN_TEST_PG")
@@ -102,7 +102,6 @@ func pgHarness(t *testing.T) (*Server, *pgxpool.Pool) {
 	}
 	srv := New(Config{
 		Store:       store.NewPG(pool),
-		Pool:        pool,
 		Identity:    idp,
 		Approvals:   newFakeApprovals(),
 		Broker:      &fakeBroker{},
