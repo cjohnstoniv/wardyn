@@ -54,24 +54,6 @@ export function activeStepForStatus(status: WorkspaceStatus): ImportStepId {
   }
 }
 
-export type StepDot = "pending" | "active" | "done" | "failed";
-
-// The dot state for one rail step given the workspace's status: steps before the
-// active one are done; the active step is "failed" when its status errored, else
-// "active"; later steps are pending.
-export function stepDot(step: ImportStepId, status: WorkspaceStatus): StepDot {
-  const order = IMPORT_STEPS.map((s) => s.id);
-  const activeIdx = order.indexOf(activeStepForStatus(status));
-  const idx = order.indexOf(step);
-  if (idx < activeIdx) return "done";
-  if (idx > activeIdx) return "pending";
-  return isFailedStatus(status) ? "failed" : "active";
-}
-
-export function isFailedStatus(status: WorkspaceStatus): boolean {
-  return status === "error" || status === "build_error" || status === "verify_failed";
-}
-
 // Statuses that are in-flight server-side — the panel polls while in one of these.
 const TRANSIENT: WorkspaceStatus[] = ["scanning", "building", "verifying"];
 export function isTransientStatus(status: WorkspaceStatus): boolean {

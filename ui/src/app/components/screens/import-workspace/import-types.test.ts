@@ -8,7 +8,6 @@ import {
   IMPORT_STEPS,
   activeStepForStatus,
   isTransientStatus,
-  stepDot,
   verifyPhase,
   verifyRows,
   verifyProgress,
@@ -56,19 +55,6 @@ describe("isTransientStatus", () => {
     expect(isTransientStatus("scanned")).toBe(false);
     expect(isTransientStatus("ready")).toBe(false);
     expect(isTransientStatus("verify_failed")).toBe(false);
-  });
-});
-
-describe("stepDot", () => {
-  it("marks earlier steps done, the active step active, and later steps pending", () => {
-    // scanned => active step is Configure.
-    expect(stepDot("scan", "scanned")).toBe("done");
-    expect(stepDot("configure", "scanned")).toBe("active");
-    expect(stepDot("verify", "scanned")).toBe("pending");
-  });
-  it("marks the active step failed when its status errored", () => {
-    expect(stepDot("verify", "verify_failed")).toBe("failed");
-    expect(stepDot("scan", "error")).toBe("failed");
   });
 });
 
