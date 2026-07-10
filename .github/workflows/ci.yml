@@ -27,7 +27,7 @@ jobs:
         run: make cover-check
       - name: Upload Go test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-test-reports
           path: test/reports/go/**
@@ -82,7 +82,7 @@ jobs:
         run: pnpm build
       - name: Upload UI test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-test-reports
           path: test/reports/ui/**
@@ -125,7 +125,7 @@ jobs:
         run: ./scripts/run-ui-e2e.sh
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
@@ -212,7 +212,7 @@ jobs:
         run: make test-report-docker
       - name: Upload docker-tagged test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docker-test-reports
           path: test/reports/go/docker/**
@@ -246,7 +246,7 @@ jobs:
         run: make test-report-pg
       - name: Upload PG test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pg-test-reports
           path: test/reports/go/pg/**
@@ -369,7 +369,7 @@ jobs:
       - name: Generate SBOM (CycloneDX JSON)
         run: syft . -o cyclonedx-json > wardyn-sbom.cdx.json
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wardyn-sbom
           path: wardyn-sbom.cdx.json
