@@ -6,17 +6,16 @@ package workspacescan
 // ai.go — ADVISORY-ONLY AI fallback for the workspace scanner.
 //
 // Runs CONTROL-PLANE / HOST-SIDE ONLY (never in the sandbox). The sandbox only
-// ever emits ScanFacts; this code shells out to a resident coding-agent CLI
-// (claude by default, codex optional) in a READ-ONLY posture to fill gaps the
-// deterministic pass could not resolve — e.g. an unrecognized build system
-// captured in ScanFacts.UnrecognizedSamples.
+// ever emits ScanFacts; this code shells out to a resident claude CLI in a
+// READ-ONLY posture to fill gaps the deterministic pass could not resolve —
+// e.g. an unrecognized build system captured in ScanFacts.UnrecognizedSamples.
 //
 // Trust model (mirrors internal/composer/backends/cli): the child runs
-// least-privilege — claude `--permission-mode plan`, codex `--sandbox read-only
-// --ask-for-approval never` — so a prompt-injected sample cannot make the host
-// CLI take a mutating action. ANTHROPIC_API_KEY is scrubbed so claude uses the
-// resident subscription, never an API key. The UnrecognizedSamples content is
-// scrubbed + fence-defanged before the model sees it.
+// least-privilege via `--permission-mode plan`, so a prompt-injected sample
+// cannot make the host CLI take a mutating action. ANTHROPIC_API_KEY is
+// scrubbed so claude uses the resident subscription, never an API key. The
+// UnrecognizedSamples content is scrubbed + fence-defanged before the model
+// sees it.
 //
 // Authority rules (non-negotiable): the AI NEVER overrides or deletes a
 // deterministic fact. It can only ADD to fields that are EMPTY in the base
@@ -43,12 +42,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 )
 
-// AI tool ids for AIOptions.Tool. claude is the default.
-const (
-	aiToolClaude = "claude"
-	aiToolCodex  = "codex"
-)
-
 // aiDefaultTimeout bounds a single advisory CLI invocation when unset.
 const aiDefaultTimeout = 120 * time.Second
 
@@ -66,12 +59,10 @@ const (
 )
 
 // AIOptions configures the advisory CLI invocation. Zero values are safe:
-// Tool defaults to claude, Bin defaults to the tool name (resolved via PATH),
-// Timeout defaults to aiDefaultTimeout, Model lets the CLI pick its default.
+// Bin defaults to "claude" (resolved via PATH), Timeout defaults to
+// aiDefaultTimeout.
 type AIOptions struct {
-	Bin     string        // CLI binary path; empty → Tool name via PATH
-	Tool    string        // "claude" (default) or "codex"
-	Model   string        // model id; empty → the CLI's own default
+	Bin     string        // CLI binary path; empty → "claude" via PATH
 	Timeout time.Duration // per-invocation bound; <=0 → aiDefaultTimeout
 }
 
@@ -198,13 +189,9 @@ func cleanSet(xs []string) []string {
 
 // runAdvisor performs one advisory CLI invocation and decodes the strict result.
 func runAdvisor(ctx context.Context, facts ScanFacts, opts AIOptions) (adviceWire, error) {
-	tool := strings.TrimSpace(opts.Tool)
-	if tool == "" {
-		tool = aiToolClaude
-	}
 	bin := strings.TrimSpace(opts.Bin)
 	if bin == "" {
-		bin = tool
+		bin = "claude"
 	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -217,16 +204,7 @@ func runAdvisor(ctx context.Context, facts ScanFacts, opts AIOptions) (adviceWir
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var raw []byte
-	var err error
-	switch tool {
-	case aiToolClaude:
-		raw, err = runAdvisorClaude(runCtx, bin, opts.Model, schema, user)
-	case aiToolCodex:
-		raw, err = runAdvisorCodex(runCtx, bin, opts.Model, schema, user)
-	default:
-		return adviceWire{}, fmt.Errorf("workspacescan: unknown AI tool %q (want %q or %q)", tool, aiToolClaude, aiToolCodex)
-	}
+	raw, err := runAdvisorClaude(runCtx, bin, schema, user)
 	if err != nil {
 		return adviceWire{}, err
 	}
@@ -241,7 +219,7 @@ func runAdvisor(ctx context.Context, facts ScanFacts, opts AIOptions) (adviceWir
 // runAdvisorClaude runs Claude Code headless with inline strict structured
 // output and extracts .structured_output from the JSON wrapper. Read-only via
 // --permission-mode plan; ANTHROPIC_API_KEY scrubbed.
-func runAdvisorClaude(ctx context.Context, bin, model string, schema map[string]any, user string) ([]byte, error) {
+func runAdvisorClaude(ctx context.Context, bin string, schema map[string]any, user string) ([]byte, error) {
 	schemaJSON, err := json.Marshal(schema)
 	if err != nil {
 		return nil, fmt.Errorf("workspacescan: marshal schema: %w", err)
@@ -253,9 +231,6 @@ func runAdvisorClaude(ctx context.Context, bin, model string, schema map[string]
 		"--append-system-prompt", advisorSystemPrompt,
 		"--permission-mode", "plan",
 		"--max-turns", aiMaxTurns,
-	}
-	if model != "" {
-		args = append(args, "--model", model)
 	}
 
 	out, err := execAdvisor(ctx, bin, scrubAdvisorKey(os.Environ()), args...)
@@ -282,50 +257,6 @@ func runAdvisorClaude(ctx context.Context, bin, model string, schema map[string]
 		return nil, errors.New("workspacescan: claude advisory produced no structured output")
 	}
 	return wrapper.StructuredOutput, nil
-}
-
-// runAdvisorCodex runs Codex non-interactively read-only with an output schema,
-// reading the final schema-valid object from the -o file. Codex has no separate
-// system-prompt channel, so the system prompt is prepended to the user message.
-func runAdvisorCodex(ctx context.Context, bin, model string, schema map[string]any, user string) ([]byte, error) {
-	schemaFile, cleanup, err := writeAdvisorSchema(schema)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-
-	outFile, err := os.CreateTemp("", "wardyn-advise-out-*.json")
-	if err != nil {
-		return nil, fmt.Errorf("workspacescan: create codex output file: %w", err)
-	}
-	outPath := outFile.Name()
-	_ = outFile.Close()
-	defer os.Remove(outPath)
-
-	prompt := advisorSystemPrompt + "\n\n" + user
-	args := []string{
-		"exec",
-		"--output-schema", schemaFile,
-		"-o", outPath,
-		"--sandbox", "read-only",
-		"--ask-for-approval", "never",
-	}
-	if model != "" {
-		args = append(args, "-m", model)
-	}
-	args = append(args, prompt)
-
-	if _, err := execAdvisor(ctx, bin, os.Environ(), args...); err != nil {
-		return nil, err
-	}
-	raw, err := os.ReadFile(outPath)
-	if err != nil {
-		return nil, fmt.Errorf("workspacescan: read codex output file: %w", err)
-	}
-	if len(strings.TrimSpace(string(raw))) == 0 {
-		return nil, errors.New("workspacescan: codex advisory produced no output")
-	}
-	return raw, nil
 }
 
 // execAdvisor runs the CLI and returns stdout, mapping missing-binary, timeout
@@ -366,31 +297,6 @@ func execAdvisor(ctx context.Context, bin string, env []string, args ...string) 
 		return nil, fmt.Errorf("workspacescan: AI advisor exited %d: %s", exitErr.ExitCode(), msg)
 	}
 	return nil, fmt.Errorf("workspacescan: AI advisor invocation failed: %w", err)
-}
-
-// writeAdvisorSchema writes the JSON Schema to a temp file for codex's
-// --output-schema, returning the path and a cleanup func.
-func writeAdvisorSchema(schema map[string]any) (string, func(), error) {
-	body, err := json.Marshal(schema)
-	if err != nil {
-		return "", func() {}, fmt.Errorf("workspacescan: marshal schema: %w", err)
-	}
-	f, err := os.CreateTemp("", "wardyn-advise-schema-*.json")
-	if err != nil {
-		return "", func() {}, fmt.Errorf("workspacescan: create schema file: %w", err)
-	}
-	path := f.Name()
-	cleanup := func() { os.Remove(path) }
-	if _, err := f.Write(body); err != nil {
-		_ = f.Close()
-		cleanup()
-		return "", func() {}, fmt.Errorf("workspacescan: write schema file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		cleanup()
-		return "", func() {}, fmt.Errorf("workspacescan: close schema file: %w", err)
-	}
-	return path, cleanup, nil
 }
 
 // scrubAdvisorKey returns env with ANTHROPIC_API_KEY removed so claude uses the
