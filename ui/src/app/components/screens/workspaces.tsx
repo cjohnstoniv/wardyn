@@ -50,18 +50,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
 import { JsonBlock, Mono } from "../wardyn/code-block";
 import { ConfirmEgressDialog } from "../wardyn/confirm-egress-dialog";
+import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -99,7 +90,6 @@ export function WorkspacesScreen() {
   const [editTarget, setEditTarget] = React.useState<Workspace | null>(null);
   const [profileTarget, setProfileTarget] = React.useState<Workspace | null>(null);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
-  const [deleting, setDeleting] = React.useState(false);
   // Rows with a scan in flight — scoped to workspace id so multiple scans (or a
   // scan alongside other list activity) never fight over one flag.
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
@@ -152,23 +142,6 @@ export function WorkspacesScreen() {
         next.delete(w.id);
         return next;
       });
-    }
-  };
-
-  const confirmDelete = async () => {
-    if (!toDelete) return;
-    setDeleting(true);
-    try {
-      await api.deleteWorkspace(toDelete.id);
-      toast.success(`Workspace "${toDelete.name}" deleted`);
-      setToDelete(null);
-      load();
-    } catch (e) {
-      toast.error(`Failed to delete workspace "${toDelete.name}"`, {
-        description: getErrorMessage(e),
-      });
-    } finally {
-      setDeleting(false);
     }
   };
 
@@ -335,30 +308,17 @@ export function WorkspacesScreen() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete workspace "{toDelete?.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Runs can no longer attach this source. Any run already using it is unaffected — this
-              only gates NEW runs. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                confirmDelete();
-              }}
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
-            >
-              {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-              Delete workspace
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteConfirmDialog
+        name={toDelete?.name ?? null}
+        entity="workspace"
+        description="Runs can no longer attach this source. Any run already using it is unaffected — this only gates NEW runs. This cannot be undone."
+        onOpenChange={(o) => !o && setToDelete(null)}
+        onDelete={() => api.deleteWorkspace(toDelete!.id)}
+        onDeleted={() => {
+          setToDelete(null);
+          load();
+        }}
+      />
     </div>
   );
 }
