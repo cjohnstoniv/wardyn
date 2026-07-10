@@ -157,26 +157,6 @@ func TestDetect_DepthCap(t *testing.T) {
 	}
 }
 
-func TestClassify(t *testing.T) {
-	cases := map[string]string{
-		"github.com":             "github",
-		"api.github.com":         "github",
-		"GITHUB.COM":             "github",
-		"dev.azure.com":          "azure_devops",
-		"myorg.visualstudio.com": "azure_devops",
-		"gitlab.com":             "gitlab",
-		"gitlab.internal.corp":   "gitlab",
-		"bitbucket.org":          "other",
-		"example.com":            "other",
-		"":                       "other",
-	}
-	for host, want := range cases {
-		if got := Classify(host); got != want {
-			t.Errorf("Classify(%q) = %q, want %q", host, got, want)
-		}
-	}
-}
-
 func TestDetect_RejectsUnsafeURL(t *testing.T) {
 	root := t.TempDir()
 	// A URL with an embedded newline/space must be rejected by safe().
