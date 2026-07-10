@@ -374,52 +374,23 @@ func TestFirstUseDeniedCached(t *testing.T) {
 }
 
 func TestConnectTunnelAllow(t *testing.T) {
-	// Echo TCP server stands in for the TLS upstream (CONNECT is opaque bytes).
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(conn net.Conn) {
-				_, _ = io.Copy(conn, conn)
-				_ = conn.Close()
-			}(c)
-		}
-	}()
-
-	// Build a proxy whose dialer connects to the echo server regardless of IP.
-	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}, ln.Addr().String(), nil, nil)
+	// Build a proxy whose dialer connects to an echo server (stand-in for the
+	// TLS upstream — CONNECT is opaque bytes) regardless of IP.
+	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}, startEcho(t), nil, nil)
 
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
-	// Connect to the proxy and issue a CONNECT.
-	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn, status := connectThrough(t, proxySrv.URL, "tls.test:443")
 	defer conn.Close()
-	_, _ = io.WriteString(conn, "CONNECT tls.test:443 HTTP/1.1\r\nHost: tls.test:443\r\n\r\n")
-
-	br := make([]byte, 4096)
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, err := conn.Read(br)
-	if err != nil {
-		t.Fatalf("read CONNECT response: %v", err)
-	}
-	if !strings.Contains(string(br[:n]), "200") {
-		t.Fatalf("CONNECT response = %q, want 200", string(br[:n]))
+	if !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT response = %q, want 200", status)
 	}
 	// Now the tunnel echoes.
 	_, _ = io.WriteString(conn, "ping")
+	br := make([]byte, 4096)
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, err = conn.Read(br)
+	n, err := conn.Read(br)
 	if err != nil {
 		t.Fatalf("read echo: %v", err)
 	}
@@ -434,17 +405,10 @@ func TestConnectTunnelDeny(t *testing.T) {
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
-	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn, status := connectThrough(t, proxySrv.URL, "blocked.test:443")
 	defer conn.Close()
-	_, _ = io.WriteString(conn, "CONNECT blocked.test:443 HTTP/1.1\r\nHost: blocked.test:443\r\n\r\n")
-	br := make([]byte, 4096)
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, _ := conn.Read(br)
-	if !strings.Contains(string(br[:n]), "403") {
-		t.Fatalf("CONNECT to denied host = %q, want 403", string(br[:n]))
+	if !strings.Contains(status, "403") {
+		t.Fatalf("CONNECT to denied host = %q, want 403", status)
 	}
 	if d := lastDecision(t, buf); d.Decision != egress.Deny {
 		t.Fatalf("decision = %q, want deny", d.Decision)
@@ -465,15 +429,8 @@ func TestConnectTunnelDialFailEmitsDenyNotAllow(t *testing.T) {
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
-	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn, _ := connectThrough(t, proxySrv.URL, "tls.test:443") // the handler ran; a failed dial returns a non-200
 	defer conn.Close()
-	_, _ = io.WriteString(conn, "CONNECT tls.test:443 HTTP/1.1\r\nHost: tls.test:443\r\n\r\n")
-	br := make([]byte, 4096)
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, _ = conn.Read(br) // the handler ran; a failed dial returns a non-200
 
 	// The dial-failed deny is present...
 	if d := findDecision(t, buf, "builtin:dial-failed"); d.Decision != egress.Deny {
@@ -489,6 +446,47 @@ func TestConnectTunnelDialFailEmitsDenyNotAllow(t *testing.T) {
 }
 
 // --- helpers ---
+
+// startEcho starts a TCP echo server (stand-in for an opaque TLS upstream —
+// CONNECT tunnels carry opaque bytes) and returns its address.
+func startEcho(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				_, _ = io.Copy(conn, conn)
+				_ = conn.Close()
+			}(c)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// connectThrough dials the proxy at proxyURL and issues a raw CONNECT for
+// hostport, returning the established connection and the raw response text
+// read back (status line + headers). Read errors are tolerated (some callers
+// intentionally probe a connection that never completes the CONNECT).
+func connectThrough(t *testing.T, proxyURL, hostport string) (net.Conn, string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxyURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(conn, "CONNECT "+hostport+" HTTP/1.1\r\nHost: "+hostport+"\r\n\r\n")
+	br := make([]byte, 4096)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, _ := conn.Read(br)
+	return conn, string(br[:n])
+}
 
 func upstreamAddr(s *httptest.Server) string {
 	u, _ := url.Parse(s.URL)
