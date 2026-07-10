@@ -168,7 +168,7 @@ func adversarialCeiling() types.RunPolicySpec {
 
 // twoBackendRegistry builds a Registry directly via composer.NewRegistry with two
 // FakeComposer backends ("primary" default + "secondary"), both returning result.
-func twoBackendRegistry(t *testing.T, result composer.Proposal) composer.Registry {
+func twoBackendRegistry(t *testing.T, result composer.Proposal) *composer.Registry {
 	t.Helper()
 	reg, err := composer.NewRegistry("primary", []composer.RegistryEntry{
 		{
@@ -830,7 +830,7 @@ func TestCompose_LocalGitRemoteGrounding(t *testing.T) {
 
 // interviewRegistry builds a single-backend registry whose fake asks one round of
 // questions (the given clarification) and then proposes `result`.
-func interviewRegistry(t *testing.T, result composer.Proposal, clar composer.Clarification) composer.Registry {
+func interviewRegistry(t *testing.T, result composer.Proposal, clar composer.Clarification) *composer.Registry {
 	t.Helper()
 	reg, err := composer.NewRegistry("interview", []composer.RegistryEntry{{
 		Info: composer.BackendInfo{Name: "interview", Provider: "anthropic", Model: "claude-test"},

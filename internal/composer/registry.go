@@ -35,41 +35,18 @@ type BackendInfo struct {
 	IsDefault bool   `json:"is_default"`
 }
 
-// Registry is the set of composer backends an operator has configured, with a
-// default. The API endpoint resolves a per-request backend name (empty = default)
-// and lists the available backends for the UI dropdown. A Registry with no
-// enabled backends reports Enabled()==false so the endpoint fails closed (404).
-type Registry interface {
-	// Propose runs the named backend ("" = the configured default). It returns
-	// ErrUnknownBackend (wrapped) when the name is not configured.
-	Propose(ctx context.Context, backend string, req ComposeRequest) (Proposal, error)
-	// Clarify runs the named backend's interview step ("" = default). A backend
-	// that does not implement Clarifier degrades to Clarification{Ready:true} (no
-	// questions — straight to Propose). Returns ErrUnknownBackend for an unknown
-	// name.
-	Clarify(ctx context.Context, backend string, req ComposeRequest) (Clarification, error)
-	// Assist answers ONE plain-language operator question about the proposed setup
-	// as INERT advisory text ("" = default backend). A backend that does not
-	// implement Assister degrades to a friendly "unavailable" string (never an
-	// error). Returns ErrUnknownBackend for an unknown name. The answer carries NO
-	// authority: it is never re-graded, clamped, or fed back into the pipeline.
-	Assist(ctx context.Context, backend string, req ComposeRequest, question string) (string, error)
-	// List returns display info for every configured backend (no secrets).
-	List() []BackendInfo
-	// Default returns the default backend name.
-	Default() string
-	// Enabled reports whether any backend is configured.
-	Enabled() bool
-}
-
 // RegistryEntry binds a backend's display info to its Composer implementation.
 type RegistryEntry struct {
 	Info     BackendInfo
 	Composer Composer
 }
 
-// staticRegistry is the default Registry: a fixed map built at boot.
-type staticRegistry struct {
+// Registry is the set of composer backends an operator has configured, with a
+// default: a fixed map built at boot. The API endpoint resolves a per-request
+// backend name (empty = default) and lists the available backends for the UI
+// dropdown. A Registry with no enabled backends reports Enabled()==false so
+// the endpoint fails closed (404).
+type Registry struct {
 	backends map[string]Composer
 	info     []BackendInfo
 	def      string
@@ -78,8 +55,8 @@ type staticRegistry struct {
 // NewRegistry builds a Registry from entries and a default name. It validates
 // that the default exists and that names are unique and non-empty. The returned
 // BackendInfo.IsDefault is normalized to match def.
-func NewRegistry(def string, entries []RegistryEntry) (Registry, error) {
-	r := &staticRegistry{backends: make(map[string]Composer, len(entries))}
+func NewRegistry(def string, entries []RegistryEntry) (*Registry, error) {
+	r := &Registry{backends: make(map[string]Composer, len(entries))}
 	for _, e := range entries {
 		if e.Info.Name == "" {
 			return nil, errors.New("composer: backend with empty name")
@@ -109,7 +86,9 @@ func NewRegistry(def string, entries []RegistryEntry) (Registry, error) {
 	return r, nil
 }
 
-func (r *staticRegistry) Propose(ctx context.Context, backend string, req ComposeRequest) (Proposal, error) {
+// Propose runs the named backend ("" = the configured default). It returns
+// ErrUnknownBackend (wrapped) when the name is not configured.
+func (r *Registry) Propose(ctx context.Context, backend string, req ComposeRequest) (Proposal, error) {
 	name := backend
 	if name == "" {
 		name = r.def
@@ -121,7 +100,10 @@ func (r *staticRegistry) Propose(ctx context.Context, backend string, req Compos
 	return c.Propose(ctx, req)
 }
 
-func (r *staticRegistry) Clarify(ctx context.Context, backend string, req ComposeRequest) (Clarification, error) {
+// Clarify runs the named backend's interview step ("" = default). A backend
+// that does not implement Clarifier degrades to Clarification{Ready:true} (no
+// questions — straight to Propose). Returns ErrUnknownBackend for an unknown name.
+func (r *Registry) Clarify(ctx context.Context, backend string, req ComposeRequest) (Clarification, error) {
 	name := backend
 	if name == "" {
 		name = r.def
@@ -163,7 +145,12 @@ func AssistUserMessage(req ComposeRequest, question string) string {
 	return BuildUserMessage(req) + "\n\nOperator question: " + strings.TrimSpace(question)
 }
 
-func (r *staticRegistry) Assist(ctx context.Context, backend string, req ComposeRequest, question string) (string, error) {
+// Assist answers ONE plain-language operator question about the proposed setup
+// as INERT advisory text ("" = default backend). A backend that does not
+// implement Assister degrades to a friendly "unavailable" string (never an
+// error). Returns ErrUnknownBackend for an unknown name. The answer carries NO
+// authority: it is never re-graded, clamped, or fed back into the pipeline.
+func (r *Registry) Assist(ctx context.Context, backend string, req ComposeRequest, question string) (string, error) {
 	name := backend
 	if name == "" {
 		name = r.def
@@ -180,6 +167,7 @@ func (r *staticRegistry) Assist(ctx context.Context, backend string, req Compose
 	return assistUnavailable, nil
 }
 
-func (r *staticRegistry) List() []BackendInfo { return r.info }
-func (r *staticRegistry) Default() string     { return r.def }
-func (r *staticRegistry) Enabled() bool       { return len(r.backends) > 0 }
+// List returns display info for every configured backend (no secrets).
+func (r *Registry) List() []BackendInfo { return r.info }
+func (r *Registry) Default() string     { return r.def }
+func (r *Registry) Enabled() bool       { return len(r.backends) > 0 }

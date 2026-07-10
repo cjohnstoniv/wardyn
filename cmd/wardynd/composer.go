@@ -27,7 +27,7 @@ import (
 // needs a key but names no secret (or the lookup fails), WARDYN_COMPOSER_API_KEY is
 // used as a fallback. Bedrock/Azure-Entra use cloud credential chains and CLI
 // subscriptions use resident CLI creds — neither needs a key here.
-func buildComposerRegistry(cfgVal string, secrets secretstore.Store) (composer.Registry, []backends.BackendReadiness, error) {
+func buildComposerRegistry(cfgVal string, secrets secretstore.Store) (*composer.Registry, []backends.BackendReadiness, error) {
 	cfgVal = strings.TrimSpace(cfgVal)
 	if cfgVal == "" {
 		return nil, nil, nil

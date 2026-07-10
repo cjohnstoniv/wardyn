@@ -122,12 +122,12 @@ func NewFromSpec(spec BackendSpec, apiKey string) (composer.Composer, error) {
 	}
 }
 
-// BuildRegistry constructs a composer.Registry from RegistryConfig. resolveKey
+// BuildRegistry constructs a *composer.Registry from RegistryConfig. resolveKey
 // resolves a backend's API key (secret-store name -> value, with the caller's env
 // fallback baked in); it is only called for backends that needsAPIKey(). Disabled
 // backends are skipped. It returns the registry plus human-readable warnings
 // (e.g. the subscription ToS notice) for the operator log.
-func BuildRegistry(cfg RegistryConfig, resolveKey func(spec BackendSpec) (string, error)) (composer.Registry, []string, error) {
+func BuildRegistry(cfg RegistryConfig, resolveKey func(spec BackendSpec) (string, error)) (*composer.Registry, []string, error) {
 	var entries []composer.RegistryEntry
 	var warnings []string
 	for _, spec := range cfg.Backends {
