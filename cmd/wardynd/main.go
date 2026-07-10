@@ -495,13 +495,11 @@ func run() error {
 		return fmt.Errorf("composer: %w", err)
 	}
 	// Map the boot-snapshot readiness onto the api wire type for /setup/status.
+	// backends.BackendReadiness and api.ComposerBackendReadiness have identical
+	// fields/types/order, so this is a plain Go struct conversion (tags ignored).
 	var composerBackends []api.ComposerBackendReadiness
 	for _, b := range composerReadiness {
-		composerBackends = append(composerBackends, api.ComposerBackendReadiness{
-			Name: b.Name, Provider: b.Provider, Model: b.Model, Wire: b.Wire,
-			Transport: b.Transport, Auth: b.Auth,
-			Enabled: b.Enabled, NeedsKey: b.NeedsKey, KeySecret: b.KeySecret, KeyResolved: b.KeyResolved,
-		})
+		composerBackends = append(composerBackends, api.ComposerBackendReadiness(b))
 	}
 	if composerReg != nil && composerReg.Enabled() {
 		names := make([]string, 0)
