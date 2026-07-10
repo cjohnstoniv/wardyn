@@ -13,10 +13,9 @@
 #   - iproute2    : `ip route` to prove the sandbox has NO default route (L0)
 #   - busybox wget: a second egress client
 #
-# probe.sh is the documented in-sandbox egress probe. The docker driver holds
-# the agent open by setting the container Cmd to `sleep infinity` and launches
-# the real agent via Exec, so the harness runs probe.sh on demand with
-# `docker exec` rather than as the entrypoint.
+# The docker driver holds the agent open by setting the container Cmd to
+# `sleep infinity` and launches the real agent via Exec; e2e.sh runs its own
+# inline docker-exec curl probes rather than a fixture script.
 #
 # CRITICAL: this image MUST NOT declare an ENTRYPOINT. The Wardyn docker driver
 # sets only the container *Cmd* (["sleep","infinity"]); an ENTRYPOINT would
@@ -28,10 +27,7 @@ FROM alpine:3.20
 
 RUN apk add --no-cache curl iproute2 ca-certificates
 
-COPY probe.sh /usr/local/bin/probe.sh
-RUN chmod +x /usr/local/bin/probe.sh
-
 # No ENTRYPOINT on purpose (see note above). The default CMD is a harmless
 # self-documenting message for standalone `docker run` invocations; the Wardyn
 # driver replaces it with `sleep infinity`.
-CMD ["/bin/sh", "-c", "echo 'wardyn e2e fixture: run probe.sh via docker exec' && sleep infinity"]
+CMD ["/bin/sh", "-c", "echo 'wardyn e2e fixture: probes run via docker exec' && sleep infinity"]
