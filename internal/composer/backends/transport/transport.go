@@ -24,10 +24,10 @@
 //   - Redirect guard: a redirect to a non-allowlisted host is refused.
 //   - Sensible timeouts bound every request.
 //
-// It is self-contained (standard library only) and deliberately does NOT import
-// internal/egress — that would create an import cycle (egress depends on types,
-// and pulling it in here would entangle the composer with the data-plane proxy).
-// The blocked-range list is therefore kept in sync with policy.go by hand.
+// It deliberately does NOT import internal/egress — that would create an
+// import cycle (egress depends on types, and pulling it in here would entangle
+// the composer with the data-plane proxy). The blocked-range CIDR table is
+// shared with policy.go via the stdlib-only leaf internal/ipguard instead.
 package transport
 
 import (
@@ -39,6 +39,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 )
 
 // defaultTimeout bounds a single LLM request (the whole Do, including reading
@@ -138,42 +140,14 @@ func (g *Guard) Vet(ctx context.Context, host string) (net.IP, error) {
 	return ips[0], nil
 }
 
-// blockedV4 / blockedV6 are the unconditionally-denied CIDR ranges (loopback,
-// link-local, multicast, and the unspecified address are handled separately via
-// the net.IP predicates so they can stay blocked even under allowPrivate). This
-// list mirrors internal/egress/proxy/policy.go.
+// blockedV4 / blockedV6 are the unconditionally-denied CIDR ranges, shared
+// with the egress proxy via internal/ipguard (loopback, link-local, multicast,
+// and the unspecified address are handled separately via the net.IP predicates
+// so they can stay blocked even under allowPrivate).
 var (
-	blockedV4 []*net.IPNet
-	blockedV6 []*net.IPNet
+	blockedV4 = ipguard.PrivateReservedV4
+	blockedV6 = ipguard.UniqueLocalV6
 )
-
-func init() {
-	for _, c := range []string{
-		"10.0.0.0/8",     // RFC1918 private
-		"172.16.0.0/12",  // RFC1918 private
-		"192.168.0.0/16", // RFC1918 private
-		"100.64.0.0/10",  // CGNAT (RFC6598)
-		"0.0.0.0/8",      // "this network"
-		"192.0.0.0/24",   // IETF protocol assignments
-		"198.18.0.0/15",  // benchmarking
-		"255.255.255.255/32",
-	} {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			panic("transport: bad builtin CIDR " + c) // init-time programmer error only
-		}
-		blockedV4 = append(blockedV4, n)
-	}
-	for _, c := range []string{
-		"fc00::/7", // unique local (ULA)
-	} {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			panic("transport: bad builtin CIDR " + c)
-		}
-		blockedV6 = append(blockedV6, n)
-	}
-}
 
 // IsBlocked reports whether ip is in an unconditionally-denied range. IPv4-mapped
 // IPv6 addresses are unwrapped first so a "::ffff:127.0.0.1" cannot smuggle a
