@@ -315,6 +315,3 @@ func decodeCastOutput(t *testing.T, cast string) string {
 	}
 	return out.String()
 }
-
-// compile-time use of types to keep imports meaningful if a case is removed.
-var _ = types.ActorHuman

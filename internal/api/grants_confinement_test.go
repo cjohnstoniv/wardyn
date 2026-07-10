@@ -223,7 +223,3 @@ func TestListGrantsRequiresAuth(t *testing.T) {
 		t.Fatalf("no token grants: code = %d, want 401", w.Code)
 	}
 }
-
-// compile-time reference so the store import is meaningful even if the
-// pool-gated tests are skipped (keeps the import from being flagged).
-var _ = store.ListGrantsByRun
