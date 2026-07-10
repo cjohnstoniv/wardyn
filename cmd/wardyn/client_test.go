@@ -68,15 +68,6 @@ func readAll(r *http.Request) ([]byte, error) {
 	return io.ReadAll(r.Body)
 }
 
-// assertAuth checks the bearer header carried the configured token.
-func assertAuth(t *testing.T, cap *capture) {
-	t.Helper()
-	want := "Bearer " + testToken
-	if cap.auth != want {
-		t.Errorf("Authorization = %q, want %q", cap.auth, want)
-	}
-}
-
 // decodeBody unmarshals the captured JSON body into a generic map.
 func decodeBody(t *testing.T, cap *capture) map[string]any {
 	t.Helper()
@@ -91,92 +82,22 @@ func decodeBody(t *testing.T, cap *capture) map[string]any {
 }
 
 // --------------------------------------------------------------------------
-// no-token (LOCAL HOST MODE): do() proceeds WITHOUT an Authorization header
-// rather than erroring client-side, so the CLI works against a loopback wardynd
-// in local mode. An auth-gated server returns a clear 401 instead.
-// --------------------------------------------------------------------------
-
-func TestClientDo_NoTokenSendsNoAuthHeader(t *testing.T) {
-	var gotAuth string
-	var sawReq bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawReq = true
-		gotAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte("[]"))
-	}))
-	defer srv.Close()
-
-	c := &apiClient{baseURL: srv.URL} // no token
-	if _, err := c.listRuns(context.Background()); err != nil {
-		t.Fatalf("expected no-token request to proceed, got error: %v", err)
-	}
-	if !sawReq {
-		t.Fatal("server saw no request; do() refused before sending")
-	}
-	if gotAuth != "" {
-		t.Errorf("Authorization header = %q, want empty (no token)", gotAuth)
-	}
-}
-
-// --------------------------------------------------------------------------
 // createRun: POST /api/v1/runs with the run body
 // --------------------------------------------------------------------------
-
-func TestClientCreateRun(t *testing.T) {
-	id := uuid.New()
-	want := types.AgentRun{
-		ID:               id,
-		Agent:            "claude-code",
-		Repo:             "org/repo",
-		Task:             "fix bug",
-		ConfinementClass: types.CC2,
-		State:            types.RunPending,
-		SPIFFEID:         "spiffe://example/agent-run/x",
-	}
-	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusCreated, want)
-
-	got, err := c.createRun(context.Background(), createRunBody{
-		Agent: "claude-code", Repo: "org/repo", Task: "fix bug",
-		PolicyID: "pol-1", ConfinementClass: "CC2", Interactive: true,
-	})
-	if err != nil {
-		t.Fatalf("createRun returned error: %v", err)
-	}
-	if cap.method != http.MethodPost {
-		t.Errorf("method = %s, want POST", cap.method)
-	}
-	if cap.path != "/api/v1/runs" {
-		t.Errorf("path = %s, want /api/v1/runs", cap.path)
-	}
-	if cap.ctype != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", cap.ctype)
-	}
-	assertAuth(t, &cap)
-	body := decodeBody(t, &cap)
-	if body["agent"] != "claude-code" || body["repo"] != "org/repo" || body["task"] != "fix bug" {
-		t.Errorf("body agent/repo/task wrong: %v", body)
-	}
-	if body["policy_id"] != "pol-1" || body["confinement_class"] != "CC2" {
-		t.Errorf("body policy/confinement wrong: %v", body)
-	}
-	if body["interactive"] != true {
-		t.Errorf("body interactive = %v, want true", body["interactive"])
-	}
-	if got.ID != id {
-		t.Errorf("decoded run ID = %v, want %v", got.ID, id)
-	}
-}
 
 // createRunBody omits empty optional fields so a minimal run does not send
 // policy_id / confinement_class / interactive on the wire.
 func TestClientCreateRun_OmitsEmptyOptionals(t *testing.T) {
+	id := uuid.New()
 	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusCreated, types.AgentRun{ID: uuid.New()})
+	_, c := newCapturingServer(t, &cap, http.StatusCreated, types.AgentRun{ID: id})
 
-	if _, err := c.createRun(context.Background(), createRunBody{Agent: "a", Repo: "o/r"}); err != nil {
+	got, err := c.createRun(context.Background(), createRunBody{Agent: "a", Repo: "o/r"})
+	if err != nil {
 		t.Fatalf("createRun returned error: %v", err)
+	}
+	if got.ID != id {
+		t.Errorf("decoded run ID = %v, want %v", got.ID, id)
 	}
 	body := decodeBody(t, &cap)
 	for _, k := range []string{"policy_id", "confinement_class", "interactive"} {
@@ -187,43 +108,7 @@ func TestClientCreateRun_OmitsEmptyOptionals(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// listRuns / killRun
-// --------------------------------------------------------------------------
-
-func TestClientListRuns(t *testing.T) {
-	want := []types.AgentRun{{ID: uuid.New(), Agent: "a"}, {ID: uuid.New(), Agent: "b"}}
-	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusOK, want)
-
-	got, err := c.listRuns(context.Background())
-	if err != nil {
-		t.Fatalf("listRuns returned error: %v", err)
-	}
-	if cap.method != http.MethodGet || cap.path != "/api/v1/runs" {
-		t.Errorf("got %s %s, want GET /api/v1/runs", cap.method, cap.path)
-	}
-	if len(cap.body) != 0 {
-		t.Errorf("GET should send no body, got %q", cap.body)
-	}
-	if len(got) != 2 {
-		t.Errorf("decoded %d runs, want 2", len(got))
-	}
-}
-
-func TestClientKillRun(t *testing.T) {
-	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusAccepted, nil)
-
-	if err := c.killRun(context.Background(), "run-123"); err != nil {
-		t.Fatalf("killRun returned error: %v", err)
-	}
-	if cap.method != http.MethodPost || cap.path != "/api/v1/runs/run-123/kill" {
-		t.Errorf("got %s %s, want POST /api/v1/runs/run-123/kill", cap.method, cap.path)
-	}
-}
-
-// --------------------------------------------------------------------------
-// approvals: list (state query) + approve/deny verb + reason body
+// approvals: list (state query) — no CLI command yet for these, kept here
 // --------------------------------------------------------------------------
 
 func TestClientListApprovals_WithState(t *testing.T) {
@@ -253,122 +138,9 @@ func TestClientListApprovals_NoState(t *testing.T) {
 	}
 }
 
-func TestClientDecideApproval_Verb(t *testing.T) {
-	tests := []struct {
-		name     string
-		approve  bool
-		wantVerb string
-	}{
-		{name: "approve hits the approve verb", approve: true, wantVerb: "approve"},
-		{name: "deny hits the deny verb", approve: false, wantVerb: "deny"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var cap capture
-			_, c := newCapturingServer(t, &cap, http.StatusOK, types.ApprovalRequest{State: types.ApprovalApproved})
-
-			if _, err := c.decideApproval(context.Background(), "ap-7", tc.approve, "looks fine"); err != nil {
-				t.Fatalf("decideApproval returned error: %v", err)
-			}
-			wantPath := "/api/v1/approvals/ap-7/" + tc.wantVerb
-			if cap.method != http.MethodPost || cap.path != wantPath {
-				t.Errorf("got %s %s, want POST %s", cap.method, cap.path, wantPath)
-			}
-			body := decodeBody(t, &cap)
-			if body["reason"] != "looks fine" {
-				t.Errorf("reason body = %v, want %q", body["reason"], "looks fine")
-			}
-		})
-	}
-}
-
-// --------------------------------------------------------------------------
-// audit: GET /api/v1/audit?run_id=...
-// --------------------------------------------------------------------------
-
-func TestClientAudit(t *testing.T) {
-	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusOK, []types.AuditEvent{{Action: "run.create"}})
-
-	if _, err := c.audit(context.Background(), "run-9"); err != nil {
-		t.Fatalf("audit returned error: %v", err)
-	}
-	if cap.method != http.MethodGet || cap.path != "/api/v1/audit" {
-		t.Errorf("got %s %s, want GET /api/v1/audit", cap.method, cap.path)
-	}
-	if cap.query != "run_id=run-9" {
-		t.Errorf("query = %q, want run_id=run-9", cap.query)
-	}
-}
-
 // --------------------------------------------------------------------------
 // policy CRUD: list/get/create/update/delete method+path+body
 // --------------------------------------------------------------------------
-
-func TestClientPolicyCRUD(t *testing.T) {
-	tests := []struct {
-		name       string
-		call       func(c *apiClient) error
-		wantMethod string
-		wantPath   string
-		wantBody   bool
-	}{
-		{
-			name:       "list",
-			call:       func(c *apiClient) error { _, err := c.listPolicies(context.Background()); return err },
-			wantMethod: http.MethodGet, wantPath: "/api/v1/policies",
-		},
-		{
-			name:       "get",
-			call:       func(c *apiClient) error { _, err := c.getPolicy(context.Background(), "p-1"); return err },
-			wantMethod: http.MethodGet, wantPath: "/api/v1/policies/p-1",
-		},
-		{
-			name: "create",
-			call: func(c *apiClient) error {
-				_, err := c.createPolicy(context.Background(), policyBody{Name: "default"})
-				return err
-			},
-			wantMethod: http.MethodPost, wantPath: "/api/v1/policies", wantBody: true,
-		},
-		{
-			name: "update",
-			call: func(c *apiClient) error {
-				_, err := c.updatePolicy(context.Background(), "p-2", policyBody{Name: "renamed"})
-				return err
-			},
-			wantMethod: http.MethodPut, wantPath: "/api/v1/policies/p-2", wantBody: true,
-		},
-		{
-			name:       "delete",
-			call:       func(c *apiClient) error { return c.deletePolicy(context.Background(), "p-3") },
-			wantMethod: http.MethodDelete, wantPath: "/api/v1/policies/p-3",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var cap capture
-			// We only assert the outbound request here (method/path/body), so the
-			// server returns an empty 200 with no body — that decodes cleanly into
-			// any of the slice/object return types these calls expect.
-			_, c := newCapturingServer(t, &cap, http.StatusOK, nil)
-
-			if err := tc.call(c); err != nil {
-				t.Fatalf("%s call returned error: %v", tc.name, err)
-			}
-			if cap.method != tc.wantMethod || cap.path != tc.wantPath {
-				t.Errorf("got %s %s, want %s %s", cap.method, cap.path, tc.wantMethod, tc.wantPath)
-			}
-			assertAuth(t, &cap)
-			if tc.wantBody && len(cap.body) == 0 {
-				t.Errorf("%s should send a JSON body, got none", tc.name)
-			}
-			if !tc.wantBody && len(cap.body) != 0 {
-				t.Errorf("%s should send no body, got %q", tc.name, cap.body)
-			}
-		})
-	}
-}
 
 func TestClientCreatePolicy_BodyShape(t *testing.T) {
 	var cap capture
@@ -422,18 +194,9 @@ func TestClientPutSecret(t *testing.T) {
 	}
 }
 
-func TestClientDeleteSecret(t *testing.T) {
-	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusNoContent, nil)
-
-	if err := c.deleteSecret(context.Background(), "gh-token"); err != nil {
-		t.Fatalf("deleteSecret returned error: %v", err)
-	}
-	if cap.method != http.MethodDelete || cap.path != "/api/v1/secrets/gh-token" {
-		t.Errorf("got %s %s, want DELETE /api/v1/secrets/gh-token", cap.method, cap.path)
-	}
-}
-
+// listSecrets unwraps the {"names":[...]} envelope — the command test only
+// asserts the outbound request, not the printed names, so this is the only
+// coverage of that decode step.
 func TestClientListSecrets(t *testing.T) {
 	var cap capture
 	_, c := newCapturingServer(t, &cap, http.StatusOK, map[string][]string{"names": {"a", "b", "c"}})
@@ -441,9 +204,6 @@ func TestClientListSecrets(t *testing.T) {
 	got, err := c.listSecrets(context.Background())
 	if err != nil {
 		t.Fatalf("listSecrets returned error: %v", err)
-	}
-	if cap.method != http.MethodGet || cap.path != "/api/v1/secrets" {
-		t.Errorf("got %s %s, want GET /api/v1/secrets", cap.method, cap.path)
 	}
 	if strings.Join(got, ",") != "a,b,c" {
 		t.Errorf("names = %v, want [a b c]", got)

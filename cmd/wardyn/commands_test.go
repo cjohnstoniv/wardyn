@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -31,6 +30,7 @@ type recordedReq struct {
 	path   string
 	query  string
 	auth   string
+	ctype  string
 	body   []byte
 }
 
@@ -61,7 +61,7 @@ func newCmdServer(t *testing.T, respStatus int, respBody any) *cmdServer {
 		cs.mu.Lock()
 		cs.reqs = append(cs.reqs, recordedReq{
 			method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
-			auth: r.Header.Get("Authorization"), body: body,
+			auth: r.Header.Get("Authorization"), ctype: r.Header.Get("Content-Type"), body: body,
 		})
 		cs.mu.Unlock()
 		if respBody != nil {
@@ -110,6 +110,9 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	}
 	if got.auth != "Bearer tok" {
 		t.Errorf("auth = %q, want Bearer tok", got.auth)
+	}
+	if got.ctype != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got.ctype)
 	}
 	var body map[string]any
 	if err := json.Unmarshal(got.body, &body); err != nil {
@@ -474,19 +477,6 @@ func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
 	srv.mu.Unlock()
 	if n != 1 {
 		t.Errorf("server saw %d requests, want 1", n)
-	}
-}
-
-// envOr returns the default when the var is unset OR empty, and the value
-// otherwise — this is the resolution behind the --url default.
-func TestEnvOr(t *testing.T) {
-	t.Setenv("WARDYN_URL", "")
-	if got := cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"); got != "http://localhost:8080" {
-		t.Errorf("envOr(empty) = %q, want default", got)
-	}
-	t.Setenv("WARDYN_URL", "http://example:9000")
-	if got := cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"); got != "http://example:9000" {
-		t.Errorf("envOr(set) = %q, want the env value", got)
 	}
 }
 
