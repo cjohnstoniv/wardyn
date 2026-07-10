@@ -18,10 +18,8 @@ package apie2e
 // can neither exceed operator policy nor hide its own risk.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -231,28 +229,11 @@ func getBackends(t *testing.T, baseURL string) (int, []byte) {
 	return doAdmin(t, http.MethodGet, baseURL+"/api/v1/composer/backends", nil)
 }
 
+// doAdmin is doRaw with the admin token (ponytail P3-SDK-4).
 func doAdmin(t *testing.T, method, url string, body []byte) (int, []byte) {
 	t.Helper()
-	var r io.Reader
-	if body != nil {
-		r = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(context.Background(), method, url, r)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Authorization", "Bearer "+adminToken)
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw
+	status, raw := doRaw(t, method, url, adminToken, body)
+	return status, []byte(raw)
 }
 
 func decodeCompose(t *testing.T, raw []byte) composeResp {

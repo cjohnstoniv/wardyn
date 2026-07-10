@@ -6,7 +6,6 @@ package apie2e
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"slices"
 	"testing"
@@ -207,20 +206,6 @@ func actionsOf(events []types.AuditEvent) []string {
 // putRaw PUTs a raw body with a bearer token and returns the status code.
 func (h *harness) putRaw(t *testing.T, path, bearer string, body []byte) int {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, h.srv.URL+path, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("PUT %s: %v", path, err)
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode
+	status, _ := doRaw(t, http.MethodPut, h.srv.URL+path, bearer, body)
+	return status
 }

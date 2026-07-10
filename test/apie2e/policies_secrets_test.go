@@ -6,12 +6,10 @@ package apie2e
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -263,23 +261,6 @@ type rawResponse struct {
 // the status + body. An empty bearer sends no Authorization header.
 func (h *harness) getJSON(t *testing.T, path, bearer string) rawResponse {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.srv.URL+path, nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	return rawResponse{status: resp.StatusCode, body: string(raw)}
+	status, body := doRaw(t, http.MethodGet, h.srv.URL+path, bearer, nil)
+	return rawResponse{status: status, body: body}
 }
