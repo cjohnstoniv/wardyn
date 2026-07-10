@@ -27,10 +27,9 @@ type capturedRequest struct {
 }
 
 // newFakeServer returns an httptest.Server that records the first Messages request
-// into rec and replies with a Messages response whose content carries the given
-// blocks. textJSON is emitted as a text block (Structured Outputs); when toolName
-// is non-empty the same JSON is emitted as a tool_use block instead.
-func newFakeServer(t *testing.T, rec *capturedRequest, textJSON, toolName string) *httptest.Server {
+// into rec and replies with a Messages response whose content carries textJSON as
+// a text block (Structured Outputs).
+func newFakeServer(t *testing.T, rec *capturedRequest, textJSON string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.path = r.URL.Path
@@ -41,17 +40,7 @@ func newFakeServer(t *testing.T, rec *capturedRequest, textJSON, toolName string
 		if err := json.Unmarshal(raw, &rec.body); err != nil {
 			t.Errorf("unmarshal request body: %v (body=%s)", err, raw)
 		}
-		var content []map[string]any
-		if toolName != "" {
-			content = []map[string]any{{
-				"type":  "tool_use",
-				"id":    "toolu_test",
-				"name":  toolName,
-				"input": json.RawMessage(textJSON),
-			}}
-		} else {
-			content = []map[string]any{{"type": "text", "text": textJSON}}
-		}
+		content := []map[string]any{{"type": "text", "text": textJSON}}
 		resp := map[string]any{
 			"id":          "msg_test",
 			"type":        "message",
@@ -166,7 +155,7 @@ func TestNewComposer_Validation(t *testing.T) {
 
 func TestPropose_StructuredOutputs(t *testing.T) {
 	var rec capturedRequest
-	srv := newFakeServer(t, &rec, composertest.ValidProposalJSON, "")
+	srv := newFakeServer(t, &rec, composertest.ValidProposalJSON)
 
 	c, err := NewComposer(Config{
 		Transport:    TransportAPI,
@@ -224,56 +213,10 @@ func TestPropose_StructuredOutputs(t *testing.T) {
 	}
 }
 
-func TestPropose_ForcedToolFallback(t *testing.T) {
-	var rec capturedRequest
-	srv := newFakeServer(t, &rec, composertest.ValidProposalJSON, composer.ProposalSchemaName)
-
-	c, err := NewComposer(Config{
-		Transport:     TransportAPI,
-		Model:         "claude-sonnet-4-5",
-		APIKey:        "test",
-		useForcedTool: true,
-		extraOptions:  []option.RequestOption{option.WithBaseURL(srv.URL), option.WithHTTPClient(srv.Client())},
-	})
-	if err != nil {
-		t.Fatalf("NewComposer: %v", err)
-	}
-
-	p, err := c.Propose(context.Background(), composertest.SampleRequest())
-	if err != nil {
-		t.Fatalf("Propose: %v", err)
-	}
-	assertValidProposal(t, p)
-
-	// Forced-tool path: a single tool whose name is the schema name, pinned via
-	// tool_choice; output_config.format must NOT be present.
-	tools, ok := rec.body["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("request tools = %v, want exactly one tool", rec.body["tools"])
-	}
-	tool := tools[0].(map[string]any)
-	if tool["name"] != composer.ProposalSchemaName {
-		t.Errorf("tool name = %v, want %q", tool["name"], composer.ProposalSchemaName)
-	}
-	if _, ok := dig(tool, "input_schema", "properties"); !ok {
-		t.Errorf("tool input_schema missing properties; tool=%v", tool)
-	}
-	if ap, _ := dig(tool, "input_schema", "additionalProperties"); ap != false {
-		t.Errorf("tool input_schema.additionalProperties = %v, want false", ap)
-	}
-	choiceName, _ := dig(rec.body, "tool_choice", "name")
-	if choiceName != composer.ProposalSchemaName {
-		t.Errorf("tool_choice.name = %v, want %q", choiceName, composer.ProposalSchemaName)
-	}
-	if _, hasFmt := dig(rec.body, "output_config", "format"); hasFmt {
-		t.Error("forced-tool path should NOT send output_config.format")
-	}
-}
-
 func TestPropose_StripsCodeFence(t *testing.T) {
 	var rec capturedRequest
 	fenced := "```json\n" + composertest.ValidProposalJSON + "\n```"
-	srv := newFakeServer(t, &rec, fenced, "")
+	srv := newFakeServer(t, &rec, fenced)
 
 	c, err := NewComposer(Config{
 		Transport:    TransportAPI,
@@ -341,7 +284,7 @@ func TestPropose_MalformedFailsClosed(t *testing.T) {
 func TestPropose_UnknownGrantKindFailsClosed(t *testing.T) {
 	bad := strings.Replace(composertest.ValidProposalJSON, `"kind": "github_token"`, `"kind": "root_shell"`, 1)
 	var rec capturedRequest
-	srv := newFakeServer(t, &rec, bad, "")
+	srv := newFakeServer(t, &rec, bad)
 
 	c, err := NewComposer(Config{
 		Transport:    TransportAPI,
@@ -379,15 +322,11 @@ func TestStripCodeFence(t *testing.T) {
 }
 
 func TestExtractJSON_Errors(t *testing.T) {
-	if _, err := extractJSON(nil, false); err == nil {
+	if _, err := extractJSON(nil); err == nil {
 		t.Error("extractJSON(nil) error = nil, want error")
 	}
-	// Structured-output path with no text content fails closed.
-	if _, err := extractJSON(&sdk.Message{}, false); err == nil {
-		t.Error("extractJSON(empty, structured) error = nil, want no-text error")
-	}
-	// Forced-tool path with no tool_use block fails closed.
-	if _, err := extractJSON(&sdk.Message{}, true); err == nil {
-		t.Error("extractJSON(empty, forced-tool) error = nil, want no-tool error")
+	// No text content fails closed.
+	if _, err := extractJSON(&sdk.Message{}); err == nil {
+		t.Error("extractJSON(empty) error = nil, want no-text error")
 	}
 }
