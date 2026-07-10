@@ -77,28 +77,6 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 	return ToSorted(ghSet), ToSorted(otherSet)
 }
 
-// Classify maps a git remote HOST to a broker-relevant category:
-//   - "github"       — github.com, *.github.com
-//   - "azure_devops" — dev.azure.com, *.visualstudio.com
-//   - "gitlab"       — gitlab.com and self-managed gitlab.* hosts
-//   - "other"        — anything else
-//
-// Matching is case-insensitive and tolerates a trailing dot. Pure string work
-// (no subprocess), reusing the host forms parseRemoteURL already yields.
-func Classify(host string) string {
-	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	switch {
-	case h == "github.com" || strings.HasSuffix(h, ".github.com"):
-		return "github"
-	case h == "dev.azure.com" || strings.HasSuffix(h, ".visualstudio.com"):
-		return "azure_devops"
-	case h == "gitlab.com" || strings.HasPrefix(h, "gitlab."):
-		return "gitlab"
-	default:
-		return "other"
-	}
-}
-
 // depthUnder returns how many path segments p is below root.
 func depthUnder(root, p string) int {
 	rel, err := filepath.Rel(root, p)
