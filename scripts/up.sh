@@ -256,6 +256,11 @@ cmd_up() {
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
+  # LocalMode no-auth requires a loopback request PEER; in compose the peer is the
+  # docker gateway (port is published loopback-only, so LAN peers can't reach it).
+  # Trust the forwarder so the host UI/CLI isn't 403'd. Safe only with the 127.0.0.1
+  # publish this stack uses (see docker-compose.yaml).
+  env_set "${ENV_FILE}" WARDYN_LOCAL_TRUST_FORWARDER true
   env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""
 
   _policy="${WARDYN_DEFAULT_POLICY:-}"
@@ -318,6 +323,24 @@ cmd_up() {
     log "Sandbox → control-plane reachability: OK — workspace Verify and Record will complete on this instance."
   else
     warn "sandbox → control-plane probe failed (http://wardynd:8080 on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal'."
+  fi
+
+  # LOCAL-MODE no-auth GATE smoke (closes the masking class from the N1/forwarder
+  # regression). /healthz is OUTSIDE the auth group, and the container healthcheck
+  # runs on loopback INSIDE the container — neither exercises host→gated-API from a
+  # NON-loopback peer, which is exactly what WARDYN_LOCAL_TRUST_FORWARDER must allow.
+  # Hit a gated endpoint (/api/v1/me) from an in-network container (a non-loopback
+  # peer, like the docker gateway a host request arrives as): 200 = forwarder OK;
+  # 403 = the peer gate is wrongly rejecting compose traffic (a real regression).
+  # WSL2 NAT can't do this from the host shell, so probe from the network instead.
+  if grep -qiE '^WARDYN_LOCAL_MODE=(1|true|yes)$' "${ENV_FILE}" 2>/dev/null; then
+    _me_code=$(docker run --rm --network wardyn-internal curlimages/curl:latest \
+      -s -m 5 -o /dev/null -w '%{http_code}' "http://wardynd:8080/api/v1/me" 2>/dev/null || echo 000)
+    case "${_me_code}" in
+      200) log "Local-mode no-auth gate: OK (gated API reachable from a non-loopback peer — WARDYN_LOCAL_TRUST_FORWARDER effective)." ;;
+      403) warn "Local-mode no-auth gate REJECTED a non-loopback peer (HTTP 403). The UI/CLI will be locked out — ensure WARDYN_LOCAL_TRUST_FORWARDER=true reached wardynd (docker compose config)." ;;
+      *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
+    esac
   fi
 
   open_url "${_url}"

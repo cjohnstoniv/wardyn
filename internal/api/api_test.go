@@ -192,6 +192,11 @@ func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.
 	// loopback Host (the Compose default publishes 127.0.0.1). Model that here so
 	// local-mode tests exercise the allowed path; non-local tests ignore Host.
 	r.Host = "127.0.0.1"
+	// N1: the local-mode bypass ALSO requires a loopback TCP peer (RemoteAddr).
+	// httptest.NewRequest defaults RemoteAddr to "192.0.2.1:1234" (TEST-NET, non-
+	// loopback), which the guard rejects; a real local-mode request arrives from a
+	// loopback peer. Model that so local-mode tests exercise the allowed path.
+	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
 	return w

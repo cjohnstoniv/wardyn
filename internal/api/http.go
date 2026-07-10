@@ -115,6 +115,25 @@ func isLoopbackOrigin(origin string) bool {
 	return isLoopbackHost(u.Host)
 }
 
+// isLoopbackRemoteAddr reports whether the request's TCP peer (r.RemoteAddr, set
+// by the server from the accepted connection) is a loopback address. Unlike the
+// Host header, a LAN/remote client CANNOT spoof this — it is the load-bearing gate
+// for the LOCAL-MODE no-auth surface against a DIRECT network client: a peer that
+// hits <host-ip>:<port> with a forged "Host: 127.0.0.1" passes isLoopbackHost but
+// arrives from a non-loopback peer. This does NOT replace isLoopbackHost: browser
+// DNS-rebinding runs in the victim's own browser (loopback peer, attacker Host),
+// which the Host check catches. We deliberately do NOT install middleware.RealIP
+// (see server.go), so r.RemoteAddr is the real socket peer, never an X-Forwarded-For.
+// A malformed/empty RemoteAddr fails closed (treated as non-loopback).
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func isLoopbackHost(host string) bool {
 	h := host
 	// Strip an optional :port. SplitHostPort also removes IPv6 brackets; it errors
@@ -157,13 +176,30 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			op = "local:operator"
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// N1 (direct-network guard): the no-auth local surface must answer ONLY to
+			// a loopback TCP PEER. The Host header (checked next) is forgeable by a
+			// direct socket client, so a LAN peer hitting <host-ip>:<port> with a
+			// forged "Host: 127.0.0.1" would otherwise reach this auth-bypassed
+			// surface even when wardynd is bound to 0.0.0.0 (the WARDYN_LISTEN
+			// default). RemoteAddr is the accepted-connection peer and cannot be
+			// spoofed remotely. Sidecar callbacks use internalAuth (a separate
+			// middleware) and never reach here, so they are unaffected.
+			// LocalTrustForwarder relaxes this for the compose topology only, where the
+			// peer is always the docker gateway and LAN protection is the loopback
+			// PUBLISH (see the Config field doc). The Host gate below still applies.
+			if !s.cfg.LocalTrustForwarder && !isLoopbackRemoteAddr(r.RemoteAddr) {
+				writeError(w, http.StatusForbidden, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
+				return
+			}
 			// FIX #8 (DNS-rebinding defense): the no-auth local surface must answer
 			// ONLY to a loopback Host. Without this a rebinding page
 			// (Origin==Host==attacker.com, DNS rebound to 127.0.0.1) passes the
 			// browser's same-origin check yet carries no credential, so it would
-			// otherwise reach this auth-bypassed surface. Reject any non-loopback
-			// Host with 403 BEFORE the bypass. Only LocalMode is gated here; SSO/token
-			// modes already require a credential and are unaffected.
+			// otherwise reach this auth-bypassed surface. The rebinding request runs
+			// in the victim's own browser (loopback peer, so the RemoteAddr gate above
+			// passes) — this Host gate is what stops it. Reject any non-loopback Host
+			// with 403. Only LocalMode is gated here; SSO/token modes already require a
+			// credential and are unaffected.
 			if !isLoopbackHost(r.Host) {
 				writeError(w, http.StatusForbidden, "local mode: request Host is not loopback (DNS-rebinding guard)")
 				return

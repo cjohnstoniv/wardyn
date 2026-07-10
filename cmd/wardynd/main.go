@@ -94,6 +94,7 @@ func run() error {
 		adminToken     = flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API")
 		localMode      = flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "LOCAL HOST MODE: bypass public-API auth (no SSO/token) and attribute actions to the local operator. Single-developer localhost use only — refused on a publicly-routable bind. Sidecar/run-token auth is unaffected. Auto-enabled when no auth is configured AND the bind is loopback.")
 		localOperator  = flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default: local:<os-user>)")
+		localTrustFwd  = flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access.")
 		uiDir          = flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)")
 		runnerSel      = flagEnv("runner", "WARDYN_RUNNER", "none", `runner driver: "docker" | "none"`)
 		identitySel    = flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`)
@@ -586,9 +587,10 @@ func run() error {
 		Components:                components,
 		ScanAIAdvisor:             scanAdvisor,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:    strings.TrimSpace(*ageKey) != "",
-		LocalLoopback:    loopbackBind,
-		ComposerBackends: composerBackends,
+		AgeKeyDurable:       strings.TrimSpace(*ageKey) != "",
+		LocalLoopback:       loopbackBind,
+		LocalTrustForwarder: *localTrustFwd,
+		ComposerBackends:    composerBackends,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -800,7 +802,12 @@ func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore
 		if err != nil {
 			return nil, fmt.Errorf("generate age identity: %w", err)
 		}
-		log.Printf("wardynd: WARNING generated ephemeral age identity; set -age-key=%s to persist secrets across restarts", id.String())
+		// F10: log the PUBLIC recipient as a fingerprint, never the secret identity.
+		// The old message printed the full AGE-SECRET-KEY- to a log file created at
+		// the default umask (~/.wardyn/host-wardynd.log), leaking the secret-store
+		// master key. To persist, mint one with `wardynd -gen-age-key` (prints to
+		// stdout by design) and set WARDYN_AGE_KEY — do not copy it out of this log.
+		log.Printf("wardynd: WARNING generated ephemeral age identity (public %s); secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY", id.Recipient().String())
 	} else {
 		if strings.TrimSpace(ageKey) == knownPublicAgeKey {
 			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is the publicly-known demo key (published in git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or set your own with `age-keygen`")

@@ -6,7 +6,9 @@ help:
 	@echo "Wardyn governance control plane"
 	@echo ""
 	@echo "Targets:"
-	@echo "  setup                 - One-command local Wardyn: doctor, build, up, open browser"
+	@echo "  setup                 - One-command Wardyn: prompts for mode + each credential, builds, up, opens browser"
+	@echo "                          (non-interactive opt-ins: WARDYN_SETUP_MODE=local|team [required headless],"
+	@echo "                           WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1, WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
 	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
 	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
 	@echo "  dev-pg                - Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)"
@@ -164,6 +166,9 @@ setup:
 
 # Force local (host) mode: wardynd runs as you, uses your existing Claude login
 # (no re-login, no stale credential copy). Best for sandboxing your own machine.
+# In a terminal this still PROMPTS for each credential (staging, AWS, SCM); only a
+# headless run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1
+# / WARDYN_IMPORT_SCM=1 are set.
 setup-host:
 	@echo "Wardyn setup (local/host mode: your Claude login, proxy-injected)..."
 	WARDYN_SETUP_MODE=local ./scripts/setup.sh

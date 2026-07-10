@@ -47,16 +47,39 @@ type Platform struct {
 // deliberately avoids the subprocess.
 func DetectCLIProviders() []CLIProvider {
 	home, _ := os.UserHomeDir()
+	claude := detectProvider("claude", home, []string{filepath.Join(".claude", ".credentials.json")})
+	// macOS: Claude Code stores the OAuth credential in the login Keychain (service
+	// "Claude Code-credentials"), so ~/.claude/.credentials.json usually does NOT
+	// exist — the file check above false-negatives a logged-in Mac and the UI wrongly
+	// reads "not logged in". Fall back to a Keychain presence probe. Note: host-mode
+	// subscription staging still needs the on-disk file, so this only fixes the login
+	// signal, not the composed-run mount (see stage-claude-creds.sh).
+	if !claude.LoggedIn {
+		if via := detectMacKeychainClaude(); via != "" {
+			claude.LoggedIn = true
+			claude.LoginVia = via
+		}
+	}
 	return []CLIProvider{
-		// The subscription login signal is the OAuth token file
-		// ~/.claude/.credentials.json specifically — NOT the bare ~/.claude dir or
-		// ~/.claude.json, which also exist when Claude Code runs against Bedrock or
-		// an API key (no subscription). Keying on the dir false-positives those as
-		// "subscription logged in". Symmetric with codex's .codex/auth.json, and
-		// matches what internal/subscription reads.
-		detectProvider("claude", home, []string{filepath.Join(".claude", ".credentials.json")}),
+		claude,
 		detectProvider("codex", home, []string{filepath.Join(".codex", "auth.json")}),
 	}
+}
+
+// detectMacKeychainClaude reports the Keychain-backed Claude login on macOS as a
+// LoginVia string, or "" if absent/not-macOS. It queries only the item's presence
+// (`find-generic-password` WITHOUT -w), so the secret is never read into this
+// process and no "allow access" ACL prompt is triggered — this is a metadata probe,
+// not a credential read.
+func detectMacKeychainClaude() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	// -s <service>: match the service attribute; no -w so only metadata is touched.
+	if err := exec.Command("security", "find-generic-password", "-s", "Claude Code-credentials").Run(); err == nil {
+		return "macOS Keychain (Claude Code-credentials)"
+	}
+	return ""
 }
 
 // detectProvider resolves one CLI's install + login heuristic. loginPaths are
