@@ -155,8 +155,9 @@ type Config struct {
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
 	DefaultPolicy types.RunPolicySpec
-	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s").
-	// Defaults to "docker"; "k8s" when a k8s runner is wired.
+	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
+	// or "none" for a headless control plane (-runner none: runs stay PENDING).
+	// Defaults to "docker".
 	RunnerTarget string
 	// UIDir, when set, serves a SPA from this directory at "/".
 	UIDir string
