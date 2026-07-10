@@ -4,9 +4,9 @@
  */
 
 // The Getting-started "Connect a model" step body. Renders the LLM-access list
-// (LlmAccess) and, on a sealed compose control plane that can't see the host's
-// Claude login, a host-mode hint. Has NO composer-backends section by design
-// (owner decision: zero composer UI here).
+// (LlmAccess) and, when running on the containerized control plane (a coming-soon
+// team feature) that can't see the host's Claude login, a "use host mode" hint.
+// Has NO composer-backends section by design (owner decision: zero composer UI here).
 import * as React from "react";
 import { Info } from "lucide-react";
 import type { SetupStatus } from "../../../lib/types";
@@ -51,14 +51,15 @@ export function ModelStep({
           <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed">
             <p className="text-foreground">
               Sandboxing your <span className="font-medium">own machine</span>, and already logged into the
-              Claude CLI? This is the containerized (team) setup — wardynd runs sealed in a container that
-              can&apos;t see your host&apos;s <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code>{" "}
-              login, which is why it reads &quot;not connected&quot; even though you are. The local setup uses
-              your existing login automatically — no re-login, no stored key:
+              Claude CLI? You&apos;re on the containerized control plane — a <span className="font-medium">coming-soon
+              team feature</span>. wardynd runs sealed in a container that can&apos;t see your host&apos;s{" "}
+              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login, which is why it
+              reads &quot;not connected&quot; even though you are. Host mode is the supported setup — it uses your
+              existing login automatically, no re-login, no stored key:
             </p>
             <p>
               <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-xs text-foreground">
-                make setup-host
+                make setup
               </code>
             </p>
           </div>

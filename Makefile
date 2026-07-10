@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup setup-host setup-team stop-host reset doctor dev-pg
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup stop-host reset doctor dev-pg
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -6,8 +6,8 @@ help:
 	@echo "Wardyn governance control plane"
 	@echo ""
 	@echo "Targets:"
-	@echo "  setup                 - One-command Wardyn: prompts for mode + each credential, builds, up, opens browser"
-	@echo "                          (non-interactive opt-ins: WARDYN_SETUP_MODE=local|team [required headless],"
+	@echo "  setup                 - One-command Wardyn (HOST mode): prompts for each credential, builds, up, opens browser"
+	@echo "                          (team/compose mode is coming soon; non-interactive opt-ins:"
 	@echo "                           WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1, WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
 	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
 	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
@@ -160,26 +160,16 @@ test-e2e-ui:
 	cd ui && pnpm install --frozen-lockfile
 	./scripts/run-ui-e2e.sh
 
+# HOST mode (the only supported deployment for now): wardynd runs as you and uses
+# your existing Claude login (no re-login, no stale credential copy). Team/compose
+# mode is a coming-soon feature. In a terminal this PROMPTS for each credential
+# (staging, AWS, SCM); a headless run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1
+# / WARDYN_IMPORT_AWS=1 / WARDYN_IMPORT_SCM=1 are set.
 setup:
-	@echo "Wardyn setup — detects your host, asks how you're running it, launches + opens the UI..."
+	@echo "Wardyn setup (host mode) — detects your host, prompts for each credential, launches + opens the UI..."
 	./scripts/setup.sh
 
-# Force local (host) mode: wardynd runs as you, uses your existing Claude login
-# (no re-login, no stale credential copy). Best for sandboxing your own machine.
-# In a terminal this still PROMPTS for each credential (staging, AWS, SCM); only a
-# headless run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1
-# / WARDYN_IMPORT_SCM=1 are set.
-setup-host:
-	@echo "Wardyn setup (local/host mode: your Claude login, proxy-injected)..."
-	WARDYN_SETUP_MODE=local ./scripts/setup.sh
-
-# Force team (compose) mode: sealed containerized control plane, brokered per-user
-# keys. Best for running Wardyn as a shared service.
-setup-team:
-	@echo "Wardyn setup (team/compose: sealed control plane, brokered keys)..."
-	WARDYN_SETUP_MODE=team ./scripts/setup.sh
-
-# Stop the background host-mode wardynd started by `make setup` / setup-host.
+# Stop the background host-mode wardynd started by `make setup`.
 # (Team/compose mode is stopped with `make compose-down`.)
 stop-host:
 	@pid=$$(cat $$HOME/.wardyn/host-wardynd.pid 2>/dev/null); \

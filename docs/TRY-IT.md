@@ -7,16 +7,18 @@ agent run** (bring an Anthropic API key).
 
 ## Level 0 — fastest start: the UI + Getting-started (no keys, no login)
 
-The recommended first step. One interactive command detects your host, asks the
-one genuine choice (**Local** — agents on this machine with your Claude login,
-the default — or **Team** — a sealed shared compose service), launches the
-right mode with no SSO and no token, and opens the **Getting-started page** in
-your browser the moment the UI is live:
+The recommended first step. One command detects your host, sets up **host mode**
+(sandbox agents on this machine with your Claude login), launches with no SSO
+and no token, and opens the **Getting-started page** in your browser the moment
+the UI is live:
 
 ```sh
-make setup    # interactive Local-vs-Team installer → launch → open http://localhost:8080
-              # Local mode runs wardynd in the background: log/PID in ~/.wardyn/, stop with `make stop-host`
+make setup    # host-mode installer → launch → open http://localhost:8080
+              # wardynd runs in the background: log/PID in ~/.wardyn/, stop with `make stop-host`
 ```
+
+> Team mode (a sealed, shared compose control plane) is **coming soon** — host
+> mode is the supported deployment for now.
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
@@ -36,9 +38,9 @@ make demo                # compose up: postgres + dex + wardynd; creates a demo 
 
 Then:
 
-- **UI**: http://localhost:8080 — log in via Dex (`demo@wardyn.local` /
-  `password`; add `127.0.0.1 dex` to /etc/hosts for the browser redirect) or
-  use the CLI with the admin token.
+- **UI**: http://localhost:8080 — use the CLI or admin token. (Human SSO login
+  via the UI is **coming soon** — the "Sign in with SSO" button is disabled in
+  this version, though the `/auth/login` flow still works server-side.)
 - **CLI** (inside or outside the container):
 
 ```sh
@@ -162,7 +164,7 @@ subscription, and OpenAI) are in [`examples/composer-configs/`](../examples/comp
 
 ```sh
 make stop-host           # Local (host) mode: stop the background wardynd (PID in ~/.wardyn/)
-make compose-down        # Team (compose) mode: stop the stack — KEEPS your data (runs + audit)
+make compose-down        # compose stack: stop it — KEEPS your data (runs + audit)
 make reset               # start over from an empty Runs list: wipes Postgres + recordings volumes
 ```
 

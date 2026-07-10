@@ -316,11 +316,12 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
       <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
         <TriangleAlert className="mt-0.5 size-4 shrink-0" />
         <div>
-          <p className="font-medium">SSO login required for interactive attach</p>
+          <p className="font-medium">Interactive attach is coming soon in this deployment</p>
           <p className="mt-1 text-muted-foreground">
-            The browser cannot send an Authorization header over a WebSocket connection.
-            Interactive terminal access requires an OIDC session cookie. Please sign in
-            via SSO (not an admin token) to use this feature.
+            The browser cannot send an Authorization header over a WebSocket connection, so
+            interactive terminal access needs an OIDC (SSO) session — which is a coming-soon
+            team feature. Run Wardyn in host mode (<code className="rounded bg-background/70 px-1 py-0.5">make setup</code>)
+            for the full local experience, or use the CLI (<code className="rounded bg-background/70 px-1 py-0.5">wardyn attach</code>).
           </p>
         </div>
       </div>

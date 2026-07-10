@@ -57,14 +57,6 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     }
   };
 
-  const submitSso = () => {
-    setLoading("sso");
-    setError(null);
-    // Hand off to the OIDC login flow; the server sets a session cookie
-    // and redirects back, at which point App's mount probe takes over.
-    window.location.href = "/auth/login";
-  };
-
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4">
       {/* ambient backdrop — subtle radial teal glow at the top */}
@@ -182,10 +174,15 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
             <div className="h-px flex-1 bg-border" />
           </div>
 
-          <Button variant="outline" className="w-full" onClick={submitSso} disabled={loading !== null}>
-            {loading === "sso" ? <Loader2 className="size-4 animate-spin" /> : <Building2 className="size-4" />}
+          {/* SSO / team sign-in is a coming-soon feature — disabled for now. The
+              admin-token form above is the supported path in this version. */}
+          <Button variant="outline" className="w-full" disabled title="SSO / team sign-in is coming soon">
+            <Building2 className="size-4" />
             Sign in with SSO
           </Button>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            SSO / team sign-in is coming soon — use an admin token for now.
+          </p>
         </div>
 
         <p className="mt-5 text-center text-xs text-muted-foreground">

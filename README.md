@@ -262,8 +262,8 @@ Notable residual risks:
   Engine). Fence/CC1 runs need nothing more; Wall/CC2 adds gVisor's `runsc`,
   Vault/CC3 adds `/dev/kvm` + a Kata runtime — `wardyn setup wall|vault`
   prints the exact steps for your machine.
-- **Go 1.26+** and **Node 22 + pnpm 9** — only for building from source /
-  host mode (the team/compose path builds inside containers).
+- **Go 1.26+** and **Node 22 + pnpm 9** — only for building from source
+  (host mode builds `bin/wardynd` + the UI locally).
 - Postgres is **included** in the compose file — nothing external to install,
   no hosted service to sign up for.
 
@@ -275,36 +275,35 @@ Notable residual risks:
 ```sh
 git clone https://github.com/cjohnstoniv/wardyn
 cd wardyn
-make setup   # one interactive installer: detects your host, asks Local vs Team, launches the right mode
+make setup   # one installer: detects your host, sets up host mode, launches + opens the UI
 ```
 
-`make setup` (== `scripts/setup.sh`) asks the one genuine human choice and does
-the rest:
+`make setup` (== `scripts/setup.sh`) runs **host mode** and does the rest for
+you:
 
-- **Local (host mode) — the default; recommended for personal use.** Sandbox
-  agents run on *this* machine with *your* Claude login: setup stages your
-  existing `claude` credentials for sandboxes (the live token is injected at
-  the proxy on the wire, so no long-lived or refreshable secret is resident in
-  the sandbox — only an inert, proxy-overridden sentinel), builds `bin/wardynd` + the UI on first run, reuses or starts the
-  compose Postgres on loopback, then launches `wardynd` as a **background host
-  process** (PID + log under `~/.wardyn/`) and opens `http://localhost:8080`.
-  It also detects which confinement barriers this host can run and prints the
-  exact commands for anything missing (gVisor/Kata installs need sudo — the
-  script **never runs sudo itself**). Stop it with `make stop-host`.
-- **Team (compose)** — `wardynd` runs sealed in a container as a shared
-  service (== `scripts/up.sh up`): read-only `make doctor` preflight, builds
-  the `wardynd` image, mints/persists a secret-store age key, auto-picks a
-  confinement policy (CC2's `default.json` if `runsc` is available, else CC1's
-  `demo.json`), starts `postgres` + `wardynd` in no-login local mode, opens
-  the browser as soon as the UI is live (`WARDYN_UP_NO_BROWSER=1` to skip),
-  and builds the per-run images after (`WARDYN_UP_SKIP_RUN_IMAGES=1` skips).
-  Tear down with `make compose-down` — this **keeps** your local data (runs
-  and the append-only audit log persist by design).
+- **Host mode — the supported deployment.** Sandbox agents run on *this*
+  machine with *your* Claude login: setup stages your existing `claude`
+  credentials for sandboxes (the live token is injected at the proxy on the
+  wire, so no long-lived or refreshable secret is resident in the sandbox —
+  only an inert, proxy-overridden sentinel), builds `bin/wardynd` + the UI on
+  first run, reuses or starts the compose Postgres on loopback, then launches
+  `wardynd` as a **background host process** (PID + log under `~/.wardyn/`) and
+  opens `http://localhost:8080`. It also detects which confinement barriers
+  this host can run and prints the exact commands for anything missing
+  (gVisor/Kata installs need sudo — the script **never runs sudo itself**).
+  Stop it with `make stop-host`.
 
-Non-interactive: `WARDYN_SETUP_MODE=local|team make setup`, or call the
-shortcuts `make setup-host` / `make setup-team` directly. Re-run `make doctor`
-any time — it's read-only. To deliberately start from an **empty Runs list**,
-`make reset` wipes the volumes (Postgres + recordings) and re-runs setup.
+> **Team mode is coming soon.** A sealed compose control plane where `wardynd`
+> runs containerized as a shared, multi-user service is a planned future
+> feature — it is **not selectable yet** (`WARDYN_SETUP_MODE=team make setup`
+> prints a notice and exits). The compose *stack* itself still exists for other
+> uses: `make compose-up` (containerized `wardynd` — e.g. to make workspace
+> **Verify/Record** work on Docker Desktop + WSL2 NAT), `make demo`, and
+> `make reset`. Tear those down with `make compose-down` (keeps your local data).
+
+Re-run `make doctor` any time — it's read-only. To deliberately start from an
+**empty Runs list**, `make reset` wipes the volumes (Postgres + recordings) and
+re-runs setup.
 
 ### The local access model in one picture
 
