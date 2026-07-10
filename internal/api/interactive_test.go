@@ -11,7 +11,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -175,6 +174,3 @@ func TestCreateRun_NonInteractive_StillExecs(t *testing.T) {
 
 // compile-time assertion that fakeRunner satisfies the interface.
 var _ runner.Runner = (*fakeRunner)(nil)
-
-// silence unused in non-pg builds.
-var _ = uuid.Nil

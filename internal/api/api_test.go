@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -409,6 +408,3 @@ func mustIDP(t *testing.T) *embedded.Provider {
 	}
 	return idp
 }
-
-// reference egress types so the import stays meaningful.
-var _ = egress.Allow
