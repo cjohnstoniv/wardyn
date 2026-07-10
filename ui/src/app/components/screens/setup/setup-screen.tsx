@@ -99,10 +99,12 @@ export function shouldOpenSetup(status: SetupStatus, dismissed: boolean): boolea
 }
 
 // ------------------------------------------------------------
-// Steps — ids/labels FROZEN (App.tsx + tests read these). The step body heading
-// is the friendlier, task-shaped title (D5/B9).
+// Steps — ids/labels FROZEN. The step body heading is the friendlier,
+// task-shaped title (D5/B9). SetupScreen renders these via its own
+// FunnelStepper, never the generic StepIndicator (that's wizard.tsx /
+// import-panel.tsx's), so these stay module-private.
 // ------------------------------------------------------------
-export type SetupStepId =
+type SetupStepId =
   | "environment"
   | "provider"
   | "host_proxy"
@@ -113,7 +115,7 @@ export type SetupStepId =
   | "review"
   | "launch";
 
-export const SETUP_STEPS: { id: SetupStepId; label: string }[] = [
+const SETUP_STEPS: { id: SetupStepId; label: string }[] = [
   { id: "environment", label: "Environment" },
   { id: "provider", label: "Model/Harness Provider" },
   { id: "host_proxy", label: "Host Proxy" },

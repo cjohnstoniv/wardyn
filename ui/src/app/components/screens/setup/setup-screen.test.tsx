@@ -44,15 +44,11 @@ vi.mock("../../../lib/api", async () => {
   };
 });
 
-import { StepIndicator } from "../new-run/step-shell";
-import { PermissionWizard } from "../new-run/wizard";
 import {
   SetupScreen,
-  SETUP_STEPS,
   setupDismissed,
   dismissSetup,
   shouldOpenSetup,
-  type SetupStepId,
 } from "./setup-screen";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 
@@ -113,34 +109,6 @@ describe("setupDismissed()/dismissSetup() — localStorage flag", () => {
     expect(setupDismissed()).toBe(false);
     dismissSetup();
     expect(setupDismissed()).toBe(true);
-  });
-});
-
-describe("StepIndicator regression (generalized generic)", () => {
-  beforeEach(() => {
-    healthMock.mockReset().mockResolvedValue({ confinement_classes: ["CC1", "CC2"] });
-    listSecretsMock.mockReset().mockResolvedValue([]);
-    listWorkspacesMock.mockReset().mockResolvedValue([]);
-  });
-
-  it("the run wizard still renders unchanged with no `steps` prop", async () => {
-    render(
-      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} />,
-    );
-    // WIZARD_STEPS default is inferred (T=WizardStepId) — Basics is the first step.
-    expect(await screen.findByText("Basics")).toBeInTheDocument();
-  });
-
-  it("renders when passed steps=SETUP_STEPS with a SetupStepId current", () => {
-    render(<StepIndicator<SetupStepId> current="environment" steps={SETUP_STEPS} />);
-    expect(screen.getByText("Environment")).toBeInTheDocument();
-    expect(screen.getByText("Model/Harness Provider")).toBeInTheDocument();
-    expect(screen.getByText("Host Proxy")).toBeInTheDocument();
-    expect(screen.getByText("SCM Provider")).toBeInTheDocument();
-    expect(screen.getByText("Artifact Redirect")).toBeInTheDocument();
-    expect(screen.getByText("Workspaces")).toBeInTheDocument();
-    expect(screen.getByText("Credentials")).toBeInTheDocument();
-    expect(screen.getByText("Launch")).toBeInTheDocument();
   });
 });
 
