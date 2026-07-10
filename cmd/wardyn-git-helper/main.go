@@ -596,14 +596,5 @@ func pollApproval(ctx context.Context, client *http.Client, proxyURL, approvalID
 // to the proxy host at the given path. The proxy's ServeHTTP receives it with
 // r.URL.Host == "" (no absolute URI), matching the local-route condition.
 func buildLocalURL(proxyURL, path string) (string, error) {
-	base, err := url.Parse(proxyURL)
-	if err != nil {
-		return "", err
-	}
-	rel := &url.URL{
-		Scheme: base.Scheme,
-		Host:   base.Host,
-		Path:   path,
-	}
-	return rel.String(), nil
+	return url.JoinPath(proxyURL, path)
 }

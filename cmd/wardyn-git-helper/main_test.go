@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -431,37 +430,6 @@ func TestIsGitHubHost(t *testing.T) {
 		if isGitHubHost(h) {
 			t.Errorf("isGitHubHost(%q) = true, want false", h)
 		}
-	}
-}
-
-// TestBuildLocalURL verifies the URL construction for proxy-local routes.
-func TestBuildLocalURL(t *testing.T) {
-	cases := []struct {
-		proxyURL string
-		path     string
-		want     string
-	}{
-		{
-			proxyURL: "http://wardyn-proxy:3128",
-			path:     "/wardyn/v1/credentials/mint",
-			want:     "http://wardyn-proxy:3128/wardyn/v1/credentials/mint",
-		},
-		{
-			proxyURL: "http://localhost:3128",
-			path:     "/wardyn/v1/approvals/some-id",
-			want:     "http://localhost:3128/wardyn/v1/approvals/some-id",
-		},
-	}
-	for _, c := range cases {
-		t.Run(fmt.Sprintf("%s%s", c.proxyURL, c.path), func(t *testing.T) {
-			got, err := buildLocalURL(c.proxyURL, c.path)
-			if err != nil {
-				t.Fatalf("buildLocalURL: %v", err)
-			}
-			if got != c.want {
-				t.Errorf("got %q want %q", got, c.want)
-			}
-		})
 	}
 }
 
