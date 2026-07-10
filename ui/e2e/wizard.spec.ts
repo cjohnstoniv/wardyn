@@ -23,6 +23,7 @@
 // and the isolation SUBSTRATE (gVisor/runc/Kata) lives in tooltips too.
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
+import { COMPOSER_UI_ENABLED } from "../src/app/lib/features";
 
 // The wizard renders inside a Dialog; scope everything to it so step copy never
 // collides with the screen behind it.
@@ -30,17 +31,26 @@ function wizard(page: Page): Locator {
   return page.getByRole("dialog");
 }
 
-// Open the shell top-bar "New run" dialog, wait for the composer-backends probe
-// (its completion re-sets the chooser, so we must not click mid-probe), then
-// pick "Configure manually" to enter the manual wizard on its Basics step.
+// Open the shell top-bar "New run" dialog. With the AI composer flag off
+// (features.ts), new-run-dialog.tsx skips the /composer/backends probe and the
+// chooser entirely and opens straight into the manual wizard's Basics step. If
+// the flag is ever flipped on, the chooser returns — keep that path too.
 async function openWizard(page: Page): Promise<Locator> {
   await gotoConsole(page);
-  const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
+  if (COMPOSER_UI_ENABLED) {
+    const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
+    await page.getByRole("button", { name: "New run" }).click();
+    await backends;
+    const dlg = wizard(page);
+    await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
+    await dlg.getByRole("button", { name: /Configure manually/ }).click();
+    // Step 1 is Basics — its onboarded-Workspaces field proves we're on it.
+    await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
+    return dlg;
+  }
   await page.getByRole("button", { name: "New run" }).click();
-  await backends;
   const dlg = wizard(page);
   await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
-  await dlg.getByRole("button", { name: /Configure manually/ }).click();
   // Step 1 is Basics — its onboarded-Workspaces field proves we're on it.
   await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
   return dlg;
