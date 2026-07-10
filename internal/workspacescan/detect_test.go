@@ -5,6 +5,7 @@ package workspacescan
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -219,7 +220,7 @@ func TestDeriveProfile_HostileNeedsFactsCapped(t *testing.T) {
 	var facts ScanFacts
 	for i := 0; i < 10000; i++ {
 		facts.SecretRequirements = append(facts.SecretRequirements,
-			SecretNeed{Name: "KEY_" + strings.Repeat("A", i%3) + string(rune('A'+i%26)) + itoa(i), Kind: "not-a-kind"})
+			SecretNeed{Name: "KEY_" + strings.Repeat("A", i%3) + string(rune('A'+i%26)) + strconv.Itoa(i), Kind: "not-a-kind"})
 	}
 	facts.SecretRequirements = append(facts.SecretRequirements,
 		SecretNeed{Name: "bad name with spaces"},
@@ -250,18 +251,6 @@ func TestDeriveProfile_HostileNeedsFactsCapped(t *testing.T) {
 	eq(t, "ServicesNeeded", got.ServicesNeeded, []string{"postgres", "redis"})
 	eq(t, "SuggestedEgress", got.SuggestedEgress, []string{"evil.example.com", "ok.example.org"})
 	eq(t, "SecretFilesPresent", got.SecretFilesPresent, []string{"ok/.env"})
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b []byte
-	for i > 0 {
-		b = append([]byte{byte('0' + i%10)}, b...)
-		i /= 10
-	}
-	return string(b)
 }
 
 // TestScan_RequiredWinsOverOptionalDuplicate: the same key declared optional
