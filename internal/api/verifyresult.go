@@ -5,8 +5,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -34,15 +32,8 @@ func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request
 	isRecord := run.Task == "workspace record"
 	wsID := *run.WorkspaceID
 
-	limited := http.MaxBytesReader(w, r.Body, maxScanResultUploadBytes)
-	raw, err := io.ReadAll(limited)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "verify result exceeds size limit")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "read verify result: "+err.Error())
+	raw, ok := readCappedBody(w, r, maxScanResultUploadBytes, "verify result")
+	if !ok {
 		return
 	}
 	var uploaded workspacescan.VerifyResult

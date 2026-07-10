@@ -108,12 +108,8 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 	// Repair-on-read: capture any record entry stranded `recording` by a
@@ -220,12 +216,8 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 	// ponytail: this GET→mutate→UPDATE can race an async repo-scan upload and
@@ -284,10 +276,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		Domains []string `json:"domains"`
 	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if derr := dec.Decode(&req); derr != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+derr.Error())
+	if !decodeStrict(w, r, &req) {
 		return
 	}
 	if len(req.Domains) > maxApprovedEgress {
@@ -345,12 +334,8 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -434,10 +419,7 @@ func (s *Server) handleSetSetupCommands(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		Commands []workspacescan.SetupCommand `json:"commands"`
 	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if derr := dec.Decode(&req); derr != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+derr.Error())
+	if !decodeStrict(w, r, &req) {
 		return
 	}
 	if len(req.Commands) > maxSetupCommands {
@@ -483,12 +465,8 @@ func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 	if len(ws.SetupCommands) == 0 || string(ws.SetupCommands) == "null" {
@@ -553,19 +531,12 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 		EmitEnvAsCode bool `json:"emit_env_as_code"`
 	}
 	if r.ContentLength != 0 {
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		if derr := dec.Decode(&req); derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body: "+derr.Error())
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -674,12 +645,8 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 

@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -130,4 +132,47 @@ func (s *Server) refreshRun(ctx context.Context, runID uuid.UUID, fallback types
 		return refreshed
 	}
 	return fallback
+}
+
+// getWorkspaceOr404 loads a workspace, writing a 404 (missing) or 500 (store
+// error) and returning ok=false on failure. Callers must return immediately
+// when ok is false.
+func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
+	if notFoundIf(w, err, "workspace") {
+		return types.Workspace{}, false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+		return types.Workspace{}, false
+	}
+	return ws, true
+}
+
+// decodeStrict strict-decodes the request body into dst (unknown fields
+// rejected), writing a 400 and returning false on failure.
+func decodeStrict(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// readCappedBody reads the request body under capBytes, writing a labeled 413
+// (over cap) or 400 (read error) and returning ok=false on failure.
+func readCappedBody(w http.ResponseWriter, r *http.Request, capBytes int64, noun string) ([]byte, bool) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, capBytes))
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, noun+" exceeds size limit")
+			return nil, false
+		}
+		writeError(w, http.StatusBadRequest, "read "+noun+": "+err.Error())
+		return nil, false
+	}
+	return raw, true
 }

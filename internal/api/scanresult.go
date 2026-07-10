@@ -5,8 +5,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -53,15 +51,8 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 	// Fail closed: cap the body, then strict-parse it. A malformed / oversized
 	// body never yields a profile (it would otherwise let an in-sandbox agent
 	// pollute a workspace's authority object).
-	limited := http.MaxBytesReader(w, r.Body, maxScanResultUploadBytes)
-	raw, err := io.ReadAll(limited)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "scan result exceeds size limit")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "read scan result: "+err.Error())
+	raw, ok := readCappedBody(w, r, maxScanResultUploadBytes, "scan result")
+	if !ok {
 		return
 	}
 	// Fail-closed parse: a malformed body is rejected outright — never partially

@@ -4,7 +4,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -111,10 +110,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // is always audited (site_config.write), mirroring secret.write.
 func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg types.SiteConfig
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+	if !decodeStrict(w, r, &cfg) {
 		return
 	}
 	if err := validateSiteConfig(cfg); err != nil {
