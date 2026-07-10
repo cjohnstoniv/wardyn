@@ -121,17 +121,18 @@ export function RunsScreen() {
   const [tableCap, setTableCap] = React.useState(TABLE_STEP);
   const [newOpen, setNewOpen] = React.useState(false);
 
+  const fetchRuns = React.useCallback(() => {
+    return api.listRuns().then((r) => {
+      setRuns(r);
+      setStatus("ready");
+    });
+  }, []);
+
   // Foreground load: flips the skeleton / error state.
   const load = React.useCallback(() => {
     setStatus("loading");
-    api
-      .listRuns()
-      .then((r) => {
-        setRuns(r);
-        setStatus("ready");
-      })
-      .catch(() => setStatus("error"));
-  }, []);
+    fetchRuns().catch(() => setStatus("error"));
+  }, [fetchRuns]);
 
   // Reload on every navigation to /runs (location.key changes even same-path) so
   // the shell's "New run" — which navigates here after a create from any screen —
@@ -142,16 +143,10 @@ export function RunsScreen() {
   // Background refresh: update in place, silent on failure (a blip shouldn't
   // blow the board away — keep last-good data and recover next tick).
   const refresh = React.useCallback(() => {
-    api
-      .listRuns()
-      .then((r) => {
-        setRuns(r);
-        setStatus("ready");
-      })
-      .catch(() => {
-        /* keep last-good data */
-      });
-  }, []);
+    fetchRuns().catch(() => {
+      /* keep last-good data */
+    });
+  }, [fetchRuns]);
   usePoll(refresh, POLL_MS, newOpen);
 
   const kill = async (id: string) => {
