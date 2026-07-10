@@ -270,18 +270,6 @@ func (p *Provider) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	return nil
 }
 
-// Keys exposes the public verification key as a JWKS for the API to serve.
-func (p *Provider) Keys() jose.JSONWebKeySet {
-	return jose.JSONWebKeySet{
-		Keys: []jose.JSONWebKey{{
-			Key:       &p.signKey.PublicKey,
-			KeyID:     p.kid,
-			Algorithm: string(jose.ES256),
-			Use:       "sig",
-		}},
-	}
-}
-
 func (p *Provider) spiffeIDForRun(runID uuid.UUID) (spiffeid.ID, error) {
 	id, err := spiffeid.FromSegments(p.trustDomain, "agent-run", runID.String())
 	if err != nil {

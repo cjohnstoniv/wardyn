@@ -8,14 +8,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 
@@ -337,40 +335,6 @@ func TestCheckGrantsCloudSTSRefusal(t *testing.T) {
 				t.Fatalf("unexpected err = %v", err)
 			}
 		})
-	}
-}
-
-func TestKeysJWKS(t *testing.T) {
-	p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
-	ks := p.Keys()
-	if len(ks.Keys) != 1 {
-		t.Fatalf("got %d keys, want 1", len(ks.Keys))
-	}
-	k := ks.Keys[0]
-	if k.KeyID == "" {
-		t.Fatal("empty kid")
-	}
-	if k.Algorithm != string(jose.ES256) {
-		t.Fatalf("alg = %q, want ES256", k.Algorithm)
-	}
-	if k.Use != "sig" {
-		t.Fatalf("use = %q, want sig", k.Use)
-	}
-	if !k.IsPublic() {
-		t.Fatal("JWKS must expose only the public key")
-	}
-	// JWKS must serialize cleanly (the API will serve it).
-	if _, err := json.Marshal(ks); err != nil {
-		t.Fatalf("marshal JWKS: %v", err)
-	}
-	// kid in the JWKS must match the kid in minted token headers.
-	id, _ := p.MintRunIdentity(context.Background(), uuid.New(), "alice", "", testAudience)
-	parsed, err := jwt.ParseSigned(id.Token, []jose.SignatureAlgorithm{jose.ES256})
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(parsed.Headers) == 0 || parsed.Headers[0].KeyID != k.KeyID {
-		t.Fatalf("token kid does not match JWKS kid %q", k.KeyID)
 	}
 }
 
