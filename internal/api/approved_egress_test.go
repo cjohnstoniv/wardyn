@@ -78,14 +78,7 @@ func TestSetApprovedEgressRoundTrip(t *testing.T) {
 		ID: wsID, Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/home/u/repo",
 		Profile: profile, Status: types.WorkspaceReady,
 	}}
-	srv := New(Config{
-		Identity:        h.idp,
-		Audit:           h.audit,
-		AdminToken:      adminToken,
-		TrustDomain:     "wardyn.local",
-		ControlPlaneURL: "http://wardynd:8080",
-		Store:           fake,
-	})
+	srv := New(baseTestConfig(h, fake))
 
 	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+wsID.String()+"/approved-egress",
 		adminToken, `{"domains":["GHCR.io","docker.io","ghcr.io"]}`)
@@ -197,10 +190,7 @@ func TestObservedEgress(t *testing.T) {
 			runOther: {{Action: "egress.deny", Target: "should-not-appear.example.com"}},
 		},
 	}
-	srv := New(Config{
-		Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake,
-	})
+	srv := New(baseTestConfig(h, fake))
 	w := do(t, srv, http.MethodGet, "/api/v1/workspaces/"+wsID.String()+"/observed-egress", adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -252,7 +242,7 @@ func TestSetSetupCommands(t *testing.T) {
 
 	wsID := uuid.New()
 	fake := &setupCmdStore{ws: types.Workspace{ID: wsID, Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned}}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+wsID.String()+"/setup-commands",
 		adminToken, `{"commands":[{"stage":"install","command":"pnpm install --frozen-lockfile","source":"convention:node"},{"stage":"test","command":"pnpm run test"}]}`)
 	if w.Code != http.StatusOK {

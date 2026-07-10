@@ -122,15 +122,7 @@ func (s *fakeSiteConfigStore) PutSiteConfig(_ context.Context, cfg types.SiteCon
 func newSiteConfigHarness(t *testing.T, fake *fakeSiteConfigStore) (*Server, *recRecorder) {
 	t.Helper()
 	h := newHarness(t)
-	srv := New(Config{
-		Identity:        h.idp,
-		Audit:           h.audit,
-		AdminToken:      adminToken,
-		TrustDomain:     "wardyn.local",
-		ControlPlaneURL: "http://wardynd:8080",
-		Store:           fake,
-	})
-	return srv, h.audit
+	return New(baseTestConfig(h, fake)), h.audit
 }
 
 func TestHandleGetSiteConfig_Unconfigured(t *testing.T) {
