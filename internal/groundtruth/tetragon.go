@@ -48,7 +48,6 @@ type TetragonEvent struct {
 // TetragonProcessExec carries a process execve.
 type TetragonProcessExec struct {
 	Process *TetragonProcess `json:"process,omitempty"`
-	Parent  *TetragonProcess `json:"parent,omitempty"`
 }
 
 // TetragonProcessKprobe carries a kprobe hit — the workhorse event kind for
@@ -60,7 +59,6 @@ type TetragonProcessExec struct {
 //     __sys_connect TracingPolicy): the destination is in a sock_arg.
 type TetragonProcessKprobe struct {
 	Process      *TetragonProcess `json:"process,omitempty"`
-	Parent       *TetragonProcess `json:"parent,omitempty"`
 	FunctionName string           `json:"function_name,omitempty"`
 	Args         []TetragonArg    `json:"args,omitempty"`
 }
@@ -81,41 +79,20 @@ type TetragonFileArg struct {
 }
 
 // TetragonSockArg is Tetragon's KprobeSock argument, emitted by a connect
-// kprobe. Field names match Tetragon's protojson output. We read the destination
-// tuple (daddr/dport) for connect detection; the source tuple and protocol are
-// parsed for completeness / future use.
+// kprobe. Field names match Tetragon's protojson output. We read only the
+// destination tuple (daddr/dport) used for connect detection.
 type TetragonSockArg struct {
-	Family   string `json:"family,omitempty"`   // e.g. "AF_INET"
-	Protocol string `json:"protocol,omitempty"` // e.g. "IPPROTO_TCP"
-	SAddr    string `json:"saddr,omitempty"`    // source address
-	DAddr    string `json:"daddr,omitempty"`    // destination address
-	SPort    int    `json:"sport,omitempty"`    // source port
-	DPort    int    `json:"dport,omitempty"`    // destination port
+	DAddr string `json:"daddr,omitempty"` // destination address
+	DPort int    `json:"dport,omitempty"` // destination port
 }
 
 // TetragonProcess is the common process descriptor across event kinds. We read
-// the binary, arguments, container/cgroup correlation handles, and pod (for
-// future k8s correlation; unused on the docker path).
+// the binary, arguments, and container/cgroup correlation handles.
 type TetragonProcess struct {
-	Binary    string       `json:"binary,omitempty"`
-	Arguments string       `json:"arguments,omitempty"`
-	Cwd       string       `json:"cwd,omitempty"`
-	CgroupID  uint64       `json:"cgroup_id,omitempty"`
-	Docker    string       `json:"docker,omitempty"` // container id (truncated)
-	Pod       *TetragonPod `json:"pod,omitempty"`
-}
-
-// TetragonPod carries the k8s correlation handle (container id). On the docker
-// path Process.Docker is used instead; we read this so k8s correlation is a
-// future drop-in without changing the mapper.
-type TetragonPod struct {
-	Namespace string                `json:"namespace,omitempty"`
-	Name      string                `json:"name,omitempty"`
-	Container *TetragonPodContainer `json:"container,omitempty"`
-}
-
-type TetragonPodContainer struct {
-	ID string `json:"id,omitempty"` // e.g. "containerd://<id>" or "docker://<id>"
+	Binary    string `json:"binary,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+	CgroupID  uint64 `json:"cgroup_id,omitempty"`
+	Docker    string `json:"docker,omitempty"` // container id (truncated)
 }
 
 // ── Mapper ──────────────────────────────────────────────────────────────────
@@ -318,24 +295,12 @@ func auditFor(runID *uuid.UUID, action, target, outcome string, data EventData) 
 	}
 }
 
-// containerID returns the best container id handle from a process: the docker
-// field on the docker path, else the pod container id (k8s path), stripping a
-// "docker://" / "containerd://" scheme.
+// containerID returns the process's docker container id.
 func containerID(p *TetragonProcess) string {
 	if p == nil {
 		return ""
 	}
-	if p.Docker != "" {
-		return p.Docker
-	}
-	if p.Pod != nil && p.Pod.Container != nil {
-		id := p.Pod.Container.ID
-		if i := strings.Index(id, "://"); i >= 0 {
-			id = id[i+3:]
-		}
-		return id
-	}
-	return ""
+	return p.Docker
 }
 
 // buildArgv splits a process binary + arguments string into an argv slice.

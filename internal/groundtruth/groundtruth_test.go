@@ -465,27 +465,6 @@ func TestMapUnmapped_CgroupOnlyNoLongerCorrelates(t *testing.T) {
 	}
 }
 
-func TestMapPodContainerID(t *testing.T) {
-	// k8s path: container id under pod.container.id with a scheme prefix.
-	corr := fakeCorrelator{byContainer: map[string]uuid.UUID{"podcid999": knownRun}}
-	m := NewMapper(corr)
-	line := []byte(`{
-		"process_exec": {
-			"process": {"binary": "/bin/sh", "pod": {"namespace": "ns", "name": "p", "container": {"id": "containerd://podcid999"}}}
-		}
-	}`)
-	ev, ok := m.MapLine(line)
-	if !ok {
-		t.Fatal("expected map via pod container id")
-	}
-	if ev.RunID == nil || *ev.RunID != knownRun {
-		t.Errorf("run id = %v, want %v via pod container id", ev.RunID, knownRun)
-	}
-	if decodeData(t, ev).ContainerID != "podcid999" {
-		t.Errorf("container_id should strip the scheme; got %q", decodeData(t, ev).ContainerID)
-	}
-}
-
 func TestMapUnknownKind(t *testing.T) {
 	m := NewMapper(mappedCorrelator())
 	// A Tetragon event kind we do not record -> ok=false.
