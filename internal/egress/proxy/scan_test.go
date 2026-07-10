@@ -4,7 +4,6 @@
 package proxy
 
 import (
-	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"io"
@@ -472,16 +471,8 @@ func TestLLMScanBlindOnOpaqueConnect(t *testing.T) {
 		}
 	}()
 
-	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)}
-	p := newProxy(Options{
-		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),
-		Sink:     sink,
-		Scanner:  scanEngine(t, "alert", scanTestSecret),
-		Resolver: publicResolver{},
-		Dial:     redirectDial(ln.Addr().String()),
-	})
+	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}, ln.Addr().String(), nil, nil)
+	p.scanner = scanEngine(t, "alert", scanTestSecret)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
