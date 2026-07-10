@@ -40,13 +40,7 @@ func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files
 // `-tags docker`. The builder runs daemonless: envbuilder pushes to the registry
 // (cacheRepo) and Wardyn finalizes the image locally, so a missing cacheRepo
 // fails closed.
-//
-// ponytail: the third parameter is the retired docker.sock knob
-// (WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK / -envbuild-allow-docker-sock). It is
-// IGNORED — kaniko-based envbuilder never talks to dockerd, so the socket mount
-// had zero function and was pure host-escape exposure. The signature is kept
-// because main.go still passes the flag through; the flag is now a no-op.
-func newEnvBuilder(envbuilderImage, cacheRepo string, _ bool) (api.ImageBuilder, error) {
+func newEnvBuilder(envbuilderImage, cacheRepo string) (api.ImageBuilder, error) {
 	b, err := envbuild.New(envbuilderImage, cacheRepo)
 	if err != nil {
 		return nil, err

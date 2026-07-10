@@ -114,14 +114,10 @@ services:
       # VERIFY needs the detected toolchain (Go/Node/…) present in the image; the
       # base agent image has none, so without a built devcontainer a verify of a
       # real repo fails "command not found" (exit 127). Enable with WARDYN_ENVBUILD=true
-      # PLUS one commit path:
-      #   - WARDYN_ENVBUILD_CACHE_REPO=<oci-ref>  (PREFERRED: safe daemonless push), or
-      #   - WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK=true (DANGEROUS: bind-mounts the host
-      #     docker.sock into the untrusted-code BUILD container — a host-root-escape
-      #     risk; trusted single-host dev ONLY, an explicit operator choice — never
-      #     defaulted on).
+      # PLUS WARDYN_ENVBUILD_CACHE_REPO=<oci-ref> — cache-repo required: envbuilder
+      # pushes to the registry and Wardyn finalizes the image locally; there is no
+      # local-daemon commit path (the old docker.sock knob was retired).
       WARDYN_ENVBUILD: "${WARDYN_ENVBUILD:-false}"
-      WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK: "${WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK:-false}"
       WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-}"
       # CC1 (runc) demo policy: plain Docker hosts without gVisor (CC2) can still
       # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json

@@ -126,7 +126,6 @@ func run() error {
 		envbuild     = flagBool("envbuild", "WARDYN_ENVBUILD", false, "enable devcontainer image builds for create-run (requires -tags docker)")
 		envbuildImg  = flagEnv("envbuild-image", "WARDYN_ENVBUILD_IMAGE", "", "envbuilder OCI image override (empty = upstream default)")
 		envbuildRepo = flagEnv("envbuild-cache-repo", "WARDYN_ENVBUILD_CACHE_REPO", "", "optional OCI registry ref for envbuilder layer cache (enables safe daemonless push mode)")
-		envbuildSock = flagBool("envbuild-allow-docker-sock", "WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK", false, "DANGEROUS: bind-mount /var/run/docker.sock into the (untrusted-code-running) devcontainer build container so it can commit to the local daemon. Host-root escape risk; trusted single-host dev only. Prefer -envbuild-cache-repo.")
 
 		// agentImages is a JSON object mapping agent names to OCI image refs
 		// (e.g. '{"claude-code":"wardyn/agent-claude-code:demo"}'). When set,
@@ -481,7 +480,7 @@ func run() error {
 	// error so the misconfiguration fails closed at boot rather than silently.
 	var imgBuilder api.ImageBuilder
 	if *envbuild {
-		b, berr := newEnvBuilder(*envbuildImg, *envbuildRepo, *envbuildSock)
+		b, berr := newEnvBuilder(*envbuildImg, *envbuildRepo)
 		if berr != nil {
 			return fmt.Errorf("envbuild: %w", berr)
 		}

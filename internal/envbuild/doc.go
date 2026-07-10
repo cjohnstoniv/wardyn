@@ -60,8 +60,7 @@
 //     otherwise FAILS CLOSED. No Docker socket is ever mounted into the build
 //     container: kaniko-based envbuilder pushes to the registry and never talks
 //     to dockerd, so a socket mount would grant a trivial host-root escape for
-//     zero function. (The retired WARDYN_ENVBUILD_ALLOW_DOCKER_SOCK knob is a
-//     no-op.)
+//     zero function.
 //   - Build-time NETWORK defaults to "none" (Builder.BuildNetwork /
 //     WARDYN_ENVBUILD_BUILD_NETWORK): the untrusted build code gets no network
 //     reachability — no exfiltration, no SSRF to host-local services, no fetching
