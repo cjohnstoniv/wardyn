@@ -143,9 +143,3 @@ func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, _ string, _ co
 	f.removed = true
 	return nil
 }
-
-func (f *fakeEnvbuilderDocker) ContainerInspect(_ context.Context, id string) (container.InspectResponse, error) {
-	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: id},
-	}, nil
-}

@@ -69,9 +69,8 @@
 //   - Privileges are dropped: CapDrop ALL + no-new-privileges.
 //   - Resource caps (memory, swap-disabled, CPU, PID limit) bound the DoS /
 //     blast-radius surface; an optional StorageOpt "size" cap
-//     (Builder.MaxBuildContextBytes / WARDYN_ENVBUILD_MAX_CONTEXT_MB) bounds the
-//     build's writable layer where the storage driver supports per-container
-//     quotas.
+//     (WARDYN_ENVBUILD_MAX_CONTEXT_MB) bounds the build's writable layer where
+//     the storage driver supports per-container quotas.
 //   - Input validation: a git-URL scheme allowlist (only https:// and git://;
 //     file://, ssh://, scp-like, and ext::/<helper>:: transports are rejected),
 //     control-char/leading-dash ref rejection, length bounds on all inputs, and

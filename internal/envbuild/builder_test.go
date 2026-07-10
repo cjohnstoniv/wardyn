@@ -451,7 +451,7 @@ func TestBuild_StorageOptContextCap(t *testing.T) {
 	t.Run("applied when set", func(t *testing.T) {
 		f := newFakeEnvbuilderDocker()
 		b := newPushBuilder(t, f)
-		b.MaxBuildContextBytes = 8 << 30 // 8 GiB
+		t.Setenv("WARDYN_ENVBUILD_MAX_CONTEXT_MB", "8192") // 8 GiB
 		if _, err := b.Build(t.Context(), BuildSpec{
 			RepoURL:        "https://github.com/example/repo",
 			OutputImageTag: "wardyn-ws:abc",
