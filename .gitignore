@@ -78,3 +78,10 @@ ui/playwright-report/
 # real (non-.example) local composer configs must never be committed
 /examples/composer-configs/anthropic-api.json
 /examples/composer-configs/openai-api.json
+
+# design-sync (claude.ai/design system sync) — staged scripts, build output, machine state
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
