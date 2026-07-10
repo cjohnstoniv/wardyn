@@ -27,6 +27,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -321,10 +322,10 @@ func TestL0_ProxyOnlyDualHomedBridge(t *testing.T) {
 		t.Fatalf("inspect agent: %v", err)
 	}
 	agentNets := networkNames(agent)
-	if !containsStr(agentNets, intNet) {
+	if !slices.Contains(agentNets, intNet) {
 		t.Errorf("agent must be attached to the per-run internal net %q, got %v", intNet, agentNets)
 	}
-	if containsStr(agentNets, d.cfg.InternalNetwork) {
+	if slices.Contains(agentNets, d.cfg.InternalNetwork) {
 		t.Errorf("agent must NEVER join the control-plane net %q (would grant an off-segment bridge, breaking L0); got %v", d.cfg.InternalNetwork, agentNets)
 	}
 	if len(agentNets) != 1 {
@@ -342,10 +343,10 @@ func TestL0_ProxyOnlyDualHomedBridge(t *testing.T) {
 		t.Fatalf("inspect proxy: %v", err)
 	}
 	proxyNets := networkNames(proxy)
-	if !containsStr(proxyNets, intNet) {
+	if !slices.Contains(proxyNets, intNet) {
 		t.Errorf("proxy must be on the per-run internal net %q (shared with the agent), got %v", intNet, proxyNets)
 	}
-	if !containsStr(proxyNets, d.cfg.InternalNetwork) {
+	if !slices.Contains(proxyNets, d.cfg.InternalNetwork) {
 		t.Errorf("proxy must be on the control-plane net %q (the single bridge off-segment), got %v", d.cfg.InternalNetwork, proxyNets)
 	}
 }

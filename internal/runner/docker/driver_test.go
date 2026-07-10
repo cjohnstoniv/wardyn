@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -122,7 +123,7 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 	if string(proxy.host.NetworkMode) != intNet {
 		t.Errorf("proxy NetworkMode = %q, want %q", proxy.host.NetworkMode, intNet)
 	}
-	if !containsStr(proxy.connectedTo, d.cfg.InternalNetwork) {
+	if !slices.Contains(proxy.connectedTo, d.cfg.InternalNetwork) {
 		t.Errorf("proxy must connect to control-plane network %q, connectedTo=%v", d.cfg.InternalNetwork, proxy.connectedTo)
 	}
 
@@ -310,57 +311,42 @@ func TestTeardown_Idempotent(t *testing.T) {
 	}
 }
 
-// ITEM 35: when the agent's wardyn.run-id label is unreadable, teardown must
-// recover the run id from the deterministic agent container name and still tear
-// down the sibling proxy (routable network, run token) + per-run network, rather
-// than orphaning them and reporting a false success.
-func TestTeardown_RecoversRunIDFromNameWhenLabelMissing(t *testing.T) {
-	f := newFakeDocker()
-	f.images["busybox:latest"] = true
-	d := newTestDriver(f)
+// ITEM 35: when the agent's wardyn.run-id label is unreadable — missing, or
+// present but non-UUID (corrupt) — teardown must recover the run id from the
+// deterministic agent container name and still tear down the sibling proxy
+// (routable network, run token) + per-run network, rather than orphaning them
+// and reporting a false success.
+func TestTeardown_RecoversRunIDFromName(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{"label missing", map[string]string{}},
+		{"label corrupt", map[string]string{labelRun: "not-a-uuid"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newTestDriver(f)
 
-	sb, err := d.CreateSandbox(context.Background(), testSpec())
-	if err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
-	}
-	runID := testSpec().RunID
-	// Simulate a stripped/stale run-id label on the agent container.
-	f.containers[sb.Ref].cfg.Labels = map[string]string{}
+			sb, err := d.CreateSandbox(context.Background(), testSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			runID := testSpec().RunID
+			f.containers[sb.Ref].cfg.Labels = tc.labels
 
-	if err := d.teardown(context.Background(), sb.Ref); err != nil {
-		t.Fatalf("teardown must succeed via name-recovered run id, got %v", err)
-	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
-		t.Errorf("proxy sidecar must be torn down via name-recovered run id (removed=%v)", p != nil && p.removed)
-	}
-	if _, ok := f.networks[internalNetName(runID)]; ok {
-		t.Error("per-run network must be removed via name-recovered run id")
-	}
-}
-
-// A CORRUPT (present but non-UUID) run-id label must ALSO fall back to the
-// deterministic container name — not just an empty label — so parseRunID
-// failing on garbage never orphans the proxy/network.
-func TestTeardown_RecoversRunIDFromNameWhenLabelCorrupt(t *testing.T) {
-	f := newFakeDocker()
-	f.images["busybox:latest"] = true
-	d := newTestDriver(f)
-
-	sb, err := d.CreateSandbox(context.Background(), testSpec())
-	if err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
-	}
-	runID := testSpec().RunID
-	f.containers[sb.Ref].cfg.Labels = map[string]string{labelRun: "not-a-uuid"}
-
-	if err := d.teardown(context.Background(), sb.Ref); err != nil {
-		t.Fatalf("teardown must succeed via name-recovered run id despite a corrupt label, got %v", err)
-	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
-		t.Errorf("proxy sidecar must be torn down despite the corrupt label (removed=%v)", p != nil && p.removed)
-	}
-	if _, ok := f.networks[internalNetName(runID)]; ok {
-		t.Error("per-run network must be removed despite the corrupt label")
+			if err := d.teardown(context.Background(), sb.Ref); err != nil {
+				t.Fatalf("teardown must succeed via name-recovered run id, got %v", err)
+			}
+			if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
+				t.Errorf("proxy sidecar must be torn down via name-recovered run id (removed=%v)", p != nil && p.removed)
+			}
+			if _, ok := f.networks[internalNetName(runID)]; ok {
+				t.Error("per-run network must be removed via name-recovered run id")
+			}
+		})
 	}
 }
 
@@ -427,11 +413,11 @@ func TestExec_WrapsWithRecorderWhenEnabled(t *testing.T) {
 	if len(cmd) == 0 || cmd[0] != "wardyn-rec" {
 		t.Fatalf("recording exec must start with wardyn-rec, got %v", cmd)
 	}
-	if !containsStr(cmd, "claude") || !containsStr(cmd, "code") {
+	if !slices.Contains(cmd, "claude") || !slices.Contains(cmd, "code") {
 		t.Errorf("agent argv must be preserved after wrapping, got %v", cmd)
 	}
 	// run id must be threaded through for deterministic recording filename.
-	if !containsStr(cmd, testSpec().RunID.String()) {
+	if !slices.Contains(cmd, testSpec().RunID.String()) {
 		t.Errorf("recorder argv must carry run id, got %v", cmd)
 	}
 }
@@ -493,7 +479,7 @@ func TestExecLess_MainProcessLifecycle(t *testing.T) {
 	if c.cfg == nil || len(c.cfg.Cmd) == 0 || c.cfg.Cmd[0] != "wardyn-rec" {
 		t.Fatalf("main-process Cmd must be recorder-wrapped, got %v", c.cfg.Cmd)
 	}
-	if !containsStr(c.cfg.Cmd, "agent-run") || !containsStr(c.cfg.Cmd, "task") {
+	if !slices.Contains(c.cfg.Cmd, "agent-run") || !slices.Contains(c.cfg.Cmd, "task") {
 		t.Errorf("workload argv must be preserved in main-process Cmd, got %v", c.cfg.Cmd)
 	}
 	if len(f.lastExecCmd) != 0 {
@@ -542,7 +528,7 @@ func TestAttach_OpensInteractiveShellNotTrackedAsAgentExec(t *testing.T) {
 
 	// Attach opens the persistent interactive shell session (tmux/bash wrapper),
 	// not a bare /bin/sh. The exact command is the package's attachShell.
-	if got := f.lastExecCmd; !equalStr(got, attachShell) {
+	if got := f.lastExecCmd; !slices.Equal(got, attachShell) {
 		t.Errorf("attach must exec the interactive shell %v, got %v", attachShell, got)
 	}
 
@@ -597,7 +583,7 @@ func TestCapabilities_FromDaemonInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Classes: %v", err)
 	}
-	if !equalClasses(caps.Classes, []types.ConfinementClass{types.CC1, types.CC2}) {
+	if !slices.Equal(caps.Classes, []types.ConfinementClass{types.CC1, types.CC2}) {
 		t.Errorf("Classes = %v", caps.Classes)
 	}
 }

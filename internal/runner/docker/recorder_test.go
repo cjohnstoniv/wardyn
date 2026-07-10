@@ -6,6 +6,7 @@
 package docker
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -16,11 +17,11 @@ func TestRecorderArgv(t *testing.T) {
 	agent := []string{"claude", "code", "--task", "fix bug"}
 
 	// Disabled => passthrough.
-	if got := recorderArgv("wardyn-rec", "/var/log/wardyn", "", "", runID, agent, false); !equalStr(got, agent) {
+	if got := recorderArgv("wardyn-rec", "/var/log/wardyn", "", "", runID, agent, false); !slices.Equal(got, agent) {
 		t.Errorf("disabled must passthrough, got %v", got)
 	}
 	// Empty binary => passthrough even when record=true.
-	if got := recorderArgv("", "/var/log/wardyn", "", "", runID, agent, true); !equalStr(got, agent) {
+	if got := recorderArgv("", "/var/log/wardyn", "", "", runID, agent, true); !slices.Equal(got, agent) {
 		t.Errorf("empty binary must passthrough, got %v", got)
 	}
 	// Delivery mount set => -out-dir flag present with the mount target.
@@ -60,10 +61,10 @@ func TestRecorderArgv(t *testing.T) {
 	if sep == -1 {
 		t.Fatalf("missing -- separator: %v", got)
 	}
-	if !equalStr(got[sep+1:], agent) {
+	if !slices.Equal(got[sep+1:], agent) {
 		t.Errorf("agent argv after -- = %v, want %v", got[sep+1:], agent)
 	}
-	if !containsStr(got[:sep], runID.String()) {
+	if !slices.Contains(got[:sep], runID.String()) {
 		t.Errorf("run id must appear before --, got %v", got[:sep])
 	}
 }
@@ -82,29 +83,17 @@ func TestRecorderArgv_NeverUnmaskedOutDirWithUpload(t *testing.T) {
 	// Both delivery paths offered: the masked upload must win, the unmasked
 	// shared-mount -out-dir must be dropped.
 	got := recorderArgv("wardyn-rec", "/var/log/wardyn", RecordingMountTarget, uploadURL, runID, agent, true)
-	if containsStr(got, "-out-dir") {
+	if slices.Contains(got, "-out-dir") {
 		t.Errorf("masked upload configured: argv must NOT carry an unmasked -out-dir, got %v", got)
 	}
-	if !containsStr(got, "-upload-url") {
+	if !slices.Contains(got, "-upload-url") {
 		t.Errorf("masked upload configured: argv must keep -upload-url, got %v", got)
 	}
 
 	// Shared-mount-only (no upload path, e.g. nil run id): the reduced-isolation
 	// fallback is preserved so single-host delivery still works.
 	gotFallback := recorderArgv("wardyn-rec", "/var/log/wardyn", RecordingMountTarget, "", runID, agent, true)
-	if !containsStr(gotFallback, "-out-dir") {
+	if !slices.Contains(gotFallback, "-out-dir") {
 		t.Errorf("no upload path: shared-mount fallback -out-dir must be present, got %v", gotFallback)
 	}
-}
-
-func equalStr(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

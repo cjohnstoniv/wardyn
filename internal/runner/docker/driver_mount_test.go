@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,15 +95,15 @@ func TestRecordingChmodDirs_NeverLoosensHostBindRoot(t *testing.T) {
 	const cast = "/var/log/wardyn"
 
 	hostBind := recordingChmodDirs(Config{CastDir: cast, RecordingMount: "/host/recordings"})
-	if containsStr(hostBind, RecordingMountTarget) {
+	if slices.Contains(hostBind, RecordingMountTarget) {
 		t.Errorf("host-bind RecordingMount: target %q must NOT be chmod 0777'd (host world-writable); got %v", RecordingMountTarget, hostBind)
 	}
-	if !containsStr(hostBind, cast) {
+	if !slices.Contains(hostBind, cast) {
 		t.Errorf("CastDir must always be prepared; got %v", hostBind)
 	}
 
 	vol := recordingChmodDirs(Config{CastDir: cast, RecordingMount: "wardyn-rec-vol"})
-	if !containsStr(vol, RecordingMountTarget) {
+	if !slices.Contains(vol, RecordingMountTarget) {
 		t.Errorf("named-volume RecordingMount: target must be prepared (Docker-managed); got %v", vol)
 	}
 

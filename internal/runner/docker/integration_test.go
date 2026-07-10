@@ -34,15 +34,7 @@ func TestLifecycle_RealDocker(t *testing.T) {
 	// busybox doubles as the proxy image here: we only need a reachable
 	// container on the internal network to validate connectivity. The proxy
 	// "process" is a sleep; reachability is checked at L3 (ping/route), not L7.
-	d, err := New(Config{
-		ProxyImage: "busybox:latest",
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// The control-plane-facing network must exist for the proxy to join.
-	ensureNetwork(t, d, d.cfg.InternalNetwork)
+	d := newNetworkTestDriver(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -132,11 +124,7 @@ func TestWorkspaceMount_RealDocker(t *testing.T) {
 		t.Skip("set WARDYN_TEST_DOCKER=1 to run the real-Docker workspace mount test")
 	}
 
-	d, err := New(Config{ProxyImage: "busybox:latest"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ensureNetwork(t, d, d.cfg.InternalNetwork)
+	d := newNetworkTestDriver(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
