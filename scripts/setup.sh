@@ -7,19 +7,21 @@
 # choice — no credential is copied, imported, or a volume destroyed unless you say so
 # (interactively) or set the matching opt-in env var (non-interactively).
 #
-# Two deployment shapes:
-#   local (host mode)  — sandbox agents on YOUR machine with YOUR Claude login. wardynd
-#                        runs as you, sees ~/.claude directly (no re-login), proxy-injects
-#                        your live token (never a stale copy). Best for personal use.
-#   team  (compose)    — wardynd runs sealed in a container as a shared service; each user
-#                        brings brokered keys. Best for a multi-user server.
+# Deployment: HOST mode only for now. Sandbox agents run on YOUR machine with YOUR
+# Claude login — wardynd runs as you, sees ~/.claude directly (no re-login), and
+# proxy-injects your live token (never a stale copy). Best for personal use.
+#
+# Team mode (a sealed compose control plane running as a shared multi-user service)
+# is a COMING-SOON feature and is not selectable here yet — WARDYN_SETUP_MODE=team
+# prints a notice and exits. (The compose stack itself still exists for other uses:
+# `make compose-up`, `make reset`, `make demo`, and the WSL2 workspace-verify fix.)
 #
 # Barriers (Fence/Wall/Vault) that need a package install (gVisor, Kata) require sudo —
 # this script NEVER runs sudo silently. It detects what's present and prints the exact
 # commands for anything missing, so you stay in control of privileged changes.
 #
-# Usage:  ./scripts/setup.sh            (interactive)
-#         WARDYN_SETUP_MODE=local ./scripts/setup.sh   (non-interactive: local|team)
+# Usage:  ./scripts/setup.sh            (host mode; no mode prompt)
+#         WARDYN_SETUP_MODE=team ...    (errors: team mode is coming soon)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -138,46 +140,30 @@ if [ "${#missing_barriers[@]}" -gt 0 ]; then
   say "  (Skip for now — you can add them later and re-run this command.)"
 fi
 
-# ── DECIDE: the one REQUIRED human choice — where the model/harness provider runs.
-# This is a real decision with different trust models, so we never silently default
-# it: interactively we re-ask until 1/2; non-interactively WARDYN_SETUP_MODE must be
-# set (else we exit with the explanation rather than guess).
-hd "How are you running Wardyn?  (required — this decides where your model access lives)"
-say "  ${B}1) Local (host)${R}  — wardynd runs as YOU on this machine. Sandbox runs can use YOUR"
-say "                     Claude login: your live OAuth token is injected per-request at the proxy"
-say "                     (the sandbox never holds a usable copy). Best for personal use."
-say "  ${B}2) Team (compose)${R} — wardynd runs SEALED in a container. It can NEVER see your host"
-say "                     Claude login or host files; each user brings their own brokered keys via"
-say "                     the UI's 'Connect a model' step. Best for a shared multi-user server."
-MODE="${WARDYN_SETUP_MODE:-}"
+# ── DECIDE: host mode is the only deployment available right now. We no longer
+# prompt host vs team — team (a sealed compose control plane / multi-user shared
+# service) is a COMING-SOON feature. Setup runs host mode; an explicit request for
+# team (WARDYN_SETUP_MODE=team) gets a clear notice and exits.
+MODE="${WARDYN_SETUP_MODE:-local}"
 case "$MODE" in
   local|Local|1) MODE=local;;
-  team|Team|2)   MODE=team;;
-  "")
-    if [ -t 0 ]; then
-      while :; do
-        printf "  Choose 1 (local) or 2 (team): "
-        read -r ans || { warn "stdin closed before a mode was chosen."; exit 2; }  # EOF: don't busy-loop
-        case "$ans" in 1|local|Local) MODE=local; break;; 2|team|Team) MODE=team; break;; *) warn "Please answer 1 or 2 — this choice is required.";; esac
-      done
-    else
-      warn "Deployment mode is required and this is a non-interactive run."
-      warn "Set WARDYN_SETUP_MODE=local (host mode: runs use YOUR Claude login, proxy-injected) or"
-      warn "WARDYN_SETUP_MODE=team (sealed container: per-user brokered keys), then re-run."
-      exit 2
-    fi
+  team|Team|2)
+    hd "Team mode is coming soon"
+    warn "Team mode — a sealed compose control plane where wardynd runs containerized as a shared,"
+    warn "multi-user service — is a COMING-SOON feature and isn't available in this version."
+    warn "This version supports HOST mode only: wardynd runs as you and sandbox runs use your Claude"
+    warn "login (injected per-request at the proxy). Just run 'make setup' — no mode needed."
+    exit 2
     ;;
-  *) warn "WARDYN_SETUP_MODE='${MODE}' is not valid — use 'local' or 'team'."; exit 2;;
+  *)
+    warn "WARDYN_SETUP_MODE='${MODE}' is not valid — this version supports HOST mode only."
+    warn "Leave WARDYN_SETUP_MODE unset (or =local) for host mode; team mode is coming soon."
+    exit 2
+    ;;
 esac
-ok "Mode: ${MODE}"
+ok "Mode: host (local) — team/compose is coming soon"
 
-# ── ACT ──────────────────────────────────────────────────────────────────────
-if [ "$MODE" = "team" ]; then
-  hd "Bringing up the compose (team) stack"
-  info "wardynd runs sealed in a container; the UI's 'Connect a model' step brokers per-user keys."
-  exec ./scripts/up.sh up
-fi
-
+# ── ACT (host mode only; team is coming soon, so there is no team branch) ──────
 # local / host mode
 hd "Setting up local (host) mode"
 

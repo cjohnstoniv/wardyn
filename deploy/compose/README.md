@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. |
+| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. **SSO / team login is a coming-soon feature** — the UI's SSO button is disabled; use the admin-token path or the CLI. |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -14,11 +14,16 @@ launches) but not run as a long-lived service.
 
 ## Quick start
 
+> **Note:** `make setup` now runs **host mode** (wardynd as a host process). To
+> bring up *this containerized compose stack*, use `./scripts/up.sh up` (below) or
+> `make compose-up`. A first-class "team" setup for the compose control plane is
+> **coming soon**.
+
 ```sh
-make setup    # doctor preflight, build, mint a secret key, bring up postgres+wardynd, open the UI
+./scripts/up.sh up    # doctor preflight, build, mint a secret key, bring up postgres+wardynd, open the UI
 ```
 
-`make setup` (== `scripts/up.sh up`) is THE one command: it runs a read-only
+`scripts/up.sh up` is THE one command for the compose stack: it runs a read-only
 preflight (`make doctor`), builds the `wardynd` image, mints/persists a
 `WARDYN_AGE_KEY`, auto-picks a confinement policy, starts `postgres` +
 `wardynd` in **local mode** (no SSO/Dex, no bearer token), and opens
@@ -29,14 +34,17 @@ launch until those finish (skip them with `WARDYN_UP_SKIP_RUN_IMAGES=1`). Run
 `make doctor` any time on its own — it's read-only. Tear down with
 `make compose-down`.
 
-- **WSL**: run `make setup` inside your WSL distro's shell; the UI opens in
-  the Windows browser automatically.
+- **WSL**: run `./scripts/up.sh up` inside your WSL distro's shell; the UI opens
+  in the Windows browser automatically.
 - **Native Windows**: install WSL2 + Docker Desktop (with WSL integration)
-  first, then run `make setup` inside the WSL distro — `make doctor` detects a
-  native Windows shell and blocks with this same guidance.
+  first, then run `./scripts/up.sh up` inside the WSL distro — `make doctor`
+  detects a native Windows shell and blocks with this same guidance.
 
 Want the SSO/Dex + bearer-token demo instead (a scripted governed run against
-the full stack, incl. Dex)?
+the full stack, incl. Dex)? **Note: human SSO login via the UI is coming soon
+(the SSO button is disabled)** — the demo's run creation is driven by the admin
+token / CLI, which still works; the browser SSO-login step below is not yet
+available.
 
 ```sh
 make agent-images  # build the agent OCI images the demo run launches (claude-code + codex)
@@ -50,17 +58,18 @@ make demo          # build images, bring the stack up, create a demo run, show i
 Then:
 
 - UI / API: <http://localhost:8080>
-- Human SSO: log in at `/auth/login` as `demo@wardyn.local` / `password`
+- Human SSO: **coming soon** — the `/auth/login` flow still works server-side, but
+  the UI's "Sign in with SSO" button is disabled in this version. Use the admin token.
 - Dex discovery: <http://localhost:5556/.well-known/openid-configuration>
 - Admin API: `Authorization: Bearer demo-admin-token`
 
 The public API accepts **either** a valid OIDC session cookie **or** the admin
 bearer token, so the CLI keeps working with the token while humans use SSO.
 
-Dex (human SSO) is an **opt-in compose profile** (`sso`) — `make setup` never
-starts it. `scripts/demo.sh` and `make demo`/`make compose-up` still start it
-explicitly (compose always honors an explicitly-named service regardless of
-active profiles). To bring Dex up yourself on top of a `make setup` stack:
+Dex (human SSO) is an **opt-in compose profile** (`sso`) — `scripts/up.sh up`
+never starts it. `scripts/demo.sh` and `make demo`/`make compose-up` still start
+it explicitly (compose always honors an explicitly-named service regardless of
+active profiles). To bring Dex up yourself on top of a `scripts/up.sh up` stack:
 
 ```sh
 docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex

@@ -474,6 +474,7 @@ func run() error {
 			return fmt.Errorf("oidc: %w", err)
 		}
 		log.Printf("wardynd: OIDC SSO enabled (issuer=%s)", *oidcIssuer)
+		log.Printf("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment is coming soon; the UI's 'Sign in with SSO' button is disabled, so use the admin token or the CLI for now")
 	}
 
 	// Devcontainer image builder (optional; docker build tag only). When -envbuild

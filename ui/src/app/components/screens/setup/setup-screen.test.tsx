@@ -384,7 +384,7 @@ describe("SetupScreen", () => {
   });
 
   it("provider step nudges a personal compose box toward host mode; host mode never sees it", async () => {
-    // compose + local box, model undetected -> the "make setup-host" nudge shows
+    // compose + local box, model undetected -> the "make setup" (host mode) nudge shows
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         deployment: { host_like: false },
@@ -394,7 +394,7 @@ describe("SetupScreen", () => {
     const { unmount } = render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
-    expect(await screen.findByText("make setup-host")).toBeInTheDocument();
+    expect(await screen.findByText("coming-soon team feature")).toBeInTheDocument();
     unmount();
 
     // host mode (wardynd sees the login) -> model is connected, no nudge
@@ -408,7 +408,7 @@ describe("SetupScreen", () => {
     await screen.findByText("Fence");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
     await screen.findByText("Claude / Anthropic");
-    expect(screen.queryByText("make setup-host")).not.toBeInTheDocument();
+    expect(screen.queryByText("coming-soon team feature")).not.toBeInTheDocument();
   });
 
   // Model/Harness Provider — detection-driven family grouping (owner ask) --------

@@ -246,6 +246,12 @@ build-only profile, and every run gets its own gatewayless sandbox network.
 Postgres persists to the `postgres_data` volume; `wardynd` holds the
 `recordings` and `audit` volumes.
 
+> **Deployment status:** host mode (`make setup`) is the supported path today.
+> A first-class **team** deployment — the compose control plane running as a
+> sealed, multi-user shared service with human SSO — is **coming soon**; the Dex
+> (SSO) profile and OIDC backend exist and are CI-tested, but the UI's SSO login
+> is disabled for now, and `make setup` no longer offers a host-vs-team choice.
+
 ## Parity rule
 
 The control plane contains zero target-specific code: only

@@ -12,18 +12,24 @@ surface is complete enough to run a real pilot, and the deployment is verifiable
 Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and L2 TLS-intercept remain v0.5.
 
 ### Added
-- **One unified `make setup` installer with a Local-vs-Team choice.** The
-  interactive `scripts/setup.sh` detects the host (Docker daemons, WSL,
-  barrier capability, an existing `claude` login), asks the one genuine human
-  choice, and launches the right shape: **Local (host mode, default)** — stages
-  the operator's Claude login for sandboxes (live token proxy-injected, no
-  resident copy), builds `bin/wardynd` + the UI, reuses/starts the compose
-  Postgres, runs `wardynd` as a background host process (PID/log under
-  `~/.wardyn/`, stop with the new `make stop-host`) — or **Team (compose)** —
-  the sealed containerized service (`scripts/up.sh up`). Non-interactive via
-  `WARDYN_SETUP_MODE=local|team`; `make setup-host` / `make setup-team`
-  shortcuts; barrier installs (gVisor/Kata) are never run with silent sudo —
-  the exact commands are printed instead.
+- **`make setup` — a consent-first, host-mode installer.** The interactive
+  `scripts/setup.sh` detects the host (Docker daemons, WSL, barrier capability,
+  an existing `claude` login) and sets up **host mode**: it stages the operator's
+  Claude login for sandboxes (live token proxy-injected — the resident copy is an
+  inert sentinel, no usable credential), builds `bin/wardynd` + the UI,
+  reuses/starts the compose Postgres, and runs `wardynd` as a background host
+  process (PID/log under `~/.wardyn/`, stop with the new `make stop-host`). Every
+  auto-detected credential (Claude login, AWS/Bedrock keys, SCM PAT/SSH key) is
+  gated behind a plan-then-prompt; a headless run writes nothing and destroys no
+  volume without an explicit opt-in flag. Barrier installs (gVisor/Kata) are never
+  run with silent sudo — the exact commands are printed instead.
+- **Team (compose) deployment is marked coming-soon.** `make setup` no longer
+  offers a host-vs-team choice (host only); `WARDYN_SETUP_MODE=team` prints a
+  notice and exits, the `make setup-host` / `make setup-team` shortcuts are
+  removed, and the UI's "Sign in with SSO" button is disabled. The compose stack
+  itself still runs for its other uses (`make compose-up`, `make demo`,
+  `make reset`, and the WSL2 workspace-Verify/Record fix); the OIDC/SSO backend
+  remains present and CI-tested.
 - **Named recording sessions + confined Verify replay.** Record is now a
   user-named interactive session with model access (the fixed build/test task
   taxonomy is gone). Verify replays an existing recording inside a confined
