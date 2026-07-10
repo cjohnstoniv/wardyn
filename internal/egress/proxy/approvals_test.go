@@ -144,24 +144,8 @@ func TestResolveWaitHold(t *testing.T) {
 	holdPollInterval = 5 * time.Millisecond
 	defer func() { holdPollInterval = saved }()
 
-	// A control plane that raises PENDING on POST and returns getState on GET.
-	newCP := func(getState types.ApprovalState, raises *atomic.Int32) *httptest.Server {
-		apID := uuid.New()
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPost {
-				if raises != nil {
-					raises.Add(1)
-				}
-				w.WriteHeader(http.StatusCreated)
-				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalPending})
-				return
-			}
-			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: getState})
-		}))
-	}
-
 	t.Run("approved -> holds then allows", func(t *testing.T) {
-		cp := newCP(types.ApprovalApproved, nil)
+		cp := approvalCPStub(apState(types.ApprovalApproved), nil, nil)
 		defer cp.Close()
 		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 2*time.Second, 4)
@@ -171,7 +155,7 @@ func TestResolveWaitHold(t *testing.T) {
 	})
 
 	t.Run("denied -> holds then denies", func(t *testing.T) {
-		cp := newCP(types.ApprovalDenied, nil)
+		cp := approvalCPStub(apState(types.ApprovalDenied), nil, nil)
 		defer cp.Close()
 		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 2*time.Second, 4)
@@ -182,7 +166,7 @@ func TestResolveWaitHold(t *testing.T) {
 
 	t.Run("timeout -> fails closed pending, approval left raised", func(t *testing.T) {
 		var raises atomic.Int32
-		cp := newCP(types.ApprovalPending, &raises)
+		cp := approvalCPStub(apState(types.ApprovalPending), &raises, nil)
 		defer cp.Close()
 		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 40*time.Millisecond, 4)
@@ -200,7 +184,7 @@ func TestResolveWaitHold(t *testing.T) {
 	})
 
 	t.Run("hold cap saturated -> fails fast pending", func(t *testing.T) {
-		cp := newCP(types.ApprovalPending, nil)
+		cp := approvalCPStub(apState(types.ApprovalPending), nil, nil)
 		defer cp.Close()
 		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 5*time.Second, 1)

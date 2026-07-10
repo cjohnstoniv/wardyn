@@ -284,21 +284,8 @@ func TestFirstUsePendingPath(t *testing.T) {
 }
 
 func TestFirstUseApprovedThenAllowed(t *testing.T) {
-	apID := uuid.New()
-	var state atomic.Value
-	state.Store(types.ApprovalPending)
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/internal/approvals"):
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalPending})
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/internal/approvals/"):
-			st := state.Load().(types.ApprovalState)
-			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: st})
-		default:
-			http.Error(w, "unexpected", http.StatusTeapot)
-		}
-	}))
+	state := apState(types.ApprovalPending)
+	cp := approvalCPStub(state, nil, nil)
 	defer cp.Close()
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -335,18 +322,8 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 }
 
 func TestFirstUseDeniedCached(t *testing.T) {
-	apID := uuid.New()
 	var getCount atomic.Int32
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/internal/approvals"):
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalPending})
-		case r.Method == http.MethodGet:
-			getCount.Add(1)
-			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalDenied})
-		}
-	}))
+	cp := approvalCPStub(apState(types.ApprovalDenied), nil, &getCount)
 	defer cp.Close()
 
 	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
@@ -442,6 +419,35 @@ func TestConnectTunnelDialFailEmitsDenyNotAllow(t *testing.T) {
 }
 
 // --- helpers ---
+
+// approvalCPStub is a shared control-plane fixture for approval polling: POST
+// raises a pending approval (counted via raises, if non-nil); GET returns the
+// state held in getState (seed with apState — callers may Store a new value
+// mid-test to simulate the approver deciding), counted via gets if non-nil.
+func approvalCPStub(getState *atomic.Value, raises, gets *atomic.Int32) *httptest.Server {
+	apID := uuid.New()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if raises != nil {
+				raises.Add(1)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalPending})
+			return
+		}
+		if gets != nil {
+			gets.Add(1)
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: getState.Load().(types.ApprovalState)})
+	}))
+}
+
+// apState seeds an atomic.Value for approvalCPStub's getState argument.
+func apState(s types.ApprovalState) *atomic.Value {
+	var v atomic.Value
+	v.Store(s)
+	return &v
+}
 
 // testInsecureTLSConfig trusts any httptest TLS server's self-signed leaf.
 // Shared client-side TLSClientConfig for tests standing in an HTTPS upstream
