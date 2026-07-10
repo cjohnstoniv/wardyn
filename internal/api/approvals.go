@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
-	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -75,7 +74,3 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
-
-// compile-time reference so the broker import is meaningful even when the API
-// only mints from internal handlers (keeps the dependency intentional).
-var _ = broker.Minted{}

@@ -41,7 +41,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -674,6 +673,3 @@ func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, 
 		Data:      data,
 	}
 }
-
-// compile-time check that egress.DecisionLog is referenced (internal handler).
-var _ = egress.DecisionLog{}
