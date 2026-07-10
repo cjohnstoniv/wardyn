@@ -134,12 +134,17 @@ describe("SetupScreen", () => {
   it("walks all nine funnel steps and Next/Back move within bounds", async () => {
     render(<SetupScreen onDone={() => {}} />);
 
+    // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
+    // The Back button is disambiguated as /^back$/i so it doesn't collide with the
+    // "Finish later — Come back anytime…" verb. NEW STEP_ORDER: artifact_repo now
+    // comes BEFORE scm_provider (corporate phase precedes the "Your work" phase).
+
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
     expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
     expect(screen.getByText("Fence")).toBeInTheDocument();
     expect(screen.queryByText("gVisor runtime")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /back/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^back$/i })).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument(); // provider (family group)
@@ -151,13 +156,13 @@ describe("SetupScreen", () => {
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
-      await screen.findByRole("heading", { name: /source control provider/i }),
-    ).toBeInTheDocument(); // scm_provider
+      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
+    ).toBeInTheDocument(); // artifact_repo (now BEFORE scm_provider)
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
-      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
-    ).toBeInTheDocument(); // artifact_repo
+      await screen.findByRole("heading", { name: /source control provider/i }),
+    ).toBeInTheDocument(); // scm_provider
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces
@@ -172,15 +177,19 @@ describe("SetupScreen", () => {
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    // launch step — the example config + the launch button
+    // launch step — its h2 heading + the launch CTA (the footer nav button and
+    // LaunchStep's own inline button both read "Launch your first run").
     expect(
-      await screen.findByRole("button", { name: /launch your first run/i }),
+      await screen.findByRole("heading", { name: /launch your first run/i }),
     ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /^launch your first run$/i }).length,
+    ).toBeGreaterThan(0);
     // last step: no more Next
     expect(screen.queryByRole("button", { name: /^next:/i })).not.toBeInTheDocument();
 
     // Back from launch lands on Review (the new penultimate step).
-    await user.click(screen.getByRole("button", { name: /back/i }));
+    await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
   });
 
@@ -225,11 +234,17 @@ describe("SetupScreen", () => {
     render(<SetupScreen onDone={() => {}} />);
 
     await screen.findByText("Fence");
+    // jsdom renders BOTH rail variants (compact icon + full), so scope rail-button
+    // queries to the full-rail nav landmark. Host Proxy / Artifact Redirect live in
+    // the collapsible "Corporate network" phase, collapsed by default — expand it so
+    // their buttons (with their badges) render in the nav.
+    const nav = screen.getByRole("navigation", { name: /setup steps/i });
+    await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
     // Every check the backend reports for these three ids stays "info" (never
     // "ok") — the rail badge must not depend on that to say "Configured".
-    const hostProxyBtn = await screen.findByRole("button", { name: /host proxy/i });
-    const scmBtn = screen.getByRole("button", { name: /scm provider/i });
-    const artifactBtn = screen.getByRole("button", { name: /artifact redirect/i });
+    const hostProxyBtn = await within(nav).findByRole("button", { name: /host proxy/i });
+    const scmBtn = within(nav).getByRole("button", { name: /scm provider/i });
+    const artifactBtn = within(nav).getByRole("button", { name: /artifact redirect/i });
     expect(within(hostProxyBtn).getByText("Configured")).toBeInTheDocument();
     expect(within(scmBtn).getByText("Configured")).toBeInTheDocument();
     expect(within(artifactBtn).getByText("Configured")).toBeInTheDocument();
@@ -240,9 +255,13 @@ describe("SetupScreen", () => {
     render(<SetupScreen onDone={() => {}} />);
 
     await screen.findByText("Fence");
-    const hostProxyBtn = await screen.findByRole("button", { name: /host proxy/i });
-    const scmBtn = screen.getByRole("button", { name: /scm provider/i });
-    const artifactBtn = screen.getByRole("button", { name: /artifact redirect/i });
+    // Scope to the full-rail nav (both rail variants render in jsdom) and expand the
+    // collapsed "Corporate network" phase so Host Proxy / Artifact Redirect render.
+    const nav = screen.getByRole("navigation", { name: /setup steps/i });
+    await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
+    const hostProxyBtn = await within(nav).findByRole("button", { name: /host proxy/i });
+    const scmBtn = within(nav).getByRole("button", { name: /scm provider/i });
+    const artifactBtn = within(nav).getByRole("button", { name: /artifact redirect/i });
     expect(within(hostProxyBtn).getByText("Optional")).toBeInTheDocument();
     expect(within(scmBtn).getByText("Optional")).toBeInTheDocument();
     expect(within(artifactBtn).getByText("Optional")).toBeInTheDocument();
@@ -258,15 +277,20 @@ describe("SetupScreen", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it("the fast path appears only when the host reports ready, and jumps to launch", async () => {
+  it("the fast path appears only when the host reports ready, and its launch opens the run dialog", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
     );
     render(<SetupScreen onDone={() => {}} />);
+    // Banner renders only when genuinely ready AND a model is connected.
     expect(await screen.findByText(/you're ready — launch your first run now/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^launch your first run$/i }));
-    // jumped to the launch step — the example config's "Example — not live config" marker
-    expect(await screen.findByText(/not live config/i)).toBeInTheDocument();
+    // The banner's launch now OPENS NewRunDialog (not a jump to the launch step).
+    // The composer is off in this build, so the dialog opens straight into the
+    // manual wizard — assert on its dialog description.
+    expect(
+      await screen.findByText(/compose the agent's permission envelope/i),
+    ).toBeInTheDocument();
   });
 
   it("the fast path is HIDDEN when a barrier is up but no model is connected (honesty)", async () => {
@@ -309,7 +333,13 @@ describe("SetupScreen", () => {
     expect(screen.getByText("Blocking")).toBeInTheDocument();
 
     expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: /re-check/i }));
+    // Two Re-check buttons now share this step: the persistent HostStatusBar (first
+    // in DOM order) and ReviewStep's own (rendered after it in the step body). Both
+    // invoke the same re-check; click the ReviewStep's own and assert getSetupStatus
+    // is called again.
+    const rechecks = screen.getAllByRole("button", { name: /re-check/i });
+    expect(rechecks).toHaveLength(2);
+    await user.click(rechecks[rechecks.length - 1]);
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
   });
 
@@ -446,15 +476,25 @@ describe("SetupScreen", () => {
   it("environment step names the concrete substrate each ready tier runs as (E2)", async () => {
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // render settled
-    // baseStatus runner has CC1+CC2 ready with a substrate map; each ready card
-    // shows "Running here as <substrate>". Vault (CC3) is todo here (no substrate),
-    // so exactly the two ready tiers carry the line.
-    expect(screen.getByText("Running here as oci/runc")).toBeInTheDocument();
-    expect(screen.getByText("Running here as oci/runsc")).toBeInTheDocument();
+    // baseStatus runner has CC1+CC2 ready with a substrate map; each ready column
+    // shows "Running here as <substrate>" — the string spans a text node + a mono
+    // <span>, so scope to each tier's column (<th>) and match both parts there.
+    // Vault (CC3) is todo (no substrate), so exactly the two ready tiers carry it.
+    const fenceCol = screen.getByRole("radio", { name: /Fence/ }).closest("th")!;
+    expect(within(fenceCol).getByText(/Running here as/)).toBeInTheDocument();
+    expect(within(fenceCol).getByText("oci/runc")).toBeInTheDocument();
+    const wallCol = screen.getByRole("radio", { name: /Wall/ }).closest("th")!;
+    expect(within(wallCol).getByText(/Running here as/)).toBeInTheDocument();
+    expect(within(wallCol).getByText("oci/runsc")).toBeInTheDocument();
     expect(screen.getAllByText(/Running here as/)).toHaveLength(2);
   });
 
-  it("provider step surfaces the LLM auth mode + composer backend transport/auth (E2)", async () => {
+  it("provider step surfaces no composer UI (owner decision)", async () => {
+    // Honest inverse of the old composer-provenance test: the ModelStep body
+    // deliberately drops the "AI Run Composer backends" section (owner decision:
+    // zero composer UI here). Even WITH a composer backend configured, the provider
+    // step must render the LLM auth provenance via LlmAccess but NO composer text —
+    // no transport/auth provenance, no "composer" copy at all.
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         providers: [
@@ -467,8 +507,7 @@ describe("SetupScreen", () => {
           },
         ],
         // The llm_provider check carries the single authoritative subscription
-        // sentence (fresh vs EXPIRED, inject on/off); the Claude subscription row
-        // renders it verbatim so the two rows can never disagree.
+        // sentence; the Claude subscription row renders it verbatim.
         checks: [
           {
             id: "llm_provider",
@@ -500,13 +539,16 @@ describe("SetupScreen", () => {
     await screen.findByRole("heading", { name: /pick your barrier/i });
     await user.click(screen.getByRole("button", { name: /^next:/i })); // → provider
 
-    // cliRow renders the llm_provider detail verbatim (auth-mode aware).
+    // The provider families still render, and the LLM auth line surfaces verbatim.
+    expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument();
     expect(
-      await screen.findByText("Claude Code CLI w/ Claude subscription — token valid"),
+      screen.getByText("Claude Code CLI w/ Claude subscription — token valid"),
     ).toBeInTheDocument();
-    // ComposerBackends appends the muted transport/auth provenance.
-    expect(screen.getByText("· api")).toBeInTheDocument();
-    expect(screen.getByText("· apikey")).toBeInTheDocument();
+    // But the composer-backends section is gone — no transport/auth provenance and
+    // no "composer" copy anywhere on the step.
+    expect(screen.queryByText(/composer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("· api")).not.toBeInTheDocument();
+    expect(screen.queryByText("· apikey")).not.toBeInTheDocument();
   });
 
   // E3 — default barrier tier selection ---------------------------------------
@@ -515,35 +557,29 @@ describe("SetupScreen", () => {
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByRole("heading", { name: /pick your barrier/i });
 
-    // Ready cards are selectable <button>s (aria-pressed); todo/unavailable cards
-    // stay plain <div>s. baseStatus has CC1+CC2 ready and no persisted pick, so the
-    // resolved default is the strongest available (Wall) — the SOLE pressed card.
-    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
-    expect(
-      screen.getByRole("button", { name: /Real work on real repos/, pressed: true }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Trying Wardyn out/, pressed: false }),
-    ).toBeInTheDocument();
+    // The three tiers are radios (role=radio / aria-checked); the tier name is in
+    // each radio's accessible name (Fence/Wall/Vault). baseStatus has CC1+CC2 ready
+    // and no persisted pick, so the resolved default is the strongest available
+    // (Wall/CC2) — the SOLE checked radio.
+    expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: /Wall/, checked: true })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Fence/, checked: false })).toBeInTheDocument();
 
-    // Clicking the Fence card moves the selection AND persists it to localStorage.
-    await user.click(screen.getByRole("button", { name: /Trying Wardyn out/ }));
+    // Clicking the Fence radio moves the selection AND persists it to localStorage.
+    await user.click(screen.getByRole("radio", { name: /Fence/ }));
     expect(getDefaultCc()).toBe("CC1");
-    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
-    expect(
-      screen.getByRole("button", { name: /Trying Wardyn out/, pressed: true }),
-    ).toBeInTheDocument();
+    expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: /Fence/, checked: true })).toBeInTheDocument();
 
-    // Regression the ready-only wrapper decision exists to prevent: Vault (CC3) is
-    // a todo card — a plain <div> — so its "Show setup command" button still toggles
-    // the inline command instead of being swallowed by a selection <button>.
-    expect(screen.queryByText("wardyn setup vault")).not.toBeInTheDocument();
+    // Regression the selectable-only radio decision exists to prevent: Vault (CC3)
+    // is a todo tier — its radio is disabled, but its "Show setup command" button
+    // still reveals the inline command instead of being swallowed by a selection.
+    expect(screen.queryByText(/wardyn setup vault/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /show setup command/i }));
-    expect(screen.getByText("wardyn setup vault")).toBeInTheDocument();
-    // Toggling the todo card's command never disturbs the barrier selection.
-    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
-    await user.click(screen.getByRole("button", { name: /hide setup command/i }));
-    expect(screen.queryByText("wardyn setup vault")).not.toBeInTheDocument();
+    expect(screen.getByText(/wardyn setup vault/)).toBeInTheDocument();
+    // Revealing the todo card's command never disturbs the barrier selection.
+    expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: /Fence/, checked: true })).toBeInTheDocument();
   });
 
   // Barrier taxonomy — incompatible (hardware) vs needs-setup (installable) ----
@@ -553,16 +589,15 @@ describe("SetupScreen", () => {
     await screen.findByRole("heading", { name: /pick your barrier/i });
 
     // baseStatus: CC1+CC2 ready, CC3 missing, platform.kvm=true — Vault is a
-    // fixable gap, never a dead end: the single Recommended chip sits on Vault
-    // (whose status reads Needs setup), not on the weaker currently-ready Wall.
-    const recommended = screen.getAllByText("Recommended");
-    expect(recommended).toHaveLength(1);
-    expect(recommended[0].closest('[class*="rounded-xl"]')?.textContent).toContain("Vault");
+    // fixable gap, never a dead end: the single Recommended chip sits in the Vault
+    // column (whose status reads Needs setup), not on the weaker currently-ready
+    // Wall. Scope the chip to the Vault column (<th>) rather than the whole table.
+    expect(screen.getAllByText("Recommended")).toHaveLength(1);
+    const vaultCol = screen.getByRole("radio", { name: /Vault/ }).closest("th")!;
+    expect(within(vaultCol).getByText("Recommended")).toBeInTheDocument();
     expect(screen.queryByText("Incompatible here")).not.toBeInTheDocument();
-    // The selection ring (the ACTUAL default for new runs) stays on ready tiers.
-    expect(
-      screen.getByRole("button", { name: /Real work on real repos/, pressed: true }),
-    ).toBeInTheDocument();
+    // The selection ring (the ACTUAL default for new runs) stays on ready tiers (Wall).
+    expect(screen.getByRole("radio", { name: /Wall/, checked: true })).toBeInTheDocument();
   });
 
   it("marks Vault Incompatible (with the /dev/kvm why) only on a KVM-less host, demoting the recommendation to Wall", async () => {
@@ -576,6 +611,24 @@ describe("SetupScreen", () => {
     expect(screen.getByText(/doesn't expose \/dev\/kvm/)).toBeInTheDocument();
     const recommended = screen.getAllByText("Recommended");
     expect(recommended).toHaveLength(1);
-    expect(recommended[0].closest('[class*="rounded-xl"]')?.textContent).toContain("Wall");
+    // Pin the chip to the Wall COLUMN (the old rounded-xl closest() resolved to
+    // the whole matrix container, which always contains "Wall" — tautology).
+    expect(
+      within(screen.getByRole("radio", { name: /Wall/ }).closest("th")!).getByText("Recommended"),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the fast-path banner when a model is connected but the backend is NOT ready", async () => {
+    // Honesty: fastPath requires readiness.ready AND llmReady — a connected
+    // model alone (e.g. runner missing) must not fabricate the banner.
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        ready: false,
+        providers: [{ tool: "claude", installed: true, logged_in: true }],
+      }),
+    );
+    render(<SetupScreen onDone={() => {}} />);
+    await screen.findByRole("heading", { name: /pick your barrier/i });
+    expect(screen.queryByText(/You're ready — launch your first run now/i)).not.toBeInTheDocument();
   });
 });

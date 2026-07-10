@@ -105,7 +105,7 @@ export function RecordPane({
         <SectionLabel>{confined ? "Verify — locked sandbox" : "Record sessions"}</SectionLabel>
         <Chip tone="info">{confined ? "Confined · re-run your steps" : "Recommended · skippable"}</Chip>
       </div>
-      <p className="text-[13px] leading-relaxed text-muted-foreground">
+      <p className="text-sm leading-relaxed text-muted-foreground">
         {confined ? (
           <>
             Pick a recording below and <strong>replay it in a locked sandbox</strong> — default-deny

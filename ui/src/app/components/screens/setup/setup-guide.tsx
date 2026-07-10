@@ -136,19 +136,19 @@ export function SetupGuideDialog({
           </div>
 
           {guide.docNote && (
-            <p className="text-[12px] leading-snug text-muted-foreground">{guide.docNote}</p>
+            <p className="text-xs leading-snug text-muted-foreground">{guide.docNote}</p>
           )}
 
           {guide.manualSteps && guide.manualSteps.length > 0 && (
             <div>
               <button
                 onClick={() => setShowManual((v) => !v)}
-                className="text-[12px] font-medium text-info underline-offset-2 hover:underline"
+                className="text-xs font-medium text-info underline-offset-2 hover:underline"
               >
                 {showManual ? "Hide manual steps" : "Or set it up manually"}
               </button>
               {showManual && (
-                <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[12px] leading-snug text-muted-foreground">
+                <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs leading-snug text-muted-foreground">
                   {guide.manualSteps.map((s, i) => (
                     <li key={i}>{s}</li>
                   ))}

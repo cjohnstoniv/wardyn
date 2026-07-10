@@ -23,7 +23,7 @@ export function WardynWordmark({ className, compact = false }: { className?: str
     <span className={cn("inline-flex items-center gap-2 select-none", className)}>
       <WardynMark />
       {!compact && (
-        <span className="text-[15px] font-semibold tracking-tight text-foreground">
+        <span className="text-base font-semibold tracking-tight text-foreground">
           Wardyn
         </span>
       )}

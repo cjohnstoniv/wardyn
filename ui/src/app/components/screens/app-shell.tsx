@@ -25,6 +25,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";
 import { useTheme } from "../wardyn/theme-provider";
+import { deriveReadiness } from "./onboarding/intro";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import {
@@ -145,7 +146,12 @@ export function AppShell({
   const checkReadiness = React.useCallback(() => {
     api
       .getSetupStatus()
-      .then((s) => setReadiness(s.ready ? "ready" : "needs-setup"))
+      .then((s) => {
+        // Agree with the funnel's essentials verdict (barrier AND model) —
+        // backend `ready` alone is barrier-only and would overclaim here.
+        const r = deriveReadiness(s);
+        setReadiness(r.ready && r.llmReady ? "ready" : "needs-setup");
+      })
       .catch(() => {
         /* leave the last-known readiness in place */
       });

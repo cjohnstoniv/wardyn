@@ -18,7 +18,9 @@
 import type { ConfinementClass } from "../../lib/types";
 
 export interface CCMeta {
-  /** Friendly display label shown to users (the wire value lives in the tooltip). */
+  /** Friendly display label shown to users. The CC wire code shows only in the
+   *  New Run confinement step's tooltip; the Getting-started matrix deliberately
+   *  prints it beside the label as a column sub-header (design decision). */
   label: string;
   /** Short "what it is / strength / availability" tagline. */
   tagline: string;
@@ -33,8 +35,8 @@ export interface CCMeta {
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
-// Vault order is spelled out (setup-sections' TIER_ORDER and step-confinement's
-// CC_ORDER consolidate onto this).
+// Vault order is spelled out. The barrier picker, the New Run confinement step,
+// and default-confinement's strongest-available scan all consume this.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
 // Ordered weakest -> strongest. The Fence/Wall/Vault metaphor: a fence has holes

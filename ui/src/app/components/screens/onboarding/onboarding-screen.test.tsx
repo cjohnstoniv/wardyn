@@ -86,4 +86,10 @@ describe("OnboardingScreen (welcome hero)", () => {
     markOnboardingSeen();
     expect(onboardingSeen()).toBe(true);
   });
+
+  it("never renders a Composer chip (zero composer UI surfaces on the hero)", async () => {
+    render(<OnboardingScreen onGetStarted={() => {}} onSkip={() => {}} />);
+    await screen.findByText(/Barrier:/);
+    expect(screen.queryByText(/Composer/)).not.toBeInTheDocument();
+  });
 });

@@ -117,6 +117,3 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   credential: "Credential",
   egress: "Network egress",
 };
-
-// One exit verb across the first-run funnel (B13).
-export const EXIT_VERB = BTN.finishLater;

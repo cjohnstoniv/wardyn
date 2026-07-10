@@ -3,26 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Shared first-run funnel primitives — the honest intro that appears BOTH on the
-// first-boot Welcome hero (onboarding-screen.tsx) and as the dismissible
-// IntroPanel above the Getting-started stepper (setup-screen.tsx). One copy of
-// the "how it works" strip, the readiness derivation, and the re-check feedback
-// line, so Welcome and the funnel can never drift apart (B1/B2/B5).
+// Shared first-run funnel primitives — the honest intro blurb + "how it works"
+// strip (reused by the first-boot Welcome hero in onboarding-screen.tsx and the
+// funnel shell's intro panel in setup-layout.tsx) plus the readiness derivation,
+// so Welcome and the funnel can never drift apart (B1/B3/B6).
 import * as React from "react";
 import {
   BrickWall,
   ChevronRight,
-  CircleX,
   Fingerprint,
   KeyRound,
-  Loader2,
   ScrollText,
   ShieldCheck,
-  X,
 } from "lucide-react";
+import { cn } from "../../ui/utils";
 import type { SetupStatus } from "../../../lib/types";
 
-// The single honest one-liner shown under the hero and in the IntroPanel.
+// The single honest one-liner shown under the Welcome hero and in the funnel
+// shell's intro panel.
 export function IntroBlurb() {
   return (
     <>
@@ -49,54 +47,36 @@ const HOW_IT_WORKS: { Icon: React.ElementType; title: string; sub: string; tone:
   { Icon: ShieldCheck, title: "You gate the risky bits", sub: "Egress and writes ask first", tone: "warning" },
   { Icon: ScrollText, title: "Everything recorded", sub: "Append-only audit; session replay where the runner supports it", tone: "muted" },
 ];
-const NODE_TONE: Record<NodeTone, string> = {
-  muted: "text-muted-foreground",
-  primary: "text-primary",
-  warning: "text-warning",
+const NODE_TONE: Record<NodeTone, { ring: string; iconWrap: string }> = {
+  muted: { ring: "border-border", iconWrap: "bg-muted text-foreground" },
+  primary: { ring: "border-primary/40", iconWrap: "bg-primary/15 text-primary" },
+  warning: { ring: "border-warning/40", iconWrap: "bg-warning-subtle text-warning" },
 };
 
 export function HowItWorksStrip() {
   return (
-    <div className="flex flex-wrap items-stretch gap-1.5">
-      {HOW_IT_WORKS.map((n, i) => (
-        <React.Fragment key={n.title}>
-          <div className="flex min-w-[118px] flex-1 flex-col gap-1.5 rounded-[10px] border border-border bg-background/60 p-3">
-            <span className={NODE_TONE[n.tone]}>
-              <n.Icon className="size-4" />
-            </span>
-            <span className="text-[12.5px] font-semibold text-foreground">{n.title}</span>
-            <span className="text-[11.5px] leading-snug text-muted-foreground">{n.sub}</span>
-          </div>
-          {i < HOW_IT_WORKS.length - 1 && (
-            <ChevronRight aria-hidden className="size-3.5 shrink-0 self-center text-muted-foreground/50" />
-          )}
-        </React.Fragment>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// IntroPanel — the dismissible intro that sits above the single stepper (B2).
-// ---------------------------------------------------------------------------
-export function IntroPanel({ onHide }: { onHide: () => void }) {
-  return (
-    <div className="mb-4 rounded-2xl border border-border bg-card p-5">
-      <div className="flex items-start justify-between gap-3">
-        <p className="max-w-[620px] text-sm leading-relaxed text-foreground/90">
-          <IntroBlurb />
-        </p>
-        <button
-          onClick={onHide}
-          className="flex shrink-0 items-center gap-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <X className="size-3.5" /> Hide intro
-        </button>
-      </div>
-      <div className="mt-4">
-        <HowItWorksStrip />
-      </div>
-    </div>
+    <ol
+      className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:items-stretch"
+      aria-label="How Wardyn protects each run"
+    >
+      {HOW_IT_WORKS.map((n, i) => {
+        const tone = NODE_TONE[n.tone];
+        return (
+          <li key={n.title} className="flex items-center gap-2 lg:flex-1">
+            <div className={cn("flex-1 rounded-xl border bg-card p-3", tone.ring)}>
+              <div className={cn("mb-2 inline-flex size-8 items-center justify-center rounded-lg", tone.iconWrap)}>
+                <n.Icon className="size-4" aria-hidden />
+              </div>
+              <div className="text-sm text-foreground">{n.title}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{n.sub}</div>
+            </div>
+            {i < HOW_IT_WORKS.length - 1 && (
+              <ChevronRight className="hidden size-4 shrink-0 text-muted-foreground lg:block" aria-hidden />
+            )}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -114,10 +94,6 @@ export function hasLlmPath(status: SetupStatus): boolean {
   // `make setup` demo config, which has no model behind it.
   if (status.composer.backends.some((b) => b.key_resolved && b.wire !== "fake")) return true;
   return false;
-}
-
-export function hasGitCredential(status: SetupStatus): boolean {
-  return status.secrets.github_app || status.secrets.present.some((n) => /\bpat\b|-pat$|^pat-/i.test(n));
 }
 
 export interface Readiness {
@@ -154,9 +130,8 @@ export function deriveReadiness(status: SetupStatus): Readiness {
 }
 
 // ---------------------------------------------------------------------------
-// RecheckFeedback (B5) — after Re-check, never a silent dead-end. Shows a live
-// "checking…" line, or a concrete "still not detected" result + when it was
-// last checked. Rendered per-tier from the actual re-probed status.
+// lastCheckedLabel — the relative "Checked Ns ago" line for the host-status
+// strip and the Review step's re-check control.
 // ---------------------------------------------------------------------------
 export function lastCheckedLabel(at: Date | null): string {
   if (!at) return "";
@@ -164,31 +139,4 @@ export function lastCheckedLabel(at: Date | null): string {
   if (s < 5) return "Checked just now";
   if (s < 60) return `Checked ${s}s ago`;
   return `Last checked ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-export function RecheckFeedback({
-  rechecking,
-  message,
-}: {
-  rechecking: boolean;
-  /** The concrete "still not detected — …" line, shown once a re-check has run and the thing is still missing. */
-  message?: string;
-}) {
-  // Always-mounted polite live region so a screen reader announces the async
-  // re-check outcome instead of it appearing silently in the DOM.
-  return (
-    <div role="status" aria-live="polite">
-      {rechecking ? (
-        <p className="mt-2 flex items-start gap-1.5 text-[12.5px] leading-snug text-info">
-          <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" />
-          Re-checking the host…
-        </p>
-      ) : message ? (
-        <p className="mt-2 flex items-start gap-1.5 text-[12.5px] leading-snug text-danger">
-          <CircleX className="mt-0.5 size-3.5 shrink-0" />
-          {message}
-        </p>
-      ) : null}
-    </div>
-  );
 }

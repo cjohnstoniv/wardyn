@@ -391,7 +391,7 @@ function RiskPanel({
 
 // Doctor-style setup readiness (decision 2/3/4): each row is label+detail |
 // StatusChip | action button — the same DOM shape as the Getting-started
-// funnel's AccessRow (setup-sections.tsx), so the vocabulary never drifts
+// funnel's AccessRow (llm-access.tsx), so the vocabulary never drifts
 // between the two surfaces even though this one can't share the component (it
 // projects a proposal's SetupItem[], not the boot-time SetupStatus). Item text
 // (label/detail/required_by) is server-derived but rendered as plain React text
@@ -462,7 +462,7 @@ function SetupChecklistRow({
       data-testid={`setup-item-${item.id}`}
     >
       <div className="min-w-[200px] flex-1">
-        <div className="text-[13.5px] font-semibold text-foreground">{item.label}</div>
+        <div className="text-sm font-semibold text-foreground">{item.label}</div>
         <p className="mt-0.5 text-xs leading-snug text-muted-foreground">Required by {item.required_by}</p>
         {item.detail && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{item.detail}</p>}
         {residencyNote && (

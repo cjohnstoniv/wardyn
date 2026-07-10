@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Default barrier tier (E3) — consolidates the three duplicated "strongest
-// available" scans (setup-sections.tsx, onboarding-screen.tsx, setup-screen.tsx)
-// onto CC_ORDER, plus the localStorage persistence for the operator's pick. The
-// New Run wizard prefills from resolveDefaultCc() and treats it as a floor, never
-// silently downgrading below what's persisted.
+// Default barrier tier (E3) — the single source for the operator's default
+// barrier: the strongest available class (over CC_ORDER) plus the localStorage
+// persistence for their explicit pick. The Getting-started barrier step persists
+// the pick here; the New Run wizard, the workspace-import Record/Security chips,
+// and onboarding-screen read it back via resolveDefaultCc()/getDefaultCc()/
+// strongestAvailable(), treating it as a floor and never silently downgrading
+// below what's persisted.
 import type { ConfinementClass } from "../../lib/types";
 import { lsGet, lsSet } from "../../lib/storage";
 import { CC_ORDER } from "./cc-meta";
