@@ -44,12 +44,8 @@ func (s *Server) handleSuggestVerifyFix(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 	var vr workspacescan.VerifyResult

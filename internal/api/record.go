@@ -203,18 +203,11 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// learning session with open egress (the Record step).
 		Confined bool `json:"confined"`
 	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if derr := dec.Decode(&req); derr != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+derr.Error())
+	if !decodeStrict(w, r, &req) {
 		return
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -322,19 +315,12 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		Hosts []string `json:"hosts"`
 	}
 	if r.ContentLength != 0 {
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		if derr := dec.Decode(&req); derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body: "+derr.Error())
+		if !decodeStrict(w, r, &req) {
 			return
 		}
 	}
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 	res, ok := recordResultsMap(ws)[taskKey]
