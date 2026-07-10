@@ -23,7 +23,7 @@ func TestPG_RecordResultUpsertAndStatusCAS(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	ws, err := store.CreateWorkspace(ctx, pool, types.Workspace{
+	ws, err := store.NewPG(pool).CreateWorkspace(ctx, types.Workspace{
 		ID: uuid.New(), Name: "rec-pg", Kind: types.WorkspaceKindLocalDir,
 		Source: "/tmp/rec-pg-" + uuid.NewString(), Status: types.WorkspaceScanned,
 		CreatedAt: now, UpdatedAt: now,
@@ -46,10 +46,10 @@ func TestPG_RecordResultUpsertAndStatusCAS(t *testing.T) {
 
 	// Unconditional upsert creates the entry; a second task's upsert must not
 	// disturb the first (per-key merge, not whole-map replace).
-	if _, applied, err := store.SetWorkspaceRecordResult(ctx, pool, ws.ID, "build", entry("recording"), ""); err != nil || !applied {
+	if _, applied, err := store.NewPG(pool).SetWorkspaceRecordResult(ctx, ws.ID, "build", entry("recording"), ""); err != nil || !applied {
 		t.Fatalf("initial upsert: applied=%v err=%v", applied, err)
 	}
-	got, applied, err := store.SetWorkspaceRecordResult(ctx, pool, ws.ID, "test", entry("recording"), "")
+	got, applied, err := store.NewPG(pool).SetWorkspaceRecordResult(ctx, ws.ID, "test", entry("recording"), "")
 	if err != nil || !applied {
 		t.Fatalf("second-task upsert: applied=%v err=%v", applied, err)
 	}
@@ -59,10 +59,10 @@ func TestPG_RecordResultUpsertAndStatusCAS(t *testing.T) {
 
 	// CAS: recording→recorded applies; a stale write guarded on `recording`
 	// must then no-op (the late-upload / double-capture protection).
-	if _, applied, err = store.SetWorkspaceRecordResult(ctx, pool, ws.ID, "build", entry("recorded"), "recording"); err != nil || !applied {
+	if _, applied, err = store.NewPG(pool).SetWorkspaceRecordResult(ctx, ws.ID, "build", entry("recorded"), "recording"); err != nil || !applied {
 		t.Fatalf("recording→recorded CAS: applied=%v err=%v", applied, err)
 	}
-	got, applied, err = store.SetWorkspaceRecordResult(ctx, pool, ws.ID, "build", entry("recording"), "recording")
+	got, applied, err = store.NewPG(pool).SetWorkspaceRecordResult(ctx, ws.ID, "build", entry("recording"), "recording")
 	if err != nil {
 		t.Fatalf("guarded stale write: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestPG_RecordResultUpsertAndStatusCAS(t *testing.T) {
 	}
 
 	// Missing workspace is ErrNotFound, not a silent guard-miss.
-	if _, _, err := store.SetWorkspaceRecordResult(ctx, pool, uuid.New(), "build", entry("recording"), "recording"); err == nil {
+	if _, _, err := store.NewPG(pool).SetWorkspaceRecordResult(ctx, uuid.New(), "build", entry("recording"), "recording"); err == nil {
 		t.Fatal("guarded write against a missing workspace must error")
 	}
 }
@@ -84,7 +84,7 @@ func TestPG_ClaimAndClearActiveRunCAS(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	ws, err := store.CreateWorkspace(ctx, pool, types.Workspace{
+	ws, err := store.NewPG(pool).CreateWorkspace(ctx, types.Workspace{
 		ID: uuid.New(), Name: "claim-pg", Kind: types.WorkspaceKindLocalDir,
 		Source: "/tmp/claim-pg-" + uuid.NewString(), Status: types.WorkspaceScanned,
 		CreatedAt: now, UpdatedAt: now,
@@ -95,24 +95,24 @@ func TestPG_ClaimAndClearActiveRunCAS(t *testing.T) {
 
 	runA, runB := uuid.New(), uuid.New()
 	// Two launches that both observed a free slot: exactly one CAS wins.
-	if _, claimed, err := store.ClaimWorkspaceActiveRun(ctx, pool, ws.ID, runA, nil); err != nil || !claimed {
+	if _, claimed, err := store.NewPG(pool).ClaimWorkspaceActiveRun(ctx, ws.ID, runA, nil); err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
 	}
-	if _, claimed, err := store.ClaimWorkspaceActiveRun(ctx, pool, ws.ID, runB, nil); err != nil || claimed {
+	if _, claimed, err := store.NewPG(pool).ClaimWorkspaceActiveRun(ctx, ws.ID, runB, nil); err != nil || claimed {
 		t.Fatalf("second claim from the same observation must lose: claimed=%v err=%v", claimed, err)
 	}
 	// Clear is conditional on the pointer still being ours.
-	if cleared, err := store.ClearWorkspaceActiveRun(ctx, pool, ws.ID, runB); err != nil || cleared {
+	if cleared, err := store.NewPG(pool).ClearWorkspaceActiveRun(ctx, ws.ID, runB); err != nil || cleared {
 		t.Fatalf("loser's clear must no-op: cleared=%v err=%v", cleared, err)
 	}
-	if cleared, err := store.ClearWorkspaceActiveRun(ctx, pool, ws.ID, runA); err != nil || !cleared {
+	if cleared, err := store.NewPG(pool).ClearWorkspaceActiveRun(ctx, ws.ID, runA); err != nil || !cleared {
 		t.Fatalf("owner's clear: cleared=%v err=%v", cleared, err)
 	}
 	// A claim expecting the (now stale) old pointer fails; expecting nil wins.
-	if _, claimed, err := store.ClaimWorkspaceActiveRun(ctx, pool, ws.ID, runB, &runA); err != nil || claimed {
+	if _, claimed, err := store.NewPG(pool).ClaimWorkspaceActiveRun(ctx, ws.ID, runB, &runA); err != nil || claimed {
 		t.Fatalf("claim with stale expectation must lose: claimed=%v err=%v", claimed, err)
 	}
-	if _, claimed, err := store.ClaimWorkspaceActiveRun(ctx, pool, ws.ID, runB, nil); err != nil || !claimed {
+	if _, claimed, err := store.NewPG(pool).ClaimWorkspaceActiveRun(ctx, ws.ID, runB, nil); err != nil || !claimed {
 		t.Fatalf("claim of the freed slot: claimed=%v err=%v", claimed, err)
 	}
 }

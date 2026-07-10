@@ -212,7 +212,7 @@ func TestApprovals_AlreadyDecided_409(t *testing.T) {
 // are isolated within the shared DB.
 func seedRun(t *testing.T, h *harness, runID uuid.UUID) {
 	t.Helper()
-	_, err := store.CreateRun(context.Background(), h.pool, types.AgentRun{
+	_, err := store.NewPG(h.pool).CreateRun(context.Background(), types.AgentRun{
 		ID:               runID,
 		CreatedAt:        time.Now().UTC(),
 		UpdatedAt:        time.Now().UTC(),
@@ -232,7 +232,7 @@ func seedRun(t *testing.T, h *harness, runID uuid.UUID) {
 // seedGrant inserts a credential grant for runID and returns its id.
 func seedGrant(t *testing.T, h *harness, runID uuid.UUID, spec types.GrantSpec) uuid.UUID {
 	t.Helper()
-	g, err := store.CreateGrant(context.Background(), h.pool, types.CredentialGrant{
+	g, err := store.NewPG(h.pool).CreateGrant(context.Background(), types.CredentialGrant{
 		ID:        uuid.New(),
 		RunID:     runID,
 		CreatedAt: time.Now().UTC(),

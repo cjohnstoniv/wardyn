@@ -78,7 +78,7 @@ func TestKillRun_TerminalGuard(t *testing.T) {
 	if err := json.Unmarshal(cw.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, err := store.UpdateRunStateIf(ctx, pool, run.ID, run.State, types.RunCompleted); err != nil {
+	if _, err := store.NewPG(pool).UpdateRunStateIf(ctx, run.ID, run.State, types.RunCompleted); err != nil {
 		t.Fatalf("force completed: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestKillRun_TerminalGuard(t *testing.T) {
 	if kw.Code != http.StatusConflict {
 		t.Fatalf("kill on terminal run: code = %d, want 409; body=%s", kw.Code, kw.Body.String())
 	}
-	got, err := store.GetRun(ctx, pool, run.ID)
+	got, err := store.NewPG(pool).GetRun(ctx, run.ID)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}

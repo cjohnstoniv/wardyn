@@ -95,16 +95,16 @@ type approvalStore struct {
 }
 
 func (a approvalStore) CreateApproval(ctx context.Context, ar types.ApprovalRequest) (types.ApprovalRequest, error) {
-	return store.CreateApproval(ctx, a.pool, ar)
+	return store.NewPG(a.pool).CreateApproval(ctx, ar)
 }
 func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.GetApproval(ctx, a.pool, id)
+	return store.NewPG(a.pool).GetApproval(ctx, id)
 }
 func (a approvalStore) ListApprovals(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.ListApprovals(ctx, a.pool, state)
+	return store.NewPG(a.pool).ListApprovals(ctx, state)
 }
 func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return store.DecideApproval(ctx, a.pool, id, state, decidedBy, reason)
+	return store.NewPG(a.pool).DecideApproval(ctx, id, state, decidedBy, reason)
 }
 func (a approvalStore) Record(ctx context.Context, ev types.AuditEvent) error {
 	return a.rec.Record(ctx, ev)
@@ -129,10 +129,10 @@ func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, approve bool
 	return approval.Decide(ctx, s.st(), id, approve, decidedByType, decidedBy, reason)
 }
 func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.GetApproval(ctx, s.pool, id)
+	return store.NewPG(s.pool).GetApproval(ctx, id)
 }
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.ListApprovals(ctx, s.pool, state)
+	return store.NewPG(s.pool).ListApprovals(ctx, state)
 }
 
 // ─── audit fanout ─────────────────────────────────────────────────────────────
@@ -310,7 +310,7 @@ type runRevoker interface {
 var _ lifecycle.Stopper = lifecycleStopper{}
 
 func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (lifecycle.StopOutcome, error) {
-	run, err := store.GetRun(ctx, l.pool, runID)
+	run, err := store.NewPG(l.pool).GetRun(ctx, runID)
 	if err != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle get run: %w", err)
 	}
@@ -322,7 +322,7 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// (applied=false) and we tear nothing down and revoke nothing, preserving the
 	// keepalive. If a concurrent kill/complete already moved the run terminal, the
 	// CAS also no-ops and we leave that path's teardown/revocation untouched.
-	applied, uerr := store.UpdateRunStateIfIdle(ctx, l.pool, runID, types.RunRunning, types.RunStopped, notAfter)
+	applied, uerr := store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
 	}

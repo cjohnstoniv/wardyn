@@ -114,16 +114,16 @@ type approvalStore struct {
 }
 
 func (a approvalStore) CreateApproval(ctx context.Context, ar types.ApprovalRequest) (types.ApprovalRequest, error) {
-	return store.CreateApproval(ctx, a.pool, ar)
+	return store.NewPG(a.pool).CreateApproval(ctx, ar)
 }
 func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.GetApproval(ctx, a.pool, id)
+	return store.NewPG(a.pool).GetApproval(ctx, id)
 }
 func (a approvalStore) ListApprovals(ctx context.Context, st types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.ListApprovals(ctx, a.pool, st)
+	return store.NewPG(a.pool).ListApprovals(ctx, st)
 }
 func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, st types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return store.DecideApproval(ctx, a.pool, id, st, decidedBy, reason)
+	return store.NewPG(a.pool).DecideApproval(ctx, id, st, decidedBy, reason)
 }
 func (a approvalStore) Record(ctx context.Context, ev types.AuditEvent) error {
 	return a.rec.Record(ctx, ev)
@@ -146,10 +146,10 @@ func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, approve bool
 	return approval.Decide(ctx, s.st(), id, approve, decidedByType, decidedBy, reason)
 }
 func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.GetApproval(ctx, s.pool, id)
+	return store.NewPG(s.pool).GetApproval(ctx, id)
 }
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.ListApprovals(ctx, s.pool, state)
+	return store.NewPG(s.pool).ListApprovals(ctx, state)
 }
 
 // ─── fake runner ──────────────────────────────────────────────────────────────

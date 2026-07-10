@@ -3,8 +3,9 @@
 
 // Package store provides typed CRUD over the Wardyn schema using pgx/v5.
 // All writes are serialised through pgxpool; callers supply contexts with
-// deadlines. Functions are not methods — inject the pool explicitly to keep
-// the package testable against a real Postgres without a Server struct.
+// deadlines. Most operations are methods on PG (see iface.go); InsertAuditEvent
+// stays a free function taking the pool explicitly since it predates a Store
+// value in the audit.Recorder wiring.
 //
 // Naming conventions:
 //   - Create* inserts and returns the full hydrated row.
@@ -39,7 +40,7 @@ var ErrAlreadyDecided = errors.New("store: approval already decided")
 // ─── AgentRun ────────────────────────────────────────────────────────────────
 
 // CreateRun inserts a new run and returns the persisted row.
-func CreateRun(ctx context.Context, pool *pgxpool.Pool, r types.AgentRun) (types.AgentRun, error) {
+func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
 	const q = `
 		INSERT INTO agent_runs
 			(id, created_at, updated_at, created_by, agent, repo, task,
@@ -48,7 +49,7 @@ func CreateRun(ctx context.Context, pool *pgxpool.Pool, r types.AgentRun) (types
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
 			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id`
 
-	row := pool.QueryRow(ctx, q,
+	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID,
@@ -57,21 +58,21 @@ func CreateRun(ctx context.Context, pool *pgxpool.Pool, r types.AgentRun) (types
 }
 
 // GetRun returns the run for id, or ErrNotFound.
-func GetRun(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (types.AgentRun, error) {
+func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
 			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id
 		FROM agent_runs WHERE id = $1`
-	return scanRun(pool.QueryRow(ctx, q, id))
+	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
 
 // ListRuns returns all runs in reverse creation order.
-func ListRuns(ctx context.Context, pool *pgxpool.Pool) ([]types.AgentRun, error) {
+func (s PG) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
 			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id
 		FROM agent_runs ORDER BY created_at DESC`
-	rows, err := pool.Query(ctx, q)
+	rows, err := s.Pool.Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("store: list runs: %w", err)
 	}
@@ -80,8 +81,8 @@ func ListRuns(ctx context.Context, pool *pgxpool.Pool) ([]types.AgentRun, error)
 }
 
 // UpdateRunState sets the state and bumps updated_at.
-func UpdateRunState(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, state types.RunState) error {
-	tag, err := pool.Exec(ctx,
+func (s PG) UpdateRunState(ctx context.Context, id uuid.UUID, state types.RunState) error {
+	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2`,
 		string(state), id,
 	)
@@ -102,8 +103,8 @@ func UpdateRunState(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, state
 // (TOCTOU-safe, like DecideApproval). A false return with a nil error means the
 // run existed but was no longer in fromState (or did not exist) — the caller
 // treats this as "someone else won the transition" and does nothing.
-func UpdateRunStateIf(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
-	tag, err := pool.Exec(ctx,
+func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
+	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2 AND state=$3`,
 		string(toState), id, string(fromState),
 	)
@@ -123,8 +124,8 @@ func UpdateRunStateIf(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fro
 // Passing the snapshot's updated_at as notAfter makes a run touched after the
 // snapshot no-op the stop (rows-affected 0 => false), so the reaper leaves it be
 // and retries on the next tick. Returns (true, nil) when the transition applied.
-func UpdateRunStateIfIdle(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
-	tag, err := pool.Exec(ctx,
+func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
+	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2 AND state=$3 AND updated_at <= $4`,
 		string(toState), id, string(fromState), notAfter,
 	)
@@ -135,8 +136,8 @@ func UpdateRunStateIfIdle(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
 }
 
 // SetSandboxRef records the runner reference (container ID / pod name).
-func SetSandboxRef(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, ref string) error {
-	tag, err := pool.Exec(ctx,
+func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
+	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now() WHERE id=$2`,
 		ref, id,
 	)
@@ -153,8 +154,8 @@ func SetSandboxRef(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, ref st
 // It is the activity keepalive the interactive-attach handler calls so the idle
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
 // that a human is actively attached to. Returns ErrNotFound when no row matched.
-func TouchRun(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
-	tag, err := pool.Exec(ctx, `UPDATE agent_runs SET updated_at=now() WHERE id=$1`, id)
+func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET updated_at=now() WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("store: touch run: %w", err)
 	}
@@ -211,7 +212,7 @@ func collectRuns(rows pgx.Rows) ([]types.AgentRun, error) {
 // ─── RunPolicy ───────────────────────────────────────────────────────────────
 
 // CreatePolicy inserts a policy and returns the persisted row.
-func CreatePolicy(ctx context.Context, pool *pgxpool.Pool, p types.RunPolicy) (types.RunPolicy, error) {
+func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(p.Spec)
 	if err != nil {
 		return types.RunPolicy{}, fmt.Errorf("store: marshal policy spec: %w", err)
@@ -220,20 +221,20 @@ func CreatePolicy(ctx context.Context, pool *pgxpool.Pool, p types.RunPolicy) (t
 		INSERT INTO run_policies (id, name, created_at, updated_at, spec)
 		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, name, created_at, updated_at, spec`
-	return scanPolicy(pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	return scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
 }
 
 // GetPolicy returns the policy for id, or ErrNotFound.
-func GetPolicy(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (types.RunPolicy, error) {
+func (s PG) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error) {
 	const q = `SELECT id, name, created_at, updated_at, spec FROM run_policies WHERE id = $1`
-	return scanPolicy(pool.QueryRow(ctx, q, id))
+	return scanPolicy(s.Pool.QueryRow(ctx, q, id))
 }
 
 // ListPolicies returns all policies in reverse creation order. The slice is
 // empty (never nil) when no policies exist.
-func ListPolicies(ctx context.Context, pool *pgxpool.Pool) ([]types.RunPolicy, error) {
+func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 	const q = `SELECT id, name, created_at, updated_at, spec FROM run_policies ORDER BY created_at DESC`
-	rows, err := pool.Query(ctx, q)
+	rows, err := s.Pool.Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("store: list policies: %w", err)
 	}
@@ -259,7 +260,7 @@ func ListPolicies(ctx context.Context, pool *pgxpool.Pool) ([]types.RunPolicy, e
 // the persisted row. Returns ErrNotFound when no policy has the given id. The
 // caller is responsible for validating the spec before calling (policies are
 // admin-gated config; the API validates every spec before it reaches the store).
-func UpdatePolicy(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
+func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return types.RunPolicy{}, fmt.Errorf("store: marshal policy spec: %w", err)
@@ -268,14 +269,14 @@ func UpdatePolicy(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, name st
 		UPDATE run_policies SET name=$1, spec=$2, updated_at=now()
 		WHERE id=$3
 		RETURNING id, name, created_at, updated_at, spec`
-	return scanPolicy(pool.QueryRow(ctx, q, name, specJSON, id))
+	return scanPolicy(s.Pool.QueryRow(ctx, q, name, specJSON, id))
 }
 
 // DeletePolicy removes a policy by id. Returns ErrNotFound when no row matched.
 // Note: a foreign-key reference from agent_runs.policy_id can make this fail at
 // the DB level if runs still reference the policy; the wrapped error surfaces.
-func DeletePolicy(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
-	tag, err := pool.Exec(ctx, `DELETE FROM run_policies WHERE id=$1`, id)
+func (s PG) DeletePolicy(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_policies WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete policy: %w", err)
 	}
@@ -348,12 +349,12 @@ const wsCols = `id, name, kind, source, ref, default_target, profile, image_ref,
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is core A's opaque WorkspaceProfile blob (nil until scanned).
-func CreateWorkspace(ctx context.Context, pool *pgxpool.Pool, ws types.Workspace) (types.Workspace, error) {
+func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING ` + wsCols
-	return scanWorkspace(pool.QueryRow(ctx, q,
+	return scanWorkspace(s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
 		workspaceProfileParam(ws.Profile), ws.ImageRef, ws.BuiltProfileHash,
 		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
@@ -364,23 +365,23 @@ func CreateWorkspace(ctx context.Context, pool *pgxpool.Pool, ws types.Workspace
 }
 
 // GetWorkspace returns the workspace for id, or ErrNotFound.
-func GetWorkspace(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (types.Workspace, error) {
-	return scanWorkspace(pool.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id = $1`, id))
+func (s PG) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error) {
+	return scanWorkspace(s.Pool.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id = $1`, id))
 }
 
 // GetWorkspaceBySource returns the workspace with the given kind+source, or
 // ErrNotFound — the read side of the partial-unique (source) WHERE
 // kind='local_dir' index, and the lookup a repo-kind workspace resolves by.
-func GetWorkspaceBySource(ctx context.Context, pool *pgxpool.Pool, kind types.WorkspaceKind, source string) (types.Workspace, error) {
-	return scanWorkspace(pool.QueryRow(ctx,
+func (s PG) GetWorkspaceBySource(ctx context.Context, kind types.WorkspaceKind, source string) (types.Workspace, error) {
+	return scanWorkspace(s.Pool.QueryRow(ctx,
 		`SELECT `+wsCols+` FROM workspaces WHERE kind = $1 AND source = $2`, string(kind), source))
 }
 
 // ListWorkspaces returns all workspaces in reverse creation order. The slice
 // is empty (never nil) when no workspaces exist.
-func ListWorkspaces(ctx context.Context, pool *pgxpool.Pool) ([]types.Workspace, error) {
+func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 	q := `SELECT ` + wsCols + ` FROM workspaces ORDER BY created_at DESC`
-	rows, err := pool.Query(ctx, q)
+	rows, err := s.Pool.Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("store: list workspaces: %w", err)
 	}
@@ -413,7 +414,7 @@ func ListWorkspaces(ctx context.Context, pool *pgxpool.Pool) ([]types.Workspace,
 // resets the scan-owned fields + ApprovedEgress itself when source/kind
 // changed — the persisted profile and egress approvals were reviewed against
 // the OLD source).
-func UpdateWorkspace(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
 		SET name=$1, kind=$2, source=$3, ref=$4, default_target=$5,
@@ -422,7 +423,7 @@ func UpdateWorkspace(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, ws t
 			verified_at=$13, active_run_id=$14, status=$15, record_results=$16, updated_at=now()
 		WHERE id=$17
 		RETURNING ` + wsCols
-	return scanWorkspace(pool.QueryRow(ctx, q,
+	return scanWorkspace(s.Pool.QueryRow(ctx, q,
 		ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
 		workspaceProfileParam(ws.Profile), ws.ImageRef, ws.BuiltProfileHash,
 		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
@@ -436,8 +437,8 @@ func UpdateWorkspace(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, ws t
 // approval must never clobber a concurrently-persisted scan (an async repo
 // scan's profile/status land via the full-column UpdateWorkspace, and a
 // read-modify-write here would silently revert them).
-func SetWorkspaceApprovedEgress(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, domains []string) (types.Workspace, error) {
-	return scanWorkspace(pool.QueryRow(ctx,
+func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	return scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET approved_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceApprovedParam(domains), id))
 }
@@ -445,8 +446,8 @@ func SetWorkspaceApprovedEgress(ctx context.Context, pool *pgxpool.Pool, id uuid
 // SetWorkspaceSetupCommands replaces ONLY the operator-approved setup-commands
 // column (scoped write, same anti-clobber discipline as approved-egress). The
 // blob is opaque []workspacescan.SetupCommand JSON.
-func SetWorkspaceSetupCommands(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, cmds json.RawMessage) (types.Workspace, error) {
-	return scanWorkspace(pool.QueryRow(ctx,
+func (s PG) SetWorkspaceSetupCommands(ctx context.Context, id uuid.UUID, cmds json.RawMessage) (types.Workspace, error) {
+	return scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET setup_commands=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceProfileParam(cmds), id))
 }
@@ -458,7 +459,7 @@ func SetWorkspaceSetupCommands(ctx context.Context, pool *pgxpool.Pool, id uuid.
 // task's CURRENT stored status equals it (single-statement compare-and-set):
 // a late streaming upload can never revert a completed capture, and a double
 // capture no-ops. Returns applied=false (no error) on a guard miss.
-func SetWorkspaceRecordResult(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
+func (s PG) SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID,
 	taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error) {
 	q := `UPDATE workspaces
 		SET record_results = COALESCE(record_results,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb),
@@ -469,10 +470,10 @@ func SetWorkspaceRecordResult(ctx context.Context, pool *pgxpool.Pool, id uuid.U
 		q += ` AND COALESCE(record_results->$2->>'status','') = $4`
 		args = append(args, onlyIfStatus)
 	}
-	ws, err := scanWorkspace(pool.QueryRow(ctx, q+` RETURNING `+wsCols, args...))
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q+` RETURNING `+wsCols, args...))
 	if errors.Is(err, ErrNotFound) && onlyIfStatus != "" {
 		// Distinguish guard-miss from a missing workspace.
-		ws, gerr := GetWorkspace(ctx, pool, id)
+		ws, gerr := s.GetWorkspace(ctx, id)
 		if gerr != nil {
 			return types.Workspace{}, false, gerr
 		}
@@ -489,13 +490,13 @@ func SetWorkspaceRecordResult(ctx context.Context, pool *pgxpool.Pool, id uuid.U
 // step launches that both observed the same free slot cannot both win: the
 // loser gets applied=false and must NOT launch. Returns ErrNotFound only when
 // the workspace does not exist.
-func ClaimWorkspaceActiveRun(ctx context.Context, pool *pgxpool.Pool, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error) {
-	ws, err := scanWorkspace(pool.QueryRow(ctx,
+func (s PG) ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error) {
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET active_run_id=$2, updated_at=now()
 		 WHERE id=$1 AND active_run_id IS NOT DISTINCT FROM $3 RETURNING `+wsCols,
 		id, runID, expected))
 	if errors.Is(err, ErrNotFound) {
-		ws, gerr := GetWorkspace(ctx, pool, id)
+		ws, gerr := s.GetWorkspace(ctx, id)
 		if gerr != nil {
 			return types.Workspace{}, false, gerr
 		}
@@ -510,8 +511,8 @@ func ClaimWorkspaceActiveRun(ctx context.Context, pool *pgxpool.Pool, id, runID 
 // ClearWorkspaceActiveRun clears active_run_id ONLY while it still points at
 // runID (conditional, single statement) — a terminal run's cleanup can never
 // clobber a step that was concurrently launched and now owns the pointer.
-func ClearWorkspaceActiveRun(ctx context.Context, pool *pgxpool.Pool, id, runID uuid.UUID) (bool, error) {
-	tag, err := pool.Exec(ctx,
+func (s PG) ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error) {
+	tag, err := s.Pool.Exec(ctx,
 		`UPDATE workspaces SET active_run_id=NULL, updated_at=now() WHERE id=$1 AND active_run_id=$2`,
 		id, runID)
 	if err != nil {
@@ -524,8 +525,8 @@ func ClearWorkspaceActiveRun(ctx context.Context, pool *pgxpool.Pool, id, runID 
 // build-once/reuse-many cache) — the anti-clobber discipline the other scoped
 // writers established; the previous full-row cache write could revert every
 // concurrently-persisted async field from a stale snapshot.
-func SetWorkspaceBuiltImage(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error) {
-	return scanWorkspace(pool.QueryRow(ctx,
+func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error) {
+	return scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET image_ref=$1, built_profile_hash=$2, updated_at=now() WHERE id=$3 RETURNING `+wsCols,
 		imageRef, builtHash, id))
 }
@@ -536,10 +537,10 @@ func SetWorkspaceBuiltImage(ctx context.Context, pool *pgxpool.Pool, id uuid.UUI
 // proven-working markers. Any nil pointer leaves that column unchanged via
 // COALESCE-on-sentinel is avoided by taking explicit values — callers pass the
 // current values for columns they don't mean to change.
-func SetWorkspaceImportState(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
+func (s PG) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
 	status types.WorkspaceStatus, activeRunID *uuid.UUID, verifyResult json.RawMessage,
 	verifiedHash string, verifiedAt *time.Time) (types.Workspace, error) {
-	return scanWorkspace(pool.QueryRow(ctx,
+	return scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET status=$1, active_run_id=$2, verify_result=$3,
 			verified_profile_hash=$4, verified_at=$5, updated_at=now()
 		 WHERE id=$6 RETURNING `+wsCols,
@@ -547,8 +548,8 @@ func SetWorkspaceImportState(ctx context.Context, pool *pgxpool.Pool, id uuid.UU
 }
 
 // DeleteWorkspace removes a workspace by id. Returns ErrNotFound when no row matched.
-func DeleteWorkspace(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
-	tag, err := pool.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, id)
+func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete workspace: %w", err)
 	}
@@ -618,7 +619,7 @@ func fillWorkspace(ws types.Workspace, kind, status string, profileRaw, approved
 // ─── CredentialGrant ─────────────────────────────────────────────────────────
 
 // CreateGrant inserts a credential grant (eligibility record) and returns it.
-func CreateGrant(ctx context.Context, pool *pgxpool.Pool, g types.CredentialGrant) (types.CredentialGrant, error) {
+func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	specJSON, err := json.Marshal(g.Spec)
 	if err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: marshal grant spec: %w", err)
@@ -627,19 +628,19 @@ func CreateGrant(ctx context.Context, pool *pgxpool.Pool, g types.CredentialGran
 		INSERT INTO credential_grants (id, run_id, created_at, spec)
 		VALUES ($1,$2,$3,$4)
 		RETURNING id, run_id, created_at, spec`
-	return scanGrant(pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON))
+	return scanGrant(s.Pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON))
 }
 
 // GetGrant returns the grant for id, or ErrNotFound.
-func GetGrant(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (types.CredentialGrant, error) {
+func (s PG) GetGrant(ctx context.Context, id uuid.UUID) (types.CredentialGrant, error) {
 	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE id = $1`
-	return scanGrant(pool.QueryRow(ctx, q, id))
+	return scanGrant(s.Pool.QueryRow(ctx, q, id))
 }
 
 // ListGrantsByRun returns all grants for a run.
-func ListGrantsByRun(ctx context.Context, pool *pgxpool.Pool, runID uuid.UUID) ([]types.CredentialGrant, error) {
+func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
 	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at`
-	rows, err := pool.Query(ctx, q, runID)
+	rows, err := s.Pool.Query(ctx, q, runID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list grants: %w", err)
 	}
@@ -692,7 +693,7 @@ func scanGrantRow(rows pgx.Rows) (types.CredentialGrant, error) {
 // ─── ApprovalRequest ─────────────────────────────────────────────────────────
 
 // CreateApproval inserts a new approval request.
-func CreateApproval(ctx context.Context, pool *pgxpool.Pool, a types.ApprovalRequest) (types.ApprovalRequest, error) {
+func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	scopeJSON, err := json.Marshal(a.RequestedScope)
 	if err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: marshal approval scope: %w", err)
@@ -704,34 +705,34 @@ func CreateApproval(ctx context.Context, pool *pgxpool.Pool, a types.ApprovalReq
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
 			decided_at, decided_by, minted_jti, reason`
-	return scanApproval(pool.QueryRow(ctx, q,
+	return scanApproval(s.Pool.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
 	))
 }
 
 // GetApproval returns the approval for id, or ErrNotFound.
-func GetApproval(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (types.ApprovalRequest, error) {
+func (s PG) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
 	const q = `
 		SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
 			decided_at, decided_by, minted_jti, reason
 		FROM approvals WHERE id = $1`
-	return scanApproval(pool.QueryRow(ctx, q, id))
+	return scanApproval(s.Pool.QueryRow(ctx, q, id))
 }
 
 // ListApprovals returns approvals filtered by state. Pass empty string to list all.
-func ListApprovals(ctx context.Context, pool *pgxpool.Pool, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error) {
+func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error) {
 	var (
 		rows pgx.Rows
 		err  error
 	)
 	if stateFilter == "" {
-		rows, err = pool.Query(ctx, `
+		rows, err = s.Pool.Query(ctx, `
 			SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
 				decided_at, decided_by, minted_jti, reason
 			FROM approvals ORDER BY requested_at DESC`)
 	} else {
-		rows, err = pool.Query(ctx, `
+		rows, err = s.Pool.Query(ctx, `
 			SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
 				decided_at, decided_by, minted_jti, reason
 			FROM approvals WHERE state=$1 ORDER BY requested_at DESC`,
@@ -761,7 +762,7 @@ func ListApprovals(ctx context.Context, pool *pgxpool.Pool, stateFilter types.Ap
 // DecideApproval transitions an approval from PENDING to the given state.
 // Returns ErrAlreadyDecided if the approval is not PENDING (fail-closed).
 // Uses a single UPDATE with WHERE state='PENDING' to prevent TOCTOU races.
-func DecideApproval(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
+func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
 	now := time.Now().UTC()
 	const q = `
 		UPDATE approvals
@@ -769,12 +770,12 @@ func DecideApproval(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, state
 		WHERE id=$5 AND state='PENDING'
 		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
 			decided_at, decided_by, minted_jti, reason`
-	a, err := scanApproval(pool.QueryRow(ctx, q, string(state), now, decidedBy, reason, id))
+	a, err := scanApproval(s.Pool.QueryRow(ctx, q, string(state), now, decidedBy, reason, id))
 	if errors.Is(err, ErrNotFound) {
 		// Row exists but wasn't PENDING, or doesn't exist at all.
 		// Distinguish by checking existence.
 		var exists bool
-		_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists)
+		_ = s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists)
 		if exists {
 			return types.ApprovalRequest{}, ErrAlreadyDecided
 		}
@@ -843,14 +844,14 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev types.AuditEve
 
 // QueryAuditEvents returns audit events for a run in time order.
 // limit <= 0 means no explicit limit (returns up to 1000).
-func QueryAuditEvents(ctx context.Context, pool *pgxpool.Pool, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+func (s PG) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
 	const q = `
 		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
 		FROM audit_events WHERE run_id=$1 ORDER BY seq ASC LIMIT $2`
-	rows, err := pool.Query(ctx, q, runID, limit)
+	rows, err := s.Pool.Query(ctx, q, runID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: query audit events: %w", err)
 	}
@@ -876,14 +877,14 @@ func QueryAuditEvents(ctx context.Context, pool *pgxpool.Pool, runID uuid.UUID, 
 // newest first — the global SIEM-style feed the Audit view renders. Per-run
 // queries (QueryAuditEvents) stay chronological; this global tail is reverse-
 // chronological and bounded by limit.
-func QueryRecentAuditEvents(ctx context.Context, pool *pgxpool.Pool, limit int) ([]types.AuditEvent, error) {
+func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.AuditEvent, error) {
 	if limit <= 0 {
 		limit = 500
 	}
 	const q = `
 		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
 		FROM audit_events ORDER BY seq DESC LIMIT $1`
-	rows, err := pool.Query(ctx, q, limit)
+	rows, err := s.Pool.Query(ctx, q, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: query recent audit events: %w", err)
 	}
@@ -909,11 +910,11 @@ func QueryRecentAuditEvents(ctx context.Context, pool *pgxpool.Pool, limit int) 
 // equals the given action, or ErrNotFound when none exists. Used by /healthz to
 // find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
 // health state (so the stream reports healthy only while beats are arriving).
-func LatestAuditEventByAction(ctx context.Context, pool *pgxpool.Pool, action string) (types.AuditEvent, error) {
+func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
 	const q = `
 		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
 		FROM audit_events WHERE action=$1 ORDER BY seq DESC LIMIT 1`
-	ev, err := scanAuditEvent(pool.QueryRow(ctx, q, action))
+	ev, err := scanAuditEvent(s.Pool.QueryRow(ctx, q, action))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AuditEvent{}, ErrNotFound
 	}
@@ -963,9 +964,9 @@ func scanAuditEventRow(rows pgx.Rows) (types.AuditEvent, error) {
 // SiteConfig (not an error) when no row has been written yet — first boot has
 // no config, and "unconfigured" is a valid, common state rather than a
 // failure the caller must special-case.
-func GetSiteConfig(ctx context.Context, pool *pgxpool.Pool) (types.SiteConfig, error) {
+func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 	var raw []byte
-	err := pool.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw)
+	err := s.Pool.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.SiteConfig{}, nil
 	}
@@ -984,7 +985,7 @@ func GetSiteConfig(ctx context.Context, pool *pgxpool.Pool) (types.SiteConfig, e
 // second row impossible at the schema level; a write always REPLACES the whole
 // document (no partial merge — the API layer decodes and validates the full
 // document before calling this).
-func PutSiteConfig(ctx context.Context, pool *pgxpool.Pool, cfg types.SiteConfig) (types.SiteConfig, error) {
+func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: marshal site config: %w", err)
@@ -995,7 +996,7 @@ func PutSiteConfig(ctx context.Context, pool *pgxpool.Pool, cfg types.SiteConfig
 		ON CONFLICT (singleton) DO UPDATE SET config = EXCLUDED.config, updated_at = now()
 		RETURNING config`
 	var out []byte
-	if err := pool.QueryRow(ctx, q, raw).Scan(&out); err != nil {
+	if err := s.Pool.QueryRow(ctx, q, raw).Scan(&out); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
 	}
 	var saved types.SiteConfig
