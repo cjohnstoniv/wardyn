@@ -29,7 +29,10 @@
 package apie2e
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"sync"
@@ -421,6 +424,44 @@ func (h *harness) callerClaims(runID uuid.UUID) *identity.Claims {
 		RunID:    runID,
 		SPIFFEID: "spiffe://" + trustDomain + "/agent-run/" + runID.String(),
 	}
+}
+
+// doRaw sends a bearer-authed HTTP request and returns the status + raw body
+// string. An empty bearer sends no Authorization header; a nil body sends
+// none. Content-Type/Accept are always set to application/json: neither is
+// enforced server-side (the recording upload route explicitly ignores
+// Content-Type; only an Accept containing "text/event-stream" is special-cased
+// elsewhere), so sending them unconditionally is safe for every caller,
+// including the raw asciicast upload in putRaw.
+func doRaw(t *testing.T, method, url, bearer string, body []byte) (int, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, r)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, string(raw)
 }
 
 // waitFor polls fn until it returns true or the deadline elapses. Used to wait
