@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestPolicies_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPolicies: %v", err)
 	}
-	if !containsPolicy(all, created.ID) {
+	if !slices.ContainsFunc(all, func(p types.RunPolicy) bool { return p.ID == created.ID }) {
 		t.Errorf("ListPolicies missing %s", created.ID)
 	}
 
@@ -115,7 +116,7 @@ func TestSecrets_WriteOnlyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSecrets: %v", err)
 	}
-	if !containsString(names, name) {
+	if !slices.Contains(names, name) {
 		t.Errorf("ListSecrets missing the name %q", name)
 	}
 	for _, n := range names {
@@ -133,7 +134,7 @@ func TestSecrets_WriteOnlyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSecrets after delete: %v", err)
 	}
-	if containsString(after, name) {
+	if slices.Contains(after, name) {
 		t.Errorf("secret %q still listed after delete", name)
 	}
 }
@@ -237,26 +238,6 @@ func TestSecrets_InjectionRequiresRunToken(t *testing.T) {
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-
-// containsPolicy reports whether the list includes id.
-func containsPolicy(ps []types.RunPolicy, id uuid.UUID) bool {
-	for _, p := range ps {
-		if p.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-// containsString reports membership.
-func containsString(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
 
 // assertSecretListBodyHidesValue fetches the raw GET /api/v1/secrets body and
 // asserts the secret value does not appear anywhere in it.

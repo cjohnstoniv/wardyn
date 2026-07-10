@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestRuns_CreateGetList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if !containsRun(runs, created.ID) {
+	if !slices.ContainsFunc(runs, func(r types.AgentRun) bool { return r.ID == created.ID }) {
 		t.Errorf("ListRuns does not contain the created run %s", created.ID)
 	}
 }
@@ -245,14 +246,4 @@ func TestRuns_GetUnknown_404(t *testing.T) {
 	h := newHarness(t, harnessOpts{})
 	_, err := h.sdk.GetRun(context.Background(), uuid.New())
 	assertAPIStatus(t, err, http.StatusNotFound)
-}
-
-// containsRun reports whether runs includes a run with id.
-func containsRun(runs []types.AgentRun, id uuid.UUID) bool {
-	for _, r := range runs {
-		if r.ID == id {
-			return true
-		}
-	}
-	return false
 }

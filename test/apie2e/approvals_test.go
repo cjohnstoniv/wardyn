@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -273,7 +274,7 @@ func assertNoWidening(t *testing.T, authored githubScope, minted broker.Minted) 
 	if err := json.Unmarshal([]byte(minted.Metadata["repos"]), &gotRepos); err != nil {
 		t.Fatalf("decode minted repos metadata: %v", err)
 	}
-	if !equalStringSets(gotRepos, authored.Repos) {
+	if !slices.Equal(slices.Sorted(slices.Values(gotRepos)), slices.Sorted(slices.Values(authored.Repos))) {
 		t.Errorf("minted repos = %v, want %v (no widening)", gotRepos, authored.Repos)
 	}
 	var gotPerms map[string]string
@@ -307,24 +308,4 @@ func assertNoWidening(t *testing.T, authored githubScope, minted broker.Minted) 
 			}
 		}
 	}
-}
-
-// equalStringSets reports set equality ignoring order.
-func equalStringSets(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	seen := map[string]int{}
-	for _, x := range a {
-		seen[x]++
-	}
-	for _, x := range b {
-		seen[x]--
-	}
-	for _, n := range seen {
-		if n != 0 {
-			return false
-		}
-	}
-	return true
 }
