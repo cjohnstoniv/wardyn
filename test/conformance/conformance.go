@@ -221,14 +221,7 @@ func testL0StructuralEgress(t *testing.T, r runner.Runner, opts Options) {
 		t.Skipf("driver %q declares StructuralEgress but no ConfinementClasses; cannot create sandbox for L0 probe", r.Name())
 	}
 
-	spec := minimalSpec(opts.image())
-	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
-
-	sb, err := r.CreateSandbox(ctx, spec)
-	if err != nil {
-		t.Fatalf("CreateSandbox for L0 probe: %v", err)
-	}
-	defer func() { _ = r.StopSandbox(context.Background(), sb.Ref) }()
+	sb := createStrongestSandbox(t, ctx, r, caps, opts, "L0 probe")
 
 	// Delegate to the injected probe; it calls t.Errorf if a default route exists.
 	opts.DefaultRouteProbe(t, sb.Ref)
@@ -258,14 +251,7 @@ func testWaitExitCode(t *testing.T, r runner.Runner, opts Options) {
 		t.Skipf("no ExitArgv supplied for driver %q; Wait exit-code case skipped", r.Name())
 	}
 
-	spec := minimalSpec(opts.image())
-	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
-
-	sb, err := r.CreateSandbox(ctx, spec)
-	if err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
-	}
-	defer func() { _ = r.StopSandbox(context.Background(), sb.Ref) }()
+	sb := createStrongestSandbox(t, ctx, r, caps, opts, "Wait exit-code case")
 
 	// A non-zero exit code is the interesting case: it is what distinguishes
 	// FAILED from COMPLETED. Use a distinctive code so a spurious 0/1 cannot
@@ -306,14 +292,7 @@ func testInteractiveAttach(t *testing.T, r runner.Runner, opts Options) {
 		t.Skipf("driver %q declares no confinement classes; Attach not testable without a sandbox substrate", r.Name())
 	}
 
-	spec := minimalSpec(opts.image())
-	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
-
-	sb, err := r.CreateSandbox(ctx, spec)
-	if err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
-	}
-	defer func() { _ = r.StopSandbox(context.Background(), sb.Ref) }()
+	sb := createStrongestSandbox(t, ctx, r, caps, opts, "Attach")
 
 	sess, err := r.Attach(ctx, sb.Ref, runner.AttachOptions{Cols: 80, Rows: 24})
 	if err != nil {
@@ -385,37 +364,20 @@ func testInteractiveAttach(t *testing.T, r runner.Runner, opts Options) {
 // library itself needs no recorder substrate.
 type RecordingProbe func(t *testing.T, ref string)
 
-// RecordingOptions controls CheckRecordingCapability. It is intentionally
-// separate from Options so that adding the recording gate does not change the
-// signature or behaviour of Run / the existing driver suites.
+// RecordingOptions controls CheckRecordingCapability. It embeds Options for
+// the SandboxImage/Timeout/ExitArgv fields the recording case shares with
+// Run's suite; it is intentionally a SEPARATE type from Options so that
+// adding the recording gate does not change the signature or behaviour of
+// Run / the existing driver suites — only RecordingOptions literal
+// construction (embedding changes neither).
 type RecordingOptions struct {
+	Options
 	// RecordingProbe is invoked when the driver declares SessionRecording. If
 	// the driver declares recording but RecordingProbe is nil, the check is
 	// marked pending (skipped with a notice) — the same fail-soft posture
 	// DefaultRouteProbe uses, so a driver CI without a recorder substrate does
 	// not hard-fail, but a driver CI that wires the probe verifies the contract.
 	RecordingProbe RecordingProbe
-	// SandboxImage / Timeout / ExitArgv mirror Options for the recording case
-	// that must create a sandbox and exec a recorded command. Defaults match
-	// Options (scratch image, 30s timeout). ExitArgv, when set, is used to run a
-	// short-lived recorded command before the probe inspects the artifact.
-	SandboxImage string
-	Timeout      time.Duration
-	ExitArgv     func(code int) []string
-}
-
-func (o RecordingOptions) timeout() time.Duration {
-	if o.Timeout > 0 {
-		return o.Timeout
-	}
-	return 30 * time.Second
-}
-
-func (o RecordingOptions) image() string {
-	if o.SandboxImage != "" {
-		return o.SandboxImage
-	}
-	return "scratch"
 }
 
 // CheckRecordingCapability is the recording-capability honesty gate. It is an
@@ -499,6 +461,24 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 
 	// Delegate to the probe; it calls t.Errorf if no recording artifact exists.
 	opts.RecordingProbe(t, sb.Ref)
+}
+
+// createStrongestSandbox creates a sandbox at the strongest confinement class
+// declared in caps and registers its teardown via t.Cleanup. Callers must have
+// already confirmed caps.ConfinementClasses is non-empty: the no-classes
+// handling differs by KIND across call sites (Skipf/Logf/fail-closed Errorf)
+// and is intentionally left to each caller rather than folded in here.
+func createStrongestSandbox(t *testing.T, ctx context.Context, r runner.Runner, caps runner.Capabilities, opts Options, caseName string) runner.Sandbox {
+	t.Helper()
+	spec := minimalSpec(opts.image())
+	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+
+	sb, err := r.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox for %s: %v", caseName, err)
+	}
+	t.Cleanup(func() { _ = r.StopSandbox(context.Background(), sb.Ref) })
+	return sb
 }
 
 // minimalSpec returns a SandboxSpec with a unique RunID suitable for
