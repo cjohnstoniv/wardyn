@@ -54,46 +54,101 @@ func mustLocalReq(t *testing.T, method, path string, body io.Reader) *http.Reque
 	return req
 }
 
-func TestLocalMintForwardsRunTokenAndPassesThrough(t *testing.T) {
-	var gotAuth, gotPath, gotBody string
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotPath = r.URL.Path
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"kind":"github_token","token":"minted","jti":"j"}`)
-	}))
-	defer cp.Close()
+// TestLocalRouteForwardsRunTokenAndBody covers the three brokered-forward
+// shapes (mint, approval lookup, recording upload): each strips the
+// sandbox's smuggled Authorization, injects the run token, forwards the
+// request path/body verbatim to the control plane, and passes its response
+// straight back.
+func TestLocalRouteForwardsRunTokenAndBody(t *testing.T) {
+	apID := uuid.New()
+	runID := uuid.New()
 
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+	cases := []struct {
+		name           string
+		method         string
+		route          string
+		body           string
+		wantCPPath     string
+		wantStatus     int
+		respBody       string
+		wantRuleSource string
+	}{
+		{
+			name:           "mint",
+			method:         http.MethodPost,
+			route:          routeMint,
+			body:           `{"grant_id":"` + uuid.New().String() + `"}`,
+			wantCPPath:     "/api/v1/internal/credentials/mint",
+			wantStatus:     http.StatusOK,
+			respBody:       `{"kind":"github_token","token":"minted","jti":"j"}`,
+			wantRuleSource: ruleSourceMint,
+		},
+		{
+			name:           "approval",
+			method:         http.MethodGet,
+			route:          routeApprovals + apID.String(),
+			wantCPPath:     "/api/v1/internal/approvals/" + apID.String(),
+			wantStatus:     http.StatusOK,
+			respBody:       `{"id":"` + apID.String() + `"}`,
+			wantRuleSource: ruleSourceApprovals,
+		},
+		{
+			name:           "recording",
+			method:         http.MethodPut,
+			route:          routeRecordings + runID.String(),
+			body:           `{"version":2}`,
+			wantCPPath:     "/api/v1/internal/recordings/" + runID.String(),
+			wantStatus:     http.StatusNoContent,
+			wantRuleSource: ruleSourceRecordings,
+		},
+	}
 
-	gid := uuid.New()
-	reqBody := `{"grant_id":"` + gid.String() + `"}`
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodPost, routeMint, strings.NewReader(reqBody))
-	// Sandbox tries to smuggle its own Authorization: it MUST be stripped.
-	req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
-	req.Header.Set("Content-Type", "application/json")
-	p.ServeHTTP(rec, req)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotAuth, gotPath, gotBody string
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				gotPath = r.URL.Path
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				w.WriteHeader(tc.wantStatus)
+				if tc.respBody != "" {
+					_, _ = io.WriteString(w, tc.respBody)
+				}
+			}))
+			defer cp.Close()
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
-	}
-	if rec.Body.String() != `{"kind":"github_token","token":"minted","jti":"j"}` {
-		t.Fatalf("body not passed through verbatim: %q", rec.Body.String())
-	}
-	if gotAuth != "Bearer RUNTOK" {
-		t.Fatalf("control plane Authorization = %q, want Bearer RUNTOK (run token injected, sandbox stripped)", gotAuth)
-	}
-	if gotPath != "/api/v1/internal/credentials/mint" {
-		t.Fatalf("forwarded path = %q", gotPath)
-	}
-	if gotBody != reqBody {
-		t.Fatalf("forwarded body = %q, want %q", gotBody, reqBody)
-	}
-	if d := lastDecision(t, buf); d.RuleSource != ruleSourceMint || d.Decision != egress.Allow {
-		t.Fatalf("decision = %+v, want brokered:mint allow", d)
+			p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+
+			var reqBody io.Reader
+			if tc.body != "" {
+				reqBody = strings.NewReader(tc.body)
+			}
+			rec := httptest.NewRecorder()
+			req := mustLocalReq(t, tc.method, tc.route, reqBody)
+			// Sandbox tries to smuggle its own Authorization: it MUST be stripped.
+			req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
+			p.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
+			}
+			if tc.respBody != "" && rec.Body.String() != tc.respBody {
+				t.Fatalf("body not passed through verbatim: %q", rec.Body.String())
+			}
+			if gotAuth != "Bearer RUNTOK" {
+				t.Fatalf("control plane Authorization = %q, want Bearer RUNTOK (run token injected, sandbox stripped)", gotAuth)
+			}
+			if gotPath != tc.wantCPPath {
+				t.Fatalf("forwarded path = %q, want %q", gotPath, tc.wantCPPath)
+			}
+			if tc.body != "" && gotBody != tc.body {
+				t.Fatalf("forwarded body = %q, want %q", gotBody, tc.body)
+			}
+			if d := lastDecision(t, buf); d.RuleSource != tc.wantRuleSource || d.Decision != egress.Allow {
+				t.Fatalf("decision = %+v, want %s allow", d, tc.wantRuleSource)
+			}
+		})
 	}
 }
 
@@ -156,37 +211,6 @@ func TestAbsoluteURIWritPathDoesNotReachLocalRoutes(t *testing.T) {
 	}
 	if strings.HasPrefix(lastDecision(t, buf).RuleSource, "brokered:") {
 		t.Fatalf("absolute-URI request must NOT emit a brokered decision")
-	}
-}
-
-func TestLocalApprovalForwardsRunToken(t *testing.T) {
-	apID := uuid.New()
-	var gotAuth, gotPath string
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotPath = r.URL.Path
-		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalApproved})
-	}))
-	defer cp.Close()
-
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
-
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodGet, routeApprovals+apID.String(), nil)
-	req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
-	p.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
-	}
-	if gotAuth != "Bearer RUNTOK" {
-		t.Fatalf("control plane Authorization = %q, want Bearer RUNTOK", gotAuth)
-	}
-	if gotPath != "/api/v1/internal/approvals/"+apID.String() {
-		t.Fatalf("forwarded path = %q", gotPath)
-	}
-	if d := lastDecision(t, buf); d.RuleSource != ruleSourceApprovals || d.Decision != egress.Allow {
-		t.Fatalf("decision = %+v, want brokered:approvals allow", d)
 	}
 }
 
@@ -274,16 +298,41 @@ func TestLocalUnknownWritPath404(t *testing.T) {
 	}
 }
 
-func TestLocalApprovalRejectsNestedPath(t *testing.T) {
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("must not forward a nested approval path")
-	}))
-	defer cp.Close()
-	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodGet, routeApprovals+"abc/extra", nil)
-	p.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("nested approval path status = %d, want 404", rec.Code)
+// TestLocalRouteRejectsBadPathSegment covers non-UUID and traversal-shaped
+// path segments for both the recording and approval brokered routes: none
+// of them may reach the forward to the control plane.
+func TestLocalRouteRejectsBadPathSegment(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		route  string
+	}{
+		{"recording-dotdot", http.MethodPut, routeRecordings + ".."},
+		{"recording-nonuuid", http.MethodPut, routeRecordings + "x"},
+		{"recording-traversal", http.MethodPut, routeRecordings + "../decisions"},
+		{"recording-nested", http.MethodPut, routeRecordings + uuid.New().String() + "/extra"},
+		{"approval-nested", http.MethodGet, routeApprovals + "abc/extra"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cpCalled := false
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { cpCalled = true }))
+			defer cp.Close()
+			p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+
+			var body io.Reader
+			if tc.method == http.MethodPut {
+				body = bytes.NewReader([]byte("x"))
+			}
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, tc.method, tc.route, body))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", rec.Code)
+			}
+			if cpCalled {
+				t.Fatal("control plane must never be contacted for an invalid path segment")
+			}
+		})
 	}
 }
