@@ -69,47 +69,6 @@ jobs:
           name: task-e2e-live-results
           path: test/e2e/RESULTS.md
 
-  # Full Playwright UI e2e (every screen + the AI Run Composer) against a real
-  # wardynd + Postgres backend serving the built UI. The PR `ui-e2e` job runs the
-  # same suite; nightly re-runs it with full browser retries as a regression net
-  # and is the home for heavier UI-e2e additions. Uses a NAMED Postgres container
-  # ("wardyn-test-pg") because scripts/e2e-backend.sh seeds run-state fixtures and
-  # the composer's approval fixtures via `docker exec`.
-  ui-e2e-live:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
-      - name: Start Postgres (named container for the seeder)
-        run: |
-          docker run -d --name wardyn-test-pg \
-            -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
-            -p 55432:5432 postgres:17
-          for i in $(seq 1 30); do docker exec wardyn-test-pg pg_isready -U wardyn && break || sleep 1; done
-      - name: Install UI deps + Playwright chromium
-        working-directory: ui
-        run: pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium
-      - name: Playwright UI e2e (all screens + composer, fresh seed per spec)
-        run: ./scripts/run-ui-e2e.sh
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightly-playwright-report
-          path: |
-            ui/playwright-report/**
-            ui/test-results/**
-
   # Real-Docker envbuild/runner smoke test (the "E" / envbuild workstream).
   # Unlike the PR-time `test-docker-tagged` job (ci.yml), this sets
   # WARDYN_TEST_DOCKER=1 so the real-Docker-gated cases (internal/runner/docker
