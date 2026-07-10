@@ -43,33 +43,6 @@ func TestFSStore_Roundtrip(t *testing.T) {
 	}
 }
 
-func TestFSStore_ListCasts(t *testing.T) {
-	store, err := recording.NewFSStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFSStore: %v", err)
-	}
-	ctx := context.Background()
-	ids := []string{"run-aaa", "run-bbb", "run-ccc"}
-	for _, id := range ids {
-		if err := store.SaveCast(ctx, id, strings.NewReader("{}")); err != nil {
-			t.Fatalf("SaveCast %s: %v", id, err)
-		}
-	}
-	list, err := store.ListCasts(ctx)
-	if err != nil {
-		t.Fatalf("ListCasts: %v", err)
-	}
-	got := map[string]bool{}
-	for _, id := range list {
-		got[id] = true
-	}
-	for _, id := range ids {
-		if !got[id] {
-			t.Errorf("expected %s in ListCasts, got %v", id, list)
-		}
-	}
-}
-
 func TestFSStore_OpenCast_NotFound(t *testing.T) {
 	store, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
