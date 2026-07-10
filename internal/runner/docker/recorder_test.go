@@ -16,16 +16,8 @@ func TestRecorderArgv(t *testing.T) {
 	runID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	agent := []string{"claude", "code", "--task", "fix bug"}
 
-	// Disabled => passthrough.
-	if got := recorderArgv("wardyn-rec", "/var/log/wardyn", "", "", runID, agent, false); !slices.Equal(got, agent) {
-		t.Errorf("disabled must passthrough, got %v", got)
-	}
-	// Empty binary => passthrough even when record=true.
-	if got := recorderArgv("", "/var/log/wardyn", "", "", runID, agent, true); !slices.Equal(got, agent) {
-		t.Errorf("empty binary must passthrough, got %v", got)
-	}
 	// Delivery mount set => -out-dir flag present with the mount target.
-	withOut := recorderArgv("wardyn-rec", "/var/log/wardyn", RecordingMountTarget, "", runID, agent, true)
+	withOut := recorderArgv("/var/log/wardyn", RecordingMountTarget, "", runID, agent)
 	foundOut := false
 	for i, a := range withOut {
 		if a == "-out-dir" && i+1 < len(withOut) && withOut[i+1] == RecordingMountTarget {
@@ -38,7 +30,7 @@ func TestRecorderArgv(t *testing.T) {
 	// Enabled => wrapped, agent argv after the "--" separator, run id present,
 	// and the brokered upload route passed via -upload-url (default delivery).
 	uploadURL := "http://wardyn-proxy:3128/wardyn/v1/recordings/22222222-2222-2222-2222-222222222222"
-	got := recorderArgv("wardyn-rec", "/var/log/wardyn", "", uploadURL, runID, agent, true)
+	got := recorderArgv("/var/log/wardyn", "", uploadURL, runID, agent)
 	if got[0] != "wardyn-rec" {
 		t.Fatalf("want wardyn-rec first, got %v", got)
 	}
@@ -82,7 +74,7 @@ func TestRecorderArgv_NeverUnmaskedOutDirWithUpload(t *testing.T) {
 
 	// Both delivery paths offered: the masked upload must win, the unmasked
 	// shared-mount -out-dir must be dropped.
-	got := recorderArgv("wardyn-rec", "/var/log/wardyn", RecordingMountTarget, uploadURL, runID, agent, true)
+	got := recorderArgv("/var/log/wardyn", RecordingMountTarget, uploadURL, runID, agent)
 	if slices.Contains(got, "-out-dir") {
 		t.Errorf("masked upload configured: argv must NOT carry an unmasked -out-dir, got %v", got)
 	}
@@ -92,7 +84,7 @@ func TestRecorderArgv_NeverUnmaskedOutDirWithUpload(t *testing.T) {
 
 	// Shared-mount-only (no upload path, e.g. nil run id): the reduced-isolation
 	// fallback is preserved so single-host delivery still works.
-	gotFallback := recorderArgv("wardyn-rec", "/var/log/wardyn", RecordingMountTarget, "", runID, agent, true)
+	gotFallback := recorderArgv("/var/log/wardyn", RecordingMountTarget, "", runID, agent)
 	if !slices.Contains(gotFallback, "-out-dir") {
 		t.Errorf("no upload path: shared-mount fallback -out-dir must be present, got %v", gotFallback)
 	}

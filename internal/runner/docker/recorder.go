@@ -37,12 +37,12 @@ import (
 // <runID>.cast into the API-served replay store (cross-run-writable, viewer-
 // exposed). The shared mount is only ever used as the reduced-isolation
 // FALLBACK when no control-plane upload path exists.
-func recorderArgv(recBinary, castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv []string, record bool) []string {
-	if !record || recBinary == "" {
-		return agentArgv
-	}
+//
+// Callers only ever invoke this when recording is enabled (both call sites
+// gate on Config.Record), so it always wraps — there is no passthrough case.
+func recorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv []string) []string {
 	out := []string{
-		recBinary,
+		recorderBinary,
 		"-cast-dir", castDir,
 	}
 	// Prefer the masked control-plane upload over the unmasked shared mount: if

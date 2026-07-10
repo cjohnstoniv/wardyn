@@ -51,23 +51,15 @@ type Config struct {
 	// connects the wardyn-proxy sidecars to the control plane. The proxy joins
 	// it; the agent never does. Defaults to "wardyn-internal".
 	InternalNetwork string
-	// CastDir is where wardyn-rec writes session recordings inside the agent
-	// container (passed through to the recorder). Defaults to "/var/log/wardyn".
-	CastDir string
 	// Record enables PTY session recording: Exec wraps the agent argv with
 	// wardyn-rec (which execs asciinema or falls back to a .log).
 	Record bool
-	// RecorderBinary is the path to wardyn-rec inside the agent image.
-	// Defaults to "wardyn-rec" (resolved on PATH).
-	RecorderBinary string
 	// RecordingMount, when set, is a named Docker volume (or an absolute host
 	// path, which is bind-mounted) shared with the control plane's recording
 	// store. It is mounted at RecordingMountTarget inside the agent container
 	// and wardyn-rec delivers the finished cast there (-out-dir). Single-host
 	// delivery only; multi-node delivery (upload via proxy) lands in v0.5.
 	RecordingMount string
-	// StopTimeout is the graceful stop timeout. Defaults to 10s.
-	StopTimeout time.Duration
 	// ConfinementRuntimes optionally pins, per Confinement Class, the exact
 	// Docker runtime family that must back it — the operator knob that makes CC3
 	// substrate-pluggable across OCI runtimes (e.g. {CC3: "kata-qemu"} to force
@@ -83,6 +75,17 @@ type Config struct {
 // container; wardyn-rec's -out-dir points here.
 const RecordingMountTarget = "/wardyn/recordings"
 
+// defaultCastDir is where wardyn-rec writes session recordings inside the
+// agent container. recorderBinary is wardyn-rec's path inside the agent
+// image (resolved on PATH). stopTimeout is the graceful StopSandbox timeout.
+// Nobody in the repo overrides any of these (ponytail P3-RNR-2); re-add a
+// Config knob if that changes.
+const (
+	defaultCastDir = "/var/log/wardyn"
+	recorderBinary = "wardyn-rec"
+	stopTimeout    = 10 * time.Second
+)
+
 // recordingSourceProbeTarget is a known-allowed workspace target used ONLY to
 // exercise runner.ValidateMount's host-SOURCE deny-list against a host-bind
 // RecordingMount. The real in-container target is RecordingMountTarget, a fixed
@@ -94,15 +97,6 @@ const recordingSourceProbeTarget = "/work"
 func (c *Config) withDefaults() {
 	if c.InternalNetwork == "" {
 		c.InternalNetwork = "wardyn-internal"
-	}
-	if c.CastDir == "" {
-		c.CastDir = "/var/log/wardyn"
-	}
-	if c.RecorderBinary == "" {
-		c.RecorderBinary = "wardyn-rec"
-	}
-	if c.StopTimeout <= 0 {
-		c.StopTimeout = 10 * time.Second
 	}
 }
 
@@ -525,7 +519,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // EPERMs and delivery uses the masked proxy-upload path. (The "/"-prefix split is
 // the same one that decides bind vs volume when the mount is attached.)
 func recordingChmodDirs(cfg Config) []string {
-	dirs := []string{cfg.CastDir}
+	dirs := []string{defaultCastDir}
 	if cfg.RecordingMount != "" && !strings.HasPrefix(cfg.RecordingMount, "/") {
 		dirs = append(dirs, RecordingMountTarget)
 	}
@@ -600,7 +594,7 @@ func (d *Driver) recordCmd(runID uuid.UUID, castDir string, argv []string) []str
 	if d.cfg.RecordingMount != "" && uploadURL == "" {
 		outDir = RecordingMountTarget
 	}
-	return recorderArgv(d.cfg.RecorderBinary, castDir, outDir, uploadURL, runID, argv, true)
+	return recorderArgv(castDir, outDir, uploadURL, runID, argv)
 }
 
 // Exec launches the agent process inside the sandbox with a TTY attached.
@@ -629,7 +623,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
 				runID = id
 			}
 		}
-		cmd = d.recordCmd(runID, d.cfg.CastDir, argv)
+		cmd = d.recordCmd(runID, defaultCastDir, argv)
 	}
 	execCfg := container.ExecOptions{
 		Tty:          true,
@@ -771,7 +765,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
 // then remove. Idempotent on a missing sandbox.
 func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
-	timeout := int(d.cfg.StopTimeout.Seconds())
+	timeout := int(stopTimeout.Seconds())
 	if err := d.cli.ContainerStop(ctx, ref, container.StopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: stop: %w", err)
 	}
