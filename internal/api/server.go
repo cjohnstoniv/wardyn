@@ -271,7 +271,7 @@ type Config struct {
 	// {run, inline_policy} that Wardyn risk-grades deterministically and clamps to
 	// DefaultPolicy before returning for human approval. Nil / not-Enabled
 	// disables the endpoints (404), so the feature is strictly opt-in.
-	Composer composer.Registry
+	Composer *composer.Registry
 	// Components advertises, per pluggable seam (identity, secret_store,
 	// recording, policy_engine, sandbox, ...), the SELECTED running implementation
 	// and the recommended production default, for honest /healthz visibility. Nil

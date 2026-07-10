@@ -295,7 +295,7 @@ type harnessOpts struct {
 	// the composer is disabled (those endpoints 404), preserving the existing
 	// tests' behaviour. The hook is intentionally minimal and backward-compatible:
 	// existing harnessOpts{...} construct the zero value, leaving cfg.Composer nil.
-	composer composer.Registry
+	composer *composer.Registry
 }
 
 // newHarness boots the real control plane end-to-end. Guarded by WARDYN_TEST_PG;

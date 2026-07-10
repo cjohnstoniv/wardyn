@@ -295,7 +295,7 @@ type composeError struct {
 // composerBackendKnown reports whether a backend name resolves in the registry
 // ("" = the default). It lets handleComposeRun reject an unknown backend with a
 // real 400 BEFORE any SSE flush, matching the buffer transport.
-func composerBackendKnown(reg composer.Registry, name string) bool {
+func composerBackendKnown(reg *composer.Registry, name string) bool {
 	if strings.TrimSpace(name) == "" {
 		return true
 	}
