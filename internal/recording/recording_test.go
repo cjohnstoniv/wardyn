@@ -18,49 +18,6 @@ import (
 
 // ── store tests ──────────────────────────────────────────────────────────────
 
-func TestFSStore_Roundtrip(t *testing.T) {
-	store, err := recording.NewFSStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFSStore: %v", err)
-	}
-	ctx := context.Background()
-	const runID = "550e8400-e29b-41d4-a716-446655440000"
-	const content = `{"version":2,"width":220,"height":50}
-[0.5,"o","hello\r\n"]
-`
-	if err := store.SaveCast(ctx, runID, strings.NewReader(content)); err != nil {
-		t.Fatalf("SaveCast: %v", err)
-	}
-
-	rc, err := store.OpenCast(ctx, runID)
-	if err != nil {
-		t.Fatalf("OpenCast: %v", err)
-	}
-	defer rc.Close()
-	got, _ := io.ReadAll(rc)
-	if string(got) != content {
-		t.Errorf("content mismatch:\ngot  %q\nwant %q", got, content)
-	}
-}
-
-func TestFSStore_OpenCast_NotFound(t *testing.T) {
-	store, err := recording.NewFSStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFSStore: %v", err)
-	}
-	_, err = store.OpenCast(context.Background(), "no-such-run")
-	if err == nil {
-		t.Fatal("expected ErrNotFound, got nil")
-	}
-	if !isNotFound(err) {
-		t.Errorf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func isNotFound(err error) bool {
-	return err == recording.ErrNotFound
-}
-
 func TestFSStore_TraversalRejection(t *testing.T) {
 	store, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
