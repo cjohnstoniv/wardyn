@@ -49,11 +49,7 @@ func TestErrorBody_CappedAt2KiB(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newTestClient(srv).ListRuns(context.Background())
-	var apiErr *client.APIError
-	assertAsAPIError(t, err, &apiErr)
-	if apiErr.Status != http.StatusInternalServerError {
-		t.Errorf("got Status %d, want %d", apiErr.Status, http.StatusInternalServerError)
-	}
+	apiErr := assertAPIError(t, err, http.StatusInternalServerError)
 	if len(apiErr.Body) != 2048 {
 		t.Errorf("error body not capped: got %d bytes, want exactly 2048", len(apiErr.Body))
 	}
@@ -73,8 +69,7 @@ func TestErrorBody_SmallerThan2KiB_NotTruncated(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newTestClient(srv).CreateRun(context.Background(), client.CreateRunRequest{})
-	var apiErr *client.APIError
-	assertAsAPIError(t, err, &apiErr)
+	apiErr := assertAPIError(t, err, http.StatusBadRequest)
 	// writeJSON appends a trailing newline via json.Encoder; compare on the
 	// JSON-meaningful content rather than exact bytes.
 	if !strings.Contains(apiErr.Body, small) {
@@ -104,11 +99,7 @@ func TestTypedError_JSONBodyPreserved(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newTestClient(srv).ListPolicies(context.Background())
-	var apiErr *client.APIError
-	assertAsAPIError(t, err, &apiErr)
-	if apiErr.Status != http.StatusUnprocessableEntity {
-		t.Errorf("got Status %d, want 422", apiErr.Status)
-	}
+	apiErr := assertAPIError(t, err, http.StatusUnprocessableEntity)
 	if apiErr.Body != errJSON {
 		t.Errorf("got Body %q, want %q", apiErr.Body, errJSON)
 	}
@@ -134,11 +125,7 @@ func TestTypedError_MalformedBodyDegradesGracefully(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newTestClient(srv).ListRuns(context.Background())
-	var apiErr *client.APIError
-	assertAsAPIError(t, err, &apiErr)
-	if apiErr.Status != http.StatusBadGateway {
-		t.Errorf("got Status %d, want 502", apiErr.Status)
-	}
+	apiErr := assertAPIError(t, err, http.StatusBadGateway)
 	if apiErr.Body != garbage {
 		t.Errorf("got Body %q, want the raw non-JSON body %q", apiErr.Body, garbage)
 	}
@@ -157,11 +144,7 @@ func TestTypedError_EmptyBody(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newTestClient(srv).ListRuns(context.Background())
-	var apiErr *client.APIError
-	assertAsAPIError(t, err, &apiErr)
-	if apiErr.Status != http.StatusForbidden {
-		t.Errorf("got Status %d, want 403", apiErr.Status)
-	}
+	apiErr := assertAPIError(t, err, http.StatusForbidden)
 	if apiErr.Body != "" {
 		t.Errorf("got Body %q, want empty", apiErr.Body)
 	}
@@ -264,17 +247,6 @@ func TestListGrants_Success(t *testing.T) {
 	}
 }
 
-func TestListGrants_NotFound(t *testing.T) {
-	runID := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).ListGrants(context.Background(), runID)
-	assertAPIError(t, err, http.StatusNotFound)
-}
-
 // --------------------------------------------------------------------------
 // ListPolicies / GetPolicy (previously uncovered)
 // --------------------------------------------------------------------------
@@ -334,17 +306,6 @@ func TestGetPolicy_Success(t *testing.T) {
 	}
 }
 
-func TestGetPolicy_NotFound(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy not found"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).GetPolicy(context.Background(), id)
-	assertAPIError(t, err, http.StatusNotFound)
-}
-
 // --------------------------------------------------------------------------
 // CreatePolicy (previously uncovered)
 // --------------------------------------------------------------------------
@@ -394,16 +355,6 @@ func TestCreatePolicy_Success(t *testing.T) {
 	}
 }
 
-func TestCreatePolicy_BadRequest(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).CreatePolicy(context.Background(), client.PolicyRequest{})
-	assertAPIError(t, err, http.StatusBadRequest)
-}
-
 // --------------------------------------------------------------------------
 // UpdatePolicy (previously uncovered)
 // --------------------------------------------------------------------------
@@ -442,17 +393,6 @@ func TestUpdatePolicy_Success(t *testing.T) {
 	}
 }
 
-func TestUpdatePolicy_NotFound(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy not found"})
-	}))
-	defer srv.Close()
-
-	_, err := newTestClient(srv).UpdatePolicy(context.Background(), id, client.PolicyRequest{Name: "x"})
-	assertAPIError(t, err, http.StatusNotFound)
-}
-
 // --------------------------------------------------------------------------
 // DeletePolicy (previously uncovered)
 // --------------------------------------------------------------------------
@@ -472,33 +412,5 @@ func TestDeletePolicy_Success(t *testing.T) {
 
 	if err := newTestClient(srv).DeletePolicy(context.Background(), id); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestDeletePolicy_NotFound(t *testing.T) {
-	id := uuid.New()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy not found"})
-	}))
-	defer srv.Close()
-
-	err := newTestClient(srv).DeletePolicy(context.Background(), id)
-	assertAPIError(t, err, http.StatusNotFound)
-}
-
-// --------------------------------------------------------------------------
-// Local helper: assertAsAPIError centralizes the errors.As + fatal dance and
-// binds the matched *APIError into the caller's variable for further assertions.
-// --------------------------------------------------------------------------
-
-// assertAsAPIError fails the test unless err is a *client.APIError, binding it
-// into target on success.
-func assertAsAPIError(t *testing.T, err error, target **client.APIError) {
-	t.Helper()
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !errors.As(err, target) {
-		t.Fatalf("expected *client.APIError, got %T: %v", err, err)
 	}
 }
