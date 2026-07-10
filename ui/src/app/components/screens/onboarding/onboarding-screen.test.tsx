@@ -37,7 +37,6 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
     providers: [{ tool: "claude", installed: true, logged_in: true }],
     secrets: { present: [], github_app: false },
     age_key: { durable: true },
-    restart_required: false,
     has_runs: false,
     platform: { os: "linux", wsl: false },
     ...overrides,

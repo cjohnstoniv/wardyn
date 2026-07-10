@@ -283,8 +283,7 @@ type Config struct {
 	LocalLoopback bool
 	// ComposerBackends is the BOOT-snapshot readiness of every configured composer
 	// backend (including disabled + needs-key ones the live registry can't show).
-	// Surfaced by /setup/status and used to compute restart_required drift. Nil
-	// when the composer is unconfigured.
+	// Surfaced by /setup/status. Nil when the composer is unconfigured.
 	ComposerBackends []ComposerBackendReadiness
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
