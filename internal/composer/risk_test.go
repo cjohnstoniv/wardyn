@@ -205,13 +205,10 @@ func TestGrade_SortedRiskiestFirst(t *testing.T) {
 	}
 }
 
-func TestHighItems_AndOverall(t *testing.T) {
+func TestOverallLevel_AllLow(t *testing.T) {
 	spec := types.RunPolicySpec{MinConfinementClass: types.CC3} // all low
 	if OverallLevel(Grade(RunInput{}, spec)) != RiskLow {
 		t.Errorf("CC3-only spec should be overall LOW")
-	}
-	if len(HighItems(Grade(RunInput{}, spec))) != 0 {
-		t.Errorf("CC3-only spec should have no HIGH items")
 	}
 }
 

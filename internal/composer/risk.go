@@ -319,15 +319,3 @@ func OverallLevel(items []RiskItem) RiskLevel {
 	}
 	return max
 }
-
-// HighItems returns only the HIGH-graded items (the "⚠ high-risk" set the UI
-// separates and requires explicit acknowledgment for).
-func HighItems(items []RiskItem) []RiskItem {
-	var hi []RiskItem
-	for _, it := range items {
-		if it.Level == RiskHigh {
-			hi = append(hi, it)
-		}
-	}
-	return hi
-}
