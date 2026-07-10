@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"slices"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -78,23 +77,6 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 		_ = attach.Close()
 		if string(b) != "batch" || string(a) != "attach" {
 			t.Fatalf("named isolation broken: batch=%q attach=%q", b, a)
-		}
-	})
-
-	t.Run("list_reflects_and_nonnil", func(t *testing.T) {
-		s := newStore(t)
-		if ids, err := s.ListCasts(ctx); err != nil || ids == nil {
-			t.Fatalf("ListCasts empty must be non-nil slice: %v %v", ids, err)
-		}
-		_ = s.SaveCast(ctx, "x", bytes.NewReader([]byte("1")))
-		_ = s.SaveCast(ctx, "y", bytes.NewReader([]byte("2")))
-		ids, err := s.ListCasts(ctx)
-		if err != nil {
-			t.Fatalf("ListCasts: %v", err)
-		}
-		slices.Sort(ids)
-		if !slices.Contains(ids, "x") || !slices.Contains(ids, "y") {
-			t.Fatalf("ListCasts missing keys: %v", ids)
 		}
 	})
 }

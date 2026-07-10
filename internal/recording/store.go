@@ -36,21 +36,16 @@ var ErrNotFound = errors.New("recording: not found")
 // session recording does NOT clobber the batch run's cast (keyed by bare runID)
 // and concurrent/sequential attaches each get their own cast. The same path
 // guardrails (no traversal) apply to both runID and suffix. The composite key is
-// what OpenCast/ListCasts surface; the recording HTTP handler can serve it by
-// that key. Passing an empty suffix is equivalent to SaveCast.
+// what OpenCast surfaces; the recording HTTP handler can serve it by that key.
+// Passing an empty suffix is equivalent to SaveCast.
 //
 // OpenCast returns a ReadCloser for the asciicast. The caller is responsible
 // for closing it. Returns ErrNotFound when no recording exists. The key is
 // either a bare runID (batch cast) or a "<runID>~<suffix>" composite.
-//
-// ListCasts returns the keys for which a cast file exists, in unspecified order
-// (bare runIDs and "<runID>~<suffix>" composites). An empty slice (not nil) is
-// returned when no casts exist.
 type Store interface {
 	SaveCast(ctx context.Context, runID string, r io.Reader) error
 	SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error
 	OpenCast(ctx context.Context, key string) (io.ReadCloser, error)
-	ListCasts(ctx context.Context) ([]string, error)
 }
 
 // castSep separates the run id from a session suffix in a composite cast key.
@@ -134,31 +129,6 @@ func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, erro
 		return nil, ErrNotFound
 	}
 	return f, err
-}
-
-// ListCasts returns the runIDs for which a .cast file exists under root.
-func (s *FSStore) ListCasts(_ context.Context) ([]string, error) {
-	entries, err := os.ReadDir(s.root)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []string{}, nil
-		}
-		return nil, err
-	}
-	var ids []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if strings.HasSuffix(name, ".cast") {
-			ids = append(ids, strings.TrimSuffix(name, ".cast"))
-		}
-	}
-	if ids == nil {
-		ids = []string{}
-	}
-	return ids, nil
 }
 
 // safeRunPath builds the .cast file path for runID inside root. It rejects any
