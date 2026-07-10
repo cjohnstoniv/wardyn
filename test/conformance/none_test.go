@@ -279,8 +279,10 @@ func TestRecordingCapabilityHonest(t *testing.T) {
 	r := newRecordingRunner()
 
 	conformance.CheckRecordingCapability(t, r, conformance.RecordingOptions{
-		Timeout:  5 * time.Second,
-		ExitArgv: func(code int) []string { return []string{"sh", "-c", "exit 0"} },
+		Options: conformance.Options{
+			Timeout:  5 * time.Second,
+			ExitArgv: func(code int) []string { return []string{"sh", "-c", "exit 0"} },
+		},
 		RecordingProbe: func(t *testing.T, ref string) {
 			t.Helper()
 			if !r.recorded[ref] {
@@ -295,7 +297,7 @@ func TestRecordingCapabilityHonest(t *testing.T) {
 // no pretending). This is the "doesn't pretend" leg of the contract.
 func TestRecordingCapabilityNoneStub(t *testing.T) {
 	conformance.CheckRecordingCapability(t, noneRunner{}, conformance.RecordingOptions{
-		Timeout: 5 * time.Second,
+		Options: conformance.Options{Timeout: 5 * time.Second},
 	})
 }
 
@@ -360,8 +362,10 @@ func TestNegCtl_RecordingPretender(t *testing.T) {
 		return
 	}
 	conformance.CheckRecordingCapability(t, pretendingRecordingRunner{}, conformance.RecordingOptions{
-		Timeout:  5 * time.Second,
-		ExitArgv: func(code int) []string { return []string{"sh", "-c", "exit 0"} },
+		Options: conformance.Options{
+			Timeout:  5 * time.Second,
+			ExitArgv: func(code int) []string { return []string{"sh", "-c", "exit 0"} },
+		},
 		RecordingProbe: func(t *testing.T, ref string) {
 			t.Helper()
 			// The pretender records nothing, so the artifact never exists; a real
@@ -379,7 +383,7 @@ func TestNegCtl_ProbedNonRecorder(t *testing.T) {
 		return
 	}
 	conformance.CheckRecordingCapability(t, noneRunner{}, conformance.RecordingOptions{
-		Timeout:        5 * time.Second,
+		Options:        conformance.Options{Timeout: 5 * time.Second},
 		RecordingProbe: func(t *testing.T, ref string) { t.Helper() }, // misuse: probe a non-recorder
 	})
 }
