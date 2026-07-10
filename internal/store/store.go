@@ -187,17 +187,10 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 func collectRuns(rows pgx.Rows) ([]types.AgentRun, error) {
 	var out []types.AgentRun
 	for rows.Next() {
-		var r types.AgentRun
-		var cc, state string
-		if err := rows.Scan(
-			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
-			&r.PolicyID, &cc, &state,
-			&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID,
-		); err != nil {
-			return nil, fmt.Errorf("store: scan run row: %w", err)
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
 		}
-		r.ConfinementClass = types.ConfinementClass(cc)
-		r.State = types.RunState(state)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -241,7 +234,7 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 	defer rows.Close()
 	var out []types.RunPolicy
 	for rows.Next() {
-		p, err := scanPolicyRow(rows)
+		p, err := scanPolicy(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -298,18 +291,6 @@ func scanPolicy(row pgx.Row) (types.RunPolicy, error) {
 	}
 	if err := json.Unmarshal(specRaw, &p.Spec); err != nil {
 		return types.RunPolicy{}, fmt.Errorf("store: unmarshal policy spec: %w", err)
-	}
-	return p, nil
-}
-
-func scanPolicyRow(rows pgx.Rows) (types.RunPolicy, error) {
-	var p types.RunPolicy
-	var specRaw []byte
-	if err := rows.Scan(&p.ID, &p.Name, &p.CreatedAt, &p.UpdatedAt, &specRaw); err != nil {
-		return types.RunPolicy{}, fmt.Errorf("store: scan policy row: %w", err)
-	}
-	if err := json.Unmarshal(specRaw, &p.Spec); err != nil {
-		return types.RunPolicy{}, fmt.Errorf("store: unmarshal policy spec row: %w", err)
 	}
 	return p, nil
 }
@@ -388,7 +369,7 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 	defer rows.Close()
 	var out []types.Workspace
 	for rows.Next() {
-		ws, err := scanWorkspaceRow(rows)
+		ws, err := scanWorkspace(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -559,41 +540,22 @@ func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// wsScanDest is the address list matching wsCols order, shared by row/rows scan.
-func wsScanDest(ws *types.Workspace, kind, status *string, profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw *[]byte) []any {
-	return []any{
-		&ws.ID, &ws.Name, kind, &ws.Source, &ws.Ref, &ws.DefaultTarget,
-		profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, approvedRaw, setupRaw, verifyRaw,
-		&ws.VerifiedProfileHash, &ws.VerifiedAt, &ws.ActiveRunID, status, &ws.CreatedAt, &ws.UpdatedAt,
-		recordRaw,
-	}
-}
-
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
 	var kind, status string
 	var profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw []byte
-	err := row.Scan(wsScanDest(&ws, &kind, &status, &profileRaw, &approvedRaw, &setupRaw, &verifyRaw, &recordRaw)...)
+	err := row.Scan(
+		&ws.ID, &ws.Name, &kind, &ws.Source, &ws.Ref, &ws.DefaultTarget,
+		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &setupRaw, &verifyRaw,
+		&ws.VerifiedProfileHash, &ws.VerifiedAt, &ws.ActiveRunID, &status, &ws.CreatedAt, &ws.UpdatedAt,
+		&recordRaw,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
 	}
 	if err != nil {
 		return types.Workspace{}, fmt.Errorf("store: scan workspace: %w", err)
 	}
-	return fillWorkspace(ws, kind, status, profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw), nil
-}
-
-func scanWorkspaceRow(rows pgx.Rows) (types.Workspace, error) {
-	var ws types.Workspace
-	var kind, status string
-	var profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw []byte
-	if err := rows.Scan(wsScanDest(&ws, &kind, &status, &profileRaw, &approvedRaw, &setupRaw, &verifyRaw, &recordRaw)...); err != nil {
-		return types.Workspace{}, fmt.Errorf("store: scan workspace row: %w", err)
-	}
-	return fillWorkspace(ws, kind, status, profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw), nil
-}
-
-func fillWorkspace(ws types.Workspace, kind, status string, profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw []byte) types.Workspace {
 	ws.Kind = types.WorkspaceKind(kind)
 	ws.Status = types.WorkspaceStatus(status)
 	if profileRaw != nil {
@@ -613,7 +575,7 @@ func fillWorkspace(ws types.Workspace, kind, status string, profileRaw, approved
 		// off chance, fail safe to "nothing approved" rather than error.
 		_ = json.Unmarshal(approvedRaw, &ws.ApprovedEgress)
 	}
-	return ws
+	return ws, nil
 }
 
 // ─── CredentialGrant ─────────────────────────────────────────────────────────
@@ -647,7 +609,7 @@ func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.Crede
 	defer rows.Close()
 	var out []types.CredentialGrant
 	for rows.Next() {
-		g, err := scanGrantRow(rows)
+		g, err := scanGrant(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -674,18 +636,6 @@ func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 	}
 	if err := json.Unmarshal(specRaw, &g.Spec); err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: unmarshal grant spec: %w", err)
-	}
-	return g, nil
-}
-
-func scanGrantRow(rows pgx.Rows) (types.CredentialGrant, error) {
-	var g types.CredentialGrant
-	var specRaw []byte
-	if err := rows.Scan(&g.ID, &g.RunID, &g.CreatedAt, &specRaw); err != nil {
-		return types.CredentialGrant{}, fmt.Errorf("store: scan grant row: %w", err)
-	}
-	if err := json.Unmarshal(specRaw, &g.Spec); err != nil {
-		return types.CredentialGrant{}, fmt.Errorf("store: unmarshal grant spec row: %w", err)
 	}
 	return g, nil
 }
@@ -744,7 +694,7 @@ func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) 
 	defer rows.Close()
 	var out []types.ApprovalRequest
 	for rows.Next() {
-		a, err := scanApprovalRow(rows)
+		a, err := scanApproval(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -804,22 +754,6 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	return a, nil
 }
 
-func scanApprovalRow(rows pgx.Rows) (types.ApprovalRequest, error) {
-	var a types.ApprovalRequest
-	var kind, state string
-	var scopeRaw []byte
-	if err := rows.Scan(
-		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
-		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason,
-	); err != nil {
-		return types.ApprovalRequest{}, fmt.Errorf("store: scan approval row: %w", err)
-	}
-	a.Kind = types.ApprovalKind(kind)
-	a.State = types.ApprovalState(state)
-	a.RequestedScope = json.RawMessage(scopeRaw)
-	return a, nil
-}
-
 // ─── AuditEvent ──────────────────────────────────────────────────────────────
 
 // InsertAuditEvent appends a single audit event. Implements audit.Recorder.
@@ -858,7 +792,7 @@ func (s PG) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([
 	defer rows.Close()
 	var out []types.AuditEvent
 	for rows.Next() {
-		ev, err := scanAuditEventRow(rows)
+		ev, err := scanAuditEvent(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -891,7 +825,7 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 	defer rows.Close()
 	var out []types.AuditEvent
 	for rows.Next() {
-		ev, err := scanAuditEventRow(rows)
+		ev, err := scanAuditEvent(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -933,23 +867,6 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 		&ev.Target, &ev.Outcome, &ev.SourceIP, &dataRaw,
 	); err != nil {
 		return types.AuditEvent{}, err
-	}
-	ev.ActorType = types.ActorType(actorType)
-	if len(dataRaw) > 0 {
-		ev.Data = json.RawMessage(dataRaw)
-	}
-	return ev, nil
-}
-
-func scanAuditEventRow(rows pgx.Rows) (types.AuditEvent, error) {
-	var ev types.AuditEvent
-	var actorType string
-	var dataRaw []byte
-	if err := rows.Scan(
-		&ev.ID, &ev.Time, &ev.RunID, &actorType, &ev.Actor, &ev.Action,
-		&ev.Target, &ev.Outcome, &ev.SourceIP, &dataRaw,
-	); err != nil {
-		return types.AuditEvent{}, fmt.Errorf("store: scan audit event row: %w", err)
 	}
 	ev.ActorType = types.ActorType(actorType)
 	if len(dataRaw) > 0 {
