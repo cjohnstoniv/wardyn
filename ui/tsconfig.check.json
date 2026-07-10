@@ -1,10 +1,9 @@
 {
-  "//": "Typecheck-only config. Bypasses project references (tsconfig.node.json is composite and cannot run under --noEmit) so `tsc -p tsconfig.check.json` cleanly typechecks the app sources + tests.",
+  "//": "Typecheck-only config. `tsc -p tsconfig.check.json` cleanly typechecks the app sources + tests.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
   },
-  "references": [],
   "include": ["src"]
 }
