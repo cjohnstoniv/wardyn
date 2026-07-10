@@ -121,7 +121,7 @@ func testCapabilities(t *testing.T, r runner.Runner, opts Options) {
 		_ = r.StopSandbox(context.Background(), sb.Ref)
 	}()
 
-	if !confinementClassGE(sb.EnforcedClass, strongest) {
+	if sb.EnforcedClass.Rank() < strongest.Rank() {
 		t.Errorf("CreateSandbox silently downgraded: requested %q, enforced %q", strongest, sb.EnforcedClass)
 	}
 }
@@ -489,24 +489,5 @@ func minimalSpec(image string) runner.SandboxSpec {
 		Image: image,
 		// ConfinementClass deliberately left empty; callers set it.
 		Labels: map[string]string{"wardyn.conformance": "true"},
-	}
-}
-
-// confinementClassGE reports whether actual >= requested in the CC1 < CC2 < CC3 order.
-// An unrecognised class is treated as less than CC1 (fail closed).
-func confinementClassGE(actual, requested types.ConfinementClass) bool {
-	return classRank(actual) >= classRank(requested)
-}
-
-func classRank(c types.ConfinementClass) int {
-	switch c {
-	case types.CC1:
-		return 1
-	case types.CC2:
-		return 2
-	case types.CC3:
-		return 3
-	default:
-		return 0
 	}
 }
