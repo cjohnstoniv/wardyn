@@ -32,6 +32,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -352,10 +353,7 @@ func detectContent(rel, name, path string, st *collectState) {
 }
 
 func ext(name string) string {
-	if i := strings.LastIndex(name, "."); i >= 0 {
-		return strings.ToLower(name[i:])
-	}
-	return ""
+	return strings.ToLower(filepath.Ext(name))
 }
 
 func isGradleBuild(name string) bool {
@@ -835,7 +833,7 @@ func detectPackageJSON(path string, facts *ScanFacts) {
 		return
 	}
 	for k := range pkg.Scripts {
-		if _, ok := conventionalScriptKeys[k]; ok && !strContains(facts.ScriptKeys, k) {
+		if _, ok := conventionalScriptKeys[k]; ok && !slices.Contains(facts.ScriptKeys, k) {
 			facts.ScriptKeys = append(facts.ScriptKeys, k)
 		}
 	}
@@ -847,21 +845,12 @@ func detectMakefile(path string, facts *ScanFacts) {
 	eachLine(path, facts, func(line string) bool {
 		if m := makeTargetRE.FindStringSubmatch(line); m != nil {
 			t := m[1]
-			if _, ok := conventionalMakeTargets[t]; ok && !strContains(facts.MakeTargets, t) {
+			if _, ok := conventionalMakeTargets[t]; ok && !slices.Contains(facts.MakeTargets, t) {
 				facts.MakeTargets = append(facts.MakeTargets, t)
 			}
 		}
 		return true
 	})
-}
-
-func strContains(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
 }
 
 // jsInstallCmd returns the install command for the detected JS package manager.

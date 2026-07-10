@@ -3,7 +3,10 @@
 
 package workspacescan
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func setupCmdStrings(cmds []SetupCommand) []string {
 	if len(cmds) == 0 {
@@ -53,16 +56,7 @@ func TestScan_DocusaurusDoesNotDoubleEmitBuild(t *testing.T) {
 	// docusaurus marker adds a tool hint but no second build.
 	eq(t, "docusaurus SetupCommands", setupCmdStrings(got.SetupCommands),
 		[]string{"install:npm ci", "build:npm run build"})
-	if !hasString(got.Tools, "docusaurus") {
+	if !slices.Contains(got.Tools, "docusaurus") {
 		t.Errorf("Tools = %v, want docusaurus hint", got.Tools)
 	}
-}
-
-func hasString(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
