@@ -264,23 +264,26 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // MEDIUM fix: EXPIRED approvals were never fetched, so a request that timed
   // out without a human decision silently vanished from the console. Include
   // EXPIRED in the decided view alongside APPROVED/DENIED (finding D12).
-  const load = React.useCallback(() => {
-    setStatus("loading");
-    Promise.all([
+  const fetchAll = React.useCallback(() => {
+    return Promise.all([
       api.listApprovals("PENDING"),
       api.listApprovals("APPROVED"),
       api.listApprovals("DENIED"),
       api.listApprovals("EXPIRED"),
-    ])
-      .then(([pending, approved, denied, expired]) => {
-        setPendingItems(pending);
-        setDecidedItems([...approved, ...denied, ...expired].sort(
-          (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
-        ));
-        setStatus("ready");
-      })
-      .catch(() => setStatus("error"));
+    ]).then(([pending, approved, denied, expired]) => {
+      setPendingItems(pending);
+      setDecidedItems([...approved, ...denied, ...expired].sort(
+        (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
+      ));
+    });
   }, []);
+
+  const load = React.useCallback(() => {
+    setStatus("loading");
+    fetchAll()
+      .then(() => setStatus("ready"))
+      .catch(() => setStatus("error"));
+  }, [fetchAll]);
   React.useEffect(load, [load]);
 
   // MEDIUM fix: a HITL queue is blocking — newly-arrived requests must surface
@@ -290,19 +293,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // pending-count badge updates.
   const POLL_MS = 10_000;
   usePoll(() => {
-    Promise.all([
-      api.listApprovals("PENDING"),
-      api.listApprovals("APPROVED"),
-      api.listApprovals("DENIED"),
-      api.listApprovals("EXPIRED"),
-    ])
-      .then(([pending, approved, denied, expired]) => {
-        setPendingItems(pending);
-        setDecidedItems([...approved, ...denied, ...expired].sort(
-          (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
-        ));
-        onChanged?.();
-      })
+    fetchAll()
+      .then(() => onChanged?.())
       .catch(() => {
         /* transient poll failure — keep the last good view, retry next tick */
       });

@@ -234,33 +234,29 @@ export function AuditScreen() {
   // MEDIUM fix: do NOT client re-sort by wall-clock time — the server returns
   // events in authoritative append (seq) order; re-sorting by `time` can reorder
   // events that share a timestamp and misrepresent causality. Preserve as-is.
+  const fetchEvents = React.useCallback(() => {
+    return api.listAudit(runFilter || undefined).then((r) => {
+      setEvents(r);
+      setTruncated(r.length >= (runFilter ? RUN_AUDIT_PAGE_CAP : AUDIT_PAGE_CAP));
+    });
+  }, [runFilter]);
+
   const load = React.useCallback(() => {
     setStatus("loading");
-    api
-      .listAudit(runFilter || undefined)
-      .then((r) => {
-        setEvents(r);
-        setTruncated(r.length >= (runFilter ? RUN_AUDIT_PAGE_CAP : AUDIT_PAGE_CAP));
-        setStatus("ready");
-      })
+    fetchEvents()
+      .then(() => setStatus("ready"))
       .catch(() => setStatus("error"));
-  }, [runFilter]);
+  }, [fetchEvents]);
   React.useEffect(load, [load]);
 
   // Live-tail: audit is append-only, so a background poll is meaningful (new
   // events only ever get added). Refresh quietly — never flip back to the
   // loading skeleton, that would flicker the whole list every tick.
   const tick = React.useCallback(() => {
-    api
-      .listAudit(runFilter || undefined)
-      .then((r) => {
-        setEvents(r);
-        setTruncated(r.length >= (runFilter ? RUN_AUDIT_PAGE_CAP : AUDIT_PAGE_CAP));
-      })
-      .catch(() => {
-        /* transient poll failure — keep the last good view, retry next tick */
-      });
-  }, [runFilter]);
+    fetchEvents().catch(() => {
+      /* transient poll failure — keep the last good view, retry next tick */
+    });
+  }, [fetchEvents]);
   usePoll(tick, AUDIT_POLL_MS, status !== "ready");
 
   React.useEffect(() => {
