@@ -244,22 +244,10 @@ func deploymentHostLike(providers []SetupProvider) bool {
 	return false
 }
 
-// llmAccessAvailable reports whether a run launched now would have REAL model
-// access: a logged-in resident CLI, an enabled composer backend with a resolved
-// key that is NOT the deterministic `fake` stub, or an LLM-ish API-key secret.
-//
-// It is defined as "a provenance signal exists" so readiness and the rendered
-// detail can NEVER drift: llmProvenance is the single predicate, this is just its
-// boolean projection (passing "" for the claude detail — presence, not wording,
-// decides readiness). Extracted pure so it is unit-testable without host CLI
-// detection.
-func llmAccessAvailable(providers []SetupProvider, backends []ComposerBackendReadiness, secretNames []string) bool {
-	return llmProvenance(providers, backends, secretNames, "") != ""
-}
-
-// llmProvenance returns the human detail for the WINNING LLM-access signal,
-// mirroring llmAccessAvailable's priority (resident CLI login > enabled real
-// composer backend > api-key-ish secret) and returning "" when none is present.
+// llmProvenance is the single LLM-access predicate: it returns the human detail
+// for the WINNING signal (resident CLI login > enabled real composer backend >
+// api-key-ish secret) and "" when none is present — readiness is simply
+// "llmProvenance != \"\"", so the boolean and the rendered detail can never drift.
 //
 // The `fake` exclusion is the honesty guard: a `wire:"fake"` backend resolves
 // trivially (it needs no key) but calls no model, so counting it would render an
