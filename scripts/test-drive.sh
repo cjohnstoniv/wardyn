@@ -154,6 +154,56 @@ run_section() {
   [[ -z "${OPT_SECTION}" || "${OPT_SECTION}" == "$1" ]]
 }
 
+# ── section scaffolding helpers (create/track/wait/kill/audit-count) ─────────
+# Sections 4-7 all create their own run, track it for teardown, and wait for
+# RUNNING before proceeding. ensure_run does that; sets RUN_ID, returns 1 (and
+# prints the "could not create run" failure) if create_run itself failed.
+ensure_run() {
+  local sec="$1"
+  RUN_ID="$(create_run --task "wardyn test-drive section ${sec}")"
+  if [[ -z "${RUN_ID}" ]]; then
+    bad "section ${sec}: could not create run"
+    echo
+    return 1
+  fi
+  TD_RUN_IDS+=("${RUN_ID}")
+  wait_state "${RUN_ID}" "RUNNING" 25 2 || bad "section ${sec}: sandbox not RUNNING"
+}
+
+# reuse_or_ensure_run SECTION — sections 2-3 reuse section 1's run if it
+# exists (S1_RUN_ID) rather than paying for a second sandbox; otherwise fall
+# back to ensure_run. Sets RUN_ID + OWN_RUN (1 if this call created the run,
+# so the section's epilogue should kill it; 0 if reused from section 1).
+reuse_or_ensure_run() {
+  local sec="$1"
+  if [[ -n "${S1_RUN_ID:-}" ]]; then
+    RUN_ID="${S1_RUN_ID}"; OWN_RUN=0
+    return 0
+  fi
+  OWN_RUN=1
+  ensure_run "${sec}"
+}
+
+# kill_run RID [OWN=1] — best-effort kill of RID at a section's end, unless
+# --keep was passed or OWN=0 (the run belongs to an earlier reused section).
+kill_run() {
+  local rid="$1" own="${2:-1}"
+  if [[ "${own}" -eq 1 && "${OPT_KEEP}" -eq 0 ]]; then
+    hc -o /dev/null -X POST "${WARDYN_URL}/api/v1/runs/${rid}/kill" \
+      -H "${ADMIN_HDR}" >/dev/null 2>&1 || true
+  fi
+}
+
+# audit_count RID PY_PREDICATE — count of /api/v1/audit events for RID whose
+# per-event dict `e` satisfies the python boolean expression PY_PREDICATE.
+audit_count() {
+  local rid="$1" pred="$2"
+  api "/api/v1/audit?run_id=${rid}" | python3 -c "
+import sys, json
+print(sum(1 for e in json.load(sys.stdin) if ${pred}))
+" 2>/dev/null || echo 0
+}
+
 # ── preflight ─────────────────────────────────────────────────────────────────
 command -v docker     >/dev/null 2>&1 || die "docker not found"
 command -v python3    >/dev/null 2>&1 || die "python3 not found (used for JSON parsing)"
@@ -266,16 +316,9 @@ if run_section 2; then
   log "Section 2: egress deny — unlisted domain blocked by proxy"
   note "Probes evil.example.com through wardyn-proxy; expects 403 (or first-use hold)"
 
-  S2_RUN_ID="${S1_RUN_ID:-}"
-  S2_OWN=0
-  if [[ -z "${S2_RUN_ID}" ]]; then
-    S2_RUN_ID="$(create_run --task "wardyn test-drive section 2")"
-    [[ -n "${S2_RUN_ID}" ]] || { bad "section 2: could not create run"; echo; }
-    if [[ -n "${S2_RUN_ID}" ]]; then
-      TD_RUN_IDS+=("${S2_RUN_ID}")
-      S2_OWN=1
-      wait_state "${S2_RUN_ID}" "RUNNING" 25 2 || bad "section 2: sandbox not RUNNING"
-    fi
+  S2_RUN_ID=""; S2_OWN=0
+  if reuse_or_ensure_run 2; then
+    S2_RUN_ID="${RUN_ID}"; S2_OWN="${OWN_RUN}"
   fi
 
   if [[ -n "${S2_RUN_ID}" ]]; then
@@ -291,18 +334,15 @@ if run_section 2; then
 
     # Show the audit event for this run.
     sleep 2
-    S2_AUDIT="$(api "/api/v1/audit?run_id=${S2_RUN_ID}")"
-    S2_DENY_CNT="$(printf '%s' "${S2_AUDIT}" \
-      | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e.get("action") in ("egress.deny","egress.pending") and "evil" in json.dumps(e)))' 2>/dev/null || echo 0)"
+    S2_DENY_CNT="$(audit_count "${S2_RUN_ID}" \
+      'e.get("action") in ("egress.deny","egress.pending") and "evil" in json.dumps(e)')"
     if [[ "${S2_DENY_CNT}" -ge 1 ]]; then
       ok "section 2: egress.deny/pending audit event visible for evil.example.com"
     else
       note "section 2: audit event not yet visible (async flush); check UI Audit tab"
     fi
 
-    [[ "${S2_OWN}" -eq 1 && "${OPT_KEEP}" -eq 0 ]] && \
-      { hc -o /dev/null -X POST "${WARDYN_URL}/api/v1/runs/${S2_RUN_ID}/kill" \
-          -H "${ADMIN_HDR}" >/dev/null 2>&1 || true; }
+    kill_run "${S2_RUN_ID}" "${S2_OWN}"
   fi
   echo
 fi
@@ -316,16 +356,9 @@ if run_section 3; then
   log "Section 3: metadata IP block (169.254.169.254 -> builtin deny)"
   note "The proxy unconditionally blocks link-local/metadata IPs regardless of policy"
 
-  S3_RUN_ID="${S1_RUN_ID:-}"
-  S3_OWN=0
-  if [[ -z "${S3_RUN_ID}" ]]; then
-    S3_RUN_ID="$(create_run --task "wardyn test-drive section 3")"
-    [[ -n "${S3_RUN_ID}" ]] || { bad "section 3: could not create run"; echo; }
-    if [[ -n "${S3_RUN_ID}" ]]; then
-      TD_RUN_IDS+=("${S3_RUN_ID}")
-      S3_OWN=1
-      wait_state "${S3_RUN_ID}" "RUNNING" 25 2 || bad "section 3: sandbox not RUNNING"
-    fi
+  S3_RUN_ID=""; S3_OWN=0
+  if reuse_or_ensure_run 3; then
+    S3_RUN_ID="${RUN_ID}"; S3_OWN="${OWN_RUN}"
   fi
 
   if [[ -n "${S3_RUN_ID}" ]]; then
@@ -356,18 +389,14 @@ if run_section 3; then
 
     # Audit evidence.
     sleep 2
-    S3_AUDIT="$(api "/api/v1/audit?run_id=${S3_RUN_ID}")"
-    S3_DENY_CNT="$(printf '%s' "${S3_AUDIT}" \
-      | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e.get("action")=="egress.deny"))' 2>/dev/null || echo 0)"
+    S3_DENY_CNT="$(audit_count "${S3_RUN_ID}" 'e.get("action")=="egress.deny"')"
     if [[ "${S3_DENY_CNT}" -ge 1 ]]; then
       ok "section 3: egress.deny audit event(s) visible for this run (${S3_DENY_CNT})"
     else
       note "section 3: egress.deny not yet in audit (async); check UI Audit tab"
     fi
 
-    [[ "${S3_OWN}" -eq 1 && "${OPT_KEEP}" -eq 0 ]] && \
-      { hc -o /dev/null -X POST "${WARDYN_URL}/api/v1/runs/${S3_RUN_ID}/kill" \
-          -H "${ADMIN_HDR}" >/dev/null 2>&1 || true; }
+    kill_run "${S3_RUN_ID}" "${S3_OWN}"
   fi
   echo
 fi
@@ -383,13 +412,12 @@ if run_section 4; then
   note "Probes an unknown domain; first_use_approval raises a PENDING approval"
   note "Then approves it via the API and shows the state change + audit"
 
-  S4_RUN_ID="$(create_run --task "wardyn test-drive section 4")"
-  [[ -n "${S4_RUN_ID}" ]] || { bad "section 4: could not create run"; echo; }
+  S4_RUN_ID=""
+  if ensure_run 4; then
+    S4_RUN_ID="${RUN_ID}"
+  fi
 
   if [[ -n "${S4_RUN_ID}" ]]; then
-    TD_RUN_IDS+=("${S4_RUN_ID}")
-    wait_state "${S4_RUN_ID}" "RUNNING" 25 2 || bad "section 4: sandbox not RUNNING"
-
     S4_CTR="wardyn-agent-${S4_RUN_ID}"
     S4_DOMAIN="td-s4-$(date +%s).example.com"
     note "section 4: probing domain ${S4_DOMAIN} (will trigger first-use approval)"
@@ -455,14 +483,8 @@ print(next((a.get('state','') for a in aps if a.get('id') == aid), ''))
 
       # Show audit event for the approval.
       sleep 2
-      S4_AUDIT="$(api "/api/v1/audit?run_id=${S4_RUN_ID}")"
-      S4_AP_AUDIT="$(printf '%s' "${S4_AUDIT}" \
-        | python3 -c "
-import sys, json
-eid = '${S4_AP_ID}'
-print(sum(1 for e in json.load(sys.stdin)
-          if 'approval' in e.get('action','') or eid in json.dumps(e)))
-" 2>/dev/null || echo 0)"
+      S4_AP_AUDIT="$(audit_count "${S4_RUN_ID}" \
+        "'approval' in e.get('action','') or '${S4_AP_ID}' in json.dumps(e)")"
       if [[ "${S4_AP_AUDIT}" -ge 1 ]]; then
         ok "section 4: approval-related audit event visible"
       else
@@ -473,9 +495,7 @@ print(sum(1 for e in json.load(sys.stdin)
     # Clean up the background curl regardless.
     kill "${S4_CURL_PID}" 2>/dev/null || true; wait "${S4_CURL_PID}" 2>/dev/null || true
 
-    [[ "${OPT_KEEP}" -eq 0 ]] && \
-      { hc -o /dev/null -X POST "${WARDYN_URL}/api/v1/runs/${S4_RUN_ID}/kill" \
-          -H "${ADMIN_HDR}" >/dev/null 2>&1 || true; }
+    kill_run "${S4_RUN_ID}"
   fi
   echo
 fi
@@ -492,13 +512,12 @@ if run_section 5; then
   note "Proves the full chain: sandbox -> proxy(token inject) -> broker -> approval"
   note "Demo has no GitHub App, so the broker fails closed; no token leaks to env"
 
-  S5_RUN_ID="$(create_run --task "wardyn test-drive section 5")"
-  [[ -n "${S5_RUN_ID}" ]] || { bad "section 5: could not create run"; echo; }
+  S5_RUN_ID=""
+  if ensure_run 5; then
+    S5_RUN_ID="${RUN_ID}"
+  fi
 
   if [[ -n "${S5_RUN_ID}" ]]; then
-    TD_RUN_IDS+=("${S5_RUN_ID}")
-    wait_state "${S5_RUN_ID}" "RUNNING" 25 2 || bad "section 5: sandbox not RUNNING"
-
     S5_CTR="wardyn-agent-${S5_RUN_ID}"
     TMPOUT="/tmp/wardyn-td-s5-${S5_RUN_ID}.out"
     TMPERR="/tmp/wardyn-td-s5-${S5_RUN_ID}.err"
@@ -575,9 +594,7 @@ print(next((a['id'] for a in aps
 
     rm -f "${TMPOUT}" "${TMPERR}" 2>/dev/null || true
 
-    [[ "${OPT_KEEP}" -eq 0 ]] && \
-      { hc -o /dev/null -X POST "${WARDYN_URL}/api/v1/runs/${S5_RUN_ID}/kill" \
-          -H "${ADMIN_HDR}" >/dev/null 2>&1 || true; }
+    kill_run "${S5_RUN_ID}"
   fi
   echo
 fi
@@ -591,13 +608,12 @@ if run_section 6; then
   log "Section 6: kill cascade"
   note "Kills the run; asserts container gone + token revoked + audit event"
 
-  S6_RUN_ID="$(create_run --task "wardyn test-drive section 6")"
-  [[ -n "${S6_RUN_ID}" ]] || { bad "section 6: could not create run"; echo; }
+  S6_RUN_ID=""
+  if ensure_run 6; then
+    S6_RUN_ID="${RUN_ID}"
+  fi
 
   if [[ -n "${S6_RUN_ID}" ]]; then
-    TD_RUN_IDS+=("${S6_RUN_ID}")
-    wait_state "${S6_RUN_ID}" "RUNNING" 25 2 || bad "section 6: sandbox not RUNNING"
-
     S6_CTR="wardyn-agent-${S6_RUN_ID}"
     S6_PROXY_CTR="wardyn-proxy-${S6_RUN_ID}"
 
@@ -671,10 +687,8 @@ if run_section 6; then
     fi
 
     # run.kill audit event.
-    S6_AUDIT="$(api "/api/v1/audit?run_id=${S6_RUN_ID}")"
-    S6_KILL_AUDIT="$(printf '%s' "${S6_AUDIT}" \
-      | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e.get("action")=="run.kill" and e.get("actor_type")=="human"))' \
-      2>/dev/null || echo 0)"
+    S6_KILL_AUDIT="$(audit_count "${S6_RUN_ID}" \
+      'e.get("action")=="run.kill" and e.get("actor_type")=="human"')"
     if [[ "${S6_KILL_AUDIT}" -ge 1 ]]; then
       ok "section 6: run.kill audit event with actor_type=human present"
     else
@@ -694,13 +708,12 @@ if run_section 7; then
   log "Section 7: recording artifact"
   note "Uploads a synthetic asciicast then retrieves it via the admin API"
 
-  S7_RUN_ID="$(create_run --task "wardyn test-drive section 7")"
-  [[ -n "${S7_RUN_ID}" ]] || { bad "section 7: could not create run"; echo; }
+  S7_RUN_ID=""
+  if ensure_run 7; then
+    S7_RUN_ID="${RUN_ID}"
+  fi
 
   if [[ -n "${S7_RUN_ID}" ]]; then
-    TD_RUN_IDS+=("${S7_RUN_ID}")
-    wait_state "${S7_RUN_ID}" "RUNNING" 25 2 || bad "section 7: sandbox not RUNNING"
-
     S7_PROXY_CTR="wardyn-proxy-${S7_RUN_ID}"
 
     # Capture the run token so we can upload via the run-token-gated endpoint.
@@ -752,9 +765,7 @@ if run_section 7; then
       fi
     fi
 
-    [[ "${OPT_KEEP}" -eq 0 ]] && \
-      { hc -o /dev/null -X POST "${WARDYN_URL}/api/v1/runs/${S7_RUN_ID}/kill" \
-          -H "${ADMIN_HDR}" >/dev/null 2>&1 || true; }
+    kill_run "${S7_RUN_ID}"
   fi
   echo
 fi
