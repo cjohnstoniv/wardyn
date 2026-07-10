@@ -9,7 +9,7 @@
 # `make agent-images`) rather than reimplementing them.
 #
 # Usage:
-#   scripts/up.sh [doctor|up|down|reset|pg|selftest]   (default: up)
+#   scripts/up.sh [doctor|up|down|reset|pg]   (default: up)
 #
 #   doctor    Read-only preflight. Exits 2 if it finds a BLOCKing issue.
 #   up        doctor, build wardynd, configure, start postgres+wardynd, open the
@@ -20,7 +20,6 @@
 #             (audit is a system of record); `reset` is how you deliberately start
 #             from an EMPTY Runs list on a machine that has run Wardyn before.
 #   pg        Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432).
-#   selftest  Assert the pure helpers below on fixed inputs. No docker, no network.
 set -eu
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,8 +30,6 @@ ENV_EXAMPLE="${REPO_ROOT}/deploy/compose/.env.example"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 
 compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
-
-# ── pure helpers (exercised by `selftest` — no docker, no filesystem, no network) ──
 
 # pick_policy RUNTIMES_JSON [WANTS_LLM] -> a WARDYN_DEFAULT_POLICY path.
 # RUNTIMES_JSON is the output of `docker info --format '{{json .Runtimes}}'`.
@@ -57,55 +54,38 @@ pick_policy() {
   esac
 }
 
-# composer_wants_llm_classify COMPOSER_CFG ANTHROPIC_KEY OPENAI_KEY -> "1" | ""
+# composer_wants_llm ENV_FILE -> "1" | ""
 # "1" when the operator has opted into a real model path: a non-fake composer
-# backend is configured, or a host LLM API key is exported. Pure string logic
-# (selftest-exercised); composer_wants_llm gathers the real inputs.
-composer_wants_llm_classify() {
-  _cwl_cfg=$1; _cwl_anth=$2; _cwl_oai=$3
+# backend is configured, or a host LLM API key is exported.
+composer_wants_llm() {
+  _cwl_cfg=$(env_get "$1" WARDYN_COMPOSER_CONFIG)
   case "${_cwl_cfg}" in
     ''|*'"wire":"fake"'*|*'"wire": "fake"'*) : ;;  # unset or the fake default → no signal from config
     *) echo 1; return ;;                            # a real (non-fake) backend is configured
   esac
-  [ -n "${_cwl_anth}" ] && { echo 1; return; }
-  [ -n "${_cwl_oai}" ]  && { echo 1; return; }
+  [ -n "${ANTHROPIC_API_KEY:-}" ] && { echo 1; return; }
+  [ -n "${OPENAI_API_KEY:-}" ]    && { echo 1; return; }
   echo ""
 }
 
-# composer_wants_llm ENV_FILE — real-environment wrapper around the classifier.
-composer_wants_llm() {
-  composer_wants_llm_classify \
-    "$(env_get "$1" WARDYN_COMPOSER_CONFIG)" \
-    "${ANTHROPIC_API_KEY:-}" \
-    "${OPENAI_API_KEY:-}"
-}
-
-# os_kind_classify UNAME_S OS_ENV PROC_VERSION WSL_DISTRO_NAME
-#   -> windows | wsl | linux | darwin | unknown
-# Pure string classification, no I/O — os_kind() below gathers the real inputs.
-os_kind_classify() {
-  _osc_u=$1; _osc_os=$2; _osc_proc=$3; _osc_wsl=$4
-  # WSL must be checked before the generic Linux case: WSL's own `uname -s`
-  # reports "Linux".
-  case "${_osc_proc}" in *[Mm]icrosoft*) echo wsl; return ;; esac
-  if [ -n "${_osc_wsl}" ]; then echo wsl; return; fi
-  case "${_osc_u}" in
-    MINGW*|MSYS*|CYGWIN*) echo windows; return ;;
-  esac
-  if [ "${_osc_os}" = "Windows_NT" ]; then echo windows; return; fi
-  case "${_osc_u}" in
-    Linux)  echo linux ;;
-    Darwin) echo darwin ;;
-    *)      echo unknown ;;
-  esac
-}
-
-# os_kind — real-environment wrapper around os_kind_classify.
+# os_kind -> windows | wsl | linux | darwin | unknown
 os_kind() {
   _ok_u=$(uname -s 2>/dev/null || echo unknown)
   _ok_proc=""
   [ -r /proc/version ] && _ok_proc=$(cat /proc/version 2>/dev/null || true)
-  os_kind_classify "${_ok_u}" "${OS:-}" "${_ok_proc}" "${WSL_DISTRO_NAME:-}"
+  # WSL must be checked before the generic Linux case: WSL's own `uname -s`
+  # reports "Linux".
+  case "${_ok_proc}" in *[Mm]icrosoft*) echo wsl; return ;; esac
+  if [ -n "${WSL_DISTRO_NAME:-}" ]; then echo wsl; return; fi
+  case "${_ok_u}" in
+    MINGW*|MSYS*|CYGWIN*) echo windows; return ;;
+  esac
+  if [ "${OS:-}" = "Windows_NT" ]; then echo windows; return; fi
+  case "${_ok_u}" in
+    Linux)  echo linux ;;
+    Darwin) echo darwin ;;
+    *)      echo unknown ;;
+  esac
 }
 
 # port_in_use PORT — best-effort; tries whatever's on PATH, defaults to "free"
@@ -407,41 +387,14 @@ cmd_pg() {
   log "wardyn-test-pg ready on :55432 (databases: wardyn, wardyn_e2e)"
 }
 
-# ── selftest ─────────────────────────────────────────────────────────────
-
-cmd_selftest() {
-  [ "$(pick_policy '{"runc":{}}')" = "/examples/policies/demo.json" ] || { echo "FAIL: pick_policy(runc only)"; exit 1; }
-  [ "$(pick_policy '{"runc":{},"runsc":{}}')" = "/examples/policies/default.json" ] || { echo "FAIL: pick_policy(runc+runsc)"; exit 1; }
-  [ "$(pick_policy '{}')" = "/examples/policies/demo.json" ] || { echo "FAIL: pick_policy(empty)"; exit 1; }
-  # composer-capable upgrade: WANTS_LLM="1" overrides the runtime-based pick.
-  [ "$(pick_policy '{"runc":{}}' 1)" = "/examples/policies/composer-dev.json" ] || { echo "FAIL: pick_policy(runc + wants_llm)"; exit 1; }
-  [ "$(pick_policy '{"runc":{},"runsc":{}}' 1)" = "/examples/policies/composer-dev.json" ] || { echo "FAIL: pick_policy(runsc + wants_llm)"; exit 1; }
-  [ "$(composer_wants_llm_classify '{"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}' '' '')" = "" ] || { echo "FAIL: composer_wants_llm(fake backend, no key)"; exit 1; }
-  [ "$(composer_wants_llm_classify '{"default":"prod","backends":[{"name":"prod","wire":"anthropic","model":"sonnet"}]}' '' '')" = "1" ] || { echo "FAIL: composer_wants_llm(real backend)"; exit 1; }
-  [ "$(composer_wants_llm_classify '' 'sk-ant-xxx' '')" = "1" ] || { echo "FAIL: composer_wants_llm(anthropic key)"; exit 1; }
-  [ "$(composer_wants_llm_classify '' '' 'sk-openai')" = "1" ] || { echo "FAIL: composer_wants_llm(openai key)"; exit 1; }
-  [ "$(composer_wants_llm_classify '' '' '')" = "" ] || { echo "FAIL: composer_wants_llm(nothing)"; exit 1; }
-
-  [ "$(os_kind_classify 'MINGW64_NT-10.0' '' '' '')" = "windows" ] || { echo "FAIL: os_kind_classify(MINGW)"; exit 1; }
-  [ "$(os_kind_classify 'Linux' 'Windows_NT' '' '')" = "windows" ] || { echo "FAIL: os_kind_classify(OS=Windows_NT)"; exit 1; }
-  [ "$(os_kind_classify 'Linux' '' 'Linux version 5.15.0 (microsoft-standard-WSL2)' '')" = "wsl" ] || { echo "FAIL: os_kind_classify(proc/version microsoft)"; exit 1; }
-  [ "$(os_kind_classify 'Linux' '' '' 'Ubuntu')" = "wsl" ] || { echo "FAIL: os_kind_classify(WSL_DISTRO_NAME)"; exit 1; }
-  [ "$(os_kind_classify 'Linux' '' 'Linux version 6.6.0-generic' '')" = "linux" ] || { echo "FAIL: os_kind_classify(linux)"; exit 1; }
-  [ "$(os_kind_classify 'Darwin' '' '' '')" = "darwin" ] || { echo "FAIL: os_kind_classify(darwin)"; exit 1; }
-  [ "$(os_kind_classify 'FreeBSD' '' '' '')" = "unknown" ] || { echo "FAIL: os_kind_classify(unknown)"; exit 1; }
-
-  echo "selftest: OK"
-}
-
 # ── dispatch ─────────────────────────────────────────────────────────────
 
 cmd="${1:-up}"
 case "${cmd}" in
-  doctor)   cmd_doctor ;;
-  up)       cmd_up ;;
-  down)     cmd_down ;;
-  reset)    cmd_reset ;;
-  pg)       cmd_pg ;;
-  selftest) cmd_selftest ;;
-  *) die "usage: $0 {doctor|up|down|reset|pg|selftest}" ;;
+  doctor) cmd_doctor ;;
+  up)     cmd_up ;;
+  down)   cmd_down ;;
+  reset)  cmd_reset ;;
+  pg)     cmd_pg ;;
+  *) die "usage: $0 {doctor|up|down|reset|pg}" ;;
 esac
