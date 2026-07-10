@@ -61,18 +61,16 @@ func recordCmd(client clientFn) *cobra.Command {
 	}
 	save.Flags().StringVar(&name, "name", "", "name for the saved policy (required)")
 
-	var mode string
 	task := &cobra.Command{
 		Use:   "task <workspace-id> <task-key>",
 		Short: "Record one workspace import task in an OPEN sandbox (learn what it actually uses)",
 		Long: "Launches the task's open (allow-all egress) recording sandbox via the workspace import\n" +
 			"pipeline. Task keys come from the workspace's derived record_tasks (build/test/lint/setup/\n" +
-			"custom). Auto mode runs the operator-approved commands; interactive mode idles for\n" +
-			"`wardyn attach` and ends with the normal run kill (Done recording). The capture lands on\n" +
-			"the workspace when the run terminates.",
+			"custom). The session idles for `wardyn attach` and ends with the normal run kill\n" +
+			"(Done recording). The capture lands on the workspace when the run terminates.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := client().recordWorkspaceTask(cmd.Context(), args[0], args[1], mode)
+			resp, err := client().recordWorkspaceTask(cmd.Context(), args[0], args[1])
 			if err != nil {
 				return err
 			}
@@ -88,7 +86,6 @@ func recordCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	task.Flags().StringVar(&mode, "mode", "", "auto (run the approved commands) or interactive (attach and drive it yourself)")
 
 	cmd.AddCommand(synth, save, task)
 	return cmd
