@@ -19,26 +19,6 @@ import (
 
 // ─── Fakes ───────────────────────────────────────────────────────────────────
 
-// fakeClock is a deterministic clock whose value is set by the test.
-type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func newFakeClock(t time.Time) *fakeClock { return &fakeClock{now: t} }
-
-func (f *fakeClock) Now() time.Time {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.now
-}
-
-func (f *fakeClock) Advance(d time.Duration) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.now = f.now.Add(d)
-}
-
 // fakeStore holds RunSummary rows; satisfies lifecycle.Store.
 type fakeStore struct {
 	mu   sync.Mutex
@@ -148,10 +128,10 @@ func (f *fakeRecorder) last() (types.AuditEvent, bool) {
 
 // makeReaper creates a Reaper wired to the provided fakes with a deliberately
 // short interval (never fires during unit tests — we call tick directly).
-func makeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, clk *fakeClock) *lifecycle.Reaper {
+func makeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, now time.Time) *lifecycle.Reaper {
 	return lifecycle.New(store, stopper, rec, lifecycle.Config{
 		Interval: time.Hour, // effectively never fires in unit tests
-		Clock:    clk,
+		Now:      func() time.Time { return now },
 	})
 }
 
@@ -161,7 +141,6 @@ func makeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, clk *
 // threshold must be stopped and an audit event emitted.
 func TestIdleRunIsStopped(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -179,7 +158,7 @@ func TestIdleRunIsStopped(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if !stopper.wasStopped(runID) {
@@ -207,7 +186,6 @@ func TestIdleRunIsStopped(t *testing.T) {
 // threshold must NOT be stopped.
 func TestActiveRunUntouched(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -224,7 +202,7 @@ func TestActiveRunUntouched(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if stopper.wasStopped(runID) {
@@ -239,7 +217,6 @@ func TestActiveRunUntouched(t *testing.T) {
 // that value instead of the platform default.
 func TestPerPolicyOverrideRespected(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -263,7 +240,7 @@ func TestPerPolicyOverrideRespected(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if !stopper.wasStopped(idleRunID) {
@@ -283,7 +260,6 @@ func TestPerPolicyOverrideRespected(t *testing.T) {
 // attach sessions.
 func TestNeverReapWhenPolicyNegative(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -304,7 +280,7 @@ func TestNeverReapWhenPolicyNegative(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if stopper.wasStopped(neverRunID) {
@@ -322,7 +298,6 @@ func TestNeverReapWhenPolicyNegative(t *testing.T) {
 // the loop continues and stops the remaining eligible runs.
 func TestStopperErrorDoesNotKillLoop(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -347,7 +322,7 @@ func TestStopperErrorDoesNotKillLoop(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	// The error run was not recorded as stopped (stopper returned an error).
@@ -368,12 +343,11 @@ func TestStopperErrorDoesNotKillLoop(t *testing.T) {
 // without panicking and emits no spurious stops.
 func TestStoreErrorIsLogged(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{err: errors.New("postgres unavailable")}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	// Must not panic.
 	r.Tick(context.Background())
 
@@ -392,7 +366,6 @@ func TestStoreErrorIsLogged(t *testing.T) {
 // platform default.)
 func TestPolicyThresholdBoundary(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -416,7 +389,7 @@ func TestPolicyThresholdBoundary(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if stopper.wasStopped(safeRunID) {
@@ -435,7 +408,6 @@ func TestPolicyThresholdBoundary(t *testing.T) {
 // applied should be audited.
 func TestConditionalStopDoesNotEmitAutostopWhenTerminal(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -453,7 +425,7 @@ func TestConditionalStopDoesNotEmitAutostopWhenTerminal(t *testing.T) {
 		{ID: normalRunID, UpdatedAt: base.Add(-60 * time.Minute), PolicyAutoStopAfterSec: int((30 * time.Minute).Seconds())},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	// Exactly one audit event: for the run whose stop actually applied. The raced
@@ -476,7 +448,6 @@ func TestConditionalStopDoesNotEmitAutostopWhenTerminal(t *testing.T) {
 // disabled per docs/policies.)
 func TestAutoStopZeroMeansDisabled(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -497,7 +468,7 @@ func TestAutoStopZeroMeansDisabled(t *testing.T) {
 		},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if stopper.wasStopped(disabledRunID) {
@@ -518,7 +489,6 @@ func TestAutoStopZeroMeansDisabled(t *testing.T) {
 // dishonestly read as a fully-contained stop.
 func TestRevokeFailureEmitsRevokeFailureEvent(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -533,7 +503,7 @@ func TestRevokeFailureEmitsRevokeFailureEvent(t *testing.T) {
 		{ID: runID, UpdatedAt: base.Add(-60 * time.Minute), PolicyAutoStopAfterSec: int((30 * time.Minute).Seconds())},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	if !stopper.wasStopped(runID) {
@@ -578,7 +548,6 @@ func TestRevokeFailureEmitsRevokeFailureEvent(t *testing.T) {
 // exercised end-to-end in the store PG test).
 func TestSnapshotUpdatedAtThreadedToStopper(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	clk := newFakeClock(base)
 	store := &fakeStore{}
 	stopper := newFakeStopper()
 	rec := &fakeRecorder{}
@@ -589,7 +558,7 @@ func TestSnapshotUpdatedAtThreadedToStopper(t *testing.T) {
 		{ID: runID, UpdatedAt: snapshotAt, PolicyAutoStopAfterSec: int((30 * time.Minute).Seconds())},
 	}
 
-	r := makeReaper(store, stopper, rec, clk)
+	r := makeReaper(store, stopper, rec, base)
 	r.Tick(context.Background())
 
 	stopper.mu.Lock()
