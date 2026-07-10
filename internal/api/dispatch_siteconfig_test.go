@@ -27,28 +27,6 @@ import (
 // and pgHarnessWithRunner (Postgres-backed Server, skips cleanly without
 // WARDYN_TEST_PG) rather than reinventing either.
 
-// seedSiteConfigForDispatch writes the operator-wide SiteConfig singleton
-// through the SAME store dispatchWithVerify reads (store.NewPG, wired by
-// pgHarnessWithRunner), and restores the zero value afterward. site_config is
-// a store-wide (not per-run) singleton row, so without this cleanup a value
-// seeded here would leak into any other PG-backed test sharing WARDYN_TEST_PG.
-func seedSiteConfigForDispatch(t *testing.T, srv *Server, cfg types.SiteConfig) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := srv.cfg.Store.PutSiteConfig(ctx, cfg); err != nil {
-		t.Fatalf("seed site config: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{})
-	})
-}
-
-// dispatchInlinePolicy carries registry.npmjs.org in the STARTING egress
-// allowlist so the artifact-redirect substitution assertion below is real
-// (proves removal) rather than vacuous (proves absence of something never
-// there).
-const dispatchInlinePolicy = `{"allowed_domains":["api.anthropic.com","registry.npmjs.org"],"min_confinement_class":"CC2"}`
-
 // TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock drives a real
 // POST /api/v1/runs -> handleCreateRun -> dispatch -> dispatchWithVerify and
 // asserts the composed runner.SandboxSpec the fakeRunner captured.
@@ -70,15 +48,28 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 
 	// Operator SiteConfig: upstream corp proxy, npm artifact redirect (with a
 	// token so the MITM+injection half is exercised too), and a declared GHES
-	// SCM host.
-	seedSiteConfigForDispatch(t, srv, types.SiteConfig{
+	// SCM host. site_config is a store-wide (not per-run) singleton row, so
+	// restore the zero value afterward — otherwise a value seeded here leaks
+	// into any other PG-backed test sharing WARDYN_TEST_PG.
+	ctx := context.Background()
+	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
 		UpstreamProxySecretRef: "corp-proxy-url",
 		ArtifactOverrides: map[string]types.ArtifactOverride{
 			"npm": {BaseURL: "https://artifactory.corp/npm", TokenSecretRef: "npm-artifactory-token"},
 		},
 		ScmHosts: []string{"ghes.corp.example"},
+	}); err != nil {
+		t.Fatalf("seed site config: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{})
 	})
 
+	// dispatchInlinePolicy carries registry.npmjs.org in the STARTING egress
+	// allowlist so the artifact-redirect substitution assertion below is real
+	// (proves removal) rather than vacuous (proves absence of something never
+	// there).
+	const dispatchInlinePolicy = `{"allowed_domains":["api.anthropic.com","registry.npmjs.org"],"min_confinement_class":"CC2"}`
 	body := `{"agent":"claude-code","repo":"acme/widgets","task":"do the thing","inline_policy":` + dispatchInlinePolicy + `}`
 	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusCreated {

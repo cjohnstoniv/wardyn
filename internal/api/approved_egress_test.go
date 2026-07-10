@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -58,17 +59,12 @@ func TestSetApprovedEgressValidation(t *testing.T) {
 	// Over the cap: 65 valid domains.
 	doms := make([]string, 65)
 	for i := range doms {
-		doms[i] = "h" + itoaTest(i) + ".example.com"
+		doms[i] = "h" + strconv.Itoa(i) + ".example.com"
 	}
 	body, _ := json.Marshal(map[string]any{"domains": doms})
 	if w := do(t, h.srv, http.MethodPut, "/api/v1/workspaces/"+id+"/approved-egress", adminToken, string(body)); w.Code != http.StatusBadRequest {
 		t.Errorf("over cap: code = %d, want 400", w.Code)
 	}
-}
-
-func itoaTest(i int) string {
-	b, _ := json.Marshal(i)
-	return string(b)
 }
 
 // TestSetApprovedEgressRoundTrip: the handler normalizes (lowercase, dedupe,

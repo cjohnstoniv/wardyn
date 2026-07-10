@@ -95,7 +95,7 @@ func TestEnsureLLMGrant_UnknownAgentNoop(t *testing.T) {
 }
 
 func TestEnsureLLMGrant_RespectsExistingGrant(t *testing.T) {
-	existing := types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.anthropic.com","header":"x-api-key","format":"%s","secret_name":"anthropic-api-key"}`)}
+	existing := apiKeyGrant("api.anthropic.com", "anthropic-api-key")
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{existing}}
 	ensureLLMGrant(&spec, "claude-code", secretsWith("anthropic-api-key"), false)
 	if n := len(spec.EligibleGrants); n != 1 {
@@ -141,7 +141,7 @@ func TestReconcileLLMAccess_SatisfiedIsProvisionedNote(t *testing.T) {
 // run doesn't hard-fail at proxy startup.
 func TestReconcileLLMAccess_GrantWithoutEgressIsDroppedAndWarned(t *testing.T) {
 	// Grant present, but AllowedDomains does NOT contain api.anthropic.com.
-	grant := types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.anthropic.com","header":"x-api-key","format":"%s","secret_name":"anthropic-api-key"}`)}
+	grant := apiKeyGrant("api.anthropic.com", "anthropic-api-key")
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant}, AllowedDomains: []string{"github.com"}}
 	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false)
 	if w == "" {
@@ -357,7 +357,7 @@ func TestReconcileLLMAccess_SubscriptionInjectDefaultNote(t *testing.T) {
 // the launch the provisioned note promises. (Observed live: Opus proposed an
 // api_key grant on a subscription compose with no secret stored.)
 func TestReconcileLLMAccess_SubscriptionDropsRideAlongAPIKeyGrant(t *testing.T) {
-	grant := types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.anthropic.com","header":"x-api-key","format":"%s","secret_name":"anthropic-api-key"}`)}
+	grant := apiKeyGrant("api.anthropic.com", "anthropic-api-key")
 	spec := types.RunPolicySpec{
 		AllowedDomains: []string{"*.anthropic.com", "api.anthropic.com"},
 		EligibleGrants: []types.GrantSpec{grant},
@@ -377,7 +377,7 @@ func TestReconcileLLMAccess_SubscriptionDropsRideAlongAPIKeyGrant(t *testing.T) 
 // api-key mode, model-proposed grant, secret ABSENT => the grant is dropped
 // (proxy would fail closed at startup) and the honest no-secret warning stands.
 func TestReconcileLLMAccess_NoSecretDropsOrphanedGrant(t *testing.T) {
-	grant := types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.anthropic.com","header":"x-api-key","format":"%s","secret_name":"anthropic-api-key"}`)}
+	grant := apiKeyGrant("api.anthropic.com", "anthropic-api-key")
 	spec := types.RunPolicySpec{
 		AllowedDomains: []string{"api.anthropic.com"},
 		EligibleGrants: []types.GrantSpec{grant},

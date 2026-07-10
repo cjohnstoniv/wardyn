@@ -3,7 +3,10 @@
 
 package api
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestRepoFieldSafe locks in the sanitization for the attacker-influenceable
 // run.Repo before it can flow into the in-sandbox `git clone`. Anything with a
@@ -83,20 +86,11 @@ func TestRepoCloneURL(t *testing.T) {
 // SSH-over-443 endpoint (matches ONLY :443) and never the bare SSH host (which
 // would match any port) — the egress half of the SSH lane.
 func TestScanEgressDomains_SSH(t *testing.T) {
-	has := func(doms []string, want string) bool {
-		for _, d := range doms {
-			if d == want {
-				return true
-			}
-		}
-		return false
-	}
-
 	gh := scanEgressDomains("ssh://git@github.com/o/r.git")
-	if !has(gh, "ssh.github.com:443") {
+	if !slices.Contains(gh, "ssh.github.com:443") {
 		t.Errorf("github ssh: missing ssh.github.com:443, got %v", gh)
 	}
-	if has(gh, "ssh.github.com") {
+	if slices.Contains(gh, "ssh.github.com") {
 		t.Errorf("github ssh: bare ssh.github.com must NOT be allowlisted (any-port), got %v", gh)
 	}
 
@@ -104,16 +98,16 @@ func TestScanEgressDomains_SSH(t *testing.T) {
 	// the git_pat HTTPS lane, not this one) — least privilege, matches the direct-run
 	// sshEgress lane.
 	ado := scanEgressDomains("git@ssh.dev.azure.com:v3/org/proj/repo")
-	if !has(ado, "ssh.dev.azure.com:443") {
+	if !slices.Contains(ado, "ssh.dev.azure.com:443") {
 		t.Errorf("ado ssh: missing ssh.dev.azure.com:443, got %v", ado)
 	}
-	if has(ado, "ssh.dev.azure.com") {
+	if slices.Contains(ado, "ssh.dev.azure.com") {
 		t.Errorf("ado ssh: bare ssh.dev.azure.com must NOT be allowlisted (any-port), got %v", ado)
 	}
 
 	// A plain https URL still just adds its bare host (unchanged behavior).
 	https := scanEgressDomains("https://example.com/x/y.git")
-	if !has(https, "example.com") {
+	if !slices.Contains(https, "example.com") {
 		t.Errorf("https: missing example.com, got %v", https)
 	}
 }

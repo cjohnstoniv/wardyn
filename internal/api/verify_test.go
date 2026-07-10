@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-
 	"time"
 
 	"github.com/google/uuid"
@@ -20,9 +19,8 @@ import (
 
 type verifyStore struct {
 	store.Store
-	ws     types.Workspace
+	importStateFake
 	run    types.AgentRun
-	state  *types.Workspace
 	hasRun bool
 }
 
@@ -35,27 +33,23 @@ func (s *verifyStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error)
 	}
 	return s.run, nil
 }
-func (s *verifyStore) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	ws := s.ws
-	ws.Status = status
-	ws.ActiveRunID = active
-	ws.VerifyResult = vr
-	ws.VerifiedProfileHash = vh
-	ws.VerifiedAt = va
-	s.state = &ws
-	return ws, nil
+
+// SetWorkspaceImportState resolves the otherwise-ambiguous selector between the
+// embedded nil store.Store interface and importStateFake (both declare this
+// method) by routing to importStateFake's shared implementation explicitly.
+func (s *verifyStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, vr, vh, va)
 }
 
 func newVerifySrv(t *testing.T, fake store.Store) *Server {
 	h := newHarness(t)
-	return New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	return New(baseTestConfig(h, fake))
 }
 
 func TestVerifyWorkspace_GuardsNoCommandsNoRunner(t *testing.T) {
 	wsID := uuid.New()
 	// No approved commands → 422.
-	fake := &verifyStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned}}
+	fake := &verifyStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned}}}
 	srv := newVerifySrv(t, fake)
 	if w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/verify", adminToken, ""); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("no-commands: code = %d, want 422; body=%s", w.Code, w.Body.String())
@@ -83,11 +77,11 @@ func TestUploadVerifyResult_GreenSetsReadyVerified(t *testing.T) {
 	wsID := uuid.New()
 	tok := h.mintRunToken(t, runID)
 	fake := &verifyStore{
-		hasRun: true,
-		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123", ActiveRunID: &runID},
+		hasRun:          true,
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
+		importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123", ActiveRunID: &runID}},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 	// A green upload (all steps exit 0).
 	body := `{"ran":true,"ok":true,"done":true,"total":2,"steps":[{"stage":"install","command":"npm ci","exit_code":0},{"stage":"test","command":"npm test","exit_code":0}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
@@ -115,11 +109,11 @@ func TestUploadVerifyResult_SupersededRunRejected(t *testing.T) {
 	active := uuid.New() // a DIFFERENT run now owns the workspace
 	tok := h.mintRunToken(t, runID)
 	fake := &verifyStore{
-		hasRun: true,
-		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123", ActiveRunID: &active},
+		hasRun:          true,
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
+		importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc123", ActiveRunID: &active}},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 	body := `{"ran":true,"ok":true,"done":true,"total":1,"steps":[{"stage":"test","command":"npm test","exit_code":0}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
 	if w.Code != http.StatusConflict {
@@ -145,11 +139,11 @@ func TestUploadVerifyResult_ProgressKeepsVerifying(t *testing.T) {
 	wsID := uuid.New()
 	tok := h.mintRunToken(t, runID)
 	fake := &verifyStore{
-		hasRun: true,
-		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:     types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc", ActiveRunID: &runID},
+		hasRun:          true,
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
+		importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceVerifying, BuiltProfileHash: "abc", ActiveRunID: &runID}},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 	// A PROGRESS upload (done omitted/false): install done, build running.
 	body := `{"ran":true,"total":2,"steps":[{"stage":"install","command":"npm ci","exit_code":0},{"stage":"build","command":"npm run build","running":true}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
@@ -178,11 +172,13 @@ func TestReconcileWorkspaceRun_StuckVerifyFailsCleanly(t *testing.T) {
 	runID := uuid.New()
 	wsID := uuid.New()
 	fake := &verifyStore{
-		hasRun: true,
-		run:    types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:     types.Workspace{ID: wsID, Status: types.WorkspaceVerifying, ActiveRunID: &runID},
+		hasRun:          true,
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
+		importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Status: types.WorkspaceVerifying, ActiveRunID: &runID}},
 	}
-	s := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken, TrustDomain: "wardyn.local", ControlPlaneURL: "http://x", Store: fake})
+	cfg := baseTestConfig(h, fake)
+	cfg.ControlPlaneURL = "http://x"
+	s := New(cfg)
 	s.reconcileWorkspaceRun(context.Background(), runID)
 	if fake.state == nil || fake.state.Status != types.WorkspaceVerifyFailed {
 		t.Fatalf("stuck verify should reconcile to verify_failed, got %+v", fake.state)

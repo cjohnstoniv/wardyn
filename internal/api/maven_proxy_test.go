@@ -3,7 +3,10 @@
 
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMavenProxyOpts(t *testing.T) {
 	got := mavenProxyOpts("http://wardyn-proxy:3128")
@@ -12,20 +15,11 @@ func TestMavenProxyOpts(t *testing.T) {
 		t.Errorf("mavenProxyOpts:\n got=%q\nwant=%q", got, want)
 	}
 	// Default port when unspecified; https scheme stripped.
-	if p := mavenProxyOpts("https://proxy.example"); p == "" || !contains(p, "proxyHost=proxy.example") || !contains(p, "proxyPort=3128") {
+	if p := mavenProxyOpts("https://proxy.example"); p == "" || !strings.Contains(p, "proxyHost=proxy.example") || !strings.Contains(p, "proxyPort=3128") {
 		t.Errorf("default-port/https parse = %q", p)
 	}
 	// Unparseable → empty (no bogus MAVEN_OPTS).
 	if p := mavenProxyOpts(""); p != "" {
 		t.Errorf("empty proxyURL should yield empty opts, got %q", p)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
