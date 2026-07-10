@@ -292,8 +292,6 @@ type composeError struct {
 	msg    string
 }
 
-func (e *composeError) Error() string { return e.msg }
-
 // composerBackendKnown reports whether a backend name resolves in the registry
 // ("" = the default). It lets handleComposeRun reject an unknown backend with a
 // real 400 BEFORE any SSE flush, matching the buffer transport.
