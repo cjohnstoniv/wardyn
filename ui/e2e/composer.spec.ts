@@ -42,6 +42,7 @@
 //   * footer actions are "Approve & launch" and "Edit in wizard".
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
+import { COMPOSER_UI_ENABLED } from "../src/app/lib/features";
 
 // The compose + launch tests share one seeded backend; the launch test mutates
 // run state (creates a run). Serial mode keeps the read-only compose/review
@@ -107,6 +108,8 @@ async function compose(page: Page, dlg: Locator, prompt: string): Promise<void> 
 }
 
 test.describe("AI Run Composer — Describe your task", () => {
+  test.skip(!COMPOSER_UI_ENABLED, "AI Run Composer UI is flag-off (features.ts) — suite self-activates when the flag flips");
+
   test("the provider dropdown lists the configured backends with the default preselected", async ({
     page,
   }) => {
