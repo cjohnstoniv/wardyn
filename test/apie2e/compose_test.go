@@ -457,7 +457,7 @@ func TestCompose_AdversarialClampedAndGradedHigh(t *testing.T) {
 	if pol.AllowAllEgress {
 		t.Errorf("allow_all_egress not clamped off")
 	}
-	if confRank(pol.MinConfinementClass) < confRank(types.CC2) {
+	if pol.MinConfinementClass.Rank() < types.CC2.Rank() {
 		t.Errorf("confinement %q below the operator CC2 floor", pol.MinConfinementClass)
 	}
 	if len(pol.WorkspaceMounts) != 0 {
@@ -629,22 +629,6 @@ func TestCompose_DisabledReturns404(t *testing.T) {
 	st, raw = getBackends(t, h.srv.URL)
 	if st != http.StatusNotFound {
 		t.Errorf("GET backends (disabled) status = %d, want 404 (body=%s)", st, raw)
-	}
-}
-
-// ─── small local helpers ───────────────────────────────────────────────────────
-
-// confRank ranks confinement classes for the floor assertion (CC1<CC2<CC3).
-func confRank(c types.ConfinementClass) int {
-	switch c {
-	case types.CC3:
-		return 3
-	case types.CC2:
-		return 2
-	case types.CC1:
-		return 1
-	default:
-		return 0
 	}
 }
 
