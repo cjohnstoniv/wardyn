@@ -72,11 +72,10 @@ import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { RESIDUAL_PREFIX } from "../wardyn/copy";
-// guaranteeSentences is the composer wizard's tested, plain-language translation
-// of a RunPolicySpec ("what the agent can/can't do") — reused here instead of a
-// second copy, so a stored policy reads in the exact same honest vocabulary as
-// a proposed one.
-import { guaranteeSentences } from "./new-run/compose-quick-review";
+// ComposeQuickReview is the composer wizard's CAN/CAN'T projection of a
+// RunPolicySpec — reused here instead of a second prose family, so a stored
+// policy reads in the exact same honest vocabulary as a proposed one.
+import { ComposeQuickReview } from "./new-run/compose-quick-review";
 
 type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
 
@@ -375,7 +374,6 @@ function PolicyDetail({
   onClose: () => void;
   onEdit: (p: RunPolicy) => void;
 }) {
-  const sentences = React.useMemo(() => (policy ? guaranteeSentences(policy.spec) : []), [policy]);
   const meta = policy ? CC_META[policy.spec.min_confinement_class] : undefined;
 
   return (
@@ -396,19 +394,14 @@ function PolicyDetail({
               <Field label="Updated" value={relativeTime(policy.updated_at)} />
             </div>
 
-            {/* Policy bodies as humane rows (C7) — plain-language sentences
-                derived from the same clamped-spec translator the New Run wizard
-                uses, so a stored policy and a proposed one read identically. */}
+            {/* Policy bodies as humane rows (C7) — the same CAN/CAN'T projection
+                the New Run wizard uses, so a stored policy and a proposed one
+                read identically. */}
             <div>
               <SectionLabel>What this policy allows</SectionLabel>
-              <ul className="mt-2 space-y-1.5 text-sm text-foreground">
-                {sentences.map((s, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/70" />
-                    <span>{s}</span>
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-2">
+                <ComposeQuickReview inline_policy={policy.spec} />
+              </div>
             </div>
 
             {meta && (
