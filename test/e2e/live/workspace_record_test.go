@@ -6,7 +6,6 @@
 package live
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -262,70 +261,6 @@ func (h *harness) recWaitTaskDone(t *testing.T, wsID, task string, timeout time.
 		}
 		time.Sleep(3 * time.Second)
 	}
-}
-
-// recJSON does one authenticated JSON request and decodes into out (when non-nil),
-// failing the test unless the status is one of want.
-func (h *harness) recJSON(t *testing.T, method, path string, body any, out any, want ...int) {
-	t.Helper()
-	var rd *bytes.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
-	} else {
-		rd = bytes.NewReader(nil)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, method, h.base+path, rd)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
-	resp, err := h.http.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer resp.Body.Close()
-	okStatus := false
-	for _, w := range want {
-		if resp.StatusCode == w {
-			okStatus = true
-			break
-		}
-	}
-	if !okStatus {
-		raw, _ := readCapped(resp.Body)
-		t.Fatalf("%s %s: status %d (want %v): %s", method, path, resp.StatusCode, want, raw)
-	}
-	if out != nil {
-		if derr := json.NewDecoder(resp.Body).Decode(out); derr != nil {
-			t.Fatalf("%s %s: decode: %v", method, path, derr)
-		}
-	}
-}
-
-// recTry does one authenticated JSON request and returns (status, capped body)
-// without failing the test — for steps that are best-effort per topology.
-func (h *harness) recTry(t *testing.T, method, path string, body any) (int, string) {
-	t.Helper()
-	var rd *bytes.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
-	} else {
-		rd = bytes.NewReader(nil)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, method, h.base+path, rd)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.token)
-	resp, err := h.http.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer resp.Body.Close()
-	raw, _ := readCapped(resp.Body)
-	return resp.StatusCode, string(raw)
 }
 
 func warningsMention(warnings []string, needle string) bool {

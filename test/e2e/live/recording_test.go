@@ -197,19 +197,15 @@ func (h *harness) synthesizeProfile(t *testing.T, id uuid.UUID) profileProposal 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.base+"/api/v1/runs/"+id.String()+"/profile", nil)
-	req.Header.Set("Authorization", "Bearer "+h.token)
-	resp, err := h.http.Do(req)
+	status, raw, err := h.authedJSON(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/profile", nil)
 	if err != nil {
 		t.Fatalf("POST profile: %v", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		raw, _ := readCapped(resp.Body)
-		t.Fatalf("profile status %d: %s", resp.StatusCode, raw)
+	if status != 200 {
+		t.Fatalf("profile status %d: %s", status, raw)
 	}
 	var p profileProposal
-	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+	if err := json.Unmarshal(raw, &p); err != nil {
 		t.Fatalf("decode profile: %v", err)
 	}
 	return p
