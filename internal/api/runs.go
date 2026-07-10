@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -197,7 +199,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// because CC3 outranks CC2, then fail at sandbox create with a raw docker
 		// error. Require the exact enforced class to be advertised. enforced=="" means
 		// no class is required (policy floor unset, no request) ⇒ any runner passes.
-		if enforced != "" && !confinementSupported(caps.ConfinementClasses, enforced) {
+		if enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
 				"runner %q cannot enforce confinement_class %s (available: %s)",
 				caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
@@ -409,9 +411,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 				runID.String(), "failure", mustJSON(map[string]any{
 					"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error(),
 				})))
-			if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-				created = refreshed
-			}
+			created = s.refreshRun(ctx, runID, created)
 			writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 			return
 		}
@@ -430,9 +430,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Runner != nil {
 		s.dispatch(ctx, created, id.Token, image, spec, firstGitHubGrantID, gitPATGrants, sshGrants, injections, req.Interactive)
 		// Re-read so the response reflects the post-dispatch state.
-		if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-			created = refreshed
-		}
+		created = s.refreshRun(ctx, runID, created)
 	}
 
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
@@ -517,10 +515,8 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// Sandbox env: non-secret values only (invariant 1). The run token never
 	// appears here — the proxy holds it via ProxyConfig.RunToken and injects it
 	// when forwarding internal API calls from inside the sandbox.
-	proxyURL := "http://wardyn-proxy:3128" // per-run proxy sidecar (docker hostname)
-	if s.cfg.ProxyURL != "" {
-		proxyURL = s.cfg.ProxyURL
-	}
+	// Per-run proxy sidecar (docker hostname) unless the config overrides it.
+	proxyURL := cmp.Or(s.cfg.ProxyURL, "http://wardyn-proxy:3128")
 	sandboxEnv := map[string]string{
 		"WARDYN_RUN_ID":    run.ID.String(),
 		"WARDYN_PROXY_URL": proxyURL,
@@ -663,13 +659,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// image's gateway default and seed a NON-SECRET placeholder so claude emits a
 	// request the proxy strips + re-injects (invariant 1: the real key is never
 	// resident; the placeholder is a sentinel, not a credential).
-	subscription := false
-	for _, wm := range policy.WorkspaceMounts {
-		if wm.Target == "/home/agent/.claude" {
-			subscription = true
-			break
-		}
-	}
+	subscription := specHasMountTarget(&policy, claudeCredTarget)
 	// Subscription runs: inject the operator's LIVE OAuth token PROXY-SIDE (the
 	// sandbox holds only an inert sentinel) instead of the resident copy, which
 	// goes stale — the access token expires (~hours) and the refresh token ROTATES
@@ -1422,20 +1412,6 @@ func bestClass(classes []types.ConfinementClass) types.ConfinementClass {
 	return best
 }
 
-// confinementSupported reports whether the runner advertises the EXACT class c.
-// Unlike a rank comparison, this is correct for non-contiguous capability sets:
-// CC2 (gVisor/runsc) and CC3 (Kata/krun) are independent runtimes, so a host may
-// advertise one without the other and must not be treated as able to enforce a
-// class it does not actually provide (invariant 5, fail closed).
-func confinementSupported(classes []types.ConfinementClass, c types.ConfinementClass) bool {
-	for _, have := range classes {
-		if have == c {
-			return true
-		}
-	}
-	return false
-}
-
 // classesOrNone renders an advertised confinement set for error messages, or
 // "none" when the runner advertises no class.
 func classesOrNone(classes []types.ConfinementClass) string {
@@ -1681,10 +1657,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			if s.cfg.BedrockAWSProfile != "" {
 				env["AWS_PROFILE"] = s.cfg.BedrockAWSProfile
 			}
-			ssoRegion := s.cfg.BedrockAWSSSORegion
-			if ssoRegion == "" {
-				ssoRegion = s.cfg.BedrockRegion
-			}
+			ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
 			hosts = append(hosts, ssoEgressHosts(ssoRegion)...)
 			return bedrockAuth{env: env, egressHosts: hosts, ready: true,
 				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir}

@@ -4,12 +4,14 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -299,12 +301,9 @@ func composerBackendKnown(reg composer.Registry, name string) bool {
 	if strings.TrimSpace(name) == "" {
 		return true
 	}
-	for _, b := range reg.List() {
-		if b.Name == name {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(reg.List(), func(b composer.BackendInfo) bool {
+		return b.Name == name
+	})
 }
 
 // runComposePipeline is the advisory compose pipeline, factored out of the
@@ -367,10 +366,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 			return nil, &composeError{http.StatusBadGateway, "composer backend: " + cerr.Error()}
 		}
 		if !cl.Ready && len(cl.Questions) > 0 {
-			backend := req.Backend
-			if backend == "" {
-				backend = s.cfg.Composer.Default()
-			}
+			backend := cmp.Or(req.Backend, s.cfg.Composer.Default())
 			auditFields := map[string]any{
 				"backend": backend, "round": req.Round, "questions": len(cl.Questions),
 				"workspace": string(req.Workspace.Kind), "correlation_id": correlationID,
@@ -551,10 +547,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// Advisory audit: a proposal was generated (no run, no mint). Record the
 	// backend used and the overall graded risk for the trail.
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "assemble"})
-	backend := req.Backend
-	if backend == "" {
-		backend = s.cfg.Composer.Default()
-	}
+	backend := cmp.Or(req.Backend, s.cfg.Composer.Default())
 	// The proposal is serialized+capped as ONE text blob (not embedded as nested
 	// JSON): CapAuditText can cut mid-object, so storing the possibly-truncated
 	// result as a plain string is what keeps the OUTER audit Data valid JSON.
@@ -782,17 +775,20 @@ func agentLLMProvider(agent string) (llmProvider, bool) {
 	}
 }
 
+// apiKeyGrantScopeHost decodes an api_key grant scope's host field
+// (trimmed; "" when absent or undecodable).
+func apiKeyGrantScopeHost(scope json.RawMessage) string {
+	var sc struct {
+		Host string `json:"host"`
+	}
+	_ = json.Unmarshal(scope, &sc)
+	return strings.TrimSpace(sc.Host)
+}
+
 // apiKeyGrantForHost returns the api_key grant in spec whose scope.host == host.
 func apiKeyGrantForHost(spec *types.RunPolicySpec, host string) (types.GrantSpec, bool) {
 	for _, g := range spec.EligibleGrants {
-		if g.Kind != types.GrantAPIKey {
-			continue
-		}
-		var sc struct {
-			Host string `json:"host"`
-		}
-		_ = json.Unmarshal(g.Scope, &sc)
-		if strings.EqualFold(strings.TrimSpace(sc.Host), host) {
+		if g.Kind == types.GrantAPIKey && strings.EqualFold(apiKeyGrantScopeHost(g.Scope), host) {
 			return g, true
 		}
 	}
@@ -805,38 +801,23 @@ func apiKeyGrantForHost(spec *types.RunPolicySpec, host string) (types.GrantSpec
 // key can never leak to a wildcard-matched host — so the grant's egress entry must
 // be exact too.
 func domainAllowedExact(domains []string, host string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	for _, d := range domains {
-		if strings.ToLower(strings.TrimSpace(d)) == h {
-			return true
-		}
-	}
-	return false
+	h := strings.TrimSpace(host)
+	return slices.ContainsFunc(domains, func(d string) bool {
+		return strings.EqualFold(strings.TrimSpace(d), h)
+	})
 }
 
 // removeAPIKeyGrantForHost drops the api_key grant whose scope.host == host.
 func removeAPIKeyGrantForHost(spec *types.RunPolicySpec, host string) {
-	h := strings.ToLower(strings.TrimSpace(host))
-	kept := spec.EligibleGrants[:0]
-	for _, g := range spec.EligibleGrants {
-		if g.Kind == types.GrantAPIKey {
-			var sc struct {
-				Host string `json:"host"`
-			}
-			_ = json.Unmarshal(g.Scope, &sc)
-			if strings.ToLower(strings.TrimSpace(sc.Host)) == h {
-				continue
-			}
-		}
-		kept = append(kept, g)
-	}
-	spec.EligibleGrants = kept
+	spec.EligibleGrants = slices.DeleteFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
+		return g.Kind == types.GrantAPIKey && strings.EqualFold(apiKeyGrantScopeHost(g.Scope), host)
+	})
 }
 
 // Claude subscription-mode credential mount targets. Dispatch detects
-// subscription mode by the FIRST of these (internal/api/runs.go: wm.Target ==
-// "/home/agent/.claude" => ANTHROPIC_BASE_URL=https://api.anthropic.com, direct
-// CONNECT tunnel gated by the run's egress allowlist). The .claude.json companion
+// subscription mode by the FIRST of these (internal/api/runs.go:
+// specHasMountTarget(claudeCredTarget) => ANTHROPIC_BASE_URL=https://api.anthropic.com,
+// direct CONNECT tunnel gated by the run's egress allowlist). The .claude.json companion
 // carries the CLI's account config — the proven recipe needs BOTH mounted.
 const (
 	claudeCredTarget     = "/home/agent/.claude"

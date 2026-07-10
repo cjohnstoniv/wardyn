@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -119,4 +120,14 @@ func unionAllowedDomains(spec *types.RunPolicySpec, add []string) []string {
 		added = append(added, d)
 	}
 	return added
+}
+
+// refreshRun re-reads a run after a state-changing step (build failure,
+// dispatch) so the caller returns the store's freshest row; on read error the
+// pre-step snapshot is returned unchanged.
+func (s *Server) refreshRun(ctx context.Context, runID uuid.UUID, fallback types.AgentRun) types.AgentRun {
+	if refreshed, err := s.cfg.Store.GetRun(ctx, runID); err == nil {
+		return refreshed
+	}
+	return fallback
 }
