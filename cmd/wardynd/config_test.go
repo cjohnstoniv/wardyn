@@ -137,48 +137,6 @@ func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	}
 }
 
-// ─── splitCSV: OIDC email-domain list parsing ───────────────────────────────────
-
-// TestSplitCSV covers the comma-separated env parser used for
-// WARDYN_OIDC_EMAIL_DOMAINS: trims whitespace, drops empty entries, and returns
-// nil for a blank input (meaning "no restriction" — an empty slice and nil are
-// distinct to the OIDC allow-list, so a blank value must be nil).
-func TestSplitCSV(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want []string
-	}{
-		{name: "empty is nil (no restriction)", in: "", want: nil},
-		{name: "whitespace-only is nil", in: "   ", want: nil},
-		{name: "single value", in: "example.com", want: []string{"example.com"}},
-		{name: "trims surrounding whitespace", in: " a.com , b.com ", want: []string{"a.com", "b.com"}},
-		{name: "drops empty entries from doubled commas", in: "a.com,,b.com", want: []string{"a.com", "b.com"}},
-		{name: "trailing comma dropped", in: "a.com,", want: []string{"a.com"}},
-		{name: "only commas is nil", in: ",,,", want: nil},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := splitCSV(tc.in)
-			if !equalStrings(got, tc.want) {
-				t.Fatalf("splitCSV(%q) = %#v, want %#v", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // ─── flag vs env precedence for the flagEnv/flagBool/flagDuration helpers ────────
 //
 // These helpers seed a flag's DEFAULT from the documented env var, then register

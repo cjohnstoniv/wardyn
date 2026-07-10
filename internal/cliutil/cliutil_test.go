@@ -23,6 +23,8 @@ func TestSplitCSV(t *testing.T) {
 		"a,b,c":     {"a", "b", "c"},
 		"a, ,b":     {"a", "b"},
 		" a , b ,c": {"a", "b", "c"},
+		"a.com,":    {"a.com"},
+		",,,":       nil,
 	}
 	for in, want := range cases {
 		got := SplitCSV(in)
