@@ -18,6 +18,7 @@ import { ShieldAlert, Clock, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ApprovalRequest } from "../../lib/types";
 import { api } from "../../lib/api";
+import { getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Mono } from "./code-block";
 import { SectionLabel } from "./primitives";
@@ -74,7 +75,7 @@ export function LiveApprovals({
       await refresh();
     } catch (e) {
       toast.error(approve ? "Approve failed" : "Deny failed", {
-        description: e instanceof Error ? e.message : String(e),
+        description: getErrorMessage(e),
       });
     } finally {
       setBusy(null);

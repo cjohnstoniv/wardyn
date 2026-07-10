@@ -265,7 +265,7 @@ export function PermissionWizard({
       // already launched, so surface them without blocking.
       surfaceRunWarnings(created);
     } catch (e) {
-      setError((e as Error).message || "Failed to launch run.");
+      setError(msg(e) || "Failed to launch run.");
       setLaunching(false);
     }
   };

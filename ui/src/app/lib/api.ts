@@ -594,13 +594,6 @@ export const api = {
     return unwrapList<RunPolicy>(await asJson<unknown>(res));
   },
 
-  // GET /api/v1/policies/{id}
-  async getPolicy(id: string): Promise<RunPolicy | undefined> {
-    const res = await wfetch(`/policies/${encodeURIComponent(id)}`, { method: "GET" });
-    if (res.status === 404) return undefined;
-    return asJson<RunPolicy>(res);
-  },
-
   // POST /api/v1/policies  { name, spec } -> 201 created policy.
   // The server validates the spec; a 400 surfaces as an HttpError.
   async createPolicy(name: string, spec: RunPolicySpec): Promise<RunPolicy> {

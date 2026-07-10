@@ -847,7 +847,7 @@ export function AddWorkspaceDialog({
       onOpenChange(false);
       onSaved?.(saved);
     } catch (e) {
-      setError((e as Error).message || "Failed to save workspace.");
+      setError(getErrorMessage(e) || "Failed to save workspace.");
     } finally {
       setSaving(false);
     }
