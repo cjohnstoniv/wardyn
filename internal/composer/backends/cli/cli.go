@@ -239,13 +239,11 @@ func (c *cliComposer) assistClaude(ctx context.Context, system, user string) (st
 // assistCodex runs Codex non-interactively WITHOUT --output-schema; the final
 // assistant message is written to the -o file, which we read as plain text.
 func (c *cliComposer) assistCodex(ctx context.Context, system, user string) (string, error) {
-	outFile, err := os.CreateTemp("", "wardyn-codex-assist-*.txt")
+	outPath, cleanup, err := tempOutputFile("wardyn-codex-assist-*.txt")
 	if err != nil {
-		return "", fmt.Errorf("cli composer: create codex output file: %w", err)
+		return "", err
 	}
-	outPath := outFile.Name()
-	_ = outFile.Close()
-	defer os.Remove(outPath)
+	defer cleanup()
 
 	prompt := user
 	if strings.TrimSpace(system) != "" {
@@ -373,13 +371,11 @@ func (c *cliComposer) runClaude(ctx context.Context, schema map[string]any, syst
 // prepended to the user message (this is what carries the propose/clarify
 // instructions to the model).
 func (c *cliComposer) runCodex(ctx context.Context, schemaFile, system, user string) ([]byte, error) {
-	outFile, err := os.CreateTemp("", "wardyn-codex-out-*.json")
+	outPath, cleanup, err := tempOutputFile("wardyn-codex-out-*.json")
 	if err != nil {
-		return nil, fmt.Errorf("cli composer: create codex output file: %w", err)
+		return nil, err
 	}
-	outPath := outFile.Name()
-	_ = outFile.Close()
-	defer os.Remove(outPath)
+	defer cleanup()
 
 	prompt := user
 	if strings.TrimSpace(system) != "" {
@@ -482,6 +478,24 @@ func writeSchemaFile(schema map[string]any, name string) (string, func(), error)
 	if err := f.Close(); err != nil {
 		cleanup()
 		return "", func() {}, fmt.Errorf("cli composer: close schema file: %w", err)
+	}
+	return path, cleanup, nil
+}
+
+// tempOutputFile creates a temp file (matching pattern) for a CLI to write its
+// output to and returns its path plus a cleanup func that removes it. The file is
+// created then immediately closed so the CLI subprocess can open and write it
+// fresh; the caller reads it back after the subprocess exits.
+func tempOutputFile(pattern string) (string, func(), error) {
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("cli composer: create output file: %w", err)
+	}
+	path := f.Name()
+	cleanup := func() { os.Remove(path) }
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("cli composer: close output file: %w", err)
 	}
 	return path, cleanup, nil
 }

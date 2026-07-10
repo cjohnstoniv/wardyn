@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/composer/backends/composertest"
 )
 
 // TestNoAmbientKeyLeakOnAzure guards against the OpenAI SDK's environment
@@ -24,7 +25,7 @@ func TestNoAmbientKeyLeakOnAzure(t *testing.T) {
 		gotApiKey = r.Header.Get("Api-Key")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(chatCompletionResponse(validProposalJSON, "")))
+		_, _ = w.Write([]byte(chatCompletionResponse(composertest.ValidProposalJSON, "")))
 	}))
 	defer srv.Close()
 
@@ -60,7 +61,7 @@ func TestNoAmbientBaseURLRedirectOnAPI(t *testing.T) {
 		hit = true
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(chatCompletionResponse(validProposalJSON, "")))
+		_, _ = w.Write([]byte(chatCompletionResponse(composertest.ValidProposalJSON, "")))
 	}))
 	defer srv.Close()
 	t.Setenv("OPENAI_BASE_URL", srv.URL)

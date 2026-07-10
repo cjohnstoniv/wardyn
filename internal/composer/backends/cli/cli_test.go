@@ -9,96 +9,26 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/composer/backends/composertest"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// validProposalJSON is a schema-valid run proposal object — the bytes a real CLI
-// would land in claude's .structured_output / codex's -o file. It exercises the
-// full mapping (an api_key grant + a write-capable github grant) so we assert the
-// backend hands ParseProposal something that round-trips into a real Proposal.
-const validProposalJSON = `{
-  "run": {
-    "agent": "claude-code",
-    "repo": "github.com/acme/widget",
-    "task": "Add a healthz endpoint and open a PR.",
-    "confinement_class": "CC2",
-    "interactive": false,
-    "devcontainer_repo": ""
-  },
-  "inline_policy": {
-    "allowed_domains": ["api.anthropic.com", "github.com"],
-    "denied_domains": [],
-    "allow_all_egress": false,
-    "first_use_approval": true,
-    "min_confinement_class": "CC2",
-    "auto_stop_after_sec": 1800,
-    "eligible_grants": [
-      {
-        "kind": "github_token",
-        "ttl_seconds": 3600,
-        "requires_approval": true,
-        "github_repos": ["acme/widget"],
-        "github_permissions": [{"name": "contents", "level": "write"}],
-        "apikey_host": "",
-        "apikey_secret_name": ""
-      },
-      {
-        "kind": "api_key",
-        "ttl_seconds": 3600,
-        "requires_approval": false,
-        "github_repos": [],
-        "github_permissions": [],
-        "apikey_host": "api.anthropic.com",
-        "apikey_secret_name": "anthropic-key"
-      }
-    ]
-  },
-  "summary": "Read-only CC2 run with an approval-gated write token to push a PR.",
-  "warnings": ["github contents:write is gated on approval"]
-}`
-
-// sampleRequest is a non-trivial compose request: a prompt plus an attachment and
-// a source hint, so we can assert BuildUserMessage's full content reaches the CLI.
-func sampleRequest() composer.ComposeRequest {
-	return composer.ComposeRequest{
-		Prompt:      "Add a /healthz endpoint to the widget service and open a PR.",
-		Workspace:   composer.Workspace{Kind: composer.WorkspaceGit, Repo: "acme/widgets"},
-		Attachments: []composer.Attachment{{Name: "notes.md", Content: "service is in cmd/widget"}},
-		Sources:     []string{"https://example.com/spec"},
-	}
-}
-
-// assertValidProposal checks the parsed Proposal matches validProposalJSON.
+// assertValidProposal checks the parsed Proposal matches composertest.ValidProposalJSON,
+// plus the cli-specific second grant (an api_key alongside the github_token).
 func assertValidProposal(t *testing.T, p composer.Proposal) {
 	t.Helper()
-	if p.Run.Agent != "claude-code" {
-		t.Errorf("Run.Agent = %q, want claude-code", p.Run.Agent)
-	}
-	if p.Run.ConfinementClass != "CC2" {
-		t.Errorf("Run.ConfinementClass = %q, want CC2", p.Run.ConfinementClass)
-	}
-	if p.InlinePolicy.MinConfinementClass != types.CC2 {
-		t.Errorf("MinConfinementClass = %q, want CC2", p.InlinePolicy.MinConfinementClass)
-	}
-	if !p.InlinePolicy.FirstUseApproval.RaisesApproval() {
-		t.Error("FirstUseApproval = false, want true")
-	}
+	composertest.AssertValidProposal(t, p)
 	if got := len(p.InlinePolicy.EligibleGrants); got != 2 {
 		t.Fatalf("EligibleGrants len = %d, want 2", got)
 	}
-	if p.InlinePolicy.EligibleGrants[0].Kind != types.GrantGitHubToken {
-		t.Errorf("grant[0].Kind = %q, want github_token", p.InlinePolicy.EligibleGrants[0].Kind)
-	}
 	if p.InlinePolicy.EligibleGrants[1].Kind != types.GrantAPIKey {
 		t.Errorf("grant[1].Kind = %q, want api_key", p.InlinePolicy.EligibleGrants[1].Kind)
-	}
-	if p.Summary == "" {
-		t.Error("Summary is empty")
 	}
 }
 
@@ -159,29 +89,20 @@ func flagValue(argv []string, flag string) (string, bool) {
 	return "", false
 }
 
-func contains(argv []string, want string) bool {
-	for _, a := range argv {
-		if a == want {
-			return true
-		}
-	}
-	return false
-}
-
 // --- claude tool -------------------------------------------------------------
 
 func TestClaude_HappyPath(t *testing.T) {
 	// Fake claude: emit a JSON wrapper whose .structured_output is the proposal.
 	// claude's --json-schema is passed INLINE (not a file), so no copy step.
 	fake := writeFakeCLI(t, "claude",
-		`printf '%s' '{"type":"result","is_error":false,"structured_output":`+validProposalJSON+`}'`)
+		`printf '%s' '{"type":"result","is_error":false,"structured_output":`+composertest.ValidProposalJSON+`}'`)
 
 	c, err := NewComposer(Config{Tool: ToolClaude, Model: "claude-sonnet-4-5", BinPath: fake.bin})
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
 
-	p, err := c.Propose(context.Background(), sampleRequest())
+	p, err := c.Propose(context.Background(), composertest.SampleRequest())
 	if err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
@@ -194,7 +115,7 @@ func TestClaude_HappyPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("argv missing -p flag: %v", argv)
 	}
-	wantUser := composer.BuildUserMessage(sampleRequest())
+	wantUser := composer.BuildUserMessage(composertest.SampleRequest())
 	if user != wantUser {
 		t.Errorf("-p value mismatch:\n got %q\nwant %q", user, wantUser)
 	}
@@ -217,7 +138,7 @@ func TestClaude_HappyPath(t *testing.T) {
 		t.Errorf("--append-system-prompt mismatch:\n got %q\nwant %q", v, composer.SystemPrompt())
 	}
 	// --bare must NOT be passed.
-	if contains(argv, "--bare") {
+	if slices.Contains(argv, "--bare") {
 		t.Error("argv unexpectedly contains --bare")
 	}
 	// --json-schema carries the portable strict schema INLINE as JSON (claude
@@ -246,12 +167,12 @@ func TestClaude_LeastPrivilegePermissionMode(t *testing.T) {
 	// --sandbox read-only. Otherwise a prompt-injected attachment could induce a tool
 	// call and get host code execution based solely on the CLI's ambient default.
 	fake := writeFakeCLI(t, "claude",
-		`printf '%s' '{"is_error":false,"structured_output":`+validProposalJSON+`}'`)
+		`printf '%s' '{"is_error":false,"structured_output":`+composertest.ValidProposalJSON+`}'`)
 	c, err := NewComposer(Config{Tool: ToolClaude, BinPath: fake.bin})
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	if _, err := c.Propose(context.Background(), sampleRequest()); err != nil {
+	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 	argv := fake.argv(t)
@@ -259,7 +180,7 @@ func TestClaude_LeastPrivilegePermissionMode(t *testing.T) {
 		t.Errorf("--permission-mode = %q, want plan (read-only parity with codex)", v)
 	}
 	// The OPPOSITE flag must never be present.
-	if contains(argv, "--dangerously-skip-permissions") || contains(argv, "--allow-dangerously-skip-permissions") {
+	if slices.Contains(argv, "--dangerously-skip-permissions") || slices.Contains(argv, "--allow-dangerously-skip-permissions") {
 		t.Error("argv must NOT bypass permissions on the host claude path")
 	}
 }
@@ -270,7 +191,7 @@ func TestClaude_ScrubsAnthropicAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	envLog := filepath.Join(dir, "env.log")
 	fake := writeFakeCLI(t, "claude",
-		`env > "`+envLog+`"; printf '%s' '{"is_error":false,"structured_output":`+validProposalJSON+`}'`)
+		`env > "`+envLog+`"; printf '%s' '{"is_error":false,"structured_output":`+composertest.ValidProposalJSON+`}'`)
 
 	t.Setenv("ANTHROPIC_API_KEY", "sk-should-be-scrubbed")
 	t.Setenv("WARDYN_FAKE_MARKER", "kept")
@@ -279,7 +200,7 @@ func TestClaude_ScrubsAnthropicAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	if _, err := c.Propose(context.Background(), sampleRequest()); err != nil {
+	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 
@@ -298,15 +219,15 @@ func TestClaude_ScrubsAnthropicAPIKey(t *testing.T) {
 
 func TestClaude_OmitsModelWhenEmpty(t *testing.T) {
 	fake := writeFakeCLI(t, "claude",
-		`printf '%s' '{"is_error":false,"structured_output":`+validProposalJSON+`}'`)
+		`printf '%s' '{"is_error":false,"structured_output":`+composertest.ValidProposalJSON+`}'`)
 	c, err := NewComposer(Config{Tool: ToolClaude, BinPath: fake.bin})
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	if _, err := c.Propose(context.Background(), sampleRequest()); err != nil {
+	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
-	if contains(fake.argv(t), "--model") {
+	if slices.Contains(fake.argv(t), "--model") {
 		t.Error("argv unexpectedly contains --model when cfg.Model is empty")
 	}
 }
@@ -320,7 +241,7 @@ func TestClaude_ReportedError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	_, err = c.Propose(context.Background(), sampleRequest())
+	_, err = c.Propose(context.Background(), composertest.SampleRequest())
 	if err == nil {
 		t.Fatal("expected error from is_error wrapper, got nil")
 	}
@@ -335,21 +256,21 @@ func TestCodex_HappyPath(t *testing.T) {
 	// Fake codex: copy the --output-schema file aside, then find its -o argument
 	// and write the proposal JSON to that file.
 	fake := writeFakeCLI(t, "codex",
-		copySchemaBody("--output-schema")+codexWriteOutBody(validProposalJSON))
+		copySchemaBody("--output-schema")+codexWriteOutBody(composertest.ValidProposalJSON))
 
 	c, err := NewComposer(Config{Tool: ToolCodex, Model: "gpt-5-codex", BinPath: fake.bin})
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
 
-	p, err := c.Propose(context.Background(), sampleRequest())
+	p, err := c.Propose(context.Background(), composertest.SampleRequest())
 	if err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 	assertValidProposal(t, p)
 
 	argv := fake.argv(t)
-	if !contains(argv, "exec") {
+	if !slices.Contains(argv, "exec") {
 		t.Errorf("argv missing 'exec' subcommand: %v", argv)
 	}
 	if v, _ := flagValue(argv, "--sandbox"); v != "read-only" {
@@ -373,7 +294,7 @@ func TestCodex_HappyPath(t *testing.T) {
 	verifySchemaContents(t, filepath.Join(filepath.Dir(fake.bin), "schema-copy.json"))
 	// codex exec has no separate system-prompt channel, so the final positional
 	// argument is the system prompt prepended to the fenced user message.
-	wantPrompt := composer.SystemPrompt() + "\n\n" + composer.BuildUserMessage(sampleRequest())
+	wantPrompt := composer.SystemPrompt() + "\n\n" + composer.BuildUserMessage(composertest.SampleRequest())
 	if last := argv[len(argv)-1]; last != wantPrompt {
 		t.Errorf("final positional arg mismatch:\n got %q\nwant %q", last, wantPrompt)
 	}
@@ -394,7 +315,7 @@ func TestClaude_Clarify(t *testing.T) {
 		t.Fatal("cli backend must implement composer.Clarifier")
 	}
 
-	cl, err := clr.Clarify(context.Background(), sampleRequest())
+	cl, err := clr.Clarify(context.Background(), composertest.SampleRequest())
 	if err != nil {
 		t.Fatalf("Clarify: %v", err)
 	}
@@ -419,7 +340,7 @@ func TestCodex_EmptyOutputFileErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	if _, err := c.Propose(context.Background(), sampleRequest()); err == nil {
+	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err == nil {
 		t.Fatal("expected error on empty codex output, got nil")
 	}
 }
@@ -449,7 +370,7 @@ n=$((n+1)); printf '%s' "$n" > "` + counter + `"
 if [ "$n" -lt 2 ]; then
   printf '%s' 'not json at all {{{'
 else
-  printf '%s' '{"is_error":false,"structured_output":` + validProposalJSON + `}'
+  printf '%s' '{"is_error":false,"structured_output":` + composertest.ValidProposalJSON + `}'
 fi`
 	bin := filepath.Join(dir, "claude")
 	script := "#!/usr/bin/env bash\nset -u\n" + body + "\n"
@@ -461,7 +382,7 @@ fi`
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	p, err := c.Propose(context.Background(), sampleRequest())
+	p, err := c.Propose(context.Background(), composertest.SampleRequest())
 	if err != nil {
 		t.Fatalf("Propose after retry: %v", err)
 	}
@@ -482,7 +403,7 @@ func TestRetry_FailsClosedOnPersistentMalformed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	_, err = c.Propose(context.Background(), sampleRequest())
+	_, err = c.Propose(context.Background(), composertest.SampleRequest())
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -498,7 +419,7 @@ func TestClaude_MissingStructuredOutputFieldRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	if _, err := c.Propose(context.Background(), sampleRequest()); err == nil {
+	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err == nil {
 		t.Fatal("expected error for missing structured_output, got nil")
 	}
 }
@@ -510,7 +431,7 @@ func TestMissingBinary_ErrorsCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewComposer: %v", err)
 	}
-	_, err = c.Propose(context.Background(), sampleRequest())
+	_, err = c.Propose(context.Background(), composertest.SampleRequest())
 	if err == nil {
 		t.Fatal("expected error for missing binary, got nil")
 	}
@@ -531,7 +452,7 @@ func TestTimeout_KillsHangingCLI(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err = c.Propose(context.Background(), sampleRequest())
+	_, err = c.Propose(context.Background(), composertest.SampleRequest())
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
@@ -554,7 +475,7 @@ func TestContextCancel_PropagatesPromptly(t *testing.T) {
 	go func() { time.Sleep(150 * time.Millisecond); cancel() }()
 
 	start := time.Now()
-	_, err = c.Propose(ctx, sampleRequest())
+	_, err = c.Propose(ctx, composertest.SampleRequest())
 	if err == nil {
 		t.Fatal("expected cancellation error, got nil")
 	}

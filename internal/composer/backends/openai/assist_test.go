@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/composer/backends/composertest"
 )
 
 // assistCompletionJSON is a plain-text (non-schema) Chat Completions reply — the
@@ -38,7 +39,7 @@ func TestAssist_NoResponseFormat(t *testing.T) {
 		t.Fatal("openai backend must implement composer.Assister")
 	}
 
-	got, err := as.Assist(context.Background(), sampleRequest(), "Can the agent reach GitHub?")
+	got, err := as.Assist(context.Background(), composertest.SampleRequest(), "Can the agent reach GitHub?")
 	if err != nil {
 		t.Fatalf("Assist: %v", err)
 	}

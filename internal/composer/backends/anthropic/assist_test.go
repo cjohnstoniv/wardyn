@@ -11,6 +11,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/composer/backends/composertest"
 )
 
 // TestAssist_NoStructuredOutput asserts the Assist wire returns non-empty advisory
@@ -35,7 +36,7 @@ func TestAssist_NoStructuredOutput(t *testing.T) {
 		t.Fatal("anthropic backend must implement composer.Assister")
 	}
 
-	got, err := as.Assist(context.Background(), sampleRequest(), "Can the agent reach GitHub?")
+	got, err := as.Assist(context.Background(), composertest.SampleRequest(), "Can the agent reach GitHub?")
 	if err != nil {
 		t.Fatalf("Assist: %v", err)
 	}
