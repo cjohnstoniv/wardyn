@@ -8,7 +8,7 @@ requires (descriptions, results, reasons, timing) and needs no external tools.
 
 Usage:
     go test -json ./... | python3 scripts/test2md.py --title "Go unit tests" \
-        --out test/reports/go/unit/report.md [--json test/reports/go/unit/results.json]
+        --out test/reports/go/unit/report.md
 
 Exit code mirrors the test run: non-zero if any test failed.
 """
@@ -22,7 +22,6 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--title", default="Go tests")
     ap.add_argument("--out", required=True, help="markdown report path")
-    ap.add_argument("--json", help="optional structured JSON summary path")
     args = ap.parse_args()
 
     # key = (package, test-or-None); value = dict(status, elapsed, output[])
@@ -107,16 +106,6 @@ def main() -> int:
 
     with open(args.out, "w") as f:
         f.write("\n".join(lines))
-
-    if args.json:
-        summary = {
-            "title": args.title,
-            "totals": {"passed": passed, "failed": failed, "skipped": skipped, "total": total},
-            "tests": list(tests.values()),
-            "packages": pkg_status,
-        }
-        with open(args.json, "w") as f:
-            json.dump(summary, f, indent=1)
 
     print(f"[test2md] {args.title}: {passed} passed, {failed} failed, {skipped} skipped "
           f"-> {args.out}", file=sys.stderr)
