@@ -23,9 +23,6 @@ var reg = component.NewRegistry[Constructor]("fs")
 // Register adds a recording-store implementation; call it from an init().
 func Register(name string, c Constructor) { reg.Register(name, c) }
 
-// Names lists the registered store names (sorted). Default returns the default.
-func Names() []string { return reg.Names() }
-func Default() string { return reg.Default() }
 
 // New constructs the recording store selected by name (empty => default).
 func New(name string, d Deps) (Store, error) {

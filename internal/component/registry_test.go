@@ -15,9 +15,6 @@ func TestRegistry_DefaultAndLookup(t *testing.T) {
 	r.Register("a", func() string { return "A" })
 	r.Register("b", func() string { return "B" })
 
-	if r.Default() != "a" {
-		t.Fatalf("default = %q", r.Default())
-	}
 	// Empty name resolves to the default.
 	c, resolved, err := r.Resolve("")
 	if err != nil || resolved != "a" || c() != "A" {

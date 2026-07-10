@@ -77,8 +77,6 @@ func (r *Registry[C]) Names() []string {
 	return out
 }
 
-// Default returns the default component name.
-func (r *Registry[C]) Default() string { return r.def }
 
 // Resolve maps name (empty → default) to its constructor and the resolved name,
 // or a helpful error listing the registered names. Seam New() wrappers call this.
