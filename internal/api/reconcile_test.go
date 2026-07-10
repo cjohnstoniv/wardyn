@@ -52,7 +52,7 @@ func TestReconcileFinalize_TeardownErrorAudited(t *testing.T) {
 		RunnerTarget:     "docker",
 		SandboxRef:       "container-" + runID.String(),
 	}
-	if _, err := store.CreateRun(ctx, pool, run); err != nil {
+	if _, err := store.NewPG(pool).CreateRun(ctx, run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, runID) })
@@ -60,7 +60,7 @@ func TestReconcileFinalize_TeardownErrorAudited(t *testing.T) {
 	srv.reconcileFinalize(ctx, runID, types.RunFailed, run.SandboxRef, "reconciled after restart")
 
 	// The run must still be finalized terminal despite the teardown failure.
-	if got, _ := store.GetRun(ctx, pool, runID); got.State != types.RunFailed {
+	if got, _ := store.NewPG(pool).GetRun(ctx, runID); got.State != types.RunFailed {
 		t.Errorf("run state = %q, want FAILED (finalized regardless of teardown)", got.State)
 	}
 

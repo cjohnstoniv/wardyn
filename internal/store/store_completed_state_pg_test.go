@@ -39,7 +39,7 @@ func TestUpdateRunState_RunningToCompleted_PG(t *testing.T) {
 		SPIFFEID:         "spiffe://wardyn.test/agent-run/" + uuid.NewString(),
 		RunnerTarget:     "docker",
 	}
-	if _, err := store.CreateRun(ctx, pool, run); err != nil {
+	if _, err := store.NewPG(pool).CreateRun(ctx, run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 	t.Cleanup(func() {
@@ -47,7 +47,7 @@ func TestUpdateRunState_RunningToCompleted_PG(t *testing.T) {
 	})
 
 	// The conditional transition the completion watcher performs.
-	ok, err := store.UpdateRunStateIf(ctx, pool, run.ID, types.RunRunning, types.RunCompleted)
+	ok, err := store.NewPG(pool).UpdateRunStateIf(ctx, run.ID, types.RunRunning, types.RunCompleted)
 	if err != nil {
 		t.Fatalf("RUNNING->COMPLETED update errored (the 0003 CHECK migration is "+
 			"missing or wrong): %v", err)
@@ -56,7 +56,7 @@ func TestUpdateRunState_RunningToCompleted_PG(t *testing.T) {
 		t.Fatal("RUNNING->COMPLETED transition did not apply")
 	}
 
-	got, err := store.GetRun(ctx, pool, run.ID)
+	got, err := store.NewPG(pool).GetRun(ctx, run.ID)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}

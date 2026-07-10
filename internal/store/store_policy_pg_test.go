@@ -41,7 +41,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 
 	// Create.
-	created, err := store.CreatePolicy(ctx, pool, p)
+	created, err := store.NewPG(pool).CreatePolicy(ctx, p)
 	if err != nil {
 		t.Fatalf("create policy: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 
 	// List must contain it.
-	list, err := store.ListPolicies(ctx, pool)
+	list, err := store.NewPG(pool).ListPolicies(ctx)
 	if err != nil {
 		t.Fatalf("list policies: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 
 	// Get.
-	got, err := store.GetPolicy(ctx, pool, id)
+	got, err := store.NewPG(pool).GetPolicy(ctx, id)
 	if err != nil {
 		t.Fatalf("get policy: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 		AllowedDomains:      []string{"github.com"},
 		MinConfinementClass: types.CC3,
 	}
-	updated, err := store.UpdatePolicy(ctx, pool, id, newName, updatedSpec)
+	updated, err := store.NewPG(pool).UpdatePolicy(ctx, id, newName, updatedSpec)
 	if err != nil {
 		t.Fatalf("update policy: %v", err)
 	}
@@ -98,20 +98,20 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 
 	// Update of an unknown id => ErrNotFound.
-	if _, err := store.UpdatePolicy(ctx, pool, uuid.New(), "ghost", updatedSpec); !errors.Is(err, store.ErrNotFound) {
+	if _, err := store.NewPG(pool).UpdatePolicy(ctx, uuid.New(), "ghost", updatedSpec); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("update unknown id err = %v, want ErrNotFound", err)
 	}
 
 	// Delete.
-	if err := store.DeletePolicy(ctx, pool, id); err != nil {
+	if err := store.NewPG(pool).DeletePolicy(ctx, id); err != nil {
 		t.Fatalf("delete policy: %v", err)
 	}
 	// Get after delete => ErrNotFound.
-	if _, err := store.GetPolicy(ctx, pool, id); !errors.Is(err, store.ErrNotFound) {
+	if _, err := store.NewPG(pool).GetPolicy(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("get after delete err = %v, want ErrNotFound", err)
 	}
 	// Delete again => ErrNotFound.
-	if err := store.DeletePolicy(ctx, pool, id); !errors.Is(err, store.ErrNotFound) {
+	if err := store.NewPG(pool).DeletePolicy(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id err = %v, want ErrNotFound", err)
 	}
 }

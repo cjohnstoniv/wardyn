@@ -36,7 +36,7 @@ func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 		SPIFFEID:         "spiffe://test/agent-run/" + runID.String(),
 		RunnerTarget:     "docker",
 	}
-	if _, err := store.CreateRun(ctx, pool, run); err != nil {
+	if _, err := store.NewPG(pool).CreateRun(ctx, run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
@@ -50,12 +50,12 @@ func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 		State:          types.ApprovalPending,
 		RequestedAt:    time.Now().UTC(),
 	}
-	if _, err := store.CreateApproval(ctx, pool, ap); err != nil {
+	if _, err := store.NewPG(pool).CreateApproval(ctx, ap); err != nil {
 		t.Fatalf("create approval: %v", err)
 	}
 
 	// First decide: APPROVE.
-	result, err := store.DecideApproval(ctx, pool, apID, types.ApprovalApproved, "alice", "ok")
+	result, err := store.NewPG(pool).DecideApproval(ctx, apID, types.ApprovalApproved, "alice", "ok")
 	if err != nil {
 		t.Fatalf("first decide: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 	}
 
 	// Second decide: must return ErrAlreadyDecided.
-	_, err = store.DecideApproval(ctx, pool, apID, types.ApprovalDenied, "bob", "changed mind")
+	_, err = store.NewPG(pool).DecideApproval(ctx, apID, types.ApprovalDenied, "bob", "changed mind")
 	if err == nil {
 		t.Fatal("expected ErrAlreadyDecided, got nil")
 	}

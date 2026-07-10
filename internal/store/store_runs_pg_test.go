@@ -77,7 +77,7 @@ func newRun(state types.RunState) types.AgentRun {
 // grants/approvals via the schema's ON DELETE CASCADE).
 func persistRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, r types.AgentRun) types.AgentRun {
 	t.Helper()
-	created, err := store.CreateRun(ctx, pool, r)
+	created, err := store.NewPG(pool).CreateRun(ctx, r)
 	if err != nil {
 		t.Fatalf("create run %s: %v", r.ID, err)
 	}
@@ -110,10 +110,10 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 			MinConfinementClass: types.CC2,
 		},
 	}
-	if _, err := store.CreatePolicy(ctx, pool, pol); err != nil {
+	if _, err := store.NewPG(pool).CreatePolicy(ctx, pol); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}
-	t.Cleanup(func() { _ = store.DeletePolicy(context.Background(), pool, polID) })
+	t.Cleanup(func() { _ = store.NewPG(pool).DeletePolicy(context.Background(), polID) })
 
 	r := newRun(types.RunStarting)
 	r.PolicyID = &polID
@@ -126,7 +126,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 		t.Errorf("created.ID = %s, want %s", created.ID, r.ID)
 	}
 
-	got, err := store.GetRun(ctx, pool, r.ID)
+	got, err := store.NewPG(pool).GetRun(ctx, r.ID)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	}
 
 	// GetRun of an unknown id => ErrNotFound.
-	if _, err := store.GetRun(ctx, pool, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := store.NewPG(pool).GetRun(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("get unknown run err = %v, want ErrNotFound", err)
 	}
 }
@@ -229,7 +229,7 @@ func TestPG_UpdateRunStateIf_ConditionalTransition(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := persistRun(t, ctx, pool, newRun(tc.startAs))
 
-			ok, err := store.UpdateRunStateIf(ctx, pool, r.ID, tc.from, tc.to)
+			ok, err := store.NewPG(pool).UpdateRunStateIf(ctx, r.ID, tc.from, tc.to)
 			if err != nil {
 				t.Fatalf("UpdateRunStateIf: %v", err)
 			}
@@ -237,7 +237,7 @@ func TestPG_UpdateRunStateIf_ConditionalTransition(t *testing.T) {
 				t.Errorf("applied = %v, want %v", ok, tc.wantOK)
 			}
 
-			got, err := store.GetRun(ctx, pool, r.ID)
+			got, err := store.NewPG(pool).GetRun(ctx, r.ID)
 			if err != nil {
 				t.Fatalf("get run: %v", err)
 			}
@@ -249,7 +249,7 @@ func TestPG_UpdateRunStateIf_ConditionalTransition(t *testing.T) {
 
 	// UpdateRunStateIf against a nonexistent id is a no-op (false, nil) — never
 	// an error: the watcher treats "row gone" the same as "lost the race".
-	ok, err := store.UpdateRunStateIf(ctx, pool, uuid.New(), types.RunRunning, types.RunStopped)
+	ok, err := store.NewPG(pool).UpdateRunStateIf(ctx, uuid.New(), types.RunRunning, types.RunStopped)
 	if err != nil {
 		t.Fatalf("UpdateRunStateIf unknown id: %v", err)
 	}
@@ -269,25 +269,25 @@ func TestPG_UpdateRunStateIfIdle_TOCTOU(t *testing.T) {
 
 	// Case 1 — NOT touched since the snapshot: the stop must APPLY.
 	notTouched := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	snap1, err := store.GetRun(ctx, pool, notTouched.ID)
+	snap1, err := store.NewPG(pool).GetRun(ctx, notTouched.ID)
 	if err != nil {
 		t.Fatalf("get snapshot: %v", err)
 	}
-	applied, err := store.UpdateRunStateIfIdle(ctx, pool, notTouched.ID, types.RunRunning, types.RunStopped, snap1.UpdatedAt)
+	applied, err := store.NewPG(pool).UpdateRunStateIfIdle(ctx, notTouched.ID, types.RunRunning, types.RunStopped, snap1.UpdatedAt)
 	if err != nil {
 		t.Fatalf("idle CAS (not touched): %v", err)
 	}
 	if !applied {
 		t.Error("idle CAS should APPLY when updated_at == snapshot (run not touched since scan)")
 	}
-	if got, _ := store.GetRun(ctx, pool, notTouched.ID); got.State != types.RunStopped {
+	if got, _ := store.NewPG(pool).GetRun(ctx, notTouched.ID); got.State != types.RunStopped {
 		t.Errorf("state after applied idle CAS = %q, want STOPPED", got.State)
 	}
 
 	// Case 2 — TOUCHED after the snapshot (active attach keepalive): the stop must
 	// NO-OP and leave the run RUNNING.
 	touched := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	snap2, err := store.GetRun(ctx, pool, touched.ID)
+	snap2, err := store.NewPG(pool).GetRun(ctx, touched.ID)
 	if err != nil {
 		t.Fatalf("get snapshot: %v", err)
 	}
@@ -297,28 +297,28 @@ func TestPG_UpdateRunStateIfIdle_TOCTOU(t *testing.T) {
 		snap2.UpdatedAt.Add(time.Second), touched.ID); err != nil {
 		t.Fatalf("simulate attach touch: %v", err)
 	}
-	applied, err = store.UpdateRunStateIfIdle(ctx, pool, touched.ID, types.RunRunning, types.RunStopped, snap2.UpdatedAt)
+	applied, err = store.NewPG(pool).UpdateRunStateIfIdle(ctx, touched.ID, types.RunRunning, types.RunStopped, snap2.UpdatedAt)
 	if err != nil {
 		t.Fatalf("idle CAS (touched): %v", err)
 	}
 	if applied {
 		t.Error("idle CAS must NO-OP when updated_at advanced past the snapshot (active attach)")
 	}
-	if got, _ := store.GetRun(ctx, pool, touched.ID); got.State != types.RunRunning {
+	if got, _ := store.NewPG(pool).GetRun(ctx, touched.ID); got.State != types.RunRunning {
 		t.Errorf("touched run state = %q, want RUNNING (left untouched by the no-op)", got.State)
 	}
 
 	// Case 3 — already terminal: the idle CAS no-ops on the state guard too (never
 	// resurrects/clobbers a KILLED run), matching UpdateRunStateIf.
 	killed := persistRun(t, ctx, pool, newRun(types.RunKilled))
-	applied, err = store.UpdateRunStateIfIdle(ctx, pool, killed.ID, types.RunRunning, types.RunStopped, time.Now().UTC().Add(time.Hour))
+	applied, err = store.NewPG(pool).UpdateRunStateIfIdle(ctx, killed.ID, types.RunRunning, types.RunStopped, time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("idle CAS (killed): %v", err)
 	}
 	if applied {
 		t.Error("idle CAS must NO-OP when the run is already terminal, even with a generous notAfter")
 	}
-	if got, _ := store.GetRun(ctx, pool, killed.ID); got.State != types.RunKilled {
+	if got, _ := store.NewPG(pool).GetRun(ctx, killed.ID); got.State != types.RunKilled {
 		t.Errorf("killed run state = %q, want KILLED (untouched)", got.State)
 	}
 }
@@ -354,7 +354,7 @@ func TestPG_ListRuns_ReaperCandidateQuery(t *testing.T) {
 		t.Fatalf("backdate terminal run: %v", err)
 	}
 
-	all, err := store.ListRuns(ctx, pool)
+	all, err := store.NewPG(pool).ListRuns(ctx)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -412,16 +412,16 @@ func TestPG_TouchRun_Keepalive(t *testing.T) {
 		t.Fatalf("backdate run: %v", err)
 	}
 
-	before, err := store.GetRun(ctx, pool, r.ID)
+	before, err := store.NewPG(pool).GetRun(ctx, r.ID)
 	if err != nil {
 		t.Fatalf("get run before touch: %v", err)
 	}
 
-	if err := store.TouchRun(ctx, pool, r.ID); err != nil {
+	if err := store.NewPG(pool).TouchRun(ctx, r.ID); err != nil {
 		t.Fatalf("touch run: %v", err)
 	}
 
-	after, err := store.GetRun(ctx, pool, r.ID)
+	after, err := store.NewPG(pool).GetRun(ctx, r.ID)
 	if err != nil {
 		t.Fatalf("get run after touch: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestPG_TouchRun_Keepalive(t *testing.T) {
 	}
 
 	// Unknown id => ErrNotFound.
-	if err := store.TouchRun(ctx, pool, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if err := store.NewPG(pool).TouchRun(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("touch unknown run err = %v, want ErrNotFound", err)
 	}
 }
@@ -462,11 +462,11 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 			RequiresApproval: true,
 		},
 	}
-	if _, err := store.CreateGrant(ctx, pool, g); err != nil {
+	if _, err := store.NewPG(pool).CreateGrant(ctx, g); err != nil {
 		t.Fatalf("create grant: %v", err)
 	}
 
-	got, err := store.GetGrant(ctx, pool, g.ID)
+	got, err := store.NewPG(pool).GetGrant(ctx, g.ID)
 	if err != nil {
 		t.Fatalf("get grant: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 	}
 
 	// Scoped listing: present for its run, absent from a sibling run.
-	mine, err := store.ListGrantsByRun(ctx, pool, owner.ID)
+	mine, err := store.NewPG(pool).ListGrantsByRun(ctx, owner.ID)
 	if err != nil {
 		t.Fatalf("list grants for owner: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 		t.Errorf("grant %s not in ListGrantsByRun(%s)", g.ID, owner.ID)
 	}
 
-	otherGrants, err := store.ListGrantsByRun(ctx, pool, other.ID)
+	otherGrants, err := store.NewPG(pool).ListGrantsByRun(ctx, other.ID)
 	if err != nil {
 		t.Fatalf("list grants for other: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 	}
 
 	// Unknown grant id => ErrNotFound.
-	if _, err := store.GetGrant(ctx, pool, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := store.NewPG(pool).GetGrant(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("get unknown grant err = %v, want ErrNotFound", err)
 	}
 }
@@ -543,7 +543,7 @@ func TestPG_ApprovalPersistence_RoundTrip(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 		Spec:      types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{}`), TTLSeconds: 600},
 	}
-	if _, err := store.CreateGrant(ctx, pool, g); err != nil {
+	if _, err := store.NewPG(pool).CreateGrant(ctx, g); err != nil {
 		t.Fatalf("create grant: %v", err)
 	}
 
@@ -556,11 +556,11 @@ func TestPG_ApprovalPersistence_RoundTrip(t *testing.T) {
 		State:          types.ApprovalPending,
 		RequestedAt:    time.Now().UTC(),
 	}
-	if _, err := store.CreateApproval(ctx, pool, ap); err != nil {
+	if _, err := store.NewPG(pool).CreateApproval(ctx, ap); err != nil {
 		t.Fatalf("create approval: %v", err)
 	}
 
-	got, err := store.GetApproval(ctx, pool, ap.ID)
+	got, err := store.NewPG(pool).GetApproval(ctx, ap.ID)
 	if err != nil {
 		t.Fatalf("get approval: %v", err)
 	}
@@ -589,7 +589,7 @@ func TestPG_ApprovalPersistence_RoundTrip(t *testing.T) {
 	}
 
 	// State filter: present under PENDING, absent under APPROVED.
-	pending, err := store.ListApprovals(ctx, pool, types.ApprovalPending)
+	pending, err := store.NewPG(pool).ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
 		t.Fatalf("list pending approvals: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestPG_ApprovalPersistence_RoundTrip(t *testing.T) {
 		t.Errorf("approval %s missing from PENDING listing", ap.ID)
 	}
 
-	approved, err := store.ListApprovals(ctx, pool, types.ApprovalApproved)
+	approved, err := store.NewPG(pool).ListApprovals(ctx, types.ApprovalApproved)
 	if err != nil {
 		t.Fatalf("list approved approvals: %v", err)
 	}
@@ -606,7 +606,7 @@ func TestPG_ApprovalPersistence_RoundTrip(t *testing.T) {
 	}
 
 	// Empty filter lists all states; our PENDING row must be in it.
-	all, err := store.ListApprovals(ctx, pool, "")
+	all, err := store.NewPG(pool).ListApprovals(ctx, "")
 	if err != nil {
 		t.Fatalf("list all approvals: %v", err)
 	}
@@ -615,7 +615,7 @@ func TestPG_ApprovalPersistence_RoundTrip(t *testing.T) {
 	}
 
 	// Unknown approval id => ErrNotFound.
-	if _, err := store.GetApproval(ctx, pool, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := store.NewPG(pool).GetApproval(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("get unknown approval err = %v, want ErrNotFound", err)
 	}
 }

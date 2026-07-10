@@ -31,7 +31,7 @@ func TestPG_SiteConfigGetPutSingleton(t *testing.T) {
 	t.Cleanup(clear)
 
 	// Absent config: zero value, not an error.
-	got, err := store.GetSiteConfig(ctx, pool)
+	got, err := store.NewPG(pool).GetSiteConfig(ctx)
 	if err != nil {
 		t.Fatalf("get absent config: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestPG_SiteConfigGetPutSingleton(t *testing.T) {
 		},
 		ScmHosts: []string{"dev.azure.com", "github.example.com"},
 	}
-	saved, err := store.PutSiteConfig(ctx, pool, cfg)
+	saved, err := store.NewPG(pool).PutSiteConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("put config: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestPG_SiteConfigGetPutSingleton(t *testing.T) {
 	}
 
 	// Round trip via a fresh Get.
-	got, err = store.GetSiteConfig(ctx, pool)
+	got, err = store.NewPG(pool).GetSiteConfig(ctx)
 	if err != nil {
 		t.Fatalf("get after put: %v", err)
 	}
@@ -67,10 +67,10 @@ func TestPG_SiteConfigGetPutSingleton(t *testing.T) {
 	// A second Put is an upsert (singleton: never a second row), and REPLACES
 	// the whole document — clearing a field must actually clear it, not merge.
 	cfg2 := types.SiteConfig{ScmHosts: []string{"github.com"}}
-	if _, err := store.PutSiteConfig(ctx, pool, cfg2); err != nil {
+	if _, err := store.NewPG(pool).PutSiteConfig(ctx, cfg2); err != nil {
 		t.Fatalf("second put: %v", err)
 	}
-	got, err = store.GetSiteConfig(ctx, pool)
+	got, err = store.NewPG(pool).GetSiteConfig(ctx)
 	if err != nil {
 		t.Fatalf("get after second put: %v", err)
 	}
