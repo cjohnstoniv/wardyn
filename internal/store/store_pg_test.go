@@ -8,32 +8,18 @@ package store_test
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestPG_DecideApproval_SingleTransition(t *testing.T) {
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres integration tests")
-	}
+	pool := runsPGPool(t)
 	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(pool.Close)
 
 	// Create a minimal run first (FK requirement).
 	runID := uuid.New()
@@ -88,20 +74,8 @@ func TestPG_DecideApproval_SingleTransition(t *testing.T) {
 }
 
 func TestPG_AuditAppendOnly_TriggerRejects(t *testing.T) {
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres integration tests")
-	}
+	pool := runsPGPool(t)
 	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(pool.Close)
 
 	// Insert a legitimate audit event.
 	ev := types.AuditEvent{
