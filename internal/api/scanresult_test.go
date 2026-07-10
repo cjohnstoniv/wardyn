@@ -50,14 +50,7 @@ func TestUploadScanResult_NonScanRunRejected(t *testing.T) {
 	tok := h.mintRunToken(t, runID)
 	// Same identity as the token, but a Store returning an ordinary run (no
 	// WorkspaceID), so the not-a-scan-run guard is reachable.
-	srv := New(Config{
-		Identity:        h.idp,
-		Audit:           h.audit,
-		AdminToken:      adminToken,
-		TrustDomain:     "wardyn.local",
-		ControlPlaneURL: "http://wardynd:8080",
-		Store:           scanRunStore{run: types.AgentRun{ID: runID}}, // WorkspaceID == nil
-	})
+	srv := New(baseTestConfig(h, scanRunStore{run: types.AgentRun{ID: runID}})) // WorkspaceID == nil
 	w := do(t, srv, http.MethodPut,
 		"/api/v1/internal/scan-results/"+runID.String(), tok, `{"has_devcontainer":true}`)
 	if w.Code != http.StatusForbidden {
