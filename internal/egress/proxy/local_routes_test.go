@@ -233,46 +233,88 @@ func TestLocalLLMNoRuleReturns404(t *testing.T) {
 	}
 }
 
+// TestLocalLLMInjectsAPIKeyAndStripsSandboxAuth covers both brokered LLM
+// providers: the proxy always strips the sandbox's smuggled credential and
+// injects the broker-minted one, on whichever header the provider uses.
 func TestLocalLLMInjectsAPIKeyAndStripsSandboxAuth(t *testing.T) {
-	// HTTPS upstream — the LLM route always dials https://api.anthropic.com.
-	cu := captureUpstream(t, true, "llm-ok")
+	cases := []struct {
+		name      string
+		prefix    string
+		host      string
+		injHeader string
+		injValue  string
+		reqPath   string
+		reqBody   string
+	}{
+		{
+			// Startup-minted Anthropic injection credential (same mechanism the
+			// forward-proxy path uses) — an x-api-key header for api.anthropic.com.
+			name:      "anthropic",
+			prefix:    llmAnthropicPrefix,
+			host:      anthropicHost,
+			injHeader: "X-Api-Key",
+			injValue:  "BROKERED-KEY",
+			reqPath:   "v1/messages",
+			reqBody:   `{"hi":1}`,
+		},
+		{
+			name:      "openai",
+			prefix:    llmOpenAIPrefix,
+			host:      openaiHost,
+			injHeader: "Authorization",
+			injValue:  "Bearer BROKERED-OPENAI",
+			reqPath:   "v1/chat/completions",
+			reqBody:   `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`,
+		},
+	}
 
-	// Startup-minted Anthropic injection credential (same mechanism the
-	// forward-proxy path uses) — an x-api-key header for api.anthropic.com.
-	inj := staticInj(map[string]injectedHeader{
-		anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
-	})
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv), inj, testInsecureTLSConfig)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// HTTPS upstream — the LLM route always dials the provider's real host.
+			cu := captureUpstream(t, true, "llm-ok")
 
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(`{"hi":1}`))
-	req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
-	req.Header.Set("Content-Type", "application/json")
-	p.ServeHTTP(rec, req)
+			inj := staticInj(map[string]injectedHeader{
+				tc.host: {name: tc.injHeader, value: tc.injValue},
+			})
+			p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv), inj, testInsecureTLSConfig)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
-	}
-	if rec.Body.String() != "llm-ok" {
-		t.Fatalf("body = %q", rec.Body.String())
-	}
-	if got := cu.header.Get("X-Api-Key"); got != "BROKERED-KEY" {
-		t.Fatalf("upstream X-Api-Key = %q, want BROKERED-KEY (injected)", got)
-	}
-	if got := cu.header.Get("Authorization"); got != "" {
-		t.Fatalf("sandbox Authorization must be stripped, upstream saw %q", got)
-	}
-	if cu.host != anthropicHost {
-		t.Fatalf("upstream Host = %q, want %q", cu.host, anthropicHost)
-	}
-	if cu.path != "/v1/messages" {
-		t.Fatalf("upstream path = %q, want /v1/messages", cu.path)
-	}
-	if cu.body != `{"hi":1}` {
-		t.Fatalf("upstream body = %q, want streamed verbatim", cu.body)
-	}
-	if d := lastDecision(t, buf); d.RuleSource != ruleSourceLLM || d.Decision != egress.Allow {
-		t.Fatalf("decision = %+v, want brokered:llm allow", d)
+			rec := httptest.NewRecorder()
+			req := mustLocalReq(t, http.MethodPost, tc.prefix+tc.reqPath, strings.NewReader(tc.reqBody))
+			req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
+			req.Header.Set("Content-Type", "application/json")
+			p.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
+			}
+			if rec.Body.String() != "llm-ok" {
+				t.Fatalf("body = %q", rec.Body.String())
+			}
+			if got := cu.header.Get(tc.injHeader); got != tc.injValue {
+				t.Fatalf("upstream %s = %q, want %q (injected)", tc.injHeader, got, tc.injValue)
+			}
+			// If the injected credential lands on its own header, the sandbox's
+			// smuggled Authorization must be stripped outright; if the injected
+			// credential IS Authorization, it must overwrite the smuggled one
+			// (already asserted above).
+			if tc.injHeader != "Authorization" {
+				if got := cu.header.Get("Authorization"); got != "" {
+					t.Fatalf("sandbox Authorization must be stripped, upstream saw %q", got)
+				}
+			}
+			if cu.host != tc.host {
+				t.Fatalf("upstream Host = %q, want %q", cu.host, tc.host)
+			}
+			if want := "/" + tc.reqPath; cu.path != want {
+				t.Fatalf("upstream path = %q, want %q", cu.path, want)
+			}
+			if cu.body != tc.reqBody {
+				t.Fatalf("upstream body = %q, want streamed verbatim", cu.body)
+			}
+			if d := lastDecision(t, buf); d.RuleSource != ruleSourceLLM || d.Decision != egress.Allow {
+				t.Fatalf("decision = %+v, want brokered:llm allow", d)
+			}
+		})
 	}
 }
 

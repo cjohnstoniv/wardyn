@@ -4,9 +4,7 @@
 package proxy
 
 import (
-	"crypto/tls"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,36 +114,62 @@ func TestLLMScanAlertForwardsBodyAndAudits(t *testing.T) {
 }
 
 func TestLLMScanBlockRefusesAndSkipsUpstream(t *testing.T) {
-	cu := captureUpstream(t, true, "should-not-happen")
+	cases := []struct {
+		name    string
+		prefix  string
+		reqPath string
+		inj     *injector
+		reqBody string
+	}{
+		{
+			name:    "anthropic",
+			prefix:  llmAnthropicPrefix,
+			reqPath: "v1/messages",
+			inj:     anthropicInjector(),
+			reqBody: anthropicMessagesBody("leak " + scanTestSecret),
+		},
+		{
+			name:    "openai",
+			prefix:  llmOpenAIPrefix,
+			reqPath: "v1/chat/completions",
+			inj:     openaiInjector(),
+			reqBody: `{"model":"gpt-4","messages":[{"role":"user","content":"leak ` + scanTestSecret + `"}]}`,
+		},
+	}
 
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
-		anthropicInjector(), testInsecureTLSConfig)
-	p.scanner = scanEngine(t, "block", scanTestSecret)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cu := captureUpstream(t, true, "should-not-happen")
 
-	body := anthropicMessagesBody("leak " + scanTestSecret)
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	p.ServeHTTP(rec, req)
+			p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+				tc.inj, testInsecureTLSConfig)
+			p.scanner = scanEngine(t, "block", scanTestSecret)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("block status = %d, want 403", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "llm_content_blocked") {
-		t.Fatalf("block body = %q, want llm_content_blocked", rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), scanTestSecret) {
-		t.Fatal("block response leaked the raw secret (must be content-free)")
-	}
-	if cu.reached {
-		t.Fatal("blocked request must NOT reach the upstream")
-	}
-	d := lastDecision(t, buf)
-	if d.Decision != egress.Deny || d.RuleSource != ruleSourceLLMBlocked {
-		t.Fatalf("decision = %+v, want scan:blocked deny", d)
-	}
-	if d.Scan == nil || d.Scan.Action != "block" {
-		t.Fatalf("scan summary = %+v, want block", d.Scan)
+			rec := httptest.NewRecorder()
+			req := mustLocalReq(t, http.MethodPost, tc.prefix+tc.reqPath, strings.NewReader(tc.reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			p.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("block status = %d, want 403", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "llm_content_blocked") {
+				t.Fatalf("block body = %q, want llm_content_blocked", rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), scanTestSecret) {
+				t.Fatal("block response leaked the raw secret (must be content-free)")
+			}
+			if cu.reached {
+				t.Fatal("blocked request must NOT reach the upstream")
+			}
+			d := lastDecision(t, buf)
+			if d.Decision != egress.Deny || d.RuleSource != ruleSourceLLMBlocked {
+				t.Fatalf("decision = %+v, want scan:blocked deny", d)
+			}
+			if d.Scan == nil || d.Scan.Action != "block" {
+				t.Fatalf("scan summary = %+v, want block", d.Scan)
+			}
+		})
 	}
 }
 
@@ -274,58 +298,6 @@ func openaiInjector() *injector {
 	return staticInj(map[string]injectedHeader{
 		openaiHost: {name: "Authorization", value: "Bearer BROKERED-OPENAI"},
 	})
-}
-
-func TestLLMOpenAIRouteInjectsAndForwards(t *testing.T) {
-	var gotAuth, gotPath string
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotPath = r.URL.Path
-		_, _ = io.WriteString(w, "oa-ok")
-	}))
-	defer upstream.Close()
-	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		openaiInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
-	p.scanner = scanEngine(t, "alert", scanTestSecret)
-
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodPost, llmOpenAIPrefix+"v1/chat/completions",
-		strings.NewReader(`{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`))
-	req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
-	p.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK || rec.Body.String() != "oa-ok" {
-		t.Fatalf("openai forward: status=%d body=%q", rec.Code, rec.Body.String())
-	}
-	if gotAuth != "Bearer BROKERED-OPENAI" {
-		t.Fatalf("openai brokered credential not injected (sandbox auth leaked?): %q", gotAuth)
-	}
-	if gotPath != "/v1/chat/completions" {
-		t.Fatalf("upstream path = %q", gotPath)
-	}
-}
-
-func TestLLMOpenAIRouteBlocksSecret(t *testing.T) {
-	reached := false
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-	}))
-	defer upstream.Close()
-	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		openaiInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
-	p.scanner = scanEngine(t, "block", scanTestSecret)
-
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodPost, llmOpenAIPrefix+"v1/chat/completions",
-		strings.NewReader(`{"model":"gpt-4","messages":[{"role":"user","content":"leak `+scanTestSecret+`"}]}`))
-	p.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("openai chat with a secret must block, got %d", rec.Code)
-	}
-	if reached {
-		t.Fatal("blocked openai request must not reach the upstream")
-	}
 }
 
 func forwardScanEngine(t *testing.T, mode string) *contentscan.Engine {
