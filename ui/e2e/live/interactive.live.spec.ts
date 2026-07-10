@@ -14,7 +14,7 @@ import {
   expect,
   liveOnly,
   openManualWizard,
-  makeWorkspaceDir,
+  makeOnboardedWorkspace,
   captureRunCreate,
   apiKillRun,
 } from "./live-fixtures";
@@ -25,11 +25,14 @@ test.describe.configure({ mode: "serial" });
 
 test.describe("Interactive run (live)", () => {
   test("interactive run reaches RUNNING and shows the attach UI", async ({ page }) => {
+    // Onboard BEFORE opening the dialog — see wizard.live.spec.ts for why.
+    const ws = await makeOnboardedWorkspace(page, "wardyn-live-interactive");
     const dlg = await openManualWizard(page);
-    const workspace = makeWorkspaceDir("wardyn-live-interactive");
 
-    // Basics: local workspace; Interactive is the default mode (task optional).
-    await dlg.getByPlaceholder("/home/me/projects/payments").fill(workspace);
+    // Basics: attach the onboarded workspace; Interactive is the default mode
+    // (task optional).
+    await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
+    await dlg.page().getByRole("option", { name: new RegExp(ws.name) }).click();
     await dlg.getByRole("button", { name: "Next" }).click(); // → Access
     await expect(dlg.getByText("Anthropic auth")).toBeVisible();
     // Defaults are fine: an idle interactive sandbox needs no model credential

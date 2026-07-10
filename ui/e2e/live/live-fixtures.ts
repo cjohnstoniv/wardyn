@@ -7,6 +7,7 @@ import { test as base, expect, type Locator, type Page } from "@playwright/test"
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { COMPOSER_UI_ENABLED } from "../../src/app/lib/features";
 
 // Fixtures for the LIVE Playwright project (playwright.config.ts project "live").
 // These specs drive the REAL host-mode stack started by scripts/run-host.sh —
@@ -73,18 +74,51 @@ export async function openNewRunChooser(page: Page): Promise<Locator> {
   return dlg;
 }
 
-// Enter the manual 5-step PermissionWizard on its Basics step.
+// Enter the manual 5-step PermissionWizard on its Basics step. With the AI
+// composer flag off (features.ts), new-run-dialog.tsx skips the
+// /composer/backends probe and the chooser entirely and opens straight into
+// the wizard — mirrors ../wizard.spec.ts's openWizard. If the flag is ever
+// flipped on, the chooser returns — keep that path too.
 export async function openManualWizard(page: Page): Promise<Locator> {
-  const dlg = await openNewRunChooser(page);
-  await dlg.getByRole("button", { name: /Configure manually/ }).click();
+  await gotoConsole(page);
+  if (COMPOSER_UI_ENABLED) {
+    const dlg = await openNewRunChooser(page);
+    await dlg.getByRole("button", { name: /Configure manually/ }).click();
+    await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
+    return dlg;
+  }
+  await page.getByRole("button", { name: "New run" }).click();
+  const dlg = page.getByRole("dialog");
+  await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
   await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
   return dlg;
 }
 
-// Make a real, empty workspace dir on this host (the live stack's docker daemon
-// mounts host paths, and the Playwright process runs on the same box).
-export function makeWorkspaceDir(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+// mkdir a real, empty workspace dir on this host (the live stack's docker
+// daemon mounts host paths, and the Playwright process runs on the same box),
+// then onboard it via POST /api/v1/workspaces BEFORE any dialog opens — the
+// wizard's WorkspacePicker is prop-driven off new-run-dialog.tsx's
+// loadWorkspaces(), fetched once per dialog-open with no refetch on combobox
+// open, so the workspace must exist before "New run" is clicked or it never
+// appears in the picker. page.request works pre-navigation via baseURL.
+export async function makeOnboardedWorkspace(
+  page: Page,
+  prefix: string,
+): Promise<{ id: string; name: string }> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+  const name = path.basename(dir);
+  const res = await page.request.post("/api/v1/workspaces", {
+    headers: AUTH_HEADERS,
+    data: { name, kind: "local_dir", source: dir },
+  });
+  if (!res.ok()) {
+    throw new Error(
+      `onboard workspace failed (HTTP ${res.status()}): ${await res.text().catch(() => "")}`,
+    );
+  }
+  const body = (await res.json()) as { id?: string; name?: string };
+  if (!body.id) throw new Error("onboard workspace response carried no id");
+  return { id: body.id, name: body.name ?? name };
 }
 
 // Host ~/.claude dir for subscription-mode runs. Override with

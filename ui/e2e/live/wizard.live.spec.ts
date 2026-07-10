@@ -14,7 +14,7 @@ import {
   expect,
   liveOnly,
   openManualWizard,
-  makeWorkspaceDir,
+  makeOnboardedWorkspace,
   claudeDir,
   captureRunCreate,
   waitForRunTerminal,
@@ -26,11 +26,15 @@ test.describe.configure({ mode: "serial" });
 
 test.describe("Manual wizard (live)", () => {
   test("5-step wizard → minimal Fence background run → terminal state", async ({ page }) => {
+    // Onboard BEFORE opening the dialog — the wizard's WorkspacePicker fetches
+    // the onboarded list once per dialog-open, so the workspace must already
+    // exist server-side for it to appear in the combobox.
+    const ws = await makeOnboardedWorkspace(page, "wardyn-live-wizard");
     const dlg = await openManualWizard(page);
-    const workspace = makeWorkspaceDir("wardyn-live-wizard");
 
-    // Step 1 — Basics: local read-write workspace, Autonomous mode, tiny task.
-    await dlg.getByPlaceholder("/home/me/projects/payments").fill(workspace);
+    // Step 1 — Basics: attach the onboarded workspace, Autonomous mode, tiny task.
+    await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
+    await dlg.page().getByRole("option", { name: new RegExp(ws.name) }).click();
     await dlg.getByRole("radio", { name: "Autonomous" }).click();
     await dlg
       .getByPlaceholder("Describe what the agent should accomplish…")
