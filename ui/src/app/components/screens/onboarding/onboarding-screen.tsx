@@ -122,14 +122,14 @@ export function OnboardingScreen({
   const ready = !!readiness?.ready;
 
   return (
-    <div className="mx-auto flex min-h-full max-w-[780px] flex-col items-center px-6 py-14 text-center">
+    <div className="mx-auto w-full max-w-[780px] px-6 py-12">
       <span className="inline-flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
         <Shield className="size-6" aria-hidden />
       </span>
       <h1 className="mt-5 text-[2rem] font-semibold leading-tight tracking-tight text-foreground">
         Let agents work. Keep your keys.
       </h1>
-      <p className="mx-auto mt-3 max-w-[600px] text-base leading-relaxed text-muted-foreground">
+      <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted-foreground">
         <IntroBlurb />
       </p>
 
