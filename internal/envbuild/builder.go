@@ -101,7 +101,6 @@ type envbuilderDockerAPI interface {
 	ContainerLogs(ctx context.Context, container string, options container.LogsOptions) (io.ReadCloser, error)
 	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 }
 
 // the real client must implement our slice.
@@ -148,26 +147,6 @@ type Builder struct {
 	// and package/base-image registries; doing so also gives the untrusted RUN
 	// steps that same network (see the residual note in doc.go).
 	BuildNetwork string
-
-	// BuildMemoryBytes caps build-container memory in bytes. Zero => default
-	// (WARDYN_ENVBUILD_BUILD_MEMORY_MB, else defaultBuildMemoryBytes).
-	BuildMemoryBytes int64
-
-	// BuildNanoCPUs caps build-container CPU (1e9 == 1 CPU). Zero => default
-	// (WARDYN_ENVBUILD_BUILD_CPUS, else defaultBuildNanoCPUs).
-	BuildNanoCPUs int64
-
-	// BuildPidsLimit caps the number of processes in the build container.
-	// Zero => defaultBuildPidsLimit.
-	BuildPidsLimit int64
-
-	// MaxBuildContextBytes, when > 0, caps the build container's writable-layer
-	// size via the Docker StorageOpt "size" option. OFF by default because
-	// StorageOpt "size" requires a storage driver that supports per-container
-	// quotas (e.g. overlay2 on xfs with the pquota mount option); enabling it on
-	// an unsupported driver makes ContainerCreate fail. Falls back to
-	// WARDYN_ENVBUILD_MAX_CONTEXT_MB.
-	MaxBuildContextBytes int64
 }
 
 // BuildSpec describes one workspace image build.
@@ -394,9 +373,6 @@ func (b *Builder) effectiveBuildNetwork() string {
 
 // effectiveMemoryBytes resolves the build-container memory cap.
 func (b *Builder) effectiveMemoryBytes() int64 {
-	if b.BuildMemoryBytes > 0 {
-		return b.BuildMemoryBytes
-	}
 	if mb := envInt64(envBuildMemoryMB); mb > 0 {
 		return mb << 20
 	}
@@ -405,9 +381,6 @@ func (b *Builder) effectiveMemoryBytes() int64 {
 
 // effectiveNanoCPUs resolves the build-container CPU cap (1e9 == 1 CPU).
 func (b *Builder) effectiveNanoCPUs() int64 {
-	if b.BuildNanoCPUs > 0 {
-		return b.BuildNanoCPUs
-	}
 	if c := envFloat(envBuildCPUs); c > 0 {
 		return int64(c * 1e9)
 	}
@@ -416,18 +389,12 @@ func (b *Builder) effectiveNanoCPUs() int64 {
 
 // effectivePidsLimit resolves the build-container process cap.
 func (b *Builder) effectivePidsLimit() int64 {
-	if b.BuildPidsLimit > 0 {
-		return b.BuildPidsLimit
-	}
 	return defaultBuildPidsLimit
 }
 
 // effectiveMaxContextBytes resolves the optional writable-layer size cap. Zero
 // (the default) means no StorageOpt size limit is applied.
 func (b *Builder) effectiveMaxContextBytes() int64 {
-	if b.MaxBuildContextBytes > 0 {
-		return b.MaxBuildContextBytes
-	}
 	if mb := envInt64(envMaxContextMB); mb > 0 {
 		return mb << 20
 	}
