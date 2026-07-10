@@ -143,11 +143,8 @@ type recordTaskResp struct {
 	Warnings    []string `json:"warnings"`
 }
 
-func (c *apiClient) recordWorkspaceTask(ctx context.Context, wsID, taskKey, mode string) (recordTaskResp, error) {
+func (c *apiClient) recordWorkspaceTask(ctx context.Context, wsID, taskKey string) (recordTaskResp, error) {
 	body := map[string]string{"task_key": taskKey}
-	if mode != "" {
-		body["mode"] = mode
-	}
 	var out recordTaskResp
 	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID+"/record", body, &out)
 	return out, err

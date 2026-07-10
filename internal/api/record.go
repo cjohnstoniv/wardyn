@@ -176,13 +176,12 @@ func (s *Server) repairStaleRecordings(ctx context.Context, ws types.Workspace) 
 	return ws
 }
 
-// handleRecordWorkspace launches one task's OPEN recording sandbox:
-// POST /workspaces/{id}/record {"task_key": "...", "mode": "auto"|"interactive"}.
-// Auto mode executes the task's approved commands wardyn-verify-style; the
-// operator drives an interactive recording through the attach terminal and
-// finishes it with the normal run kill ("Done recording"). 202 with the run id;
-// 422 unknown task / no approved commands for an auto task; 503 no runner; 409
-// while another import step is live.
+// handleRecordWorkspace launches one named OPEN recording sandbox:
+// POST /workspaces/{id}/record {"name": "...", "confined": false}
+// ("task_key" is accepted as a deprecated alias for name). The operator drives
+// the session through the attach terminal and finishes it with the normal run
+// kill ("Done recording"); confined=true replays under the approved egress set.
+// 202 with the run id; 503 no runner; 409 while another import step is live.
 func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
