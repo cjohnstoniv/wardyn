@@ -278,24 +278,7 @@ type decodedAudit struct {
 // that is a skip (external) or a failure.
 func (h *harness) pollRunningSoft(id uuid.UUID, timeout time.Duration) (types.AgentRun, bool) {
 	h.t.Helper()
-	deadline := time.Now().Add(timeout)
-	var last types.AgentRun
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		run, err := h.sdk.GetRun(ctx, id)
-		cancel()
-		if err == nil {
-			last = run
-			if run.State == types.RunRunning {
-				return run, true
-			}
-			if isTerminal(run.State) {
-				return run, false
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return last, false
+	return h.pollState(id, timeout, runningPred)
 }
 
 // killQuietly best-effort tears down a run (deferred cleanup).
@@ -333,44 +316,30 @@ func driveAnthropicProbe(t *testing.T, conn *websocket.Conn, insecure bool) stri
 // (the shell echoes the command, so the real -w output is the last occurrence).
 func driveCapture(t *testing.T, conn *websocket.Conn, send, startMark, endMark string, timeout time.Duration) string {
 	t.Helper()
-	wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := conn.Write(wctx, websocket.MessageBinary, []byte(send)); err != nil {
-		wcancel()
-		t.Fatalf("write PTY probe: %v", err)
-	}
-	wcancel()
-
-	var buf strings.Builder
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
-		typ, data, err := conn.Read(rctx)
-		rcancel()
-		if err != nil {
-			if time.Now().Before(deadline) && errorsIsDeadline(err) {
-				continue
-			}
-			break
-		}
-		if typ != websocket.MessageBinary {
-			continue
-		}
-		buf.WriteString(string(data))
-		s := buf.String()
+	var code string
+	buf, ok := driveUntil(t, conn, send, timeout, func(b string) bool {
 		// Only match once the marker is the -w OUTPUT (a line beginning startMark),
 		// not the echoed command that also contains "WCODE=%{http_code}".
-		if i := strings.LastIndex(s, startMark); i >= 0 {
-			rest := s[i+len(startMark):]
-			if j := strings.Index(rest, endMark); j >= 0 {
-				code := strings.TrimSpace(rest[:j])
-				if code != "" && !strings.Contains(code, "{") { // skip the echoed %{http_code}
-					return code
-				}
-			}
+		i := strings.LastIndex(b, startMark)
+		if i < 0 {
+			return false
 		}
+		rest := b[i+len(startMark):]
+		j := strings.Index(rest, endMark)
+		if j < 0 {
+			return false
+		}
+		c := strings.TrimSpace(rest[:j])
+		if c == "" || strings.Contains(c, "{") { // skip the echoed %{http_code}
+			return false
+		}
+		code = c
+		return true
+	})
+	if !ok {
+		t.Fatalf("did not capture %s...%s in PTY output within %s.\n--- stream ---\n%s", startMark, endMark, timeout, tail(buf, 800))
 	}
-	t.Fatalf("did not capture %s...%s in PTY output within %s.\n--- stream ---\n%s", startMark, endMark, timeout, tail(buf.String(), 800))
-	return ""
+	return code
 }
 
 // driveRealClaude drives a real `claude -p` turn in the attached PTY (real-model
@@ -380,36 +349,23 @@ func (h *harness) driveRealClaude(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 	send := "claude -p 'Reply with only the number 42.' --output-format text 2>&1; echo WCLAUDE-DONE\n"
 	wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := conn.Write(wctx, websocket.MessageBinary, []byte(send)); err != nil {
-		wcancel()
+	err := conn.Write(wctx, websocket.MessageBinary, []byte(send))
+	wcancel()
+	if err != nil {
 		t.Logf("real-model: write claude turn failed: %v (skipping the optional turn)", err)
 		return
 	}
-	wcancel()
 
-	var buf strings.Builder
-	deadline := time.Now().Add(120 * time.Second)
-	for time.Now().Before(deadline) {
-		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, data, err := conn.Read(rctx)
-		rcancel()
-		if err != nil {
-			if time.Now().Before(deadline) && errorsIsDeadline(err) {
-				continue
-			}
-			break
-		}
-		buf.WriteString(string(data))
-		if strings.Contains(buf.String(), "WCLAUDE-DONE") {
-			break
-		}
-	}
-	out := strings.ToLower(buf.String())
+	// send="" — the frame above is already written; this just drives the read loop.
+	buf, _ := driveUntil(t, conn, "", 120*time.Second, func(b string) bool {
+		return strings.Contains(b, "WCLAUDE-DONE")
+	})
+	out := strings.ToLower(buf)
 	authFail := strings.Contains(out, "authentication_error") || strings.Contains(out, "invalid bearer") ||
 		strings.Contains(out, "401") || strings.Contains(out, "please run") || strings.Contains(out, "invalid api key") ||
 		strings.Contains(out, "oauth token has expired")
 	if authFail {
-		t.Fatalf("real-model: `claude` in the subscription sandbox hit an AUTH error — proxy-side injection is broken.\n--- output ---\n%s", tail(buf.String(), 1200))
+		t.Fatalf("real-model: `claude` in the subscription sandbox hit an AUTH error — proxy-side injection is broken.\n--- output ---\n%s", tail(buf, 1200))
 	}
 	switch {
 	case strings.Contains(out, "42"):
@@ -417,6 +373,6 @@ func (h *harness) driveRealClaude(t *testing.T, conn *websocket.Conn) {
 	case strings.Contains(out, "limit") || strings.Contains(out, "usage"):
 		t.Logf("real-model: `claude` authenticated (rate/usage-limit reply, not an auth error) — injection is load-bearing; PASS")
 	default:
-		t.Logf("real-model: `claude` produced no clear reply within the window (no auth error). Likely a TUI/permission prompt — not treated as a feature failure.\n--- output ---\n%s", tail(buf.String(), 800))
+		t.Logf("real-model: `claude` produced no clear reply within the window (no auth error). Likely a TUI/permission prompt — not treated as a feature failure.\n--- output ---\n%s", tail(buf, 800))
 	}
 }

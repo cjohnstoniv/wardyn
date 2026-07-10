@@ -99,25 +99,23 @@ func TestLive_Interactive(t *testing.T) {
 // failure for an interactive run).
 func (h *harness) pollRunning(id uuid.UUID, timeout time.Duration) types.AgentRun {
 	h.t.Helper()
-	deadline := time.Now().Add(timeout)
-	var last types.AgentRun
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		run, err := h.sdk.GetRun(ctx, id)
-		cancel()
-		if err == nil {
-			last = run
-			if run.State == types.RunRunning {
-				return run
-			}
-			if isTerminal(run.State) {
-				h.t.Fatalf("interactive run went terminal (%s) before RUNNING; it should idle awaiting attach", run.State)
-			}
+	run, ok := h.pollState(id, timeout, runningPred)
+	if !ok {
+		if isTerminal(run.State) {
+			h.t.Fatalf("interactive run went terminal (%s) before RUNNING; it should idle awaiting attach", run.State)
 		}
-		time.Sleep(2 * time.Second)
+		h.t.Fatalf("run %s did not reach RUNNING within %s (last=%s)", id, timeout, run.State)
 	}
-	h.t.Fatalf("run %s did not reach RUNNING within %s (last=%s)", id, timeout, last.State)
-	return last
+	return run
+}
+
+// runningPred is the pollState predicate shared by pollRunning/pollRunningSoft:
+// done+good on RUNNING, done+!good on any terminal state, else keep polling.
+func runningPred(s types.RunState) (done, good bool) {
+	if s == types.RunRunning {
+		return true, true
+	}
+	return isTerminal(s), false
 }
 
 // dialAttach opens the attach WS-PTY as a non-browser client (no Origin header,
@@ -137,16 +135,20 @@ func (h *harness) dialAttach(t *testing.T, id uuid.UUID) *websocket.Conn {
 	return conn
 }
 
-// driveExpect writes input bytes as a binary PTY frame, then reads binary output
-// frames until `want` appears in the accumulated stream or the deadline passes.
-func driveExpect(t *testing.T, conn *websocket.Conn, send, want string, timeout time.Duration) {
+// driveUntil writes send as a binary PTY frame (skipped when send == ""), then
+// reads binary output frames — tolerating read-deadline errs between bursts —
+// accumulating them until matchFn reports a match or the timeout elapses.
+// Returns the accumulated stream and whether matchFn ever matched.
+func driveUntil(t *testing.T, conn *websocket.Conn, send string, timeout time.Duration, matchFn func(buf string) bool) (string, bool) {
 	t.Helper()
-	wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := conn.Write(wctx, websocket.MessageBinary, []byte(send)); err != nil {
+	if send != "" {
+		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := conn.Write(wctx, websocket.MessageBinary, []byte(send))
 		wcancel()
-		t.Fatalf("write PTY input %q: %v", send, err)
+		if err != nil {
+			t.Fatalf("write PTY input %q: %v", send, err)
+		}
 	}
-	wcancel()
 
 	var buf strings.Builder
 	deadline := time.Now().Add(timeout)
@@ -157,24 +159,30 @@ func driveExpect(t *testing.T, conn *websocket.Conn, send, want string, timeout 
 		if err != nil {
 			// A read timeout is expected between bursts of output; keep polling
 			// until the overall deadline. Any other error ends the attempt.
-			if time.Now().Before(deadline) && isTimeout(err) {
+			if time.Now().Before(deadline) && errorsIsDeadline(err) {
 				continue
 			}
 			break
 		}
 		if typ == websocket.MessageBinary {
 			buf.Write(data)
-			if strings.Contains(buf.String(), want) {
-				return
+			if matchFn(buf.String()) {
+				return buf.String(), true
 			}
 		}
 	}
-	t.Fatalf("did not see %q in PTY output within %s after sending %q.\n--- stream ---\n%s",
-		want, timeout, strings.TrimSpace(send), tail(buf.String(), 800))
+	return buf.String(), false
 }
 
-func isTimeout(err error) bool {
-	return errorsIsDeadline(err)
+// driveExpect writes input bytes as a binary PTY frame, then reads binary output
+// frames until `want` appears in the accumulated stream or the deadline passes.
+func driveExpect(t *testing.T, conn *websocket.Conn, send, want string, timeout time.Duration) {
+	t.Helper()
+	buf, ok := driveUntil(t, conn, send, timeout, func(b string) bool { return strings.Contains(b, want) })
+	if !ok {
+		t.Fatalf("did not see %q in PTY output within %s after sending %q.\n--- stream ---\n%s",
+			want, timeout, strings.TrimSpace(send), tail(buf, 800))
+	}
 }
 
 func tail(s string, n int) string {
