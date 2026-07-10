@@ -51,22 +51,15 @@ type fakeDocker struct {
 
 	images map[string]bool // ref -> present
 
-	networks   map[string]network.CreateOptions // name -> opts (id == name here)
-	netRemoved map[string]bool
+	networks map[string]network.CreateOptions // name -> opts (id == name here)
 
-	containers  map[string]*createdContainer // id (== name) -> record
-	createCalls []string                     // names in creation order
-	startOrder  []string
+	containers map[string]*createdContainer // id (== name) -> record
 
 	// failpoints
 	failCreateContainer string // name prefix that should fail on create
-	failConnectNetwork  string // network name that should fail on connect
-	failNetworkCreate   bool
-	failImagePull       bool // ImagePull returns an error (image absent + unpullable)
-	infoErr             error
+	failImagePull       bool   // ImagePull returns an error (image absent + unpullable)
 
-	execs       map[string]bool // execID -> created
-	lastExecCmd []string        // argv of the most recent exec
+	lastExecCmd []string // argv of the most recent exec
 	// lastResize records the most recent ContainerExecResize options so attach
 	// tests can assert the PTY was resized.
 	lastResize *container.ResizeOptions
@@ -77,16 +70,11 @@ func newFakeDocker() *fakeDocker {
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
 		networks:   map[string]network.CreateOptions{},
-		netRemoved: map[string]bool{},
 		containers: map[string]*createdContainer{},
-		execs:      map[string]bool{},
 	}
 }
 
 func (f *fakeDocker) Info(ctx context.Context) (system.Info, error) {
-	if f.infoErr != nil {
-		return system.Info{}, f.infoErr
-	}
 	return f.info, nil
 }
 
@@ -116,9 +104,6 @@ func (f *fakeDocker) ImagePull(ctx context.Context, ref string, opts image.PullO
 func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.failNetworkCreate {
-		return network.CreateResponse{}, fmt.Errorf("boom: network create")
-	}
 	f.networks[name] = opts
 	return network.CreateResponse{ID: name}, nil
 }
@@ -126,9 +111,6 @@ func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts networ
 func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID, containerID string, cfg *network.EndpointSettings) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.failConnectNetwork != "" && networkID == f.failConnectNetwork {
-		return fmt.Errorf("boom: connect %s", networkID)
-	}
 	c := f.containers[containerID]
 	if c == nil {
 		return fakeNotFound{msg: "no such container: " + containerID}
@@ -144,7 +126,6 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string) error 
 		return fakeNotFound{msg: "no such network: " + networkID}
 	}
 	delete(f.networks, networkID)
-	f.netRemoved[networkID] = true
 	return nil
 }
 
@@ -161,7 +142,6 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, cfg *container.Config,
 		net:   netCfg,
 		state: &container.State{Status: "created"},
 	}
-	f.createCalls = append(f.createCalls, name)
 	return container.CreateResponse{ID: name}, nil
 }
 
@@ -173,7 +153,6 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, opts contain
 		return fakeNotFound{msg: "no such container: " + id}
 	}
 	c.state = &container.State{Status: "running", Running: true}
-	f.startOrder = append(f.startOrder, id)
 	return nil
 }
 
@@ -280,7 +259,6 @@ func (f *fakeDocker) ContainerExecCreate(ctx context.Context, id string, opts co
 		return container.ExecCreateResponse{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	execID := "exec-" + id
-	f.execs[execID] = true
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd
 	return container.ExecCreateResponse{ID: execID}, nil
