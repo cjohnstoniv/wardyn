@@ -81,16 +81,10 @@ func anthropicInjector() *injector {
 }
 
 func TestLLMScanAlertForwardsBodyAndAudits(t *testing.T) {
-	var gotBody string
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, "llm-ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "llm-ok")
 
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "alert", scanTestSecret)
 
 	body := anthropicMessagesBody("please use key " + scanTestSecret + " now")
@@ -102,8 +96,8 @@ func TestLLMScanAlertForwardsBodyAndAudits(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != "llm-ok" {
 		t.Fatalf("alert must forward: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if gotBody != body {
-		t.Fatalf("alert must forward the body UNCHANGED:\n got %q\nwant %q", gotBody, body)
+	if cu.body != body {
+		t.Fatalf("alert must forward the body UNCHANGED:\n got %q\nwant %q", cu.body, body)
 	}
 	d := lastDecision(t, buf)
 	if d.Decision != egress.Allow || d.RuleSource != ruleSourceLLM {
@@ -122,15 +116,10 @@ func TestLLMScanAlertForwardsBodyAndAudits(t *testing.T) {
 }
 
 func TestLLMScanBlockRefusesAndSkipsUpstream(t *testing.T) {
-	reached := false
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-		_, _ = io.WriteString(w, "should-not-happen")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "should-not-happen")
 
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "block", scanTestSecret)
 
 	body := anthropicMessagesBody("leak " + scanTestSecret)
@@ -148,7 +137,7 @@ func TestLLMScanBlockRefusesAndSkipsUpstream(t *testing.T) {
 	if strings.Contains(rec.Body.String(), scanTestSecret) {
 		t.Fatal("block response leaked the raw secret (must be content-free)")
 	}
-	if reached {
+	if cu.reached {
 		t.Fatal("blocked request must NOT reach the upstream")
 	}
 	d := lastDecision(t, buf)
@@ -161,13 +150,10 @@ func TestLLMScanBlockRefusesAndSkipsUpstream(t *testing.T) {
 }
 
 func TestLLMScanCleanTurnIsQuiet(t *testing.T) {
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "llm-ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, true, "llm-ok")
 
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "alert", scanTestSecret)
 
 	rec := httptest.NewRecorder()
@@ -189,13 +175,9 @@ func TestLLMScanCleanTurnIsQuiet(t *testing.T) {
 }
 
 func TestLLMScanCountTokensIsScanned(t *testing.T) {
-	reached := false
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-	}))
-	defer upstream.Close()
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	cu := captureUpstream(t, true, "")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "block", scanTestSecret)
 
 	rec := httptest.NewRecorder()
@@ -206,7 +188,7 @@ func TestLLMScanCountTokensIsScanned(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("count_tokens carrying a secret must be scanned+blocked, got %d", rec.Code)
 	}
-	if reached {
+	if cu.reached {
 		t.Fatal("blocked count_tokens must not reach the upstream")
 	}
 	if d := lastDecision(t, buf); d.RuleSource != ruleSourceLLMBlocked {
@@ -215,14 +197,9 @@ func TestLLMScanCountTokensIsScanned(t *testing.T) {
 }
 
 func TestLLMScanBatchesMarkedUninspected(t *testing.T) {
-	reached := false
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-		_, _ = io.WriteString(w, "ok")
-	}))
-	defer upstream.Close()
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	cu := captureUpstream(t, true, "ok")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "alert", scanTestSecret)
 
 	rec := httptest.NewRecorder()
@@ -230,8 +207,8 @@ func TestLLMScanBatchesMarkedUninspected(t *testing.T) {
 		strings.NewReader(`{"requests":[]}`))
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK || !reached {
-		t.Fatalf("batches in alert mode must forward, status=%d reached=%v", rec.Code, reached)
+	if rec.Code != http.StatusOK || !cu.reached {
+		t.Fatalf("batches in alert mode must forward, status=%d reached=%v", rec.Code, cu.reached)
 	}
 	d := lastDecision(t, buf)
 	if d.Scan == nil || d.Scan.Action != "skipped" || d.Scan.SkipReason != "uninspected_channel" {
@@ -240,15 +217,9 @@ func TestLLMScanBatchesMarkedUninspected(t *testing.T) {
 }
 
 func TestLLMScanToolUseInputThroughProxy(t *testing.T) {
-	var gotBody string
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, "ok")
-	}))
-	defer upstream.Close()
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	cu := captureUpstream(t, true, "ok")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "alert", scanTestSecret)
 
 	body := `{"model":"c","max_tokens":1,"messages":[{"role":"assistant","content":` +
@@ -257,7 +228,7 @@ func TestLLMScanToolUseInputThroughProxy(t *testing.T) {
 	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(body))
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK || gotBody != body {
+	if rec.Code != http.StatusOK || cu.body != body {
 		t.Fatalf("alert must forward tool_use body unchanged: status=%d", rec.Code)
 	}
 	d := lastDecision(t, buf)
@@ -274,15 +245,9 @@ func TestLLMScanOversizeBodyForwardedIntact(t *testing.T) {
 	maxLLMScanBody = 64 // force the oversize path without allocating tens of MiB
 	defer func() { maxLLMScanBody = saved }()
 
-	var gotBody string
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, "ok")
-	}))
-	defer upstream.Close()
-	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(upstream),
-		anthropicInjector(), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only
+	cu := captureUpstream(t, true, "ok")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
 	p.scanner = scanEngine(t, "alert", scanTestSecret) // alert => fail-open on oversize
 
 	body := anthropicMessagesBody("padding " + strings.Repeat("x", 300) + " " + scanTestSecret)
@@ -296,8 +261,8 @@ func TestLLMScanOversizeBodyForwardedIntact(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("oversize body in alert mode must forward, got %d", rec.Code)
 	}
-	if gotBody != body {
-		t.Fatalf("oversize body must be forwarded INTACT (never truncated): got %d want %d bytes", len(gotBody), len(body))
+	if cu.body != body {
+		t.Fatalf("oversize body must be forwarded INTACT (never truncated): got %d want %d bytes", len(cu.body), len(body))
 	}
 	d := lastDecision(t, buf)
 	if d.Scan == nil || d.Scan.SkipReason != "body_oversize" || d.Scan.Scanned {
@@ -375,13 +340,9 @@ func forwardScanEngine(t *testing.T, mode string) *contentscan.Engine {
 }
 
 func TestForwardEgressScanBlocksGenericConnector(t *testing.T) {
-	reached := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, false, "")
 	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"connector.test"}},
-		upstreamAddr(upstream), nil, nil)
+		upstreamAddr(cu.srv), nil, nil)
 	p.scanner = forwardScanEngine(t, "block")
 
 	rec := httptest.NewRecorder()
@@ -392,7 +353,7 @@ func TestForwardEgressScanBlocksGenericConnector(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("generic connector POST with a secret must block, got %d", rec.Code)
 	}
-	if reached {
+	if cu.reached {
 		t.Fatal("blocked forward request must not reach the upstream")
 	}
 	if d := lastDecision(t, buf); d.RuleSource != ruleSourceLLMBlocked {
@@ -401,15 +362,9 @@ func TestForwardEgressScanBlocksGenericConnector(t *testing.T) {
 }
 
 func TestForwardEgressScanAlertForwardsBody(t *testing.T) {
-	var gotBody string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, "ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, false, "ok")
 	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"connector.test"}},
-		upstreamAddr(upstream), nil, nil)
+		upstreamAddr(cu.srv), nil, nil)
 	p.scanner = forwardScanEngine(t, "alert")
 
 	body := `{"payload":"leak ` + scanTestSecret + `"}`
@@ -420,8 +375,8 @@ func TestForwardEgressScanAlertForwardsBody(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("alert forward must pass, got %d", rec.Code)
 	}
-	if gotBody != body {
-		t.Fatalf("forward body not preserved: got %q want %q", gotBody, body)
+	if cu.body != body {
+		t.Fatalf("forward body not preserved: got %q want %q", cu.body, body)
 	}
 	d := lastDecision(t, buf)
 	if d.Scan == nil || d.Scan.Channel != "generic" || len(d.Scan.Findings) == 0 {
@@ -430,14 +385,9 @@ func TestForwardEgressScanAlertForwardsBody(t *testing.T) {
 }
 
 func TestForwardEgressNotScannedWhenDisabled(t *testing.T) {
-	reached := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-		_, _ = io.WriteString(w, "ok")
-	}))
-	defer upstream.Close()
+	cu := captureUpstream(t, false, "ok")
 	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"connector.test"}},
-		upstreamAddr(upstream), nil, nil)
+		upstreamAddr(cu.srv), nil, nil)
 	// LLM-only scanner (InspectForwardEgress defaults false): the forward path is
 	// untouched even with a secret in the body and even in block mode.
 	p.scanner = scanEngine(t, "block", scanTestSecret)
@@ -447,8 +397,8 @@ func TestForwardEgressNotScannedWhenDisabled(t *testing.T) {
 		strings.NewReader(`{"payload":"leak `+scanTestSecret+`"}`))
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK || !reached {
-		t.Fatalf("forward path must be unscanned when inspect_forward_egress is off: status=%d reached=%v", rec.Code, reached)
+	if rec.Code != http.StatusOK || !cu.reached {
+		t.Fatalf("forward path must be unscanned when inspect_forward_egress is off: status=%d reached=%v", rec.Code, cu.reached)
 	}
 }
 
