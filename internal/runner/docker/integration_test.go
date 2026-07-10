@@ -6,15 +6,12 @@
 package docker
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/google/uuid"
 
@@ -62,14 +59,14 @@ func TestLifecycle_RealDocker(t *testing.T) {
 
 	// (a) No default route inside the agent (L0). `ip route` must not list a
 	// "default" route; busybox has `ip`.
-	out := execCapture(ctx, t, d, sb.Ref, []string{"ip", "route"})
+	out := execInSandbox(ctx, t, d, sb.Ref, []string{"ip", "route"})
 	if strings.Contains(out, "default") {
 		t.Errorf("agent must have NO default route (L0 violated). ip route:\n%s", out)
 	}
 
 	// (b) The agent has an interface on the per-run internal network (it can
 	// reach the proxy's segment). We assert a non-loopback address exists.
-	addrs := execCapture(ctx, t, d, sb.Ref, []string{"ip", "-o", "addr"})
+	addrs := execInSandbox(ctx, t, d, sb.Ref, []string{"ip", "-o", "addr"})
 	if !strings.Contains(addrs, "eth0") {
 		t.Errorf("agent must have an interface on the internal network, got:\n%s", addrs)
 	}
@@ -90,28 +87,6 @@ func TestLifecycle_RealDocker(t *testing.T) {
 	if _, err := d.Status(ctx, sb.Ref); err != nil {
 		t.Fatalf("Status after kill: %v", err)
 	}
-}
-
-// execCapture runs argv in the container and returns combined output. Used by
-// the integration test only (real daemon).
-func execCapture(ctx context.Context, t *testing.T, d *Driver, ref string, argv []string) string {
-	t.Helper()
-	created, err := d.cli.ContainerExecCreate(ctx, ref, container.ExecOptions{
-		AttachStdout: true,
-		AttachStderr: true,
-		Cmd:          argv,
-	})
-	if err != nil {
-		t.Fatalf("exec create %v: %v", argv, err)
-	}
-	resp, err := d.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
-	if err != nil {
-		t.Fatalf("exec attach %v: %v", argv, err)
-	}
-	defer resp.Close()
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, resp.Reader)
-	return buf.String()
 }
 
 // TestWorkspaceMount_RealDocker exercises PIECE 1 against a real daemon: an
@@ -152,7 +127,7 @@ func TestWorkspaceMount_RealDocker(t *testing.T) {
 
 	// The seeded host file is visible inside the container (the mount is applied
 	// and the host repo content shows up at the target — the core feature).
-	got := execCapture(ctx, t, d, sb.Ref, []string{"cat", "/home/agent/work/hello.txt"})
+	got := execInSandbox(ctx, t, d, sb.Ref, []string{"cat", "/home/agent/work/hello.txt"})
 	if !strings.Contains(got, marker) {
 		t.Errorf("host file not visible in container; cat output:\n%s", got)
 	}
@@ -162,7 +137,7 @@ func TestWorkspaceMount_RealDocker(t *testing.T) {
 	// container-root write to a host-owned dir can be EPERM'd by the host uid
 	// mapping even though the bind is rw — that is a host artifact, not a Wardyn
 	// property. The kernel mount flags are the authoritative RW signal.
-	mountLine := execCapture(ctx, t, d, sb.Ref, []string{"sh", "-c", "mount | grep /home/agent/work"})
+	mountLine := execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "mount | grep /home/agent/work"})
 	if !strings.Contains(mountLine, "/home/agent/work") {
 		t.Errorf("workspace mount not present in container mount table:\n%s", mountLine)
 	}
