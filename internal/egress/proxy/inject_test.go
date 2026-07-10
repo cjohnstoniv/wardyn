@@ -213,4 +213,26 @@ func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	if _, err := LoadConfig(filepath.Join(dir, "nope.json")); err == nil {
 		t.Fatalf("expected error for missing file")
 	}
+
+	// Missing control_plane_url / run_token, and malformed JSON, are each
+	// rejected by the same required-field / parse checks above.
+	if _, err := LoadConfigBytes([]byte(`{"run_id":"` + uuid.New().String() + `","run_token":"t"}`)); err == nil || !strings.Contains(err.Error(), "control_plane_url is required") {
+		t.Fatalf("expected control_plane_url required error, got %v", err)
+	}
+	if _, err := LoadConfigBytes([]byte(`{"run_id":"` + uuid.New().String() + `","control_plane_url":"http://x"}`)); err == nil || !strings.Contains(err.Error(), "run_token is required") {
+		t.Fatalf("expected run_token required error, got %v", err)
+	}
+	if _, err := LoadConfigBytes([]byte(`{not json`)); err == nil || !strings.Contains(err.Error(), "parse config") {
+		t.Fatalf("expected parse config error, got %v", err)
+	}
+
+	// Explicit Listen/DecisionBufferSize override the defaults.
+	explicit := `{"run_id":"` + uuid.New().String() + `","control_plane_url":"http://wardynd:8080","run_token":"t","listen":"127.0.0.1:9999","decision_buffer_size":7}`
+	ec, err := LoadConfigBytes([]byte(explicit))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes explicit: %v", err)
+	}
+	if ec.Listen != "127.0.0.1:9999" || ec.DecisionBufferSize != 7 {
+		t.Errorf("explicit overrides not kept: listen=%q buffer=%d", ec.Listen, ec.DecisionBufferSize)
+	}
 }
