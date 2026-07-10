@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -496,7 +497,7 @@ func TestCompose_AdversarialClampedAndGradedHigh(t *testing.T) {
 		t.Errorf("write grant requires_approval not forced on by the operator ceiling")
 	}
 	// The victim/secrets repo is outside the operator scope → dropped.
-	if repos := githubRepos(t, pol.EligibleGrants[0].Scope); contains(repos, "victim/secrets") {
+	if repos := githubRepos(t, pol.EligibleGrants[0].Scope); slices.ContainsFunc(repos, func(x string) bool { return strings.EqualFold(x, "victim/secrets") }) {
 		t.Errorf("out-of-scope repo not dropped from github grant: %v", repos)
 	}
 
@@ -681,15 +682,6 @@ func githubRepos(t *testing.T, scope json.RawMessage) []string {
 	return s.Repos
 }
 
-func contains(xs []string, want string) bool {
-	for _, x := range xs {
-		if strings.EqualFold(x, want) {
-			return true
-		}
-	}
-	return false
-}
-
 // ─── local-workspace git-remote grounding ────────────────────────────────────
 
 // writeGitConfig creates <dir>/.git/config with one origin remote URL.
@@ -752,15 +744,6 @@ func githubGrantRepos(t *testing.T, spec types.RunPolicySpec) ([]string, bool) {
 	return nil, false
 }
 
-func warnsContain(warns []string, sub string) bool {
-	for _, w := range warns {
-		if strings.Contains(w, sub) {
-			return true
-		}
-	}
-	return false
-}
-
 // TestCompose_LocalGitRemoteGrounding is the deterministic-git-remote property:
 // for a LOCAL workspace the github_token is grounded on the directory's ACTUAL
 // remotes, never the model's guess; no remote => no token.
@@ -803,7 +786,7 @@ func TestCompose_LocalGitRemoteGrounding(t *testing.T) {
 		if _, ok := githubGrantRepos(t, cr.Proposed.InlinePolicy); ok {
 			t.Errorf("a dir with no git remote must yield NO github_token grant")
 		}
-		if !warnsContain(cr.Warnings, "no GitHub git remote") {
+		if !slices.ContainsFunc(cr.Warnings, func(w string) bool { return strings.Contains(w, "no GitHub git remote") }) {
 			t.Errorf("expected a 'no GitHub git remote' warning, got %v", cr.Warnings)
 		}
 	})
@@ -820,7 +803,7 @@ func TestCompose_LocalGitRemoteGrounding(t *testing.T) {
 		if _, ok := githubGrantRepos(t, cr.Proposed.InlinePolicy); ok {
 			t.Errorf("a non-GitHub remote must yield NO github_token grant")
 		}
-		if !warnsContain(cr.Warnings, "non-GitHub remote") {
+		if !slices.ContainsFunc(cr.Warnings, func(w string) bool { return strings.Contains(w, "non-GitHub remote") }) {
 			t.Errorf("expected a non-GitHub remote warning, got %v", cr.Warnings)
 		}
 	})

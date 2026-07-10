@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestAudit_RunActionsAreQueryableInSeqOrder(t *testing.T) {
 			return false
 		}
 		events = ev
-		return hasAction(ev, "run.complete")
+		return slices.ContainsFunc(ev, func(e types.AuditEvent) bool { return e.Action == "run.complete" })
 	}) {
 		t.Fatalf("run.complete audit event never surfaced via the SDK; got actions=%v", actionsOf(events))
 	}
@@ -84,7 +85,7 @@ func TestAudit_RunActionsAreQueryableInSeqOrder(t *testing.T) {
 
 	// Expected control-plane actions for a runner-backed completion.
 	for _, want := range []string{"run.exec", "run.complete"} {
-		if !hasAction(events, want) {
+		if !slices.ContainsFunc(events, func(e types.AuditEvent) bool { return e.Action == want }) {
 			t.Errorf("missing audit action %q; got %v", want, actionsOf(events))
 		}
 	}
@@ -101,7 +102,9 @@ func TestAudit_RunActionsAreQueryableInSeqOrder(t *testing.T) {
 				i, events[i].Time, events[i-1].Time)
 		}
 	}
-	if execIdx, doneIdx := indexOfAction(events, "run.exec"), indexOfAction(events, "run.complete"); execIdx < 0 || doneIdx < 0 || execIdx >= doneIdx {
+	execIdx := slices.IndexFunc(events, func(e types.AuditEvent) bool { return e.Action == "run.exec" })
+	doneIdx := slices.IndexFunc(events, func(e types.AuditEvent) bool { return e.Action == "run.complete" })
+	if execIdx < 0 || doneIdx < 0 || execIdx >= doneIdx {
 		t.Fatalf("expected run.exec (idx %d) to precede run.complete (idx %d) in seq order; actions=%v",
 			execIdx, doneIdx, actionsOf(events))
 	}
@@ -141,7 +144,7 @@ func TestAudit_ApprovalDecisionRecorded(t *testing.T) {
 
 	if !waitFor(t, 5*time.Second, func() bool {
 		ev, qerr := h.sdk.AuditEvents(ctx, runID)
-		return qerr == nil && hasAction(ev, "approval.decide")
+		return qerr == nil && slices.ContainsFunc(ev, func(e types.AuditEvent) bool { return e.Action == "approval.decide" })
 	}) {
 		ev, _ := h.sdk.AuditEvents(ctx, runID)
 		t.Fatalf("approval.decide not in audit trail; got %v", actionsOf(ev))
@@ -192,16 +195,6 @@ func TestRecording_UploadThenServe(t *testing.T) {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// hasAction reports whether any event has the given action.
-func hasAction(events []types.AuditEvent, action string) bool {
-	for _, ev := range events {
-		if ev.Action == action {
-			return true
-		}
-	}
-	return false
-}
-
 // actionsOf collects the actions for diagnostic failure messages.
 func actionsOf(events []types.AuditEvent) []string {
 	out := make([]string, 0, len(events))
@@ -209,16 +202,6 @@ func actionsOf(events []types.AuditEvent) []string {
 		out = append(out, ev.Action)
 	}
 	return out
-}
-
-// indexOfAction returns the index of the first event with action, or -1.
-func indexOfAction(events []types.AuditEvent, action string) int {
-	for i, ev := range events {
-		if ev.Action == action {
-			return i
-		}
-	}
-	return -1
 }
 
 // putRaw PUTs a raw body with a bearer token and returns the status code.
