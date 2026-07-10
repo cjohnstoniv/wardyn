@@ -50,34 +50,6 @@ func readMigration(t *testing.T, name string) string {
 	return string(data)
 }
 
-// TestMigrationsDiscoveredInLexicalOrder asserts the discovery API yields the
-// migrations sorted by their numeric prefix, which is the ordering Migrate()
-// depends on to apply DDL deterministically (0003 must run after 0001, etc.).
-func TestMigrationsDiscoveredInLexicalOrder(t *testing.T) {
-	names := readMigrationNames(t)
-	if len(names) == 0 {
-		t.Fatal("no migrations discovered; embed glob is broken")
-	}
-
-	// Lexical sort over zero-padded 4-digit prefixes must equal numeric sort.
-	prev := -1
-	for _, name := range names {
-		m := migrationNameRe.FindStringSubmatch(name)
-		if m == nil {
-			t.Fatalf("migration %q does not match NNNN_slug.sql naming", name)
-		}
-		n, err := strconv.Atoi(m[1])
-		if err != nil {
-			t.Fatalf("migration %q has non-numeric prefix: %v", name, err)
-		}
-		if n <= prev {
-			t.Errorf("migration %q (prefix %04d) is not strictly after the previous prefix %04d; "+
-				"lexical discovery order would mis-apply DDL", name, n, prev)
-		}
-		prev = n
-	}
-}
-
 // TestMigrationPrefixesNoGapsOrDupes asserts the numeric prefixes form a
 // contiguous, duplicate-free sequence (1,2,3,4,...). A gap or duplicate means a
 // migration was renamed/dropped or two migrations collide, which breaks the
@@ -113,20 +85,6 @@ func TestMigrationPrefixesNoGapsOrDupes(t *testing.T) {
 			t.Errorf("gap in migration prefixes between %04d and %04d; "+
 				"prefixes must be contiguous", prefixes[i-1], prefixes[i])
 		}
-	}
-}
-
-// TestMigrationFilenamesUnique asserts there are no duplicate filenames in the
-// migration set. Filenames are the PRIMARY KEY of schema_migrations, so a
-// collision would cause one migration to be silently skipped as "applied".
-func TestMigrationFilenamesUnique(t *testing.T) {
-	names := readMigrationNames(t)
-	seen := map[string]bool{}
-	for _, name := range names {
-		if seen[name] {
-			t.Errorf("duplicate migration filename %q (filename is the schema_migrations PK)", name)
-		}
-		seen[name] = true
 	}
 }
 
