@@ -35,7 +35,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -117,11 +116,6 @@ type Config struct {
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
 	// store.NewPG(Pool) adapter when wired from wardynd.
 	Store store.Store
-	// Pool is the Postgres pool. It backs the Store adapter and is retained for
-	// the few collaborators that need a raw pool / transaction rather than the
-	// single-call Store (broker tx beginner, identity revocation, the lifecycle
-	// adapters wired in wardynd).
-	Pool *pgxpool.Pool
 	// Identity mints/verifies/revokes per-run identities (embedded by default).
 	Identity identity.Provider
 	// Approvals is the approval FSM service.

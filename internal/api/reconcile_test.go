@@ -58,7 +58,6 @@ func TestReconcileFinalize_TeardownErrorAudited(t *testing.T) {
 	fr := &errTeardownRunner{fakeRunner: &fakeRunner{}, stopErr: errors.New("docker: no such container")}
 	srv := New(Config{
 		Store:           store.NewPG(pool),
-		Pool:            pool,
 		Identity:        idp,
 		Approvals:       newFakeApprovals(),
 		Broker:          &fakeBroker{},

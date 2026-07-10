@@ -105,7 +105,6 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 	}
 	srv := New(Config{
 		Store:       store.NewPG(pool),
-		Pool:        pool,
 		Identity:    idp,
 		Approvals:   newFakeApprovals(),
 		Broker:      &fakeBroker{},
