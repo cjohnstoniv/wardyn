@@ -6,19 +6,14 @@
 // run proposal.
 //
 // It forces the model to emit ONLY the portable strict JSON Schema from package
-// composer. Two structured-output strategies are supported, selected per Config:
+// composer, using Structured Outputs: output_config.format is set to a json_schema
+// wrapping composer.ProposalJSONSchema(), and the model returns the JSON object as
+// an ordinary text content block.
 //
-//   - Structured Outputs (preferred): set output_config.format to a json_schema
-//     wrapping composer.ProposalJSONSchema(); the model returns the JSON object as
-//     an ordinary text content block.
-//   - Forced tool (fallback): register ONE tool whose input_schema is the proposal
-//     schema and pin tool_choice to it; the JSON object arrives as the tool_use
-//     block's input.
-//
-// Either way the extracted JSON bytes are handed to composer.ProposeWithRetry,
-// which parses, validates, bounds retries, and fails closed. The system prompt and
-// user-message assembly (including untrusted-content fencing) come from package
-// composer so every backend shares the exact same trust boundary.
+// The extracted JSON bytes are handed to composer.ProposeWithRetry, which parses,
+// validates, bounds retries, and fails closed. The system prompt and user-message
+// assembly (including untrusted-content fencing) come from package composer so
+// every backend shares the exact same trust boundary.
 package anthropic
 
 import (
@@ -68,11 +63,6 @@ type Config struct {
 	// Zero falls back to composer.DefaultMaxAttempts.
 	MaxAttempts int
 
-	// useForcedTool selects the forced-tool strategy instead of Structured
-	// Outputs. Unexported: the public default is Structured Outputs, which the
-	// installed SDK supports; tests flip this to exercise the fallback path.
-	useForcedTool bool
-
 	// extraOptions are appended to the SDK client options (after auth). Tests use
 	// it to inject option.WithBaseURL(httptest.Server.URL); production leaves it
 	// empty.
@@ -85,7 +75,6 @@ type composerImpl struct {
 	client      sdk.Client
 	model       sdk.Model
 	maxAttempts int
-	forcedTool  bool
 }
 
 // NewComposer validates cfg, constructs the SDK client for the chosen transport,
@@ -141,7 +130,6 @@ func NewComposer(cfg Config) (composer.Composer, error) {
 		client:      client,
 		model:       cfg.Model,
 		maxAttempts: cfg.MaxAttempts,
-		forcedTool:  cfg.useForcedTool,
 	}, nil
 }
 
@@ -203,14 +191,13 @@ func (c *composerImpl) issue(ctx context.Context, params sdk.MessageNewParams) (
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: messages request failed: %w", err)
 	}
-	return extractJSON(msg, c.forcedTool)
+	return extractJSON(msg)
 }
 
 // buildParams assembles the single MessageNewParams shared by all attempts: the
-// given system prompt, fenced user message, model, max tokens, and the
-// structured-output mechanism (Structured Outputs by default, a forced tool in the
-// fallback path) forcing the given schema/name. The schema/prompt are parameters
-// so the same wire drives both the propose and clarify steps.
+// given system prompt, fenced user message, model, max tokens, and Structured
+// Outputs forcing the given schema/name. The schema/prompt are parameters so the
+// same wire drives both the propose and clarify steps.
 func (c *composerImpl) buildParams(req composer.ComposeRequest, system string, schema map[string]any, schemaName string) sdk.MessageNewParams {
 	params := sdk.MessageNewParams{
 		Model:     c.model,
@@ -220,58 +207,18 @@ func (c *composerImpl) buildParams(req composer.ComposeRequest, system string, s
 			sdk.NewUserMessage(sdk.NewTextBlock(composer.BuildUserMessage(req))),
 		},
 	}
-	if c.forcedTool {
-		params.Tools = []sdk.ToolUnionParam{{
-			OfTool: &sdk.ToolParam{
-				Name:        schemaName,
-				InputSchema: toolInputSchema(schema),
-				Strict:      sdk.Bool(true),
-			},
-		}}
-		params.ToolChoice = sdk.ToolChoiceParamOfTool(schemaName)
-		return params
-	}
 	params.OutputConfig = sdk.OutputConfigParam{
 		Format: sdk.JSONOutputFormatParam{Schema: schema},
 	}
 	return params
 }
 
-// toolInputSchema maps the portable proposal schema onto the SDK's tool
-// input_schema shape. The schema is always an object {type, additionalProperties,
-// properties, required}; properties/required are lifted into the typed fields and
-// additionalProperties:false is preserved via ExtraFields so strict validation
-// still rejects unknown keys.
-func toolInputSchema(schema map[string]any) sdk.ToolInputSchemaParam {
-	in := sdk.ToolInputSchemaParam{}
-	if props, ok := schema["properties"]; ok {
-		in.Properties = props
-	}
-	if reqd, ok := schema["required"].([]string); ok {
-		in.Required = reqd
-	}
-	in.ExtraFields = map[string]any{"additionalProperties": false}
-	return in
-}
-
-// extractJSON pulls the proposal JSON bytes out of the Messages response. For the
-// forced-tool strategy it reads the first tool_use block's input; otherwise it
-// concatenates the assistant text blocks (Structured Outputs returns the object as
-// text). It fails closed when no usable content is present.
-func extractJSON(msg *sdk.Message, forcedTool bool) ([]byte, error) {
+// extractJSON pulls the proposal JSON bytes out of the Messages response by
+// concatenating the assistant text blocks (Structured Outputs returns the object
+// as text). It fails closed when no usable content is present.
+func extractJSON(msg *sdk.Message) ([]byte, error) {
 	if msg == nil {
 		return nil, errors.New("anthropic: nil message response")
-	}
-	if forcedTool {
-		for _, block := range msg.Content {
-			if block.Type == "tool_use" {
-				tu := block.AsToolUse()
-				if len(tu.Input) > 0 {
-					return []byte(tu.Input), nil
-				}
-			}
-		}
-		return nil, errors.New("anthropic: response contained no tool_use block")
 	}
 	var b strings.Builder
 	for _, block := range msg.Content {

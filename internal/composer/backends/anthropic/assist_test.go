@@ -20,7 +20,7 @@ import (
 func TestAssist_NoStructuredOutput(t *testing.T) {
 	var rec capturedRequest
 	const answer = "The sandbox has no internet access, so the agent cannot reach GitHub or any other site."
-	srv := newFakeServer(t, &rec, answer, "")
+	srv := newFakeServer(t, &rec, answer)
 
 	c, err := NewComposer(Config{
 		Transport:    TransportAPI,
