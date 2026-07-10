@@ -20,23 +20,31 @@ import (
 // detection, no mounts) and both transports return the same body.
 const trackAComposeBody = `{"prompt":"build a small website","workspace":{"kind":"ephemeral"},"mode":"skip"}`
 
+// singleBackendRegistry wires c as the sole ("fake") backend on a composer
+// registry, the one-entry shape every compose test harness in this package
+// needs to make the compose/assist/telemetry endpoints Enabled().
+func singleBackendRegistry(t *testing.T, c composer.Composer) *composer.Registry {
+	t.Helper()
+	reg, err := composer.NewRegistry("fake", []composer.RegistryEntry{{
+		Info:     composer.BackendInfo{Name: "fake", Provider: "fake", Model: "test"},
+		Composer: c,
+	}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	return reg
+}
+
 // newStreamComposerHarness wires a deterministic FakeComposer into the standard
 // api harness so the compose endpoint is Enabled().
 func newStreamComposerHarness(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t)
-	reg, err := composer.NewRegistry("fake", []composer.RegistryEntry{{
-		Info: composer.BackendInfo{Name: "fake", Provider: "fake", Model: "test"},
-		Composer: &composer.FakeComposer{Result: composer.Proposal{
-			Run:          composer.RunInput{Agent: "claude", Task: "build a small website"},
-			InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
-			Summary:      "proposed a throwaway sandbox",
-		}},
+	h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{Result: composer.Proposal{
+		Run:          composer.RunInput{Agent: "claude", Task: "build a small website"},
+		InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+		Summary:      "proposed a throwaway sandbox",
 	}})
-	if err != nil {
-		t.Fatalf("compose registry: %v", err)
-	}
-	h.srv.cfg.Composer = reg
 	return h
 }
 
@@ -110,19 +118,12 @@ func TestTrackAComposeBufferPathJSON(t *testing.T) {
 // would not catch a broken pipeline.
 func TestComposeRaisesRunConfinementToFloor(t *testing.T) {
 	h := newHarness(t)
-	reg, err := composer.NewRegistry("fake", []composer.RegistryEntry{{
-		Info: composer.BackendInfo{Name: "fake", Provider: "fake", Model: "test"},
-		Composer: &composer.FakeComposer{Result: composer.Proposal{
-			// The run asks for the WEAKEST tier while the policy floor is CC2.
-			Run:          composer.RunInput{Agent: "claude", Task: "build a small website", ConfinementClass: "CC1"},
-			InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
-			Summary:      "proposed a throwaway sandbox",
-		}},
+	h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{Result: composer.Proposal{
+		// The run asks for the WEAKEST tier while the policy floor is CC2.
+		Run:          composer.RunInput{Agent: "claude", Task: "build a small website", ConfinementClass: "CC1"},
+		InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+		Summary:      "proposed a throwaway sandbox",
 	}})
-	if err != nil {
-		t.Fatalf("compose registry: %v", err)
-	}
-	h.srv.cfg.Composer = reg
 
 	w := streamComposePOST(t, h.srv, "application/json")
 	if w.Code != http.StatusOK {

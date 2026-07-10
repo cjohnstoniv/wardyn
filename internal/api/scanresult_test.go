@@ -96,8 +96,9 @@ func newScanUploadSrv(t *testing.T, adv func(context.Context, workspacescan.Scan
 		run: types.AgentRun{ID: runID, Task: "workspace scan", WorkspaceID: &wsID},
 		ws:  types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: st, ScanAIAdvisor: adv})
+	cfg := baseTestConfig(h, st)
+	cfg.ScanAIAdvisor = adv
+	srv := New(cfg)
 	return srv, st, h.mintRunToken(t, runID), wsID
 }
 

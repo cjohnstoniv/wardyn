@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -147,6 +148,23 @@ func newHarness(t *testing.T) *harness {
 		ControlPlaneURL: "http://wardynd:8080",
 	})
 	return &harness{srv: srv, idp: idp, approvals: approvals, broker: brk, audit: audit}
+}
+
+// baseTestConfig returns the Config preamble shared by most handler tests
+// that build their own Server rather than using newHarness directly: embedded
+// identity/audit from h, admin auth, and the fixed trust domain/control-plane
+// URL every one of those call sites repeated verbatim. Callers can still
+// override any field (Store, DefaultPolicy, ScanAIAdvisor, ...) on the
+// returned value before calling New.
+func baseTestConfig(h *harness, st store.Store) Config {
+	return Config{
+		Identity:        h.idp,
+		Audit:           h.audit,
+		AdminToken:      adminToken,
+		TrustDomain:     "wardyn.local",
+		ControlPlaneURL: "http://wardynd:8080",
+		Store:           st,
+	}
 }
 
 func (h *harness) mintRunToken(t *testing.T, runID uuid.UUID) string {

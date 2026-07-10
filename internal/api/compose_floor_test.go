@@ -16,11 +16,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// capRunner is a fakeRunner reporting a FIXED set of confinement classes, so a
-// compose handler test can pin exactly what the host "can enforce" — bestClass of
-// this set is the availability cap fed to EffectiveConfinementFloor.
+// capRunner is a runner.Runner reporting a FIXED set of confinement classes,
+// so a compose handler test can pin exactly what the host "can enforce" —
+// bestClass of this set is the availability cap fed to
+// EffectiveConfinementFloor. It embeds the nil interface (like setupTestRunner
+// in compose_setup_test.go) since this test path only ever calls Capabilities.
 type capRunner struct {
-	*fakeRunner
+	runner.Runner
 	classes []types.ConfinementClass
 }
 
@@ -59,21 +61,14 @@ func TestCompose_ConfinementFloorThreadsAndFailsClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			reg, err := composer.NewRegistry("fake", []composer.RegistryEntry{{
-				Info: composer.BackendInfo{Name: "fake", Provider: "fake", Model: "test"},
-				Composer: &composer.FakeComposer{Result: composer.Proposal{
-					// agent "claude" (not "claude-code") avoids the LLM-grant path so the
-					// only warnings in play come from the confinement clamp under test.
-					Run:          composer.RunInput{Agent: "claude", Task: "build a small website"},
-					InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC1},
-					Summary:      "throwaway sandbox",
-				}},
+			h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{Result: composer.Proposal{
+				// agent "claude" (not "claude-code") avoids the LLM-grant path so the
+				// only warnings in play come from the confinement clamp under test.
+				Run:          composer.RunInput{Agent: "claude", Task: "build a small website"},
+				InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+				Summary:      "throwaway sandbox",
 			}})
-			if err != nil {
-				t.Fatalf("registry: %v", err)
-			}
-			h.srv.cfg.Composer = reg
-			h.srv.cfg.Runner = capRunner{fakeRunner: &fakeRunner{}, classes: tc.hostBest}
+			h.srv.cfg.Runner = capRunner{classes: tc.hostBest}
 			h.srv.cfg.DefaultPolicy.MinConfinementClass = tc.policyMin
 
 			body := fmt.Sprintf(`{"prompt":"build a small website","workspace":{"kind":"ephemeral"},"mode":"skip","confinement_floor":%q}`, tc.floor)

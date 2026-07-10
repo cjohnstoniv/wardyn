@@ -65,14 +65,7 @@ func wireMultiRoundComposer(t *testing.T, srv *Server) {
 		InlinePolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
 		Summary:      "proposed a throwaway sandbox",
 	}}
-	reg, err := composer.NewRegistry("fake", []composer.RegistryEntry{{
-		Info:     composer.BackendInfo{Name: "fake", Provider: "fake", Model: "test"},
-		Composer: mrc,
-	}})
-	if err != nil {
-		t.Fatalf("compose registry: %v", err)
-	}
-	srv.cfg.Composer = reg
+	srv.cfg.Composer = singleBackendRegistry(t, mrc)
 }
 
 // TestComposeSessionID_InvalidRejectedBothTransports asserts a malformed

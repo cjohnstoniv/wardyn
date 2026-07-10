@@ -18,17 +18,36 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
+// importStateFake implements store.Store's SetWorkspaceImportState by mutating
+// a copy of the embedded workspace snapshot and recording the write. The
+// record/verify test fakes below otherwise duplicated this method
+// byte-for-byte, so they embed this instead.
+type importStateFake struct {
+	ws    types.Workspace
+	state *types.Workspace // last SetWorkspaceImportState write (nil = untouched)
+}
+
+func (s *importStateFake) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
+	ws := s.ws
+	ws.Status = status
+	ws.ActiveRunID = active
+	ws.VerifyResult = vr
+	ws.VerifiedProfileHash = vh
+	ws.VerifiedAt = va
+	s.state = &ws
+	return ws, nil
+}
+
 // recordStore fakes exactly the store surface the record lane touches.
 type recordStore struct {
 	store.Store
-	ws            types.Workspace
+	importStateFake
 	run           types.AgentRun
 	events        []types.AuditEvent
 	grants        []types.CredentialGrant
-	saved         json.RawMessage  // current record_results blob (per-key upserts land here)
-	state         *types.Workspace // last SetWorkspaceImportState write (nil = untouched)
-	claimedRun    *uuid.UUID       // last ClaimWorkspaceActiveRun run id
-	clearedActive bool             // ClearWorkspaceActiveRun called
+	saved         json.RawMessage // current record_results blob (per-key upserts land here)
+	claimedRun    *uuid.UUID      // last ClaimWorkspaceActiveRun run id
+	clearedActive bool            // ClearWorkspaceActiveRun called
 }
 
 func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
@@ -37,6 +56,13 @@ func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace,
 		ws.RecordResults = s.saved
 	}
 	return ws, nil
+}
+
+// SetWorkspaceImportState resolves the otherwise-ambiguous selector between the
+// embedded nil store.Store interface and importStateFake (both declare this
+// method) by routing to importStateFake's shared implementation explicitly.
+func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, vr, vh, va)
 }
 func (s *recordStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	if s.run.ID == uuid.Nil {
@@ -100,16 +126,6 @@ func (s *recordStore) SetWorkspaceApprovedEgress(_ context.Context, _ uuid.UUID,
 	s.ws.ApprovedEgress = domains
 	return s.ws, nil
 }
-func (s *recordStore) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	ws := s.ws
-	ws.Status = status
-	ws.ActiveRunID = active
-	ws.VerifyResult = vr
-	ws.VerifiedProfileHash = vh
-	ws.VerifiedAt = va
-	s.state = &ws
-	return ws, nil
-}
 
 func (s *recordStore) savedResult(t *testing.T, task string) RecordTaskResult {
 	t.Helper()
@@ -144,11 +160,10 @@ func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()
 	fake := &recordStore{
-		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted},
-		ws:  recordingWorkspace(wsID, runID, "build"),
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunCompleted},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 
 	srv.reconcileRecordRun(context.Background(), runID)
 
@@ -176,7 +191,7 @@ func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 	fake := &recordStore{
 		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record",
 			State: types.RunCompleted, ConfinementClass: types.CC3},
-		ws: recordingWorkspace(wsID, runID, "build"),
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 		events: []types.AuditEvent{
 			egressAllowEvent(runID, "registry.npmjs.org"),
 			egressAllowEvent(runID, "api.stripe.com"),
@@ -186,8 +201,7 @@ func TestReconcileRecordRun_CapturesObservationsAndSecretNames(t *testing.T) {
 		grants: []types.CredentialGrant{{ID: grantID, RunID: runID,
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"secret_name": "STRIPE_SECRET_KEY"})}}},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 
 	srv.reconcileRecordRun(context.Background(), runID)
 
@@ -214,22 +228,20 @@ func TestReconcileRecordRun_IgnoresNonRecordAndSupersededRuns(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	// A verify run must never be captured into record_results.
 	fake := &recordStore{
-		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
-		ws:  recordingWorkspace(wsID, runID, "build"),
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify"},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 	srv.reconcileRecordRun(context.Background(), runID)
 	if fake.saved != nil {
 		t.Error("verify run wrote record_results")
 	}
 	// A record run whose task entry now points at a NEWER run is superseded.
 	fake2 := &recordStore{
-		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
-		ws:  recordingWorkspace(wsID, uuid.New() /* newer run owns the entry */, "build"),
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, uuid.New() /* newer run owns the entry */, "build")},
 	}
-	srv2 := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake2})
+	srv2 := New(baseTestConfig(h, fake2))
 	srv2.reconcileRecordRun(context.Background(), runID)
 	if fake2.saved != nil {
 		t.Error("superseded run wrote record_results")
@@ -240,7 +252,7 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 	wsID := uuid.New()
 	ws := types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
 		SetupCommands: mustJSON([]workspacescan.SetupCommand{{Stage: "build", Command: "go build ./...", Source: "convention:go"}})}
-	fake := &recordStore{ws: ws}
+	fake := &recordStore{importStateFake: importStateFake{ws: ws}}
 	srv := newVerifySrv(t, fake)
 	url := "/api/v1/workspaces/" + wsID.String() + "/record"
 
@@ -282,11 +294,11 @@ func TestRecordSessionKey_Slugs(t *testing.T) {
 
 func TestGetWorkspace_ReturnsRecordResultsNoDerivedTasks(t *testing.T) {
 	wsID := uuid.New()
-	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build-test": {RunID: uuid.New(), Label: "build & test", Mode: recordModeInteractive, Status: recordStatusRecorded},
-		})}}
+		})}}}
 	srv := newVerifySrv(t, fake)
 	w := do(t, srv, http.MethodGet, "/api/v1/workspaces/"+wsID.String(), adminToken, "")
 	if w.Code != http.StatusOK {
@@ -320,11 +332,11 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 		{Host: "169.254.169.254", DenyCount: 1},
 		{Host: "localhost", AllowCount: 1}, // not a ValidApprovedHost shape → skipped
 	}}
-	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
-		})}}
+		})}}}
 	srv := newVerifySrv(t, fake)
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
 	if w.Code != http.StatusOK {
@@ -356,14 +368,13 @@ func TestUploadVerifyResult_LateRecordUploadCannotRevertCapture(t *testing.T) {
 	// the fake's saved blob — what the guarded write checks — says `recorded`:
 	// the capture landed between the handler's read and its write.
 	fake := &recordStore{
-		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
-		ws:  recordingWorkspace(wsID, runID, "build"),
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 	}
 	fake.saved = mustJSON(map[string]RecordTaskResult{
 		"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded},
 	})
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 
 	// The handler reads the workspace through GetWorkspace (which reflects
 	// saved = recorded) → 409 no in-flight recording. Either way, the entry
@@ -378,16 +389,30 @@ func TestUploadVerifyResult_LateRecordUploadCannotRevertCapture(t *testing.T) {
 	}
 }
 
+// staleReadStore serves a fixed stale workspace row from GetWorkspace while
+// delegating writes (and their guards) to the embedded recordStore. Used only
+// by TestPromoteRecordEgress_GuardMissConflicts below, to model the row the
+// operator's GET saw going stale before their promote-egress guarded write
+// lands.
+type staleReadStore struct {
+	*recordStore
+	staleWS types.Workspace
+}
+
+func (s *staleReadStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	return s.staleWS, nil
+}
+
 func TestPromoteRecordEgress_GuardMissConflicts(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
 	// The row the handler reads says `recorded`, but the guarded write sees the
 	// fake's saved blob where a re-record flipped it back to `recording`.
-	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Status: recordStatusRecorded, Observations: &obs},
-		})}}
+		})}}}
 	// Prime saved with the superseding re-record, while GetWorkspace keeps
 	// serving the stale `recorded` row the operator saw.
 	fake.saved = mustJSON(map[string]RecordTaskResult{
@@ -418,15 +443,15 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 		{Host: "api.anthropic.com", AllowCount: 5}, // harness/model-provider plumbing → never
 		{Host: "github.com", AllowCount: 2},        // baseline clone host → never
 	}}
-	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
-		})}}
+		})}}}
 	h := newHarness(t)
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake,
-		DefaultPolicy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}})
+	cfg := baseTestConfig(h, fake)
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	srv := New(cfg)
 
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
 	if w.Code != http.StatusOK {
@@ -447,11 +472,11 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 		{Host: "api.stripe.com", AllowCount: 1},
 		{Host: "evil.example.com", AllowCount: 1},
 	}}
-	fake := &recordStore{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: recordModeAuto, Status: recordStatusRecorded, Observations: &obs},
-		})}}
+		})}}}
 	srv := newVerifySrv(t, fake)
 	url := "/api/v1/workspaces/" + wsID.String() + "/record/build/promote-egress"
 
@@ -473,28 +498,16 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 	}
 }
 
-// staleReadStore serves a fixed stale workspace row from GetWorkspace while
-// delegating writes (and their guards) to the embedded recordStore.
-type staleReadStore struct {
-	*recordStore
-	staleWS types.Workspace
-}
-
-func (s *staleReadStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
-	return s.staleWS, nil
-}
-
 func TestGetWorkspace_RepairsStaleRecordingOnRead(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()
 	// Entry says `recording` but the run is TERMINAL (e.g. idle-reaped with no
 	// reconcile hook): the GET must settle it via repair-on-read.
 	fake := &recordStore{
-		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunStopped},
-		ws:  recordingWorkspace(wsID, runID, "build"),
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record", State: types.RunStopped},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 	w := do(t, srv, http.MethodGet, "/api/v1/workspaces/"+wsID.String(), adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("get: code = %d", w.Code)
@@ -509,11 +522,10 @@ func TestUploadVerifyResult_RecordRunLandsInRecordResultsOnly(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	tok := h.mintRunToken(t, runID)
 	fake := &recordStore{
-		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
-		ws:  recordingWorkspace(wsID, runID, "build"),
+		run:             types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace record"},
+		importStateFake: importStateFake{ws: recordingWorkspace(wsID, runID, "build")},
 	}
-	srv := New(Config{Identity: h.idp, Audit: h.audit, AdminToken: adminToken,
-		TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080", Store: fake})
+	srv := New(baseTestConfig(h, fake))
 
 	body := `{"ran":true,"ok":true,"done":false,"total":2,"steps":[{"stage":"install","command":"npm ci","exit_code":0,"running":true}]}`
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/verify-results/"+runID.String(), tok, body)
