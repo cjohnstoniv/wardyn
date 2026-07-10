@@ -126,17 +126,6 @@ type Stopper interface {
 	StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (StopOutcome, error)
 }
 
-// Clock is an injectable wall-clock abstraction that makes the Reaper fully
-// deterministic in tests.
-type Clock interface {
-	Now() time.Time
-}
-
-// realClock delegates to time.Now. Used in production.
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now() }
-
 // Recorder is the minimal audit interface the Reaper needs. It matches
 // audit.Recorder exactly so the integrator can pass a store.Recorder directly.
 type Recorder interface {
@@ -148,11 +137,9 @@ type Recorder interface {
 type Config struct {
 	// Interval is how often the reaper scans. Default: 1 minute.
 	Interval time.Duration
-	// StopTimeout bounds each individual StopRun call. 0 means use the package
-	// default (defaultStopTimeout). See finding #3.
-	StopTimeout time.Duration
-	// Clock injects a wall-clock. Nil means use real time.
-	Clock Clock
+	// Now overrides the wall clock. Nil means use real time.
+	// (overridable in tests, mirrors embedded.Provider's now func idiom)
+	Now func() time.Time
 }
 
 // Reaper is the idle-workspace garbage collector. It runs a periodic loop
@@ -163,35 +150,30 @@ type Config struct {
 // until ctx is cancelled. A stopper error is logged and skipped so that one
 // broken sandbox never prevents the rest from being reaped on the same tick.
 type Reaper struct {
-	store       Store
-	stopper     Stopper
-	recorder    Recorder
-	clock       Clock
-	interval    time.Duration
-	stopTimeout time.Duration
-	logger      *slog.Logger
+	store    Store
+	stopper  Stopper
+	recorder Recorder
+	now      func() time.Time
+	interval time.Duration
+	logger   *slog.Logger
 }
 
 // New constructs a Reaper. store, stopper, and recorder are required and must
 // be non-nil. cfg may be zero-valued.
 func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 	r := &Reaper{
-		store:       store,
-		stopper:     stopper,
-		recorder:    recorder,
-		clock:       cfg.Clock,
-		interval:    cfg.Interval,
-		stopTimeout: cfg.StopTimeout,
-		logger:      slog.Default().With("component", "lifecycle.reaper"),
+		store:    store,
+		stopper:  stopper,
+		recorder: recorder,
+		now:      cfg.Now,
+		interval: cfg.Interval,
+		logger:   slog.Default().With("component", "lifecycle.reaper"),
 	}
-	if r.clock == nil {
-		r.clock = realClock{}
+	if r.now == nil {
+		r.now = time.Now
 	}
 	if r.interval <= 0 {
 		r.interval = defaultInterval
-	}
-	if r.stopTimeout <= 0 {
-		r.stopTimeout = defaultStopTimeout
 	}
 	return r
 }
@@ -222,7 +204,7 @@ func (r *Reaper) Tick(ctx context.Context) {
 		return
 	}
 
-	now := r.clock.Now()
+	now := r.now()
 
 	for _, run := range runs {
 		// Auto-stop disabled / never-reap opt-out (finding #2): a policy
@@ -244,7 +226,7 @@ func (r *Reaper) Tick(ctx context.Context) {
 		// deadline (finding #3) so a single hung StopSandbox cannot stall the
 		// whole reap loop; the run is simply retried on the next tick.
 		runID := run.ID
-		stopCtx, cancel := context.WithTimeout(ctx, r.stopTimeout)
+		stopCtx, cancel := context.WithTimeout(ctx, defaultStopTimeout)
 		// Pass the snapshot's updated_at so the stop transition is conditional on
 		// the run not having been touched (e.g. by an active attach keepalive)
 		// since the scan — finding N3.
@@ -307,7 +289,7 @@ func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, thr
 	})
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
-		Time:      r.clock.Now(),
+		Time:      r.now(),
 		RunID:     &runID,
 		ActorType: types.ActorSystem,
 		Actor:     "wardyn/lifecycle-reaper",
@@ -335,7 +317,7 @@ func (r *Reaper) emitRevokeFailure(ctx context.Context, runID uuid.UUID, errs ma
 	data, _ := json.Marshal(errs)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
-		Time:      r.clock.Now(),
+		Time:      r.now(),
 		RunID:     &runID,
 		ActorType: types.ActorSystem,
 		Actor:     "wardyn/lifecycle-reaper",
