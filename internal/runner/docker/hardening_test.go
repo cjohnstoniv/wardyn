@@ -7,6 +7,7 @@ package docker
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -55,7 +56,7 @@ func TestCapabilitiesFor_ClassMapping(t *testing.T) {
 			if !caps.SessionRecording {
 				t.Error("SessionRecording must be true")
 			}
-			if !equalClasses(caps.ConfinementClasses, tt.want) {
+			if !slices.Equal(caps.ConfinementClasses, tt.want) {
 				t.Errorf("ConfinementClasses = %v, want %v", caps.ConfinementClasses, tt.want)
 			}
 			// strongest last invariant
@@ -88,24 +89,15 @@ func TestCapabilitiesForWith_CC1UnhonorablePinNotAdvertised(t *testing.T) {
 		t.Errorf("Resolved must not carry a CC1 substrate when its pin is unhonorable; got %v", caps.Resolved)
 	}
 	// A valid (unpinned) class is still advertised — the drop is surgical.
-	if !containsClass(caps.ConfinementClasses, types.CC2) {
+	if !slices.Contains(caps.ConfinementClasses, types.CC2) {
 		t.Errorf("CC2 (runsc present, no pin) must still be advertised; classes=%v", caps.ConfinementClasses)
 	}
 
 	// Control: with a HONORABLE CC1 pin (sysbox present) CC1 is advertised again.
 	caps2 := capabilitiesForWith(infoWithRuntimes("sysbox"), overrides)
-	if !containsClass(caps2.ConfinementClasses, types.CC1) || caps2.Resolved[types.CC1] != "oci/sysbox" {
+	if !slices.Contains(caps2.ConfinementClasses, types.CC1) || caps2.Resolved[types.CC1] != "oci/sysbox" {
 		t.Errorf("honorable CC1=sysbox pin must advertise CC1 as oci/sysbox; classes=%v resolved=%v", caps2.ConfinementClasses, caps2.Resolved)
 	}
-}
-
-func containsClass(cs []types.ConfinementClass, want types.ConfinementClass) bool {
-	for _, c := range cs {
-		if c == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestClassToRuntime_FailsClosed(t *testing.T) {
@@ -220,7 +212,7 @@ func TestHardenedHostConfig_Invariants(t *testing.T) {
 	if len(hc.CapDrop) != 1 || hc.CapDrop[0] != "ALL" {
 		t.Errorf("CapDrop = %v, want [ALL]", hc.CapDrop)
 	}
-	if !containsStr(hc.SecurityOpt, "no-new-privileges") {
+	if !slices.Contains(hc.SecurityOpt, "no-new-privileges") {
 		t.Errorf("SecurityOpt = %v, must contain no-new-privileges", hc.SecurityOpt)
 	}
 	if _, ok := hc.Tmpfs["/tmp"]; !ok {
@@ -269,14 +261,14 @@ func TestCapabilitiesFor_ByoVaultRuntime(t *testing.T) {
 
 	// No pin: firecracker is unrecognized, so CC3 is NOT auto-advertised.
 	caps := capabilitiesForWith(info, nil)
-	if containsClass(caps.ConfinementClasses, types.CC3) {
+	if slices.Contains(caps.ConfinementClasses, types.CC3) {
 		t.Fatalf("CC3 must NOT auto-advertise for an unrecognized runtime; got %v", caps.ConfinementClasses)
 	}
 
 	// Explicit operator pin: the operator vouches firecracker is a VM -> CC3 advertised.
 	overrides := map[types.ConfinementClass]string{types.CC3: "firecracker"}
 	caps2 := capabilitiesForWith(info, overrides)
-	if !containsClass(caps2.ConfinementClasses, types.CC3) {
+	if !slices.Contains(caps2.ConfinementClasses, types.CC3) {
 		t.Fatalf("CC3 must advertise for an operator-pinned BYO runtime; got %v", caps2.ConfinementClasses)
 	}
 	if got := caps2.Resolved[types.CC3]; got != "oci/firecracker" {
@@ -318,7 +310,7 @@ func TestHardenedHostConfig_KvmDeviceForVault(t *testing.T) {
 			// must not. GroupAdd content is host-dependent (needs /dev/kvm to resolve
 			// the gid), so only assert presence/absence when the gid is resolvable.
 			gid := kvmDeviceGID()
-			if tt.wantKvm && gid != "" && !containsStr(hc.GroupAdd, gid) {
+			if tt.wantKvm && gid != "" && !slices.Contains(hc.GroupAdd, gid) {
 				t.Errorf("runtime %q: GroupAdd = %v, want it to contain kvm gid %q", tt.runtime, hc.GroupAdd, gid)
 			}
 			if !tt.wantKvm && len(hc.GroupAdd) != 0 {
@@ -455,27 +447,6 @@ func TestProxyResources(t *testing.T) {
 	}
 }
 
-func equalClasses(a, b []types.ConfinementClass) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func containsStr(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
 func infoWithSecurity(secOpts ...string) system.Info {
 	return system.Info{
 		Runtimes:        map[string]system.RuntimeWithStatus{"runc": {}, "runsc": {}},
@@ -545,10 +516,10 @@ func TestHardenedHostConfig_SELinuxLabelDisable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hc := hardenedHostConfig("none", tt.runtimeName, runner.Resources{}, tt.info)
-			if !containsStr(hc.SecurityOpt, "no-new-privileges") {
+			if !slices.Contains(hc.SecurityOpt, "no-new-privileges") {
 				t.Error("no-new-privileges must always be set")
 			}
-			gotDisable := containsStr(hc.SecurityOpt, "label=disable")
+			gotDisable := slices.Contains(hc.SecurityOpt, "label=disable")
 			if gotDisable != tt.wantDisable {
 				t.Errorf("label=disable present = %v, want %v (SecurityOpt=%v)", gotDisable, tt.wantDisable, hc.SecurityOpt)
 			}
@@ -575,17 +546,17 @@ func TestHardenedHostConfig_SeccompApparmor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			hc := hardenedHostConfig("none", tt.runtimeName, runner.Resources{}, tt.info)
 			// Baseline invariants on every class.
-			if !containsStr(hc.SecurityOpt, "no-new-privileges") {
+			if !slices.Contains(hc.SecurityOpt, "no-new-privileges") {
 				t.Error("no-new-privileges must always be set")
 			}
-			if !containsStr(hc.CapDrop, "ALL") {
+			if !slices.Contains(hc.CapDrop, "ALL") {
 				t.Error("CapDrop ALL must always be set")
 			}
 			// We must NEVER weaken seccomp to unconfined (RuntimeDefault stays).
-			if containsStr(hc.SecurityOpt, "seccomp=unconfined") {
+			if slices.Contains(hc.SecurityOpt, "seccomp=unconfined") {
 				t.Error("seccomp=unconfined must never be set")
 			}
-			gotApparmor := containsStr(hc.SecurityOpt, "apparmor=docker-default")
+			gotApparmor := slices.Contains(hc.SecurityOpt, "apparmor=docker-default")
 			if gotApparmor != tt.wantApparmor {
 				t.Errorf("apparmor=docker-default present = %v, want %v (SecurityOpt=%v)", gotApparmor, tt.wantApparmor, hc.SecurityOpt)
 			}
