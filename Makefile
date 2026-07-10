@@ -79,7 +79,7 @@ test-report-pg:
 test-report-docker:
 	@echo "Running docker-tagged suite with reports (requires WARDYN_TEST_DOCKER=1)..."
 	./scripts/test-report.sh docker "Wardyn docker integration tests" \
-		-tags docker ./internal/runner/... ./internal/envbuild/...
+		-tags docker ./internal/runner/... ./internal/envbuild/... ./cmd/wardyn-runner/...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Ratcheted to lock in the deep-review test build-out (total was 47.7% at the
