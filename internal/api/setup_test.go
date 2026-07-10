@@ -204,11 +204,14 @@ func TestSetupStatus_ReadyFalseWhenRunnerNil(t *testing.T) {
 	}
 }
 
-// llmAccessAvailable must NOT count a `fake` (deterministic stub) composer backend
+// llmProvenance must NOT count a `fake` (deterministic stub) composer backend
 // as real LLM access — otherwise the first-run page shows "LLM access ✓" for the
 // default `make setup` config (a single fake backend), which is an overclaim: the
 // stub calls no model. Real backends, logged-in CLIs, and api-key secrets DO count.
-func TestLLMAccessAvailable_FakeBackendIsNotAccess(t *testing.T) {
+func TestLLMProvenance_FakeBackendIsNotAccess(t *testing.T) {
+	llmAccessAvailable := func(p []SetupProvider, b []ComposerBackendReadiness, s []string) bool {
+		return llmProvenance(p, b, s, "") != ""
+	}
 	fakeOnly := []ComposerBackendReadiness{{Name: "dev", Wire: "fake", Enabled: true, KeyResolved: true}}
 	if llmAccessAvailable(nil, fakeOnly, nil) {
 		t.Error("fake-only backend counted as LLM access; want false (the deterministic stub calls no model)")

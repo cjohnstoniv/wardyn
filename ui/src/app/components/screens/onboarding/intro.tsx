@@ -108,7 +108,7 @@ export function IntroPanel({ onHide }: { onHide: () => void }) {
 export function hasLlmPath(status: SetupStatus): boolean {
   if (status.providers.some((p) => p.logged_in)) return true;
   if (status.secrets.present.some((n) => /anthropic|openai|api[-_]?key/i.test(n))) return true;
-  // Honesty guard (mirrors the backend's llmAccessAvailable): a `fake` composer
+  // Honesty guard (mirrors the backend's llmProvenance): a `fake` composer
   // backend resolves trivially but calls NO model, so it is not real LLM access.
   // Counting it would render "LLM ✓ / Composer backend ready" for the default
   // `make setup` demo config, which has no model behind it.
