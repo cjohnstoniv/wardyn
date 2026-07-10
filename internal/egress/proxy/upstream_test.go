@@ -118,26 +118,16 @@ func TestUpstreamCONNECTEndToEnd(t *testing.T) {
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
-	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
+	conn, status := connectThrough(t, proxySrv.URL, "tls.test:443")
 	defer conn.Close()
-	_, _ = io.WriteString(conn, "CONNECT tls.test:443 HTTP/1.1\r\nHost: tls.test:443\r\n\r\n")
-
-	buf := make([]byte, 4096)
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("read CONNECT response: %v", err)
-	}
-	if !strings.Contains(string(buf[:n]), "200") {
-		t.Fatalf("CONNECT response = %q, want 200", string(buf[:n]))
+	if !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT response = %q, want 200", status)
 	}
 	// Tunnel is up: the fake corp proxy echoes.
 	_, _ = io.WriteString(conn, "ping")
+	buf := make([]byte, 4096)
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, err = conn.Read(buf)
+	n, err := conn.Read(buf)
 	if err != nil {
 		t.Fatalf("read echo: %v", err)
 	}

@@ -7,12 +7,10 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -455,23 +453,7 @@ func TestForwardEgressNotScannedWhenDisabled(t *testing.T) {
 }
 
 func TestLLMScanBlindOnOpaqueConnect(t *testing.T) {
-	// An echo TCP server stands in for the opaque TLS upstream.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		for {
-			c, aerr := ln.Accept()
-			if aerr != nil {
-				return
-			}
-			go func(conn net.Conn) { _, _ = io.Copy(conn, conn); _ = conn.Close() }(c)
-		}
-	}()
-
-	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}, ln.Addr().String(), nil, nil)
+	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}, startEcho(t), nil, nil)
 	p.scanner = scanEngine(t, "alert", scanTestSecret)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
@@ -480,20 +462,10 @@ func TestLLMScanBlindOnOpaqueConnect(t *testing.T) {
 	// The allow + blind decisions are emitted BEFORE the 200, so once the 200 is
 	// read the buffer is settled (the tunnel goroutine never writes decisions).
 	doConnect := func() {
-		conn, derr := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
-		if derr != nil {
-			t.Fatal(derr)
-		}
+		conn, status := connectThrough(t, proxySrv.URL, anthropicHost+":443")
 		defer conn.Close()
-		_, _ = io.WriteString(conn, "CONNECT "+anthropicHost+":443 HTTP/1.1\r\nHost: "+anthropicHost+":443\r\n\r\n")
-		br := make([]byte, 4096)
-		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-		n, rerr := conn.Read(br)
-		if rerr != nil {
-			t.Fatalf("read CONNECT response: %v", rerr)
-		}
-		if !strings.Contains(string(br[:n]), "200") {
-			t.Fatalf("CONNECT response = %q, want 200", string(br[:n]))
+		if !strings.Contains(status, "200") {
+			t.Fatalf("CONNECT response = %q, want 200", status)
 		}
 	}
 
