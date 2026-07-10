@@ -92,23 +92,21 @@ func TestCreateSandbox_MountDefaultReadOnly(t *testing.T) {
 // host-bind RecordingMount (that would make the operator's HOST directory
 // world-writable). CastDir is always prepared; a named-volume target still is.
 func TestRecordingChmodDirs_NeverLoosensHostBindRoot(t *testing.T) {
-	const cast = "/var/log/wardyn"
-
-	hostBind := recordingChmodDirs(Config{CastDir: cast, RecordingMount: "/host/recordings"})
+	hostBind := recordingChmodDirs(Config{RecordingMount: "/host/recordings"})
 	if slices.Contains(hostBind, RecordingMountTarget) {
 		t.Errorf("host-bind RecordingMount: target %q must NOT be chmod 0777'd (host world-writable); got %v", RecordingMountTarget, hostBind)
 	}
-	if !slices.Contains(hostBind, cast) {
+	if !slices.Contains(hostBind, defaultCastDir) {
 		t.Errorf("CastDir must always be prepared; got %v", hostBind)
 	}
 
-	vol := recordingChmodDirs(Config{CastDir: cast, RecordingMount: "wardyn-rec-vol"})
+	vol := recordingChmodDirs(Config{RecordingMount: "wardyn-rec-vol"})
 	if !slices.Contains(vol, RecordingMountTarget) {
 		t.Errorf("named-volume RecordingMount: target must be prepared (Docker-managed); got %v", vol)
 	}
 
-	none := recordingChmodDirs(Config{CastDir: cast})
-	if len(none) != 1 || none[0] != cast {
+	none := recordingChmodDirs(Config{})
+	if len(none) != 1 || none[0] != defaultCastDir {
 		t.Errorf("no RecordingMount => only CastDir; got %v", none)
 	}
 }
