@@ -51,17 +51,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
-import { Textarea } from "../ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import {
   ActorTypeChip,
@@ -79,6 +70,7 @@ import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals } from "../wardyn/live-approvals";
+import { ReasonDialog } from "../wardyn/reason-dialog";
 import { cn } from "../ui/utils";
 
 // Live refresh cadence for a non-terminal run's detail.
@@ -103,7 +95,11 @@ export function RunDetailScreen() {
   const [recState, setRecState] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
 
   const { copied, copyAsync } = useCopyToClipboard(1400);
-  const [decide, setDecide] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
+  const [decide, setDecide] = React.useState<{
+    id: string;
+    action: "approve" | "deny";
+    kind: ApprovalRequest["kind"];
+  } | null>(null);
 
   // Core fetch — run + its grants, egress, approvals, and audit trail.
   const load = React.useCallback(
@@ -294,7 +290,7 @@ export function RunDetailScreen() {
             <TabsContent value="approvals" className="mt-0">
               <ApprovalsTab
                 approvals={approvals}
-                onDecide={(approvalId, action) => setDecide({ id: approvalId, action })}
+                onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               />
             </TabsContent>
 
@@ -688,7 +684,7 @@ function ApprovalsTab({
   onDecide,
 }: {
   approvals: ApprovalRequest[];
-  onDecide: (id: string, action: "approve" | "deny") => void;
+  onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
 }) {
   if (approvals.length === 0) {
     return (
@@ -728,10 +724,10 @@ function ApprovalsTab({
             )}
             {pending && (
               <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                <Button variant="outline" size="sm" onClick={() => onDecide(a.id, "deny")}>
+                <Button variant="outline" size="sm" onClick={() => onDecide(a.id, "deny", a.kind)}>
                   Deny
                 </Button>
-                <Button size="sm" variant="info" onClick={() => onDecide(a.id, "approve")}>
+                <Button size="sm" variant="info" onClick={() => onDecide(a.id, "approve", a.kind)}>
                   <Check className="size-4" /> Approve
                 </Button>
               </div>
@@ -899,69 +895,5 @@ function EmptyMini({ text }: { text: string }) {
     <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
       {text}
     </div>
-  );
-}
-
-// Compact approve/deny reason dialog (deny requires a reason for the audit trail).
-function ReasonDialog({
-  prompt,
-  onClose,
-  onSubmit,
-}: {
-  prompt: { id: string; action: "approve" | "deny" } | null;
-  onClose: () => void;
-  onSubmit: (reason: string) => Promise<boolean>;
-}) {
-  const [reason, setReason] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  React.useEffect(() => {
-    setReason("");
-    setBusy(false);
-  }, [prompt]);
-
-  const approve = prompt?.action === "approve";
-  const submit = async () => {
-    setBusy(true);
-    try {
-      await onSubmit(reason);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open={!!prompt} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{approve ? "Approve request" : "Deny request"}</DialogTitle>
-          <DialogDescription>
-            {approve
-              ? "This authorizes the broker to mint a short-lived scoped token bound to the run identity. Add a reason for the audit trail."
-              : "Record a reason for the audit trail. This decision is immutable."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2 py-1">
-          <Label htmlFor="decision-reason">
-            Reason {approve && <span className="text-muted-foreground">(optional)</span>}
-          </Label>
-          <Textarea
-            id="decision-reason"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={3}
-            placeholder={approve ? "Verified scope is minimal and time-boxed…" : "Domain not on allowlist…"}
-          />
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={busy || (!approve && !reason)} variant={approve ? "default" : "destructive"}>
-            {busy && <Loader2 className="size-4 animate-spin" />}
-            {approve ? "Approve" : "Confirm deny"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
