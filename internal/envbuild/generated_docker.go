@@ -14,9 +14,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
-
-	"github.com/docker/docker/api/types/container"
 )
 
 const (
@@ -66,16 +63,6 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 		return "", err
 	}
 
-	// Same delivery model as Build: registry PUSH is the only path, so fail closed
-	// when no registry is configured. Preflight the finalize tool sources too.
-	if err := b.requireCacheRepo(); err != nil {
-		return "", err
-	}
-	toolsDir, err := b.validateToolsDir()
-	if err != nil {
-		return "", err
-	}
-
 	// Stage the generated files into a throwaway host directory that becomes the
 	// build context. It holds only our own generated, trusted content and is
 	// always removed on return.
@@ -88,60 +75,10 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 		return "", err
 	}
 
-	timeout := b.BuildTimeout
-	if timeout <= 0 {
-		timeout = defaultBuildTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	if err := b.ensureImage(ctx, b.EnvbuilderImage); err != nil {
-		return "", err
-	}
-
-	cfg := &container.Config{
-		Image: b.EnvbuilderImage,
-		Env:   localBuildEnv(b.CacheRepo),
-	}
-	hostCfg := b.hardenedHostConfig()
 	// Bind the generated build context (no socket is ever bound). The host path is
 	// a throwaway temp dir of our own generated content, so mounting it does not
 	// widen the untrusted-code blast radius the way a real host path would.
-	hostCfg.Binds = append(hostCfg.Binds, ctxDir+":"+localContextWorkspaceFolder)
-
-	created, err := b.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
-	if err != nil {
-		return "", fmt.Errorf("envbuild: create build container: %w", err)
-	}
-	containerID := created.ID
-
-	// Always force-remove the build container even on cancellation or panic.
-	defer func() {
-		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer rmCancel()
-		_ = b.cli.ContainerRemove(rmCtx, containerID, container.RemoveOptions{Force: true})
-	}()
-
-	if err := b.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return "", fmt.Errorf("envbuild: start build container: %w", err)
-	}
-
-	waitCh, errCh := b.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
-	select {
-	case <-ctx.Done():
-		return "", fmt.Errorf("envbuild: build cancelled or timed out: %w", ctx.Err())
-	case waitErr := <-errCh:
-		return "", fmt.Errorf("envbuild: waiting for build container: %w", waitErr)
-	case resp := <-waitCh:
-		if resp.Error != nil {
-			return "", fmt.Errorf("envbuild: build container error: %s", resp.Error.Message)
-		}
-		if resp.StatusCode != 0 {
-			return "", fmt.Errorf("envbuild: build failed with exit code %d", resp.StatusCode)
-		}
-	}
-	// Layer Wardyn's runner tools onto the pushed base and return the local tag (H5).
-	return b.finalizeImage(ctx, b.pushedBaseRef(), outputTag, toolsDir, nil)
+	return b.runBuildAndFinalize(ctx, localBuildEnv(b.CacheRepo), []string{ctxDir + ":" + localContextWorkspaceFolder}, nil, outputTag)
 }
 
 // localBuildEnv builds the envbuilder environment for a git-free local-context

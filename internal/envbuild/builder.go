@@ -241,6 +241,15 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		return "", err
 	}
 
+	return b.runBuildAndFinalize(ctx, buildEnv(spec, b.CacheRepo), nil, spec.LogSink, spec.OutputImageTag)
+}
+
+// runBuildAndFinalize drives the container lifecycle shared by Build and
+// BuildFromDevcontainerFiles: registry+tools preflight, timeout, image pull,
+// container create/start/wait with env and extraBinds applied atop
+// hardenedHostConfig, always-force-remove, optional log streaming, and the
+// finalize stage that layers Wardyn's runner tools onto the pushed base image.
+func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, logSink io.Writer, outputTag string) (string, error) {
 	// Registry PUSH is the only delivery path (the docker.sock fallback is
 	// retired). Fail closed with an actionable error when no registry is set.
 	if err := b.requireCacheRepo(); err != nil {
@@ -266,14 +275,13 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		return "", err
 	}
 
-	env := buildEnv(spec, b.CacheRepo)
-
 	cfg := &container.Config{
 		Image: b.EnvbuilderImage,
 		Env:   env,
 		// envbuilder is the image entrypoint; Cmd is left nil intentionally.
 	}
 	hostCfg := b.hardenedHostConfig()
+	hostCfg.Binds = append(hostCfg.Binds, extraBinds...)
 
 	created, err := b.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
@@ -294,8 +302,8 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 	}
 
 	// Stream build logs concurrently while waiting for the container to finish.
-	if spec.LogSink != nil {
-		go b.streamLogs(ctx, containerID, spec.LogSink)
+	if logSink != nil {
+		go b.streamLogs(ctx, containerID, logSink)
 	}
 
 	// Wait for the container to exit.
@@ -320,7 +328,7 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 
 	// envbuilder has pushed the base image to the registry. Layer Wardyn's runner
 	// tools onto it and return the resolvable local tag (H5).
-	return b.finalizeImage(ctx, b.pushedBaseRef(), spec.OutputImageTag, toolsDir, spec.LogSink)
+	return b.finalizeImage(ctx, b.pushedBaseRef(), outputTag, toolsDir, logSink)
 }
 
 // hardenedHostConfig builds the Docker HostConfig for the build container with
