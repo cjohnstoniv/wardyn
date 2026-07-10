@@ -346,20 +346,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		// `verifying`). The verify binary self-bounds the actual work.
 		AutoStopAfterSec: 3600,
 	}
-	var ghGrantID *uuid.UUID
-	var sshGrants map[string]string
-	if ws.Kind == types.WorkspaceKindRepo {
-		run.Repo = ws.Source
-		if u := repoCloneURL(ws.Source); u != "" {
-			if grant := s.maybeGitHubReadGrant(ctx, runID, now, u); grant != nil {
-				ghGrantID = grant
-			}
-			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
-		}
-	} else {
-		policy.WorkspaceMounts = []types.WorkspaceMount{{Source: ws.Source, Target: composerWorkspaceTarget}}
-		run.WorkspacePath = ws.Source
-	}
+	ghGrantID, sshGrants := s.wireWorkspaceSource(ctx, runID, now, &run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return release(fmt.Errorf("create verify run: %w", err))
@@ -373,9 +360,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		image = built
 	}
 	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, nil, false, commands)
-	if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-		created = refreshed
-	}
+	created = s.refreshRun(ctx, runID, created)
 	return created, nil
 }
 
@@ -493,20 +478,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if interactive {
 		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
 	}
-	var ghGrantID *uuid.UUID
-	var sshGrants map[string]string
-	if ws.Kind == types.WorkspaceKindRepo {
-		run.Repo = ws.Source
-		if u := repoCloneURL(ws.Source); u != "" {
-			if grant := s.maybeGitHubReadGrant(ctx, runID, now, u); grant != nil {
-				ghGrantID = grant
-			}
-			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
-		}
-	} else {
-		policy.WorkspaceMounts = []types.WorkspaceMount{{Source: ws.Source, Target: composerWorkspaceTarget}}
-		run.WorkspacePath = ws.Source
-	}
+	ghGrantID, sshGrants := s.wireWorkspaceSource(ctx, runID, now, &run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return abort(fmt.Errorf("create record run: %w", err))
@@ -587,10 +559,28 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var plan json.RawMessage
 	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, injections, interactive, plan)
-	if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-		created = refreshed
-	}
+	created = s.refreshRun(ctx, runID, created)
 	return created, weakCC, nil
+}
+
+// wireWorkspaceSource points run+policy at the workspace source: a repo
+// clones (run.Repo, with best-effort GitHub/SSH read grants); a local dir is
+// bind-mounted at the composer workspace target. Shared by launchVerifyRun
+// and launchRecordRun.
+func (s *Server) wireWorkspaceSource(ctx context.Context, runID uuid.UUID, now time.Time, run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (ghGrantID *uuid.UUID, sshGrants map[string]string) {
+	if ws.Kind == types.WorkspaceKindRepo {
+		run.Repo = ws.Source
+		if u := repoCloneURL(ws.Source); u != "" {
+			if grant := s.maybeGitHubReadGrant(ctx, runID, now, u); grant != nil {
+				ghGrantID = grant
+			}
+			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
+		}
+	} else {
+		policy.WorkspaceMounts = []types.WorkspaceMount{{Source: ws.Source, Target: composerWorkspaceTarget}}
+		run.WorkspacePath = ws.Source
+	}
+	return ghGrantID, sshGrants
 }
 
 // maybeGitHubReadGrant creates a read-only github_token grant for a github.com
@@ -916,9 +906,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 
 	image := agentImage("claude-code", s.cfg.AgentImages)
 	s.dispatch(ctx, created, id.Token, image, scanPolicy, ghGrantID, nil, sshGrants, nil, false)
-	if refreshed, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-		created = refreshed
-	}
+	created = s.refreshRun(ctx, runID, created)
 	return created, nil
 }
 
