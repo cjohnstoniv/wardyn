@@ -281,6 +281,17 @@ type Config struct {
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).
 	LocalLoopback bool
+	// LocalTrustForwarder, when true, tells the LocalMode no-auth bypass to accept a
+	// NON-loopback request peer (r.RemoteAddr). It exists for the compose/team
+	// deployment ONLY: there wardynd binds 0.0.0.0 inside a container but the host
+	// publishes the port loopback-only (127.0.0.1:PORT), so a host UI/CLI request
+	// arrives at wardynd from the docker bridge gateway, not loopback. The LAN
+	// protection in that topology is the loopback PUBLISH (a LAN peer cannot reach a
+	// 127.0.0.1-bound host port at all), not the peer check — so the peer gate is a
+	// false positive there. The DNS-rebinding Host gate still applies. NEVER set this
+	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
+	// no-auth exposure the peer gate closes. Default false; set by compose only.
+	LocalTrustForwarder bool
 	// ComposerBackends is the BOOT-snapshot readiness of every configured composer
 	// backend (including disabled + needs-key ones the live registry can't show).
 	// Surfaced by /setup/status. Nil when the composer is unconfigured.

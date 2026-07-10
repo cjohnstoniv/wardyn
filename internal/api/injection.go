@@ -21,9 +21,12 @@ func hostEqual(a, b string) bool {
 // api_key injection grant carrying it resolves to the operator's LIVE Anthropic
 // subscription OAuth access token (from the resident ~/.claude via
 // Config.SubscriptionToken) instead of a value in the secret store. This lets
-// subscription runs be credentialed proxy-side exactly like api-key runs — the
-// sandbox holds only an inert sentinel, never a copy that goes stale. Defined
-// canonically in internal/types so recordmode + UI agree on the name.
+// subscription runs be credentialed proxy-side exactly like api-key runs. In the
+// default inject-on mode the sandbox's staged .credentials.json carries only inert
+// sentinel tokens (stage-claude-creds.sh replaces BOTH the durable refresh token and
+// the short-lived access token) so no usable credential is resident; the live token
+// exists only in proxy memory. Defined canonically in internal/types so recordmode +
+// UI agree on the name.
 const subscriptionOAuthSecret = types.SubscriptionOAuthSecret
 
 // subscriptionInjectionHost is the ONLY host the subscription OAuth sentinel may

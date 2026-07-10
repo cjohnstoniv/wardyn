@@ -107,6 +107,18 @@ services:
       # dev machine behind a firewall. Leave false to keep the token/SSO demo.
       WARDYN_LOCAL_MODE: "${WARDYN_LOCAL_MODE:-false}"
       WARDYN_LOCAL_OPERATOR: "${WARDYN_LOCAL_OPERATOR:-}"
+      # LOCAL-MODE no-auth requires a loopback request PEER. In compose wardynd binds
+      # 0.0.0.0 inside the container but the port is published loopback-only
+      # (127.0.0.1:PORT below), so a host UI/CLI request arrives from the docker
+      # bridge gateway, not loopback — trust the forwarder here. This is safe ONLY
+      # because of that 127.0.0.1 publish (a LAN peer cannot reach the port at all);
+      # the DNS-rebinding Host guard still applies. Never set this on a directly-bound
+      # host-mode wardynd. Residual (defense-in-depth): with this on, other containers
+      # ON wardyn-internal (postgres, dex, a run's proxy sidecar) can also reach the
+      # no-auth API — agents are NOT on this network, so this needs an already-
+      # compromised in-network container. Follow-up hardening: accept only a trusted
+      # gateway CIDR instead of any non-loopback peer.
+      WARDYN_LOCAL_TRUST_FORWARDER: "${WARDYN_LOCAL_TRUST_FORWARDER:-true}"
       WARDYN_RUNNER: "docker"
       WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:demo"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"

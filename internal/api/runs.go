@@ -825,7 +825,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"host": anthropicAPIHost, "tls_mitm": true,
-				"detail": "live subscription OAuth token injected proxy-side; sandbox holds an inert sentinel",
+				"detail": "live subscription OAuth token injected proxy-side; sandbox's staged copy holds only inert sentinel tokens (access + refresh both replaced at staging)",
 			})))
 	}
 

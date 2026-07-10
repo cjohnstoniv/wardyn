@@ -17,12 +17,16 @@
 # subscription" on that request (per-run opt-in) — staging alone grants nothing.
 #
 # SENTINEL (default): the staged .credentials.json is SANITIZED into an inert
-# sentinel — refresh token blanked, expiry pinned far out — because wardynd
-# injects the operator's LIVE OAuth token proxy-side per request (the sandbox's
-# copy is never used to reach Anthropic; it only lets `claude` start). So the
-# durable rotating secret is NOT resident in the sandbox, and the copy can never
-# go stale. (~/.claude.json still carries MCP config + history; read-only
-# mitigates tampering, not reading — prefer the api-key path if that matters.)
+# sentinel — BOTH the durable refresh token AND the short-lived access token are
+# replaced with inert placeholders, and expiry pinned far out — because wardynd
+# injects the operator's LIVE OAuth token proxy-side per request. The proxy does
+# `Authorization: Bearer <live-token>` with req.Header.Set (REPLACING whatever the
+# sandbox sends), so the sandbox copy is never used to reach Anthropic; the
+# placeholder access token only lets `claude` consider itself logged in and start.
+# So NO usable credential (neither the rotating refresh token nor a live access
+# token) is resident in the sandbox, and the copy can never go stale. (~/.claude.json
+# still carries MCP config + history; read-only mitigates tampering, not reading —
+# prefer the api-key path if that matters.)
 #
 # ESCAPE HATCH: set WARDYN_SUBSCRIPTION_INJECT=off (for BOTH this script and
 # wardynd) to keep the legacy resident-copy behavior — a real, refreshable
@@ -102,26 +106,36 @@ PY
 echo "sanitized: MCP servers + mcpOAuth tokens stripped from the sandbox copy"
 
 # Sentinel sanitization (default; skipped only in the WARDYN_SUBSCRIPTION_INJECT=off
-# escape hatch). Blank the refresh token so no usable rotating secret is resident,
-# and pin expiresAt far out so `claude` never client-refreshes — the proxy injects
-# the live host token at request time, so the frozen access token's staleness is
-# immaterial. Leaving the access token in place lets `claude` start cleanly.
+# escape hatch). Blank the refresh token AND replace the access token with an inert
+# placeholder so NO usable credential is resident, and pin expiresAt far out so
+# `claude` never client-refreshes. The proxy injects the live host token at request
+# time via Authorization: Bearer with req.Header.Set (REPLACING whatever the sandbox
+# sends, internal/egress/proxy/inject.go), so the resident access token is never used
+# on the wire — a non-empty placeholder only lets `claude` treat itself as logged in
+# and start cleanly. (Blanking to "" risks claude reading itself as logged out; a
+# present-but-inert sentinel string starts cleanly and carries no secret.)
 if [[ "$(printf '%s' "${WARDYN_SUBSCRIPTION_INJECT:-}" | tr '[:upper:]' '[:lower:]')" != "off" ]]; then
   CJ="${DEST}/.claude/.credentials.json"
   if [[ -f "${CJ}" ]]; then
     python3 - "${CJ}" <<'PY'
 import json, sys
 p = sys.argv[1]
+# Inert placeholder: mirrors the real sk-ant-oat prefix shape so `claude` accepts
+# the field and starts, but is obviously not a live token and grants nothing (the
+# proxy overrides Authorization on the wire).
+SENTINEL = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token"
 with open(p) as f:
     d = json.load(f)
 o = d.get("claudeAiOauth")
 if isinstance(o, dict):
     o["refreshToken"] = ""            # no usable rotating secret resident
+    if o.get("accessToken"):
+        o["accessToken"] = SENTINEL   # no usable access token resident (proxy injects the live one)
     o["expiresAt"] = 4102444800000    # 2100-01-01 in ms: claude never client-refreshes
 with open(p, "w") as f:
     json.dump(d, f)
 PY
-    echo "sentinel: staged .credentials.json sanitized (refresh token blanked, expiry pinned; proxy injects the live token)"
+    echo "sentinel: staged .credentials.json sanitized (refresh token blanked, access token replaced with an inert placeholder, expiry pinned; proxy injects the live token)"
   fi
 else
   echo "escape hatch: WARDYN_SUBSCRIPTION_INJECT=off — staging a REAL resident credential (can go stale; re-run to refresh)"

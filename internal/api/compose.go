@@ -1051,12 +1051,13 @@ func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent m
 		removeAPIKeyGrantForHost(spec, p.host)
 		if subscriptionInject {
 			// Safe DEFAULT: Wardyn auto-enables TLS-MITM of api.anthropic.com and
-			// injects a live, host-refreshed OAuth token, so the credential is never
-			// resident in the sandbox (only an inert sentinel) and never goes stale.
+			// injects a live, host-refreshed OAuth token. The staged .credentials.json
+			// carries only inert sentinel tokens (access + refresh both replaced), so no
+			// usable credential is resident in the sandbox and it never goes stale.
 			return fmt.Sprintf(
 				"model access provisioned for agent %q: your Claude subscription is injected PROXY-SIDE — Wardyn "+
-					"auto-enables TLS-MITM of api.anthropic.com and swaps in a live, host-refreshed OAuth token, so the "+
-					"credential is never resident in the sandbox and never goes stale.",
+					"auto-enables TLS-MITM of api.anthropic.com and swaps in a live, host-refreshed OAuth token. The "+
+					"sandbox's staged copy holds only inert sentinel tokens, so no usable credential is resident and it never goes stale.",
 				agent), true
 		}
 		// Escape hatch (WARDYN_SUBSCRIPTION_INJECT=off or no token provider): the

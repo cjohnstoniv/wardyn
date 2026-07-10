@@ -87,13 +87,17 @@ type resizeMsg struct {
 func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// FIX #8 (DNS-rebinding defense, defense-in-depth): in LOCAL no-auth mode the
-	// attach WS is protected only by same-origin at websocket.Accept, which a
-	// DNS-rebinding page defeats (Origin==Host==attacker.com rebound to loopback).
-	// Reject a non-loopback Host with 403 BEFORE the upgrade. The humanOrAdminAuth
-	// middleware applies the same gate for the REST surface; we repeat it here at
-	// the WS boundary so the socket is never even opened. SSO/token modes already
-	// require a credential, so this gate is local-mode-only.
+	// FIX #8 + N1 (defense-in-depth): in LOCAL no-auth mode the attach WS is
+	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
+	// so the socket is never opened. Two gates, same as the REST surface in
+	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
+	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
+	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
+	// require a credential, so this is local-mode-only.
+	if s.cfg.LocalMode && !s.cfg.LocalTrustForwarder && !isLoopbackRemoteAddr(r.RemoteAddr) {
+		writeError(w, http.StatusForbidden, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
+		return
+	}
 	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
 		writeError(w, http.StatusForbidden, "local mode: request Host is not loopback (DNS-rebinding guard)")
 		return
