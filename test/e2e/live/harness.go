@@ -496,8 +496,11 @@ func isTerminal(s types.RunState) bool {
 	return false
 }
 
-// pollTerminal polls GetRun until the run reaches a terminal state or timeout.
-func (h *harness) pollTerminal(id uuid.UUID, timeout time.Duration) types.AgentRun {
+// pollState is the shared 2s-tick GetRun loop behind pollTerminal/pollRunning/
+// pollRunningSoft. pred inspects each observed state and reports (done, good):
+// done stops the loop early with ok=good; running out the clock returns
+// ok=false with the last observed run.
+func (h *harness) pollState(id uuid.UUID, timeout time.Duration, pred func(types.RunState) (done, good bool)) (types.AgentRun, bool) {
 	h.t.Helper()
 	deadline := time.Now().Add(timeout)
 	var last types.AgentRun
@@ -507,14 +510,23 @@ func (h *harness) pollTerminal(id uuid.UUID, timeout time.Duration) types.AgentR
 		cancel()
 		if err == nil {
 			last = run
-			if isTerminal(run.State) {
-				return run
+			if done, good := pred(run.State); done {
+				return run, good
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
-	h.t.Fatalf("run %s did not reach a terminal state within %s (last=%s)", id, timeout, last.State)
-	return last
+	return last, false
+}
+
+// pollTerminal polls GetRun until the run reaches a terminal state or timeout.
+func (h *harness) pollTerminal(id uuid.UUID, timeout time.Duration) types.AgentRun {
+	h.t.Helper()
+	run, ok := h.pollState(id, timeout, func(s types.RunState) (bool, bool) { return isTerminal(s), true })
+	if !ok {
+		h.t.Fatalf("run %s did not reach a terminal state within %s (last=%s)", id, timeout, run.State)
+	}
+	return run
 }
 
 // ── grade ───────────────────────────────────────────────────────────────────
