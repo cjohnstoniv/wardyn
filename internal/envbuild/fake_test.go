@@ -31,9 +31,6 @@ type fakeEnvbuilderDocker struct {
 	// exitCode is the exit code that ContainerWait returns. 0 = success.
 	exitCode int64
 
-	// failCreate, when true, makes ContainerCreate return an error.
-	failCreate bool
-
 	// Track call counts for assertions.
 	pullCalled   bool
 	createCalled int
