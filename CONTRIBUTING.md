@@ -72,11 +72,18 @@ All contributors and subagents MUST preserve the six security invariants documen
 
 Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5 — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). All pull requests must pass CI checks — these **block merge**:
 
-- `go build ./...`
-- `go vet ./...`
-- `go test ./...`
+- `go build` and `go vet` — both plain and `-tags docker`
+- Go unit suites with a coverage floor: `make cover-check` (plain),
+  `make test-report-docker` (fakeDocker), `make test-report-pg` (real Postgres)
 - Conformance tests: Docker + the driver-agnostic stub (both blocking in CI)
 - UI: `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
+- Docs: the mermaid diagram + label-truth gate (`make diagrams`)
+- Deploy: `helm lint` + `helm template` render assertions, and
+  `docker compose config` validation
+- Supply chain: `govulncheck`, `staticcheck`, `gitleaks` (secret scan),
+  `go-licenses` (dependency license check), and SPDX license headers
+  (`make license-headers`)
+- DCO: a `Signed-off-by` line on every commit (see Getting Started)
 
 ## Getting Started
 
@@ -99,6 +106,9 @@ Run the full test suite locally:
 ```bash
 make test
 ```
+
+`make help` lists every target, including the ones not covered here (the
+live e2e harnesses, `make dev-pg`, the guided `make test-drive` walkthrough).
 
 Docker-dependent tests live behind the `docker` build tag — plain `make test`
 compiles them out entirely. To actually run them:
