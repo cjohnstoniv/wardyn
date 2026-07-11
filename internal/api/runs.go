@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -426,6 +427,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Persist the resolved image for provenance (best-effort: a failed write
+	// must not block dispatch — the audit trail still carries build events).
+	if err := s.cfg.Store.SetRunImage(ctx, runID, image); err != nil {
+		log.Printf("wardynd: persist run image %s: %v", runID, err)
+	}
+
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {
 		s.dispatch(ctx, created, id.Token, image, spec, firstGitHubGrantID, gitPATGrants, sshGrants, injections, req.Interactive)
@@ -775,7 +782,19 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		}
 		mitmCACertPEM, mitmCAKeyPEM = string(certPEM), string(keyPEM)
 		sandboxEnv["WARDYN_MITM_CA_PEM"] = mitmCACertPEM
-		sandboxEnv["NODE_EXTRA_CA_CERTS"] = "/home/agent/.wardyn/mitm-ca.pem"
+		// CA files live under /tmp/wardyn (any-uid-writable, works for images with
+		// arbitrary USER/HOME — the old /home/agent/.wardyn pin dangled for
+		// envbuilder/BYOI images whose HOME differs; precedent: mainProcCastDir).
+		// NODE_EXTRA_CA_CERTS is ADDITIVE (Node keeps its bundled roots), so it
+		// points at the bare CA. Everything OpenSSL-shaped REPLACES its trust store
+		// via these vars, so they point at the COMBINED bundle (system roots + the
+		// per-run CA) that install_mitm_ca/agentIdleScript assemble — the bare CA
+		// there would break verification of non-MITM'd CONNECT-tunneled hosts.
+		// JVM (keystore) and Deno (DENO_CERT) are documented as not covered.
+		sandboxEnv["NODE_EXTRA_CA_CERTS"] = "/tmp/wardyn/mitm-ca.pem"
+		sandboxEnv["SSL_CERT_FILE"] = "/tmp/wardyn/ca-bundle.pem"
+		sandboxEnv["REQUESTS_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
+		sandboxEnv["CURL_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
 	}
 
 	// Subscription: author a re-mintable api_key grant whose SENTINEL secret name

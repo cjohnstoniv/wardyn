@@ -67,6 +67,27 @@ if [[ "${1:-}" == "--selftest" ]]; then
     echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
     echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
     echo "  OPENAI_API_KEY=${OPENAI_API_KEY:+<set (${#OPENAI_API_KEY} chars)>}${OPENAI_API_KEY:-<unset — expected; proxy injects via grant>}"
+    echo "--- TLS-MITM CA trust (selftest: report only) ---"
+    if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
+        [[ -f /tmp/wardyn/mitm-ca.pem ]] \
+            && echo "  proxy CA: INSTALLED (/tmp/wardyn/mitm-ca.pem)" \
+            || echo "  proxy CA: DELIVERED but not yet installed (installed at idle/task start)"
+        if [[ -f /tmp/wardyn/ca-bundle.pem ]]; then
+            sys_found=0
+            for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
+                [[ -f "$c" ]] && sys_found=1 && break
+            done
+            if [[ $sys_found -eq 1 ]]; then
+                echo "  combined bundle: PRESENT (/tmp/wardyn/ca-bundle.pem = system roots + proxy CA)"
+            else
+                echo "  combined bundle: PROXY-CA-ONLY (no system CA bundle in image; non-MITM TLS hosts will not verify)"
+            fi
+        else
+            echo "  combined bundle: not yet assembled"
+        fi
+    else
+        echo "  proxy CA: not delivered (run did not opt into TLS-MITM)"
+    fi
     echo "--- repo wiring (selftest never clones) ---"
     echo "  WARDYN_REPO_URL=${WARDYN_REPO_URL:-<unset (no repo to clone)>}"
     echo "  WARDYN_REPO_SLUG=${WARDYN_REPO_SLUG:-<unset>}"

@@ -9,17 +9,37 @@
 
 # ── TLS-MITM CA install ───────────────────────────────────────────────────────
 # When the run opts into intercept_tls, dispatch delivers the per-run CA PUBLIC
-# cert in WARDYN_MITM_CA_PEM and points NODE_EXTRA_CA_CERTS at the path written
-# here, so the agent's client trusts the proxy's TLS termination (additive
-# trust — system roots are unaffected). Best-effort system-trust install covers
-# other clients. The CA PRIVATE key never enters the sandbox; only the proxy
-# holds it. No-op when WARDYN_MITM_CA_PEM is unset.
+# cert in WARDYN_MITM_CA_PEM and points NODE_EXTRA_CA_CERTS at the bare CA
+# written here (additive trust — Node keeps its bundled roots). For everything
+# OpenSSL-shaped (curl, Python requests, Ruby, ...), dispatch points
+# SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE at the COMBINED bundle
+# (system roots + per-run CA) assembled here — those vars REPLACE the client's
+# trust store, so the bare CA there would break non-MITM'd CONNECT-tunneled
+# hosts. Files live under /tmp/wardyn (any-uid-writable) so images with
+# arbitrary USER/HOME work; the idle main process (driver.go agentIdleScript,
+# keep in lockstep) may have written them already as a different uid, hence the
+# best-effort rewrites — within one run the content is identical, so a failed
+# rewrite over a correct file is harmless. Best-effort system-trust install
+# covers remaining clients. The CA PRIVATE key never enters the sandbox; only
+# the proxy holds it. No-op when WARDYN_MITM_CA_PEM is unset.
 install_mitm_ca() {
     [[ -n "${WARDYN_MITM_CA_PEM:-}" ]] || return 0
-    local dir="${HOME}/.wardyn"
-    mkdir -p "$dir"
-    printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$dir/mitm-ca.pem"
-    chmod 0644 "$dir/mitm-ca.pem"
+    local dir="/tmp/wardyn" sys="" c
+    mkdir -p "$dir" 2>/dev/null || true
+    chmod 1777 "$dir" 2>/dev/null || true
+    { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$dir/mitm-ca.pem" \
+        && chmod 0644 "$dir/mitm-ca.pem"; } 2>/dev/null || true
+    for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
+        [[ -f "$c" ]] && sys="$c" && break
+    done
+    if [[ -n "$sys" ]]; then
+        { cat "$sys" "$dir/mitm-ca.pem" > "$dir/ca-bundle.pem" \
+            && chmod 0644 "$dir/ca-bundle.pem"; } 2>/dev/null || true
+    else
+        { cp "$dir/mitm-ca.pem" "$dir/ca-bundle.pem" \
+            && chmod 0644 "$dir/ca-bundle.pem"; } 2>/dev/null || true
+        echo "agent-run: WARNING: no system CA bundle found; ca-bundle.pem is proxy-CA-only (non-MITM TLS hosts will not verify)" >&2
+    fi
     if command -v update-ca-certificates >/dev/null 2>&1; then
         cp "$dir/mitm-ca.pem" /usr/local/share/ca-certificates/wardyn-mitm.crt 2>/dev/null \
             && update-ca-certificates >/dev/null 2>&1 || true

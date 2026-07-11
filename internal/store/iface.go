@@ -32,6 +32,7 @@ type Store interface {
 	UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error)
 	UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error)
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
+	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error
 
 	// RunPolicy.

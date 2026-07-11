@@ -91,6 +91,11 @@ type AgentRun struct {
 	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>
 	RunnerTarget     string           `json:"runner_target"` // "docker"
 	SandboxRef       string           `json:"sandbox_ref,omitempty"`
+	// Image is the RESOLVED sandbox image this run dispatched with (convention
+	// image, devcontainer build, workspace-built, or BYOI-wrapped), persisted
+	// for provenance. Written by a scoped update after image resolution; empty
+	// for legacy rows and runs that never reached resolution.
+	Image string `json:"image,omitempty"`
 	// Interactive marks a run created for human-driven use: the sandbox is brought
 	// up RUNNING but no agent task is exec'd and no completion watcher is started
 	// (the human drives via `wardyn attach`). A non-interactive run execs the agent
