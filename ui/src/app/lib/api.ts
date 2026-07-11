@@ -275,10 +275,14 @@ function parseRecording(runId: string, text: string): Recording {
 }
 
 // GET /api/v1/setup/status permissive fallback — an endpoint-less build (older
-// backend, or the endpoint mid-rollout in a concurrent workstream) must never
-// trap the operator behind an auto-opened wizard. ready:true so the "should we
-// auto-open Getting-started" check (shouldOpenSetup) always says no.
+// backend, the endpoint mid-rollout, or a daemon that simply didn't answer)
+// must never trap the operator behind an auto-opened wizard. `unreachable`
+// marks the payload as synthetic/untrustworthy: shouldOpenSetup returns false
+// on it (ready:true alone was NOT enough — has_runs:false made the !has_runs
+// branch auto-open anyway), and the funnel renders a "couldn't reach Wardyn"
+// panel instead of a scary no-runner card built from made-up fields.
 const READY_FALLBACK: SetupStatus = {
+  unreachable: true,
   ready: true,
   checks: [],
   auth: { mode: "local", local_loopback: true },

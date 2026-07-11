@@ -848,6 +848,12 @@ export interface SetupStatus {
   // "no login" in compose even when the operator IS logged in on the host. Optional
   // for the same fixture-compat reason as `bedrock`.
   deployment?: { host_like: boolean };
+  // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
+  // daemon couldn't answer (network error / non-ok). The Go contract does not
+  // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —
+  // shouldOpenSetup never auto-opens on it, and the funnel renders a
+  // "couldn't reach Wardyn" panel instead of the no-runner danger card.
+  unreachable?: boolean;
 }
 
 // ============================================================
