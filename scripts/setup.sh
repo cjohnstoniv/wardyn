@@ -324,6 +324,14 @@ elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
           say "      · aws-secret-access-key   (from \$AWS_SECRET_ACCESS_KEY)"
           [ -n "${AWS_SESSION_TOKEN:-}" ] && say "      · aws-session-token       (from \$AWS_SESSION_TOKEN)"
           say "    into Wardyn's encrypted secret store on this host."
+          # Residency honesty (threatmodel: Bedrock SigV4 can't be proxy-injected):
+          # unlike the subscription/API-key paths, these keys are handed to the
+          # sandbox at run time. Say so, and name the safer rung before asking.
+          warn "At RUN time these long-lived keys become RESIDENT in sandboxes that use Bedrock"
+          warn "(SigV4 signing can't be proxy-injected, so the SDK must hold real credentials)."
+          info "Safer: AWS SSO with a read-only ~/.aws mount — credentials are short-lived and"
+          info "auto-rotate, and Wardyn stores nothing. Set up with 'aws configure sso' +"
+          info "'aws sso login', then re-run 'make setup' (mount mode is picked automatically)."
           if [ "${WARDYN_IMPORT_AWS:-}" = 1 ]; then
             BR_IMPORT_STATIC=true; ok "WARDYN_IMPORT_AWS=1 — will import the AWS keys once the daemon is up."
           elif [ -t 0 ] && ask_yn "Import your static AWS keys into Wardyn's secret store?" n; then

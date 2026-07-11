@@ -306,6 +306,19 @@ cmd_up() {
   fi
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
+  # A stale WARDYN_AGENT_IMAGES override in .env silently breaks every run at
+  # pull time ("registry: denied" — locally-built tags exist in no registry),
+  # and .env survives reset by design. Check the referenced images actually
+  # exist on the daemon we're about to use, and say how to fix it if not.
+  _ai_json=$(env_get "${ENV_FILE}" WARDYN_AGENT_IMAGES)
+  if [ -n "${_ai_json}" ]; then
+    for _ai_img in $(printf '%s' "${_ai_json}" | tr ',{}' '\n\n\n' | sed -n 's/.*:"\([^"]*\)".*/\1/p'); do
+      docker image inspect "${_ai_img}" >/dev/null 2>&1 \
+        || warn ".env overrides WARDYN_AGENT_IMAGES with '${_ai_img}' — NOT present on this daemon; runs naming that agent fail at pull time. Rebuild it, fix the override in ${ENV_FILE}, or start clean (make reset-all ARGS=--purge-env)."
+    done
+    unset _ai_json _ai_img
+  fi
+
   log "Starting postgres + wardynd (local mode, no SSO — see \`docker compose --profile sso up\` for Dex)"
   compose up -d postgres wardynd
 

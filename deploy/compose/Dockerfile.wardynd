@@ -16,6 +16,10 @@ WORKDIR /ui
 # Pin pnpm to the lockfile's generator. Copy manifests first for layer caching.
 RUN npm install -g pnpm@9
 COPY ui/package.json ui/pnpm-lock.yaml ./
+# puppeteer (a test-only devDependency) postinstalls a full Chrome download,
+# which is dead weight for `pnpm build` and FAILS on bookworm-slim (no unzip).
+# This stage only produces /ui/dist — skip the browser download entirely.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN pnpm install --frozen-lockfile
 COPY ui/ ./
 # Produces /ui/dist (tsc && vite build). The UI calls /api/v1 same-origin, so
