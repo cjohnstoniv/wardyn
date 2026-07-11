@@ -90,6 +90,14 @@ describe("shouldOpenSetup — pure decision helper", () => {
       false,
     );
   });
+  it("never auto-opens on the unreachable fallback, even with has_runs:false", () => {
+    // READY_FALLBACK shape: the daemon didn't answer, every field is synthetic.
+    // ready:true alone was NOT enough — the !has_runs branch used to force-open.
+    expect(
+      shouldOpenSetup(baseStatus({ unreachable: true, ready: true, has_runs: false }), false),
+    ).toBe(false);
+    expect(shouldOpenSetup(baseStatus({ unreachable: true, ready: false }), false)).toBe(false);
+  });
 });
 
 describe("setupDismissed()/dismissSetup() — localStorage flag", () => {
@@ -118,6 +126,24 @@ describe("SetupScreen", () => {
     // The Host Proxy / SCM Provider / Artifact Redirect steps each GET the site
     // config on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
+  });
+
+  it("unreachable daemon: shows 'Couldn't reach Wardyn' + Re-check, never the no-runner danger card", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        unreachable: true,
+        ready: true,
+        runner: { driver: "none", confinement_classes: [] },
+        has_runs: false,
+      }),
+    );
+    render(<SetupScreen onDone={() => {}} />);
+
+    expect(await screen.findByText(/couldn.t reach wardyn/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-check/i })).toBeInTheDocument();
+    // None of the step machinery renders from the made-up fields.
+    expect(screen.queryByText(/no sandbox runner/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
   });
 

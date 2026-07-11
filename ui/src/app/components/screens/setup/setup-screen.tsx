@@ -59,6 +59,10 @@ export function dismissSetup(): void {
 // (Finish later / launch) or a first launched run stops it, and it never
 // force-opens on a hosted/SSO multi-admin control plane.
 export function shouldOpenSetup(status: SetupStatus, dismissed: boolean): boolean {
+  // A synthetic fallback status (daemon didn't answer) proves nothing about the
+  // host — never auto-open on it. Its has_runs:false would otherwise force the
+  // funnel open with danger cards built from made-up fields.
+  if (status.unreachable) return false;
   if (dismissed || status.auth.mode !== "local") return false;
   return !status.has_runs || !status.ready;
 }
@@ -178,6 +182,32 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     return (
       <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
         <p className="text-sm text-muted-foreground">Checking Wardyn&apos;s setup…</p>
+      </div>
+    );
+  }
+
+  // A manually-opened funnel against a daemon that didn't answer: say THAT,
+  // instead of rendering step bodies (no-runner danger card, "Needs setup"
+  // badges) built from the synthetic fallback's made-up fields.
+  if (status.unreachable) {
+    return (
+      <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
+        <h1 className="text-lg font-semibold text-foreground">Getting started</h1>
+        <div className="mt-4 max-w-xl rounded-lg border border-border bg-muted/40 p-4">
+          <p className="text-sm text-foreground">Couldn&apos;t reach Wardyn.</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            The setup status request didn&apos;t get an answer, so nothing on this page would be
+            trustworthy. Check that wardynd is running (<code className="rounded bg-background/70 px-1 py-0.5 text-xs">make setup</code>
+            , logs in <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.wardyn/host-wardynd.log</code>), then re-check.
+          </p>
+          <button
+            className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:opacity-50"
+            onClick={recheck}
+            disabled={rechecking}
+          >
+            {rechecking ? "Re-checking…" : "Re-check"}
+          </button>
+        </div>
       </div>
     );
   }
