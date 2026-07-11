@@ -64,15 +64,20 @@ export interface PhaseDef {
   collapsible?: boolean;
 }
 
+// Walk order: essentials → your work → corporate network → finish. Most
+// operators reach their actual work (SCM/workspaces) right after the
+// essentials; the niche corporate-network steps sit later and stay collapsed
+// for everyone else. Step ids/labels above remain frozen — only the phase
+// composition (and therefore STEP_ORDER) moved.
 export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "provider"] },
+  { id: "work", label: "Your work", steps: ["scm_provider", "workspaces", "credentials"] },
   {
     id: "corporate",
     label: "Corporate network",
     steps: ["host_proxy", "artifact_repo"],
     collapsible: true,
   },
-  { id: "work", label: "Your work", steps: ["scm_provider", "workspaces", "credentials"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
 ];
 

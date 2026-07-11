@@ -139,17 +139,17 @@ test.describe("Getting started (live)", () => {
     await expect(main.getByText("Claude / Anthropic")).toBeVisible();
     await expect(main.getByText("OpenAI / Codex")).toBeVisible();
 
-    // -> Host Proxy -> Artifact Redirect -> SCM Provider: the redesigned
-    // STEP_ORDER walks the corporate phase (Host Proxy, Artifact Redirect)
-    // before the work phase's SCM Provider step — each new step's heading in
-    // that order.
-    await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /corporate host proxy/i })).toBeVisible();
-    await nextBtn.click();
-    await expect(
-      main.getByRole("heading", { name: /artifact registry redirection/i }),
-    ).toBeVisible();
+    // -> SCM Provider -> Workspaces -> Credentials -> Host Proxy: STEP_ORDER
+    // walks "Your work" (SCM Provider, Workspaces, Credentials) right after the
+    // essentials, then the collapsible corporate phase — each new step's
+    // heading in that order.
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /source control provider/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /onboard a workspace/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /repo & cloud credentials/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /corporate host proxy/i })).toBeVisible();
   });
 });

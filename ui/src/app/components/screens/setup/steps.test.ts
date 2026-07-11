@@ -161,15 +161,15 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
   });
 
-  it("pins STEP_ORDER to the phase walk (scm_provider follows artifact_repo)", () => {
+  it("pins STEP_ORDER to the phase walk (your work before corporate network)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
       "provider",
-      "host_proxy",
-      "artifact_repo",
       "scm_provider",
       "workspaces",
       "credentials",
+      "host_proxy",
+      "artifact_repo",
       "review",
       "launch",
     ]);
