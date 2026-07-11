@@ -155,6 +155,11 @@ export interface WizardState {
   // --- Step 5: review ---
   saveAsProfile: boolean;
   profileName: string;
+
+  // --- Basics (advanced): Bring Your Own Image ---
+  // A user-supplied base image ref. When set, the backend wraps it with the
+  // runner tools before use (see CreateRunInput.image). "" = the convention image.
+  image: string;
 }
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
@@ -192,6 +197,8 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
 
     saveAsProfile: false,
     profileName: "",
+
+    image: "",
   };
 }
 
@@ -263,6 +270,10 @@ export function buildSpec(
     confinement_class: state.confinementClass,
     interactive,
   };
+  // BYOI: a user-supplied base image the backend wraps with the runner tools.
+  if (state.image.trim()) {
+    run.image = state.image.trim();
+  }
 
   // --- onboarded workspace selections -> workspace_mounts[] / workspace_repos[]
   // ---

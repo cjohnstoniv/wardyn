@@ -131,6 +131,46 @@ it and injects it only when forwarding internal API calls.
 
 ---
 
+## Bring your own image (BYOI)
+
+You do not have to satisfy the full contract by hand. Two paths exist:
+
+**Wrapped (per-run, recommended).** Pass a `image` on `POST /api/v1/runs`
+(the New Run wizard's *Custom sandbox image (advanced)* field) — any OCI base.
+Wardyn WRAPS it with the trusted finalize stage (`FROM <your image>` +
+`COPY` the runner tools onto PATH + `ENTRYPOINT []`), so the recorder,
+git-brokering, verify, and the no-ENTRYPOINT rule are satisfied for you. A
+per-run `agent-run --selftest` runs before the task and fails the run closed if
+the image can't meet the contract, so a broken image surfaces honestly instead
+of hanging. Requires wardynd built with `-tags docker` and
+`WARDYN_ENVBUILD_TOOLS_DIR` set (the `-envbuild` path).
+
+What the wrap does NOT add — your base must still provide:
+
+- **A shell.** `agent-run` is `bash`; `wardyn attach` falls back through
+  `tmux → bash → /bin/sh`. A fully distroless/shell-less base fails the selftest.
+- **The harness CLI**, for a *task* (autonomous) run — e.g. `claude` for a
+  `claude-code` task. Interactive/BYOI login boxes don't need it. Wardyn installs
+  nothing at runtime.
+- Non-root is recommended (Claude Code refuses `--dangerously-skip-permissions`
+  as root); the wrap does not remap USER/HOME.
+
+**Private registries:** pre-pull on the host (`docker pull …`) — the driver
+short-circuits the pull when the image is already present, so no registry-auth
+wiring is needed. Pin a `@sha256:` digest to avoid mutable-tag drift between runs
+(digest refs are presence-checked by inspect, not the tag filter).
+
+**TLS-MITM trust per runtime:** the per-run proxy CA is delivered at
+`/tmp/wardyn/mitm-ca.pem` (bare CA) and `/tmp/wardyn/ca-bundle.pem` (system roots
++ CA). Node clients trust it via `NODE_EXTRA_CA_CERTS`; OpenSSL-family clients
+(curl, Python `requests`, Ruby) via `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` /
+`CURL_CA_BUNDLE`, all set by dispatch. **Not covered:** JVM keystores and Deno
+(`DENO_CERT`) — a JVM/Deno toolchain in a BYOI image must trust the CA itself.
+
+**Raw (deploy-time).** If you build an image that already satisfies the contract
+below, register it under an agent name in `WARDYN_AGENT_IMAGES` (a JSON
+`{"<agent>":"<ref>"}` map) and launch that agent — no per-run wrap.
+
 ## Adding a new agent image
 
 1. Create `deploy/images/<name>/Dockerfile` (multi-stage: Go builder + runtime).

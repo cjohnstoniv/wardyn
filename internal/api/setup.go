@@ -491,7 +491,8 @@ func agentImageCheck(images map[string]string) SetupCheck {
 			Detail: "The configured claude-code agent image (" + ref + ") is the Node-only convention image — " +
 				"a non-JS workspace (Go/Rust/Java/Python) will fail verify/record with exit 127 (toolchain not found).",
 			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (e.g. build deploy/images/campaign, or your " +
-				"own image satisfying the IMAGE CONTRACT in deploy/images/README.md).",
+				"own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a per-run base image " +
+				"in the New Run wizard's \"Custom sandbox image (advanced)\" field — Wardyn wraps it with the runner tools.",
 		}
 	}
 	return SetupCheck{

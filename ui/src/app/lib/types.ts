@@ -383,6 +383,10 @@ export interface CreateRunInput {
   policy_id?: string;
   confinement_class?: ConfinementClass;
   interactive?: boolean;
+  // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
+  // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.
+  // Mutually exclusive with a devcontainer build. Omitted → the convention image.
+  image?: string;
 }
 
 // POST /api/v1/runs response: the created run's fields PLUS an optional advisory
