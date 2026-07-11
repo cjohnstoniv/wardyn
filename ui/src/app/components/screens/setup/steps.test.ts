@@ -46,7 +46,7 @@ describe("credentials — always Optional, never done (honesty law)", () => {
       text: "Optional",
       tone: "neutral",
     });
-    expect(stepDone(status, readiness, []).credentials).toBe(false);
+    expect(stepDone(status, readiness, [], null).credentials).toBe(false);
   });
 });
 
@@ -58,7 +58,7 @@ describe("environment badge", () => {
       text: "Needs setup",
       tone: "warning",
     });
-    expect(stepDone(status, readiness, []).environment).toBe(false);
+    expect(stepDone(status, readiness, [], null).environment).toBe(false);
   });
 });
 
@@ -71,7 +71,7 @@ describe("workspaces badge", () => {
       text: "Ready · 2 onboarded",
       tone: "success",
     });
-    expect(stepDone(status, readiness, workspaces).workspaces).toBe(true);
+    expect(stepDone(status, readiness, workspaces, null).workspaces).toBe(true);
   });
 
   it("shows an info-tone 'In progress' and done=false with only a pending workspace", () => {
@@ -82,7 +82,7 @@ describe("workspaces badge", () => {
       text: "In progress",
       tone: "info",
     });
-    expect(stepDone(status, readiness, workspaces).workspaces).toBe(false);
+    expect(stepDone(status, readiness, workspaces, null).workspaces).toBe(false);
   });
 
   it("shows 'Optional' with no workspaces at all", () => {
@@ -92,6 +92,42 @@ describe("workspaces badge", () => {
       text: "Optional",
       tone: "neutral",
     });
+  });
+});
+
+describe("environment done — barrier-only, matching its badge", () => {
+  it("stays done under an unrelated failing check (Review owns the whole-checks rollup)", () => {
+    const status = baseStatus({
+      checks: [{ id: "runner", label: "Sandbox runner", status: "fail", detail: "no runner" }],
+    });
+    const readiness = deriveReadiness(status);
+    // Badge and dot read the same barrier-only signal — no green badge with a
+    // blank dot.
+    expect(stepBadges(status, readiness, [], null).environment.tone).toBe("success");
+    expect(stepDone(status, readiness, [], null).environment).toBe(true);
+    // review still rolls the failure up.
+    expect(stepDone(status, readiness, [], null).review).toBe(false);
+  });
+});
+
+describe("corporate done — same SiteConfig predicate as the badge", () => {
+  it("badge and rail dot agree: done flips exactly when the step's field is set", () => {
+    const status = baseStatus();
+    const r = deriveReadiness(status);
+    expect(stepDone(status, r, [], null).host_proxy).toBe(false);
+    expect(stepDone(status, r, [], null).scm_provider).toBe(false);
+    expect(stepDone(status, r, [], null).artifact_repo).toBe(false);
+
+    const cfg = {
+      upstream_proxy_secret_ref: "corp-proxy",
+      scm_hosts: ["github.example.com"],
+      artifact_overrides: { npm: { base_url: "https://artifactory.example.com/npm" } },
+    };
+    const done = stepDone(status, r, [], cfg);
+    expect(done.host_proxy).toBe(true);
+    expect(done.scm_provider).toBe(true);
+    expect(done.artifact_repo).toBe(true);
+    expect(siteConfigBadge(cfg, "host_proxy").text).toBe("Configured");
   });
 });
 
@@ -161,7 +197,7 @@ describe("review/launch essentials gate — barrier alone never claims launch-re
     const badges = stepBadges(status, r, [], null);
     expect(badges.review).toEqual({ text: "Review what's left", tone: "neutral" });
     expect(badges.launch).toEqual({ text: "Set up the essentials first", tone: "neutral" });
-    expect(stepDone(status, r, []).review).toBe(false);
+    expect(stepDone(status, r, [], null).review).toBe(false);
   });
 
   it("barrier + connected model: the success texts + review done", () => {
@@ -173,6 +209,6 @@ describe("review/launch essentials gate — barrier alone never claims launch-re
     const badges = stepBadges(status, r, [], null);
     expect(badges.review).toEqual({ text: "All essentials ready", tone: "success" });
     expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
-    expect(stepDone(status, r, []).review).toBe(true);
+    expect(stepDone(status, r, [], null).review).toBe(true);
   });
 });

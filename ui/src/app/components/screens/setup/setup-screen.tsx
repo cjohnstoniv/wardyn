@@ -183,7 +183,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }
 
   const badges = stepBadges(status, readiness, workspaces, siteConfig);
-  const done = stepDone(status, readiness, workspaces);
+  const done = stepDone(status, readiness, workspaces, siteConfig);
 
   return (
     <>

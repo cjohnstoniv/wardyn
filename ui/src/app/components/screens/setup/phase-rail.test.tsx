@@ -79,6 +79,16 @@ describe("PhaseRail", () => {
     expect(rail.getByText("2/2")).toBeInTheDocument();
   });
 
+  it('all-optional phases read "all optional", never a counter that cannot fill', () => {
+    const rail = renderRail("environment");
+    // "Your work" (scm/workspaces/credentials) and the corporate group are both
+    // made only of optional steps: credentials is done-pinned false (honesty
+    // law), so a 0/3 counter there could structurally never reach 3/3.
+    expect(rail.getAllByText("all optional")).toHaveLength(2);
+    expect(rail.queryByText("0/3")).not.toBeInTheDocument();
+    expect(rail.getByText("0/2")).toBeInTheDocument(); // Finish still counts
+  });
+
   it("marks only the active step aria-current=step, and no button anywhere uses aria-pressed", () => {
     const rail = renderRail("provider");
     expect(rail.getByRole("button", { name: /model\/harness provider/i })).toHaveAttribute(

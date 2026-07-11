@@ -11,7 +11,14 @@
 import { useState } from "react";
 import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../../ui/utils";
-import { PHASES, STEP_LABEL, STEP_ORDER, type SetupStepId, type StepBadge } from "./steps";
+import {
+  OPTIONAL_STEPS,
+  PHASES,
+  STEP_LABEL,
+  STEP_ORDER,
+  type SetupStepId,
+  type StepBadge,
+} from "./steps";
 
 const TONE_DOT: Record<StepBadge["tone"], string> = {
   success: "text-success",
@@ -74,9 +81,11 @@ export function PhaseRail({
           band), back at xl+. */}
       <nav aria-label="Setup steps" className="flex flex-col gap-5 lg:hidden xl:flex">
         {PHASES.map((phase) => {
-          // done[] never marks credentials true (honesty law in steps.ts), so a
-          // phase containing it ("Your work") caps below N/N by design — the
-          // counter can't reach full and that's intentional, not a bug.
+          // A phase made only of optional steps reads "all optional" instead of a
+          // progress counter: credentials is done-pinned false (honesty law in
+          // steps.ts), so "Your work" would show a counter that structurally can
+          // never reach N/N. Per-step dots still track real progress inside it.
+          const allOptional = phase.steps.every((id) => OPTIONAL_STEPS.has(id));
           const doneCount = phase.steps.filter((id) => done[id]).length;
           const isOpen =
             !phase.collapsible || expanded[phase.id] || phase.steps.includes(current);
@@ -102,7 +111,7 @@ export function PhaseRail({
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground">
-                  {phase.collapsible ? "all optional" : `${doneCount}/${phase.steps.length}`}
+                  {allOptional ? "all optional" : `${doneCount}/${phase.steps.length}`}
                 </span>
               </div>
 
