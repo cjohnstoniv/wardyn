@@ -104,17 +104,22 @@ export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" 
 // badge instead derives readiness client-side from the actual SiteConfig field
 // each step's own body edits — the honest default stays a neutral "Optional"
 // nudge until that field is genuinely set.
+export function siteConfigConfigured(
+  cfg: SiteConfig | null,
+  checkId: "host_proxy" | "scm_provider" | "artifact_repo",
+): boolean {
+  return checkId === "host_proxy"
+    ? !!cfg?.upstream_proxy_secret_ref
+    : checkId === "scm_provider"
+      ? !!cfg?.scm_hosts?.length
+      : !!cfg?.artifact_overrides && Object.keys(cfg.artifact_overrides).length > 0;
+}
+
 export function siteConfigBadge(
   cfg: SiteConfig | null,
   checkId: "host_proxy" | "scm_provider" | "artifact_repo",
 ): StepBadge {
-  const configured =
-    checkId === "host_proxy"
-      ? !!cfg?.upstream_proxy_secret_ref
-      : checkId === "scm_provider"
-        ? !!cfg?.scm_hosts?.length
-        : !!cfg?.artifact_overrides && Object.keys(cfg.artifact_overrides).length > 0;
-  return configured
+  return siteConfigConfigured(cfg, checkId)
     ? { text: "Configured", tone: "success" }
     : { text: "Optional", tone: "neutral" };
 }
@@ -176,17 +181,21 @@ export function stepDone(
   status: SetupStatus,
   r: Readiness,
   workspaces: Workspace[],
+  siteConfig: SiteConfig | null,
 ): Record<SetupStepId, boolean> {
   return {
-    environment: r.barrierReady && !status.checks.some((c) => c.status === "fail"),
+    // Environment = "Pick your barrier" — barrier-only, the same signal its badge
+    // reads. An unrelated failing check must not blank this dot while the badge
+    // stays green (Review owns the whole-checks rollup).
+    environment: r.barrierReady,
     provider: r.llmReady,
-    // Non-blocking, so "done" is purely cosmetic — the backend hardcodes these
-    // three checks to "info" on every path (never "ok"), so a live status===
-    // "ok" read is provably constant-false. Pinned to false outright rather than
-    // inferred client-side from SiteConfig (never-infer-client-side stance).
-    host_proxy: false,
-    scm_provider: false,
-    artifact_repo: false,
+    // Corporate baseline: done derives from the SAME SiteConfig predicate as the
+    // badge (siteConfigConfigured), so the green "Configured" badge and the rail
+    // checkmark can never disagree. Still honest — the value read is the actual
+    // saved config the step's own body edits, not an inferred guess.
+    host_proxy: siteConfigConfigured(siteConfig, "host_proxy"),
+    scm_provider: siteConfigConfigured(siteConfig, "scm_provider"),
+    artifact_repo: siteConfigConfigured(siteConfig, "artifact_repo"),
     // Design delta: done only once a workspace is actually READY, matching the
     // badge above — merely onboarding one (still scanning/building/verifying)
     // no longer earns the stepper checkmark.
