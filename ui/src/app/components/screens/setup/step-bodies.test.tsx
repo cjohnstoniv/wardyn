@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SetupStatus } from "../../../lib/types";
+import type { SetupStatus, SiteConfig } from "../../../lib/types";
 
 const getSetupStatusMock = vi.fn();
 const listSecretsMock = vi.fn();
@@ -53,12 +53,13 @@ import {
   ReviewStep,
   LaunchStep,
 } from "./step-bodies";
-import { ModelStep } from "./model-step";
+import { ModelStep } from "./llm-access";
 import { deriveReadiness } from "../onboarding/intro";
+import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
+// This suite's own pin is its `checks` array (gvisor/loopback/kvm/platform_wsl).
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
-  return {
-    ready: false,
+  return sharedBaseStatus({
     checks: [
       { id: "gvisor", label: "gVisor runtime", status: "ok", detail: "runsc detected" },
       { id: "loopback", label: "Loopback bind", status: "warn", detail: "bound to 0.0.0.0" },
@@ -71,19 +72,19 @@ function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
         detail: "Running under WSL2",
       },
     ],
-    auth: { mode: "local", local_loopback: true },
-    runner: {
-      driver: "docker",
-      confinement_classes: ["CC1", "CC2"],
-      confinement_substrates: { CC1: "oci/runc", CC2: "oci/runsc" },
-    },
-    composer: { enabled: false, backends: [] },
-    providers: [{ tool: "claude", installed: true, logged_in: false }],
-    secrets: { present: [], github_app: false },
-    age_key: { durable: false },
-    has_runs: false,
-    platform: { os: "linux", wsl: false, kvm: true },
     ...overrides,
+  });
+}
+
+// V2: the corp steps (Host Proxy / SCM Provider / Artifact Redirect) no longer
+// own their own SiteConfig fetch — the orchestrator does, and hands down
+// siteConfig + reloadSiteConfig/saveSiteConfig. Fresh mocks per call so a test
+// asserting on saveSiteConfig doesn't inherit another test's call history.
+function siteConfigProps(cfg: SiteConfig | null = {}) {
+  return {
+    siteConfig: cfg,
+    reloadSiteConfig: vi.fn().mockResolvedValue(undefined),
+    saveSiteConfig: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -101,19 +102,29 @@ describe("step-bodies.tsx — smoke", () => {
   });
 
   it("HostProxyStep renders its upstream-proxy-secret field", async () => {
-    render(<HostProxyStep status={baseStatus()} onRecheck={vi.fn()} rechecking={false} />);
+    render(
+      <HostProxyStep status={baseStatus()} {...siteConfigProps()} onRecheck={vi.fn()} rechecking={false} />,
+    );
     expect(await screen.findByText("Upstream proxy secret name")).toBeInTheDocument();
   });
 
   it("ScmProviderStep renders its per-host-credential card", async () => {
     render(
-      <ScmProviderStep status={baseStatus()} onAddSecret={vi.fn()} onRecheck={vi.fn()} rechecking={false} />,
+      <ScmProviderStep
+        status={baseStatus()}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
     );
     expect(await screen.findByText("Add a per-host credential")).toBeInTheDocument();
   });
 
   it("ArtifactRepoStep renders its ecosystem field", async () => {
-    render(<ArtifactRepoStep status={baseStatus()} onRecheck={vi.fn()} rechecking={false} />);
+    render(
+      <ArtifactRepoStep status={baseStatus()} {...siteConfigProps()} onRecheck={vi.fn()} rechecking={false} />,
+    );
     expect(await screen.findByText("Ecosystem")).toBeInTheDocument();
   });
 
@@ -167,17 +178,18 @@ describe("step-bodies.tsx — smoke", () => {
     ).not.toBeInTheDocument();
   });
 
-  // F2: a successful save must fire the fresh config up so the orchestrator can
-  // refresh the rail's "Configured" badge (which reads its own siteConfig state).
-  it("HostProxyStep signals a saved SiteConfig upward via onSiteConfigSaved", async () => {
+  // V2: a successful save PUTs through the orchestrator-owned saveSiteConfig
+  // (the single SiteConfig owner) instead of the step's own local hook.
+  it("HostProxyStep saves via the orchestrator-owned saveSiteConfig", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const onSiteConfigSaved = vi.fn();
+    const saveSiteConfig = vi.fn().mockResolvedValue(undefined);
     render(
       <HostProxyStep
         status={baseStatus()}
+        {...siteConfigProps()}
+        saveSiteConfig={saveSiteConfig}
         onRecheck={vi.fn()}
         rechecking={false}
-        onSiteConfigSaved={onSiteConfigSaved}
       />,
     );
     const input = await screen.findByPlaceholderText("upstream-proxy-url");
@@ -186,7 +198,7 @@ describe("step-bodies.tsx — smoke", () => {
     await waitFor(() => expect(saveBtn).toBeEnabled());
     await user.click(saveBtn);
     await waitFor(() =>
-      expect(onSiteConfigSaved).toHaveBeenCalledWith({ upstream_proxy_secret_ref: "corp-proxy" }),
+      expect(saveSiteConfig).toHaveBeenCalledWith({ upstream_proxy_secret_ref: "corp-proxy" }),
     );
   });
 

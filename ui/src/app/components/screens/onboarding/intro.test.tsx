@@ -7,24 +7,24 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { SetupStatus } from "../../../lib/types";
 import { hasLlmPath, deriveReadiness, HowItWorksStrip } from "./intro";
+import { baseStatus } from "../setup/test-fixtures";
 
 // A minimal-but-valid SetupStatus. The default `make setup` config is a single
 // `fake` (deterministic stub) composer backend + no CLI login + no key secret —
-// the case that must NOT read as real LLM access anywhere in the funnel.
+// the case that must NOT read as real LLM access anywhere in the funnel. This
+// suite's own pins: ready, CC1-only runner, a non-durable-loopback local auth,
+// an enabled/`dev` composer, no providers, and a durable secret store.
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
-  return {
+  return baseStatus({
     ready: true,
-    checks: [],
-    auth: { mode: "local", local_loopback: false },
     runner: { driver: "docker", confinement_classes: ["CC1"] },
+    auth: { mode: "local", local_loopback: false },
     composer: { enabled: true, default: "dev", backends: [] },
     providers: [],
-    secrets: { present: [], github_app: false },
     age_key: { durable: true },
-    has_runs: false,
     platform: { os: "linux", wsl: false },
     ...overrides,
-  };
+  });
 }
 
 const fakeBackend = {

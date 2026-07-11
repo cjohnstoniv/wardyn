@@ -26,23 +26,19 @@ export type SetupStepId =
   | "review"
   | "launch";
 
-export const SETUP_STEPS: { id: SetupStepId; label: string }[] = [
-  { id: "environment", label: "Environment" },
-  { id: "provider", label: "Model/Harness Provider" },
-  { id: "host_proxy", label: "Host Proxy" },
-  { id: "scm_provider", label: "SCM Provider" },
-  { id: "artifact_repo", label: "Artifact Redirect" },
-  { id: "workspaces", label: "Workspaces" },
-  { id: "credentials", label: "Credentials" },
-  { id: "review", label: "Review" },
-  { id: "launch", label: "Launch" },
-];
-
 // id→label lookup — the rail and the layout footer both need it; export once
-// here instead of each rebuilding the same Object.fromEntries map (F5).
-export const STEP_LABEL: Record<SetupStepId, string> = Object.fromEntries(
-  SETUP_STEPS.map((s) => [s.id, s.label]),
-) as Record<SetupStepId, string>;
+// here instead of each rebuilding the same map (F5).
+export const STEP_LABEL: Record<SetupStepId, string> = {
+  environment: "Environment",
+  provider: "Model/Harness Provider",
+  host_proxy: "Host Proxy",
+  scm_provider: "SCM Provider",
+  artifact_repo: "Artifact Redirect",
+  workspaces: "Workspaces",
+  credentials: "Credentials",
+  review: "Review",
+  launch: "Launch",
+};
 
 export const STEP_HEADING: Record<SetupStepId, string> = {
   environment: "Pick your barrier",
@@ -184,11 +180,13 @@ export function stepDone(
   return {
     environment: r.barrierReady && !status.checks.some((c) => c.status === "fail"),
     provider: r.llmReady,
-    // Non-blocking, so "done" is purely cosmetic — true only once the backend
-    // itself reports the check as "ok" (never inferred client-side).
-    host_proxy: status.checks.find((c) => c.id === "host_proxy")?.status === "ok",
-    scm_provider: status.checks.find((c) => c.id === "scm_provider")?.status === "ok",
-    artifact_repo: status.checks.find((c) => c.id === "artifact_repo")?.status === "ok",
+    // Non-blocking, so "done" is purely cosmetic — the backend hardcodes these
+    // three checks to "info" on every path (never "ok"), so a live status===
+    // "ok" read is provably constant-false. Pinned to false outright rather than
+    // inferred client-side from SiteConfig (never-infer-client-side stance).
+    host_proxy: false,
+    scm_provider: false,
+    artifact_repo: false,
     // Design delta: done only once a workspace is actually READY, matching the
     // badge above — merely onboarding one (still scanning/building/verifying)
     // no longer earns the stepper checkmark.

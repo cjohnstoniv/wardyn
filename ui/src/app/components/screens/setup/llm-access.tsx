@@ -3,16 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// LLM-access section for the Getting-started funnel: the API-key + resident-CLI
-// subscription list (B7), grouped by provider family (Claude/Anthropic, OpenAI/
-// Codex). Reads from the SetupStatus the daemon already reports and offers the
-// right action:
+// ModelStep — the Getting-started "Connect a model" step body: the API-key +
+// resident-CLI subscription list (B7), grouped by provider family (Claude/
+// Anthropic, OpenAI/Codex), plus an intro sentence and, when running on the
+// containerized control plane (a coming-soon team feature) that can't see the
+// host's Claude login, a "use host mode" hint. Reads from the SetupStatus the
+// daemon already reports and offers the right action:
 //   - API keys  -> one-click AddSecretDialog (setSecret)
 //   - CLI logins / runtimes -> a SetupGuide the operator runs on the host
 // (The barrier picker moved to ./environment-step and the composer-backends list
-// was dropped from setup by owner decision; this module is LLM access only.)
+// was dropped from setup by owner decision; this module is LLM access only. Has
+// NO composer-backends section by design — owner decision: zero composer UI here.)
 import * as React from "react";
-import { KeyRound, Plus } from "lucide-react";
+import { Info, KeyRound, Plus } from "lucide-react";
 import type { SetupStatus } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
@@ -20,6 +23,7 @@ import { StatusChip } from "../../wardyn/status-chip";
 import type { StatusKind } from "../../wardyn/copy";
 import { BTN } from "../../wardyn/copy";
 import { PROVIDER_GUIDES, type SetupGuide } from "./setup-guide";
+import type { Readiness } from "../onboarding/intro";
 
 type RowState = "ready" | "todo";
 type Provider = SetupStatus["providers"][number];
@@ -107,19 +111,29 @@ function ProviderFamily({
   );
 }
 
-export function LlmAccess({
+export function ModelStep({
   status,
+  readiness,
   onAddSecret,
   onSetup,
   onRecheck,
   rechecking,
 }: {
   status: SetupStatus;
+  readiness: Readiness;
   onAddSecret: (name: string) => void;
   onSetup: (g: SetupGuide) => void;
   onRecheck: () => void;
   rechecking: boolean;
 }) {
+  // Guidance for the most common first-run snag: a personal machine running the
+  // sealed (compose/team) control plane, which can't see the host's Claude login —
+  // so this step reads "not connected" even when the operator IS logged in. Only
+  // shown when the model is genuinely undetected AND we're blind-in-compose on a
+  // local box (host_like === false + local auth); host mode never sees it.
+  const suggestHostMode =
+    !readiness.llmReady && status.deployment?.host_like === false && status.auth.mode === "local";
+
   const present = status.secrets.present;
   const anthropic = hasSecret(present, /anthropic/i);
   const openai = hasSecret(present, /openai/i);
@@ -295,57 +309,86 @@ export function LlmAccess({
   );
 
   return (
-    <div className="space-y-4">
-      <ProviderFamily
-        title="Claude / Anthropic"
-        connected={anthropicConnected}
-        rows={[
-          claudeSubDetected && subRow,
-          anthropic && anthropicKeyRow,
-          bedrockConfigured && bedrockRow,
-        ]}
-        options={[
-          !claudeSubDetected && {
-            key: "sub",
-            label: claudeInstalled ? "Log in to Claude CLI" : "Install Claude CLI",
-            onClick: () => onSetup(PROVIDER_GUIDES.claude),
-          },
-          !anthropic && {
-            key: "akey",
-            label: "Add Anthropic API key",
-            icon: <KeyRound className="size-3.5" />,
-            onClick: () => onAddSecret("anthropic-api-key"),
-          },
-          !bedrockConfigured && {
-            key: "bedrock",
-            label: "Set up AWS Bedrock",
-            icon: <KeyRound className="size-3.5" />,
-            onClick: () => onAddSecret("aws-access-key-id"),
-          },
-        ].filter(Boolean) as SetupOption[]}
-      />
-      <ProviderFamily
-        title="OpenAI / Codex"
-        connected={openaiConnected}
-        rows={[openai && openaiKeyRow, codexDetected && codexRow]}
-        options={[
-          !openai && {
-            key: "okey",
-            label: "Add OpenAI API key",
-            icon: <KeyRound className="size-3.5" />,
-            onClick: () => onAddSecret("openai-api-key"),
-          },
-          !codexDetected && {
-            key: "codex",
-            label: codexInstalled ? "Log in to Codex CLI" : "Install Codex CLI",
-            onClick: () => onSetup(PROVIDER_GUIDES.codex),
-          },
-        ].filter(Boolean) as SetupOption[]}
-      />
-      <div className="flex justify-end">
-        <Button size="sm" variant="link" onClick={onRecheck} disabled={rechecking}>
-          {rechecking ? "Refreshing…" : "Refresh detection"}
-        </Button>
+    <div className="space-y-5">
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        {readiness.llmReady
+          ? `One connected path is enough — you're already covered by ${readiness.llmLabel || "a connected model"}.`
+          : "Wardyn needs a way for the agent to talk to an LLM — a stored API key the proxy injects, or a resident CLI subscription."}
+      </p>
+
+      {suggestHostMode && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/40 p-3">
+          <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+          <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed">
+            <p className="text-foreground">
+              Sandboxing your <span className="font-medium">own machine</span>, and already logged into the
+              Claude CLI? You&apos;re on the containerized control plane — a <span className="font-medium">coming-soon
+              team feature</span>. wardynd runs sealed in a container that can&apos;t see your host&apos;s{" "}
+              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login, which is why it
+              reads &quot;not connected&quot; even though you are. Host mode is the supported setup — it uses your
+              existing login automatically, no re-login, no stored key:
+            </p>
+            <p>
+              <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-xs text-foreground">
+                make setup
+              </code>
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        <ProviderFamily
+          title="Claude / Anthropic"
+          connected={anthropicConnected}
+          rows={[
+            claudeSubDetected && subRow,
+            anthropic && anthropicKeyRow,
+            bedrockConfigured && bedrockRow,
+          ]}
+          options={[
+            !claudeSubDetected && {
+              key: "sub",
+              label: claudeInstalled ? "Log in to Claude CLI" : "Install Claude CLI",
+              onClick: () => onSetup(PROVIDER_GUIDES.claude),
+            },
+            !anthropic && {
+              key: "akey",
+              label: "Add Anthropic API key",
+              icon: <KeyRound className="size-3.5" />,
+              onClick: () => onAddSecret("anthropic-api-key"),
+            },
+            !bedrockConfigured && {
+              key: "bedrock",
+              label: "Set up AWS Bedrock",
+              icon: <KeyRound className="size-3.5" />,
+              onClick: () => onAddSecret("aws-access-key-id"),
+            },
+          ].filter(Boolean) as SetupOption[]}
+        />
+        <ProviderFamily
+          title="OpenAI / Codex"
+          connected={openaiConnected}
+          rows={[openai && openaiKeyRow, codexDetected && codexRow]}
+          options={[
+            !openai && {
+              key: "okey",
+              label: "Add OpenAI API key",
+              icon: <KeyRound className="size-3.5" />,
+              onClick: () => onAddSecret("openai-api-key"),
+            },
+            !codexDetected && {
+              key: "codex",
+              label: codexInstalled ? "Log in to Codex CLI" : "Install Codex CLI",
+              onClick: () => onSetup(PROVIDER_GUIDES.codex),
+            },
+          ].filter(Boolean) as SetupOption[]}
+        />
+        <div className="flex justify-end">
+          <Button size="sm" variant="link" onClick={onRecheck} disabled={rechecking}>
+            {rechecking ? "Refreshing…" : "Refresh detection"}
+          </Button>
+        </div>
       </div>
     </div>
   );

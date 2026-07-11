@@ -8,30 +8,22 @@ import type { SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types
 import { deriveReadiness } from "../onboarding/intro";
 import {
   PHASES,
-  SETUP_STEPS,
   STEP_HEADING,
+  STEP_LABEL,
   STEP_ORDER,
   siteConfigBadge,
   stepBadges,
   stepDone,
 } from "./steps";
+import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
-// Minimal SetupStatus fixture — shape copied from setup-screen.test.tsx's
-// baseStatus(), trimmed to only what these pure functions read.
+// This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
+// what these pure functions read.
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
-  return {
-    ready: false,
-    checks: [],
-    auth: { mode: "local", local_loopback: true },
+  return sharedBaseStatus({
     runner: { driver: "docker", confinement_classes: ["CC1"] },
-    composer: { enabled: false, backends: [] },
-    providers: [{ tool: "claude", installed: true, logged_in: false }],
-    secrets: { present: [], github_app: false },
-    age_key: { durable: false },
-    has_runs: false,
-    platform: { os: "linux", wsl: false, kvm: true },
     ...overrides,
-  };
+  });
 }
 
 function ws(id: string, status: WorkspaceStatus): Workspace {
@@ -119,7 +111,7 @@ describe("host_proxy — Configured only once the SiteConfig field is set", () =
 
 describe("frozen contract — ids, labels, headings, order", () => {
   it("pins the frozen step ids and labels (e2e clicks `Next: {label}`)", () => {
-    expect(SETUP_STEPS.map((s) => [s.id, s.label])).toEqual([
+    expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
       ["provider", "Model/Harness Provider"],
       ["host_proxy", "Host Proxy"],

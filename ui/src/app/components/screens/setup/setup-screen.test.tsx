@@ -51,35 +51,25 @@ import {
   shouldOpenSetup,
 } from "./setup-screen";
 import { getDefaultCc } from "../../wardyn/default-confinement";
+import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
+// E2 provenance is additive/optional. The substrate map (in the shared default)
+// names the concrete runtime each LIVE tier runs as; ready barrier cards render
+// it. (auth_mode needs a logged-in CLI and composer transport/auth need a
+// backend, neither of which the base carries, so those two are exercised in the
+// dedicated E2 provider test below, not here.) This suite's own pin is its
+// `checks` array (gvisor/loopback/kvm/macos-kvm), reused across the review-step
+// assertions below.
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
-  return {
-    ready: false,
+  return sharedBaseStatus({
     checks: [
       { id: "gvisor", label: "gVisor runtime", status: "ok", detail: "runsc detected" },
       { id: "loopback", label: "Loopback bind", status: "warn", detail: "bound to 0.0.0.0" },
       { id: "kvm", label: "/dev/kvm", status: "fail", detail: "missing", fix: "enable virtualization" },
       { id: "macos-kvm", label: "macOS note", status: "info", detail: "CC3 unavailable on macOS" },
     ],
-    auth: { mode: "local", local_loopback: true },
-    // E2 provenance is additive/optional. The substrate map — the one E2 field with
-    // a home in the base fixture — names the concrete runtime each LIVE tier runs
-    // as; ready barrier cards render it. (auth_mode needs a logged-in CLI and
-    // composer transport/auth need a backend, neither of which the base carries, so
-    // those two are exercised in the dedicated E2 provider test below, not here.)
-    runner: {
-      driver: "docker",
-      confinement_classes: ["CC1", "CC2"],
-      confinement_substrates: { CC1: "oci/runc", CC2: "oci/runsc" },
-    },
-    composer: { enabled: false, backends: [] },
-    providers: [{ tool: "claude", installed: true, logged_in: false }],
-    secrets: { present: [], github_app: false },
-    age_key: { durable: false },
-    has_runs: false,
-    platform: { os: "linux", wsl: false, kvm: true },
     ...overrides,
-  };
+  });
 }
 
 describe("shouldOpenSetup — pure decision helper", () => {
@@ -493,7 +483,7 @@ describe("SetupScreen", () => {
     // Honest inverse of the old composer-provenance test: the ModelStep body
     // deliberately drops the "AI Run Composer backends" section (owner decision:
     // zero composer UI here). Even WITH a composer backend configured, the provider
-    // step must render the LLM auth provenance via LlmAccess but NO composer text —
+    // step must render the LLM auth provenance via ModelStep but NO composer text —
     // no transport/auth provenance, no "composer" copy at all.
     getSetupStatusMock.mockResolvedValue(
       baseStatus({

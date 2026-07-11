@@ -57,15 +57,15 @@ const TIER_NAME_TINT: Record<ConfinementClass, string> = {
 // The strongest-COMPATIBLE recommendation, computed from the probe alone — a
 // kvm-capable host recommends Vault even before its runtime is installed (its
 // card just says "Needs setup"). NEVER demoted for a merely-uninstalled tier;
-// only a hardware-impossible one is skipped. Exported so the orchestrator and
-// tests share this one rule.
+// only a hardware-impossible one is skipped. Exported for tests only — CC1+CC2
+// are always compatible, so this can only ever return CC2 or CC3.
 export function recommendedTier(status: SetupStatus): ConfinementClass {
   const available = new Set(status.runner.confinement_classes ?? []);
   const kvm =
     status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
   const incompatible = (cc: ConfinementClass) => cc === "CC3" && !kvm && !available.has(cc);
   const compatible = CC_ORDER.filter((cc) => !incompatible(cc));
-  return compatible[compatible.length - 1] ?? "CC1";
+  return compatible[compatible.length - 1];
 }
 
 // Per-tier "pick this when…" guidance — the sole copy (the barrier picker lives
@@ -86,15 +86,12 @@ const NOT_DETECTED: Partial<Record<ConfinementClass, string>> = {
 export function EnvironmentStep({
   status,
   selected,
-  recommended,
   onSelect,
   recheckToken = 0,
   rechecking = false,
 }: {
   status: SetupStatus;
   selected: ConfinementClass | null;
-  /** Override the internal strongest-compatible pick (tests / orchestrator). */
-  recommended?: ConfinementClass;
   onSelect: (cc: ConfinementClass) => void;
   /** Increments each completed host re-check — drives the still-not-detected line. */
   recheckToken?: number;
@@ -106,7 +103,7 @@ export function EnvironmentStep({
   const noDriver = status.runner.driver === "none";
   const noRunner = noDriver || classes.length === 0;
   const available = new Set(classes);
-  const rec = recommended ?? recommendedTier(status);
+  const rec = recommendedTier(status);
 
   // Incompatible vs needs-setup is a HARDWARE fact (the backend probes /dev/kvm).
   // Only a genuinely KVM-less host marks Vault incompatible; an old daemon without

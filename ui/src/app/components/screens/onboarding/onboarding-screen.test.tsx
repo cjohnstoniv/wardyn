@@ -26,21 +26,19 @@ vi.mock("../../../lib/api", async () => {
 });
 
 import { OnboardingScreen, onboardingSeen, markOnboardingSeen } from "./onboarding-screen";
+import { baseStatus } from "../setup/test-fixtures";
 
+// This suite's own pins: ready, CC1-only runner, a logged-in Claude CLI, and a
+// durable secret store.
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
-  return {
+  return baseStatus({
     ready: true,
-    checks: [],
-    auth: { mode: "local", local_loopback: true },
     runner: { driver: "docker", confinement_classes: ["CC1"] },
-    composer: { enabled: false, backends: [] },
     providers: [{ tool: "claude", installed: true, logged_in: true }],
-    secrets: { present: [], github_app: false },
     age_key: { durable: true },
-    has_runs: false,
     platform: { os: "linux", wsl: false },
     ...overrides,
-  };
+  });
 }
 
 describe("OnboardingScreen (welcome hero)", () => {
