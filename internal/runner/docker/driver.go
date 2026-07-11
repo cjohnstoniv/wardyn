@@ -888,6 +888,19 @@ func (d *Driver) ensureImage(ctx context.Context, ref string) error {
 }
 
 func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
+	// A digest-pinned ref (repo@sha256:...) is not a tag, so the "reference" list
+	// filter (which is tag-shaped) never matches it — check by inspect instead, so
+	// a pre-pulled digest-pinned BYOI/private image reads present and short-circuits
+	// the pull (which would otherwise re-hit a registry we may have no auth for).
+	if strings.Contains(ref, "@sha256:") {
+		if _, err := d.cli.ImageInspect(ctx, ref); err != nil {
+			if isNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("docker: image inspect %q: %w", ref, err)
+		}
+		return true, nil
+	}
 	f := filters.NewArgs()
 	f.Add("reference", ref)
 	summaries, err := d.cli.ImageList(ctx, image.ListOptions{Filters: f})

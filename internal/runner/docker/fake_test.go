@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	dockerclient "github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -99,6 +100,15 @@ func (f *fakeDocker) ImagePull(ctx context.Context, ref string, opts image.PullO
 	}
 	f.images[ref] = true
 	return io.NopCloser(strings.NewReader(`{"status":"pulled"}`)), nil
+}
+
+func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...dockerclient.ImageInspectOption) (image.InspectResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.images[imageID] {
+		return image.InspectResponse{ID: imageID}, nil
+	}
+	return image.InspectResponse{}, fakeNotFound{msg: "no such image: " + imageID}
 }
 
 func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error) {
