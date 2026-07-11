@@ -8,7 +8,7 @@
 // secret/site-config loads, and every dialog; the SHELL (header, dismissible
 // intro, fast-path banner, phase rail, host-status strip, step heading, footer
 // nav) lives in SetupLayout, the pure step bodies in ./environment-step,
-// ./model-step, ./step-bodies, and the step/badge data in ./steps.
+// ./llm-access, ./step-bodies, and the step/badge data in ./steps.
 //
 // Read-only against GET /api/v1/setup/status (the FROZEN SetupStatus contract in
 // lib/types.ts) except for the setSecret()/putSiteConfig() writes each step body
@@ -26,7 +26,7 @@ import { deriveReadiness, lastCheckedLabel } from "../onboarding/intro";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
-import { ModelStep } from "./model-step";
+import { ModelStep } from "./llm-access";
 import {
   ArtifactRepoStep,
   CredentialsStep,
@@ -95,13 +95,24 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     setDefaultCc(cc);
   }, []);
 
+  // Sole SiteConfig owner (V2): the orchestrator holds the one fetched copy and
+  // hands the three corp steps a reload + save pair instead of each keeping its
+  // own mount-time GET synced back up via a callback prop.
+  const reloadSiteConfig = React.useCallback(() => {
+    return api.getSiteConfig().then(setSiteConfig).catch(() => {});
+  }, []);
+
+  const saveSiteConfig = React.useCallback((next: SiteConfig) => {
+    return api.putSiteConfig(next).then(() => setSiteConfig(next));
+  }, []);
+
   const recheck = React.useCallback(() => {
     setRechecking(true);
     // Load/resync the corporate-baseline SiteConfig (F2): the rail "Configured"
     // badges read siteConfig state, so mount (via this recheck) and every manual
     // Re-check pull it — a failure leaves the last-known config (or the initial
-    // null) in place, never clobbers it. This is the ORCHESTRATOR'S sole GET path (bodies load their own copy for form state).
-    api.getSiteConfig().then(setSiteConfig).catch(() => {});
+    // null) in place, never clobbers it. This is the ORCHESTRATOR'S sole GET path.
+    reloadSiteConfig();
     return api
       .getSetupStatus()
       .then((s) => {
@@ -111,7 +122,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setRecheckCount((n) => n + 1);
       })
       .finally(() => setRechecking(false));
-  }, []);
+  }, [reloadSiteConfig]);
 
   const loadSecrets = React.useCallback(() => {
     api.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
@@ -212,26 +223,32 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         {stepId === "host_proxy" && (
           <HostProxyStep
             status={status}
+            siteConfig={siteConfig}
+            reloadSiteConfig={reloadSiteConfig}
+            saveSiteConfig={saveSiteConfig}
             onRecheck={recheck}
             rechecking={rechecking}
-            onSiteConfigSaved={setSiteConfig}
           />
         )}
         {stepId === "scm_provider" && (
           <ScmProviderStep
             status={status}
+            siteConfig={siteConfig}
+            reloadSiteConfig={reloadSiteConfig}
+            saveSiteConfig={saveSiteConfig}
             onAddSecret={openAddSecret}
             onRecheck={recheck}
             rechecking={rechecking}
-            onSiteConfigSaved={setSiteConfig}
           />
         )}
         {stepId === "artifact_repo" && (
           <ArtifactRepoStep
             status={status}
+            siteConfig={siteConfig}
+            reloadSiteConfig={reloadSiteConfig}
+            saveSiteConfig={saveSiteConfig}
             onRecheck={recheck}
             rechecking={rechecking}
-            onSiteConfigSaved={setSiteConfig}
           />
         )}
         {stepId === "workspaces" && (

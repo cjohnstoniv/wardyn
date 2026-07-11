@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PhaseRail } from "./phase-rail";
-import { SETUP_STEPS, type SetupStepId, type StepBadge } from "./steps";
+import { STEP_LABEL, type SetupStepId, type StepBadge } from "./steps";
 
 const BADGES: Record<SetupStepId, StepBadge> = {
   environment: { text: "Ready · 2 of 3 barriers", tone: "success" },
@@ -53,8 +53,8 @@ describe("PhaseRail", () => {
   it("renders all 9 frozen labels as buttons in the full rail", () => {
     // current inside the corporate phase so it auto-expands and all 9 show.
     const rail = renderRail("host_proxy");
-    for (const step of SETUP_STEPS) {
-      expect(rail.getByRole("button", { name: new RegExp(step.label, "i") })).toBeInTheDocument();
+    for (const label of Object.values(STEP_LABEL)) {
+      expect(rail.getByRole("button", { name: new RegExp(label, "i") })).toBeInTheDocument();
     }
   });
 

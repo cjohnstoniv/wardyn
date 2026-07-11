@@ -10,28 +10,13 @@ import type { SetupStatus } from "../../../lib/types";
 import { EnvironmentStep, recommendedTier } from "./environment-step";
 import { CONFINEMENT_CONSTANT_NOTE, CC_META } from "../../wardyn/cc-meta";
 import { BTN, RESIDUAL_PREFIX } from "../../wardyn/copy";
+import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
-// Minimal SetupStatus for the picker — only the fields EnvironmentStep reads
-// (runner + platform) carry meaning; the rest satisfy the type. CC1 + CC2 live,
-// KVM-capable host so CC3 is "needs setup" (not incompatible).
+// Only the fields EnvironmentStep reads (runner + platform) carry meaning; the
+// rest satisfy the type. CC1 + CC2 live, KVM-capable host so CC3 is "needs
+// setup" (not incompatible). This suite's own pin is empty `providers`.
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
-  return {
-    ready: false,
-    checks: [],
-    auth: { mode: "local", local_loopback: true },
-    runner: {
-      driver: "docker",
-      confinement_classes: ["CC1", "CC2"],
-      confinement_substrates: { CC1: "oci/runc", CC2: "oci/runsc" },
-    },
-    composer: { enabled: false, backends: [] },
-    providers: [],
-    secrets: { present: [], github_app: false },
-    age_key: { durable: false },
-    has_runs: false,
-    platform: { os: "linux", wsl: false, kvm: true },
-    ...overrides,
-  };
+  return sharedBaseStatus({ providers: [], ...overrides });
 }
 
 // Disabled radios/buttons (#5) mean default pointerEventsCheck now passes — a
@@ -44,8 +29,6 @@ function renderStep(props: Partial<React.ComponentProps<typeof EnvironmentStep>>
     <EnvironmentStep
       status={props.status ?? baseStatus()}
       selected={props.selected ?? null}
-      // Undefined ⇒ EnvironmentStep computes the strongest-compatible pick itself.
-      recommended={props.recommended}
       onSelect={props.onSelect ?? onSelect}
       recheckToken={props.recheckToken}
       rechecking={props.rechecking}
@@ -107,7 +90,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
       runner: { driver: "docker", confinement_classes: ["CC1"] },
       platform: { os: "linux", wsl: false, kvm: false },
     });
-    const { rerender } = renderStep({ status, recommended: "CC1", recheckToken: 0 });
+    const { rerender } = renderStep({ status, recheckToken: 0 });
 
     expect(screen.queryByText(/wardyn setup wall/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: BTN.showSetupCommand }));
@@ -119,7 +102,6 @@ describe("EnvironmentStep — matrix-as-picker", () => {
       <EnvironmentStep
         status={status}
         selected={null}
-        recommended="CC1"
         onSelect={vi.fn()}
         recheckToken={1}
       />,
@@ -168,7 +150,10 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   });
 
   it("(10) exactly one Recommended chip renders", () => {
-    renderStep({ recommended: "CC2" });
+    // KVM-less ⇒ recommendedTier steps down from Vault to Wall (CC2) — the only
+    // reachable way to pin a non-Vault recommendation (see (R1) below).
+    const status = baseStatus({ platform: { os: "linux", wsl: false, kvm: false } });
+    renderStep({ status });
     expect(screen.getAllByText("Recommended")).toHaveLength(1);
   });
 
@@ -190,7 +175,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(caveats.some((el) => el.getAttribute("title") === expected)).toBe(true);
   });
 
-  // ── recommendedTier helper (exported for the orchestrator + tests) ──────────
+  // ── recommendedTier helper (exported for tests only) ─────────────────────────
   it("(R1) recommendedTier picks the strongest COMPATIBLE tier, not the strongest installed", () => {
     // kvm-capable ⇒ Vault is recommended even though CC3 isn't in confinement_classes.
     expect(recommendedTier(baseStatus())).toBe("CC3");

@@ -5,9 +5,10 @@
 
 // The Getting-started step bodies: the corporate-baseline steps (Host Proxy /
 // SCM Provider / Artifact Redirect), Workspaces, Credentials, Review, and Launch.
-// Mostly presentational — the orchestrator (setup-screen) owns SetupStatus and
-// navigation, while each body owns its OWN writes (putSiteConfig, setSecret,
-// scanWorkspace) and reports SiteConfig saves upward via onSiteConfigSaved.
+// Mostly presentational — the orchestrator (setup-screen) owns SetupStatus AND
+// the fetched SiteConfig (the sole owner — see the corporate-baseline steps
+// below), while each body owns its OWN writes (setSecret, scanWorkspace, and the
+// SiteConfig saves via the orchestrator-owned saveSiteConfig).
 import * as React from "react";
 import {
   AlertTriangle,
@@ -37,7 +38,7 @@ import { api } from "../../../lib/api";
 import { getErrorMessage } from "../../../lib/format";
 import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
 import { StatusChip } from "../../wardyn/status-chip";
-import { CC_HINTS, CC_META } from "../../wardyn/cc-meta";
+import { CC_META } from "../../wardyn/cc-meta";
 import { BTN, RUN_MODE } from "../../wardyn/copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -49,17 +50,6 @@ import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
-
-// Client-side fallback copy for well-known check ids, used only when the
-// backend's own `check.fix` is absent/terse. Sourced from the same honest
-// CC_HINTS wording the confinement chip/wizard use, so the copy can't drift.
-const FIX_HINTS: Record<string, { fix: string }> = {
-  confinement: { fix: `Enable gVisor as a Docker runtime for the Wall (default) tier: ${CC_HINTS.CC2}` },
-  gvisor: { fix: `Enable gVisor as a Docker runtime for the Wall (default) tier: ${CC_HINTS.CC2}` },
-  wsl: {
-    fix: "WSL2 splits networking from Windows — bind wardynd to 0.0.0.0 (not localhost) so the console and agents on the Windows side can reach it.",
-  },
-};
 
 // ------------------------------------------------------------
 // Shared check-row primitives (Review + the corporate steps).
@@ -80,7 +70,7 @@ const CHECK_COLOR: Record<SetupCheckStatus, string> = {
 function CheckRow({ check }: { check: SetupCheck }) {
   const Icon = CHECK_ICON[check.status] ?? Info;
   const color = CHECK_COLOR[check.status] ?? "text-muted-foreground";
-  const fix = check.fix || FIX_HINTS[check.id]?.fix;
+  const fix = check.fix;
   return (
     <li className="flex items-start gap-2.5 rounded-lg border border-border p-3">
       <Icon className={`mt-0.5 size-4 shrink-0 ${color}`} />
@@ -203,50 +193,32 @@ export function ReviewStep({
 // Corporate-baseline steps (Host Proxy / SCM Provider / Artifact Redirect) — all
 // three are non-blocking "info"-tier checks (see internal/api/setup.go's
 // hostProxyCheck/scm_provider/artifactRepoCheck): they never gate readiness, they
-// just let an operator wire the SiteConfig baseline every run inherits. Each loads
-// the current SiteConfig itself (GET is idempotent/cheap) and PUTs a shallow merge
-// on top of it so editing one field never clobbers what another step wrote.
+// just let an operator wire the SiteConfig baseline every run inherits.
+//
+// SiteConfig has ONE owner (V2): the orchestrator (setup-screen) holds the
+// fetched doc and hands each step `siteConfig` + `reloadSiteConfig`/
+// `saveSiteConfig`. HARD CONSTRAINT: each step below re-GETs (reloadSiteConfig())
+// in a mount effect, on step entry, before any save — the PUT is a shallow merge
+// on top of the CURRENT doc, so a copy that's gone stale since another step's
+// edit would otherwise silently clobber it.
 // ------------------------------------------------------------
 const ARTIFACT_ECOSYSTEMS = ["npm", "pip", "cargo", "maven", "go", "nuget"] as const;
 
-// Shared load/save plumbing for the three steps above: load the current
-// SiteConfig once on mount (an absent config is a fresh `{}`, not an error),
-// and PUT a shallow-merged next value, committing local state only on
-// success so a rejected PUT doesn't desync the UI from the server.
-// ponytail deviation (F2 — rail-badge freshness): onSaved fires the fresh config
-// upward after every successful PUT so the orchestrator can resync its own
-// siteConfig state (which drives the rail's "Configured" badges) — otherwise a
-// save here is invisible to the badge computed one level up.
-function useSiteConfig(onLoad?: (c: SiteConfig) => void, onSaved?: (c: SiteConfig) => void) {
-  const [cfg, setCfg] = React.useState<SiteConfig | null>(null);
-  const onLoadRef = React.useRef(onLoad);
-  onLoadRef.current = onLoad;
-  const onSavedRef = React.useRef(onSaved);
-  onSavedRef.current = onSaved;
-
-  React.useEffect(() => {
-    api
-      .getSiteConfig()
-      .then((c) => {
-        setCfg(c);
-        onLoadRef.current?.(c);
-      })
-      .catch(() => {}); // genuine error: keep cfg null so Save stays disabled (PUT is whole-doc)
-  }, []);
-
-  const save = async (next: SiteConfig, errorMessage: string): Promise<boolean> => {
-    try {
-      await api.putSiteConfig(next);
-      setCfg(next);
-      onSavedRef.current?.(next);
-      return true;
-    } catch (e) {
-      toast.error(errorMessage, { description: getErrorMessage(e) });
-      return false;
-    }
-  };
-
-  return { cfg, save };
+// Shared save wrapper for the three steps above: PUTs via the orchestrator-owned
+// saveSiteConfig, toasting and reporting failure as `false` so each step's caller
+// only commits its own local field state once the PUT actually lands.
+async function trySaveSiteConfig(
+  saveSiteConfig: (next: SiteConfig) => Promise<void>,
+  next: SiteConfig,
+  errorMessage: string,
+): Promise<boolean> {
+  try {
+    await saveSiteConfig(next);
+    return true;
+  } catch (e) {
+    toast.error(errorMessage, { description: getErrorMessage(e) });
+    return false;
+  }
 }
 
 function RecheckButton({ onRecheck, rechecking }: { onRecheck: () => void; rechecking: boolean }) {
@@ -353,28 +325,45 @@ function HostProxyBreakdown({ detection: d }: { detection: HostProxyDetection })
 
 export function HostProxyStep({
   status,
+  siteConfig,
+  reloadSiteConfig,
+  saveSiteConfig,
   onRecheck,
   rechecking,
-  onSiteConfigSaved, // ponytail (F2): signal saves up so the rail badge stays fresh
 }: {
   status: SetupStatus;
+  siteConfig: SiteConfig | null;
+  reloadSiteConfig: () => Promise<void>;
+  saveSiteConfig: (next: SiteConfig) => Promise<void>;
   onRecheck: () => void;
   rechecking: boolean;
-  onSiteConfigSaved?: (cfg: SiteConfig) => void;
 }) {
   const check = status.checks.find((c) => c.id === "host_proxy");
   const [secretName, setSecretName] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-  const { cfg, save: saveConfig } = useSiteConfig(
-    (c) => setSecretName(c.upstream_proxy_secret_ref ?? ""),
-    onSiteConfigSaved,
-  );
+
+  // Clobber guard (V2, hard constraint) — re-GET on step entry.
+  React.useEffect(() => {
+    reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Seed the field from the freshest doc exactly once (matches the old
+  // useSiteConfig onLoad callback) — never again, so a later reload (e.g. from
+  // the header Re-check button) can't stomp an in-progress edit.
+  const seededRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!seededRef.current && siteConfig) {
+      setSecretName(siteConfig.upstream_proxy_secret_ref ?? "");
+      seededRef.current = true;
+    }
+  }, [siteConfig]);
 
   const save = async () => {
     const name = secretName.trim();
     setSaving(true);
-    const next: SiteConfig = { ...(cfg ?? {}), upstream_proxy_secret_ref: name || undefined };
-    if (await saveConfig(next, "Failed to save the upstream proxy secret")) {
+    const next: SiteConfig = { ...(siteConfig ?? {}), upstream_proxy_secret_ref: name || undefined };
+    if (await trySaveSiteConfig(saveSiteConfig, next, "Failed to save the upstream proxy secret")) {
       toast.success("Upstream proxy secret saved");
     }
     setSaving(false);
@@ -408,7 +397,7 @@ export function HostProxyStep({
             placeholder="upstream-proxy-url"
             className="font-mono"
           />
-          <Button variant="outline" onClick={save} disabled={saving || cfg === null}>
+          <Button variant="outline" onClick={save} disabled={saving || siteConfig === null}>
             {saving ? <Loader2 className="size-4 animate-spin" /> : "Save"}
           </Button>
         </div>
@@ -421,35 +410,47 @@ export function HostProxyStep({
 
 export function ScmProviderStep({
   status,
+  siteConfig,
+  reloadSiteConfig,
+  saveSiteConfig,
   onAddSecret,
   onRecheck,
   rechecking,
-  onSiteConfigSaved, // ponytail (F2): signal saves up so the rail badge stays fresh
 }: {
   status: SetupStatus;
+  siteConfig: SiteConfig | null;
+  reloadSiteConfig: () => Promise<void>;
+  saveSiteConfig: (next: SiteConfig) => Promise<void>;
   onAddSecret: (name: string) => void;
   onRecheck: () => void;
   rechecking: boolean;
-  onSiteConfigSaved?: (cfg: SiteConfig) => void;
 }) {
   const check = status.checks.find((c) => c.id === "scm_provider");
   const [host, setHost] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-  const { cfg, save: saveConfig } = useSiteConfig(undefined, onSiteConfigSaved);
+
+  // Clobber guard (V2, hard constraint) — re-GET on step entry.
+  React.useEffect(() => {
+    reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const addHost = async () => {
     const h = host.trim().toLowerCase();
     if (!h) return;
     setSaving(true);
-    const hosts = Array.from(new Set([...(cfg?.scm_hosts ?? []), h]));
-    const next: SiteConfig = { ...(cfg ?? {}), scm_hosts: hosts };
-    if (await saveConfig(next, "Failed to add the SCM host")) setHost("");
+    const hosts = Array.from(new Set([...(siteConfig?.scm_hosts ?? []), h]));
+    const next: SiteConfig = { ...(siteConfig ?? {}), scm_hosts: hosts };
+    if (await trySaveSiteConfig(saveSiteConfig, next, "Failed to add the SCM host")) setHost("");
     setSaving(false);
   };
 
   const removeHost = async (h: string) => {
-    const next: SiteConfig = { ...(cfg ?? {}), scm_hosts: (cfg?.scm_hosts ?? []).filter((x) => x !== h) };
-    await saveConfig(next, "Failed to remove the SCM host");
+    const next: SiteConfig = {
+      ...(siteConfig ?? {}),
+      scm_hosts: (siteConfig?.scm_hosts ?? []).filter((x) => x !== h),
+    };
+    await trySaveSiteConfig(saveSiteConfig, next, "Failed to remove the SCM host");
   };
 
   return (
@@ -489,13 +490,13 @@ export function ScmProviderStep({
             onChange={(e) => setHost(e.target.value)}
             placeholder="ghes.corp.internal"
           />
-          <Button variant="outline" onClick={addHost} disabled={saving || cfg === null || !host.trim()}>
+          <Button variant="outline" onClick={addHost} disabled={saving || siteConfig === null || !host.trim()}>
             {saving ? <Loader2 className="size-4 animate-spin" /> : "Add"}
           </Button>
         </div>
       </Field>
 
-      <DomainPillList domains={cfg?.scm_hosts ?? []} onRemove={removeHost} />
+      <DomainPillList domains={siteConfig?.scm_hosts ?? []} onRemove={removeHost} />
 
       <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
     </div>
@@ -504,31 +505,40 @@ export function ScmProviderStep({
 
 export function ArtifactRepoStep({
   status,
+  siteConfig,
+  reloadSiteConfig,
+  saveSiteConfig,
   onRecheck,
   rechecking,
-  onSiteConfigSaved, // ponytail (F2): signal saves up so the rail badge stays fresh
 }: {
   status: SetupStatus;
+  siteConfig: SiteConfig | null;
+  reloadSiteConfig: () => Promise<void>;
+  saveSiteConfig: (next: SiteConfig) => Promise<void>;
   onRecheck: () => void;
   rechecking: boolean;
-  onSiteConfigSaved?: (cfg: SiteConfig) => void;
 }) {
   const check = status.checks.find((c) => c.id === "artifact_repo");
   const [eco, setEco] = React.useState<string>(ARTIFACT_ECOSYSTEMS[0]);
   const [baseUrl, setBaseUrl] = React.useState("");
   const [tokenRef, setTokenRef] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-  const { cfg, save: saveConfig } = useSiteConfig(undefined, onSiteConfigSaved);
 
-  const overrides = cfg?.artifact_overrides ?? {};
+  // Clobber guard (V2, hard constraint) — re-GET on step entry.
+  React.useEffect(() => {
+    reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const overrides = siteConfig?.artifact_overrides ?? {};
 
   const save = async () => {
     const url = baseUrl.trim();
     if (!url) return;
     setSaving(true);
     const nextOverrides = { ...overrides, [eco]: { base_url: url, token_secret_ref: tokenRef.trim() || undefined } };
-    const next: SiteConfig = { ...(cfg ?? {}), artifact_overrides: nextOverrides };
-    if (await saveConfig(next, "Failed to save the artifact override")) {
+    const next: SiteConfig = { ...(siteConfig ?? {}), artifact_overrides: nextOverrides };
+    if (await trySaveSiteConfig(saveSiteConfig, next, "Failed to save the artifact override")) {
       setBaseUrl("");
       setTokenRef("");
     }
@@ -538,8 +548,8 @@ export function ArtifactRepoStep({
   const remove = async (name: string) => {
     const nextOverrides = { ...overrides };
     delete nextOverrides[name];
-    const next: SiteConfig = { ...(cfg ?? {}), artifact_overrides: nextOverrides };
-    await saveConfig(next, "Failed to remove the artifact override");
+    const next: SiteConfig = { ...(siteConfig ?? {}), artifact_overrides: nextOverrides };
+    await trySaveSiteConfig(saveSiteConfig, next, "Failed to remove the artifact override");
   };
 
   return (
@@ -620,7 +630,7 @@ export function ArtifactRepoStep({
             className="font-mono"
           />
         </Field>
-        <Button variant="outline" size="sm" onClick={save} disabled={saving || cfg === null || !baseUrl.trim()}>
+        <Button variant="outline" size="sm" onClick={save} disabled={saving || siteConfig === null || !baseUrl.trim()}>
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Add/Update
         </Button>
       </div>
@@ -855,10 +865,7 @@ export function CredentialsStep({
           <Button variant="outline" size="sm" onClick={() => onAddSecret("github-app-key")}>
             <KeyRound className="size-3.5" /> Add private key (PEM)
           </Button>
-          <Button variant="ghost" size="sm" onClick={onRecheck} disabled={rechecking}>
-            {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-            {BTN.recheck}
-          </Button>
+          <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
         </div>
       </div>
 
