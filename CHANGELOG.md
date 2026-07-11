@@ -30,11 +30,13 @@ Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and L2 TLS-intercept remain v0.5
   itself still runs for its other uses (`make compose-up`, `make demo`,
   `make reset`, and the WSL2 workspace-Verify/Record fix); the OIDC/SSO backend
   remains present and CI-tested.
-- **Named recording sessions + confined Verify replay.** Record is now a
+- **Named recording sessions + confined Verify sessions.** Record is now a
   user-named interactive session with model access (the fixed build/test task
-  taxonomy is gone). Verify replays an existing recording inside a confined
-  sandbox — default-deny egress with live approvals — to prove a profile
-  works before it's relied on.
+  taxonomy is gone). Verify launches a fresh confined session for an existing
+  recording — default-deny egress limited to the approved set, with live
+  approvals — to re-run the same steps under least privilege and prove a
+  profile works before it's relied on (a live re-run, not a byte-for-byte
+  replay of the captured session).
 - **Recorded profiles as run sources.** The New Run dialog's Basics step
   offers a workspace's recorded sessions as profiles; picking one fast-tracks
   to Review, and the recording's observed egress is loaded into the run's

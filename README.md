@@ -216,11 +216,16 @@ The primary way to onboard real work: **record** a named interactive session in
 a workspace (with model access), then rerun it as a governed profile — the New
 Run dialog offers the workspace's recorded sessions as fast-track profiles, and
 a recorded profile's observed egress is loaded into the run's allowlist for
-review. **Verify** does NOT replay the recorded session itself — it launches a
-separate confined run (default-deny egress + live approvals) that executes the
-workspace's operator-approved setup commands (install/build/test/lint) in the
-built devcontainer image, to prove the environment/build works before you rely
-on the profile.
+review. Two Verify surfaces, and neither replays the captured session
+byte-for-byte:
+
+- **Verify (recording):** launches a fresh CONFINED session for a recording you
+  pick — default-deny egress limited to the approved set, live approvals next
+  to the attached terminal — to re-run the same steps under least privilege.
+- **Verify (workspace import):** launches a throwaway governed run that
+  executes the workspace's operator-approved setup commands
+  (install/build/test/lint) in the built devcontainer image, to prove the
+  environment/build works before you rely on the profile.
 
 ### AI Run Composer (optional, UI currently hidden)
 
@@ -281,7 +286,7 @@ make setup   # one installer: detects your host, sets up host mode, launches + o
 `make setup` (== `scripts/setup.sh`) runs **host mode** and does the rest for
 you:
 
-- **Host mode — the supported deployment.** Sandbox agents run on *this*
+- **Host mode — the default deployment.** Sandbox agents run on *this*
   machine with *your* Claude login: setup stages your existing `claude`
   credentials for sandboxes (the live token is injected at the proxy on the
   wire, so no long-lived or refreshable secret is resident in the sandbox —
@@ -291,7 +296,10 @@ you:
   opens `http://localhost:8080`. It also detects which confinement barriers
   this host can run and prints the exact commands for anything missing
   (gVisor/Kata installs need sudo — the script **never runs sudo itself**).
-  Stop it with `make stop-host`.
+  Stop it with `make stop-host`. Skipped the staging prompt (or ran headless)?
+  `make stage-claude` stages your Claude login later and restarts `wardynd` so
+  the per-run "Use my Claude subscription" mount works — the Getting Started
+  page's *Claude subscription staging* check tells you when this applies.
 
 > **The other supported single-user setup: containerized.**
 > `make setup-containerized` (or `WARDYN_SETUP_MODE=container make setup`)
@@ -309,7 +317,22 @@ you:
 
 Re-run `make doctor` any time — it's read-only. To deliberately start from an
 **empty Runs list**, `make reset` wipes the volumes (Postgres + recordings) and
-re-runs setup.
+re-ups the **compose** stack — it confirms first (default No;
+`WARDYN_FORCE_RESET=1` headless) and it does **not** touch a host-mode daemon:
+to reset host mode, `make stop-host && make setup`.
+
+A few config facts worth knowing before you customize:
+
+- **Policy defaults are launch-path-specific.** A bare `wardynd` loads
+  `examples/policies/default.json` (CC2, no `api_key` grant — composed runs
+  can't reach a model under it); host mode picks `composer-dev.json` or your
+  staged subscription ceiling; the compose path auto-picks by what's
+  configured. The Getting Started *Model access for composed runs* check warns
+  when your stored credential and the live `WARDYN_DEFAULT_POLICY` disagree.
+- **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist
+  a `WARDYN_AGE_KEY` for you; only a hand-launched bare `wardynd` runs on an
+  EPHEMERAL age key (secrets unreadable after restart — the *Secret store
+  durability* check warns, and `wardynd -gen-age-key` mints a durable one).
 
 ### The local access model in one picture
 
