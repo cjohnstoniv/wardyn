@@ -152,8 +152,8 @@ describe("SetupScreen", () => {
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is disambiguated as /^back$/i so it doesn't collide with the
-    // "Finish later — Come back anytime…" verb. NEW STEP_ORDER: artifact_repo now
-    // comes BEFORE scm_provider (corporate phase precedes the "Your work" phase).
+    // "Finish later — Come back anytime…" verb. STEP_ORDER: essentials → your
+    // work (scm/workspaces/credentials) → corporate network → finish.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
@@ -167,24 +167,24 @@ describe("SetupScreen", () => {
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
-      await screen.findByRole("heading", { name: /corporate host proxy/i }),
-    ).toBeInTheDocument(); // host_proxy
-
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(
-      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
-    ).toBeInTheDocument(); // artifact_repo (now BEFORE scm_provider)
-
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(
       await screen.findByRole("heading", { name: /source control provider/i }),
-    ).toBeInTheDocument(); // scm_provider
+    ).toBeInTheDocument(); // scm_provider (your work starts right after the essentials)
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText("GitHub App")).toBeInTheDocument(); // credentials
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /corporate host proxy/i }),
+    ).toBeInTheDocument(); // host_proxy
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
+    ).toBeInTheDocument(); // artifact_repo
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     // review step — the consolidated readiness rollup + the checks that used to
@@ -222,8 +222,16 @@ describe("SetupScreen", () => {
     render(<SetupScreen onDone={() => {}} />);
 
     await screen.findByText("Fence");
+    // Walk the reordered funnel: provider → your work (scm/workspaces/credentials)
+    // → host_proxy. The footer Next label names each stop.
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> provider
     await screen.findByText("Claude / Anthropic");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> scm_provider
+    await screen.findByRole("heading", { name: /source control provider/i });
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> workspaces
+    await screen.findByText(/somewhere to work/i);
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> credentials
+    await screen.findByText("GitHub App");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
     expect(
       await screen.findByRole("heading", { name: /corporate host proxy/i }),
