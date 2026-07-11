@@ -144,7 +144,7 @@ export function OnboardingScreen({
           {ready ? "Finish setup" : "Get set up — about 2 minutes"} <ArrowRight className="size-4" />
         </Button>
         <Button variant="outline" onClick={onSkip}>
-          Skip to the console
+          Skip for now
         </Button>
       </div>
 

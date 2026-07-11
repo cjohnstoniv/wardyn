@@ -697,7 +697,12 @@ function ScanPane({
       <div className="space-y-3">
         <div className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2.5 text-xs text-danger">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <span>The scan failed for this workspace. Check the source path/repo, then rescan.</span>
+          <span>
+            The scan failed for this workspace. Check the source path/repo, then rescan. A private
+            repo needs a brokered <code className="font-mono">git-pat-&lt;host&gt;</code> or{" "}
+            <code className="font-mono">ssh-key-&lt;host&gt;</code> secret before the scan can clone
+            it — add one under Secrets (or the SCM Provider setup step) first.
+          </span>
         </div>
         <Button variant="outline" size="sm" onClick={onRescan}>
           <RotateCw className="size-3.5" /> Rescan

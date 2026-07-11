@@ -865,6 +865,14 @@ export function AddWorkspaceDialog({
               className="font-mono"
               autoComplete="off"
             />
+            {kind === "repo" && (
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                A private repo clones through the credential broker — it needs a{" "}
+                <code className="font-mono">git-pat-&lt;host&gt;</code> (HTTPS) or{" "}
+                <code className="font-mono">ssh-key-&lt;host&gt;</code> (SSH) secret, added under
+                Secrets. Onboarding succeeds without one, but the clone will fail later.
+              </p>
+            )}
           </div>
 
           {kind === "repo" && (
