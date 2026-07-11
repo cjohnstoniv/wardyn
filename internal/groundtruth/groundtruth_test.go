@@ -481,8 +481,8 @@ func TestMapUnknownKind(t *testing.T) {
 	}
 }
 
-func TestHeartbeatEvent(t *testing.T) {
-	ev := HeartbeatEvent()
+func TestHeartbeatEventWithDropped(t *testing.T) {
+	ev := HeartbeatEventWithDropped(0)
 	if ev.Action != ActionSensorHeartbeat {
 		t.Errorf("action = %q, want %q", ev.Action, ActionSensorHeartbeat)
 	}

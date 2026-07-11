@@ -64,7 +64,7 @@ func TestGroundtruthHeartbeatAcceptedNullRun(t *testing.T) {
 	// only called for non-NULL run ids), and recorded with forced attribution.
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
-	hb := groundtruth.HeartbeatEvent()
+	hb := groundtruth.HeartbeatEventWithDropped(0)
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
 	if w.Code != http.StatusAccepted {
@@ -190,7 +190,7 @@ func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
 	fail := &failingRecorder{err: errors.New("audit store down")}
 	h.srv.cfg.Audit = fail
 
-	hb := groundtruth.HeartbeatEvent() // kernel.* + NULL run_id => no DB needed
+	hb := groundtruth.HeartbeatEventWithDropped(0) // kernel.* + NULL run_id => no DB needed
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
 	if w.Code/100 == 2 {
@@ -209,7 +209,7 @@ func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	tok := h.mintGroundtruthToken(t)
 
 	future := time.Now().Add(100 * 24 * time.Hour) // ~100 days ahead
-	hb := groundtruth.HeartbeatEvent()             // kernel.* + NULL run_id => no DB needed
+	hb := groundtruth.HeartbeatEventWithDropped(0) // kernel.* + NULL run_id => no DB needed
 	hb.Time = future
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body))
