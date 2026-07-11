@@ -66,7 +66,7 @@ describe("OnboardingScreen (welcome hero)", () => {
     expect(screen.getByText(/Model: Claude connected/)).toBeInTheDocument();
   });
 
-  it("Get set up advances (onGetStarted); Skip to the console exits (onSkip)", async () => {
+  it("Get set up advances (onGetStarted); Skip for now exits (onSkip)", async () => {
     const onGetStarted = vi.fn();
     const onSkip = vi.fn();
     render(<OnboardingScreen onGetStarted={onGetStarted} onSkip={onSkip} />);
@@ -75,7 +75,7 @@ describe("OnboardingScreen (welcome hero)", () => {
     await user.click(screen.getByRole("button", { name: /get set up|finish setup/i }));
     expect(onGetStarted).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole("button", { name: /skip to the console/i }));
+    await user.click(screen.getByRole("button", { name: /skip for now/i }));
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 

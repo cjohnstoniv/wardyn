@@ -256,6 +256,15 @@ export function ModelStep({
               {bedrock.region || "region unset"} · {bedrock.model || "model unset"}
             </span>
           )}
+          {bedrockConfigured && !bedrockReady && (!bedrock.region || !bedrock.model) && (
+            // Region/model have no write API (boot-time config) — say how to set
+            // them on the host instead of leaving a dead "needs-creds" end.
+            <span className="mt-0.5 block">
+              Region/model are wardynd boot-time config: set WARDYN_BEDROCK_REGION /
+              WARDYN_BEDROCK_MODEL (or -bedrock-region / -bedrock-model), restart wardynd, then
+              Re-check.
+            </span>
+          )}
         </>
       }
       action={

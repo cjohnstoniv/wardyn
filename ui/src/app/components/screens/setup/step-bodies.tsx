@@ -761,6 +761,14 @@ export function WorkspacesStep({
                   {summary && (
                     <span className="block truncate text-[11px] text-muted-foreground">{summary}</span>
                   )}
+                  {STATUS_TONE[w.status] === "danger" && (
+                    // The failure reason itself is only in the import overlay's scan
+                    // pane (the toast is ephemeral) — point at the recovery path
+                    // inline instead of leaving a bare red chip.
+                    <span className="block text-[11px] text-danger">
+                      Scan failed — Resume import to see what went wrong and retry.
+                    </span>
+                  )}
                 </span>
                 {scanning.has(w.id) ? (
                   <Chip tone="neutral" dot>
