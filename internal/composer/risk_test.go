@@ -137,6 +137,26 @@ func TestGrade_ApiKeyIsMedium_CloudStsIsHigh(t *testing.T) {
 	}
 }
 
+func TestGrade_GitPATAndSSHKeyAreHigh_ButNeverFloorConfinement(t *testing.T) {
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC1, EligibleGrants: []types.GrantSpec{
+		{Kind: types.GrantGitPAT, RequiresApproval: true},
+		{Kind: types.GrantSSHKey, RequiresApproval: true},
+	}}
+	if it, ok := find(Grade(RunInput{}, spec), "eligible_grants[0]"); !ok || it.Level != RiskHigh {
+		t.Errorf("git_pat should be HIGH, got %+v ok=%v", it, ok)
+	}
+	if it, ok := find(Grade(RunInput{}, spec), "eligible_grants[1]"); !ok || it.Level != RiskHigh {
+		t.Errorf("ssh_key should be HIGH, got %+v ok=%v", it, ok)
+	}
+	// Anti-brick invariant: the HIGH display grade must NOT imply a CC3 floor.
+	// RequiredConfinementFloor is enforced fail-closed at compose AND run.create,
+	// and an unconditional floor here would block every SCM clone on KVM-less
+	// hosts (see the ponytail note on grantIsWriteCapable).
+	if floor := RequiredConfinementFloor(spec); floor != "" {
+		t.Fatalf("git_pat/ssh_key must not floor confinement, got %q", floor)
+	}
+}
+
 func TestGrade_WorkspaceMountReadWriteIsHigh_ReadOnlyIsLow(t *testing.T) {
 	rw := false
 	ro := true

@@ -215,8 +215,10 @@ var weakKinds = map[string]struct{}{"ci": {}, "code": {}, "generic": {}}
 // this mirrors internal/contentscan/patterns.go's secretRules catalog (kept
 // local rather than reshaping that package's Span/Finding streaming API). Only
 // the rule NAME and location are ever recorded, never the matched bytes.
-// ponytail: 8 anchored formats cover the accidental-commit cases; entropy
-// scanning is deliberately omitted (too many false positives on a file tree).
+// ponytail: 10 anchored formats cover the accidental-commit cases; entropy
+// scanning is deliberately omitted (too many false positives on a file tree),
+// and ADO PATs have no raw-value rule (opaque base64, no distinctive prefix —
+// a regex would be low-precision; they're caught in credential-URL form).
 type leakRule struct {
 	kind string
 	re   *regexp.Regexp
@@ -231,6 +233,10 @@ var leakRules = []leakRule{
 	{"private-key-block", regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`)},
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`)},
 	{"gcp-service-account", regexp.MustCompile(`"type"\s*:\s*"service_account"`)},
+	{"gitlab-pat", regexp.MustCompile(`\bglpat-[0-9A-Za-z_-]{20,}\b`)},
+	// A credential embedded in a URL (the ~/.git-credentials / remote-URL shape).
+	// Password ≥8 chars so doc placeholders like https://user:pass@host don't flag.
+	{"git-credentials-url", regexp.MustCompile(`https?://[^/\s:@]+:[^/\s@]{8,}@[^/\s]+`)},
 }
 
 var leakKinds = func() map[string]struct{} {

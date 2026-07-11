@@ -374,6 +374,35 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// codex-cli has no SSH clone lane (no openssh/corkscrew in the image; its
+	// agent-run never reads WARDYN_SSH_GRANTS), so an ssh_key grant would sit
+	// unconsumed and the clone would fail SILENTLY mid-run. Fail loud at create
+	// instead: drop the wiring and tell the operator on the response + audit
+	// log. The persisted grant rows stay — they are eligibility records nothing
+	// will mint, not issued credentials.
+	if req.Agent == "codex-cli" && len(sshGrants) > 0 {
+		hosts := make([]string, 0, len(sshGrants))
+		for h := range sshGrants {
+			hosts = append(hosts, h)
+		}
+		slices.Sort(hosts)
+		warnings = append(warnings, fmt.Sprintf(
+			"codex-cli has no SSH clone lane — dropping ssh_key grant(s) for %s; use an HTTPS/PAT source for this repo, or run it under claude-code",
+			strings.Join(hosts, ", ")))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.unsupported_agent",
+			req.Agent, "failure", mustJSON(map[string]any{"dropped_hosts": hosts})))
+		sshGrants = map[string]string{}
+		sshEgress = nil
+	}
+	// BYOI images get claude-code's agent-run, whose SSH lane needs openssh +
+	// corkscrew in the BASE image — which Wardyn cannot inspect from the control
+	// plane. Advise softly; the runtime guard in agent-run still fails loud
+	// in-sandbox if the tools are missing.
+	if req.Image != "" && len(sshGrants) > 0 {
+		warnings = append(warnings,
+			"this run clones over SSH: your custom image must carry openssh-client + corkscrew, or the clone is skipped (agent-run warns in the run log)")
+	}
+
 	createAuditData := map[string]any{
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "jti": id.JTI,
