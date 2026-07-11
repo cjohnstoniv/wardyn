@@ -110,24 +110,6 @@ type AgentRun struct {
 	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty"`
 }
 
-// RunManifest is the immutable "what actually ran" record, captured once at
-// dispatch and never mutated, so a governance audit can reconstruct a run after
-// its sandbox is gone. Without it "prove what ran" is not provable: the agent
-// image is a mutable tag (:latest) and an inline policy is otherwise not
-// persisted. It records the RESOLVED image digest (not the floating tag), the
-// as-run policy snapshot (including an inline policy), the agent, the confinement
-// class, and the workspace commit.
-type RunManifest struct {
-	RunID            uuid.UUID        `json:"run_id"`
-	CapturedAt       time.Time        `json:"captured_at"`
-	Agent            string           `json:"agent"`
-	ImageRef         string           `json:"image_ref"`    // requested ref, e.g. ghcr.io/<org>/agent-<name>:latest
-	ImageDigest      string           `json:"image_digest"` // resolved image@sha256:... actually run
-	ConfinementClass ConfinementClass `json:"confinement_class"`
-	PolicySpec       RunPolicySpec    `json:"policy_spec"`                // fully-resolved as-run snapshot
-	WorkspaceCommit  string           `json:"workspace_commit,omitempty"` // git HEAD SHA of the workspace, when a repo
-}
-
 // RunPolicy is the declarative policy attached to runs: egress allowlist,
 // approval rules, and the maximum credential scopes a run may be granted.
 // Workspace-local configuration may only NARROW a policy, never widen it.

@@ -11,12 +11,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// HeartbeatEvent builds the periodic sensor liveness beat with no drop count.
-// Equivalent to HeartbeatEventWithDropped(0).
-func HeartbeatEvent() types.AuditEvent {
-	return HeartbeatEventWithDropped(0)
-}
-
 // HeartbeatEventWithDropped builds the periodic sensor liveness beat. run_id is
 // NULL (the sensor is host-scoped, not per-run); actor_type=system,
 // actor=sensor. The control plane records these append-only and /healthz keys
