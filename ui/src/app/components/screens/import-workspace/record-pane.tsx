@@ -26,11 +26,8 @@ import {
   ShieldCheck,
   Square,
   TriangleAlert,
-  X,
 } from "lucide-react";
-import { toast } from "sonner";
-import type { ApprovalRequest, RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
-import { api } from "../../../lib/api";
+import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { recordResult, recordSessions, verifyKeyOf, policyNameFor, isEmptyCapture, newEgressHosts } from "./import-types";
 import { Observations } from "../profile-review";

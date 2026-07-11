@@ -25,7 +25,7 @@ import { setToken, probeAuth, api } from "../../lib/api";
 export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const { theme, toggle } = useTheme();
   const [token, setTokenValue] = React.useState("");
-  const [loading, setLoading] = React.useState<"token" | "sso" | null>(null);
+  const [loading, setLoading] = React.useState<"token" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   // Trust boundary shown pre-auth — populated from /healthz when it responds.
   // Seeded EMPTY (not "wardyn.local"/"embedded", which are the DEFAULT-instance

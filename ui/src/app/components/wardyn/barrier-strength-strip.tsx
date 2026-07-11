@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as React from "react";
 import { cn } from "../ui/utils";
 import { confinementTierMeta } from "./primitives";
 import type { ConfinementClass } from "../../lib/types";

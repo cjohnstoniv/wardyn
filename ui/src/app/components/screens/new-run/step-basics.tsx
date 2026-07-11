@@ -5,7 +5,6 @@
 
 // Step 1 — Basics: agent, onboarded-workspace multi-select, run mode
 // (interactive | batch), and an optional task.
-import * as React from "react";
 import { Textarea } from "../../ui/textarea";
 import {
   Select,

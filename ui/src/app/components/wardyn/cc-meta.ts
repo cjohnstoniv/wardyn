@@ -87,15 +87,6 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
 export const CONFINEMENT_CONSTANT_NOTE =
   "Whatever the barrier, every run still gets Wardyn's egress filtering, short-lived brokered credentials, human approvals, and full audit — those are set by policy, not the barrier. The barrier only decides how strongly the sandbox is walled off from your machine.";
 
-// Back-compat: the honest mechanism sentence keyed by class. The ConfinementChip
-// tooltip, the step-confinement hints, and setup-screen's fix copy read this, so
-// the substrate wording stays in exactly one place.
-export const CC_HINTS: Record<ConfinementClass, string> = {
-  CC1: CC_META.CC1.mechanism,
-  CC2: CC_META.CC2.mechanism,
-  CC3: CC_META.CC3.mechanism,
-};
-
 // ── Tier comparison matrix (E1) ─────────────────────────────────────────────
 // The pricing-table view (tiers as columns, protections as rows). The ONLY new
 // tier metadata — no parallel store: each row just GRADES the tiers; the actual

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as React from "react";
 import { Minus } from "lucide-react";
 import { Chip } from "./primitives";
 import { STATUS_LABEL, type StatusKind } from "./copy";
@@ -24,12 +23,6 @@ const STATUS_TONE: Record<StatusKind, "success" | "warning" | "danger" | "neutra
 // Getting-started shell (setup-layout.tsx) tags optional steps with it. It lives
 // here rather than widening the shared StatusKind vocabulary.
 type ExtraStatusKind = "optional";
-const EXTRA_LABEL: Record<ExtraStatusKind, string> = {
-  optional: "Optional",
-};
-const EXTRA_TONE: Record<ExtraStatusKind, "success" | "warning" | "danger" | "neutral"> = {
-  optional: "neutral",
-};
 
 export function StatusChip({
   status,
@@ -45,9 +38,9 @@ export function StatusChip({
 }) {
   if (status === "optional") {
     return (
-      <Chip tone={EXTRA_TONE.optional} title={reason}>
+      <Chip tone="neutral" title={reason}>
         <Minus className="size-3" aria-hidden />
-        {label ?? EXTRA_LABEL.optional}
+        {label ?? "Optional"}
       </Chip>
     );
   }

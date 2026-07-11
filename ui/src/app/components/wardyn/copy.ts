@@ -71,7 +71,6 @@ export const BTN = {
   recheck: "Re-check",
   installGuide: "Install guide →",
   recheckLogin: "Re-check login",
-  reconnect: "Reconnect",
   finishLater: "Finish later",
   finishLaterHint: "Come back anytime from Getting started.",
 } as const;
