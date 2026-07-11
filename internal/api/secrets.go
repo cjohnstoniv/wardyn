@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -32,6 +33,21 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-harness-anthropic-oauth": true,
 }
 
+// reservedSecret reports whether name is a platform-internal / managed-credential
+// key that the generic secrets API must not touch and the injection sink must not
+// resolve as a raw value. It covers the static reservedSecretNames set PLUS the
+// managed-harness token-blob PATTERN (wardyn-harness-<provider>-oauth) — so a
+// FUTURE provider row in agentHarnessLogin (e.g. codex) is sealed automatically,
+// closing the "add a provider, forget to reserve its blob" landmine even though
+// its name is generated dynamically by harnessCredSecretName. Use this at every
+// reserved-name guard instead of a bare map lookup.
+func reservedSecret(name string) bool {
+	if reservedSecretNames[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
+}
+
 // identifierSecretNames hold non-credential IDENTIFIER values (not maskable
 // secret material) that are legitimately shorter than secretmask.MinLen — e.g.
 // a numeric GitHub App ID. They are exempt from the MinLen gate below; masking
@@ -52,7 +68,7 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name string) bool {
 		writeError(w, http.StatusBadRequest, "invalid secret name (lowercase alphanumerics, '.', '_', '-')")
 		return false
 	}
-	if reservedSecretNames[name] {
+	if reservedSecret(name) {
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}
@@ -132,7 +148,7 @@ func (s *Server) listUserSecretNames(ctx context.Context) ([]string, error) {
 	}
 	names := make([]string, 0, len(all))
 	for _, n := range all {
-		if reservedSecretNames[n] {
+		if reservedSecret(n) {
 			continue
 		}
 		names = append(names, n)

@@ -41,6 +41,17 @@ type createRunRequest struct {
 	DevcontainerRepo string `json:"devcontainer_repo,omitempty"`
 	// DevcontainerRef is the optional git ref (branch/tag/sha) to build.
 	DevcontainerRef string `json:"devcontainer_ref,omitempty"`
+	// Image, when set, is a USER-supplied base image (Bring Your Own Image). It is
+	// mandatorily WRAPPED via the trusted finalize stage (FROM <image> + COPY
+	// wardyn tools + cleared ENTRYPOINT) before use, so recording/git-brokering/
+	// verify never silently degrade and a hostile ENTRYPOINT can't tear the sandbox
+	// down. All sandbox controls (egress, confinement, secret brokering) apply
+	// regardless of image contents — that IS the product. MUTUALLY EXCLUSIVE with
+	// DevcontainerRepo. Unlike DevcontainerRepo (which degrades to the convention
+	// image when no builder is wired), an explicitly chosen Image with no
+	// ImageBuilder is a hard 400 — a chosen image must never be silently swapped.
+	// api-local request field; the four nouns in internal/types are untouched.
+	Image string `json:"image,omitempty"`
 	// ConfinementClass, when set, requests a specific confinement class for the
 	// run (types.CC1/CC2/CC3). Empty means inherit the policy minimum (unset).
 	// An unknown non-empty value fails closed with HTTP 400. The docker driver
@@ -115,6 +126,24 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if req.Agent == "" {
 		writeError(w, http.StatusBadRequest, "agent is required")
 		return
+	}
+
+	// BYOI validation (fail closed before any store write): a user-supplied image
+	// is mutually exclusive with a devcontainer build, and — unlike DevcontainerRepo,
+	// which degrades to the convention image — an explicitly chosen image with no
+	// ImageBuilder wired is a hard error (never silently swap a chosen image for the
+	// convention one).
+	if req.Image != "" {
+		if req.DevcontainerRepo != "" {
+			writeError(w, http.StatusBadRequest, "image and devcontainer_repo are mutually exclusive")
+			return
+		}
+		if s.cfg.ImageBuilder == nil {
+			writeError(w, http.StatusBadRequest,
+				"a custom sandbox image was requested but this control plane has no image builder wired "+
+					"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)")
+			return
+		}
 	}
 
 	// Validate the requested confinement class up front (fail closed before any
@@ -397,13 +426,35 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 	}
 
-	// Resolve the sandbox image. Default: the agent convention image. A request-
-	// level devcontainer build wins; else the primary onboarded workspace's profile
-	// selects/builds the image. A DEVCONTAINER-REPO build failure marks the run
+	// Resolve the sandbox image. Default: the agent convention image. Precedence:
+	// a BYOI wrap (top) > a request-level devcontainer build > the primary onboarded
+	// workspace's profile. A BYOI or DEVCONTAINER-REPO build failure marks the run
 	// FAILED (observable, never a 500); a WORKSPACE image build failure is fail-open
 	// (keeps the convention image), since onboarding is a convenience, not a gate.
 	image := agentImage(req.Agent, s.cfg.AgentImages)
-	if req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil {
+	switch {
+	case req.Image != "": // validated above: ImageBuilder is non-nil, not XOR'd
+		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
+		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
+		// shell or the harness binary).
+		outTag := "wardyn-byoi/" + runID.String() + ":latest"
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, req.Image, outTag)
+		if berr != nil {
+			_ = s.cfg.Store.UpdateRunState(ctx, runID, types.RunFailed)
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
+				runID.String(), "failure", mustJSON(map[string]any{
+					"byoi_base": req.Image, "error": berr.Error(),
+				})))
+			created = s.refreshRun(ctx, runID, created)
+			writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+			return
+		}
+		image = built
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
+			runID.String(), "success", mustJSON(map[string]any{
+				"byoi_base": req.Image, "image": built,
+			})))
+	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(ctx, req.DevcontainerRepo, req.DevcontainerRef, outTag)
 		if berr != nil {
@@ -421,7 +472,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			runID.String(), "success", mustJSON(map[string]any{
 				"devcontainer_repo": req.DevcontainerRepo, "image": built,
 			})))
-	} else if len(wsRefs) > 0 {
+	case len(wsRefs) > 0:
 		if built, ok := s.resolveWorkspaceImage(ctx, runID, wsRefs[0]); ok {
 			image = built
 		}
@@ -706,7 +757,16 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// PROXY-SIDE exactly like a resident subscription (the sandbox holds only an
 	// inert sentinel). This is the compose-mode subscription path. Precedence:
 	// host-staged mount > managed > Bedrock > api-key.
-	managed := !harnessLoginRun && !subscription && !bedrockReady && s.managedInjectReady(run.Agent)
+	//
+	// OPT-OUT (do NOT override an explicit api-key choice): managed is the FALLBACK
+	// when nothing else credentials the run — NOT a silent replacement for an
+	// operator who chose api-key. An anthropic api-key grant already present in
+	// `injections` (compose's ensureLLMGrant on UseSubscription=false, or a direct
+	// api-key run) means the operator opted for api-key; letting managed fire would
+	// drop that grant below and silently bill the subscription instead, while the
+	// compose review said "api-key". So require no pre-existing anthropic injection.
+	managed := !harnessLoginRun && !subscription && !bedrockReady &&
+		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent)
 	injectManaged := managed
 
 	if harnessLoginRun {
@@ -1095,7 +1155,19 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// `wardyn attach`. There is no agent process, so there is nothing for the
 	// watcher to Wait on — starting it would have it observe an immediate Wait
 	// failure (no tracked agent exec) and could prematurely terminate the run.
+	// BYOI runtime preflight: a wrapped arbitrary base is guaranteed to carry the
+	// runner tools (the wrap COPYs them), but may still lack a shell or the harness
+	// CLI. Run `agent-run --selftest` and observe its exit — for a batch run, fail
+	// CLOSED on nonzero (honest FAILED + audit, never a hang or a silent bad run);
+	// for an interactive/login box, warn-only (a login box legitimately lacks repo
+	// wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
+	// image tag so convention/devcontainer runs are unaffected.
+	byoi := strings.HasPrefix(image, "wardyn-byoi/")
+
 	if interactive {
+		if byoi {
+			s.byoiSelftest(ctx, run, sb.Ref, false /* warn-only */)
+		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"sandbox_ref": sb.Ref,
@@ -1108,6 +1180,12 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// sandbox. The driver wraps the argv with wardyn-rec (recording) when
 	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
 	if run.Task != "" {
+		// BYOI: gate the task exec on a passing selftest (fail closed).
+		if byoi && !s.byoiSelftest(ctx, run, sb.Ref, true /* fail-closed */) {
+			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunRunning, types.RunFailed)
+			return
+		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
 		if xerr := s.cfg.Runner.Exec(ctx, sb.Ref, argv); xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
@@ -1127,6 +1205,58 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// would kill the watcher immediately). See startCompletionWatcher.
 		s.startCompletionWatcher(run.ID, sb.Ref)
 	}
+}
+
+// hasAnthropicAPIKeyInjection reports whether the run already carries an api_key
+// injection targeting api.anthropic.com — i.e. the operator/compose set up the
+// api-key transport for Anthropic. The managed-subscription gate uses it to stay
+// a FALLBACK (fire only when nothing else credentials Anthropic), never a silent
+// override of an explicit api-key choice. Mirrors the drop-loop's host check.
+func hasAnthropicAPIKeyInjection(injections []runner.InjectionGrant) bool {
+	for _, ig := range injections {
+		if strings.EqualFold(strings.TrimSuffix(ig.Rule.Host, "."), "api.anthropic.com") {
+			return true
+		}
+	}
+	return false
+}
+
+// byoiSelftest runs `agent-run --selftest` inside a BYOI sandbox and waits for
+// its exit, auditing the outcome. It relies on the runner's "latest Exec wins"
+// contract: this exec is tracked and Wait'd BEFORE the real task exec replaces
+// it, so the subsequent task's completion watcher is unaffected. Returns true
+// when the selftest passed (exit 0). failClosed only governs the audit tone —
+// the caller decides what to do with a false (fail the batch run, or warn-only
+// for interactive). A selftest that cannot even start (missing shell/binary,
+// exit 127) surfaces as a non-nil Exec/Wait error → returns false.
+func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, failClosed bool) bool {
+	if xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
+			run.ID.String(), "failure", mustJSON(map[string]any{
+				"error": xerr.Error(), "fail_closed": failClosed,
+				"detail": "BYOI image could not run agent-run --selftest (missing shell or harness binary?)",
+			})))
+		return false
+	}
+	code, werr := s.cfg.Runner.Wait(ctx, ref)
+	if werr != nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
+			run.ID.String(), "failure", mustJSON(map[string]any{
+				"error": werr.Error(), "fail_closed": failClosed,
+			})))
+		return false
+	}
+	if code != 0 {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
+			run.ID.String(), "failure", mustJSON(map[string]any{
+				"exit_code": code, "fail_closed": failClosed,
+				"detail": "BYOI image failed the agent-run contract selftest",
+			})))
+		return false
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
+		run.ID.String(), "success", mustJSON(map[string]any{"exit_code": 0})))
+	return true
 }
 
 // startCompletionWatcher launches the detached goroutine that blocks until the
@@ -1556,7 +1686,7 @@ func resolveUpstreamProxyURL(ctx context.Context, secretRef string, getSecret fu
 	if secretRef == "" {
 		return "", ""
 	}
-	if reservedSecretNames[secretRef] {
+	if reservedSecret(secretRef) {
 		return "", "reserved-secret-name"
 	}
 	if getSecret == nil {

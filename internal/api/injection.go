@@ -180,7 +180,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// would let a policy forge run identities or session cookies. Fail closed +
 	// audit BEFORE reading the value. This is the single chokepoint that protects
 	// every current and future caller; the policy validator rejects it earlier.
-	if reservedSecretNames[minted.Injection.SecretName] {
+	if reservedSecret(minted.Injection.SecretName) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
 			mustJSON(map[string]any{"reason": "reserved-secret-name", "grant_id": grantID})))

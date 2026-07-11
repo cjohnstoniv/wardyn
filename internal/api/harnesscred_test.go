@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -72,10 +74,47 @@ func TestManagedSentinelCredsAreInert(t *testing.T) {
 }
 
 func TestHarnessSecretIsReserved(t *testing.T) {
-	// The stored blob name must be reserved so the generic secrets API cannot
-	// clobber/list it and the injection sink refuses to resolve it as a value.
-	if !reservedSecretNames[harnessCredSecretName("anthropic")] {
-		t.Fatal("managed harness secret name must be in reservedSecretNames")
+	// Every provider that supports container login must have its stored blob name
+	// reserved, so the generic secrets API cannot clobber/list it and the injection
+	// sink refuses to resolve it as a raw value. reservedSecret covers the
+	// wardyn-harness-*-oauth PATTERN, so a future provider row is sealed
+	// automatically — this test guards that the pattern actually matches every
+	// name harnessCredSecretName generates.
+	for _, agent := range []string{"claude-code"} {
+		hl, ok := agentHarnessLogin(agent)
+		if !ok {
+			continue
+		}
+		if !reservedSecret(hl.secretName) {
+			t.Fatalf("managed harness secret %q (provider %q) is NOT reserved — it would be listable/injectable as a raw value", hl.secretName, hl.provider)
+		}
+	}
+	// The pattern must also seal a hypothetical future provider's blob.
+	if !reservedSecret(harnessCredSecretName("codex")) {
+		t.Fatal("reservedSecret must cover the wardyn-harness-<provider>-oauth pattern for future providers")
+	}
+}
+
+func TestManagedOptOut_APIKeyInjectionWins(t *testing.T) {
+	// The managed-subscription dispatch gate must stay a FALLBACK: when the run
+	// already carries an anthropic api-key injection (the operator chose api-key),
+	// managed must NOT fire and silently override it.
+	anthropic := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "api.anthropic.com"}}}
+	if !hasAnthropicAPIKeyInjection(anthropic) {
+		t.Fatal("should detect an api.anthropic.com injection")
+	}
+	// Trailing dot / case should still match (mirrors the sink host check).
+	dotted := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "API.Anthropic.com."}}}
+	if !hasAnthropicAPIKeyInjection(dotted) {
+		t.Fatal("host match must normalize case + trailing dot")
+	}
+	// A non-anthropic injection (e.g. OpenAI) must NOT block managed.
+	other := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "api.openai.com"}}}
+	if hasAnthropicAPIKeyInjection(other) {
+		t.Fatal("a non-anthropic injection must not count")
+	}
+	if hasAnthropicAPIKeyInjection(nil) {
+		t.Fatal("no injections must not count")
 	}
 }
 

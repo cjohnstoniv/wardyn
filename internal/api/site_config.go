@@ -58,7 +58,7 @@ func validSiteHost(h string) bool {
 // same rule handlePutSecret enforces on write): a valid secretNameRE identifier
 // that is not one of the platform-internal reserved names.
 func validSecretRef(ref string) bool {
-	return secretNameRE.MatchString(ref) && !reservedSecretNames[ref]
+	return secretNameRE.MatchString(ref) && !reservedSecret(ref)
 }
 
 // validateSiteConfig enforces the structural + security invariants of an
