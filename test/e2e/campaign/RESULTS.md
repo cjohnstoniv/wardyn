@@ -26,7 +26,8 @@ nothing less (e.g. chi with zero deps recorded only the clone host; jsoup record
 primary host). Verify genuinely exercised least-privilege: the confined reruns cold-downloaded
 their deps through only the allowed hosts (pip fetched pytest, cargo the crates.io index, Maven
 the full Central tree) and ran real tests (uuid 77 pass, tenacity 165 passed, walkdir 48 tests,
-chi ok, jsoup 1971 tests / 0 failures) — independently Fable-verified against the live logs.
+chi ok, jsoup 1971 tests / 0 failures) — independently verified against the live logs by an
+adversarial review pass.
 
 Evidence: `evidence/<lang>.json` (per-workspace record_results + verify_result, step exit codes,
 approved_egress, verified_profile_hash/verified_at). `evidence/00-desrisk-model-access-audit.json`
@@ -71,7 +72,7 @@ These are genuine environment-fidelity fixes, not paper-over — each was found 
 - `verified_profile_hash` is null on these workspaces: the toolchain image is wired via
   `WARDYN_AGENT_IMAGES` (no per-workspace envbuild), so there's no built-image hash to stamp. The
   proof of a green run is `verify_result.ok` + `verified_at` (both present), not the hash.
-- Independently verified by a Fable adversarial pass: HONEST-AND-SUPPORTED — all exit codes 0,
+- Independently verified by an adversarial review pass: HONEST-AND-SUPPORTED — all exit codes 0,
   server-gated ready, real cold-download-through-allowed-hosts + real test execution confirmed from
   the live logs (not cache/no-op theater).
 
@@ -81,5 +82,5 @@ Compose stack up (`make setup` or `docker compose -f deploy/compose/docker-compo
 fat image built (`docker build -f deploy/images/campaign/Dockerfile -t wardyn/agent-campaign:demo .`)
 and wired via `WARDYN_AGENT_IMAGES`. Then per repo: onboard (kind:repo) → PUT setup-commands →
 POST /record {task:test,mode:auto} → POST /record/test/promote-egress → POST /verify → poll to
-`ready`. Driver: `scratchpad/rvloop.sh`. API driven from an in-network container with a
+`ready` (that sequence, looped per repo, is the whole driver). API driven from an in-network container with a
 `Host: localhost` header (WSL2 can't reach the published port; local-mode needs a loopback Host).

@@ -279,9 +279,6 @@ control-plane store.
 
 ## Notes
 
-- The Iris knowledge graph (`kg-memory` MCP) was UNAVAILABLE during this run
-  (`Connection refused` to `127.0.0.1:8890`); per the global directive this is
-  noted and the work proceeded without it. No durable finding was written back.
 - Optional real-LLM path (`WARDYN_E2E_ANTHROPIC_KEY`): the suite documents but
   does not auto-wire it — the full real path needs a boot-time `api_key` grant
   (injection rule host=`api.anthropic.com`) + the secret in wardynd's secret
@@ -430,11 +427,8 @@ the end of validation, leaving no residual state.
 
 ## Notes
 
-- The Iris knowledge graph (`kg-memory` MCP) availability was not relied upon for
-  this live-validation pass; the work is reproducible from the artifacts above.
-- `examples/workspaces/README.md` still says a clone hook is "future"; that prose
-  is now stale (the hook is live) but the file is outside this validator's path —
-  flagged for the docs/workspaces owner to update.
+- `examples/workspaces/README.md` described the clone hook as "future" at
+  validation time; that prose has since been fixed (the hook is live).
 
 ---
 
