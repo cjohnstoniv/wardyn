@@ -9,7 +9,7 @@
 # `make agent-images`) rather than reimplementing them.
 #
 # Usage:
-#   scripts/up.sh [doctor|up|down|reset|pg]   (default: up)
+#   scripts/up.sh [doctor|up|down|reset|reset-all|pg]   (default: up)
 #
 #   doctor    Read-only preflight. Exits 2 if it finds a BLOCKing issue.
 #   up        doctor, build wardynd, configure, start postgres+wardynd, open the
@@ -19,6 +19,9 @@
 #             `up` — the explicit clean-slate path. `down` keeps data on purpose
 #             (audit is a system of record); `reset` is how you deliberately start
 #             from an EMPTY Runs list on a machine that has run Wardyn before.
+#   reset-all FULL undo of local setup across BOTH modes: host daemon + compose
+#             stack + ~/.wardyn install files. Leaves the machine clean (no
+#             re-up). Flags: --dry-run --purge-images --purge-env.
 #   pg        Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432).
 set -eu
 
@@ -145,6 +148,22 @@ env_set() {
   else
     printf '%s=%s\n' "${_es_key}" "${_es_val}" >> "${_es_file}"
   fi
+}
+
+# _confirm PROMPT — shared consent gate for destructive commands (same
+# convention as setup.sh's stale-store recovery): WARDYN_FORCE_RESET=1 is the
+# headless yes; otherwise an interactive prompt defaulting to No; non-interactive
+# without the env var refuses. Callers decide the exit code on refusal (reset's
+# contract: interactive decline exits 0, non-interactive refusal exits 2).
+_confirm() {
+  [ "${WARDYN_FORCE_RESET:-}" = 1 ] && return 0
+  if [ -t 0 ]; then
+    printf '  %s [y/N] ' "$1"
+    read -r _c_a || _c_a=""
+    case "${_c_a}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+  fi
+  warn "Non-interactive: set WARDYN_FORCE_RESET=1 to proceed."
+  return 1
 }
 
 # ── doctor ───────────────────────────────────────────────────────────────
@@ -372,33 +391,202 @@ cmd_down() {
 # is what you want normally. reset REMOVES them, so the following `up` starts with
 # an EMPTY Runs list — the honest "fresh like a new clone" state on a machine that
 # has run Wardyn before. Irreversible, so it CONFIRMS (default No; headless needs
-# WARDYN_FORCE_RESET=1 — same convention as setup.sh's stale-store recovery). The
-# confirm exists mostly for HOST-mode (`make setup`) users: reset does not touch
-# their host daemon at all — it wipes the COMPOSE volumes and then starts a
-# CONTAINERIZED wardynd next to the still-running host one, a different runtime
-# shape than they asked for.
+# WARDYN_FORCE_RESET=1). A live HOST-mode (`make setup`) daemon is offered a stop
+# first: the containerized wardynd this brings up binds the same 127.0.0.1:8080,
+# so leaving the host one running guarantees a port collision, not a second UI.
+# For the FULL undo (host daemon + rundir + compose, no re-up) use reset-all.
 cmd_reset() {
   warn "reset REMOVES the compose volumes: Postgres (ALL runs + the append-only audit log) and recordings."
   warn "This is irreversible. Plain \`make compose-down\` keeps them; use that if you only want to stop the stack."
   _host_pid="$(cat "${HOME}/.wardyn/host-wardynd.pid" 2>/dev/null || true)"
   if [ -n "${_host_pid}" ] && kill -0 "${_host_pid}" 2>/dev/null; then
-    warn "You are running HOST mode (\`make setup\`, PID ${_host_pid}). reset operates on the COMPOSE stack only:"
-    warn "it will NOT reset your host daemon, and it WILL start a second, CONTAINERIZED wardynd."
-    warn "To reset host mode instead: make stop-host && make setup"
-  fi
-  if [ "${WARDYN_FORCE_RESET:-}" != 1 ]; then
-    if [ -t 0 ]; then
-      printf "  Wipe the compose volumes and re-up? [y/N] "
-      read -r _a || _a=""
-      case "${_a}" in y|Y|yes|YES) ;; *) log "Aborted — nothing was removed."; exit 0 ;; esac
+    warn "Host-mode wardynd is running (PID ${_host_pid}) — the containerized wardynd this brings up needs its :8080."
+    if _confirm "Stop the host daemon first (make stop-host)?"; then
+      make -C "${REPO_ROOT}" stop-host
     else
-      warn "Non-interactive: refusing to wipe volumes without WARDYN_FORCE_RESET=1."
-      exit 2
+      warn "Left the host daemon up — the fresh containerized wardynd will fail to bind :8080."
     fi
+  fi
+  if ! _confirm "Wipe the compose volumes and re-up?"; then
+    [ -t 0 ] && { log "Aborted — nothing was removed."; exit 0; }
+    exit 2
   fi
   compose down -v --remove-orphans
   log "Volumes removed — bringing up a fresh, empty Wardyn"
   cmd_up
+}
+
+# reset-all — the TRUE fresh-install undo: everything `make setup` / `make
+# compose-up` created, across BOTH modes (host daemon + compose stack), so an
+# iteration loop can start each round from a genuinely clean box. Unlike
+# `reset` it does NOT re-up — it leaves the machine clean and stops.
+#
+# ~/.wardyn is shared real estate (other tools keep source trees and scratch
+# there), so removal is a NAMED ALLOWLIST of the files setup.sh /
+# stage-claude-creds.sh create — never `rm -rf ~/.wardyn`. Everything else
+# found there is reported as PRESERVED.
+#
+# Kept by default (flags to purge):
+#   deploy/compose/.env  (--purge-env)     the persisted age key. Safe to keep:
+#                                          `down -v` destroyed every secret
+#                                          sealed under it, and the same key
+#                                          just seals the next ones. Purge only
+#                                          for a pristine first-contact baseline.
+#   built :demo images   (--purge-images)  the minutes-long rebuild set.
+# Built binaries (bin/, ui/dist) are `make clean`'s job — not duplicated here.
+_ra_mark() {  # _ra_mark 0|1 LABEL — one manifest line
+  if [ "$1" = 1 ]; then printf '  [present] %s\n' "$2"; else printf '  [absent]  %s\n' "$2"; fi
+}
+
+cmd_reset_all() {
+  _ra_dry=0; _ra_purge_images=0; _ra_purge_env=0
+  for _ra_a in "$@"; do
+    case "${_ra_a}" in
+      --dry-run)      _ra_dry=1 ;;
+      --purge-images) _ra_purge_images=1 ;;
+      --purge-env)    _ra_purge_env=1 ;;
+      *) die "reset-all: unknown flag '${_ra_a}' (known: --dry-run --purge-images --purge-env)" ;;
+    esac
+  done
+  _ra_rundir="${HOME}/.wardyn"
+  _ra_images="wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+
+  # ── gather facts (read-only) ─────────────────────────────────────────
+  _ra_host_pid=$(cat "${_ra_rundir}/host-wardynd.pid" 2>/dev/null || true)
+  _ra_host_live=0
+  [ -n "${_ra_host_pid}" ] && kill -0 "${_ra_host_pid}" 2>/dev/null && _ra_host_live=1
+
+  _ra_proj=$(compose config 2>/dev/null | awk '/^name:/{print $2; exit}')
+  [ -n "${_ra_proj}" ] || _ra_proj=compose
+  _ra_containers=$(compose ps -aq 2>/dev/null | grep -c . || true)
+
+  # Enable every profile the file declares (sso, groundtruth, build-only, …) so
+  # profile-gated volumes like tetragon_export are seen AND torn down too.
+  _ra_profiles=""
+  for _ra_p in $(compose config --profiles 2>/dev/null); do
+    _ra_profiles="${_ra_profiles} --profile ${_ra_p}"
+  done
+
+  # Resolve the EXACT docker volume names this compose file owns (explicit
+  # `name:` when set, else <project>_<logical>) — the same set `down -v`
+  # removes. A project-label filter is NOT safe here: the label is just the
+  # directory name ("compose"), which this repo's pre-rename eras (warden-*/
+  # writ-*) share, and reset-all must never claim volumes that aren't its own.
+  _ra_volnames=$(compose ${_ra_profiles} config 2>/dev/null | awk -v proj="${_ra_proj}" '
+    /^volumes:/ { inv=1; next }
+    inv && /^[^ ]/ { inv=0 }
+    inv && /^  [A-Za-z0-9_.-]+:/ { cur=$0; sub(/:.*/,"",cur); sub(/^  /,"",cur); names[cur]=proj"_"cur; next }
+    inv && cur != "" && /^    name:/ { v=$0; sub(/^    name: */,"",v); gsub(/"/,"",v); names[cur]=v }
+    END { for (c in names) printf "%s ", names[c] }')
+  _ra_volumes=""
+  for _ra_v in ${_ra_volnames}; do
+    docker volume inspect "${_ra_v}" >/dev/null 2>&1 && _ra_volumes="${_ra_volumes}${_ra_v} "
+  done
+
+  _ra_net=0; _ra_net_attached=0
+  if docker network inspect wardyn-internal >/dev/null 2>&1; then
+    _ra_net=1
+    _ra_net_attached=$(docker network inspect -f '{{len .Containers}}' wardyn-internal 2>/dev/null || echo 0)
+  fi
+
+  _ra_testpg=0
+  docker inspect wardyn-test-pg >/dev/null 2>&1 && _ra_testpg=1
+
+  # ~/.wardyn: split into install files (ours to delete) vs preserved (not ours)
+  _ra_install=""; _ra_preserved=""
+  if [ -d "${_ra_rundir}" ]; then
+    for _ra_e in "${_ra_rundir}"/* "${_ra_rundir}"/.[!.]*; do
+      [ -e "${_ra_e}" ] || continue
+      case "$(basename "${_ra_e}")" in
+        host-wardynd.pid|host-wardynd.log|claude-creds|composer-dev-subscription.json)
+          _ra_install="${_ra_install}$(basename "${_ra_e}") " ;;
+        *)
+          _ra_preserved="${_ra_preserved}$(basename "${_ra_e}") " ;;
+      esac
+    done
+  fi
+
+  _ra_env_present=0
+  [ -f "${ENV_FILE}" ] && _ra_env_present=1
+
+  _ra_images_present=""
+  for _ra_img in ${_ra_images}; do
+    docker image inspect "${_ra_img}" >/dev/null 2>&1 && _ra_images_present="${_ra_images_present}${_ra_img} "
+  done
+
+  # ── manifest ─────────────────────────────────────────────────────────
+  log "reset-all — full undo of local Wardyn setup. Manifest:"
+  if [ "${_ra_host_live}" = 1 ]; then
+    _ra_mark 1 "host-mode wardynd (PID ${_ra_host_pid}, ~/.wardyn/host-wardynd.pid) — will be stopped"
+  else
+    _ra_mark 0 "host-mode wardynd (no live PID)"
+  fi
+  _ra_mark "$([ "${_ra_containers:-0}" -gt 0 ] && echo 1 || echo 0)" "compose containers: ${_ra_containers:-0} (project '${_ra_proj}')"
+  _ra_mark "$([ -n "${_ra_volumes}" ] && echo 1 || echo 0)" "compose volumes: ${_ra_volumes:-none }(runs + audit + recordings — IRREVERSIBLE)"
+  if [ "${_ra_net}" = 1 ]; then
+    _ra_mark 1 "docker network wardyn-internal (${_ra_net_attached} attached — removed only if 0 remain after teardown)"
+  else
+    _ra_mark 0 "docker network wardyn-internal"
+  fi
+  _ra_mark "${_ra_testpg}" "dev/e2e postgres container wardyn-test-pg (:55432)"
+  _ra_mark "$([ -n "${_ra_install}" ] && echo 1 || echo 0)" "~/.wardyn install files: ${_ra_install:-none }(includes STAGED CLAUDE CREDS — re-stage after next setup)"
+  [ -n "${_ra_preserved}" ] && printf '  [keep]    ~/.wardyn PRESERVED (not Wardyn setup'\''s): %s\n' "${_ra_preserved}"
+  if [ "${_ra_purge_env}" = 1 ]; then
+    _ra_mark "${_ra_env_present}" "deploy/compose/.env (age key) — --purge-env"
+  else
+    printf '  [keep]    deploy/compose/.env (age key; sealed secrets die with the volume, so keeping it is safe — --purge-env for a pristine baseline)\n'
+  fi
+  if [ "${_ra_purge_images}" = 1 ]; then
+    _ra_mark "$([ -n "${_ra_images_present}" ] && echo 1 || echo 0)" "built images: ${_ra_images_present:-none}— --purge-images (minutes to rebuild)"
+  else
+    printf '  [keep]    built images (%s) — --purge-images to remove; rebuilds take minutes\n' "${_ra_images_present:-none present}"
+  fi
+  printf '  [note]    built binaries (bin/, ui/dist): use `make clean`\n'
+
+  if [ "${_ra_dry}" = 1 ]; then
+    log "Dry run — nothing was touched. After a real reset-all every line above reads [absent]."
+    exit 0
+  fi
+
+  # ── consent, then act on the facts above ─────────────────────────────
+  warn "This removes everything marked [present]: all runs, the audit log, recordings, and staged Claude creds."
+  if ! _confirm "Proceed with reset-all?"; then
+    [ -t 0 ] && { log "Aborted — nothing was removed."; exit 0; }
+    exit 2
+  fi
+
+  [ "${_ra_host_live}" = 1 ] && make -C "${REPO_ROOT}" stop-host
+
+  # shellcheck disable=SC2086 — _ra_profiles is a flat flag list by construction
+  compose ${_ra_profiles} down -v --remove-orphans \
+    || warn "compose down failed (docker unreachable?) — continuing with filesystem cleanup"
+
+  # run-host.sh creates wardyn-internal OUTSIDE compose ownership (the source of
+  # setup.sh's "incorrect label" recovery dance) — remove it when nothing is
+  # attached so the next setup recreates it cleanly; a busy network is left alone.
+  if docker network inspect wardyn-internal >/dev/null 2>&1; then
+    docker network rm wardyn-internal >/dev/null 2>&1 \
+      || warn "wardyn-internal still has attached containers — left in place"
+  fi
+
+  # -v: also drop the anonymous pgdata volume docker auto-created for it
+  [ "${_ra_testpg}" = 1 ] && docker rm -f -v wardyn-test-pg >/dev/null 2>&1
+
+  # Allowlist only — never `rm -rf ~/.wardyn` (see comment above).
+  rm -f  "${_ra_rundir}/host-wardynd.pid" "${_ra_rundir}/host-wardynd.log"
+  rm -rf "${_ra_rundir}/claude-creds"
+  rm -f  "${_ra_rundir}/composer-dev-subscription.json"
+
+  [ "${_ra_purge_env}" = 1 ] && rm -f "${ENV_FILE}"
+
+  if [ "${_ra_purge_images}" = 1 ]; then
+    for _ra_img in ${_ra_images_present}; do
+      docker rmi "${_ra_img}" >/dev/null 2>&1 || warn "could not remove ${_ra_img} (in use?)"
+    done
+  fi
+
+  log "Clean. Verify: scripts/up.sh reset-all --dry-run   (every line should read [absent])"
+  log "Next: make setup (host mode)  or  make compose-up (containerized)"
 }
 
 cmd_pg() {
@@ -432,11 +620,13 @@ cmd_pg() {
 # ── dispatch ─────────────────────────────────────────────────────────────
 
 cmd="${1:-up}"
+[ $# -gt 0 ] && shift
 case "${cmd}" in
-  doctor) cmd_doctor ;;
-  up)     cmd_up ;;
-  down)   cmd_down ;;
-  reset)  cmd_reset ;;
-  pg)     cmd_pg ;;
-  *) die "usage: $0 {doctor|up|down|reset|pg}" ;;
+  doctor)    cmd_doctor ;;
+  up)        cmd_up ;;
+  down)      cmd_down ;;
+  reset)     cmd_reset ;;
+  reset-all) cmd_reset_all "$@" ;;
+  pg)        cmd_pg ;;
+  *) die "usage: $0 {doctor|up|down|reset|reset-all|pg}" ;;
 esac
