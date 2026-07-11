@@ -407,8 +407,8 @@ describe("SetupScreen", () => {
     expect(await screen.findByText(/^add secret$/i)).toBeInTheDocument();
   });
 
-  it("provider step nudges a personal compose box toward host mode; host mode never sees it", async () => {
-    // compose + local box, model undetected -> the "make setup" (host mode) nudge shows
+  it("provider step nudges a personal compose box toward container login; host mode never sees it", async () => {
+    // compose + local box, model undetected -> the container-login nudge shows
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         deployment: { host_like: false },
@@ -418,7 +418,12 @@ describe("SetupScreen", () => {
     const { unmount } = render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
-    expect(await screen.findByText("coming-soon team feature")).toBeInTheDocument();
+    // The banner now offers container login as the first-class fix (attach works
+    // via a minted ticket; the old "coming-soon team feature" copy is gone). The
+    // banner's button is the exact-named one; the family option adds a suffix.
+    expect(
+      await screen.findByRole("button", { name: /^connect via container login$/i }),
+    ).toBeInTheDocument();
     unmount();
 
     // host mode (wardynd sees the login) -> model is connected, no nudge

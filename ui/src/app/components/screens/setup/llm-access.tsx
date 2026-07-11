@@ -15,14 +15,16 @@
 // was dropped from setup by owner decision; this module is LLM access only. Has
 // NO composer-backends section by design — owner decision: zero composer UI here.)
 import * as React from "react";
-import { Info, KeyRound, Plus } from "lucide-react";
+import { Info, KeyRound, Loader2, Plus } from "lucide-react";
 import type { SetupStatus } from "../../../lib/types";
+import { api } from "../../../lib/api";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { StatusChip } from "../../wardyn/status-chip";
 import type { StatusKind } from "../../wardyn/copy";
 import { BTN } from "../../wardyn/copy";
 import { PROVIDER_GUIDES, type SetupGuide } from "./setup-guide";
+import { HarnessLoginPane } from "./harness-login-pane";
 import type { Readiness } from "../onboarding/intro";
 
 type RowState = "ready" | "todo";
@@ -169,6 +171,23 @@ export function ModelStep({
   // verbatim under the subscription row — same never-disagree discipline as the
   // Bedrock and llm_provider rows above.
   const stagingCheck = status.checks.find((c) => c.id === "claude_subscription_staging");
+  // Wardyn-managed subscription (captured via container login) — the compose-mode
+  // path with no resident host login. The harness_credential check carries the
+  // authoritative aging sentence, reused verbatim.
+  const managedCred = status.harness?.find((h) => h.provider === "anthropic" && h.captured);
+  const managedCheck = status.checks.find((c) => c.id === "harness_credential");
+  // Inline container-login flow toggle (self-contained pane; never routes away).
+  const [loginOpen, setLoginOpen] = React.useState(false);
+  const [disconnecting, setDisconnecting] = React.useState(false);
+  const disconnectManaged = async () => {
+    setDisconnecting(true);
+    try {
+      await api.harnessDisconnect("anthropic");
+      onRecheck();
+    } finally {
+      setDisconnecting(false);
+    }
+  };
 
   const keyRow = (name: string, label: string, detail: string, configured: boolean) => (
     <AccessRow
@@ -240,7 +259,7 @@ export function ModelStep({
   );
   const codexDetected = !!codex?.logged_in;
   const codexInstalled = !!codex?.installed;
-  const anthropicConnected = anthropic || claudeSubDetected || bedrockReady;
+  const anthropicConnected = anthropic || claudeSubDetected || bedrockReady || !!managedCred;
   const openaiConnected = openai || codexDetected;
 
   const bedrockRow = (
@@ -300,6 +319,31 @@ export function ModelStep({
       )}
     </React.Fragment>
   );
+  const managedRow = (
+    <React.Fragment key="claude-managed">
+      <AccessRow
+        status={rowStatus(managedCred?.aging ? "todo" : "ready", rechecking)}
+        label="Claude subscription (managed by Wardyn)"
+        detail={
+          managedCheck?.detail ??
+          "A Wardyn-managed Claude subscription token is injected proxy-side into every run — the sandbox holds only an inert sentinel."
+        }
+        action={
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => setLoginOpen(true)}>
+              Reconnect
+            </Button>
+            <Button size="sm" variant="ghost" onClick={disconnectManaged} disabled={disconnecting}>
+              {disconnecting ? <Loader2 className="size-3.5 animate-spin" /> : null} Disconnect
+            </Button>
+          </div>
+        }
+      />
+      {managedCred?.aging && managedCheck?.fix && (
+        <p className="pl-1 text-xs leading-relaxed text-warning">{managedCheck.fix}</p>
+      )}
+    </React.Fragment>
+  );
   const anthropicKeyRow = (
     <React.Fragment key="anthropic-key">
       {keyRow(
@@ -335,19 +379,26 @@ export function ModelStep({
           : "Wardyn needs a way for the agent to talk to an LLM — a stored API key the proxy injects, or a resident CLI subscription."}
       </p>
 
-      {suggestHostMode && (
+      {suggestHostMode && !managedCred && (
         <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/40 p-3">
           <Info className="mt-0.5 size-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed">
             <p className="text-foreground">
-              Sandboxing your <span className="font-medium">own machine</span>, and already logged into the
-              Claude CLI? You&apos;re on the containerized control plane — a <span className="font-medium">coming-soon
-              team feature</span>. wardynd runs sealed in a container that can&apos;t see your host&apos;s{" "}
-              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login, which is why it
-              reads &quot;not connected&quot; even though you are. Host mode is the supported setup — it uses your
-              existing login automatically, no re-login, no stored key:
+              You&apos;re on the containerized control plane, so wardynd runs sealed in a container that can&apos;t
+              see your host&apos;s{" "}
+              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login — which is why it
+              reads &quot;not connected&quot; even if you are logged in on the host. The supported fix here is{" "}
+              <span className="font-medium">container login</span>: Wardyn opens a sandbox, you run{" "}
+              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">claude setup-token</code> and paste the
+              result, and it&apos;s injected proxy-side into every run.
             </p>
-            <p>
+            <div>
+              <Button size="sm" onClick={() => setLoginOpen(true)}>
+                <KeyRound className="size-3.5" /> Connect via container login
+              </Button>
+            </div>
+            <p className="text-muted-foreground">
+              Prefer to use your host login directly? Run Wardyn in host mode instead:{" "}
               <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-xs text-foreground">
                 make setup
               </code>
@@ -362,6 +413,7 @@ export function ModelStep({
           connected={anthropicConnected}
           rows={[
             claudeSubDetected && subRow,
+            managedCred && managedRow,
             anthropic && anthropicKeyRow,
             bedrockConfigured && bedrockRow,
           ]}
@@ -371,6 +423,15 @@ export function ModelStep({
               label: claudeInstalled ? "Log in to Claude CLI" : "Install Claude CLI",
               onClick: () => onSetup(PROVIDER_GUIDES.claude),
             },
+            // Container login: works with no local Claude install — the compose-mode
+            // path. Shown when there is no resident login and no managed token yet.
+            !claudeSubDetected &&
+              !managedCred && {
+                key: "container-login",
+                label: "Connect via container login (no local install)",
+                icon: <KeyRound className="size-3.5" />,
+                onClick: () => setLoginOpen(true),
+              },
             !anthropic && {
               key: "akey",
               label: "Add Anthropic API key",
@@ -385,6 +446,16 @@ export function ModelStep({
             },
           ].filter(Boolean) as SetupOption[]}
         />
+        {loginOpen && (
+          <HarnessLoginPane
+            provider="anthropic"
+            onDone={() => {
+              setLoginOpen(false);
+              onRecheck();
+            }}
+            onCancel={() => setLoginOpen(false)}
+          />
+        )}
         <ProviderFamily
           title="OpenAI / Codex"
           connected={openaiConnected}

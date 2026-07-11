@@ -87,6 +87,9 @@ export function HowItWorksStrip() {
 // ---------------------------------------------------------------------------
 export function hasLlmPath(status: SetupStatus): boolean {
   if (status.providers.some((p) => p.logged_in)) return true;
+  // A Wardyn-managed subscription (captured via container login) is real model
+  // access even with no resident host login — the compose-mode path.
+  if (status.harness?.some((h) => h.captured)) return true;
   if (status.secrets.present.some((n) => /anthropic|openai|api[-_]?key/i.test(n))) return true;
   // Honesty guard (mirrors the backend's llmProvenance): a `fake` composer
   // backend resolves trivially but calls NO model, so it is not real LLM access.
@@ -112,6 +115,8 @@ export function deriveReadiness(status: SetupStatus): Readiness {
   const claude = status.providers.find((p) => p.tool === "claude" && p.logged_in);
   let llmLabel = "";
   if (claude) llmLabel = "Claude connected";
+  else if (status.harness?.some((h) => h.provider === "anthropic" && h.captured))
+    llmLabel = "Claude connected (Wardyn-managed login)";
   else if (status.secrets.present.some((n) => /anthropic/i.test(n))) llmLabel = "Anthropic key added";
   else if (status.secrets.present.some((n) => /openai/i.test(n))) llmLabel = "OpenAI key added";
   else if (status.composer.backends.some((b) => b.key_resolved && b.wire !== "fake"))
