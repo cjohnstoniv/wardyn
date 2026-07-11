@@ -66,9 +66,16 @@ func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ image.ListOptions)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []image.Summary
-	for tag, present := range f.imagesPresent {
-		if present {
-			out = append(out, image.Summary{RepoTags: []string{tag}})
+	for ref, present := range f.imagesPresent {
+		if !present {
+			continue
+		}
+		// A digest-pinned ref lives under RepoDigests, not RepoTags (mirrors the
+		// real daemon), so ensureImage must match it there.
+		if strings.Contains(ref, "@sha256:") {
+			out = append(out, image.Summary{RepoDigests: []string{ref}})
+		} else {
+			out = append(out, image.Summary{RepoTags: []string{ref}})
 		}
 	}
 	return out, nil

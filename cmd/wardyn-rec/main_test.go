@@ -92,6 +92,32 @@ func TestBuildAsciinemaArgv_PreventsShellInjection(t *testing.T) {
 	}
 }
 
+// The -c trailer must capture the AGENT's real exit code to the sidecar file so
+// runAsciinema can recover it (asciinema's own exit code masks a failed agent —
+// the fail-open hazard the BYOI selftest gate depends on avoiding).
+func TestBuildAsciinemaArgv_CapturesAgentExitCode(t *testing.T) {
+	cast := filepath.Join(t.TempDir(), "out.cast")
+	// A recorded "agent" that exits 3 (stands in for a failing agent-run --selftest).
+	argv := buildAsciinemaArgv("/usr/bin/asciinema", cast, []string{"sh", "-c", "exit 3"})
+	var cString string
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == "-c" {
+			cString = argv[i+1]
+			break
+		}
+	}
+	// Drive the -c string through a shell as asciinema would (asciinema itself
+	// would exit 0 here; we only care that the sidecar captured the agent's 3).
+	_ = exec.Command("sh", "-c", cString).Run()
+	code, ok := readAgentExitFile(cast)
+	if !ok {
+		t.Fatal("sidecar exit file was not written by the -c trailer")
+	}
+	if code != 3 {
+		t.Fatalf("recovered exit code = %d, want 3 (asciinema's masked 0 must not win)", code)
+	}
+}
+
 func TestFilenames(t *testing.T) {
 	if got := castFile("/d", "abc"); got != filepath.Join("/d", "abc.cast") {
 		t.Errorf("castFile = %q", got)
