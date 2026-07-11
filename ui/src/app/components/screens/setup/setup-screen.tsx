@@ -256,6 +256,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             siteConfig={siteConfig}
             reloadSiteConfig={reloadSiteConfig}
             saveSiteConfig={saveSiteConfig}
+            onAddSecret={openAddSecret}
             onRecheck={recheck}
             rechecking={rechecking}
           />

@@ -113,7 +113,9 @@ export function SetupLayout({
             <Button
               variant="outline"
               onClick={() => {
-                onSelect("environment");
+                // Just dismiss the nudge — the operator said "keep setting up",
+                // so keep them on the step they were configuring, don't jump
+                // them back to Environment.
                 onKeepSettingUp?.();
               }}
             >

@@ -328,6 +328,7 @@ export function HostProxyStep({
   siteConfig,
   reloadSiteConfig,
   saveSiteConfig,
+  onAddSecret,
   onRecheck,
   rechecking,
 }: {
@@ -335,6 +336,7 @@ export function HostProxyStep({
   siteConfig: SiteConfig | null;
   reloadSiteConfig: () => Promise<void>;
   saveSiteConfig: (next: SiteConfig) => Promise<void>;
+  onAddSecret: (name: string) => void;
   onRecheck: () => void;
   rechecking: boolean;
 }) {
@@ -387,7 +389,7 @@ export function HostProxyStep({
       <Field
         label="Upstream proxy secret name"
         htmlFor="host-proxy-secret"
-        hint="Create this secret (holding the upstream proxy URL) via the Add-secret flow in the Provider or Credentials step first."
+        hint="Store the proxy URL as a secret (Add secret), then reference its name here."
       >
         <div className="flex gap-2">
           <Input
@@ -397,6 +399,12 @@ export function HostProxyStep({
             placeholder="upstream-proxy-url"
             className="font-mono"
           />
+          <Button
+            variant="outline"
+            onClick={() => onAddSecret(secretName.trim() || "upstream-proxy-url")}
+          >
+            Add secret
+          </Button>
           <Button variant="outline" onClick={save} disabled={saving || siteConfig === null}>
             {saving ? <Loader2 className="size-4 animate-spin" /> : "Save"}
           </Button>

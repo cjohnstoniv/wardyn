@@ -103,9 +103,32 @@ describe("step-bodies.tsx — smoke", () => {
 
   it("HostProxyStep renders its upstream-proxy-secret field", async () => {
     render(
-      <HostProxyStep status={baseStatus()} {...siteConfigProps()} onRecheck={vi.fn()} rechecking={false} />,
+      <HostProxyStep
+        status={baseStatus()}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
     );
     expect(await screen.findByText("Upstream proxy secret name")).toBeInTheDocument();
+  });
+
+  it("HostProxyStep's Add-secret button opens the flow inline (no dead cross-step pointer)", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const onAddSecret = vi.fn();
+    render(
+      <HostProxyStep
+        status={baseStatus()}
+        {...siteConfigProps()}
+        onAddSecret={onAddSecret}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /add secret/i }));
+    // Empty field falls back to the conventional name.
+    expect(onAddSecret).toHaveBeenCalledWith("upstream-proxy-url");
   });
 
   it("ScmProviderStep renders its per-host-credential card", async () => {
@@ -188,6 +211,7 @@ describe("step-bodies.tsx — smoke", () => {
         status={baseStatus()}
         {...siteConfigProps()}
         saveSiteConfig={saveSiteConfig}
+        onAddSecret={vi.fn()}
         onRecheck={vi.fn()}
         rechecking={false}
       />,
