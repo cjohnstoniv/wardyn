@@ -66,6 +66,9 @@ type SetupStatus struct {
 	// the Host Proxy Getting-Started step renders. Read-only detection; it
 	// never configures anything (the upstream-proxy plumbing is separate).
 	HostProxy setup.HostProxyDetection `json:"host_proxy"`
+	// SCM is the presence-only git-credential posture (gh CLI login, helper,
+	// plaintext stores) the ScmProviderStep's ladder recommendations key off.
+	SCM setup.SCMPosture `json:"scm"`
 	// Bedrock is the AWS Bedrock Anthropic-transport readiness the "Connect a
 	// model" step renders alongside the API-key/subscription rows. Region/Model
 	// are boot-time operator config (non-secret, safe to echo); the AWS
@@ -623,6 +626,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 	plat := setup.DetectPlatform()
 	hostProxy := setup.DetectHostProxy()
+	scmPosture := setup.DetectSCMPosture()
 
 	// LLM access provenance: the detail of the WINNING signal (resident CLI login,
 	// a REAL non-fake composer backend, or an api-key-ish secret), "" when none.
@@ -832,41 +836,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// scm_provider: whether ANY SCM credential is configured for cloning private
-	// repos — a GitHub App (Secrets.GitHubApp), a git-pat-<host-slug> secret (the
-	// HTTPS/PAT lane's naming CONVENTION this check looks for — <host-slug> is
-	// the host lowercased with dots turned to hyphens, e.g. github-com,
-	// dev-azure-com, or a GHES host's own slug — this is the contract the
-	// ScmProviderStep UI must follow when it writes the secret), or an
-	// ssh-key-<host-slug> secret (the SSH lane's key_secret_ref, same slug
-	// convention). Always "info": entirely optional, never a blocking gate —
-	// public repos and local-dir workspaces need no SCM credential at all.
-	// ponytail: a secret-NAME prefix scan, not a grant-usage check (grants are
-	// per-run, not standing config) — same honest-heuristic posture as the
-	// llm_provider secret-name scan above.
-	scmConfigured := sec.GitHubApp
-	var scmVia []string
-	if sec.GitHubApp {
-		scmVia = append(scmVia, "GitHub App")
-	}
-	for _, n := range secretNames {
-		if strings.HasPrefix(n, "git-pat-") || strings.HasPrefix(n, "ssh-key-") {
-			scmConfigured = true
-			scmVia = append(scmVia, n)
-		}
-	}
-	if scmConfigured {
-		checks = append(checks, SetupCheck{
-			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
-			Detail: "SCM credentials configured: " + strings.Join(scmVia, ", ") + ".",
-		})
-	} else {
-		checks = append(checks, SetupCheck{
-			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
-			Detail: "No SCM credential configured yet (optional): cloning a private GitHub/Azure DevOps repo needs a GitHub App, a git-pat-<host-slug> secret (HTTPS/PAT), or an ssh-key-<host-slug> secret (SSH) referenced from a matching grant.",
-			Fix:    "Add a secret named git-pat-github-com / git-pat-dev-azure-com (or your GHES/ADO-Server host's slug) under Secrets and reference it from a git_pat grant — or configure a GitHub App.",
-		})
-	}
+	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
 
 	// Platform info rows (permanent, non-fixable => "info").
 	if plat.WSL {
@@ -910,10 +880,85 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		HasRuns:    hasRuns,
 		Platform:   SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
 		HostProxy:  hostProxy,
+		SCM:        scmPosture,
 		Bedrock:    bedrock,
 		Deployment: SetupDeployment{HostLike: deploymentHostLike(providers)},
 		Harness:    harnessCreds,
 	})
+}
+
+// scmProviderCheck grades the SCM credential posture against the safest-path
+// ladder (GitHub App > fine-grained PAT > deploy key > classic PAT/gh token >
+// personal SSH key). NEVER a gate: warn means "a safer option exists", not
+// "broken" — the configured lane still clones fine, and public repos need no
+// SCM credential at all. Grading:
+//   - GitHub App configured        -> ok   (brokered ≤1h scoped tokens; the only
+//     rung Wardyn itself can expire — nothing safer to recommend)
+//   - any ssh-key-<host> secret    -> warn (a STANDING resident-lane key Wardyn
+//     can neither scope nor expire; auto-used by every future SSH clone)
+//   - git-pat-<host> only          -> info (could already be a fine-grained
+//     rung-2 token — server-side we cannot tell it from a classic one, so no
+//     warn; the detail carries the upgrade hint instead)
+//   - nothing configured           -> info (+ posture-aware Fix when the host
+//     shows loose habits: gh CLI login, credential.helper store/cache,
+//     ~/.git-credentials, ~/.netrc)
+//
+// ponytail: a secret-NAME prefix scan, not a grant-usage check (grants are
+// per-run, not standing config) — the <host-slug> convention (dots→hyphens,
+// e.g. git-pat-github-com) is the contract the ScmProviderStep UI follows.
+func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPosture) SetupCheck {
+	var pats, sshKeys []string
+	for _, n := range secretNames {
+		switch {
+		case strings.HasPrefix(n, "git-pat-"):
+			pats = append(pats, n)
+		case strings.HasPrefix(n, "ssh-key-"):
+			sshKeys = append(sshKeys, n)
+		}
+	}
+	loosePosture := posture.GhCLI || posture.GitCredentialsFile || posture.Netrc ||
+		strings.HasPrefix(posture.CredentialHelper, "store") || strings.HasPrefix(posture.CredentialHelper, "cache")
+	switch {
+	case githubApp:
+		via := append([]string{"GitHub App"}, pats...)
+		detail := "Safest lane configured: the GitHub App mints a brokered, ≤1h, contents-scoped token per run — the only SCM credential Wardyn itself can expire. (" + strings.Join(via, ", ") + ")"
+		if len(sshKeys) > 0 {
+			// Honesty: the App does NOT retire a standing ssh-key-* secret —
+			// SSH-protocol clones still auto-use it, resident, with no prompt.
+			detail += " Note: standing SSH key secret(s) also present (" + strings.Join(sshKeys, ", ") + ") — the App doesn't retire them; delete if unused."
+		}
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "ok",
+			Detail: detail,
+		}
+	case len(sshKeys) > 0:
+		detail := "SSH key secret(s) configured (" + strings.Join(sshKeys, ", ") + "): a STANDING credential, resident in the sandbox for each clone, that Wardyn can neither scope nor expire. It works — a safer rung exists."
+		if len(pats) > 0 {
+			detail += " PAT secret(s) also present (" + strings.Join(pats, ", ") + "): those are brokered per-clone and never resident."
+		}
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "warn",
+			Detail: detail,
+			Fix:    "Prefer a GitHub App (brokered, expirable) or a fine-grained repo-scoped PAT (github.com/settings/personal-access-tokens/new → Contents: Read-only). If SSH, make it a single-repo read-only deploy key, not a personal identity.",
+		}
+	case len(pats) > 0:
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
+			Detail: "PAT secret(s) configured (" + strings.Join(pats, ", ") + "), brokered per-clone and never resident. If it is a classic whole-account PAT, re-issue it fine-grained + repo-scoped + short-expiry; a GitHub App is safer still.",
+		}
+	case loosePosture:
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
+			Detail: "No SCM credential configured yet (optional). Host posture note: this machine keeps broad or plaintext git credentials (gh CLI session, credential.helper store/cache, ~/.git-credentials or ~/.netrc) — Wardyn never reads them.",
+			Fix:    "For private repos, prefer a GitHub App or a fine-grained repo-scoped PAT stored as git-pat-<host-slug> (e.g. git-pat-github-com) — or generate a read-only deploy key (make setup offers this).",
+		}
+	default:
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
+			Detail: "No SCM credential configured yet (optional): cloning a private GitHub/Azure DevOps repo needs a GitHub App, a git-pat-<host-slug> secret (HTTPS/PAT), or an ssh-key-<host-slug> secret (SSH) referenced from a matching grant.",
+			Fix:    "Add a secret named git-pat-github-com / git-pat-dev-azure-com (or your GHES/ADO-Server host's slug) under Secrets and reference it from a git_pat grant — or configure a GitHub App.",
+		}
+	}
 }
 
 // hostProxyCheck summarizes host-proxy detection as a single non-blocking

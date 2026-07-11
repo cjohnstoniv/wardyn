@@ -141,7 +141,54 @@ describe("step-bodies.tsx — smoke", () => {
         rechecking={false}
       />,
     );
-    expect(await screen.findByText("Add a per-host credential")).toBeInTheDocument();
+    expect(await screen.findByText("Fine-grained PAT")).toBeInTheDocument();
+  });
+
+  // Safest-path ladder (Change 1): the four rungs render in order, GitHub App
+  // first and badged Recommended — never re-sorted by configured/detected state.
+  it("ScmProviderStep renders the GitHub App card first, badged Recommended", async () => {
+    render(
+      <ScmProviderStep
+        status={baseStatus()}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
+    );
+    const headings = await screen.findAllByRole("heading", { level: 3 });
+    expect(headings.map((h) => h.textContent)).toEqual([
+      "GitHub App",
+      "Fine-grained PAT",
+      "SSH deploy key",
+    ]);
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
+  });
+
+  it("ScmProviderStep shows the gh-CLI posture line only when scm.gh_cli is true", async () => {
+    const { rerender } = render(
+      <ScmProviderStep
+        status={baseStatus()}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
+    );
+    expect(screen.queryByText(/gh CLI login detected/i)).not.toBeInTheDocument();
+
+    rerender(
+      <ScmProviderStep
+        status={baseStatus({
+          scm: { gh_cli: true, credential_helper: "", git_credentials_file: false, netrc: false },
+        })}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
+    );
+    expect(await screen.findByText(/gh CLI login detected on the host/i)).toBeInTheDocument();
   });
 
   it("ArtifactRepoStep renders its ecosystem field", async () => {

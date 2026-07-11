@@ -43,12 +43,17 @@ function AccessRow({
   reason,
   label,
   detail,
+  residency,
   action,
 }: {
   status: StatusKind;
   reason?: string;
   label: React.ReactNode;
   detail?: React.ReactNode;
+  // Small proxy-injected/resident-at-run-time indicator (see PROXY_INJECTED_CHIP
+  // / BEDROCK_RESIDENT_CHIP below) — optional, only set for the Claude/Anthropic
+  // auth-mode rows the safest-path campaign covers.
+  residency?: React.ReactNode;
   action?: React.ReactNode;
 }) {
   return (
@@ -57,6 +62,7 @@ function AccessRow({
         <div className="text-sm font-semibold text-foreground">{label}</div>
         {detail && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{detail}</p>}
       </div>
+      {residency}
       <StatusChip status={status} reason={reason} />
       {action && <div className="shrink-0">{action}</div>}
     </li>
@@ -66,6 +72,33 @@ function AccessRow({
 function hasSecret(present: string[], re: RegExp): boolean {
   return present.some((n) => re.test(n));
 }
+
+// Auth-mode residency framing (best-practice-safest-path campaign): where the
+// live secret lives at run time differs materially across these options, so
+// each one wears a small indicator instead of leaving it unstated.
+// Proxy-injected = the live secret never leaves the proxy — the sandbox holds
+// nothing (API key) or an inert sentinel (subscription/managed). Bedrock's
+// static-key/SSO SigV4 paths can't be proxy-injected, so those credentials
+// land resident in the sandbox at run time — amber, with the static-vs-SSO
+// nuance spelled out under that option below. (The Bedrock BEARER transport is
+// proxy-injected, but this row's actions only wire the static/SSO paths.)
+const PROXY_INJECTED_CHIP = (
+  <Chip tone="success" className="uppercase tracking-wide">
+    proxy-injected
+  </Chip>
+);
+// The personal-subscription row hedges with "(default)": the
+// WARDYN_SUBSCRIPTION_INJECT=off escape hatch stages a resident copy instead.
+const PROXY_INJECTED_DEFAULT_CHIP = (
+  <Chip tone="success" className="uppercase tracking-wide">
+    proxy-injected (default)
+  </Chip>
+);
+const BEDROCK_RESIDENT_CHIP = (
+  <Chip tone="warning" className="uppercase tracking-wide">
+    resident (static/SSO)
+  </Chip>
+);
 
 // SetupOption is one not-yet-configured way to connect a provider family — shown
 // as a compact "add" button rather than a full row, so the family surfaces only
@@ -189,11 +222,18 @@ export function ModelStep({
     }
   };
 
-  const keyRow = (name: string, label: string, detail: string, configured: boolean) => (
+  const keyRow = (
+    name: string,
+    label: string,
+    detail: string,
+    configured: boolean,
+    residency?: React.ReactNode,
+  ) => (
     <AccessRow
       status={rowStatus(configured ? "ready" : "todo", rechecking)}
       label={label}
       detail={detail}
+      residency={residency}
       action={
         <Button size="sm" variant="outline" onClick={() => onAddSecret(name)}>
           <KeyRound className="size-3.5" /> {configured ? "Edit" : "Add key"}
@@ -212,6 +252,7 @@ export function ModelStep({
     // connectedDetail. Used only for the Claude subscription row (see below) so it
     // renders verbatim from the llm_provider check — never a contradicting copy.
     authDetail?: string,
+    residency?: React.ReactNode,
   ) => {
     const installed = !!provider?.installed;
     const loggedIn = !!provider?.logged_in;
@@ -228,6 +269,7 @@ export function ModelStep({
               ? "Installed but not logged in."
               : notInstalledDetail
         }
+        residency={residency}
         action={
           !installed ? (
             // B7: a dead disabled button becomes a real "Install guide →" link.
@@ -263,40 +305,46 @@ export function ModelStep({
   const openaiConnected = openai || codexDetected;
 
   const bedrockRow = (
-    <AccessRow
-      key="bedrock"
-      status={rowStatus(bedrockReady ? "ready" : "todo", rechecking)}
-      label="AWS Bedrock (Claude Code)"
-      detail={
-        <>
-          {bedrockDetail}
-          {(bedrock.region || bedrock.model) && (
-            <span className="mt-0.5 block font-mono">
-              {bedrock.region || "region unset"} · {bedrock.model || "model unset"}
-            </span>
-          )}
-          {bedrockConfigured && !bedrockReady && (!bedrock.region || !bedrock.model) && (
-            // Region/model have no write API (boot-time config) — say how to set
-            // them on the host instead of leaving a dead "needs-creds" end.
-            <span className="mt-0.5 block">
-              Region/model are wardynd boot-time config: set WARDYN_BEDROCK_REGION /
-              WARDYN_BEDROCK_MODEL (or -bedrock-region / -bedrock-model), restart wardynd, then
-              Re-check.
-            </span>
-          )}
-        </>
-      }
-      action={
-        <div className="flex flex-wrap gap-1.5">
-          <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-access-key-id")}>
-            <KeyRound className="size-3.5" /> Access key
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-secret-access-key")}>
-            <KeyRound className="size-3.5" /> Secret key
-          </Button>
-        </div>
-      }
-    />
+    <React.Fragment key="bedrock">
+      <AccessRow
+        status={rowStatus(bedrockReady ? "ready" : "todo", rechecking)}
+        label="AWS Bedrock (Claude Code)"
+        residency={BEDROCK_RESIDENT_CHIP}
+        detail={
+          <>
+            {bedrockDetail}
+            {(bedrock.region || bedrock.model) && (
+              <span className="mt-0.5 block font-mono">
+                {bedrock.region || "region unset"} · {bedrock.model || "model unset"}
+              </span>
+            )}
+            {bedrockConfigured && !bedrockReady && (!bedrock.region || !bedrock.model) && (
+              // Region/model have no write API (boot-time config) — say how to set
+              // them on the host instead of leaving a dead "needs-creds" end.
+              <span className="mt-0.5 block">
+                Region/model are wardynd boot-time config: set WARDYN_BEDROCK_REGION /
+                WARDYN_BEDROCK_MODEL (or -bedrock-region / -bedrock-model), restart wardynd, then
+                Re-check.
+              </span>
+            )}
+          </>
+        }
+        action={
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-access-key-id")}>
+              <KeyRound className="size-3.5" /> Access key
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-secret-access-key")}>
+              <KeyRound className="size-3.5" /> Secret key
+            </Button>
+          </div>
+        }
+      />
+      <p className="pl-1 text-xs leading-relaxed text-muted-foreground">
+        Static AWS keys become resident in sandboxes that use Bedrock; SSO via ~/.aws mount
+        auto-rotates and is safer.
+      </p>
+    </React.Fragment>
   );
 
   const subRow = (
@@ -311,6 +359,7 @@ export function ModelStep({
         // sentence ("w/ Claude subscription", valid vs EXPIRED) so the two rows stay
         // consistent. Non-subscription logins fall back to the generic copy above.
         claude?.auth_mode === "subscription" ? llmProviderDetail : undefined,
+        PROXY_INJECTED_DEFAULT_CHIP,
       )}
       {stagingCheck?.status === "warn" && (
         <p className="pl-1 text-xs leading-relaxed text-warning">
@@ -328,6 +377,7 @@ export function ModelStep({
           managedCheck?.detail ??
           "A Wardyn-managed Claude subscription token is injected proxy-side into every run — the sandbox holds only an inert sentinel."
         }
+        residency={PROXY_INJECTED_CHIP}
         action={
           <div className="flex flex-wrap gap-1.5">
             <Button size="sm" variant="outline" onClick={() => setLoginOpen(true)}>
@@ -351,6 +401,7 @@ export function ModelStep({
         "Anthropic API key",
         "Enables Claude models over the API — an alternative to the CLI login.",
         anthropic,
+        PROXY_INJECTED_CHIP,
       )}
     </React.Fragment>
   );

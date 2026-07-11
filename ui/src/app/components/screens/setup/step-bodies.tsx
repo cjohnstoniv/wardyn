@@ -191,9 +191,10 @@ export function ReviewStep({
 
 // ------------------------------------------------------------
 // Corporate-baseline steps (Host Proxy / SCM Provider / Artifact Redirect) — all
-// three are non-blocking "info"-tier checks (see internal/api/setup.go's
-// hostProxyCheck/scm_provider/artifactRepoCheck): they never gate readiness, they
-// just let an operator wire the SiteConfig baseline every run inherits.
+// three are non-blocking (see internal/api/setup.go): host_proxy/artifact_repo
+// are "info"-tier; scm_provider is graded ok/warn/info against the safest-path
+// ladder but never gates readiness. They just let an operator wire the
+// SiteConfig baseline every run inherits.
 //
 // SiteConfig has ONE owner (V2): the orchestrator (setup-screen) holds the
 // fetched doc and hands each step `siteConfig` + `reloadSiteConfig`/
@@ -474,17 +475,74 @@ export function ScmProviderStep({
         </ul>
       )}
 
-      <div className="space-y-2.5 rounded-xl border border-border p-4">
-        <p className="text-sm font-medium text-foreground">Add a per-host credential</p>
+      {status.scm?.gh_cli && (
+        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Info className="mt-0.5 size-3.5 shrink-0" />
+          gh CLI login detected on the host — that token is broad; Wardyn never imports it. Prefer a
+          fine-grained PAT (rung 2).
+        </p>
+      )}
+
+      {/* Rung 1 — GitHub App: brokered, ≤1h scoped tokens; the only credential
+          Wardyn itself can expire. App ID / PEM inputs live on the Credentials
+          step; this card is the ladder's status + pitch, not a second form. */}
+      <div className="space-y-2 rounded-xl border border-border p-4">
+        <div className="flex items-center gap-2">
+          <Github className="size-4 text-foreground" />
+          <h3 className="text-sm font-semibold text-foreground">GitHub App</h3>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Chip tone="primary" className="uppercase tracking-wide">
+              Recommended
+            </Chip>
+            <Chip tone="success">brokered</Chip>
+            <StatusChip status={status.secrets.github_app ? "ready" : "needs-setup"} />
+          </div>
+        </div>
         <p className="text-xs leading-snug text-muted-foreground">
-          Store the PAT as a secret named <span className="font-mono">git-pat-&lt;host-slug&gt;</span> (e.g.{" "}
-          <span className="font-mono">git-pat-github-com</span>,{" "}
-          <span className="font-mono">git-pat-dev-azure-com</span>), then reference it from a git_pat grant.
+          Wardyn mints a fresh ≤1h read-scoped token per run — the only credential Wardyn itself can
+          expire.
+        </p>
+      </div>
+
+      {/* Rung 2 — fine-grained PAT: brokered per-clone, never resident. */}
+      <div className="space-y-2.5 rounded-xl border border-border p-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-foreground">Fine-grained PAT</h3>
+          <Chip tone="success">brokered</Chip>
+        </div>
+        <p className="text-xs leading-snug text-muted-foreground">
+          Create a fine-grained token scoped to one repo, Contents: Read-only, short expiry (
+          <span className="font-mono">github.com/settings/personal-access-tokens/new</span> → Only
+          select repositories). Store as{" "}
+          <span className="font-mono">git-pat-&lt;host-slug&gt;</span>, then reference it from a
+          git_pat grant.
         </p>
         <Button variant="outline" size="sm" onClick={() => onAddSecret("git-pat-github-com")}>
           <KeyRound className="size-3.5" /> Add PAT secret
         </Button>
       </div>
+
+      {/* Rung 3 — SSH deploy key: single-repo, read-only, but resident on disk. */}
+      <div className="space-y-2.5 rounded-xl border border-border p-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-foreground">SSH deploy key</h3>
+          <Chip tone="warning">resident (seconds)</Chip>
+        </div>
+        <p className="text-xs leading-snug text-muted-foreground">
+          A read-only deploy key clones exactly one repo. <span className="font-mono">make setup</span>{" "}
+          can generate one — the private half never leaves this machine&apos;s encrypted store. Leave
+          &quot;Allow write access&quot; unchecked.
+        </p>
+        <Button variant="outline" size="sm" onClick={() => onAddSecret("ssh-key-github-com")}>
+          <KeyRound className="size-3.5" /> Add SSH key secret
+        </Button>
+      </div>
+
+      {/* Rung 4 — personal SSH key / classic PAT: whole-account, not a card. */}
+      <p className="flex items-start gap-1.5 text-xs text-warning">
+        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+        A personal id_ed25519 or classic PAT grants your whole account — prefer the rungs above.
+      </p>
 
       <Field
         label="Self-hosted GHES / ADO Server host"

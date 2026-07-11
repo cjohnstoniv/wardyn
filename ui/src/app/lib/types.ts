@@ -841,6 +841,17 @@ export interface HostProxyDetection {
   has_credentials: boolean;
 }
 
+// Presence-only host git-credential posture (mirrors internal/setup/detect.go's
+// SCMPosture) — used only to recommend a safer credential-ladder rung on the SCM
+// Provider step; Wardyn never reads the files it detects, only stats/git-configs
+// their presence.
+export interface SCMPosture {
+  gh_cli: boolean;
+  credential_helper: string;
+  git_credentials_file: boolean;
+  netrc: boolean;
+}
+
 export interface SetupStatus {
   ready: boolean;
   checks: SetupCheck[];
@@ -863,6 +874,10 @@ export interface SetupStatus {
   // Masked host-proxy detection (see HostProxyDetection). Optional for the same
   // fixture-compat reason as `bedrock` — READY_FALLBACK and older daemons omit it.
   host_proxy?: HostProxyDetection;
+  // Presence-only host git-credential posture (see SCMPosture) — feeds the
+  // scm_provider check's grading and the ScmProviderStep gh-CLI advisory line.
+  // Optional for the same fixture-compat reason as `bedrock`.
+  scm?: SCMPosture;
   // Whether wardynd itself sees a resident Claude login (host mode) vs is blind to
   // it (compose/container). host_like === false is why the LLM-access check reads
   // "no login" in compose even when the operator IS logged in on the host. Optional
