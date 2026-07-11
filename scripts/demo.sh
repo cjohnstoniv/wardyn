@@ -50,7 +50,7 @@ cmd_up() {
 
   # The docker driver launches this OCI image for the run; without it the driver
   # fails closed on the missing image and the demo run lands FAILED.
-  local agent_image="wardyn/agent-${DEMO_AGENT}:demo"
+  local agent_image="wardyn/agent-${DEMO_AGENT}:local"
   local agent_dockerfile="${REPO_ROOT}/deploy/images/${DEMO_AGENT}/Dockerfile"
 
   if [[ "${do_build}" -eq 1 ]]; then

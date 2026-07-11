@@ -38,3 +38,18 @@ wait_down() {
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# wardyn_pick_docker_host — export the same daemon preference as
+# scripts/setup.sh's pick_daemon: honor an explicit DOCKER_HOST, else the
+# dedicated tier-capable native dockerd if present, else the default socket.
+# Provisioners (up.sh pg) and consumers (e2e-backend.sh, run-local.sh) must
+# agree on the daemon, or `docker exec wardyn-test-pg` hits a different store
+# than the one that created the container (real failure on dual-daemon boxes).
+wardyn_pick_docker_host() {
+  [ -n "${DOCKER_HOST:-}" ] && return 0
+  for _wpd_s in /run/wardyn-docker.sock /var/run/wardyn-docker.sock; do
+    [ -S "${_wpd_s}" ] && { DOCKER_HOST="unix://${_wpd_s}"; export DOCKER_HOST; break; }
+  done
+  unset _wpd_s
+  return 0
+}

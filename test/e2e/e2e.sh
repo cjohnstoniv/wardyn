@@ -48,7 +48,7 @@ BASE="http://localhost:8080"
 INTERNAL_NET="wardyn-internal"           # compose network name (see compose `networks:`)
 FIXTURE_AGENT="e2e-fixture"              # agent NAME -> image ghcr.io/.../agent-e2e-fixture
 FIXTURE_IMAGE="ghcr.io/cjohnstoniv/agent-${FIXTURE_AGENT}:latest"
-PROXY_IMAGE="wardyn/wardyn-proxy:demo"
+PROXY_IMAGE="wardyn/wardyn-proxy:local"
 CURL_HELPER="curlimages/curl:latest"
 
 WORKDIR="$(mktemp -d /tmp/wardyn-e2e.XXXXXX)"
@@ -56,7 +56,7 @@ RUN_ID=""
 CC_RUN_ID=""                             # the REAL-AGENT (claude-code) run id
 PROXY_NAME=""
 CC_AGENT="claude-code"                   # real agent NAME (image via WARDYN_AGENT_IMAGES)
-CC_IMAGE="wardyn/agent-claude-code:demo" # the demo tag the compose stack maps to
+CC_IMAGE="wardyn/agent-claude-code:local" # the demo tag the compose stack maps to
 
 pass=0; fail=0
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }

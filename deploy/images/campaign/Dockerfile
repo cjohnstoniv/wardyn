@@ -4,7 +4,7 @@
 # resolve to ONE image that carries BOTH the wardyn binaries (agent-run,
 # wardyn-verify, wardyn-rec, wardyn-scan, claude, git — inherited from the base)
 # AND the toolchains, so real build/test commands run in-sandbox.
-FROM wardyn/agent-claude-code:demo
+FROM wardyn/agent-claude-code:local
 
 # SSH SCM lane note: openssh-client + corkscrew (CONNECT ProxyCommand helper) and
 # the baked /etc/ssh/ssh_known_hosts are INHERITED from the base image above — no

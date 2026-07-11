@@ -83,19 +83,27 @@ runtimes_json() { docker info -f '{{json .Runtimes}}' 2>/dev/null || echo '{}'; 
 # ── DETECT ───────────────────────────────────────────────────────────────────
 hd "Detecting your environment"
 IS_WSL=false; grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=true
-if $IS_WSL; then
-  info "WSL2 detected (host↔sandbox networking is split — the UI opens in your Windows browser)."
+$IS_WSL && info "WSL2 detected (host↔sandbox networking is split — the UI opens in your Windows browser)."
+
+HAVE_DOCKER=false; docker version >/dev/null 2>&1 && HAVE_DOCKER=true
+if ! $HAVE_DOCKER; then warn "docker not reachable at $DSOCK — start Docker and re-run."; exit 1; fi
+# The daemon FLAVOR decides which warnings are real: Docker Desktop's engine
+# lives in its own VM (WSL2 NAT swallows sandbox→wardynd callbacks; custom
+# runtimes reset on restart); a native in-distro dockerd has neither problem.
+DOCKER_OS="$(docker info -f '{{.OperatingSystem}}' 2>/dev/null || true)"
+IS_DESKTOP=false; case "$DOCKER_OS" in *"Docker Desktop"*) IS_DESKTOP=true;; esac
+ok "docker reachable ($(basename "$DSOCK")${DOCKER_OS:+ — ${DOCKER_OS}})"
+if $IS_WSL && $IS_DESKTOP; then
   # The known host-mode gap on Docker Desktop + WSL2 default (NAT) networking:
   # host.docker.internal resolves to WINDOWS, not this distro, so sandbox→wardynd
   # callbacks are lost — workspace Verify results never report and Record captures
-  # land empty. Say it up front (run-host.sh repeats it at launch).
-  warn "If you use Docker Desktop with default (NAT) networking, workspace Verify/Record won't complete in host mode."
+  # land empty. Only warn when the picked daemon actually IS Docker Desktop —
+  # firing this on a native in-distro dockerd was a false alarm that taught users
+  # to ignore it.
+  warn "Docker Desktop + WSL2 (NAT networking): workspace Verify/Record won't complete in host mode."
   warn "Fixes: WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then 'wsl --shutdown'),"
   warn "or run the containerized stack instead: make compose-up."
 fi
-
-HAVE_DOCKER=false; docker version >/dev/null 2>&1 && HAVE_DOCKER=true
-if $HAVE_DOCKER; then ok "docker reachable ($(basename "$DSOCK"))"; else warn "docker not reachable at $DSOCK — start Docker and re-run."; exit 1; fi
 
 RT="$(runtimes_json)"
 HAVE_RUNSC=false; case "$RT" in *'"runsc"'*) HAVE_RUNSC=true;; esac
@@ -170,8 +178,8 @@ if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
   hd "Where should the control plane run?"
   say "    1) host          — wardynd runs as you; uses your Claude login directly (default)"
   say "    2) containerized — the compose stack; add an API key/Bedrock for model access"
-  if $IS_WSL; then
-    info "WSL2 detected: on Docker Desktop with default (NAT) networking, pick 2 —"
+  if $IS_WSL && $IS_DESKTOP; then
+    info "WSL2 + Docker Desktop (NAT) detected: pick 2 —"
     info "host mode's workspace Verify/Record callbacks don't route there."
   fi
   while :; do
@@ -361,17 +369,18 @@ if [ ! -x ./bin/wardynd ] || [ ! -f ./ui/dist/index.html ]; then
   ok "built"
 fi
 
-# Build the per-run agent images if missing (first run only; slow). Host mode's
-# WARDYN_AGENT_IMAGES (run-host.sh) advertises these three; without them the very
-# first run fails at pull time ("registry: denied") on the local-only :demo tags,
-# because those tags exist in no registry. Docker is already confirmed reachable
-# above (setup exits early otherwise), so no extra guard is needed here. Progress
-# streams so a slow first-run build is visibly happening, not a silent hang.
+# Build the per-run agent images if missing (first run only; slow). Without them
+# the very first run fails at pull time ("registry: denied") on the locally-built
+# :local tags, because those tags exist in no registry. Docker is already
+# confirmed reachable above (setup exits early otherwise), so no extra guard is
+# needed here. Progress streams so a slow first-run build is visibly happening,
+# not a silent hang. The oracle image (a deterministic e2e stand-in, no LLM) is
+# deliberately NOT built here — the e2e scripts that use it build it themselves;
+# a first-time user never runs it.
 . scripts/lib/images.sh
 hd "Agent images (per-run sandboxes)"
-for _img in claude-code:wardyn/agent-claude-code:demo \
-            codex-cli:wardyn/agent-codex-cli:demo \
-            oracle:wardyn/agent-oracle:demo; do
+for _img in claude-code:wardyn/agent-claude-code:local \
+            codex-cli:wardyn/agent-codex-cli:local; do
   _img_dir="${_img%%:*}"; _img_tag="${_img#*:}"
   if image_missing "$_img_tag"; then
     info "Building ${_img_tag} (first run; this can take several minutes)…"
@@ -563,9 +572,6 @@ if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 
 fi
 
 if $healthy; then
-  { command -v wslview  >/dev/null 2>&1 && wslview  "$URL"; } >/dev/null 2>&1 \
-    || { command -v explorer.exe >/dev/null 2>&1 && explorer.exe "$URL"; } >/dev/null 2>&1 \
-    || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } >/dev/null 2>&1 || true
   # Import static AWS creds detected earlier (mount mode needs none — the SDK reads
   # the ~/.aws mount). Local host mode has no admin token, so the CLI just works.
   if [ "${BR_IMPORT_STATIC:-false}" = true ]; then
@@ -665,6 +671,11 @@ if $healthy; then
   ok "PID    ${WPID}   (${PIDFILE})"
   ok "Logs   ${LOGFILE}   (tail -f to watch)"
   ok "Stop   make stop-host   (or: kill ${WPID})"
+  # Open the UI LAST — every interactive prompt above is done, so the browser
+  # never steals focus while the terminal is still waiting on an answer.
+  { command -v wslview  >/dev/null 2>&1 && wslview  "$URL"; } >/dev/null 2>&1 \
+    || { command -v explorer.exe >/dev/null 2>&1 && explorer.exe "$URL"; } >/dev/null 2>&1 \
+    || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } >/dev/null 2>&1 || true
 else
   rm -f "$PIDFILE"
   warn "wardynd did not become healthy — last log lines:"

@@ -22,6 +22,9 @@ cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/lib/images.sh"
 source "${REPO_ROOT}/scripts/lib/common.sh"
 
+# Provision + exec wardyn-test-pg on the same daemon as up.sh pg (dual-daemon boxes).
+wardyn_pick_docker_host
+
 PORT="${WARDYN_LOCAL_PORT:-9090}"
 TOKEN="${WARDYN_LOCAL_TOKEN:-wardyn-local-admin}"
 PG_CONTAINER="${WARDYN_LOCAL_PG_CONTAINER:-wardyn-test-pg}"
@@ -96,27 +99,27 @@ cmd_up() {
     # Ensure the proxy sidecar + agent images exist (build if missing —
     # first run only; the agent image build is slow). oracle is the e2e oracle
     # image, advertised in WARDYN_AGENT_IMAGES below, so build it here too.
-    if image_missing wardyn/wardyn-proxy:demo; then
+    if image_missing wardyn/wardyn-proxy:local; then
       log "Building the wardyn-proxy sidecar image (first run)…"
       docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image >/dev/null 2>&1 \
         || log "WARNING proxy image build failed — runs may fail until 'make compose-build'"
     fi
-    if image_missing wardyn/agent-claude-code:demo; then
+    if image_missing wardyn/agent-claude-code:local; then
       log "Building the claude-code agent image (first run; slow)…"
-      docker build -q -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:demo . >/dev/null 2>&1 \
+      docker build -q -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local . >/dev/null 2>&1 \
         || log "WARNING agent image build failed — runs may fail until 'make agent-images'"
     fi
-    if image_missing wardyn/agent-oracle:demo; then
+    if image_missing wardyn/agent-oracle:local; then
       log "Building the oracle agent image (first run)…"
-      docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:demo . >/dev/null 2>&1 \
+      docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local . >/dev/null 2>&1 \
         || log "WARNING oracle image build failed — oracle runs fail until 'make agent-images'"
     fi
     # Sandbox containers reach the host control plane via host.docker.internal (the
     # proxy sidecar maps it to the docker host gateway). Agent names → locally-built
     # demo images (else the runner pulls a non-existent ghcr image).
     export WARDYN_CONTROL_PLANE_URL="http://host.docker.internal:${PORT}"
-    export WARDYN_PROXY_IMAGE="wardyn/wardyn-proxy:demo"
-    export WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-claude-code:demo","codex-cli":"wardyn/agent-codex-cli:demo","oracle":"wardyn/agent-oracle:demo"}'
+    export WARDYN_PROXY_IMAGE="wardyn/wardyn-proxy:local"
+    export WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-claude-code:local","codex-cli":"wardyn/agent-codex-cli:local","oracle":"wardyn/agent-oracle:local"}'
     export WARDYN_AGENT_ANTHROPIC_MODEL="${WARDYN_AGENT_ANTHROPIC_MODEL:-opus}"
     log "Sandbox runner: docker (CC1/Fence) — runs + Verify can launch"
   else

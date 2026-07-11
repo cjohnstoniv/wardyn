@@ -402,10 +402,10 @@ func TestAgentImageCheck(t *testing.T) {
 	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-claude-code:latest") {
 		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want warn naming the ghcr ref", chk.Status, chk.Detail)
 	}
-	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:demo"}); chk.Status != "warn" {
+	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:local"}); chk.Status != "warn" {
 		t.Errorf("compose demo convention image: status=%q, want warn", chk.Status)
 	}
-	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-campaign:demo"}); chk.Status != "info" {
+	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-campaign:local"}); chk.Status != "info" {
 		t.Errorf("operator override image: status=%q, want info (not a red)", chk.Status)
 	}
 	for _, chk := range []SetupCheck{agentImageCheck(nil), agentImageCheck(map[string]string{"claude-code": "custom:tag"})} {

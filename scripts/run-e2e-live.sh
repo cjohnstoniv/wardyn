@@ -48,7 +48,7 @@ command -v docker >/dev/null 2>&1 || die "docker not found"
 log "building wardynd (-tags docker), wardyn, and the oracle agent image"
 go build -tags docker -o bin/wardynd ./cmd/wardynd || die "build wardynd failed"
 go build -o bin/wardyn ./cmd/wardyn || die "build wardyn failed"
-docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:demo . >/dev/null || die "build oracle image failed"
+docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local . >/dev/null || die "build oracle image failed"
 # The proxy sidecar image + a built UI are only needed if we start wardynd.
 
 # ── ensure a wardynd is listening ────────────────────────────────────────────

@@ -47,7 +47,7 @@ automatically.
 ## Level 1 — governance demo (no keys)
 
 ```sh
-make agent-images        # build wardyn/agent-claude-code:demo (+codex)
+make agent-images        # build wardyn/agent-claude-code:local (+codex)
 make demo                # compose up: postgres + dex + wardynd; creates a demo run
 ```
 

@@ -62,10 +62,10 @@ go build -tags docker -o bin/wardynd ./cmd/wardynd || die "build wardynd failed"
 go build -o bin/wardyn ./cmd/wardyn || die "build wardyn failed"
 
 # Ensure the images a started wardynd needs exist on the runner daemon.
-image_missing wardyn/wardyn-proxy:demo && { log "building wardyn-proxy image"; docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image >/dev/null 2>&1 || die "build proxy image failed"; }
-image_missing wardyn/agent-oracle:demo && { log "building oracle image"; docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:demo . >/dev/null || die "build oracle image failed"; }
+image_missing wardyn/wardyn-proxy:local && { log "building wardyn-proxy image"; docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image >/dev/null 2>&1 || die "build proxy image failed"; }
+image_missing wardyn/agent-oracle:local && { log "building oracle image"; docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local . >/dev/null || die "build oracle image failed"; }
 if [[ "${WARDYN_E2E_REAL_MODEL:-}" == "1" ]]; then
-  image_missing wardyn/agent-claude-code:demo && { log "building claude-code image (real-model lane)"; docker build -q -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:demo . >/dev/null || die "build claude-code image failed"; }
+  image_missing wardyn/agent-claude-code:local && { log "building claude-code image (real-model lane)"; docker build -q -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local . >/dev/null || die "build claude-code image failed"; }
 fi
 
 # ── wardynd lifecycle (this driver owns it for the duration) ─────────────────
