@@ -92,6 +92,12 @@ export function StepReview({
           value={run.interactive ? RUN_MODE.interactive.label : RUN_MODE.autonomous.label}
         />
         <Summary label="Repo" value={<Mono className="text-foreground">{run.repo || "—"}</Mono>} />
+        {run.image && (
+          <Summary
+            label="Image"
+            value={<Mono className="break-all text-foreground">{run.image}</Mono>}
+          />
+        )}
         <Summary label="Auth" value={authLabel} />
         <Summary
           label="Confinement"

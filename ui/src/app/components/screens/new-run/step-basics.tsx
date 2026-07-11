@@ -6,6 +6,7 @@
 // Step 1 — Basics: agent, onboarded-workspace multi-select, run mode
 // (interactive | batch), and an optional task.
 import { Textarea } from "../../ui/textarea";
+import { Input } from "../../ui/input";
 import {
   Select,
   SelectContent,
@@ -53,7 +54,7 @@ export function StepBasics({
 
   return (
     <div className="space-y-5">
-      <Field label="Agent" hint="Only the two supported coding agents can be launched.">
+      <Field label="Agent" hint="Claude Code and Codex CLI are the built-in agents; a custom image (below) can carry your own harness.">
         <Select value={state.agent} onValueChange={(v) => patch({ agent: v as WizardAgent })}>
           <SelectTrigger>
             <SelectValue />
@@ -192,6 +193,30 @@ export function StepBasics({
           rows={3}
         />
       </Field>
+
+      {/* Advanced: bring your own base image. Collapsed by default (native
+          <details> — no lib) so the common path is unchanged. */}
+      <details className="rounded-lg border border-dashed border-border p-3" open={!!state.image}>
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
+          Custom sandbox image (advanced)
+        </summary>
+        <div className="mt-3 space-y-2">
+          <Input
+            placeholder="e.g. myco/dev:latest or ghcr.io/org/image@sha256:…"
+            value={state.image}
+            onChange={(e) => patch({ image: e.target.value })}
+            className="font-mono"
+            aria-label="Custom sandbox image"
+          />
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Wardyn layers its runner tools onto this base and clears its entrypoint before use, and runs a
+            self-test before the task. Egress policy, confinement, and secret brokering apply regardless of
+            image contents. Your image needs a shell (and, for a task run, the agent&apos;s CLI). Pre-pull
+            private images on the host; pin a <span className="font-mono">@sha256:</span> digest to avoid tag
+            drift. Leave blank to use the built-in agent image.
+          </p>
+        </div>
+      </details>
     </div>
   );
 }
