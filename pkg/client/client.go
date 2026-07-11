@@ -6,7 +6,8 @@
 // It mirrors the REST API surface of wardynd exactly — same paths, same
 // status codes, same JSON vocabulary (internal/types is the shared source of
 // truth). The SDK adds zero non-stdlib dependencies so it can be embedded in
-// any agent or CLI without dependency friction.
+// external tooling without dependency friction. (The in-repo `wardyn` CLI
+// keeps its own minimal client in cmd/wardyn/client.go.)
 //
 // Usage:
 //

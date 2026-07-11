@@ -54,9 +54,8 @@ docker-compose.override.yml
 # maintainer's local, non-OSS scratch (personal WSL-migration config, keys, scripts)
 /local/
 
-# Generated test-report artifacts (regenerable per run). Committed durable files:
-# test/reports/README.md, rollup.md, coverage-dashboard.md, and the per-component
-# review ledgers under test/reports/components/. Everything else is generated.
+# Generated test-report artifacts (regenerable per run). Committed durable
+# files: test/reports/README.md and rollup.md. Everything else is generated.
 test/reports/go/
 test/reports/ui/
 test/reports/e2e/
@@ -82,3 +81,8 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+
+# maintainer-local audit artifacts — never ship
+/PONYTAIL_PASS*_AUDIT.md
+/.ponytail-*
+/REPO_AUDIT_*.md
