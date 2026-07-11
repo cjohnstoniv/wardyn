@@ -1781,6 +1781,12 @@ func actorTypeFromRequest(r *http.Request) types.ActorType {
 // fact never human-gated (breaks invariant 4 per-run identity and invariant 6
 // non-repudiation). A token action is recorded as system/admin-token, not human.
 func actorFromRequest(r *http.Request) (types.ActorType, string) {
+	// Attach-ticket auth (ticketOrHumanAuth): the ticket carries the actor that
+	// MINTED it through the normal authenticated surface — strongest available
+	// attribution for a WS handshake that cannot carry a credential itself.
+	if ta, ok := ticketActorFromContext(r.Context()); ok {
+		return ta.actorType, ta.principal
+	}
 	if op := localPrincipalFromContext(r.Context()); op != "" {
 		if h := r.Header.Get("X-Wardyn-Principal"); h != "" {
 			return types.ActorHuman, h

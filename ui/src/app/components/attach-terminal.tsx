@@ -33,7 +33,7 @@ import "@xterm/xterm/css/xterm.css";
 // cell positions, so Claude Code's TUI renders cleanly instead of degrading to
 // "__" the way the OS monospace fallback does.
 import "@fontsource/jetbrains-mono/400.css";
-import { getToken } from "../lib/api";
+import { api, getToken } from "../lib/api";
 import { Loader2, TriangleAlert, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "./ui/utils";
 
@@ -43,7 +43,9 @@ import { cn } from "./ui/utils";
 // api.ts stores the admin token in localStorage under this key.  When the
 // token is present AND there is no valid OIDC session (we can't read
 // HttpOnly cookies from JS, but we know the UI only uses a token when the
-// OIDC flow is not active), we must warn the user.
+// OIDC flow is not active), the WS handshake cannot carry the bearer — so we
+// mint a single-use attach ticket via the normal authenticated REST surface
+// and present it as ?ticket= instead.
 function isAdminTokenOnlyMode(): boolean {
   return getToken() !== null;
 }
@@ -51,10 +53,11 @@ function isAdminTokenOnlyMode(): boolean {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function buildWsUrl(runId: string): string {
+function buildWsUrl(runId: string, ticket?: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host; // same-origin → cookie is sent
-  return `${proto}//${host}/api/v1/runs/${encodeURIComponent(runId)}/attach`;
+  const base = `${proto}//${host}/api/v1/runs/${encodeURIComponent(runId)}/attach`;
+  return ticket ? `${base}?ticket=${encodeURIComponent(ticket)}` : base;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +98,8 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  // Warn early if we're in token-only mode; don't even attempt the WebSocket.
+  // Token-only mode routes the WS handshake through a minted attach ticket
+  // (the browser cannot put the bearer on the handshake itself).
   const tokenOnlyMode = React.useMemo(() => isAdminTokenOnlyMode(), []);
 
   // Refit the terminal to its (current) container size and tell the PTY.
@@ -116,7 +120,6 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
   }, []);
 
   React.useEffect(() => {
-    if (tokenOnlyMode) return; // nothing to tear down
     const mount = containerRef.current;
     if (!mount) return;
 
@@ -177,10 +180,34 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
 
     const connect = () => {
       if (disposed) return;
-      const ws = new WebSocket(buildWsUrl(runId));
+      setConnState(reconnectAttempts > 0 ? "reconnecting" : "connecting");
+      if (tokenOnlyMode) {
+        // Mint a fresh single-use ticket per (re)connect — the previous one was
+        // consumed by the last handshake — then open the WS with ?ticket=.
+        api
+          .attachTicket(runId)
+          .then((ticket) => {
+            if (disposed) return;
+            openSocket(buildWsUrl(runId, ticket));
+          })
+          .catch((e: unknown) => {
+            if (disposed) return;
+            setConnState("error");
+            setErrorMsg(
+              `Could not mint an attach ticket: ${e instanceof Error ? e.message : String(e)}`,
+            );
+            onCloseRef.current?.();
+          });
+        return;
+      }
+      openSocket(buildWsUrl(runId));
+    };
+
+    const openSocket = (url: string) => {
+      if (disposed) return;
+      const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
-      setConnState(reconnectAttempts > 0 ? "reconnecting" : "connecting");
 
       ws.onopen = () => {
         if (reconnectAttempts > 0) {
@@ -309,24 +336,6 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
       clearTimeout(t);
     };
   }, [fullscreen, refit]);
-
-  // Token-only mode: can't inject auth into a WebSocket handshake.
-  if (tokenOnlyMode) {
-    return (
-      <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
-        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-        <div>
-          <p className="font-medium">Interactive attach is coming soon in this deployment</p>
-          <p className="mt-1 text-muted-foreground">
-            The browser cannot send an Authorization header over a WebSocket connection, so
-            interactive terminal access needs an OIDC (SSO) session — which is a coming-soon
-            team feature. Run Wardyn in host mode (<code className="rounded bg-background/70 px-1 py-0.5">make setup</code>)
-            for the full local experience, or use the CLI (<code className="rounded bg-background/70 px-1 py-0.5">wardyn attach</code>).
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div

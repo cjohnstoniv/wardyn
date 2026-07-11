@@ -329,6 +329,18 @@ export const api = {
     return asJson<AgentRun>(res);
   },
 
+  // POST /api/v1/runs/{id}/attach-ticket — mint a single-use, short-TTL ticket
+  // the attach WebSocket accepts as ?ticket= (browsers cannot put the admin
+  // bearer on a WS handshake). Minted through this NORMAL authenticated call;
+  // consumed on first WS connect, so each (re)connect mints a fresh one.
+  async attachTicket(runId: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach-ticket`, {
+      method: "POST",
+    });
+    const body = await asJson<{ ticket: string }>(res);
+    return body.ticket;
+  },
+
   // POST /api/v1/runs  { agent, repo, task, policy_id?, confinement_class?,
   //   interactive?, inline_policy? }
   // interactive=true brings the sandbox up idle (no agent task) so a human can

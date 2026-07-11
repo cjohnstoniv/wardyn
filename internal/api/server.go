@@ -324,6 +324,9 @@ type ComponentInfo struct {
 type Server struct {
 	cfg    Config
 	router chi.Router
+	// attachTix holds outstanding single-use WS attach tickets (see
+	// attach_ticket.go). Zero value is ready to use.
+	attachTix attachTickets
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -388,13 +391,11 @@ func (s *Server) routes() chi.Router {
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
 
-			// Interactive attach (WebSocket). Auth is enforced by the
-			// humanOrAdminAuth group middleware BEFORE this handler runs; the
-			// handler upgrades to a WebSocket and relays a live PTY from a
-			// RUNNING sandbox. The interactive shell is bounded by the same L0
-			// egress + confinement envelope as the agent (invariant 3) and the
-			// human principal is recorded for attribution (invariant 4).
-			r.Get("/runs/{id}/attach", s.handleAttachWS)
+			// Single-use WS attach tickets: browsers cannot put the admin
+			// bearer on a WebSocket handshake, so the UI first POSTs here
+			// (through THIS authenticated group) and presents the returned
+			// 30s ticket as ?ticket= on the attach WS below.
+			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
 
 			r.Get("/approvals", s.handleListApprovals)
 			r.Post("/approvals/{id}/approve", s.handleApproveApproval)
@@ -485,6 +486,21 @@ func (s *Server) routes() chi.Router {
 			if s.cfg.RecordingStore != nil {
 				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore))
 			}
+		})
+
+		// Interactive attach (WebSocket). Its own group: browsers cannot put
+		// the admin bearer on a WS handshake, so this route ALSO accepts a
+		// single-use ?ticket= minted via POST /runs/{id}/attach-ticket above
+		// (ticketOrHumanAuth falls through to humanOrAdminAuth when no ticket
+		// is presented — OIDC-cookie and CLI bearer attach are unchanged). The
+		// handler upgrades to a WebSocket and relays a live PTY from a RUNNING
+		// sandbox. The interactive shell is bounded by the same L0 egress +
+		// confinement envelope as the agent (invariant 3) and the principal —
+		// the ticket's MINTER for ticket auth — is recorded for attribution
+		// (invariant 4).
+		r.Group(func(r chi.Router) {
+			r.Use(s.ticketOrHumanAuth)
+			r.Get("/runs/{id}/attach", s.handleAttachWS)
 		})
 
 		// Internal sidecar surface (run-token bearer).
