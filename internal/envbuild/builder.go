@@ -306,8 +306,33 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	}
 
 	// envbuilder has pushed the base image to the registry. Layer Wardyn's runner
-	// tools onto it and return the resolvable local tag (H5).
-	return b.finalizeImage(ctx, b.pushedBaseRef(), outputTag, toolsDir, logSink)
+	// tools onto it and return the resolvable local tag (H5). pullParent=true: the
+	// base was just pushed to the registry, so the finalize build must pull it.
+	return b.finalizeImage(ctx, b.pushedBaseRef(), outputTag, toolsDir, logSink, true)
+}
+
+// FinalizeBase is the Bring-Your-Own-Image path: wrap an arbitrary USER-supplied
+// base image with Wardyn's runner tools (agent-run, wardyn-rec, wardyn-verify,
+// wardyn-git-helper) and a cleared ENTRYPOINT, producing a runnable image the
+// runner can exec/record/verify. Unlike Build, there is NO untrusted-code build
+// container and NO registry push — just the trusted FROM+COPY finalize stage on
+// the host daemon, so it needs neither a cache repo nor the build sandbox. The
+// base is pulled only if absent (ensureImage), so a private image pre-pulled on
+// the host works with no registry-auth wiring. Fails closed if the tools dir is
+// unconfigured/incomplete or the base is unpullable (the wrap build itself is
+// the BYOI contract preflight).
+func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string) (string, error) {
+	toolsDir, err := b.validateToolsDir()
+	if err != nil {
+		return "", err
+	}
+	if err := b.ensureImage(ctx, baseRef); err != nil {
+		return "", fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
+			"(pre-pull a private image on the host with `docker pull`)", baseRef, err)
+	}
+	// pullParent=false: ensureImage already made the base present locally; a
+	// registry pull here would fail for a local-only or digest-pinned user image.
+	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, nil, false)
 }
 
 // hardenedHostConfig builds the Docker HostConfig for the build container with
@@ -642,7 +667,7 @@ func (b *Builder) pushedBaseRef() string {
 // outputTag the runner will use. It runs on the host daemon with TRUSTED content
 // only (a FROM + COPY, no untrusted RUN), so it does not need the untrusted-code
 // build sandbox. Returns the resolvable local tag on success.
-func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer) (string, error) {
+func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullParent bool) (string, error) {
 	if strings.ContainsAny(baseRef, " \t\r\n\x00") {
 		return "", fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
 	}
@@ -655,7 +680,9 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 		Dockerfile:  "Dockerfile",
 		Remove:      true,
 		ForceRemove: true,
-		PullParent:  true, // pull the freshly pushed base from the registry
+		// Devcontainer path pulls the freshly pushed registry base; BYOI passes
+		// false since ensureImage already made the (possibly local-only) base present.
+		PullParent: pullParent,
 	})
 	if err != nil {
 		return "", fmt.Errorf("envbuild: finalize image build (COPY runner tools): %w", err)

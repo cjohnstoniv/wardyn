@@ -105,6 +105,12 @@ type ImageBuilder interface {
 	// profile (plan A5). outputTag is the deterministic profile-hash-keyed tag
 	// the result is committed under.
 	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string) (imageRef string, err error)
+	// FinalizeBase wraps an arbitrary USER-supplied base image (Bring Your Own
+	// Image) with Wardyn's runner tools + a cleared ENTRYPOINT, returning the
+	// runnable local image reference. No untrusted build, no registry push — just
+	// the trusted FROM+COPY finalize stage; the base is pulled only if absent, so
+	// a host-pre-pulled private image works. outputTag is the per-run tag.
+	FinalizeBase(ctx context.Context, baseRef, outputTag string) (imageRef string, err error)
 }
 
 // Config holds the API server's non-secret configuration and injected

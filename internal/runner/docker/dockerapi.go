@@ -35,6 +35,10 @@ type dockerAPI interface {
 
 	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
 	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
+	// ImageInspect resolves a ref (including a digest-pinned repo@sha256:... ref,
+	// which the tag-shaped ImageList reference filter cannot match) to check
+	// local presence without a registry round-trip.
+	ImageInspect(ctx context.Context, imageID string, opts ...dockerclient.ImageInspectOption) (image.InspectResponse, error)
 
 	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
 	NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error

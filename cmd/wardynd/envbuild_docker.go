@@ -36,6 +36,12 @@ func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files
 	return e.b.BuildFromDevcontainerFiles(ctx, files, outputTag)
 }
 
+// FinalizeBase wraps a user-supplied base image (BYOI) with the runner tools +
+// a cleared ENTRYPOINT via the trusted finalize stage.
+func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string) (string, error) {
+	return e.b.FinalizeBase(ctx, baseRef, outputTag)
+}
+
 // newEnvBuilder constructs the devcontainer image builder. Compiled only with
 // `-tags docker`. The builder runs daemonless: envbuilder pushes to the registry
 // (cacheRepo) and Wardyn finalizes the image locally, so a missing cacheRepo
