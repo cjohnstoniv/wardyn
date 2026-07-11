@@ -363,6 +363,38 @@ func TestComposerCeilingCheck(t *testing.T) {
 	}
 }
 
+// claudeSubscriptionStagingCheck: fires only on a resident Claude login; a
+// login whose DefaultPolicy ceiling doesn't bless the /home/agent/.claude mount
+// is "detected but NOT staged" (the headless-`make setup` skip) => WARN naming
+// `make stage-claude`; a blessed ceiling => ok; the macOS-Keychain login (which
+// staging cannot read) gets the SSH-login remedy instead.
+func TestClaudeSubscriptionStagingCheck(t *testing.T) {
+	// No resident login => no row (llm_provider already covers "add one").
+	if _, ok := claudeSubscriptionStagingCheck(false, false, ""); ok {
+		t.Fatalf("no-login case should produce no claude_subscription_staging row")
+	}
+
+	// Logged in, ceiling does not bless the mount => WARN with the stage-claude fix.
+	chk, ok := claudeSubscriptionStagingCheck(true, false, "~/.claude/.credentials.json")
+	if !ok || chk.Status != "warn" || chk.ID != "claude_subscription_staging" {
+		t.Fatalf("logged-in-not-staged: ok=%v status=%q id=%q, want warn row", ok, chk.Status, chk.ID)
+	}
+	if !strings.Contains(chk.Fix, "make stage-claude") {
+		t.Errorf("warn Fix should name `make stage-claude`; got %q", chk.Fix)
+	}
+
+	// Keychain login: staging can't read it — the Fix must carry the SSH remedy.
+	chk, ok = claudeSubscriptionStagingCheck(true, false, "macOS Keychain (Claude Code-credentials)")
+	if !ok || chk.Status != "warn" || !strings.Contains(chk.Fix, "SSH") || !strings.Contains(chk.Fix, "make stage-claude") {
+		t.Fatalf("keychain login: ok=%v status=%q fix=%q, want warn with SSH + stage-claude remedy", ok, chk.Status, chk.Fix)
+	}
+
+	// Blessed ceiling (staging ran, run-host.sh picked the subscription ceiling) => ok.
+	if chk, ok := claudeSubscriptionStagingCheck(true, true, ""); !ok || chk.Status != "ok" {
+		t.Fatalf("staged: ok=%v status=%q, want ok", ok, chk.Status)
+	}
+}
+
 // agentImageCheck: the shipped ghcr/compose-demo convention images are known
 // Node-only by construction => warn naming WARDYN_AGENT_IMAGES; any operator
 // override is assumed provisioned on purpose => info, not a red.

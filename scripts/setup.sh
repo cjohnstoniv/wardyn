@@ -190,19 +190,23 @@ if $HAVE_CLAUDE && $CLAUDE_LOGGED_IN && $CLAUDE_CRED_FILE; then
   stage_do=false
   if [ "${WARDYN_STAGE_CLAUDE:-}" = 1 ]; then stage_do=true
   elif [ -t 0 ]; then ask_yn "Stage your Claude login now?" y && stage_do=true
-  else info "non-interactive: skipping Claude staging (set WARDYN_STAGE_CLAUDE=1 to stage headlessly)."; fi
+  else info "non-interactive: skipping Claude staging (run 'make stage-claude' later, or set WARDYN_STAGE_CLAUDE=1)."; fi
   if $stage_do; then
     # Output is NOT suppressed: the stage script's sanitization lines are the honest
     # record of what it did to your credential — the user should see them.
     if ./scripts/stage-claude-creds.sh; then
       ok "Claude subscription staged. (The model-access badge is green from your host login regardless; staging is what enables the per-run subscription MOUNT.)"
+      # Staging just generated/refreshed the subscription ceiling that run-host.sh
+      # picks as WARDYN_DEFAULT_POLICY — an already-running wardynd won't load it
+      # until restarted, same as the Bedrock boot-time config.
+      MODEL_CONFIG_APPLIED=true
     else
       warn "Could not stage creds (continuing; you can add an API key in the UI)."
     fi
   else
     info "Skipped Claude staging. The model-access badge stays green from your host login, but the"
-    info "per-run \"Use my Claude subscription\" mount won't work until you stage — re-run 'make setup'"
-    info "or 'scripts/stage-claude-creds.sh' later (there is no UI action for this)."
+    info "per-run \"Use my Claude subscription\" mount won't work until you stage — run 'make stage-claude'"
+    info "later (it stages and restarts wardynd; there is no UI action for this)."
   fi
 elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
   # Auto-detect the host's Bedrock setup and offer to configure Wardyn end to end —

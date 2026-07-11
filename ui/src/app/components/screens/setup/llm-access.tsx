@@ -164,6 +164,11 @@ export function ModelStep({
   // story — reuse it verbatim so the check row and this row can never disagree on
   // an expired subscription (binding review note: no ready-vs-EXPIRED contradiction).
   const llmProviderDetail = status.checks.find((c) => c.id === "llm_provider")?.detail;
+  // claude_subscription_staging: a resident login that is NOT staged for the
+  // per-run subscription mount (the headless-`make setup` skip). Rendered
+  // verbatim under the subscription row — same never-disagree discipline as the
+  // Bedrock and llm_provider rows above.
+  const stagingCheck = status.checks.find((c) => c.id === "claude_subscription_staging");
 
   const keyRow = (name: string, label: string, detail: string, configured: boolean) => (
     <AccessRow
@@ -278,6 +283,11 @@ export function ModelStep({
         // sentence ("w/ Claude subscription", valid vs EXPIRED) so the two rows stay
         // consistent. Non-subscription logins fall back to the generic copy above.
         claude?.auth_mode === "subscription" ? llmProviderDetail : undefined,
+      )}
+      {stagingCheck?.status === "warn" && (
+        <p className="pl-1 text-xs leading-relaxed text-warning">
+          {stagingCheck.detail} {stagingCheck.fix}
+        </p>
       )}
     </React.Fragment>
   );

@@ -398,6 +398,40 @@ func composerCeilingCheck(ceiling types.RunPolicySpec, hasAnthropicKey, hasOpenA
 	}, true
 }
 
+// claudeSubscriptionStagingCheck is the "will the per-run subscription mount
+// actually work" readiness row. It fires ONLY when a resident Claude login is
+// detected (no login => the llm_provider check already says "add one"). The gap
+// it catches: the model-access badge reads green from the HOST login, but the
+// per-run "Use my Claude subscription" mount only works after staging generates
+// the subscription ceiling (~/.wardyn/composer-dev-subscription.json) and
+// wardynd restarts onto it — a headless `make setup` (no TTY, no
+// WARDYN_STAGE_CLAUDE=1) skips staging silently. blessed mirrors run-host.sh's
+// policy pick: WARDYN_DEFAULT_POLICY blesses the /home/agent/.claude mount only
+// when staging produced the ceiling, so logged-in && !blessed == "not staged".
+// Pure (host I/O done by the caller) so it is unit-testable.
+func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string) (SetupCheck, bool) {
+	if !hasClaudeSub {
+		return SetupCheck{}, false
+	}
+	if blessed {
+		return SetupCheck{
+			ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "ok",
+			Detail: "Your Claude login is staged for sandbox use — the per-run \"Use my Claude subscription\" mount is available.",
+		}, true
+	}
+	fix := "Run `make stage-claude` on the host — it stages the login and restarts wardynd onto the subscription ceiling."
+	if strings.Contains(loginVia, "Keychain") {
+		fix = "Your Claude login lives in the macOS Keychain, which staging cannot read. Run `claude login` once over SSH " +
+			"(it writes ~/.claude/.credentials.json), then `make stage-claude`."
+	}
+	return SetupCheck{
+		ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "warn",
+		Detail: "A resident Claude login was detected — the model-access badge is green — but it is NOT staged for " +
+			"sandbox use, so ticking \"Use my Claude subscription\" on a run won't work.",
+		Fix: fix,
+	}, true
+}
+
 // agentImageCheck reports the resolved claude-code agent image so an operator
 // sees, before a run ever fails, whether it is the Node-only convention image
 // or a provisioned override — the readiness surface for the campaign's
@@ -660,13 +694,22 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// run 404s" trap where WARDYN_DEFAULT_POLICY (e.g. demo.json/default.json) carries
 	// no api_key grant. A resident Claude CLI login signals the subscription path.
 	hasClaudeSub := false
+	claudeLoginVia := ""
 	for _, p := range providers {
 		if p.Tool == "claude" && p.LoggedIn {
 			hasClaudeSub = true
+			claudeLoginVia = p.LoginDetectedVia
 			break
 		}
 	}
 	if chk, ok := composerCeilingCheck(s.cfg.DefaultPolicy, present["anthropic-api-key"], present["openai-api-key"], hasClaudeSub); ok {
+		checks = append(checks, chk)
+	}
+
+	// claude_subscription_staging: the login is detected, but is it STAGED for the
+	// per-run subscription mount? Catches the headless-`make setup` skip where the
+	// badge is green yet the per-run checkbox silently does nothing.
+	if chk, ok := claudeSubscriptionStagingCheck(hasClaudeSub, ceilingBlessesClaudeCreds(s.cfg.DefaultPolicy), claudeLoginVia); ok {
 		checks = append(checks, chk)
 	}
 
