@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui setup stage-claude stop-host reset doctor dev-pg
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui setup stage-claude stop-host reset reset-all doctor dev-pg
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -14,6 +14,8 @@ help:
 	@echo "  stage-claude          - Stage your Claude login for per-run subscription mounts (restarts wardynd)"
 	@echo "  stop-host             - Stop the host-mode wardynd started by make setup (pidfile under ~/.wardyn)"
 	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
+	@echo "  reset-all             - FULL undo of local setup: host daemon + compose + ~/.wardyn install files"
+	@echo "                          (ARGS='--dry-run' to audit; '--purge-images'/'--purge-env' to go further)"
 	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
 	@echo "  dev-pg                - Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)"
 	@echo "  build                 - Build Go binaries (default tags)"
@@ -208,6 +210,14 @@ stop-host:
 reset:
 	@echo "Resetting local Wardyn (wipes volumes: runs + audit + recordings, then re-up)..."
 	./scripts/up.sh reset
+
+# FULL undo across BOTH modes: stops the host daemon, removes the compose stack
+# + volumes, the stray wardyn-internal network, wardyn-test-pg, and the
+# ~/.wardyn install files (allowlist — staged Claude creds included; the rest of
+# ~/.wardyn is preserved). Keeps the age key (.env) and built images unless
+# ARGS='--purge-env' / '--purge-images'. Leaves the box clean — no re-up.
+reset-all:
+	./scripts/up.sh reset-all $(ARGS)
 
 doctor:
 	./scripts/up.sh doctor
