@@ -72,6 +72,17 @@ describe("SetupLayout", () => {
     expect(screen.getByText(/you're ready — launch your first run now/i)).toBeInTheDocument();
     expect(screen.getByText(/a barrier is up and claude connected/i)).toBeInTheDocument();
   });
+
+  it("'Keep setting up' dismisses the banner without jumping back to Environment", async () => {
+    const onSelect = vi.fn();
+    const onKeepSettingUp = vi.fn();
+    renderLayout({ current: "workspaces", fastPath: true, onSelect, onKeepSettingUp });
+    await user.click(screen.getByRole("button", { name: /keep setting up/i }));
+    expect(onKeepSettingUp).toHaveBeenCalled();
+    // The operator stays where they were configuring — no forced step change.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: /onboard a workspace/i })).toBeInTheDocument();
+  });
 });
 
 describe("Optional chip — set-exact across all nine steps", () => {
