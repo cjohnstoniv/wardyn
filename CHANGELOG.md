@@ -9,9 +9,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
 The v0.2 milestone is the **Docker-only honest pilot**: every control the docs
 claim is actually enforced in code (or honestly marked unbuilt), the operator
 surface is complete enough to run a real pilot, and the deployment is verifiable.
-Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and L2 TLS-intercept remain v0.5.
+Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and arbitrary-domain L2
+TLS-intercept remain v0.5 (targeted TLS-MITM of LLM/registry hosts already
+ships — see the threat model's §5.1a claims contract).
 
 ### Added
+- **Bring Your Own Image (BYOI).** A run may name an arbitrary base image;
+  the control plane wraps it with the runner tools (`internal/envbuild`
+  FinalizeBase, digest-pinned base; opt-in via `WARDYN_ENVBUILD`) and gates
+  launch on an in-sandbox `agent-run --selftest`, fail-closed, with faithful
+  recorded exit codes. The New Run wizard gains a custom-image field; live
+  proof harness: `scripts/run-e2e-byoi.sh` (`make test-e2e-byoi`). Operator
+  docs in `deploy/images/README.md`.
+- **Wardyn-managed Claude subscription via container login.** A containerized
+  control plane (no host `~/.claude` to stage) can connect a Claude
+  subscription from the Getting Started page: an interactive login sandbox
+  plus a pasted `claude setup-token` credential, stored age-encrypted under a
+  reserved secret name and injected proxy-side like the resident-login path.
+  The managed credential is strictly a **fallback** — an explicit
+  anthropic-api-key injection always wins, so composing with "Use my Claude
+  subscription" unchecked keeps the api-key path.
+- **Single-use WebSocket attach tickets.** Browser terminal attach now works
+  in token mode: `POST /api/v1/runs/{id}/attach-ticket` mints a single-use,
+  short-TTL ticket for the WS handshake (browsers cannot put a bearer token
+  on a WebSocket upgrade).
+- **Run image provenance + portable MITM CA trust.** Every run persists the
+  RESOLVED sandbox image it actually ran (shown on run detail), and the
+  per-run TLS-MITM CA moved to an any-uid-writable path with a combined
+  system-roots+CA bundle wired via `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/
+  `CURL_CA_BUNDLE`, so curl/Python/Ruby in wrapped and BYOI images trust the
+  proxy's TLS termination (JVM keystores and `DENO_CERT` remain documented
+  gaps).
 - **`make setup` — a consent-first, host-mode installer.** The interactive
   `scripts/setup.sh` detects the host (Docker daemons, WSL, barrier capability,
   an existing `claude` login) and sets up **host mode**: it stages the operator's
@@ -23,13 +51,18 @@ Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and L2 TLS-intercept remain v0.5
   gated behind a plan-then-prompt; a headless run writes nothing and destroys no
   volume without an explicit opt-in flag. Barrier installs (gVisor/Kata) are never
   run with silent sudo — the exact commands are printed instead.
-- **Team (compose) deployment is marked coming-soon.** `make setup` no longer
-  offers a host-vs-team choice (host only); `WARDYN_SETUP_MODE=team` prints a
-  notice and exits, the `make setup-host` / `make setup-team` shortcuts are
-  removed, and the UI's "Sign in with SSO" button is disabled. The compose stack
-  itself still runs for its other uses (`make compose-up`, `make demo`,
-  `make reset`, and the WSL2 workspace-Verify/Record fix); the OIDC/SSO backend
-  remains present and CI-tested.
+- **Team (compose multi-user) deployment is marked coming-soon.**
+  `WARDYN_SETUP_MODE=team` prints a notice and exits, the `make setup-host` /
+  `make setup-team` shortcuts are removed, and the UI's "Sign in with SSO"
+  button is disabled. The compose stack itself still runs for its other uses
+  (`make compose-up`, `make demo`, `make reset`, and as the containerized
+  single-user mode below); the OIDC/SSO backend remains present and CI-tested.
+- **One front door: `make setup` asks host vs containerized.** With a TTY and
+  no explicit `WARDYN_SETUP_MODE`, setup asks where the control plane should
+  run — **host** (default; wardynd runs as you, your Claude login usable
+  directly) or **containerized** (delegates to `scripts/up.sh up`: the compose
+  stack, single-user, the Docker Desktop + WSL2 NAT workspace-Verify/Record
+  fix). Headless stays promptless and defaults to host.
 - **Named recording sessions + confined Verify sessions.** Record is now a
   user-named interactive session with model access (the fixed build/test task
   taxonomy is gone). Verify launches a fresh confined session for an existing
