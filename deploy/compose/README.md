@@ -15,9 +15,10 @@ launches) but not run as a long-lived service.
 ## Quick start
 
 > **Note:** this stack is the SUPPORTED single-user **containerized** setup —
-> `make setup-containerized` (or `WARDYN_SETUP_MODE=container make setup`) runs
-> `./scripts/up.sh up` for you; `make compose-up` is the raw-compose variant.
-> `make setup` (no mode) runs **host mode** (wardynd as a host process) instead.
+> `make setup` offers it as choice 2 (or force it with
+> `WARDYN_SETUP_MODE=container make setup`), which runs `./scripts/up.sh up`
+> for you; `make compose-up` is the raw-compose variant. Choice 1 / the
+> headless default is **host mode** (wardynd as a host process) instead.
 > A first-class **team** setup — this control plane as a shared *multi-user*
 > service (SSO logins, per-user identity/RBAC) — is **coming soon**.
 

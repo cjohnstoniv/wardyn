@@ -301,9 +301,10 @@ you:
   the per-run "Use my Claude subscription" mount works — the Getting Started
   page's *Claude subscription staging* check tells you when this applies.
 
-> **The other supported single-user setup: containerized.**
-> `make setup-containerized` (or `WARDYN_SETUP_MODE=container make setup`)
-> brings up the compose stack instead: `wardynd` runs in a container on
+> **The other supported single-user setup: containerized.** `make setup` asks
+> which you want (Enter = host; headless defaults to host, or pick explicitly
+> with `WARDYN_SETUP_MODE=local|container`). Choosing **containerized** brings
+> up the compose stack instead: `wardynd` runs in a container on
 > `wardyn-internal`, so sandbox→control-plane callbacks route in-network —
 > this is the fix for workspace **Verify/Record** on Docker Desktop + WSL2
 > NAT. The container can't see your host Claude login, so add an API key (or
