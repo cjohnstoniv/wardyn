@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup stop-host reset doctor dev-pg
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup stage-claude stop-host reset doctor dev-pg
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -9,6 +9,7 @@ help:
 	@echo "  setup                 - One-command Wardyn (HOST mode): prompts for each credential, builds, up, opens browser"
 	@echo "                          (team/compose mode is coming soon; non-interactive opt-ins:"
 	@echo "                           WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1, WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
+	@echo "  stage-claude          - Stage your Claude login for per-run subscription mounts (restarts wardynd)"
 	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
 	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
 	@echo "  dev-pg                - Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)"
@@ -168,6 +169,13 @@ test-e2e-ui:
 setup:
 	@echo "Wardyn setup (host mode) — detects your host, prompts for each credential, launches + opens the UI..."
 	./scripts/setup.sh
+
+# Stage the resident Claude login for per-run subscription mounts, even headless.
+# Re-runs setup with staging forced; a running wardynd is restarted so it loads
+# the just-generated subscription ceiling. Idempotent — safe to re-run anytime
+# (e.g. after a headless `make setup` skipped the staging prompt).
+stage-claude:
+	WARDYN_STAGE_CLAUDE=1 ./scripts/setup.sh
 
 # Stop the background host-mode wardynd started by `make setup`.
 # (Team/compose mode is stopped with `make compose-down`.)

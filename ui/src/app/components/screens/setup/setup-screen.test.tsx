@@ -461,6 +461,58 @@ describe("SetupScreen", () => {
     expect(screen.getByText(/us-east-1 · us\.anthropic\.claude-sonnet-4-5-20250929-v1:0/)).toBeInTheDocument();
   });
 
+  it("provider step surfaces the claude_subscription_staging warn verbatim under the subscription row", async () => {
+    // The headless-`make setup` skip: login detected (badge green) but NOT staged,
+    // so the per-run subscription mount silently does nothing. The check row is
+    // the backend's honest signal; the provider step must render it verbatim.
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        providers: [
+          { tool: "claude", installed: true, logged_in: true, login_detected_via: "~/.claude/.credentials.json" },
+        ],
+        checks: [
+          {
+            id: "claude_subscription_staging",
+            label: "Claude subscription staging",
+            status: "warn",
+            detail: "A resident Claude login was detected — the model-access badge is green — but it is NOT staged for sandbox use.",
+            fix: "Run `make stage-claude` on the host.",
+          },
+        ],
+      }),
+    );
+    render(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // → provider
+
+    expect(await screen.findByText(/NOT staged for sandbox use/)).toBeInTheDocument();
+    expect(screen.getByText(/make stage-claude/)).toBeInTheDocument();
+  });
+
+  it("provider step renders no staging note when the staging check is ok or absent", async () => {
+    // Staged (ok) => the row is quiet; absent (no login) => nothing. Never a
+    // green banner for staging — ok is simply the absence of the warn.
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        providers: [{ tool: "claude", installed: true, logged_in: true }],
+        checks: [
+          {
+            id: "claude_subscription_staging",
+            label: "Claude subscription staging",
+            status: "ok",
+            detail: "Your Claude login is staged for sandbox use.",
+          },
+        ],
+      }),
+    );
+    render(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // → provider
+
+    expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument();
+    expect(screen.queryByText(/staged for sandbox use/)).not.toBeInTheDocument();
+  });
+
   // E2 — setup-check provenance ------------------------------------------------
 
   it("environment step names the concrete substrate each ready tier runs as (E2)", async () => {
