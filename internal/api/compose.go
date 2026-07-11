@@ -440,7 +440,13 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// governed default: key never resident, proxy-injected, 1h TTL).
 	subscribed := req.UseSubscription && prop.Run.Agent == "claude-code" &&
 		ceilingBlessesClaudeCreds(s.cfg.DefaultPolicy)
-	ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed)
+	// Managed subscription: opted in, Claude, no ceiling-blessed mount, but a
+	// Wardyn-managed setup-token IS connected — the compose-mode path (no host
+	// ~/.claude to stage). Treated like subscription for grant purposes (egress
+	// only, no api-key grant); dispatch injects it proxy-side.
+	managedSub := req.UseSubscription && prop.Run.Agent == "claude-code" &&
+		!subscribed && s.managedInjectReady(prop.Run.Agent)
+	ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "clamp"})
 	// Raise the operator ceiling's confinement floor to include the per-run compose
 	// floor (the operator's Getting Started default tier), capped at the strongest
@@ -476,18 +482,25 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// (after the clamp may have stripped the grant or its egress entry): one
 	// warning, always true to what dispatch will do. May also drop an orphaned
 	// grant to keep the run from hard-failing at startup.
-	injectedCreds, credWarns := applyLLMCredMount(&clamped, s.cfg.DefaultPolicy, prop.Run.Agent, req.UseSubscription)
-	clampWarns = append(clampWarns, credWarns...)
+	// Managed subscription needs no mount (the token is injected proxy-side from
+	// the store), so skip applyLLMCredMount entirely — otherwise it would emit the
+	// misleading "stage credentials" warning for a run that IS credentialed.
+	var injectedCreds bool
+	var credWarns []string
+	if !managedSub {
+		injectedCreds, credWarns = applyLLMCredMount(&clamped, s.cfg.DefaultPolicy, prop.Run.Agent, req.UseSubscription)
+		clampWarns = append(clampWarns, credWarns...)
+	}
 	// The use_subscription <-> credential-mount PAIR's reconciled verdict, threaded
 	// into the setup checklist (setupSubscriptionMountItem) verbatim — reused, never
 	// recomputed, so that row can never disagree with the Warnings bullets above.
-	subState := composeSubscriptionState{Requested: req.UseSubscription, Injected: injectedCreds, Warnings: credWarns}
+	subState := composeSubscriptionState{Requested: req.UseSubscription, Injected: injectedCreds, Managed: managedSub, Warnings: credWarns}
 	// Structured model-access verdict (not folded into Warnings): a no-access result
 	// is a "this run will do nothing" blocker the review must gate on, not one bullet
 	// among benign clamp notices. reconcileLLMAccess still mutates the spec (drops
 	// orphaned grants) as a side effect.
 	var llmAccess *composeLLMAccess
-	if note, provisioned := reconcileLLMAccess(&clamped, prop.Run.Agent, presentSecrets, s.subscriptionInjectEnabled()); note != "" {
+	if note, provisioned := reconcileLLMAccess(&clamped, prop.Run.Agent, presentSecrets, s.subscriptionInjectEnabled(), managedSub); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
 	}
 	wsWarns, code, werr := applyWorkspaces(&run, &clamped, req.Workspaces)
@@ -1037,10 +1050,21 @@ func (s *Server) subscriptionInjectEnabled() bool {
 // when the run will reach its model, false when it will launch but 404 on the first
 // model call. The caller surfaces false as a blocking acknowledgement, not a benign
 // clamp notice, so the two can never be conflated by prose-sniffing.
-func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscriptionInject bool) (string, bool) {
+func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscriptionInject, managed bool) (string, bool) {
 	p, ok := agentLLMProvider(agent)
 	if !ok {
 		return "", true
+	}
+	// Managed subscription (compose, no host ~/.claude): the token is injected
+	// proxy-side from the store; dispatch adds api.anthropic.com egress
+	// unconditionally, so this run WILL reach the model. Drop any api-key grant
+	// that rode along (the human chose subscription).
+	if agent == "claude-code" && managed {
+		removeAPIKeyGrantForHost(spec, p.host)
+		return fmt.Sprintf(
+			"model access provisioned for agent %q: your Wardyn-managed Claude subscription (setup-token) is injected "+
+				"PROXY-SIDE — Wardyn enables TLS-MITM of api.anthropic.com and swaps in the managed token. The sandbox holds "+
+				"only an inert sentinel (no host credential is mounted or resident).", agent), true
 	}
 	if agent == "claude-code" && specHasMountTarget(spec, claudeCredTarget) && anthropicReachable(spec) {
 		// Subscription is this run's chosen transport: drop any provider api_key

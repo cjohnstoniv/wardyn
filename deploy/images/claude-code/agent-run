@@ -363,6 +363,7 @@ if [[ "${1:-}" == "--idle" ]]; then
     : "${HOME:=/home/agent}"; export HOME  # robust ~ even if launched with HOME unset
     install_mitm_ca
     prepare_claude_config_dir  # writable CLAUDE_CONFIG_DIR (RO subscription mount)
+    materialize_managed_claude_config  # sentinel creds for managed subscription (compose)
     install_artifact_config
     provision_git_helper_secret
     provision_ssh_grants
@@ -398,6 +399,10 @@ install_mitm_ca
 # Give claude-code a WRITABLE config dir when the subscription creds are mounted
 # read-only (dispatch sets CLAUDE_CONFIG_DIR); no-op otherwise.
 prepare_claude_config_dir
+
+# Managed subscription (compose, no host ~/.claude): write the inert sentinel
+# credentials so `claude` starts logged-in; the live token is injected proxy-side.
+materialize_managed_claude_config
 
 # Materialize any operator-configured artifact-registry redirect config (no-op
 # unless WARDYN_ARTIFACT_CONFIG_B64 is set) before the clone/install/verify below.

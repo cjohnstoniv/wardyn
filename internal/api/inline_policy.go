@@ -119,22 +119,23 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 				return http.StatusUnprocessableEntity, fmt.Errorf(
 					"api_key grant references reserved secret name %q", rule.SecretName)
 			}
-			// The subscription OAuth sentinel is NOT a stored secret — it resolves
-			// live from the operator's ~/.claude at inject time. Don't require it in
-			// the secret store (that's the "references unknown secret" bug for a
-			// subscription-recorded profile); just require the provider to be wired.
-			if rule.SecretName == subscriptionOAuthSecret {
-				if s.cfg.SubscriptionToken == nil {
-					return http.StatusUnprocessableEntity, errors.New(
-						"policy uses subscription LLM auth, but no subscription token provider is configured")
+			// The subscription/managed OAuth sentinels are NOT stored secrets — they
+			// resolve live at inject time (resident ~/.claude, or the Wardyn-managed
+			// captured setup-token). Don't require them in the secret store (that's the
+			// "references unknown secret" bug for a subscription/managed-recorded
+			// profile); just require the matching provider to be wired.
+			if provider, source, isSentinel := s.oauthProviderForSentinel(rule.SecretName); isSentinel {
+				if provider == nil {
+					return http.StatusUnprocessableEntity, fmt.Errorf(
+						"policy uses %s LLM auth, but no %s token provider is configured", source, source)
 				}
-				// Host pin (H2, write-time defense): the sentinel resolves to the
-				// operator's LIVE OAuth token and may only ever target Anthropic. Reject
-				// an authored grant that points it elsewhere (the inject sink also
-				// enforces this, fail-closed).
+				// Host pin (H2, write-time defense): the sentinel resolves to a LIVE
+				// OAuth token and may only ever target Anthropic. Reject an authored
+				// grant that points it elsewhere (the inject sink also enforces this,
+				// fail-closed).
 				if !hostEqual(rule.Host, subscriptionInjectionHost) {
 					return http.StatusUnprocessableEntity, fmt.Errorf(
-						"subscription LLM auth may only target %s, not %q", subscriptionInjectionHost, rule.Host)
+						"%s LLM auth may only target %s, not %q", source, subscriptionInjectionHost, rule.Host)
 				}
 				continue
 			}

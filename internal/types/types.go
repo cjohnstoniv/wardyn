@@ -577,6 +577,19 @@ const (
 // is never synthesized). Shared here so api + recordmode + UI agree on the name.
 const SubscriptionOAuthSecret = "anthropic-subscription-oauth"
 
+// ManagedOAuthSecret is a SENTINEL secret name (NOT a stored secret) that works
+// exactly like SubscriptionOAuthSecret at the injection sink (host-pinned to
+// api.anthropic.com, forced Authorization: Bearer, value masked), but resolves
+// to the Wardyn-MANAGED subscription token: a long-lived `claude setup-token`
+// OAuth token the operator captured via the container-login flow and Wardyn
+// persisted (see internal/api/harnesscred.go). This is what lets a COMPOSE/
+// containerized deployment — whose distroless wardynd has no host ~/.claude to
+// read — credential a subscription run proxy-side without ever making the token
+// resident in the sandbox. Distinct from SubscriptionOAuthSecret only in its
+// SOURCE (managed store vs resident host ~/.claude), so the audit trail names
+// which one credentialed a run.
+const ManagedOAuthSecret = "anthropic-managed-oauth"
+
 // GrantSpec is a credential scope description. The broker enforces the
 // invariant: a minted credential's scope is exactly the approved scope —
 // never wider (no scope-widening between request and mint).

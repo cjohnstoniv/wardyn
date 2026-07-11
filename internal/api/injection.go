@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -29,11 +30,29 @@ func hostEqual(a, b string) bool {
 // UI agree on the name.
 const subscriptionOAuthSecret = types.SubscriptionOAuthSecret
 
-// subscriptionInjectionHost is the ONLY host the subscription OAuth sentinel may
-// target. The sentinel resolves to the operator's LIVE Anthropic OAuth access
-// token, which has exactly one correct destination; injecting it anywhere else
-// would exfiltrate a long-lived operator credential (H2).
+// subscriptionInjectionHost is the ONLY host the subscription/managed OAuth
+// sentinels may target. They resolve to a LIVE Anthropic OAuth access token,
+// which has exactly one correct destination; injecting it anywhere else would
+// exfiltrate a long-lived operator credential (H2).
 const subscriptionInjectionHost = "api.anthropic.com"
+
+// oauthProviderForSentinel maps a grant's secret name to the OAuth token
+// provider that resolves it, if it is one of the two Anthropic OAuth sentinels.
+// Both resolve through the same subscription.Provider interface and the same
+// injection sink (host-pinned, forced Bearer, masked) — they differ only in
+// SOURCE (resident host token vs Wardyn-managed captured token), which the
+// returned source label records in the audit. isSentinel=false for any ordinary
+// stored-secret grant (handled by the generic path below).
+func (s *Server) oauthProviderForSentinel(secretName string) (provider subscription.Provider, source string, isSentinel bool) {
+	switch secretName {
+	case subscriptionOAuthSecret:
+		return s.cfg.SubscriptionToken, "subscription", true
+	case types.ManagedOAuthSecret:
+		return s.cfg.ManagedToken, "managed", true
+	default:
+		return nil, "", false
+	}
+}
 
 // injectionResponse carries the FORMATTED secret value the proxy injects.
 // ExpiresAt (unix ms, 0 = never) lets the proxy re-resolve a rotating credential
@@ -85,46 +104,47 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// SUBSCRIPTION path: the sentinel secret name resolves to the operator's LIVE
-	// OAuth access token (host-refreshed) rather than a stored secret. The token
-	// lives only in proxy memory (masked from streams); the sandbox holds an inert
-	// sentinel. ExpiresAt is returned so the proxy re-resolves before it lapses.
-	if minted.Injection.SecretName == subscriptionOAuthSecret {
+	// SUBSCRIPTION / MANAGED path: the sentinel secret name resolves to a LIVE
+	// Anthropic OAuth access token (the resident host token, or the Wardyn-managed
+	// captured setup-token) rather than a stored secret. The token lives only in
+	// proxy memory (masked from streams); the sandbox holds an inert sentinel.
+	if provider, source, isSentinel := s.oauthProviderForSentinel(minted.Injection.SecretName); isSentinel {
+		sentinel := minted.Injection.SecretName
 		// HOST PIN (H2): fail closed unless the grant targets Anthropic. An
 		// authored/inline/recorded grant could set this sentinel's host to any
 		// egress-allowlisted host; because we force Authorization: Bearer <token>
-		// below with the operator's LIVE OAuth token, a non-Anthropic host would
-		// exfiltrate that token (in cleartext on a plain-HTTP allowlist entry). This
-		// is the single sink chokepoint that protects every caller; the policy
-		// validator rejects a mis-authored host earlier as defense-in-depth.
+		// below with a LIVE OAuth token, a non-Anthropic host would exfiltrate that
+		// token (in cleartext on a plain-HTTP allowlist entry). This is the single
+		// sink chokepoint that protects every caller; the policy validator rejects a
+		// mis-authored host earlier as defense-in-depth.
 		if !hostEqual(minted.Injection.Host, subscriptionInjectionHost) {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", subscriptionOAuthSecret, "failure",
-				mustJSON(map[string]any{"reason": "subscription-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID})))
+				"secret.read", sentinel, "failure",
+				mustJSON(map[string]any{"reason": "oauth-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
 			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+subscriptionInjectionHost)
 			return
 		}
-		if s.cfg.SubscriptionToken == nil {
+		if provider == nil {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", subscriptionOAuthSecret, "failure",
-				mustJSON(map[string]any{"reason": "no-subscription-provider", "grant_id": grantID})))
-			writeError(w, http.StatusFailedDependency, "subscription token provider is not configured")
+				"secret.read", sentinel, "failure",
+				mustJSON(map[string]any{"reason": "no-oauth-provider", "grant_id": grantID, "source": source})))
+			writeError(w, http.StatusFailedDependency, source+" token provider is not configured")
 			return
 		}
-		tok, terr := s.cfg.SubscriptionToken.Current(r.Context())
+		tok, terr := provider.Current(r.Context())
 		if terr != nil {
-			// Fail closed: never inject an expired/absent subscription token.
+			// Fail closed: never inject an expired/absent token.
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", subscriptionOAuthSecret, "failure",
-				mustJSON(map[string]any{"reason": "resolve-failed", "grant_id": grantID})))
-			writeError(w, http.StatusFailedDependency, "resolve subscription token: "+terr.Error())
+				"secret.read", sentinel, "failure",
+				mustJSON(map[string]any{"reason": "resolve-failed", "grant_id": grantID, "source": source})))
+			writeError(w, http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error())
 			return
 		}
-		// The subscription OAuth token has exactly ONE correct wire shape:
-		// Authorization: Bearer <token>. Force it here regardless of the grant's
-		// authored header/format — a recorded profile can carry a crossed-wire
-		// sentinel grant (x-api-key/%s) that would otherwise inject the token in the
-		// wrong header. Host stays the grant's (api.anthropic.com).
+		// The OAuth token has exactly ONE correct wire shape: Authorization: Bearer
+		// <token>. Force it here regardless of the grant's authored header/format — a
+		// recorded profile can carry a crossed-wire sentinel grant (x-api-key/%s)
+		// that would otherwise inject the token in the wrong header. Host stays the
+		// grant's (api.anthropic.com).
 		const subHeader, subFormat = "Authorization", "Bearer %s"
 		formatted := formatInjectionValue(subFormat, []byte(tok.Value))
 		if s.cfg.MaskRegistry != nil {
@@ -134,15 +154,21 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", subscriptionOAuthSecret, "success",
-			mustJSON(map[string]any{"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI})))
-		writeJSON(w, http.StatusOK, injectionResponse{
-			Host:      minted.Injection.Host,
-			Header:    subHeader,
-			Value:     formatted,
-			JTI:       minted.JTI,
-			ExpiresAt: tok.ExpiresAt.UnixMilli(),
-		})
+			"secret.read", sentinel, "success",
+			mustJSON(map[string]any{"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI, "source": source})))
+		resp := injectionResponse{
+			Host:   minted.Injection.Host,
+			Header: subHeader,
+			Value:  formatted,
+			JTI:    minted.JTI,
+		}
+		// Only advertise an expiry when the provider has a machine-readable one
+		// (resident subscription token). The managed setup-token has none (zero
+		// time), so the proxy treats it as static — no re-resolve churn.
+		if !tok.ExpiresAt.IsZero() {
+			resp.ExpiresAt = tok.ExpiresAt.UnixMilli()
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
