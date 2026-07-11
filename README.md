@@ -293,13 +293,19 @@ you:
   (gVisor/Kata installs need sudo — the script **never runs sudo itself**).
   Stop it with `make stop-host`.
 
-> **Team mode is coming soon.** A sealed compose control plane where `wardynd`
-> runs containerized as a shared, multi-user service is a planned future
-> feature — it is **not selectable yet** (`WARDYN_SETUP_MODE=team make setup`
-> prints a notice and exits). The compose *stack* itself still exists for other
-> uses: `make compose-up` (containerized `wardynd` — e.g. to make workspace
-> **Verify/Record** work on Docker Desktop + WSL2 NAT), `make demo`, and
-> `make reset`. Tear those down with `make compose-down` (keeps your local data).
+> **The other supported single-user setup: containerized.**
+> `make setup-containerized` (or `WARDYN_SETUP_MODE=container make setup`)
+> brings up the compose stack instead: `wardynd` runs in a container on
+> `wardyn-internal`, so sandbox→control-plane callbacks route in-network —
+> this is the fix for workspace **Verify/Record** on Docker Desktop + WSL2
+> NAT. The container can't see your host Claude login, so add an API key (or
+> Bedrock) in the UI for model access. `make demo` and `make reset` use the
+> same stack; tear it down with `make compose-down` (keeps your local data).
+>
+> **Team mode is coming soon.** That same compose control plane as a shared,
+> **multi-user** service — SSO logins, per-user identity/RBAC — is a planned
+> future feature and is **not selectable yet** (`WARDYN_SETUP_MODE=team make
+> setup` prints a notice and exits).
 
 Re-run `make doctor` any time — it's read-only. To deliberately start from an
 **empty Runs list**, `make reset` wipes the volumes (Postgres + recordings) and

@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup stage-claude stop-host reset doctor dev-pg
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup setup-containerized stage-claude stop-host reset doctor dev-pg
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -7,8 +7,10 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  setup                 - One-command Wardyn (HOST mode): prompts for each credential, builds, up, opens browser"
-	@echo "                          (team/compose mode is coming soon; non-interactive opt-ins:"
-	@echo "                           WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1, WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
+	@echo "                          (non-interactive opt-ins: WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1,"
+	@echo "                           WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
+	@echo "  setup-containerized   - Single-user compose stack (wardynd in a container; the WSL2 Verify/Record fix)"
+	@echo "                          (team mode — the same stack as a shared multi-user service — is coming soon)"
 	@echo "  stage-claude          - Stage your Claude login for per-run subscription mounts (restarts wardynd)"
 	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
 	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
@@ -169,6 +171,11 @@ test-e2e-ui:
 setup:
 	@echo "Wardyn setup (host mode) — detects your host, prompts for each credential, launches + opens the UI..."
 	./scripts/setup.sh
+
+# The OTHER supported single-user setup: the compose stack (wardynd containerized
+# on wardyn-internal — the Docker Desktop + WSL2 NAT workspace-Verify/Record fix).
+setup-containerized:
+	WARDYN_SETUP_MODE=container ./scripts/setup.sh
 
 # Stage the resident Claude login for per-run subscription mounts, even headless.
 # Re-runs setup with staging forced; a running wardynd is restarted so it loads

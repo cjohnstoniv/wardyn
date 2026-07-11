@@ -7,21 +7,27 @@
 # choice — no credential is copied, imported, or a volume destroyed unless you say so
 # (interactively) or set the matching opt-in env var (non-interactively).
 #
-# Deployment: HOST mode only for now. Sandbox agents run on YOUR machine with YOUR
-# Claude login — wardynd runs as you, sees ~/.claude directly (no re-login), and
-# proxy-injects your live token (never a stale copy). Best for personal use.
+# Deployment: TWO supported single-user setups.
+#  - HOST mode (default): sandbox agents run on YOUR machine with YOUR Claude
+#    login — wardynd runs as you, sees ~/.claude directly (no re-login), and
+#    proxy-injects your live token (never a stale copy). Best for personal use.
+#  - CONTAINERIZED mode (WARDYN_SETUP_MODE=container): the compose stack —
+#    wardynd runs in a container on wardyn-internal, so sandbox→control-plane
+#    callbacks route in-network. This is the fix for Docker Desktop + WSL2 NAT
+#    (workspace Verify/Record), at the cost of host-login visibility (use an
+#    API key / Bedrock for model access). Delegates to scripts/up.sh up.
 #
-# Team mode (a sealed compose control plane running as a shared multi-user service)
-# is a COMING-SOON feature and is not selectable here yet — WARDYN_SETUP_MODE=team
-# prints a notice and exits. (The compose stack itself still exists for other uses:
-# `make compose-up`, `make reset`, `make demo`, and the WSL2 workspace-verify fix.)
+# TEAM mode (that same compose control plane as a shared MULTI-USER service —
+# SSO logins, per-user identity/RBAC) is a COMING-SOON feature;
+# WARDYN_SETUP_MODE=team prints a notice and exits.
 #
 # Barriers (Fence/Wall/Vault) that need a package install (gVisor, Kata) require sudo —
 # this script NEVER runs sudo silently. It detects what's present and prints the exact
 # commands for anything missing, so you stay in control of privileged changes.
 #
-# Usage:  ./scripts/setup.sh            (host mode; no mode prompt)
-#         WARDYN_SETUP_MODE=team ...    (errors: team mode is coming soon)
+# Usage:  ./scripts/setup.sh                 (host mode; no mode prompt)
+#         WARDYN_SETUP_MODE=container ...    (containerized single-user stack)
+#         WARDYN_SETUP_MODE=team ...         (errors: team mode is coming soon)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -149,27 +155,35 @@ if [ "${#missing_barriers[@]}" -gt 0 ]; then
   say "  (Skip for now — you can add them later and re-run this command.)"
 fi
 
-# ── DECIDE: host mode is the only deployment available right now. We no longer
-# prompt host vs team — team (a sealed compose control plane / multi-user shared
-# service) is a COMING-SOON feature. Setup runs host mode; an explicit request for
-# team (WARDYN_SETUP_MODE=team) gets a clear notice and exits.
+# ── DECIDE: two supported single-user modes — host (default) and containerized
+# (delegates to scripts/up.sh up). No prompt. TEAM (that compose control plane
+# as a shared MULTI-USER service: SSO logins, per-user identity/RBAC) is a
+# COMING-SOON feature; an explicit request gets a clear notice and exits.
 case "${WARDYN_SETUP_MODE:-local}" in
   local) ;;
+  container)
+    hd "Containerized mode — delegating to scripts/up.sh up"
+    info "wardynd runs in a container on wardyn-internal: sandbox→control-plane callbacks route"
+    info "in-network (the Docker Desktop + WSL2 NAT workspace-Verify/Record fix). The container"
+    info "can't see your host Claude login — add an API key in the UI (or Bedrock) for model access."
+    exec ./scripts/up.sh up
+    ;;
   team)
     hd "Team mode is coming soon"
-    warn "Team mode — a sealed compose control plane where wardynd runs containerized as a shared,"
-    warn "multi-user service — is a COMING-SOON feature and isn't available in this version."
-    warn "This version supports HOST mode only: wardynd runs as you and sandbox runs use your Claude"
-    warn "login (injected per-request at the proxy). Just run 'make setup' — no mode needed."
+    warn "Team mode — this compose control plane as a shared MULTI-USER service (SSO logins,"
+    warn "per-user identity/RBAC) — is a COMING-SOON feature and isn't available in this version."
+    warn "What works today, both single-user: HOST mode ('make setup' — wardynd runs as you, your"
+    warn "Claude login injected per-request at the proxy) and CONTAINERIZED mode"
+    warn "(WARDYN_SETUP_MODE=container — the compose stack, the WSL2 workspace-Verify/Record fix)."
     exit 2
     ;;
   *)
-    warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid — this version supports HOST mode only."
-    warn "Leave WARDYN_SETUP_MODE unset (or =local) for host mode; team mode is coming soon."
+    warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid. Supported: unset/local (host"
+    warn "mode) or container (compose stack, single-user). Team mode is coming soon."
     exit 2
     ;;
 esac
-ok "Mode: host (local) — team/compose is coming soon"
+ok "Mode: host (local). Also available: WARDYN_SETUP_MODE=container — team (multi-user) is coming soon"
 
 # ── ACT (host mode only; team is coming soon, so there is no team branch) ──────
 # local / host mode
