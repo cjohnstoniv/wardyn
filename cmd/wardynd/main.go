@@ -129,7 +129,7 @@ func run() error {
 		envbuildRepo = flagEnv("envbuild-cache-repo", "WARDYN_ENVBUILD_CACHE_REPO", "", "optional OCI registry ref for envbuilder layer cache (enables safe daemonless push mode)")
 
 		// agentImages is a JSON object mapping agent names to OCI image refs
-		// (e.g. '{"claude-code":"wardyn/agent-claude-code:demo"}'). When set,
+		// (e.g. '{"claude-code":"wardyn/agent-claude-code:local"}'). When set,
 		// named agents use the specified image instead of the ghcr convention.
 		// Must be valid JSON when non-empty; validated at boot (fail closed).
 		agentImagesJSON = flagEnv("agent-images", "WARDYN_AGENT_IMAGES", "", `JSON map of agent-name -> OCI image ref; overrides ghcr convention for named agents (env WARDYN_AGENT_IMAGES)`)
@@ -164,7 +164,7 @@ func run() error {
 
 		// genAgeKey, when set, prints a freshly-generated age X25519 identity
 		// (AGE-SECRET-KEY-...) to stdout and exits — BEFORE any DSN/DB work — so
-		// `docker run --rm wardyn/wardynd:demo -gen-age-key` can mint a durable
+		// `docker run --rm wardyn/wardynd:local -gen-age-key` can mint a durable
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey = flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)")
 	)

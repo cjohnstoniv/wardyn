@@ -22,7 +22,7 @@
 # The oracle needs NO LLM wiring and NO git credential broker (it never calls a
 # model). Because it ships wardyn-rec, the build context is the REPO ROOT (Go
 # source), so build with:
-#   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:demo .
+#   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local .
 
 # ── Stage 1: Go builder (wardyn-rec + wardyn-scan) ────────────────────────────
 FROM golang:1.26 AS builder

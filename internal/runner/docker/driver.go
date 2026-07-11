@@ -882,7 +882,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string) error {
 		return nil
 	}
 	// imagePresent said false, so a pull failure means the image is genuinely
-	// absent locally (not a stale tag). The demo agent tags (wardyn/agent-*:demo)
+	// absent locally (not a stale tag). The demo agent tags (wardyn/agent-*:local)
 	// live in no registry, so name the fix rather than leaking a bare
 	// "registry: denied".
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {

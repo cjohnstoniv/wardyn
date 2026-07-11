@@ -41,7 +41,7 @@ export WARDYN_LISTEN="${WARDYN_LISTEN:-:8080}"
 export WARDYN_LOCAL_MODE="${WARDYN_LOCAL_MODE:-true}"
 export WARDYN_RUNNER="${WARDYN_RUNNER:-docker}"
 export WARDYN_UI_DIR="${WARDYN_UI_DIR:-$ROOT/ui/dist}"
-export WARDYN_PROXY_IMAGE="${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:demo}"
+export WARDYN_PROXY_IMAGE="${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
 # composer-dev.json is the composer-capable ceiling: it lists an api_key grant
 # (so a composed LLM run's brokered model credential survives the clamp) and the
 # LLM egress domains. demo.json (github_token only) would clamp the model grant
@@ -56,9 +56,9 @@ fi
 export WARDYN_DEFAULT_POLICY="${WARDYN_DEFAULT_POLICY:-$ROOT/examples/policies/composer-dev.json}"
 # Map agent names to the LOCALLY-built demo images (else the runner pulls the ghcr
 # convention image, which doesn't exist → run.create fails "registry: denied").
-# The "oracle" agent (wardyn/agent-oracle:demo, deploy/images/oracle) runs a
+# The "oracle" agent (wardyn/agent-oracle:local, deploy/images/oracle) runs a
 # task's mounted solution.sh — the $0 deterministic lane for the e2e orchestrator.
-export WARDYN_AGENT_IMAGES="${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:demo\",\"codex-cli\":\"wardyn/agent-codex-cli:demo\",\"oracle\":\"wardyn/agent-oracle:demo\"}}"
+export WARDYN_AGENT_IMAGES="${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"oracle\":\"wardyn/agent-oracle:local\"}}"
 
 # Pin the claude-code agent to Opus so it never falls back to the account default
 # (a promo can push that to Fable). Overridable; empty uses the CLI default.

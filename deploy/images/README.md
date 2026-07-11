@@ -126,8 +126,8 @@ it and injects it only when forwarding internal API calls.
 
 | Directory       | Image tag                    | CLI        |
 |-----------------|------------------------------|------------|
-| `claude-code/`  | `wardyn/agent-claude-code:demo` | `claude` (`@anthropic-ai/claude-code`) |
-| `codex-cli/`    | `wardyn/agent-codex-cli:demo`   | `codex`   (`@openai/codex`) |
+| `claude-code/`  | `wardyn/agent-claude-code:local` | `claude` (`@anthropic-ai/claude-code`) |
+| `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
 
 ---
 

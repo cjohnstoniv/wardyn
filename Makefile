@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui setup stage-claude stop-host reset reset-all doctor dev-pg
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -45,17 +45,24 @@ help:
 	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
 	@echo "  compose-down          - Stop docker-compose stack"
 	@echo "  demo                  - End-to-end compose demo (build, up, run, audit)"
-	@echo "  agent-images          - Build the agent OCI images (claude-code + codex-cli + oracle)"
+	@echo "  agent-images          - Build all agent OCI images (claude-code + codex-cli + oracle e2e stand-in)"
+	@echo "  agent-images-core     - Build just the user-facing agent images (claude-code + codex-cli)"
 	@echo "  test-drive            - Guided governance test-drive against a running compose stack"
 	@echo "                          (ARGS='--up' to bring the stack up first)"
 	@echo "  clean                 - Remove built binaries"
 
-agent-images:
+# Core = the two real agent harnesses a user actually runs. The oracle image is
+# a deterministic e2e stand-in (no LLM) — dev/e2e only, so setup paths build
+# core and the e2e scripts build oracle themselves.
+agent-images-core:
 	@echo "Building agent images (build context: repo root)..."
-	docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:demo .
-	docker build -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:demo   .
-	docker build -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:demo      .
-	@echo "Agent images built: wardyn/agent-claude-code:demo  wardyn/agent-codex-cli:demo  wardyn/agent-oracle:demo"
+	docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+	docker build -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:local   .
+	@echo "Agent images built: wardyn/agent-claude-code:local  wardyn/agent-codex-cli:local"
+
+agent-images: agent-images-core
+	docker build -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
+	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
 
 build:
 	@echo "Building Go binaries..."

@@ -25,6 +25,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/lib/common.sh"
 
+# Provision + exec wardyn-test-pg on the same daemon as up.sh pg (dual-daemon boxes).
+wardyn_pick_docker_host
+
 DSN="${WARDYN_E2E_DSN:-postgres://wardyn:wardyn@localhost:55432/wardyn_e2e?sslmode=disable}"
 TOKEN="${WARDYN_E2E_TOKEN:-wardyn-e2e-token}"
 ADDR="${WARDYN_E2E_ADDR:-:8088}"

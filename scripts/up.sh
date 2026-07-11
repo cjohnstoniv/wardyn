@@ -32,6 +32,12 @@ ENV_EXAMPLE="${REPO_ROOT}/deploy/compose/.env.example"
 
 . "${REPO_ROOT}/scripts/lib/common.sh"
 
+# Every entry point (setup/up/doctor/reset/reset-all/pg) must operate on the
+# SAME daemon — setup.sh exports its pick before delegating here, but direct
+# `make compose-up` / `make reset-all` invocations need it too, or teardown
+# inspects a different daemon than the one setup populated.
+wardyn_pick_docker_host
+
 compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
 
 # pick_policy RUNTIMES_JSON [WANTS_LLM] -> a WARDYN_DEFAULT_POLICY path.
@@ -263,12 +269,12 @@ cmd_up() {
 
   if ! grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "${ENV_FILE}" 2>/dev/null; then
     log "Minting a persistent secret-store age key"
-    _keyline=$(docker run --rm wardyn/wardynd:demo -gen-age-key 2>/dev/null | grep '^AGE-SECRET-KEY-' | head -1 || true)
+    _keyline=$(docker run --rm wardyn/wardynd:local -gen-age-key 2>/dev/null | grep '^AGE-SECRET-KEY-' | head -1 || true)
     if [ -n "${_keyline}" ]; then
       env_set "${ENV_FILE}" WARDYN_AGE_KEY "${_keyline}"
       log "Persisted WARDYN_AGE_KEY to ${ENV_FILE} (secrets now survive restarts)"
     else
-      warn "wardyn/wardynd:demo -gen-age-key produced no key (this wardynd build may predate the flag)."
+      warn "wardyn/wardynd:local -gen-age-key produced no key (this wardynd build may predate the flag)."
       warn "Continuing with an ephemeral key — fine for now, but secrets won't survive a container restart."
     fi
   fi
@@ -368,11 +374,11 @@ cmd_up() {
   # open so first light is as fast as possible; you read Getting-started while these
   # finish. Skip them for a pure UI look with WARDYN_UP_SKIP_RUN_IMAGES=1.
   if [ "${WARDYN_UP_SKIP_RUN_IMAGES:-0}" = "1" ]; then
-    log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images (build later: make agent-images && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image)"
+    log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images (build later: make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image)"
   else
     log "Finishing the run components so your first run is ready (sandbox proxy + agent images)…"
     compose --profile build-only build proxy-image
-    make -C "${REPO_ROOT}" agent-images
+    make -C "${REPO_ROOT}" agent-images-core
     log "Run components ready — you can launch your first run."
   fi
 
@@ -432,7 +438,7 @@ cmd_reset() {
 #                                          sealed under it, and the same key
 #                                          just seals the next ones. Purge only
 #                                          for a pristine first-contact baseline.
-#   built :demo images   (--purge-images)  the minutes-long rebuild set.
+#   built :local images  (--purge-images)  the minutes-long rebuild set.
 # Built binaries (bin/, ui/dist) are `make clean`'s job — not duplicated here.
 _ra_mark() {  # _ra_mark 0|1 LABEL — one manifest line
   if [ "$1" = 1 ]; then printf '  [present] %s\n' "$2"; else printf '  [absent]  %s\n' "$2"; fi
@@ -449,7 +455,9 @@ cmd_reset_all() {
     esac
   done
   _ra_rundir="${HOME}/.wardyn"
-  _ra_images="wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+  # :local is the current locally-built tag; the :demo variants are the
+  # pre-rename generation still present on boxes that set up before it.
+  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
 
   # ── gather facts (read-only) ─────────────────────────────────────────
   _ra_host_pid=$(cat "${_ra_rundir}/host-wardynd.pid" 2>/dev/null || true)
@@ -515,7 +523,7 @@ cmd_reset_all() {
   done
 
   # ── manifest ─────────────────────────────────────────────────────────
-  log "reset-all — full undo of local Wardyn setup. Manifest:"
+  log "reset-all — full undo of local Wardyn setup (daemon: ${DOCKER_HOST:-default socket}). Manifest:"
   if [ "${_ra_host_live}" = 1 ]; then
     _ra_mark 1 "host-mode wardynd (PID ${_ra_host_pid}, ~/.wardyn/host-wardynd.pid) — will be stopped"
   else

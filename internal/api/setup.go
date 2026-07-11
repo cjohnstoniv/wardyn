@@ -503,10 +503,13 @@ func agentImageCheck(images map[string]string) SetupCheck {
 }
 
 // isConventionNodeOnlyImage reports whether ref is a shipped claude-code
-// convention image (the ghcr fallback or the compose demo tag) — the images
+// convention image (the ghcr fallback or a locally-built tag) — the images
 // known, by construction, to carry Node only (deploy/images/claude-code/Dockerfile).
+// The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
 func isConventionNodeOnlyImage(ref string) bool {
-	return ref == "ghcr.io/cjohnstoniv/agent-claude-code:latest" || ref == "wardyn/agent-claude-code:demo"
+	return ref == "ghcr.io/cjohnstoniv/agent-claude-code:latest" ||
+		ref == "wardyn/agent-claude-code:local" ||
+		ref == "wardyn/agent-claude-code:demo"
 }
 
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind

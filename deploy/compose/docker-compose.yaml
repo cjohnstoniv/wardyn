@@ -72,7 +72,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.wardynd
-    image: wardyn/wardynd:demo
+    image: wardyn/wardynd:local
     container_name: wardyn-api
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
@@ -120,7 +120,7 @@ services:
       # gateway CIDR instead of any non-loopback peer.
       WARDYN_LOCAL_TRUST_FORWARDER: "${WARDYN_LOCAL_TRUST_FORWARDER:-true}"
       WARDYN_RUNNER: "docker"
-      WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:demo"
+      WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:local"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — OPT-IN, OFF by default. Workspace import
       # VERIFY needs the detected toolchain (Go/Node/…) present in the image; the
@@ -177,7 +177,7 @@ services:
       WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
-      WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:demo\",\"codex-cli\":\"wardyn/agent-codex-cli:demo\"}}"
+      WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\"}}"
       # Subscription auth mode. Proxy-side OAuth injection needs wardynd to run
       # where the operator's ~/.claude + `claude` binary live (host mode) so it
       # can mint/refresh the live token. The COMPOSE wardynd is distroless and
@@ -286,7 +286,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.tetragon-ingest
-    image: wardyn/wardyn-tetragon-ingest:demo
+    image: wardyn/wardyn-tetragon-ingest:local
     container_name: wardyn-tetragon-ingest
     profiles: ["groundtruth"]
     environment:
@@ -321,7 +321,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.proxy
-    image: wardyn/wardyn-proxy:demo
+    image: wardyn/wardyn-proxy:local
     # Never started; build-only. `command: true` would still require an entry,
     # so we park it under a profile that the demo never activates.
     profiles: ["build-only"]
@@ -335,7 +335,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/images/claude-code/Dockerfile
-    image: wardyn/agent-claude-code:demo
+    image: wardyn/agent-claude-code:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
 
@@ -343,7 +343,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/images/codex-cli/Dockerfile
-    image: wardyn/agent-codex-cli:demo
+    image: wardyn/agent-codex-cli:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
 

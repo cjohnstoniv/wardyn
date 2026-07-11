@@ -44,14 +44,14 @@ func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
 	f.failImagePull = true // absent + unpullable
 	d := newTestDriver(f)
 
-	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:demo")
+	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local")
 	if err == nil {
 		t.Fatal("ensureImage on an absent, unpullable image: got nil error")
 	}
 	if !strings.Contains(err.Error(), "make agent-images") {
 		t.Errorf("error missing the fix hint: %v", err)
 	}
-	if !strings.Contains(err.Error(), "wardyn/agent-oracle:demo") {
+	if !strings.Contains(err.Error(), "wardyn/agent-oracle:local") {
 		t.Errorf("error missing the image ref: %v", err)
 	}
 }
