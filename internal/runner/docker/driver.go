@@ -255,6 +255,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	enforced := spec.ConfinementClass
 	if enforced == "" {
+		// Class-less floor for direct driver callers only: every wardynd
+		// dispatch path resolves a concrete class from the policy's
+		// min_confinement_class before reaching here (the shipped default
+		// policy floor is CC2).
 		enforced = types.CC1
 	}
 
