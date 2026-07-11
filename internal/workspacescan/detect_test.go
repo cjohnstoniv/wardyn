@@ -398,6 +398,33 @@ func TestScan_LeakFindingsAreContentFree(t *testing.T) {
 	}
 }
 
+func TestScan_LeakedValues_GitLabPATAndCredentialURL(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".git-credentials-copy.txt",
+		"https://oauth2:glpat-AbCdEfGhIjKlMnOpQrSt12@gitlab.example.com\n")
+	writeFile(t, dir, "notes.md",
+		// A bare ADO-looking opaque token must NOT flag (no raw-value ADO rule —
+		// low precision), and a short doc placeholder password must NOT flag.
+		"pat: a1b2c3d4e5f6g7h8i9j0a1b2c3d4e5f6g7h8i9j0a1b2c3d4e5f6\nclone: https://user:pass@host.example\n")
+	got := Scan(dir)
+	kinds := map[string]int{}
+	for _, f := range got.LeakFindings {
+		kinds[f.Kind]++
+	}
+	if kinds["gitlab-pat"] == 0 {
+		t.Errorf("expected a gitlab-pat finding, got %+v", got.LeakFindings)
+	}
+	if kinds["git-credentials-url"] == 0 {
+		t.Errorf("expected a git-credentials-url finding, got %+v", got.LeakFindings)
+	}
+	// notes.md must contribute nothing: bare ADO-ish blob + short placeholder.
+	for _, f := range got.LeakFindings {
+		if f.Path == "notes.md" {
+			t.Errorf("notes.md should have no findings, got %+v", f)
+		}
+	}
+}
+
 func TestDeriveProfile_HostileNewFieldsCapped(t *testing.T) {
 	var facts ScanFacts
 	facts.BuildMemoryMiB = 1 << 30 // absurd

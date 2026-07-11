@@ -199,6 +199,12 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 	case types.GrantCloudSTS:
 		add(field, "cloud_sts", RiskHigh,
 			"Cloud STS grant confers broad cloud credentials (and requires a SPIRE identity provider; the embedded IdP refuses it).", "5")
+	case types.GrantGitPAT:
+		add(field, "git_pat", RiskHigh,
+			"Stored PAT handed to git (brokered stdout-only, never resident) — but Wardyn cannot expire or down-scope it; blast radius is whatever the token grants. Prefer a GitHub App, or a fine-grained repo-scoped short-expiry token.", "2")
+	case types.GrantSSHKey:
+		add(field, "ssh_key", RiskHigh,
+			"Resident, agent-readable SSH private key for the clone window (git's SSH transport has no broker seam) — Wardyn can neither scope nor expire it. Prefer a single-repo read-only deploy key over a personal identity.", "2")
 	default:
 		add(field, string(g.Kind), RiskMedium, "Unrecognized grant kind; treated as medium.", "")
 	}
@@ -242,6 +248,11 @@ func grantIsWriteCapable(g types.GrantSpec) bool {
 	case types.GrantCloudSTS:
 		return true
 	default:
+		// ponytail: git_pat/ssh_key grade High in gradeGrant but are deliberately
+		// NOT write-capable here — their scope carries no read/write flag, and an
+		// unconditional CC3 floor (RequiredConfinementFloor) would block every SCM
+		// clone on KVM-less hosts. Add a `readonly` bool to those scopes and floor
+		// only declared-write grants if that ever changes.
 		return false
 	}
 }
