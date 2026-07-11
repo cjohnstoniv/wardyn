@@ -11,9 +11,8 @@ results carry test-case descriptions, results, durations, and failure reasons
 test/reports/
   README.md                 # this file (committed)
   rollup.md                 # aggregate across all suites + 6-invariant grid (committed)
-  coverage-dashboard.md     # coverage before/after per package (committed)
   go/<suite>/
-    report.md               # per-test-case table + failure reasons (committed)
+    report.md               # per-test-case table + failure reasons (gitignored; regenerable)
     test-output.json        # raw `go test -json` stream (gitignored)
     cover.out               # coverage profile (gitignored; *.out)
     coverage.html           # HTML coverage (gitignored)
@@ -24,13 +23,10 @@ test/reports/
   e2e/
     playwright-report/      # Playwright HTML report + traces (gitignored)
     junit.xml results.json  # (gitignored)
-  components/<lane>/
-    report.md findings.json # per-component review ledger (committed)
 ```
 
-Only the durable human/ledger files are committed (`report.md`, `findings.json`,
-`rollup.md`, `coverage-dashboard.md`, this README); the regenerable XML/JSON/HTML
-/coverage blobs are gitignored.
+Only `rollup.md` and this README are committed; everything else under
+`test/reports/` is regenerable output and gitignored (see `.gitignore`).
 
 ## How to regenerate
 
@@ -38,7 +34,7 @@ Only the durable human/ledger files are committed (`report.md`, `findings.json`,
 make test-report                 # Go unit suite  -> test/reports/go/unit/
 WARDYN_TEST_PG=postgres://...  make test-report-pg
 WARDYN_TEST_DOCKER=1           make test-report-docker
-make cover-check COVER_MIN=40    # enforce a coverage floor
+make cover-check                 # enforce the coverage floor (COVER_MIN, default 58)
 make ui-test                     # vitest + coverage -> test/reports/ui/
 cd ui && pnpm e2e                # Playwright (seeded backend) -> test/reports/e2e/
 ```

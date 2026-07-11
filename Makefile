@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-ui setup stage-claude stop-host reset doctor dev-pg
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui setup stage-claude stop-host reset doctor dev-pg
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -12,6 +12,7 @@ help:
 	@echo "                          (non-interactive opt-ins: WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1,"
 	@echo "                           WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
 	@echo "  stage-claude          - Stage your Claude login for per-run subscription mounts (restarts wardynd)"
+	@echo "  stop-host             - Stop the host-mode wardynd started by make setup (pidfile under ~/.wardyn)"
 	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
 	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
 	@echo "  dev-pg                - Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)"
@@ -30,8 +31,10 @@ help:
 	@echo "  ui-typecheck          - Typecheck the web UI (tsc --noEmit)"
 	@echo "  ui-test               - Run web UI vitest unit/component tests + coverage"
 	@echo "  test-e2e-ui           - Playwright UI e2e vs a seeded backend (needs Docker + chromium)"
+	@echo "  test-e2e              - Live security e2e: L0 egress, metadata block, kill cascade (needs Docker)"
 	@echo "  test-e2e-live         - Live TASK e2e: real sandboxes run the corpus, graded on state (needs Docker)"
 	@echo "  test-e2e-subscription - Live SUBSCRIPTION e2e: proxy-side inject-on attach + inject-off escape hatch (restarts wardynd)"
+	@echo "  test-e2e-byoi         - Live BYOI e2e: wrap stock/harness/hostile/nonexistent bases + selftest gate (needs Docker)"
 	@echo "  test-report           - Go unit tests with detailed md/coverage reports"
 	@echo "  test-report-pg        - Postgres-gated suite with reports (needs WARDYN_TEST_PG)"
 	@echo "  test-report-docker    - docker-tagged suite with reports (needs WARDYN_TEST_DOCKER=1)"
@@ -129,6 +132,15 @@ test-e2e-live:
 test-e2e-subscription:
 	@echo "Running live SUBSCRIPTION e2e (inject-on attach + inject-off escape hatch; restarts wardynd)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-subscription.sh
+
+# Live BYOI e2e: an operator-supplied base image (stock/harness/hostile/
+# nonexistent) is wrapped with the runner tools and every sandbox control is
+# proven to hold, including the fail-closed agent-run --selftest launch gate.
+# Needs Docker + the envbuild path; the script self-skips without
+# WARDYN_TEST_DOCKER=1.
+test-e2e-byoi:
+	@echo "Running live BYOI e2e (wrap + selftest gate; requires Docker)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-byoi.sh
 
 govulncheck:
 	@echo "Running govulncheck..."
