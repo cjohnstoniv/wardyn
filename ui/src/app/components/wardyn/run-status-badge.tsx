@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as React from "react";
 import { Archive, Check, CircleX, ShieldX, Square } from "lucide-react";
 import type { RunState } from "../../lib/types";
 import { Chip, RunStateBadge } from "./primitives";
