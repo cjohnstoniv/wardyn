@@ -167,6 +167,20 @@ wiring is needed. Pin a `@sha256:` digest to avoid mutable-tag drift between run
 `CURL_CA_BUNDLE`, all set by dispatch. **Not covered:** JVM keystores and Deno
 (`DENO_CERT`) — a JVM/Deno toolchain in a BYOI image must trust the CA itself.
 
+**Containment holds regardless of image; two defense-in-depth caveats.** The
+wrap clears the base's ENTRYPOINT and overwrites its runner tools from the
+trusted host copies, and egress allow-listing, confinement, mounts, and
+capability drops are applied by the runner at container-create — none of it
+depends on image contents, so a hostile base cannot escape the sandbox. Two
+image-controlled surfaces remain, both bounded by the egress allowlist and
+neither an escape: (1) a base with `USER root` runs the workload as
+root-in-container — primary confinement (cap-drop, no-new-privileges, seccomp,
+apparmor, userns-remap) still holds, but the non-root defense-in-depth the
+convention images provide is waived; prefer a non-root base. (2) The combined CA
+bundle concatenates the base's own system trust store, so an interactive
+`wardyn attach` shell trusts whatever CAs the base ships — only relevant if you
+attach a shell to an untrusted image on a non-MITM'd allowed host.
+
 **Raw (deploy-time).** If you build an image that already satisfies the contract
 below, register it under an agent name in `WARDYN_AGENT_IMAGES` (a JSON
 `{"<agent>":"<ref>"}` map) and launch that agent — no per-run wrap.
