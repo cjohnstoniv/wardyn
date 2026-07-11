@@ -17,8 +17,12 @@ make setup    # host-mode installer → launch → open http://localhost:8080
               # wardynd runs in the background: log/PID in ~/.wardyn/, stop with `make stop-host`
 ```
 
-> Team mode (a sealed, shared compose control plane) is **coming soon** — host
-> mode is the supported deployment for now.
+> Two supported single-user setups: host mode (above) and **containerized**
+> (`make setup-containerized` — the compose stack; `wardynd` runs in a container
+> so workspace Verify/Record work on Docker Desktop + WSL2 NAT, and model access
+> comes from an API key/Bedrock instead of your host login). **Team mode** —
+> that same compose control plane as a shared *multi-user* service (SSO logins,
+> per-user identity/RBAC) — is **coming soon**.
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3

@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. **SSO / team login is a coming-soon feature** — the UI's SSO button is disabled; use the admin-token path or the CLI. |
+| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. **SSO / team login (a shared multi-user service: SSO logins, per-user identity/RBAC) is a coming-soon feature** — the UI's SSO button is disabled; use the admin-token path or the CLI. |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -14,10 +14,12 @@ launches) but not run as a long-lived service.
 
 ## Quick start
 
-> **Note:** `make setup` now runs **host mode** (wardynd as a host process). To
-> bring up *this containerized compose stack*, use `./scripts/up.sh up` (below) or
-> `make compose-up`. A first-class "team" setup for the compose control plane is
-> **coming soon**.
+> **Note:** this stack is the SUPPORTED single-user **containerized** setup —
+> `make setup-containerized` (or `WARDYN_SETUP_MODE=container make setup`) runs
+> `./scripts/up.sh up` for you; `make compose-up` is the raw-compose variant.
+> `make setup` (no mode) runs **host mode** (wardynd as a host process) instead.
+> A first-class **team** setup — this control plane as a shared *multi-user*
+> service (SSO logins, per-user identity/RBAC) — is **coming soon**.
 
 ```sh
 ./scripts/up.sh up    # doctor preflight, build, mint a secret key, bring up postgres+wardynd, open the UI
