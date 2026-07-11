@@ -33,6 +33,15 @@ straight into your first run. This is all you need to look around. On WSL, run i
 inside your WSL distro's shell; it opens the UI in your Windows browser
 automatically.
 
+> **Inside a corporate network?** The enterprise-engineer path is built in:
+> the Getting Started wizard's **Corporate network** steps chain the sandbox
+> proxy through your corporate HTTP proxy and redirect npm/pip/cargo/maven/
+> go/nuget to an Artifactory/Nexus mirror; the **SCM Provider** step covers
+> GitHub Enterprise / Azure DevOps (PAT or SSH-over-443 through the credential
+> broker); **AWS Bedrock** (below) gives Claude access with no direct Anthropic
+> egress, billed through AWS; and `make setup`'s build retries with
+> `GOTOOLCHAIN=local` when a proxy blocks the public Go module proxy.
+
 ## Level 1 — governance demo (no keys)
 
 ```sh
@@ -109,7 +118,9 @@ Bedrock access-key path (see below):
   injects `x-api-key` at startup; **never resident**.
 - **Subscription (OAuth)** — mount your host `~/.claude` into the run (New Run →
   Access → Subscription). The proxy injects your **live** OAuth token as
-  `Authorization: Bearer`; the sandbox holds only an inert sentinel. On compose,
+  `Authorization: Bearer`; the sandbox holds only an inert sentinel. Host mode
+  stages this during `make setup`; if you skipped the prompt (or ran headless),
+  `make stage-claude` stages it later and restarts wardynd. On compose,
   stage creds with `WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`.
 - **AWS Bedrock** — operator-configured (not a per-run choice). Set
   `WARDYN_BEDROCK_REGION` + `WARDYN_BEDROCK_MODEL` (a cross-region *inference-profile*
@@ -129,9 +140,14 @@ The primary way to onboard your own work: in a workspace, **record** a named
 interactive session (with model access), then rerun it governed — the New Run
 dialog's Basics step offers the workspace's recorded sessions as **profiles**;
 picking one fast-tracks you to Review with the recording's observed egress
-already loaded into the allowlist. **Verify** replays a recording inside a
-confined sandbox (default-deny egress + live approvals surfaced next to the
-attached terminal) so you can prove a profile works before relying on it.
+already loaded into the allowlist. **Verify** launches a fresh CONFINED session
+for a recording you pick — default-deny egress limited to the approved set,
+live approvals surfaced next to the attached terminal — so you re-run the same
+steps under least privilege and prove the profile works before relying on it.
+(It's a live re-run under the tighter policy, not a byte-for-byte replay of the
+captured session. The workspace *import* flow has its own Verify step with
+different semantics: it executes the operator-approved setup commands in a
+governed sandbox to prove the environment builds.)
 
 ## Level 3 — enable the AI Composer (describe a task, get a proposed run)
 
@@ -170,7 +186,12 @@ subscription, and OpenAI) are in [`examples/composer-configs/`](../examples/comp
 make stop-host           # Local (host) mode: stop the background wardynd (PID in ~/.wardyn/)
 make compose-down        # compose stack: stop it — KEEPS your data (runs + audit)
 make reset               # start over from an empty Runs list: wipes Postgres + recordings volumes
+                         # (confirms first — default No; WARDYN_FORCE_RESET=1 headless)
 ```
+
+`make reset` operates on the **compose** stack: it wipes those volumes and
+brings up a *containerized* wardynd. It does not touch a host-mode daemon — to
+reset host mode, `make stop-host && make setup`.
 
 Honest limits of this demo deployment (see `threatmodel/`): single host,
 CC1/CC2 only unless a Kata runtime is registered (CC3/Vault is experimental —
