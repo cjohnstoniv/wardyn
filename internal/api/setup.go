@@ -75,6 +75,47 @@ type SetupStatus struct {
 	// Deployment reports whether wardynd itself sees a resident Claude login
 	// (host mode) or is blind to it (compose/container).
 	Deployment SetupDeployment `json:"deployment"`
+	// Harness reports per-provider Wardyn-managed subscription credentials
+	// captured via container login (setup-token), so the wizard can show a
+	// "connected / expiring / reconnect" row that works in compose mode where
+	// there is no resident host login. Empty when no managed credential exists.
+	Harness []SetupHarness `json:"harness,omitempty"`
+}
+
+// SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
+// purely from the stored blob (presence + capture age) — PRESENCE only, honesty
+// law: no green badge implies the token was live-verified. setup-token tokens
+// live ~1yr with no machine-readable expiry, so Aging is a conservative
+// age-based "reconnect soon" flag, never a hard expiry claim.
+type SetupHarness struct {
+	Provider    string `json:"provider"`              // "anthropic"
+	Captured    bool   `json:"captured"`              // a token blob is stored
+	CapturedAt  string `json:"captured_at,omitempty"` // RFC3339, when pasted
+	Aging       bool   `json:"aging,omitempty"`       // captured longer ago than harnessTokenAging
+	SourceRunID string `json:"source_run_id,omitempty"`
+}
+
+// harnessCredentialCheck is the readiness row for a Wardyn-managed subscription
+// token — the compose-mode analogue of claudeSubscriptionStagingCheck. It fires
+// only when a credential is captured (no capture => the llm_provider check
+// already says "connect a model"). Pure: the blob read is done by the caller.
+func harnessCredentialCheck(h SetupHarness) (SetupCheck, bool) {
+	if !h.Captured {
+		return SetupCheck{}, false
+	}
+	if h.Aging {
+		return SetupCheck{
+			ID: "harness_credential", Label: "Managed Claude subscription", Status: "warn",
+			Detail: "Your Wardyn-managed Claude subscription token was captured a long time ago (setup-token lives ~1 year). " +
+				"It may be close to expiring; a run will fail if Anthropic has revoked it.",
+			Fix: "Reconnect via container login on the provider step (Connect via container login → `claude setup-token` → paste).",
+		}, true
+	}
+	return SetupCheck{
+		ID: "harness_credential", Label: "Managed Claude subscription", Status: "ok",
+		Detail: "A Wardyn-managed Claude subscription token is connected and injected proxy-side into every run — the " +
+			"sandbox holds only an inert sentinel. Works in compose mode with no host ~/.claude.",
+	}, true
 }
 
 // SetupDeployment reports whether the wardynd process itself sees a resident
@@ -613,6 +654,22 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",
 			bedrock.Region, bedrock.Model, bedrock.credSourceDesc())
 	}
+
+	// Wardyn-managed subscription (container-login setup-token): a compose-mode
+	// LLM-access source with no resident host login. Presence-only; folded in as an
+	// ADDITIONAL winning signal so a managed-only operator reads "LLM access: ok"
+	// without changing llmProvenance's own priority order or its tests.
+	var harnessCreds []SetupHarness
+	if blob, ok, berr := s.readManagedBlob(ctx, "anthropic"); berr == nil && ok {
+		aging := s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging
+		harnessCreds = append(harnessCreds, SetupHarness{
+			Provider: "anthropic", Captured: true,
+			CapturedAt: blob.CapturedAt.Format(time.RFC3339), Aging: aging, SourceRunID: blob.SourceRunID,
+		})
+		if llmDetail == "" {
+			llmDetail = "A Wardyn-managed Claude subscription token (captured via container login) is injected proxy-side into every run."
+		}
+	}
 	llmReady := llmDetail != ""
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
@@ -713,6 +770,14 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, chk)
 	}
 
+	// harness_credential: the compose-mode analogue — a Wardyn-managed subscription
+	// token captured via container login, with an age-based "reconnect" warning.
+	for _, h := range harnessCreds {
+		if chk, ok := harnessCredentialCheck(h); ok {
+			checks = append(checks, chk)
+		}
+	}
+
 	if comp.Enabled {
 		checks = append(checks, SetupCheck{
 			ID: "composer", Label: "AI Run Composer", Status: "ok",
@@ -804,7 +869,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, SetupCheck{
 			ID: "platform_wsl", Label: "WSL networking", Status: "info", Platform: "wsl",
 			Detail: "Running under WSL2: host<->sandbox networking is split. Reach the UI from Windows via localhost port-forwarding, and bind wardynd to a WSL-reachable address. With Docker Desktop's default NAT networking, sandbox->wardynd callbacks don't route in host mode — workspace Verify results never report and Record captures land empty.",
-			Fix: "Enable WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then `wsl --shutdown`), or run the containerized stack (`make compose-up`) where callbacks route in-network.",
+			Fix:    "Enable WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then `wsl --shutdown`), or run the containerized stack (`make compose-up`) where callbacks route in-network.",
 		})
 	}
 	if plat.OS == "darwin" {
@@ -830,19 +895,20 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	writeJSON(w, http.StatusOK, SetupStatus{
-		Ready:           ready,
-		Checks:          checks,
-		Auth:            SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
-		Runner:          rnr,
-		Composer:        comp,
-		Providers:       providers,
-		Secrets:         sec,
-		AgeKey:          SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
-		HasRuns:         hasRuns,
-		Platform:        SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
-		HostProxy:       hostProxy,
-		Bedrock:         bedrock,
-		Deployment:      SetupDeployment{HostLike: deploymentHostLike(providers)},
+		Ready:      ready,
+		Checks:     checks,
+		Auth:       SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
+		Runner:     rnr,
+		Composer:   comp,
+		Providers:  providers,
+		Secrets:    sec,
+		AgeKey:     SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
+		HasRuns:    hasRuns,
+		Platform:   SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
+		HostProxy:  hostProxy,
+		Bedrock:    bedrock,
+		Deployment: SetupDeployment{HostLike: deploymentHostLike(providers)},
+		Harness:    harnessCreds,
 	})
 }
 

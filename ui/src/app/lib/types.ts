@@ -775,6 +775,18 @@ export interface SetupBedrock {
   ready?: boolean;
 }
 
+// A Wardyn-managed subscription credential captured via container login
+// (setup-token) — mirrors internal/api SetupHarness. Presence + capture age only
+// (honesty law: not live-verified). `aging` is a conservative age-based
+// "reconnect soon" flag, never a hard expiry claim.
+export interface SetupHarness {
+  provider: string;
+  captured: boolean;
+  captured_at?: string;
+  aging?: boolean;
+  source_run_id?: string;
+}
+
 // Host-proxy detection — mirrors internal/setup/detect_proxy.go. Every value is
 // masked server-side (embedded credentials stripped); has_credentials flags that
 // a credential WAS present in the raw value so the UI can prompt to store it as a
@@ -852,6 +864,10 @@ export interface SetupStatus {
   // "no login" in compose even when the operator IS logged in on the host. Optional
   // for the same fixture-compat reason as `bedrock`.
   deployment?: { host_like: boolean };
+  // Wardyn-managed subscription credentials captured via container login
+  // (setup-token). Present per provider that has a stored token; empty/absent
+  // when none. Optional for the same fixture-compat reason as `bedrock`.
+  harness?: SetupHarness[];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —
