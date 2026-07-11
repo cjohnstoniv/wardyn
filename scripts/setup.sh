@@ -617,6 +617,39 @@ if $healthy; then
   # github.com). Override e.g. WARDYN_SCM_SSH_HOSTS="github.com dev.azure.com".
   scm_ssh_hosts="${WARDYN_SCM_SSH_HOSTS:-github.com}"
 
+  # Credential POSTURE detection — presence only, values are NEVER read. These
+  # feed recommendations ("you're on rung X, rung Y is safer"), never imports.
+  scm_gh_cli=false;    [ -f "$HOME/.config/gh/hosts.yml" ] && scm_gh_cli=true
+  scm_cred_helper="$(git config --global credential.helper 2>/dev/null || true)"
+  scm_cred_file=false; [ -f "$HOME/.git-credentials" ] && scm_cred_file=true
+  scm_netrc=false;     { [ -f "$HOME/.netrc" ] || [ -f "$HOME/.netrc.gpg" ]; } && scm_netrc=true
+
+  # The ladder, most→least safe, honest to Wardyn's real mechanics (brokered =
+  # minted per-clone via the git credential helper, stdout-only, never on disk
+  # in the sandbox; the SSH lane is the one documented RESIDENT exception).
+  scm_any_posture=false
+  { $scm_gh_cli || [ -n "$scm_cred_helper" ] || $scm_cred_file || $scm_netrc || [ -n "$scm_pat" ] || [ -n "$scm_key" ]; } && scm_any_posture=true
+  if $scm_any_posture && [ -t 0 ] && [ -t 1 ]; then
+    hd "Your git credentials — safest path first"
+    info "Safest → least safe for agent repo access:"
+    info "  1. GitHub App          — Wardyn mints a fresh ≤1h read-scoped token per run; the only rung Wardyn can expire"
+    info "  2. Fine-grained PAT    — one repo, Contents: Read-only, short expiry (brokered; you revoke on the provider)"
+    info "  3. Read-only deploy key — one repo; resident seconds-only for the clone, then shredded (offer below)"
+    info "  4. Classic PAT / gh CLI token — brokered, but your WHOLE account"
+    info "  5. Personal id_ed25519/id_rsa — resident private key + full account access (riskiest)"
+    if $scm_gh_cli; then
+      warn "Found a GitHub CLI login (~/.config/gh/hosts.yml) — a broad account token (rung 4). Wardyn never imports it."
+      info "Safer: a fine-grained PAT — github.com/settings/personal-access-tokens/new → Only select repositories →"
+      info "Permissions: Contents: Read-only → short expiry. Then: printf %s '<token>' | ./bin/wardyn secret set git-pat-github-com"
+    fi
+    case "$scm_cred_helper" in
+      store*|cache*) warn "git credential.helper='${scm_cred_helper}' keeps loose credentials on this host — Wardyn won't read them; prefer a scoped PAT (rung 2)." ;;
+    esac
+    $scm_cred_file && warn "~/.git-credentials holds PLAINTEXT credentials — Wardyn won't read it; prefer a scoped PAT (rung 2) and consider deleting the file."
+    $scm_netrc && warn "~/.netrc detected (legacy plaintext credentials) — Wardyn won't read it."
+    [ -n "$scm_pat" ] && info "Detected a ${scm_pat_host} PAT in the env: if it's fine-grained + repo-scoped you're on rung 2; a classic PAT is rung 4 — prefer re-issuing fine-grained."
+  fi
+
   if [ -n "$scm_pat" ] || [ -n "$scm_key" ]; then
     scm_plan=""
     [ -n "$scm_pat" ] && scm_plan="${scm_plan}    · ${scm_pat_host} PAT (env) → secret git-pat-${scm_pat_host//./-}\n"
@@ -630,7 +663,7 @@ if $healthy; then
     if [ "${WARDYN_IMPORT_SCM:-}" = 1 ]; then
       scm_do=true
     elif [ -t 0 ] && [ -t 1 ]; then
-      hd "Import host git credentials into Wardyn? (lets agents clone private repos)"
+      hd "Import the detected credentials as-is? (the less-safe fallback)"
       printf '%b' "$scm_plan"
       warn "These are copied into Wardyn's ENCRYPTED store on this host."
       # F7: disclose the standing auto-grant BEFORE consent — an imported SSH key is
@@ -638,10 +671,10 @@ if $healthy; then
       # per-run prompt (unlike the subscription's per-run checkbox).
       if [ -n "$scm_key" ]; then
         warn "An imported ssh-key-<host> becomes a STANDING credential: every future SSH workspace"
-        warn "clone to that host uses it automatically, with no per-run prompt. Prefer a scoped deploy"
-        warn "key over your personal id_ed25519/id_rsa (which likely has full account access)."
+        warn "clone to that host uses it automatically, with no per-run prompt. The generated deploy"
+        warn "key below (rung 3) is the safer alternative to your personal id_ed25519/id_rsa."
       fi
-      ask_yn "Import now?" n && scm_do=true
+      ask_yn "Import anyway (less safe than rungs 1-3)?" n && scm_do=true
     else
       info "Detected host git credentials — set WARDYN_IMPORT_SCM=1 to import them into Wardyn's secret store (skipped)."
     fi
@@ -672,7 +705,47 @@ if $healthy; then
       [ -n "$scm_key" ] && warn "An SSH identity now lives in Wardyn's encrypted store on this host (the store's age key persists across restarts)."
     fi
   fi
-  unset scm_pat scm_pat_host scm_key scm_ssh_hosts scm_plan scm_do scm_n h k
+
+  # Rung 3 assist: generate a scoped read-only deploy key. Strictly safer than
+  # importing a personal identity — the private half goes straight from
+  # ssh-keygen into Wardyn's encrypted store (shredded from disk here), and
+  # losing it loses ONE repo, not an account. Headless: WARDYN_GEN_DEPLOY_KEY=1
+  # (+ optional WARDYN_DEPLOY_KEY_HOST, default github.com).
+  gen_key=false
+  if [ "${WARDYN_GEN_DEPLOY_KEY:-}" = 1 ]; then gen_key=true
+  elif [ -t 0 ] && [ -t 1 ]; then
+    ask_yn "Generate a read-only DEPLOY key for one repo (rung 3 — recommended over importing a personal key)?" n && gen_key=true
+  fi
+  if $gen_key; then
+    gen_host="${WARDYN_DEPLOY_KEY_HOST:-github.com}"
+    gen_tmp="$(mktemp -d)"
+    if ssh-keygen -t ed25519 -N "" -C "wardyn-deploy-${gen_host}" -f "$gen_tmp/key" >/dev/null 2>&1; then
+      gen_n="ssh-key-${gen_host//./-}"
+      export WARDYN_URL="$URL"
+      if ./bin/wardyn secret set "$gen_n" < "$gen_tmp/key" >/dev/null 2>&1; then
+        ok "generated + stored ${gen_n} (the private half lives ONLY in Wardyn's encrypted store)"
+        info "Paste this PUBLIC key as a read-only deploy key — repo → Settings → Deploy keys →"
+        info "Add deploy key — and leave 'Allow write access' UNCHECKED:"
+        say ""
+        say "    $(cat "$gen_tmp/key.pub")"
+        say ""
+        # Honest ceiling: Wardyn's ssh-key-<host> slot is per-HOST while a GitHub
+        # deploy key authenticates per-REPO — one generated key serves exactly the
+        # repo you register it on. Several repos ⇒ fine-grained PAT (rung 2).
+        info "Note: Wardyn's SSH slot is per-host and a deploy key is per-repo — this key clones exactly the"
+        info "one repo you register it on. Working across several repos? Use a fine-grained PAT (rung 2)."
+      else
+        warn "could not store ${gen_n} — is wardynd healthy? (nothing was written)"
+      fi
+    else
+      warn "ssh-keygen failed — no key generated."
+    fi
+    shred -u "$gen_tmp/key" 2>/dev/null || rm -f "$gen_tmp/key"
+    rm -rf "$gen_tmp"
+  fi
+  unset scm_pat scm_pat_host scm_key scm_ssh_hosts scm_plan scm_do scm_n h k \
+        scm_gh_cli scm_cred_helper scm_cred_file scm_netrc scm_any_posture \
+        gen_key gen_host gen_tmp gen_n 2>/dev/null || true
 
   hd "Wardyn is up (host mode) — your terminal is free"
   ok "UI     ${URL}   (opening in your browser)"
@@ -681,9 +754,14 @@ if $healthy; then
   ok "Stop   make stop-host   (or: kill ${WPID})"
   # Open the UI LAST — every interactive prompt above is done, so the browser
   # never steals focus while the terminal is still waiting on an answer.
-  { command -v wslview  >/dev/null 2>&1 && wslview  "$URL"; } >/dev/null 2>&1 \
-    || { command -v explorer.exe >/dev/null 2>&1 && explorer.exe "$URL"; } >/dev/null 2>&1 \
-    || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } >/dev/null 2>&1 || true
+  # Backgrounded: wslview can BLOCK indefinitely in headless/scripted runs (no
+  # Windows interop to hand off to), and a browser nicety must never hold the
+  # installer's exit. WARDYN_UP_NO_BROWSER=1 skips it (same env as up.sh).
+  if [ "${WARDYN_UP_NO_BROWSER:-0}" != "1" ]; then
+    { { command -v wslview  >/dev/null 2>&1 && wslview  "$URL"; } \
+      || { command -v explorer.exe >/dev/null 2>&1 && explorer.exe "$URL"; } \
+      || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } || true; } >/dev/null 2>&1 &
+  fi
 else
   rm -f "$PIDFILE"
   warn "wardynd did not become healthy — last log lines:"
