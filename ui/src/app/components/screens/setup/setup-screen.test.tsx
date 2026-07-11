@@ -126,6 +126,7 @@ describe("SetupScreen", () => {
     // The Host Proxy / SCM Provider / Artifact Redirect steps each GET the site
     // config on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
+    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("unreachable daemon: shows 'Couldn't reach Wardyn' + Re-check, never the no-runner danger card", async () => {
@@ -144,7 +145,6 @@ describe("SetupScreen", () => {
     // None of the step machinery renders from the made-up fields.
     expect(screen.queryByText(/no sandbox runner/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
-    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("walks all nine funnel steps and Next/Back move within bounds", async () => {
