@@ -803,7 +803,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if plat.WSL {
 		checks = append(checks, SetupCheck{
 			ID: "platform_wsl", Label: "WSL networking", Status: "info", Platform: "wsl",
-			Detail: "Running under WSL2: host<->sandbox networking is split. Reach the UI from Windows via localhost port-forwarding, and bind wardynd to a WSL-reachable address.",
+			Detail: "Running under WSL2: host<->sandbox networking is split. Reach the UI from Windows via localhost port-forwarding, and bind wardynd to a WSL-reachable address. With Docker Desktop's default NAT networking, sandbox->wardynd callbacks don't route in host mode — workspace Verify results never report and Record captures land empty.",
+			Fix: "Enable WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then `wsl --shutdown`), or run the containerized stack (`make compose-up`) where callbacks route in-network.",
 		})
 	}
 	if plat.OS == "darwin" {

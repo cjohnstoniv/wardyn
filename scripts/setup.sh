@@ -74,7 +74,16 @@ runtimes_json() { docker info -f '{{json .Runtimes}}' 2>/dev/null || echo '{}'; 
 # ── DETECT ───────────────────────────────────────────────────────────────────
 hd "Detecting your environment"
 IS_WSL=false; grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=true
-$IS_WSL && info "WSL2 detected (host↔sandbox networking is split — the UI opens in your Windows browser)."
+if $IS_WSL; then
+  info "WSL2 detected (host↔sandbox networking is split — the UI opens in your Windows browser)."
+  # The known host-mode gap on Docker Desktop + WSL2 default (NAT) networking:
+  # host.docker.internal resolves to WINDOWS, not this distro, so sandbox→wardynd
+  # callbacks are lost — workspace Verify results never report and Record captures
+  # land empty. Say it up front (run-host.sh repeats it at launch).
+  warn "If you use Docker Desktop with default (NAT) networking, workspace Verify/Record won't complete in host mode."
+  warn "Fixes: WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then 'wsl --shutdown'),"
+  warn "or run the containerized stack instead: make compose-up."
+fi
 
 HAVE_DOCKER=false; docker version >/dev/null 2>&1 && HAVE_DOCKER=true
 if $HAVE_DOCKER; then ok "docker reachable ($(basename "$DSOCK"))"; else warn "docker not reachable at $DSOCK — start Docker and re-run."; exit 1; fi
