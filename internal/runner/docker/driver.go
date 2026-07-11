@@ -142,16 +142,31 @@ const agentImageHome = "/home/agent"
 // runs, which never invoke agent-run (the human drives claude in the attach
 // shell) — without it, NODE_EXTRA_CA_CERTS points at a CA file that was never
 // written, so claude cannot trust the proxy's TLS termination of api.anthropic.com
-// (breaking subscription proxy-side injection). It writes the EXACT path
-// internal/api pins for NODE_EXTRA_CA_CERTS (/home/agent/.wardyn/mitm-ca.pem), not
-// $HOME (this Cmd may run as root). Idempotent for non-interactive runs, where
-// agent-run re-installs the CA before exec'ing the task. No-op when the run did
-// not opt into TLS-MITM (WARDYN_MITM_CA_PEM unset).
-const agentIdleScript = `d=/home/agent/.wardyn
+// (breaking subscription proxy-side injection). It writes the EXACT paths
+// internal/api pins (/tmp/wardyn — any-uid-writable, so it works regardless of
+// the image's USER/HOME; this Cmd may run as root while agent-run later re-runs
+// as the image user, hence the sticky-bit dir and the ||true rewrites: within
+// one run the content is identical, so a failed rewrite over a correct file is
+// harmless). It also assembles the COMBINED bundle (system roots + per-run CA)
+// that SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE point at — those vars
+// REPLACE the client trust store, so the bare CA there would break non-MITM'd
+// CONNECT-tunneled hosts. Keep in lockstep with install_mitm_ca in
+// deploy/images/common/agent-run-lib.sh. No-op when the run did not opt into
+// TLS-MITM (WARDYN_MITM_CA_PEM unset).
+const agentIdleScript = `d=/tmp/wardyn
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
-  mkdir -p "$d"
-  printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$d/mitm-ca.pem"
-  chmod 0644 "$d/mitm-ca.pem"
+  mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
+  { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$d/mitm-ca.pem" && chmod 0644 "$d/mitm-ca.pem"; } 2>/dev/null || true
+  sys=""
+  for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
+    [ -f "$c" ] && sys="$c" && break
+  done
+  if [ -n "$sys" ]; then
+    { cat "$sys" "$d/mitm-ca.pem" > "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
+  else
+    { cp "$d/mitm-ca.pem" "$d/ca-bundle.pem" && chmod 0644 "$d/ca-bundle.pem"; } 2>/dev/null || true
+    echo "wardyn: no system CA bundle found; ca-bundle.pem is proxy-CA-only (non-MITM TLS hosts will not verify)" >&2
+  fi
   if command -v update-ca-certificates >/dev/null 2>&1; then
     cp "$d/mitm-ca.pem" /usr/local/share/ca-certificates/wardyn-mitm.crt 2>/dev/null && update-ca-certificates >/dev/null 2>&1 || true
   fi

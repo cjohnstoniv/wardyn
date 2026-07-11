@@ -511,6 +511,11 @@ function OverviewTab({
                 <span className="break-all font-mono text-foreground">{run.sandbox_ref}</span>
               </KV>
             )}
+            {run.image && (
+              <KV label="Image">
+                <span className="break-all font-mono text-foreground">{run.image}</span>
+              </KV>
+            )}
             {run.policy_id && (
               <KV label="Policy">
                 <span className="font-mono text-foreground">{run.policy_id}</span>

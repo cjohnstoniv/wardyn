@@ -58,6 +58,10 @@ export interface AgentRun {
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the fleet board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
+  // The RESOLVED sandbox image the run dispatched with (convention image,
+  // devcontainer build, workspace-built, or BYOI-wrapped) — provenance, shown
+  // on run detail. Empty/absent for legacy rows.
+  image?: string;
 }
 
 // Terminal run states: the run has finished and can no longer be killed.
