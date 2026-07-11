@@ -239,7 +239,7 @@ Error state (replaces cards): danger card "No sandbox runner — runs can't laun
   - Row actions: Add key/Edit (→ Add-secret dialog), Install guide → / Re-check login
     (→ Setup-guide dialog: one copy-paste command, e.g. `claude login`, + manual steps).
 - **Contextual rescue box** (only when: model undetected ∧ sealed compose ∧ local box):
-  explains the sandbox can't see the host's `~/.claude` login; fix is `make setup-host`.
+  explains the sandbox can't see the host's `~/.claude` login; fix is `make setup`.
 - Sub-section **"AI Run Composer backends"**: advisory-only backends list (mono rows:
   `name · provider/model · transport · auth` + Ready/Needs-setup + add-key); empty state
   points at `-composer-config`.
@@ -367,7 +367,7 @@ Design every screen in all applicable fixtures — they exercise every state:
 - **B — Ready host:** Fence+Wall Ready (Wall recommended+selected), Claude subscription
   connected, composer ready, fast-path banner visible, 1 workspace onboarded.
 - **C — Sealed compose on a personal box:** model undetected though the operator *is* logged in
-  on the host → the `make setup-host` rescue box on step 2.
+  on the host → the `make setup` rescue box on step 2.
 - **D — Hardened native box:** all 3 barriers ready (Vault selected), Bedrock configured,
   has_runs=true — everything green, welcome CTA reads "Finish setup".
 - **E — Broken:** no sandbox runner at all (danger card replaces tier picker); one provider row

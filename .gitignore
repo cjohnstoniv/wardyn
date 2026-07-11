@@ -47,9 +47,6 @@ docker-compose.override.yml
 /wardyn-git-helper
 /wardyn-tetragon-ingest
 
-# spikes benchmark build output (regenerable: cd spikes/spire/harness && go build)
-/spikes/spire/harness/spirebench
-
 # playwright/screenshot artifacts
 .playwright-mcp/
 /*.png
