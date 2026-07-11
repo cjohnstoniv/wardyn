@@ -694,7 +694,24 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// CA / injection / MITM-host wiring alongside the subscription path.
 	injectBedrockBearer := bedrockReady && bedrock.bearer
 
-	if subscription {
+	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
+	// operator to run `claude setup-token` in the attach shell and mint one. Point
+	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
+	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
+	// mis-signals api-key mode. No mount, no injection, no MITM.
+	harnessLoginRun := run.Task == harnessLoginTask
+
+	// MANAGED subscription: when there is no resident ~/.claude mount and no
+	// Bedrock, and the operator connected a Wardyn-managed setup-token, inject it
+	// PROXY-SIDE exactly like a resident subscription (the sandbox holds only an
+	// inert sentinel). This is the compose-mode subscription path. Precedence:
+	// host-staged mount > managed > Bedrock > api-key.
+	managed := !harnessLoginRun && !subscription && !bedrockReady && s.managedInjectReady(run.Agent)
+	injectManaged := managed
+
+	if harnessLoginRun {
+		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+	} else if subscription {
 		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
 		// The subscription creds are bind-mounted READ-ONLY at ~/.claude, but
 		// claude-code needs a WRITABLE config dir (session-env/, history) — it fails
@@ -703,6 +720,15 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// ~/.claude.json). Set on the sandbox env so BOTH agent-run and an interactive
 		// `wardyn attach` shell inherit it.
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
+	} else if managed {
+		// Managed subscription (compose, no host ~/.claude mount): same wire posture
+		// as resident subscription — talk direct to api.anthropic.com over the tunnel
+		// with a writable config dir — but the sentinel creds are DELIVERED via env
+		// (WARDYN_CLAUDE_MANAGED_B64) instead of a mount, since there is nothing to
+		// mount. agent-run materializes them; the proxy injects the live token.
+		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
+		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
 	} else if bedrockReady {
 		for k, v := range bedrock.env {
 			sandboxEnv[k] = v
@@ -772,7 +798,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		mitmForInspect = true
 	}
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if injectSub || mitmForInspect || artifactInject || injectBedrockBearer {
+	if injectSub || injectManaged || mitmForInspect || artifactInject || injectBedrockBearer {
 		certPEM, keyPEM, caErr := generateRunCA(time.Now())
 		if caErr != nil {
 			_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
@@ -797,20 +823,30 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		sandboxEnv["CURL_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
 	}
 
-	// Subscription: author a re-mintable api_key grant whose SENTINEL secret name
-	// resolves to the operator's LIVE OAuth token (host-refreshed) rather than a
-	// stored secret; append its injection and ensure the exact host is egress-
-	// allowed (the injector's hard requirement). Non-approval api_key grants are
-	// re-mintable by design, so the proxy re-resolves the token before expiry
-	// indefinitely. This is what makes the sandbox's sentinel sufficient.
-	if injectSub {
+	// Subscription / managed: author a re-mintable api_key grant whose SENTINEL
+	// secret name resolves to a LIVE Anthropic OAuth token (resident host token, or
+	// the Wardyn-managed captured setup-token) rather than a stored secret; append
+	// its injection and ensure the exact host is egress-allowed (the injector's hard
+	// requirement). Non-approval api_key grants are re-mintable by design, so the
+	// proxy re-resolves the token indefinitely. This is what makes the sandbox's
+	// sentinel sufficient. injectSub and injectManaged are mutually exclusive by
+	// construction (managed requires !subscription).
+	if injectSub || injectManaged {
 		const anthropicAPIHost = "api.anthropic.com"
-		// Subscription REPLACES any api-key injection for the same host. A ceiling
-		// that also lists an anthropic-api-key grant (e.g. the composer-dev ceiling)
-		// would otherwise leave TWO injections for api.anthropic.com; the proxy
-		// resolves both at startup and the api-key mint fails closed when its secret
-		// is absent — crashing the sidecar. Drop it here (the direct-run equivalent
-		// of reconcileLLMAccess's removeAPIKeyGrantForHost on the composer path).
+		sentinelName := subscriptionOAuthSecret
+		injectSource := "subscription"
+		detail := "live subscription OAuth token injected proxy-side; sandbox's staged copy holds only inert sentinel tokens (access + refresh both replaced at staging)"
+		if injectManaged {
+			sentinelName = types.ManagedOAuthSecret
+			injectSource = "managed"
+			detail = "Wardyn-managed subscription (setup-token) injected proxy-side; sandbox holds only an inert sentinel delivered via env (no host ~/.claude mount)"
+		}
+		// Subscription/managed REPLACES any api-key injection for the same host. A
+		// ceiling that also lists an anthropic-api-key grant (e.g. the composer-dev
+		// ceiling) would otherwise leave TWO injections for api.anthropic.com; the
+		// proxy resolves both at startup and the api-key mint fails closed when its
+		// secret is absent — crashing the sidecar. Drop it here (the direct-run
+		// equivalent of reconcileLLMAccess's removeAPIKeyGrantForHost).
 		kept := injections[:0]
 		for _, ig := range injections {
 			if strings.EqualFold(strings.TrimSuffix(ig.Rule.Host, "."), anthropicAPIHost) {
@@ -824,7 +860,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			"host":        anthropicAPIHost,
 			"header":      "Authorization",
 			"format":      "Bearer %s",
-			"secret_name": subscriptionOAuthSecret,
+			"secret_name": sentinelName,
 		})
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: subGrantID, RunID: run.ID, CreatedAt: time.Now(),
@@ -832,7 +868,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		}); gerr != nil {
 			_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": "subscription inject grant: " + gerr.Error()})))
+				run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
 			return
 		}
 		if rule, derr := injectionRuleFromScope(subScope); derr == nil {
@@ -843,8 +879,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
 			run.ID.String(), "success", mustJSON(map[string]any{
-				"host": anthropicAPIHost, "tls_mitm": true,
-				"detail": "live subscription OAuth token injected proxy-side; sandbox's staged copy holds only inert sentinel tokens (access + refresh both replaced at staging)",
+				"host": anthropicAPIHost, "tls_mitm": true, "source": injectSource, "detail": detail,
 			})))
 	}
 
@@ -1000,7 +1035,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			// The CA above may also be minted purely for artifact-token injection, so
 			// this keeps an artifact-only run from TLS-terminating a direct CONNECT to
 			// Anthropic/OpenAI it never asked to intercept.
-			MITMLLM: injectSub || mitmForInspect,
+			MITMLLM: injectSub || injectManaged || mitmForInspect,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,

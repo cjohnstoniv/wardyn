@@ -62,6 +62,28 @@ prepare_claude_config_dir() {
     [[ -f "${HOME}/.claude.json" ]] && cp -a "${HOME}/.claude.json" "$cfg/.claude.json" 2>/dev/null || true
 }
 
+# ── Managed subscription (proxy-injected, compose mode) ───────────────────────
+# In managed mode there is NO host ~/.claude to mount (the compose control plane
+# is distroless). Dispatch instead delivers an inert SENTINEL .credentials.json
+# in WARDYN_CLAUDE_MANAGED_B64 (base64 of the JSON) — the same shape
+# stage-claude-creds.sh writes for the resident path: a placeholder access token,
+# blank refresh token, far-future expiry. It only lets `claude` consider itself
+# logged in and start cleanly; the LIVE token is injected proxy-side per request
+# (Authorization: Bearer, replacing whatever the sandbox sends), so no usable
+# credential is ever resident. Written into CLAUDE_CONFIG_DIR (dispatch points it
+# at a writable dir). No-op when WARDYN_CLAUDE_MANAGED_B64 is unset. Must run
+# AFTER prepare_claude_config_dir (which created the dir).
+materialize_managed_claude_config() {
+    [[ -n "${WARDYN_CLAUDE_MANAGED_B64:-}" ]] || return 0
+    local cfg="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+    mkdir -p "$cfg" 2>/dev/null || true
+    if printf '%s' "$WARDYN_CLAUDE_MANAGED_B64" | base64 -d > "$cfg/.credentials.json" 2>/dev/null; then
+        chmod 0600 "$cfg/.credentials.json" 2>/dev/null || true
+    fi
+    # Onboarding-complete marker so an interactive managed session doesn't prompt.
+    [[ -f "${HOME}/.claude.json" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "${HOME}/.claude.json" 2>/dev/null || true
+}
+
 # ── Artifact-registry redirect config ────────────────────────────────────────
 # When the operator has configured artifact-registry redirects (site-config),
 # dispatch delivers the per-tool config files (URL-only, NO token — a token is

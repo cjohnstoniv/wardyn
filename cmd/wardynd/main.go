@@ -543,6 +543,13 @@ func run() error {
 	}
 	disableSubInject := strings.EqualFold(strings.TrimSpace(os.Getenv("WARDYN_SUBSCRIPTION_INJECT")), "off")
 
+	// Managed subscription token: a long-lived `claude setup-token` captured via
+	// the container-login flow and stored age-encrypted. Serves subscription runs
+	// PROXY-SIDE in deployments (compose) whose distroless wardynd has no host
+	// ~/.claude for subToken above. Store-only (no Server dependency, no cycle);
+	// nil when there is no secret store.
+	managedToken := api.NewManagedCredProvider(secrets, "anthropic")
+
 	// Advisory AI scan fallback (opt-in): wired to the fail-open
 	// workspacescan.AdviseProfile with a bounded timeout so a slow/hung CLI can
 	// never stall — let alone fail — the sidecar's scan upload. nil = OFF.
@@ -583,6 +590,7 @@ func run() error {
 		Secrets:                   secrets,
 		MaskRegistry:              maskReg,
 		SubscriptionToken:         subToken,
+		ManagedToken:              managedToken,
 		DisableSubscriptionInject: disableSubInject,
 		Composer:                  composerReg,
 		Components:                components,

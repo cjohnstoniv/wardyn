@@ -243,6 +243,14 @@ type Config struct {
 	// stale. Nil disables the subscription-injection path (falls back to the
 	// resident-copy behavior).
 	SubscriptionToken subscription.Provider
+	// ManagedToken, when non-nil, yields the Wardyn-MANAGED Anthropic subscription
+	// token — a long-lived `claude setup-token` the operator captured via the
+	// container-login flow, stored age-encrypted. The injection sink resolves the
+	// types.ManagedOAuthSecret sentinel through it, exactly like SubscriptionToken
+	// resolves the resident-host sentinel. This is what credentials a subscription
+	// run in a COMPOSE deployment whose distroless wardynd has no host ~/.claude.
+	// Nil disables the managed-injection path.
+	ManagedToken subscription.Provider
 	// DisableSubscriptionInject is the operator ESCAPE HATCH: when true (env
 	// WARDYN_SUBSCRIPTION_INJECT=off), subscription runs keep the legacy
 	// resident-copy behavior (the mounted credential, which can go stale) instead
@@ -414,6 +422,17 @@ func (s *Server) routes() chi.Router {
 			// (anonymous non-local => 401): it enumerates providers/keys/CLIs
 			// (capability disclosure) and must never sit on the public /healthz.
 			r.Get("/setup/status", s.handleSetupStatus)
+
+			// Managed harness login: launch an interactive login sandbox where
+			// the operator runs `claude setup-token`, then paste the resulting
+			// long-lived subscription token so Wardyn injects it proxy-side into
+			// every run (compose-mode subscription without a host ~/.claude).
+			// Secret store required (the token is stored age-encrypted).
+			if s.cfg.Secrets != nil {
+				r.Post("/setup/harness-login", s.handleHarnessLogin)
+				r.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
+				r.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
+			}
 
 			// Policy management (gated to authenticated humans — a valid SSO
 			// session or the admin token; dedicated admin-role gating is

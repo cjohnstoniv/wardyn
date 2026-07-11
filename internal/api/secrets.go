@@ -19,10 +19,17 @@ import (
 var secretNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
 
 // reservedSecretNames are platform-internal keys that must not be overwritten
-// or deleted through the API (they would brick identity/session handling).
+// or deleted through the API (they would brick identity/session handling), and
+// that the injection sink refuses to resolve as a stored value. The Wardyn-
+// managed harness OAuth blob lives here too: it is written/deleted ONLY via the
+// dedicated setup/harness-credential endpoints and injected ONLY via its
+// sentinel (types.ManagedOAuthSecret) through the managed provider — never as a
+// raw stored secret, and never listable/clobberable through the generic secrets
+// API. Keep in sync with harnessCredSecretName in harnesscred.go.
 var reservedSecretNames = map[string]bool{
-	"wardyn-signing-key": true,
-	"wardyn-session-key": true,
+	"wardyn-signing-key":             true,
+	"wardyn-session-key":             true,
+	"wardyn-harness-anthropic-oauth": true,
 }
 
 // identifierSecretNames hold non-credential IDENTIFIER values (not maskable

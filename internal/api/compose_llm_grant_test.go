@@ -127,7 +127,7 @@ func TestEnsureLLMGrant_CodexOpenAIConvention(t *testing.T) {
 func TestReconcileLLMAccess_SatisfiedIsProvisionedNote(t *testing.T) {
 	spec := types.RunPolicySpec{}
 	ensureLLMGrant(&spec, "claude-code", secretsWith("anthropic-api-key"), false) // grant + domain
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false, false)
 	if !strings.Contains(w, "model access provisioned") || !strings.Contains(w, "api.anthropic.com") {
 		t.Errorf("expected an authoritative provisioned note; got %q", w)
 	}
@@ -143,7 +143,7 @@ func TestReconcileLLMAccess_GrantWithoutEgressIsDroppedAndWarned(t *testing.T) {
 	// Grant present, but AllowedDomains does NOT contain api.anthropic.com.
 	grant := apiKeyGrant("api.anthropic.com", "anthropic-api-key")
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant}, AllowedDomains: []string{"github.com"}}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false, false)
 	if w == "" {
 		t.Fatal("must warn: a grant without its egress entry would fail the proxy at startup")
 	}
@@ -155,7 +155,7 @@ func TestReconcileLLMAccess_GrantWithoutEgressIsDroppedAndWarned(t *testing.T) {
 // Secret absent => warning that names the secret AND the Claude subscription remedy.
 func TestReconcileLLMAccess_NoSecret(t *testing.T) {
 	spec := types.RunPolicySpec{}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false, false)
 	if !strings.Contains(w, "no model access") || !strings.Contains(w, "anthropic-api-key") || !strings.Contains(w, "subscription") {
 		t.Errorf("no-secret warning must name the secret and the subscription remedy; got %q", w)
 	}
@@ -164,7 +164,7 @@ func TestReconcileLLMAccess_NoSecret(t *testing.T) {
 // Secret present but grant clamped away (ceiling forbids api_key) => policy-cause warning.
 func TestReconcileLLMAccess_GrantClampedAway(t *testing.T) {
 	spec := types.RunPolicySpec{}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith("anthropic-api-key"), false, false)
 	if !strings.Contains(w, "no model access") || !strings.Contains(w, "composer-dev.json") {
 		t.Errorf("clamped-away warning must name the policy cause + remedy; got %q", w)
 	}
@@ -176,19 +176,19 @@ func TestReconcileLLMAccess_ProvisionedFlag(t *testing.T) {
 	// Satisfied grant => provisioned true.
 	ok := types.RunPolicySpec{}
 	ensureLLMGrant(&ok, "claude-code", secretsWith("anthropic-api-key"), false)
-	if _, provisioned := reconcileLLMAccess(&ok, "claude-code", secretsWith("anthropic-api-key"), false); !provisioned {
+	if _, provisioned := reconcileLLMAccess(&ok, "claude-code", secretsWith("anthropic-api-key"), false, false); !provisioned {
 		t.Error("a satisfied grant must report provisioned=true")
 	}
 	// No secret => provisioned false.
-	if _, provisioned := reconcileLLMAccess(&types.RunPolicySpec{}, "claude-code", secretsWith(), false); provisioned {
+	if _, provisioned := reconcileLLMAccess(&types.RunPolicySpec{}, "claude-code", secretsWith(), false, false); provisioned {
 		t.Error("no-secret must report provisioned=false")
 	}
 	// Secret present but ceiling forbids api_key (grant clamped away) => provisioned false.
-	if _, provisioned := reconcileLLMAccess(&types.RunPolicySpec{}, "claude-code", secretsWith("anthropic-api-key"), false); provisioned {
+	if _, provisioned := reconcileLLMAccess(&types.RunPolicySpec{}, "claude-code", secretsWith("anthropic-api-key"), false, false); provisioned {
 		t.Error("clamped-away grant must report provisioned=false")
 	}
 	// Non-LLM agent => (note "", provisioned true): nothing to verify, no row.
-	if note, provisioned := reconcileLLMAccess(&types.RunPolicySpec{}, "some-other-agent", secretsWith(), false); note != "" || !provisioned {
+	if note, provisioned := reconcileLLMAccess(&types.RunPolicySpec{}, "some-other-agent", secretsWith(), false, false); note != "" || !provisioned {
 		t.Errorf("non-LLM agent must be (note=\"\", provisioned=true); got (%q, %v)", note, provisioned)
 	}
 }
@@ -197,7 +197,7 @@ func TestReconcileLLMAccess_ProvisionedFlag(t *testing.T) {
 // mount (there is no OpenAI/Codex subscription-mount path).
 func TestReconcileLLMAccess_CodexHasNoSubscriptionHint(t *testing.T) {
 	spec := types.RunPolicySpec{}
-	w, _ := reconcileLLMAccess(&spec, "codex-cli", secretsWith(), false)
+	w, _ := reconcileLLMAccess(&spec, "codex-cli", secretsWith(), false, false)
 	if !strings.Contains(w, "openai-api-key") {
 		t.Errorf("codex warning must name openai-api-key; got %q", w)
 	}
@@ -208,7 +208,7 @@ func TestReconcileLLMAccess_CodexHasNoSubscriptionHint(t *testing.T) {
 
 func TestReconcileLLMAccess_UnknownAgentSilent(t *testing.T) {
 	spec := types.RunPolicySpec{}
-	if w, _ := reconcileLLMAccess(&spec, "some-other-agent", secretsWith(), false); w != "" {
+	if w, _ := reconcileLLMAccess(&spec, "some-other-agent", secretsWith(), false, false); w != "" {
 		t.Errorf("unknown agent must not warn; got %q", w)
 	}
 }
@@ -318,7 +318,7 @@ func TestReconcileLLMAccess_SubscriptionProvisionedNote(t *testing.T) {
 	if !injected {
 		t.Fatal("setup: injection expected")
 	}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false, false)
 	if !strings.Contains(w, "model access provisioned") || !strings.Contains(w, "subscription") {
 		t.Errorf("expected the subscription provisioned note; got %q", w)
 	}
@@ -342,7 +342,7 @@ func TestReconcileLLMAccess_SubscriptionInjectDefaultNote(t *testing.T) {
 	if injected, _ := applyLLMCredMount(&spec, subscriptionCeiling(), "claude-code", true); !injected {
 		t.Fatal("setup: injection expected")
 	}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), true)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), true, false)
 	if !strings.Contains(w, "PROXY-SIDE") || !strings.Contains(w, "never goes stale") {
 		t.Errorf("default note must state proxy-side injection + no staleness; got %q", w)
 	}
@@ -365,7 +365,7 @@ func TestReconcileLLMAccess_SubscriptionDropsRideAlongAPIKeyGrant(t *testing.T) 
 	if injected, _ := applyLLMCredMount(&spec, subscriptionCeiling(), "claude-code", true); !injected {
 		t.Fatal("setup: injection expected")
 	}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), true) // secret ABSENT; default proxy-side inject
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), true, false) // secret ABSENT; default proxy-side inject
 	if !strings.Contains(w, "model access provisioned") {
 		t.Fatalf("subscription must still be provisioned; got %q", w)
 	}
@@ -382,7 +382,7 @@ func TestReconcileLLMAccess_NoSecretDropsOrphanedGrant(t *testing.T) {
 		AllowedDomains: []string{"api.anthropic.com"},
 		EligibleGrants: []types.GrantSpec{grant},
 	}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false, false)
 	if !strings.Contains(w, "no model access") || !strings.Contains(w, "anthropic-api-key") {
 		t.Errorf("expected the no-secret warning; got %q", w)
 	}
@@ -402,7 +402,7 @@ func TestReconcileLLMAccess_SubscriptionInspectionFailCloseWarn(t *testing.T) {
 	if injected, _ := applyLLMCredMount(&spec, subscriptionCeiling(), "claude-code", true); !injected {
 		t.Fatal("setup: injection expected")
 	}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false, false)
 	if !strings.Contains(w, "FAIL at launch") || !strings.Contains(w, "intercept_tls") {
 		t.Errorf("expected the fail-at-launch warning; got %q", w)
 	}
@@ -419,7 +419,7 @@ func TestReconcileLLMAccess_SubscriptionInspectionDefaultNoFailWarn(t *testing.T
 	if injected, _ := applyLLMCredMount(&spec, subscriptionCeiling(), "claude-code", true); !injected {
 		t.Fatal("setup: injection expected")
 	}
-	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false)
+	w, _ := reconcileLLMAccess(&spec, "claude-code", secretsWith(), false, false)
 	if strings.Contains(w, "FAIL at launch") {
 		t.Errorf("require_inspectable_llm=false must not produce the fail-at-launch warning; got %q", w)
 	}

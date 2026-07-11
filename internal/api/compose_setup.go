@@ -69,6 +69,7 @@ type SetupFix struct {
 type composeSubscriptionState struct {
 	Requested bool     // the operator's per-run ask (composeRequest.UseSubscription)
 	Injected  bool     // applyLLMCredMount's verdict: did the ceiling mounts land in the FINAL spec
+	Managed   bool     // no ceiling mount, but a Wardyn-managed setup-token serves this run proxy-side
 	Warnings  []string // applyLLMCredMount's own explanation, reused verbatim
 }
 
@@ -195,12 +196,17 @@ func setupSubscriptionMountItem(sub composeSubscriptionState) (SetupItem, bool) 
 		Fix:        &SetupFix{Action: "none"},
 	}
 	detail := strings.Join(sub.Warnings, " ")
-	if sub.Injected {
+	switch {
+	case sub.Managed:
+		it.Status = "satisfied"
+		it.Label = "Subscription mode: Wardyn-managed token"
+		detail = "no operator-blessed credential mount, but a Wardyn-managed Claude subscription (setup-token) is connected and injected PROXY-SIDE for this run — the sandbox holds only an inert sentinel."
+	case sub.Injected:
 		it.Status = "satisfied"
 		if detail == "" {
 			detail = "the operator-blessed Claude credential mounts were injected for this run."
 		}
-	} else {
+	default:
 		it.Status = "missing"
 		if detail == "" {
 			detail = "subscription mode was requested but not applied; the run falls back to the api-key path."
