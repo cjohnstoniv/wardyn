@@ -252,7 +252,10 @@ Notable residual risks:
   logs every prompt/token/tool call but cannot prevent an agent from encoding
   data into a prompt to a model it is permitted to call.
 - **Domain fronting and DNS-tunnel exfil** are not closed below the optional
-  L2 TLS-intercept tier (unbuilt; v0.5 target).
+  L2 TLS-intercept tier. Per-run TLS interception **is** shipped for
+  operator-listed MITM-eligible hosts (LLM endpoints, artifact registries —
+  opt-in, off by default); interception of **arbitrary** domains is the v0.5
+  target, so most non-LLM HTTPS egress remains an opaque CONNECT tunnel.
 - **Tier-1 hardened-runc shares the host kernel.** A kernel 0-day on a
   runc-only host defeats the sandbox boundary. Wardyn defaults to CC2 (gVisor)
   for this reason.
@@ -269,6 +272,9 @@ Notable residual risks:
   prints the exact steps for your machine.
 - **Go 1.26+** and **Node 22 + pnpm 9** — only for building from source
   (host mode builds `bin/wardynd` + the UI locally).
+- **Claude Code CLI** (optional, host mode) — `make setup` stages an existing
+  `claude` login so sandboxes can use your subscription; without one, runs
+  have no model access until you add an API key (or Bedrock) in the UI.
 - Postgres is **included** in the compose file — nothing external to install,
   no hosted service to sign up for.
 
@@ -474,7 +480,7 @@ kind — today only the Docker target runs functionally (see Status below).
 |---|---|---|
 | **v0.1** | Per-run identity (embedded provider), approval FSM, credential broker, L2 egress proxy, append-only Postgres audit + PTY replay, CC1/CC2 confinement gating, Compose deploy | **Shipped (pre-alpha)** |
 | **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, policy CRUD, run-completion state, control-plane TLS, real conformance gate + supply-chain CI | **In progress** |
-| **v0.5** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway, L2 TLS-intercept, Helm chart, cloud STS federation, OTLP/OCSF SIEM sinks | Planned |
+| **v0.5** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway, arbitrary-domain L2 TLS-intercept (targeted LLM/registry MITM already ships), Helm chart, cloud STS federation, OTLP/OCSF SIEM sinks | Planned |
 | **v1.0** | CC3 Kata packaged/GA (experimental today — see Confinement Classes), Cilium toFQDNs, hash-chained audit + signed action receipts, separation-of-duty on control plane, conformance suite across both targets | Planned |
 
 ---
@@ -483,7 +489,7 @@ kind — today only the Docker target runs functionally (see Status below).
 
 | Binary | Role |
 |---|---|
-| `wardynd` | Control plane: REST API, embedded web UI, policy engine, approval FSM, token broker, audit ingest. Postgres only. |
+| `wardynd` | Control plane: REST API, embedded web UI (served by the same process from a built `ui/dist` — `WARDYN_UI_DIR` — not compiled in via `go:embed`), policy engine, approval FSM, token broker, audit ingest. Postgres only. |
 | `wardyn-runner` | Data plane: `docker/` driver implementing `internal/runner.Runner` (`k8s` driver **[v0.5 — planned]**, not yet built). |
 | `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection. |
 | `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |

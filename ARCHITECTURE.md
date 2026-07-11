@@ -18,9 +18,9 @@ the governance target.
 
 | Binary | Role |
 |---|---|
-| `wardynd` | Control plane: REST API, embedded web UI, policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
+| `wardynd` | Control plane: REST API, embedded web UI (served by the same process from a built `ui/dist` — `WARDYN_UI_DIR` — not compiled in via `go:embed`), policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
 | `wardyn-runner` | Data plane: implements `internal/runner.Runner` with the `docker/` driver **[shipped]** and `k8s/` driver **[v0.5+ — planned]**. |
-| `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection. Same binary on both targets. |
+| `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection. Opt-in per-run TLS interception (`intercept_tls`) of operator-listed MITM-eligible hosts (LLM endpoints, artifact registries) with outbound content inspection (`internal/contentscan`; per-proxy kill-switch `WARDYN_LLM_SCAN`) — claims-contract in `threatmodel/THREAT-MODEL.md` §5.1a. Same binary on both targets. |
 | `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
@@ -56,6 +56,26 @@ flowchart LR
 The trusted control plane launches each agent into an untrusted, gatewayless
 sandbox whose only path out is the `wardyn-proxy` sidecar; sidecars stream
 decisions and session casts back into the append-only audit log.
+
+### Feature surfaces on top of the core loop (all shipped)
+
+- **Workspace onboarding** — clone-and-scan a source (`wardyn-scan` →
+  `internal/workspacescan`; secret/service/egress needs are derived
+  server-side), then prove operator-approved setup commands work under
+  confinement (`wardyn-verify`). Endpoints under `/api/v1/workspaces/`.
+- **Record Mode** — run a task open once, then synthesize a least-privilege
+  policy from its captured audit trail (`internal/recordmode`,
+  `POST /api/v1/runs/{id}/profile`) and re-run it confined.
+- **Bring Your Own Image (BYOI)** — a run may name an arbitrary base image;
+  the control plane wraps it with the runner tools via `internal/envbuild`
+  (opt-in, `WARDYN_ENVBUILD`) and gates launch on an in-sandbox
+  `agent-run --selftest`, fail-closed (`internal/api/runs.go`). Operator docs:
+  `deploy/images/README.md`, "Bring your own image".
+- **Managed harness credential** — a containerized control plane (no host
+  `~/.claude`) connects a Claude subscription via an interactive login sandbox
+  plus a pasted `claude setup-token` credential, stored age-encrypted and
+  injected proxy-side like the resident-login path
+  (`internal/api/harnesscred.go`, `POST /api/v1/setup/harness-login`).
 
 ## The four nouns (`internal/types`)
 
@@ -139,7 +159,9 @@ forward-compatibility values; no transition produces them today.
    agent loop.
 5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;
    policy refuses what a substrate cannot enforce (Confinement Classes
-   CC1 runc / CC2 gVisor default / CC3 Kata). Embedded identity provider
+   CC1 runc / CC2 gVisor default / CC3 Kata **[experimental]** — surfaced in
+   the README, UI, and CLI by their friendly names **Fence / Wall / Vault**).
+   Embedded identity provider
    refuses `cloud_sts` grants (SPIRE required). Residual risks are
    published in `threatmodel/`, not hidden.
 6. **Audit is append-only and free.** Every mint/revoke/approval/policy
@@ -250,7 +272,9 @@ Postgres persists to the `postgres_data` volume; `wardynd` holds the
 > A first-class **team** deployment — the compose control plane running as a
 > sealed, multi-user shared service with human SSO — is **coming soon**; the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, but the UI's SSO login
-> is disabled for now, and `make setup` no longer offers a host-vs-team choice.
+> is disabled for now. `make setup` asks **host vs containerized** (both
+> single-user); team is not a selectable mode (`WARDYN_SETUP_MODE=team` prints
+> a notice and exits).
 
 ## Parity rule
 
