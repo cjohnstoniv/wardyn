@@ -371,10 +371,31 @@ cmd_down() {
 # recordings, audit) so runs + the append-only audit log survive a restart, which
 # is what you want normally. reset REMOVES them, so the following `up` starts with
 # an EMPTY Runs list — the honest "fresh like a new clone" state on a machine that
-# has run Wardyn before. Irreversible on purpose; the `reset` verb IS the consent.
+# has run Wardyn before. Irreversible, so it CONFIRMS (default No; headless needs
+# WARDYN_FORCE_RESET=1 — same convention as setup.sh's stale-store recovery). The
+# confirm exists mostly for HOST-mode (`make setup`) users: reset does not touch
+# their host daemon at all — it wipes the COMPOSE volumes and then starts a
+# CONTAINERIZED wardynd next to the still-running host one, a different runtime
+# shape than they asked for.
 cmd_reset() {
   warn "reset REMOVES the compose volumes: Postgres (ALL runs + the append-only audit log) and recordings."
   warn "This is irreversible. Plain \`make compose-down\` keeps them; use that if you only want to stop the stack."
+  _host_pid="$(cat "${HOME}/.wardyn/host-wardynd.pid" 2>/dev/null || true)"
+  if [ -n "${_host_pid}" ] && kill -0 "${_host_pid}" 2>/dev/null; then
+    warn "You are running HOST mode (\`make setup\`, PID ${_host_pid}). reset operates on the COMPOSE stack only:"
+    warn "it will NOT reset your host daemon, and it WILL start a second, CONTAINERIZED wardynd."
+    warn "To reset host mode instead: make stop-host && make setup"
+  fi
+  if [ "${WARDYN_FORCE_RESET:-}" != 1 ]; then
+    if [ -t 0 ]; then
+      printf "  Wipe the compose volumes and re-up? [y/N] "
+      read -r _a || _a=""
+      case "${_a}" in y|Y|yes|YES) ;; *) log "Aborted — nothing was removed."; exit 0 ;; esac
+    else
+      warn "Non-interactive: refusing to wipe volumes without WARDYN_FORCE_RESET=1."
+      exit 2
+    fi
+  fi
   compose down -v --remove-orphans
   log "Volumes removed — bringing up a fresh, empty Wardyn"
   cmd_up
