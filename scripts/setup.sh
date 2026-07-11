@@ -123,7 +123,7 @@ elif $CLAUDE_BEDROCK || $WARDYN_BEDROCK_SET; then
 elif $HAVE_CLAUDE; then
   warn "Claude CLI present but no model auth detected — run 'claude login', use an API key, or configure AWS Bedrock (export WARDYN_BEDROCK_REGION + WARDYN_BEDROCK_MODEL)."
 else
-  info "No Claude CLI on PATH (fine for team/compose mode with brokered keys)"
+  info "No Claude CLI on PATH (add an API key in the UI later to enable model access)"
 fi
 
 # ── barrier install guidance (sudo — never run silently) ─────────────────────
@@ -144,10 +144,9 @@ fi
 # prompt host vs team — team (a sealed compose control plane / multi-user shared
 # service) is a COMING-SOON feature. Setup runs host mode; an explicit request for
 # team (WARDYN_SETUP_MODE=team) gets a clear notice and exits.
-MODE="${WARDYN_SETUP_MODE:-local}"
-case "$MODE" in
-  local|Local|1) MODE=local;;
-  team|Team|2)
+case "${WARDYN_SETUP_MODE:-local}" in
+  local) ;;
+  team)
     hd "Team mode is coming soon"
     warn "Team mode — a sealed compose control plane where wardynd runs containerized as a shared,"
     warn "multi-user service — is a COMING-SOON feature and isn't available in this version."
@@ -156,7 +155,7 @@ case "$MODE" in
     exit 2
     ;;
   *)
-    warn "WARDYN_SETUP_MODE='${MODE}' is not valid — this version supports HOST mode only."
+    warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid — this version supports HOST mode only."
     warn "Leave WARDYN_SETUP_MODE unset (or =local) for host mode; team mode is coming soon."
     exit 2
     ;;
@@ -607,7 +606,7 @@ if $healthy; then
       [ -n "$scm_key" ] && warn "An SSH identity now lives in Wardyn's encrypted store on this host (the store's age key persists across restarts)."
     fi
   fi
-  unset scm_pat scm_pat_host scm_key scm_ssh_hosts scm_plan scm_do scm_ans scm_n h k
+  unset scm_pat scm_pat_host scm_key scm_ssh_hosts scm_plan scm_do scm_n h k
 
   hd "Wardyn is up (host mode) — your terminal is free"
   ok "UI     ${URL}   (opening in your browser)"

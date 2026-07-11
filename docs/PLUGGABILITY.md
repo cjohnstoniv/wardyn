@@ -136,6 +136,6 @@ as "you are running SPIRE." Three mechanisms keep it honest:
 - `internal/secretstore/{registry.go,secretstore.go}` + `secretstore/pg/register.go` + `secretstore/secretstoretest`.
 - `internal/recording/registry.go` + `recording/recordingtest`.
 - `internal/runner/substrate/substrate.go` (the `Substrate` sub-interface + `ClassSupport`) + `internal/runner/orchestrator/` (the build-tag-free `runner.Runner` that multiplexes substrates by Confinement Class) + `internal/runner/docker/hardening.go` (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
-- `internal/egress/evaluator.go` (policy evaluator) + `internal/egress/proxy/gateway.go` (LLM-gateway forwarder) — the egress seams.
+- `internal/egress/evaluator.go` (policy evaluator, overridable via `Options.Evaluator` in `internal/egress/proxy/proxy.go`) + `internal/egress/proxy/local_routes.go` (LLM-route forwarding) — the egress seams.
 - `internal/runner/runner.go` (`Capabilities.Resolved`) + `internal/api/server.go` (`/healthz` `confinement_substrates` + `components`).
 - Planned impls (seams ready, alternates not built): the non-OCI VMM `Substrate` (SmolVM/Firecracker), SPIRE identity, OpenBao secrets, OPA/Cedar evaluator, an external LLM gateway.

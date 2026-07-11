@@ -8,7 +8,6 @@ ui/dist
 bin/
 dist/
 data/
-spikes/
 test/e2e/fixtures/**/*.cast
 *.log
 # Compiled binaries that may sit at the repo root from local `go build`.

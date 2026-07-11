@@ -3,9 +3,8 @@
 #
 # Runs INSIDE the agent sandbox, cwd = the mounted workspace ($PWD). The sandbox
 # has NO default route; its only path off the per-run network is the wardyn-proxy
-# sidecar (https_proxy/http_proxy already point at it). This task supersedes the
-# old fixtures/probe.sh probe: instead of just printing verdicts it writes
-# machine-checkable EVIDENCE FILES into the workspace for grade.sh:
+# sidecar (https_proxy/http_proxy already point at it). Instead of just printing
+# verdicts it writes machine-checkable EVIDENCE FILES into the workspace for grade.sh:
 #
 #   allowed_code.txt  HTTP status for an ALLOWED host (github.com) via the proxy
 #                     -> expect 200/301/302 (proxy up + host allowed)
