@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // MEDIUM fixes pinned here:
@@ -124,6 +124,24 @@ describe("AddSecretDialog — overwrite warning", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
     await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-other"));
+  });
+});
+
+describe("SecretsScreen — Standing chip (SCM ladder rungs 2/3)", () => {
+  beforeEach(() => {
+    listSecretsMock.mockReset();
+  });
+
+  it("shows the Standing chip only on ssh-key-*/git-pat-* rows", async () => {
+    listSecretsMock.mockResolvedValue(["ssh-key-github-com", "other-secret"]);
+    render(<SecretsScreen />);
+    await screen.findByText("ssh-key-github-com");
+
+    const standingRow = screen.getByText("ssh-key-github-com").closest("tr")!;
+    expect(within(standingRow).getByText("Standing")).toBeInTheDocument();
+
+    const plainRow = screen.getByText("other-secret").closest("tr")!;
+    expect(within(plainRow).queryByText("Standing")).not.toBeInTheDocument();
   });
 });
 

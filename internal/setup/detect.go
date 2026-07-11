@@ -136,3 +136,42 @@ func detectKVM() bool {
 func isWSLProcVersion(procVersion string) bool {
 	return strings.Contains(strings.ToLower(procVersion), "microsoft")
 }
+
+// SCMPosture is a presence-only snapshot of the host's existing git-credential
+// habits, used to recommend a safer rung of the credential ladder — never to
+// import anything. No file under $HOME is ever read for values; the
+// credential.helper NAME comes from `git config`, never the credentials it
+// manages. Best-effort like the CLI probe: a CONTAINERIZED wardynd cannot see
+// the operator's $HOME, so every field false-negatives there.
+type SCMPosture struct {
+	// GhCLI: ~/.config/gh/hosts.yml exists — a gh CLI login, i.e. a broad
+	// whole-account oauth session (ladder rung 4).
+	GhCLI bool `json:"gh_cli"`
+	// CredentialHelper is the global git credential.helper name ("" if unset).
+	// "store"/"cache" prefixes mean loose plaintext-ish credentials on disk.
+	CredentialHelper string `json:"credential_helper"`
+	// GitCredentialsFile: ~/.git-credentials exists (plaintext credentials).
+	GitCredentialsFile bool `json:"git_credentials_file"`
+	// Netrc: ~/.netrc (or .netrc.gpg) exists — legacy plaintext credentials.
+	Netrc bool `json:"netrc"`
+}
+
+// DetectSCMPosture reports the host git-credential posture (presence only).
+func DetectSCMPosture() SCMPosture {
+	home, _ := os.UserHomeDir()
+	var p SCMPosture
+	if home == "" {
+		return p
+	}
+	exists := func(rel ...string) bool {
+		_, err := os.Stat(filepath.Join(append([]string{home}, rel...)...))
+		return err == nil
+	}
+	p.GhCLI = exists(".config", "gh", "hosts.yml")
+	p.GitCredentialsFile = exists(".git-credentials")
+	p.Netrc = exists(".netrc") || exists(".netrc.gpg")
+	if out, err := exec.Command("git", "config", "--global", "credential.helper").Output(); err == nil {
+		p.CredentialHelper = strings.TrimSpace(string(out))
+	}
+	return p
+}

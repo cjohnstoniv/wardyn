@@ -67,6 +67,13 @@ const PROVIDER_NAME_CHIPS = [
 const WRITE_ONLY_TOOLTIP =
   "Write-only: the value can be replaced or removed, but never read back — not even by you.";
 
+// Rungs 2/3 of the SCM safest-path ladder (ScmProviderStep) name their secrets
+// with these prefixes; both are STANDING resident credentials auto-used by every
+// future clone to that host, unlike a GitHub App's per-run brokered token.
+const STANDING_NAME_RE = /^(ssh-key-|git-pat-)/;
+const STANDING_TOOLTIP =
+  "Auto-used by every future clone to this host with no per-run prompt — delete to revoke.";
+
 export function SecretsScreen() {
   const [names, setNames] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -188,9 +195,16 @@ export function SecretsScreen() {
                         <KeyRound className="size-3.5 text-cyan" />
                         <Mono className="text-foreground">{name}</Mono>
                       </span>
-                      <Chip tone="cyan" className="gap-1" title={WRITE_ONLY_TOOLTIP}>
-                        <Lock className="size-3" /> write-only
-                      </Chip>
+                      <span className="flex items-center gap-1.5">
+                        {STANDING_NAME_RE.test(name) && (
+                          <Chip tone="warning" title={STANDING_TOOLTIP}>
+                            Standing
+                          </Chip>
+                        )}
+                        <Chip tone="cyan" className="gap-1" title={WRITE_ONLY_TOOLTIP}>
+                          <Lock className="size-3" /> write-only
+                        </Chip>
+                      </span>
                     </div>
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>

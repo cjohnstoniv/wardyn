@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { StepConfinement } from "./step-confinement";
 import { initialWizardState } from "./wizard-types";
 
@@ -93,5 +93,12 @@ describe("StepConfinement copy", () => {
     expect(screen.getByText("Keep running until I stop it")).toBeInTheDocument();
     expect(screen.queryByText(/auto_stop_after_sec = -1/)).toBeNull();
     expect(screen.getAllByText("auto_stop_after_sec").length).toBeGreaterThan(0);
+  });
+
+  it("badges the strongest available tier's tile Recommended, same nudge as Getting started's tier picker", () => {
+    renderStep({ availableClasses: ["CC1", "CC2"] });
+    expect(screen.getAllByText("Recommended")).toHaveLength(1);
+    const wallCard = screen.getByRole("button", { name: /Wall/ });
+    expect(within(wallCard).getByText("Recommended")).toBeInTheDocument();
   });
 });

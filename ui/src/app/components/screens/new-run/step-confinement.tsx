@@ -15,7 +15,7 @@ import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Label } from "../../ui/label";
 import { cn } from "../../ui/utils";
-import { ConfinementChip } from "../../wardyn/primitives";
+import { Chip, ConfinementChip } from "../../wardyn/primitives";
 import { BarrierStrengthStrip } from "../../wardyn/barrier-strength-strip";
 import { CC_META, CC_ORDER, CONFINEMENT_CONSTANT_NOTE } from "../../wardyn/cc-meta";
 import { TierMatrixDialog } from "../../wardyn/tier-matrix";
@@ -54,6 +54,21 @@ const UNAVAILABLE_REASON: Record<ConfinementClass, string> = {
   CC3: "No Vault (Kata microVM) runtime on this runner — set it up in Getting started.",
 };
 
+// The strongest tier this run can actually use, so the picker nudges toward it
+// the same way Getting started's tier picker does — same "strongest available
+// wins" idea as recommendedTier() in ../setup/environment-step.tsx:57-69, but
+// adapted to this step's data: a live per-run availability set (already
+// hardware-filtered by the runner's health probe) and a policy floor, rather
+// than SetupStatus + a /dev/kvm probe.
+function strongestAvailable(
+  available: Set<string>,
+  minClass: ConfinementClass | undefined,
+): ConfinementClass | null {
+  const floor = minClass ? CC_ORDER.indexOf(minClass) : 0;
+  const usable = CC_ORDER.filter((cc) => available.has(cc) && CC_ORDER.indexOf(cc) >= floor);
+  return usable[usable.length - 1] ?? null;
+}
+
 export function StepConfinement({
   state,
   patch,
@@ -77,6 +92,9 @@ export function StepConfinement({
   const available = new Set(
     probing ? CC_ORDER : availableClasses.length ? availableClasses : ["CC1"],
   );
+  // Never recommend off the placeholder full-CC_ORDER set used while probing —
+  // that would claim Vault before the health probe has actually said so.
+  const recommended = probing ? null : strongestAvailable(available, minClass);
   // "Compare all three" opens the pricing-table matrix (E1) — detail on demand,
   // never a replacement for the picker above.
   const [showMatrix, setShowMatrix] = React.useState(false);
@@ -130,6 +148,11 @@ export function StepConfinement({
                     </span>
                   )}
                 </div>
+                {recommended === cc && (
+                  <Chip tone="primary" className="mt-1.5 uppercase tracking-wide">
+                    Recommended
+                  </Chip>
+                )}
                 <p className="mt-2.5 text-[12px] leading-snug text-foreground/80">
                   {TIER_GUIDANCE[cc]}
                 </p>

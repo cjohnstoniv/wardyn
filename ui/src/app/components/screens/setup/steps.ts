@@ -102,13 +102,13 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
 
 // Badge for a corporate-baseline step (Host Proxy / SCM Provider / Artifact
-// Redirect): always non-blocking (B8-style) — these backend checks are
-// hardcoded "info"-tier (see hostProxyCheck/scm_provider/artifactRepoCheck in
-// internal/api/setup.go), never "ok", so a check.status==='ok' read could
-// NEVER show "Configured" even once the operator had wired it up (M21). The
-// badge instead derives readiness client-side from the actual SiteConfig field
-// each step's own body edits — the honest default stays a neutral "Optional"
-// nudge until that field is genuinely set.
+// Redirect): always non-blocking (B8-style). host_proxy/artifact_repo are
+// hardcoded "info"-tier; scm_provider is GRADED (ok for a GitHub App, warn for
+// a standing ssh-key-* secret, info otherwise — scmProviderCheck in
+// internal/api/setup.go) but still never gates readiness. The badge derives
+// readiness client-side from the actual SiteConfig field each step's own body
+// edits (M21) — the honest default stays a neutral "Optional" nudge until that
+// field is genuinely set; the graded check row carries the safety framing.
 export function siteConfigConfigured(
   cfg: SiteConfig | null,
   checkId: "host_proxy" | "scm_provider" | "artifact_repo",
