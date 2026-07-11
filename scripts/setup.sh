@@ -7,15 +7,17 @@
 # choice — no credential is copied, imported, or a volume destroyed unless you say so
 # (interactively) or set the matching opt-in env var (non-interactively).
 #
-# Deployment: TWO supported single-user setups.
+# Deployment: ONE front door, two supported single-user setups. Interactively
+# it asks which (Enter = host); headless it defaults to host, and
+# WARDYN_SETUP_MODE picks explicitly for scripts.
 #  - HOST mode (default): sandbox agents run on YOUR machine with YOUR Claude
 #    login — wardynd runs as you, sees ~/.claude directly (no re-login), and
 #    proxy-injects your live token (never a stale copy). Best for personal use.
-#  - CONTAINERIZED mode (WARDYN_SETUP_MODE=container): the compose stack —
-#    wardynd runs in a container on wardyn-internal, so sandbox→control-plane
-#    callbacks route in-network. This is the fix for Docker Desktop + WSL2 NAT
-#    (workspace Verify/Record), at the cost of host-login visibility (use an
-#    API key / Bedrock for model access). Delegates to scripts/up.sh up.
+#  - CONTAINERIZED mode: the compose stack — wardynd runs in a container on
+#    wardyn-internal, so sandbox→control-plane callbacks route in-network. This
+#    is the fix for Docker Desktop + WSL2 NAT (workspace Verify/Record), at the
+#    cost of host-login visibility (use an API key / Bedrock for model access).
+#    Delegates to scripts/up.sh up.
 #
 # TEAM mode (that same compose control plane as a shared MULTI-USER service —
 # SSO logins, per-user identity/RBAC) is a COMING-SOON feature;
@@ -25,8 +27,9 @@
 # this script NEVER runs sudo silently. It detects what's present and prints the exact
 # commands for anything missing, so you stay in control of privileged changes.
 #
-# Usage:  ./scripts/setup.sh                 (host mode; no mode prompt)
-#         WARDYN_SETUP_MODE=container ...    (containerized single-user stack)
+# Usage:  ./scripts/setup.sh                 (asks host vs containerized; headless = host)
+#         WARDYN_SETUP_MODE=local ...        (host mode, no prompt)
+#         WARDYN_SETUP_MODE=container ...    (containerized single-user stack, no prompt)
 #         WARDYN_SETUP_MODE=team ...         (errors: team mode is coming soon)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -156,9 +159,31 @@ if [ "${#missing_barriers[@]}" -gt 0 ]; then
 fi
 
 # ── DECIDE: two supported single-user modes — host (default) and containerized
-# (delegates to scripts/up.sh up). No prompt. TEAM (that compose control plane
-# as a shared MULTI-USER service: SSO logins, per-user identity/RBAC) is a
-# COMING-SOON feature; an explicit request gets a clear notice and exits.
+# (delegates to scripts/up.sh up). ONE front door: with a TTY and no explicit
+# WARDYN_SETUP_MODE we ask which (Enter = host; the WSL2 hint recommends
+# containerized where host mode's Verify/Record callbacks are known-broken).
+# Headless stays promptless and defaults to host — same behavior as before.
+# TEAM (that compose control plane as a shared MULTI-USER service: SSO logins,
+# per-user identity/RBAC) is a COMING-SOON feature; an explicit request gets a
+# clear notice and exits.
+if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
+  hd "Where should the control plane run?"
+  say "    1) host          — wardynd runs as you; uses your Claude login directly (default)"
+  say "    2) containerized — the compose stack; add an API key/Bedrock for model access"
+  if $IS_WSL; then
+    info "WSL2 detected: on Docker Desktop with default (NAT) networking, pick 2 —"
+    info "host mode's workspace Verify/Record callbacks don't route there."
+  fi
+  while :; do
+    printf "  Choice [1/2] (Enter = 1): "
+    read -r _mode || _mode=""
+    case "${_mode}" in
+      ""|1|host)          WARDYN_SETUP_MODE=local; break;;
+      2|container*)       WARDYN_SETUP_MODE=container; break;;
+      *)                  warn "Please answer 1 or 2.";;
+    esac
+  done
+fi
 case "${WARDYN_SETUP_MODE:-local}" in
   local) ;;
   container)
@@ -183,7 +208,7 @@ case "${WARDYN_SETUP_MODE:-local}" in
     exit 2
     ;;
 esac
-ok "Mode: host (local). Also available: WARDYN_SETUP_MODE=container — team (multi-user) is coming soon"
+ok "Mode: host (local) — team (multi-user) is coming soon"
 
 # ── ACT (host mode only; team is coming soon, so there is no team branch) ──────
 # local / host mode
