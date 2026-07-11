@@ -585,6 +585,13 @@ func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Write
 
 // ensureImage pulls ref if not already present locally. Fail closed: never
 // attempt a build with an absent builder image.
+//
+// A digest-pinned ref (repo@sha256:...) is stored under RepoDigests, NOT
+// RepoTags, so it must be matched against both — otherwise a pre-pulled
+// digest-pinned BYOI base would never match, fall through to a pull, and fail
+// for a private/local-only image with no registry auth (mirrors the driver's
+// imagePresent @sha256: handling, so FinalizeBase honors the same pre-pull
+// workflow the docker driver does).
 func (b *Builder) ensureImage(ctx context.Context, ref string) error {
 	summaries, err := b.cli.ImageList(ctx, image.ListOptions{})
 	if err != nil {
@@ -593,6 +600,11 @@ func (b *Builder) ensureImage(ctx context.Context, ref string) error {
 	for _, s := range summaries {
 		for _, tag := range s.RepoTags {
 			if tag == ref {
+				return nil
+			}
+		}
+		for _, dig := range s.RepoDigests {
+			if dig == ref {
 				return nil
 			}
 		}

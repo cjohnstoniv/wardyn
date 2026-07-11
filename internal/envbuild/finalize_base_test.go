@@ -64,6 +64,23 @@ func TestFinalizeBase_PullsAbsentBase(t *testing.T) {
 	}
 }
 
+func TestFinalizeBase_PrePulledDigestBaseIsNotRePulled(t *testing.T) {
+	// A digest-pinned base pre-pulled on the host (present via RepoDigests) must
+	// NOT trigger a pull — that's the "immutable, no registry-auth" workflow.
+	ref := "myco/dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	f := newFakeEnvbuilderDocker()
+	f.imagesPresent[ref] = true
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-d:latest"); err != nil {
+		t.Fatalf("FinalizeBase on a pre-pulled digest base: %v", err)
+	}
+	if f.pullCalled {
+		t.Fatal("FinalizeBase re-pulled a pre-pulled digest-pinned base (RepoDigests not matched)")
+	}
+}
+
 func TestFinalizeBase_FailsClosedOnBuildError(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	f.imagesPresent["distroless/static"] = true

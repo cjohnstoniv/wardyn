@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -138,32 +139,74 @@ func execAsciinema(asciinemaPath, cast string, agentArgv []string) error {
 }
 
 // runAsciinema runs asciinema as a child process (not exec) so we can deliver
-// the cast file after it exits. The returned int is the agent's exit code (0
+// the cast file after it exits. The returned int is the AGENT's exit code (0
 // on success); the caller must run delivery before propagating it via
 // os.Exit, so a non-zero agent exit is reported here rather than exited
 // directly. A non-nil error means asciinema itself could not be run.
+//
+// EXIT-CODE FIDELITY: `asciinema rec -c "<cmd>"` exits 0 on a SUCCESSFUL
+// RECORDING regardless of <cmd>'s own exit status — so asciinema's exit code
+// masks the agent's. That silently turns a failed agent (including a failed
+// `agent-run --selftest` the BYOI gate relies on, and any failed recorded task)
+// into a reported success. buildAsciinemaArgv therefore appends a shell trailer
+// that writes the agent's real $? to a sidecar exit file; we read it back here
+// and prefer it over asciinema's (masked) code.
 func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	argv := buildAsciinemaArgv(asciinemaPath, cast, agentArgv)
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	// Prefer the sidecar exit code (the agent's true $?) when the trailer wrote
+	// it — this is the load-bearing value, not asciinema's own.
+	if code, ok := readAgentExitFile(cast); ok {
+		return code, nil
+	}
+	// No sidecar (e.g. the shell died before the trailer ran): fall back to
+	// asciinema's exit code, which at least catches a hard recorder failure.
+	if runErr != nil {
 		var exitErr *exec.ExitError
-		if asExit(err, &exitErr) {
+		if asExit(runErr, &exitErr) {
 			return exitErr.ExitCode(), nil
 		}
-		return 0, fmt.Errorf("asciinema: %w", err)
+		return 0, fmt.Errorf("asciinema: %w", runErr)
 	}
 	return 0, nil
 }
 
+// agentExitFile is the sidecar path the -c trailer writes the agent's $? to,
+// derived from the cast path so it is per-run and co-located with the cast.
+func agentExitFile(cast string) string {
+	return strings.TrimSuffix(cast, filepath.Ext(cast)) + ".exit"
+}
+
+// readAgentExitFile reads the agent's real exit code from the sidecar, if the
+// -c trailer wrote it. ok=false when absent/unparseable (the trailer never ran).
+func readAgentExitFile(cast string) (int, bool) {
+	b, err := os.ReadFile(agentExitFile(cast))
+	if err != nil {
+		return 0, false
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, false
+	}
+	return code, true
+}
+
 func buildAsciinemaArgv(asciinemaPath, cast string, agentArgv []string) []string {
+	// Trailer: capture the agent command's real exit status to the sidecar file
+	// (asciinema's own exit code masks it — see runAsciinema). `exit $ec` keeps the
+	// intent explicit even though asciinema ignores the -c command's exit.
+	inner := strings.Join(quoteArgs(agentArgv), " ")
+	rec := inner + "; __wrec_ec=$?; printf %s \"$__wrec_ec\" > " + shellQuote(agentExitFile(cast)) +
+		" 2>/dev/null; exit $__wrec_ec"
 	return []string{
 		asciinemaPath, "rec",
 		"--stdin",
 		"-q",
-		"-c", strings.Join(quoteArgs(agentArgv), " "),
+		"-c", rec,
 		cast,
 	}
 }
