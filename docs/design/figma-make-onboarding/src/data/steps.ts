@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // The 9 step ids and labels are FROZEN (e2e tests target them) — group and re-layout freely,
 // but each keeps its identity and full label. Grouped into the four phases from brief §7.1.
 

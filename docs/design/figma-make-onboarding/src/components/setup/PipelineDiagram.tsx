@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { Fingerprint, ShieldHalf, KeyRound, Hand, ScrollText, ChevronRight, type LucideIcon } from "lucide-react";
 import { cn } from "../ui/utils";
 

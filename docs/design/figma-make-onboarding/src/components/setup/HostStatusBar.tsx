@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { RotateCw, Loader2, Server } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";

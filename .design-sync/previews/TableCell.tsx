@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from '@wardyn/ui';
 
 const RunsTable = () => (

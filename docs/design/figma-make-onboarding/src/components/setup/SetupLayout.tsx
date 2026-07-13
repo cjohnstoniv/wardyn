@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { type ReactNode, useState } from "react";
 import { ArrowLeft, ArrowRight, Rocket, X, Eye } from "lucide-react";
 import { Button } from "../ui/button";

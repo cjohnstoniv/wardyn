@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { BarrierStrengthStrip } from '@wardyn/ui';
 
 export const Fence = () => <BarrierStrengthStrip tier="CC1" />;
