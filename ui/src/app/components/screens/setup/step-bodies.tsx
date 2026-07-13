@@ -423,6 +423,7 @@ export function ScmProviderStep({
   reloadSiteConfig,
   saveSiteConfig,
   onAddSecret,
+  onJump,
   onRecheck,
   rechecking,
 }: {
@@ -431,6 +432,7 @@ export function ScmProviderStep({
   reloadSiteConfig: () => Promise<void>;
   saveSiteConfig: (next: SiteConfig) => Promise<void>;
   onAddSecret: (name: string) => void;
+  onJump: (id: SetupStepId) => void;
   onRecheck: () => void;
   rechecking: boolean;
 }) {
@@ -485,8 +487,10 @@ export function ScmProviderStep({
 
       {/* Rung 1 — GitHub App: brokered, ≤1h scoped tokens; the only credential
           Wardyn itself can expire. App ID / PEM inputs live on the Credentials
-          step; this card is the ladder's status + pitch, not a second form. */}
-      <div className="space-y-2 rounded-xl border border-border p-4">
+          step; this card is the ladder's status + pitch, not a second form —
+          so it carries a JUMP to that form rather than a dead "Needs setup"
+          badge with nothing to click (every other rung here has an action). */}
+      <div className="space-y-2.5 rounded-xl border border-border p-4">
         <div className="flex items-center gap-2">
           <Github className="size-4 text-foreground" />
           <h3 className="text-sm font-semibold text-foreground">GitHub App</h3>
@@ -502,6 +506,11 @@ export function ScmProviderStep({
           Wardyn mints a fresh ≤1h read-scoped token per run — the only credential Wardyn itself can
           expire.
         </p>
+        {!status.secrets.github_app && (
+          <Button variant="outline" size="sm" onClick={() => onJump("credentials")}>
+            <KeyRound className="size-3.5" /> Set up on the Credentials step
+          </Button>
+        )}
       </div>
 
       {/* Rung 2 — fine-grained PAT: brokered per-clone, never resident. */}
