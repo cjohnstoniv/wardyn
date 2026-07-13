@@ -114,6 +114,8 @@ export function ImportWorkspaceDialog({
 
   // Scan / verify busy + verify inline notice (422/503/409).
   const [scanning, setScanning] = React.useState(false);
+  // The server's scan-failure detail, kept so ScanPane can name the real cause.
+  const [scanError, setScanError] = React.useState<string | null>(null);
   const [verifyBusy, setVerifyBusy] = React.useState(false);
   const [verifyNotice, setVerifyNotice] = React.useState<{ status: number; detail?: string } | null>(null);
 
@@ -253,6 +255,7 @@ export function ImportWorkspaceDialog({
   const doScan = async () => {
     if (!wsId) return;
     setScanning(true);
+    setScanError(null);
     try {
       const { async: isAsync } = await api.scanWorkspace(wsId);
       if (isAsync) {
@@ -261,6 +264,9 @@ export function ImportWorkspaceDialog({
         });
       }
     } catch (e) {
+      // Keep the server's reason: the toast is transient, but ScanPane renders the
+      // failure until it's rescanned — it must state the REAL cause, not a guess.
+      setScanError(msg(e));
       toast.error("Scan failed", { description: msg(e) });
     } finally {
       setScanning(false);
@@ -438,7 +444,13 @@ export function ImportWorkspaceDialog({
             )}
 
             {step === "scan" && (
-              <ScanPane ws={ws} scanning={scanning} onRescan={doScan} onWorkspaceUpdated={setWs} />
+              <ScanPane
+                ws={ws}
+                scanning={scanning}
+                scanError={scanError}
+                onRescan={doScan}
+                onWorkspaceUpdated={setWs}
+              />
             )}
 
             {step === "configure" && ws && (
@@ -661,11 +673,13 @@ function SourcePane({
 function ScanPane({
   ws,
   scanning,
+  scanError,
   onRescan,
   onWorkspaceUpdated,
 }: {
   ws: Workspace | null;
   scanning: boolean;
+  scanError: string | null;
   onRescan: () => void;
   onWorkspaceUpdated: (w: Workspace) => void;
 }) {
@@ -695,13 +709,30 @@ function ScanPane({
   if (ws.status === "error") {
     return (
       <div className="space-y-3">
+        {/* The server's 422 detail is the ONLY thing that names the actual cause
+            (e.g. "local directory not found on this host: /home/…"). It used to be
+            toasted and then lost, leaving this pane asserting a private-repo
+            credential problem for EVERY failure — which sent operators off to add a
+            git-pat secret they didn't need. Lead with the real reason; keep the
+            credential hint as secondary guidance, and only for repos. */}
         <div className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2.5 text-xs text-danger">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <span>
-            The scan failed for this workspace. Check the source path/repo, then rescan. A private
-            repo needs a brokered <code className="font-mono">git-pat-&lt;host&gt;</code> or{" "}
-            <code className="font-mono">ssh-key-&lt;host&gt;</code> secret before the scan can clone
-            it — add one under Secrets (or the SCM Provider setup step) first.
+            {scanError ? (
+              <>
+                The scan failed: <span className="font-mono">{scanError}</span>
+              </>
+            ) : (
+              <>The scan failed for this workspace. Check the source path/repo, then rescan.</>
+            )}
+            {ws.kind === "repo" && (
+              <>
+                {" "}
+                A private repo needs a brokered <code className="font-mono">git-pat-&lt;host&gt;</code>{" "}
+                or <code className="font-mono">ssh-key-&lt;host&gt;</code> secret before the scan can
+                clone it — add one under Secrets (or the SCM Provider setup step) first.
+              </>
+            )}
           </span>
         </div>
         <Button variant="outline" size="sm" onClick={onRescan}>
