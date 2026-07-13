@@ -168,6 +168,12 @@ export function ModelStep({
   // local box (host_like === false + local auth); host mode never sees it.
   const suggestHostMode =
     !readiness.llmReady && status.deployment?.host_like === false && status.auth.mode === "local";
+  // The same deployment fact as suggestHostMode, but WITHOUT the !llmReady gate: a
+  // sealed (compose/team) wardynd can never see a host ~/.claude login, whether or
+  // not the model is connected yet. Offering "Install / Log in to Claude CLI" here
+  // dangles a path that can NEVER satisfy this step — claudeSubDetected is wired to
+  // wardynd's own view, which is blind to the host by construction.
+  const sealedControlPlane = status.deployment?.host_like === false;
 
   const present = status.secrets.present;
   const anthropic = hasSecret(present, /anthropic/i);
@@ -469,11 +475,20 @@ export function ModelStep({
             bedrockConfigured && bedrockRow,
           ]}
           options={[
-            !claudeSubDetected && {
-              key: "sub",
-              label: claudeInstalled ? "Log in to Claude CLI" : "Install Claude CLI",
-              onClick: () => onSetup(PROVIDER_GUIDES.claude),
-            },
+            // The resident-CLI route. Hidden in two cases, for two different reasons:
+            //   · managedCred — the container login ALREADY connected this same Claude
+            //     subscription; a second route to the identical credential reads as a
+            //     missing setup step next to a CONNECTED badge.
+            //   · sealedControlPlane — wardynd is containerized and cannot see a host
+            //     login at all, so this option could never flip the step to connected.
+            //     (Host mode is offered instead, in the suggestHostMode banner above.)
+            !claudeSubDetected &&
+              !managedCred &&
+              !sealedControlPlane && {
+                key: "sub",
+                label: claudeInstalled ? "Log in to Claude CLI" : "Install Claude CLI",
+                onClick: () => onSetup(PROVIDER_GUIDES.claude),
+              },
             // Container login: works with no local Claude install — the compose-mode
             // path. Shown when there is no resident login and no managed token yet.
             !claudeSubDetected &&
@@ -518,11 +533,17 @@ export function ModelStep({
               icon: <KeyRound className="size-3.5" />,
               onClick: () => onAddSecret("openai-api-key"),
             },
-            !codexDetected && {
-              key: "codex",
-              label: codexInstalled ? "Log in to Codex CLI" : "Install Codex CLI",
-              onClick: () => onSetup(PROVIDER_GUIDES.codex),
-            },
+            // Same sealed-control-plane rule as the Claude CLI option above, and
+            // stricter: Codex has no container-login path at all (agentHarnessLogin
+            // implements claude-code only), so on a sealed wardynd a resident Codex
+            // login can never be detected AND cannot be captured — the API key is the
+            // only reachable route. Offering the CLI here is a dead end.
+            !codexDetected &&
+              !sealedControlPlane && {
+                key: "codex",
+                label: codexInstalled ? "Log in to Codex CLI" : "Install Codex CLI",
+                onClick: () => onSetup(PROVIDER_GUIDES.codex),
+              },
           ].filter(Boolean) as SetupOption[]}
         />
         <div className="flex justify-end">
