@@ -1,0 +1,20 @@
+# Gitleaks config: default rules plus allowlists for the two classes of
+# deliberate non-secrets in this repo. CI (gitleaks job) and any local
+# `gitleaks detect` pick this up automatically from the repo root.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deliberate fake fixtures and prose false positives"
+regexTarget = "match"
+regexes = [
+    # README prose "…: secret-output masking, eBPF/Tetragon …" trips
+    # generic-api-key with "eBPF/Tetragon" parsed as the secret value.
+    '''secret-output masking''',
+]
+paths = [
+    # The leaked-value detector's own tests: intentionally realistic-shaped
+    # FAKE tokens (glpat-…, credentials-in-URL) that the detector must match.
+    '''internal/workspacescan/detect_test\.go''',
+]
