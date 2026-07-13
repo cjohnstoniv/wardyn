@@ -20,7 +20,6 @@ import {
   Cloud,
   Fingerprint,
   GitBranch,
-  Github,
   KeyRound,
   Plus,
   TriangleAlert,
@@ -189,7 +188,7 @@ export function StepAccess({
       <div className="rounded-lg border border-border p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-start gap-2">
-            <Github className="mt-0.5 size-4 shrink-0 text-primary" />
+            <GitBranch className="mt-0.5 size-4 shrink-0 text-primary" />
             <div>
               <Label htmlFor="gh-enable" className="text-sm font-semibold text-foreground">
                 GitHub token
