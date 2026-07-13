@@ -13,7 +13,7 @@ import * as React from "react";
 import {
   AlertTriangle,
   Cloud,
-  Github,
+  GitBranch,
   Info,
   KeyRound,
   Loader2,
@@ -492,7 +492,7 @@ export function ScmProviderStep({
           badge with nothing to click (every other rung here has an action). */}
       <div className="space-y-2.5 rounded-xl border border-border p-4">
         <div className="flex items-center gap-2">
-          <Github className="size-4 text-foreground" />
+          <GitBranch className="size-4 text-foreground" />
           <h3 className="text-sm font-semibold text-foreground">GitHub App</h3>
           <div className="ml-auto flex items-center gap-1.5">
             <Chip tone="primary" className="uppercase tracking-wide">
@@ -921,7 +921,7 @@ export function CredentialsStep({
 
       <div className="space-y-3 rounded-xl border border-border p-4">
         <div className="flex items-center gap-2">
-          <Github className="size-4 text-foreground" />
+          <GitBranch className="size-4 text-foreground" />
           <h3 className="text-sm font-semibold text-foreground">GitHub App</h3>
           <span className="ml-auto">
             <StatusChip status={status.secrets.github_app ? "ready" : "needs-setup"} />
