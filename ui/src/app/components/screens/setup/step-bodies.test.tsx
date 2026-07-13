@@ -137,6 +137,7 @@ describe("step-bodies.tsx — smoke", () => {
         status={baseStatus()}
         {...siteConfigProps()}
         onAddSecret={vi.fn()}
+        onJump={vi.fn()}
         onRecheck={vi.fn()}
         rechecking={false}
       />,
@@ -152,6 +153,7 @@ describe("step-bodies.tsx — smoke", () => {
         status={baseStatus()}
         {...siteConfigProps()}
         onAddSecret={vi.fn()}
+        onJump={vi.fn()}
         onRecheck={vi.fn()}
         rechecking={false}
       />,
@@ -165,12 +167,51 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.getByText("Recommended")).toBeInTheDocument();
   });
 
+  // The GitHub App card is deliberately a status+pitch card (its App ID / PEM form
+  // lives on the Credentials step) — but it badges "Needs setup", so it must offer a
+  // way THERE. Without this it is a dead end: an orange badge with nothing to click,
+  // while every other rung on the step has an action.
+  it("ScmProviderStep's GitHub App card jumps to the Credentials step when unconfigured", async () => {
+    const user = userEvent.setup();
+    const onJump = vi.fn();
+    render(
+      <ScmProviderStep
+        status={baseStatus()}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onJump={onJump}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /set up on the credentials step/i }));
+    expect(onJump).toHaveBeenCalledWith("credentials");
+  });
+
+  it("ScmProviderStep hides the GitHub App jump once the App is configured", async () => {
+    render(
+      <ScmProviderStep
+        status={baseStatus({ secrets: { present: [], github_app: true } })}
+        {...siteConfigProps()}
+        onAddSecret={vi.fn()}
+        onJump={vi.fn()}
+        onRecheck={vi.fn()}
+        rechecking={false}
+      />,
+    );
+    expect(await screen.findByText("GitHub App")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /set up on the credentials step/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("ScmProviderStep shows the gh-CLI posture line only when scm.gh_cli is true", async () => {
     const { rerender } = render(
       <ScmProviderStep
         status={baseStatus()}
         {...siteConfigProps()}
         onAddSecret={vi.fn()}
+        onJump={vi.fn()}
         onRecheck={vi.fn()}
         rechecking={false}
       />,
@@ -184,6 +225,7 @@ describe("step-bodies.tsx — smoke", () => {
         })}
         {...siteConfigProps()}
         onAddSecret={vi.fn()}
+        onJump={vi.fn()}
         onRecheck={vi.fn()}
         rechecking={false}
       />,
