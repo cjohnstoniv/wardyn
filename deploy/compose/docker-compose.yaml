@@ -202,7 +202,34 @@ services:
       # WARDYN_BEDROCK_MODEL: "${WARDYN_BEDROCK_MODEL:-}"
     volumes:
       # Daemon trust: see the loud note at the top of this file.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # WARDYN_DOCKER_SOCK selects WHICH daemon wardynd drives. It matters on hosts
+      # running two daemons (e.g. Docker Desktop owns /var/run/docker.sock while a
+      # native in-distro dockerd listens elsewhere): the driver probes CC2/CC3
+      # runtimes against `docker info` of the daemon behind THIS socket and fails
+      # closed when they're absent — so pointing at a runc-only daemon silently
+      # caps the whole control plane at CC1.
+      - ${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      # Workspaces root — READ-ONLY, mounted at the SAME path inside the container so
+      # host paths resolve identically on both sides. A `local_dir` workspace is
+      # scanned IN-PROCESS by wardynd (os.Stat + workspacescan.Scan, see
+      # internal/api/workspaces.go handleScanWorkspace), so a sealed/containerized
+      # wardynd that cannot see the host filesystem fails EVERY local-directory
+      # import with "local directory not found on this host" — even though the run
+      # itself would mount fine, because the sandbox bind is resolved daemon-side.
+      #
+      # Point this at the NARROWEST directory that contains your projects — ideally
+      # a dedicated projects dir, e.g.
+      #     WARDYN_WORKSPACES_ROOT=/home/you/projects
+      # DO NOT set it to your home directory. wardynd would then be able to read
+      # ~/.ssh, ~/.aws, ~/.claude and the staged ~/.wardyn/claude-creds, and it is
+      # the process that decides what gets mounted into sandboxes — a needlessly
+      # large blast radius for a feature that only needs to read source files.
+      # Read-only is sufficient: the scan never writes.
+      #
+      # Default is a harmless empty path: local-directory import stays unavailable
+      # until an operator opts in by naming a root, rather than silently exposing
+      # anything.
+      - ${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:ro
       - recordings:/data/recordings
       - audit:/data/audit
     ports:
@@ -304,8 +331,10 @@ services:
       - tetragon_export:/var/log/tetragon:ro
       # Read the host docker socket to list wardyn-managed containers for
       # correlation. Daemon-trust tradeoff applies (see the top-of-file note);
-      # the sidecar only ever runs `docker ps` (read-only listing).
-      - /var/run/docker.sock:/var/run/docker.sock
+      # the sidecar only ever runs `docker ps` (read-only listing). Must follow
+      # wardynd onto the SAME daemon, or the correlation lists the wrong host's
+      # containers — see WARDYN_DOCKER_SOCK above.
+      - ${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     depends_on:
       wardynd:
         condition: service_healthy

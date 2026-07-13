@@ -332,6 +332,10 @@ export interface Workspace {
   // Optional default in-container mount/clone target; a run selection may
   // override it. Omitted => the server's convention default.
   default_target?: string;
+  // Operator opt-in: mount this workspace READ-WRITE in the import flow's
+  // Record/Verify runs. Omitted/false => read-only (the safe default). When true,
+  // a sandboxed agent's changes PERSIST to the host directory.
+  writable?: boolean;
   // Opaque to the UI — core A (internal/workspacescan) owns the shape
   // (WorkspaceProfile: languages, package managers, egress domains, …).
   // Kept loosely typed; the needs panel does a typed cast-read (WorkspaceProfile).

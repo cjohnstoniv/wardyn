@@ -716,6 +716,7 @@ export const api = {
     source: string;
     ref?: string;
     default_target?: string;
+    writable?: boolean;
   }): Promise<Workspace> {
     const res = await wfetch("/workspaces", { method: "POST", body: JSON.stringify(input) });
     return asJson<Workspace>(res);
@@ -724,7 +725,14 @@ export const api = {
   // PUT /api/v1/workspaces/{id}  same body shape -> updated workspace.
   async updateWorkspace(
     id: string,
-    input: { name: string; kind: WorkspaceKind; source: string; ref?: string; default_target?: string },
+    input: {
+      name: string;
+      kind: WorkspaceKind;
+      source: string;
+      ref?: string;
+      default_target?: string;
+      writable?: boolean;
+    },
   ): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, {
       method: "PUT",

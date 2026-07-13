@@ -21,11 +21,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Go (tarball to /usr/local; GOPATH/GOCACHE land in the agent's writable HOME).
-ARG GO_VERSION=1.23.5
+#
+# MUST satisfy the go.mod of the repos this image builds. GOTOOLCHAIN=local (below)
+# deliberately FORBIDS the auto-download of a newer toolchain — the corporate /
+# air-gapped posture — so a Go older than a repo's `go` directive does not degrade,
+# it FAILS: "go.mod requires go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)".
+# Keep this at or above the `toolchain` line of the repos you build (wardyn itself
+# pins toolchain go1.26.4). Bump here rather than relaxing GOTOOLCHAIN.
+ARG GO_VERSION=1.26.4
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
 ENV PATH=/usr/local/go/bin:/home/agent/go/bin:${PATH} \
     GOPATH=/home/agent/go GOTOOLCHAIN=local
+
+# pnpm. The base image ships node/npm/yarn/corepack but NOT pnpm, so any repo whose
+# package.json pins `"packageManager": "pnpm@x"` (wardyn's ui/ does) fails its very
+# first setup command with `pnpm: No such file or directory`. Baked in globally
+# rather than left to a corepack shim, so no registry fetch is needed at RUN time
+# (the sandbox may have npm egress denied, and an air-gapped host has none at all).
+ARG PNPM_VERSION=9.15.4
+RUN npm install -g "pnpm@${PNPM_VERSION}" && pnpm --version
 
 # JDK 21 (Temurin) + Maven, for jsoup (needs 21) and JVM projects generally.
 RUN install -d /etc/apt/keyrings \

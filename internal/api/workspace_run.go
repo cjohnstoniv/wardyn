@@ -577,7 +577,18 @@ func (s *Server) wireWorkspaceSource(ctx context.Context, runID uuid.UUID, now t
 			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
 		}
 	} else {
-		policy.WorkspaceMounts = []types.WorkspaceMount{{Source: ws.Source, Target: composerWorkspaceTarget}}
+		// ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted. Omitting
+		// it here mounted every imported workspace read-only, which made the Record
+		// step's own promise ("so the agent can make changes") impossible to keep:
+		// `pnpm install` cannot write node_modules, a build cannot emit artifacts,
+		// and no source file can be edited — i.e. no contribution, from the very flow
+		// that exists to record one. Honor the operator's explicit per-workspace
+		// opt-in instead, mirroring the composer's ws.ReadWrite; the default is still
+		// read-only, so this widens nothing unless a human ticked the box.
+		ro := !ws.Writable
+		policy.WorkspaceMounts = []types.WorkspaceMount{
+			{Source: ws.Source, Target: composerWorkspaceTarget, ReadOnly: &ro},
+		}
 		run.WorkspacePath = ws.Source
 	}
 	return ghGrantID, sshGrants

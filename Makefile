@@ -64,6 +64,21 @@ agent-images: agent-images-core
 	docker build -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
 
+# The campaign image: the core claude-code agent PLUS real language toolchains
+# (Go, Python, Rust, JDK/Maven, pnpm). Workspace import's Record/Verify runs the
+# repo's OWN setup commands (go build, pnpm install, …), which the toolchain-less
+# core image cannot do — it dies at "command not found" (exit 127). Kept out of
+# agent-images-core because it is a fat image and most setups never need it.
+#
+# It had no make target at all, so nothing ever rebuilt it: boxes were left running
+# a stale :demo tag whose Go (1.23.5) predated this repo's own go.mod (1.26) and
+# which shipped no pnpm. Build it explicitly, then point runs at it with:
+#   WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-campaign:local"}'
+agent-image-campaign: agent-images-core
+	@echo "Building the fat toolchain image (Go/Python/Rust/JDK/pnpm)..."
+	docker build -f deploy/images/campaign/Dockerfile -t wardyn/agent-campaign:local .
+	@echo "Campaign image built: wardyn/agent-campaign:local"
+
 build:
 	@echo "Building Go binaries..."
 	go build ./...

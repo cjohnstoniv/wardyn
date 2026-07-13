@@ -343,14 +343,14 @@ func workspaceApprovedParam(domains []string) any {
 const wsCols = `id, name, kind, source, ref, default_target, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, setup_commands, verify_result, ` +
 	`verified_profile_hash, verified_at, active_run_id, status, created_at, updated_at, ` +
-	`record_results`
+	`record_results, writable`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is core A's opaque WorkspaceProfile blob (nil until scanned).
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING ` + wsCols
 	return scanWorkspace(s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
@@ -358,7 +358,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
 		workspaceProfileParam(ws.VerifyResult), ws.VerifiedProfileHash, ws.VerifiedAt,
 		ws.ActiveRunID, string(ws.Status), ws.CreatedAt, ws.UpdatedAt,
-		workspaceProfileParam(ws.RecordResults),
+		workspaceProfileParam(ws.RecordResults), ws.Writable,
 	))
 }
 
@@ -418,15 +418,17 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 		SET name=$1, kind=$2, source=$3, ref=$4, default_target=$5,
 			profile=$6, image_ref=$7, built_profile_hash=$8, approved_egress=$9,
 			setup_commands=$10, verify_result=$11, verified_profile_hash=$12,
-			verified_at=$13, active_run_id=$14, status=$15, record_results=$16, updated_at=now()
-		WHERE id=$17
+			verified_at=$13, active_run_id=$14, status=$15, record_results=$16,
+			writable=$17, updated_at=now()
+		WHERE id=$18
 		RETURNING ` + wsCols
 	return scanWorkspace(s.Pool.QueryRow(ctx, q,
 		ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
 		workspaceProfileParam(ws.Profile), ws.ImageRef, ws.BuiltProfileHash,
 		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
 		workspaceProfileParam(ws.VerifyResult), ws.VerifiedProfileHash, ws.VerifiedAt,
-		ws.ActiveRunID, string(ws.Status), workspaceProfileParam(ws.RecordResults), id,
+		ws.ActiveRunID, string(ws.Status), workspaceProfileParam(ws.RecordResults),
+		ws.Writable, id,
 	))
 }
 
@@ -565,7 +567,7 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		&ws.ID, &ws.Name, &kind, &ws.Source, &ws.Ref, &ws.DefaultTarget,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &setupRaw, &verifyRaw,
 		&ws.VerifiedProfileHash, &ws.VerifiedAt, &ws.ActiveRunID, &status, &ws.CreatedAt, &ws.UpdatedAt,
-		&recordRaw,
+		&recordRaw, &ws.Writable,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound

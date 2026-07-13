@@ -1,0 +1,19 @@
+-- Operator-owned per-workspace WRITE opt-in for the import flow's Record/Verify
+-- runs.
+--
+-- WorkspaceMount.ReadOnly is a *bool whose safe default is READ-ONLY when the
+-- field is omitted (see types.go: a plain bool would default to read-write, the
+-- unsafe direction). launchRecordRun/launchVerifyRun omitted it, so an imported
+-- workspace was ALWAYS mounted read-only — which silently made the whole point of
+-- the Record step impossible: `pnpm install` cannot write node_modules, a build
+-- cannot emit artifacts, and the agent cannot edit a single source file, even
+-- though the Record pane promises "so the agent can make changes".
+--
+-- The composer/New Run path already models exactly this choice (composer.Workspace
+-- .ReadWrite -> WorkspaceMount.ReadOnly=&false, plus a loud "changes persist to the
+-- host directory" warning). This column gives the import flow the same operator-
+-- owned opt-in instead of a second, silently-weaker default.
+--
+-- DEFAULT FALSE: read-only stays the safe default. Write access is granted only
+-- when an operator explicitly ticks it for a workspace they onboarded themselves.
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS writable BOOLEAN NOT NULL DEFAULT FALSE;
