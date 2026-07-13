@@ -86,3 +86,6 @@ ds-bundle/
 /PONYTAIL_PASS*_AUDIT.md
 /.ponytail-*
 /REPO_AUDIT_*.md
+
+# Claude Code local config (contributors bring their own)
+.claude/
