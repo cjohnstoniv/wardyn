@@ -4,9 +4,13 @@ All notable changes to Wardyn are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); Wardyn is **pre-alpha**
 and does not yet follow semantic versioning (interfaces are not stable).
 
-## [Unreleased] — v0.2 (open-source pilot, in progress)
+## [Unreleased]
 
-The v0.2 milestone is the **Docker-only honest pilot**: every control the docs
+_Nothing yet._
+
+## [0.2.0] — 2026-07-13
+
+The v0.2 milestone was the **Docker-only honest pilot**: every control the docs
 claim is actually enforced in code (or honestly marked unbuilt), the operator
 surface is complete enough to run a real pilot, and the deployment is verifiable.
 Kubernetes, SPIRE, OpenBao, the L3 MCP gateway, and arbitrary-domain L2
@@ -14,6 +18,27 @@ TLS-intercept remain v0.5 (targeted TLS-MITM of LLM/registry hosts already
 ships — see the threat model's §5.1a claims contract).
 
 ### Added
+- **Writable workspace mounts.** A local-directory workspace can opt in to
+  read-write mounting for its runs (migration 0016). Previously the run wiring
+  never set the mount's writable flag, so every imported workspace mounted
+  read-only — silently defeating Record/Verify sessions that need to install
+  dependencies or build. Opt-in checkbox with a host-persistence warning; the
+  default stays read-only.
+- **Safest-path recommendations across the setup surfaces.** A presence-only
+  git-credential posture probe (gh CLI login, credential.helper,
+  `~/.git-credentials`, `~/.netrc` — values never read) grades the SCM step
+  against a safest-path ladder (GitHub App → brokered fine-grained PAT →
+  deploy key → standing resident keys); the Provider step shows
+  proxy-injected-vs-resident residency chips on every auth option; the
+  per-run confinement picker badges the strongest available tier Recommended;
+  the Secrets screen marks standing `ssh-key-*`/`git-pat-*` credentials with
+  an amber Standing chip.
+- **Scoped deploy-key generation in setup.** The installer prints the 5-rung
+  git-credential ladder before any import decision and can generate an
+  ed25519 read-only deploy key: the private half goes stdin-only into the
+  encrypted store and is shredded from disk; the public half is printed with
+  paste instructions and the honest per-host-slot/per-repo ceiling
+  (multi-repo work → fine-grained PAT).
 - **Bring Your Own Image (BYOI).** A run may name an arbitrary base image;
   the control plane wraps it with the runner tools (`internal/envbuild`
   FinalizeBase, digest-pinned base; opt-in via `WARDYN_ENVBUILD`) and gates
@@ -244,6 +269,23 @@ ships — see the threat model's §5.1a claims contract).
   AppArmor pin because the runtime mediates syscalls.
 - The Approvals UI "Decided" tab now shows decided approvals (was always empty).
 - The lifecycle now sweeps stale `PENDING` approvals to `EXPIRED`.
+- **Truth-in-grading for `git_pat`/`ssh_key`**: both now grade HIGH with an
+  honest rationale (Wardyn can neither expire nor down-scope them), matching
+  what the approvals screen already said. codex-cli runs with an `ssh_key`
+  grant now fail loud at create time (dropped grant + operator warning +
+  audit event) instead of failing silently mid-run — codex-cli has no SSH
+  clone lane.
+- **Bedrock model-access honesty**: the static-key consent states that
+  long-lived SigV4 keys become resident in sandboxes (they cannot be
+  proxy-injected) and names the safer AWS-SSO rung; `compose up` warns when a
+  stale `WARDYN_AGENT_IMAGES` override names an image absent from the picked
+  daemon.
+- **`make reset-all` — a true full reset** across both modes (host daemon,
+  compose stack with every profile enabled, stray networks/volumes resolved by
+  exact name, a named allowlist of `~/.wardyn` install files; `--dry-run`
+  prints the manifest and doubles as the clean-state proof). `make reset` is
+  now host-aware: it offers to stop a live host-mode wardynd instead of
+  starting a containerized one into a guaranteed :8080 collision.
 
 ### Security
 - **Audit log has a durable local fallback, and it now covers every writer.** A
@@ -284,6 +326,15 @@ ships — see the threat model's §5.1a claims contract).
   lockfile is now tracked.
 - Removed a prebuilt binary from version control and corrected stale code/docs
   comments.
+- Detect-phase honesty on dual-daemon boxes: every entry point now picks the
+  SAME docker daemon (`wardyn_pick_docker_host`), locally-built images are
+  tagged `:local` instead of `:demo`, and the WSL2 NAT Verify/Record warning
+  only fires when the picked daemon actually is Docker Desktop.
+- Import scan failures now surface the real server-side cause in the scan
+  panel instead of a generic private-repo-credentials guess.
+- Setup no longer offers dead-end interactive CLI logins on a sealed
+  (containerized) control plane, and the GitHub App card's Needs-setup badge
+  gained a click target — it jumps straight to the Credentials step.
 
 ## [0.1.0] — pre-alpha baseline
 
