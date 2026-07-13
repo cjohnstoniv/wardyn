@@ -88,14 +88,6 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 	}
 }
 
-// harnessProviderForAgent maps an agent to its provider id ("" if none).
-func harnessProviderForAgent(agent string) string {
-	if hl, ok := agentHarnessLogin(agent); ok {
-		return hl.provider
-	}
-	return ""
-}
-
 // harnessLoginByProvider finds the login convention by provider id.
 func harnessLoginByProvider(provider string) (harnessLogin, bool) {
 	// v1 has a single provider; a linear scan is fine and stays correct as rows
