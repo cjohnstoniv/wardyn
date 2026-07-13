@@ -319,6 +319,14 @@ ships — see the threat model's §5.1a claims contract).
 - **Fail closed on the publicly-known demo age key.** The Compose default no
   longer ships a usable age key (it generates an ephemeral one); `wardynd`
   refuses to start if handed the old git-published demo key.
+- **Go toolchain 1.26.5** closes GO-2026-5856 (crypto/tls Encrypted Client
+  Hello privacy leak; the affected symbols are reachable from the egress
+  proxy's TLS-MITM handshake and serve paths).
+- Release-cut dependency refresh: go-oidc 3.20, pgx 5.10, ghinstallation
+  2.19, anthropic-sdk-go 1.56; lucide-react 1.24 (upstream removed brand
+  icons — the GitHub glyph becomes GitBranch), jsdom 29, @tailwindcss/vite
+  4.3.2; CI action majors (setup-go v6 with a pinned patch go-version,
+  gitleaks-action v3, upload-artifact v7, setup-node v6, pnpm v6, helm v5).
 
 ### Fixed
 - A fresh `git clone` could not build the `wardynd` image: `ui/pnpm-lock.yaml`
