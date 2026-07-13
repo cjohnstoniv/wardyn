@@ -96,6 +96,20 @@ running agent. It provides:
   for this machine); the control plane refuses to schedule a run below your
   policy's minimum.
 
+- **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the
+  control plane wraps it with the runner tools (digest-pinned base, opt-in via
+  `WARDYN_ENVBUILD`) and gates launch on an in-sandbox self-test, fail-closed.
+  **[shipped]** (Operator docs: `deploy/images/README.md`.)
+
+- **Model access without resident keys.** An Anthropic API key is injected
+  proxy-side (never resident in the sandbox); a Claude subscription is
+  proxy-injected from the operator's live login (the sandbox holds an inert
+  sentinel); and a containerized control plane — no host `~/.claude` to stage —
+  can connect a **Wardyn-managed Claude subscription** from Getting Started via
+  container login. AWS Bedrock ships as an operator-configured provider
+  (bearer token proxy-injected; SigV4 access keys are resident and documented
+  as such). **[shipped]**
+
 ---
 
 ## Architecture at a glance
@@ -479,7 +493,7 @@ kind — today only the Docker target runs functionally (see Status below).
 | Milestone | Highlights | Status |
 |---|---|---|
 | **v0.1** | Per-run identity (embedded provider), approval FSM, credential broker, L2 egress proxy, append-only Postgres audit + PTY replay, CC1/CC2 confinement gating, Compose deploy | **Shipped (pre-alpha)** |
-| **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, policy CRUD, run-completion state, control-plane TLS, real conformance gate + supply-chain CI | **In progress** |
+| **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, policy CRUD, run-completion state, control-plane TLS, real conformance gate + supply-chain CI | **Shipped (pre-alpha)** |
 | **v0.5** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway, arbitrary-domain L2 TLS-intercept (targeted LLM/registry MITM already ships), Helm chart, cloud STS federation, OTLP/OCSF SIEM sinks | Planned |
 | **v1.0** | CC3 Kata packaged/GA (experimental today — see Confinement Classes), Cilium toFQDNs, hash-chained audit + signed action receipts, separation-of-duty on control plane, conformance suite across both targets | Planned |
 
