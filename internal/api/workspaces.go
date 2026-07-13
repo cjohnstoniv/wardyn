@@ -40,6 +40,11 @@ type workspaceRequest struct {
 	Source        string              `json:"source"`
 	Ref           string              `json:"ref,omitempty"`
 	DefaultTarget string              `json:"default_target,omitempty"`
+	// Writable opts this workspace into a READ-WRITE mount for the import flow's
+	// Record/Verify runs. Omitted/false = read-only (the safe default). A sandboxed
+	// agent's changes then PERSIST to the host directory — the same trade the
+	// composer's ws.ReadWrite already exposes on the New Run path.
+	Writable bool `json:"writable,omitempty"`
 }
 
 // decodeWorkspaceRequest decodes and validates a workspace request body. It
@@ -178,6 +183,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Source:        req.Source,
 		Ref:           req.Ref,
 		DefaultTarget: req.DefaultTarget,
+		Writable:      req.Writable,
 		Status:        types.WorkspacePendingScan,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -189,7 +195,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.create", id.String(), "success", mustJSON(map[string]any{
+			// writable is recorded: it is the operator's consent to let a sandboxed
+			// agent's changes persist to a HOST directory, so it belongs in the trail.
 			"name": created.Name, "kind": created.Kind, "source": created.Source,
+			"writable": created.Writable,
 		})))
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -229,6 +238,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		(req.Kind == types.WorkspaceKindRepo && ws.Ref != req.Ref)
 	ws.Name, ws.Kind, ws.Source, ws.Ref, ws.DefaultTarget =
 		req.Name, req.Kind, req.Source, req.Ref, req.DefaultTarget
+	// writable is an editable identity field too: the store UPDATE replaces every
+	// column, so omitting it here would silently REVOKE a granted write opt-in on
+	// any unrelated edit (rename, retarget).
+	ws.Writable = req.Writable
 	if rescan {
 		ws.Profile = nil
 		ws.ImageRef = ""

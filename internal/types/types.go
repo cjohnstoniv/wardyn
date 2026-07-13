@@ -448,6 +448,19 @@ type Workspace struct {
 	// DefaultTarget is the in-container mount/clone path a run uses absent a
 	// per-attach override (WorkspaceMount.Target / WorkspaceRepo.Target).
 	DefaultTarget string `json:"default_target,omitempty"`
+	// Writable is the OPERATOR's explicit opt-in to mount this workspace
+	// READ-WRITE in the import flow's Record/Verify runs. Default false =
+	// read-only, matching WorkspaceMount.ReadOnly's safe default.
+	//
+	// Without it, an imported workspace is always read-only, which makes the
+	// Record step's own promise ("so the agent can make changes") impossible to
+	// keep: no `pnpm install` (it writes node_modules), no build artifacts, no
+	// source edits — i.e. no contribution. The composer/New Run path already
+	// exposes this same choice (composer.Workspace.ReadWrite); this is the import
+	// flow's equivalent, not a new capability.
+	//
+	// When true, a sandboxed agent's changes PERSIST to the host directory.
+	Writable bool `json:"writable,omitempty"`
 	// Profile is core A's WorkspaceProfile, opaque here. Nil/empty until scanned.
 	Profile json.RawMessage `json:"profile,omitempty"`
 	// ImageRef is the resolved/generated image for this workspace's profile

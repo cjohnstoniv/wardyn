@@ -764,6 +764,7 @@ export function AddWorkspaceDialog({
   const [source, setSource] = React.useState("");
   const [ref, setRef] = React.useState("");
   const [defaultTarget, setDefaultTarget] = React.useState("");
+  const [writable, setWritable] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
@@ -774,6 +775,7 @@ export function AddWorkspaceDialog({
     setSource(initial?.source ?? "");
     setRef(initial?.ref ?? "");
     setDefaultTarget(initial?.default_target ?? "");
+    setWritable(initial?.writable ?? false);
     setError(null);
     setSaving(false);
   }, [open, initial]);
@@ -802,6 +804,7 @@ export function AddWorkspaceDialog({
         source: s,
         ref: kind === "repo" && ref.trim() ? ref.trim() : undefined,
         default_target: defaultTarget.trim() || undefined,
+        writable: writable || undefined,
       };
       const saved = isEdit ? await api.updateWorkspace(initial!.id, input) : await api.createWorkspace(input);
       onOpenChange(false);
@@ -903,6 +906,41 @@ export function AddWorkspaceDialog({
               Where this attaches in the sandbox by default. A run may override it per attachment.
             </p>
           </div>
+
+          {/* Read-only is the safe default (WorkspaceMount.ReadOnly). Without this
+              opt-in an imported workspace can never be written, so Record/Verify
+              cannot install deps, build, or let the agent edit a file — the whole
+              point of the import flow. Granting it is real: changes land on the host. */}
+          {kind === "local_dir" && (
+            <div className="space-y-2 rounded-lg border border-border p-3">
+              <label className="flex items-start gap-2.5 text-xs">
+                <input
+                  type="checkbox"
+                  id="ws-writable"
+                  checked={writable}
+                  onChange={(e) => setWritable(e.target.checked)}
+                  className="mt-0.5 size-3.5 shrink-0 accent-primary"
+                />
+                <span>
+                  <span className="font-medium text-foreground">
+                    Let agents write to this directory
+                  </span>
+                  <span className="block text-[11px] leading-snug text-muted-foreground">
+                    Required to install dependencies, build, or have an agent change code. Leave
+                    unticked and the workspace mounts read-only — <span className="font-mono">install</span>{" "}
+                    and <span className="font-mono">build</span> steps will fail.
+                  </span>
+                </span>
+              </label>
+              {writable && (
+                <p className="rounded-md bg-warning-subtle px-2 py-1.5 text-[11px] leading-snug text-warning">
+                  The agent&apos;s changes persist to the host directory{" "}
+                  <span className="font-mono">{source.trim() || "…"}</span>. Point this at a
+                  disposable clone, not a working tree you care about.
+                </p>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger">
