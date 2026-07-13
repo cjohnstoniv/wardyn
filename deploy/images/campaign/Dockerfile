@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # it FAILS: "go.mod requires go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)".
 # Keep this at or above the `toolchain` line of the repos you build (wardyn itself
 # pins toolchain go1.26.4). Bump here rather than relaxing GOTOOLCHAIN.
-ARG GO_VERSION=1.26.4
+ARG GO_VERSION=1.26.5
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
 ENV PATH=/usr/local/go/bin:/home/agent/go/bin:${PATH} \
