@@ -18,6 +18,13 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
+# DOCKER_HOST here so the CREATE DATABASE below AND the Playwright child
+# processes (approvals.spec.ts shells out to `docker exec wardyn-test-pg`) hit
+# the daemon e2e-backend.sh provisions on — not the default one.
+. "${REPO_ROOT}/scripts/lib/common.sh"
+wardyn_pick_docker_host
+
 PORT="${WARDYN_E2E_ADDR:-:8088}"; PORT="${PORT#*:}"
 DB="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 export WARDYN_E2E_ADDR=":${PORT}"
