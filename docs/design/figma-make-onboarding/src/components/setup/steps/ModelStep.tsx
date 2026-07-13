@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useState } from "react";
 import { KeyRound, Plus, BookOpen, RefreshCw, LifeBuoy, Settings } from "lucide-react";
 import { toast } from "sonner";

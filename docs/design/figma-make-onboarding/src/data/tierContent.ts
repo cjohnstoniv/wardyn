@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import type { TierId } from "./setupFixtures";
 
 // Barrier tier copy (brief §6.1). Honesty rule: every tier carries its "Doesn't stop:" residual

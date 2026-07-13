@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { CheckCircle2, ExternalLink, Rocket } from "lucide-react";
 import { Button } from "../../ui/button";
 import { StatusChip } from "../StatusChip";

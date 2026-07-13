@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import type { ReactElement } from "react";
 import type { TierId } from "../../data/setupFixtures";
 import { cn } from "../ui/utils";
