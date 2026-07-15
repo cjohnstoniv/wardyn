@@ -18,6 +18,7 @@ import { SecretsScreen } from "./components/screens/secrets";
 import { WorkspacesScreen } from "./components/screens/workspaces";
 import { AuditScreen } from "./components/screens/audit";
 import { RecordingScreen } from "./components/screens/recording";
+import { DemoScreen } from "./components/screens/demos/demo-screen";
 import { setupDismissed, shouldOpenSetup } from "./components/screens/setup/setup-screen";
 import { GettingStarted } from "./components/screens/onboarding/onboarding-screen";
 import { WardynMark } from "./components/wardyn/logo";
@@ -176,6 +177,7 @@ export default function App() {
           <Route path="/workspaces" element={<WorkspacesScreen />} />
           <Route path="/audit" element={<AuditScreen />} />
           <Route path="/recordings" element={<RecordingScreen />} />
+          <Route path="/demos" element={<DemoScreen />} />
           <Route path="/setup" element={<GettingStarted onDone={() => navigate("/runs")} />} />
           {/* Fleet is retired — merged into Runs. Keep the old path working. */}
           <Route path="/fleet" element={<Navigate to="/runs" replace />} />

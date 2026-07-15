@@ -89,6 +89,13 @@ export function SetupLayout({
             </button>
           </div>
           <HowItWorksStrip />
+          <p className="mt-3 text-sm text-muted-foreground">
+            Not sure it works?{" "}
+            <a href="/demos" className="font-medium text-primary underline underline-offset-2">
+              Run a demo sandbox first
+            </a>{" "}
+            — no repo or key needed.
+          </p>
         </section>
       )}
 

@@ -10,7 +10,8 @@
 // the AppShell as the "Getting started" nav content; "Get set up" advances to the
 // setup funnel, "Skip" drops the operator into the console.
 import * as React from "react";
-import { ArrowRight, BrickWall, KeyRound, Shield } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowRight, BrickWall, FlaskConical, KeyRound, Shield } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -38,6 +39,7 @@ export function markOnboardingSeen(): void {
 // funnel. No double stepper — the welcome has no stepper; the funnel has one.
 export function GettingStarted({ onDone }: { onDone: () => void }) {
   const [seen, setSeen] = React.useState(onboardingSeen());
+  const navigate = useNavigate();
   if (!seen) {
     return (
       <OnboardingScreen
@@ -51,6 +53,9 @@ export function GettingStarted({ onDone }: { onDone: () => void }) {
           markOnboardingSeen();
           onDone();
         }}
+        // Browsing the demo catalog is always allowed (the runner gate lives on the
+        // per-demo Start buttons) — jump straight there without marking the welcome seen.
+        onTryDemo={() => navigate("/demos")}
       />
     );
   }
@@ -97,9 +102,12 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
 export function OnboardingScreen({
   onGetStarted,
   onSkip,
+  onTryDemo,
 }: {
   onGetStarted: () => void;
   onSkip: () => void;
+  /** Jump to the hands-on demo sandboxes. Optional so bare renders (tests) work. */
+  onTryDemo?: () => void;
 }) {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -139,14 +147,22 @@ export function OnboardingScreen({
 
       <ReadinessRow status={status} loading={loading} />
 
-      <div className="mt-6 flex items-center gap-2.5">
+      <div className="mt-6 flex flex-wrap items-center gap-2.5">
         <Button onClick={onGetStarted}>
           {ready ? "Finish setup" : "Get set up — about 2 minutes"} <ArrowRight className="size-4" />
         </Button>
         <Button variant="outline" onClick={onSkip}>
           Skip for now
         </Button>
+        <Button variant="ghost" onClick={onTryDemo}>
+          <FlaskConical className="size-4" /> Try a 2-minute demo sandbox
+        </Button>
       </div>
+      {readiness && !readiness.barrierReady && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Demos need the sandbox runner — set up the Environment step first to start one.
+        </p>
+      )}
 
       <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">
         Shown once — everything lives on under “Getting started” in the sidebar.

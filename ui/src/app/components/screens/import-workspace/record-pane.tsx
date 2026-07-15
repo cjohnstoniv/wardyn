@@ -67,9 +67,9 @@ export function RecordPane({
   // login, a stored provider key, or a real composer backend) — a session runs
   // the agent, so without one the agent's model calls would be denied. Drives
   // the warning. This is derived from GET /setup/status (hasLlmPath), NOT
-  // composer-backend detection: the composer UI is force-disabled
-  // (COMPOSER_UI_ENABLED=false) so that signal is always false and used to warn
-  // even with a perfectly good connected subscription or API key.
+  // composer-backend detection: a composer backend is optional server config,
+  // so its absence must not warn an operator who has a perfectly good
+  // connected subscription or API key.
   modelReady: boolean;
   // Start (or re-start) a session by NAME; the server slugs it to the record key.
   onRecord: (name: string) => void;
@@ -742,7 +742,9 @@ function HonestyNote({ text }: { text: string }) {
 }
 
 // A small copy-to-clipboard command pill for the interactive suggested command.
-function CopyPill({ text }: { text: string }) {
+// Exported so the demo-sandbox screen can reuse the exact same pill for its
+// numbered curl instructions instead of duplicating it.
+export function CopyPill({ text }: { text: string }) {
   const { copied, copy } = useCopyToClipboard();
   return (
     <button
