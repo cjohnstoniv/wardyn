@@ -1,0 +1,18 @@
+# CI overlay for the core compose stack (postgres + wardynd): enables the
+# image builder so BYOA runs (`wardyn run --image <ref>`) can wrap the
+# user-supplied base with the runner tools (FinalizeBase — a local FROM+COPY
+# build, no registry needed; devcontainer builds still require
+# WARDYN_ENVBUILD_CACHE_REPO).
+#
+# Used by scripts/ci-run.sh, which assembles the runner-tools dir from the
+# built agent image and exports WARDYN_CI_TOOLS_DIR before:
+#   docker compose -f docker-compose.yaml -f docker-compose.ci.yaml up -d postgres wardynd
+services:
+  wardynd:
+    environment:
+      WARDYN_ENVBUILD: "true"
+      WARDYN_ENVBUILD_TOOLS_DIR: /wardyn-tools
+    volumes:
+      # Runner tools (agent-run, agent-run-lib.sh, wardyn-rec, wardyn-verify,
+      # wardyn-git-helper) the finalize stage COPYs into wrapped images.
+      - ${WARDYN_CI_TOOLS_DIR:?exported by scripts/ci-run.sh}:/wardyn-tools:ro

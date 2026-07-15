@@ -1,0 +1,10 @@
+{
+  "allowed_domains": [],
+  "denied_domains": [],
+  "allow_all_egress": false,
+  "first_use_approval": "always_deny",
+  "allowed_methods": [],
+  "min_confinement_class": "CC1",
+  "eligible_grants": [],
+  "auto_stop_after_sec": 3600
+}
