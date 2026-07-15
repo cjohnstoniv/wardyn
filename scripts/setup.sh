@@ -396,6 +396,7 @@ for _img in claude-code:wardyn/agent-claude-code:local \
       ok "built ${_img_tag}"
     else
       warn "build failed for ${_img_tag} — runs naming this agent fail until 'make agent-images'"
+      AGENT_IMAGE_WARN=1  # surfaced again in the end-of-setup summary
     fi
   else
     ok "present: ${_img_tag}"
@@ -422,6 +423,7 @@ if ! grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "$AGE_ENV" 2>/dev/null; then
     ok "Minted a persistent secret-store age key → ${AGE_ENV} (secrets survive restarts)."
   else
     warn "Could not mint an age key; secrets may not persist across restarts."
+    AGE_KEY_WARN=1  # surfaced again in the end-of-setup summary
   fi
 fi
 
@@ -752,6 +754,17 @@ if $healthy; then
   ok "PID    ${WPID}   (${PIDFILE})"
   ok "Logs   ${LOGFILE}   (tail -f to watch)"
   ok "Stop   make stop-host   (or: kill ${WPID})"
+
+  # Non-silent recap of the two warn-and-continue paths above that only bite on the
+  # FIRST run (missing agent image => "no such image"; no age key => secrets lost on
+  # restart). wardynd started fine, so these were easy to miss mid-scroll — name the
+  # consequence and the exact fix here at the end where the operator will see it.
+  if [ "${AGENT_IMAGE_WARN:-0}" = "1" ]; then
+    warn "agent image build failed — first runs will fail with 'no such image'; run: make agent-images"
+  fi
+  if [ "${AGE_KEY_WARN:-0}" = "1" ]; then
+    warn "no persistent age key — stored secrets won't survive a restart; run: make setup (or add WARDYN_AGE_KEY=… to ${AGE_ENV})"
+  fi
   # Open the UI LAST — every interactive prompt above is done, so the browser
   # never steals focus while the terminal is still waiting on an answer.
   # Backgrounded: wslview can BLOCK indefinitely in headless/scripted runs (no
