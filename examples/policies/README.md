@@ -32,6 +32,15 @@ anywhere Docker runs, no gVisor needed): GitHub + Go-proxy egress only,
 `github_token` grant. The compose launcher auto-picks it when gVisor/`runsc`
 is absent (see the `deploy/compose/.env.example` header for the pick order).
 
+## ci.json
+
+The unattended/CI baseline (see docs/CI.md): `first_use_approval:
+"always_deny"` (hard deny, no pending approvals — nothing ever waits on a
+human), empty egress allowlist (add exactly what the task needs), no grants,
+`CC1` floor so it runs on plain runc CI runners, and a 1-hour
+`auto_stop_after_sec` bound. `scripts/ci-run.sh` uses it as the default
+`--policy-file`.
+
 ## composer-dev.json
 
 The developer ceiling for composed runs: `default.json`-style registry egress
