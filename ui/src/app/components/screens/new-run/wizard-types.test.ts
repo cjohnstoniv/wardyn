@@ -4,10 +4,32 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildSpec, initialWizardState, wizardStateFromProposal } from "./wizard-types";
+import { buildSpec, initialWizardState, validateStep, wizardStateFromProposal } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
 import type { ComposeRunProposal, RunPolicySpec } from "../../../lib/types";
 import { SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
+
+// Ephemeral runs: a workspace is OPTIONAL. Basics gates only the batch-needs-a-task
+// rule; an interactive run with zero workspaces is valid and buildSpec degrades to
+// an empty scratch run (repo "", no workspace mounts/repos).
+describe("validateStep — Basics is workspace-optional (ephemeral runs)", () => {
+  it("passes an interactive run with no workspace", () => {
+    const state = { ...initialWizardState(), workspaces: [], mode: "interactive" as const };
+    expect(validateStep("basics", state)).toBeNull();
+  });
+
+  it("still requires a task for a batch run", () => {
+    const state = { ...initialWizardState(), workspaces: [], mode: "batch" as const, task: "" };
+    expect(validateStep("basics", state)).toMatch(/task/i);
+  });
+
+  it("buildSpec degrades to an ephemeral scratch run with zero workspaces", () => {
+    const { run, inline_policy } = buildSpec({ ...initialWizardState(), workspaces: [] });
+    expect(run.repo).toBe("");
+    expect(inline_policy.workspace_mounts).toBeUndefined();
+    expect(inline_policy.workspace_repos).toBeUndefined();
+  });
+});
 
 // Regression for the saved-workspace launch bug: a subscription-recorded profile
 // carries an api_key grant naming the subscription OAuth sentinel (recordings

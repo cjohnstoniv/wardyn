@@ -7,7 +7,11 @@ import { test as base, expect, type Locator, type Page } from "@playwright/test"
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { COMPOSER_UI_ENABLED } from "../../src/app/lib/features";
+
+// The AI Run Composer is enabled (the old features.ts flag was deleted); the live
+// stack shows the chooser when its composer has backends, else falls back to the
+// wizard. The dual-path helpers below keep the no-composer branch.
+const COMPOSER_UI_ENABLED = true;
 
 // Fixtures for the LIVE Playwright project (playwright.config.ts project "live").
 // These specs drive the REAL host-mode stack started by scripts/run-host.sh —

@@ -42,7 +42,6 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { OptionCard } from "./step-shell";
-import { COMPOSER_UI_ENABLED } from "../../../lib/features";
 import { ComposeForm } from "./compose-form";
 import { ComposeProgress } from "./compose-progress";
 import { ComposeQandA } from "./compose-qanda";
@@ -50,7 +49,7 @@ import { ComposeReview } from "./compose-review";
 import { PermissionWizard } from "./wizard";
 import { AddWorkspaceDialog } from "../workspaces";
 import { AddSecretDialog } from "../secrets";
-import { surfaceRunWarnings } from "./run-warnings";
+import { surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
 import { wizardStateFromProposal, type WizardState } from "./wizard-types";
 
 type Mode = "choose" | "describe" | "clarify" | "review" | "wizard";
@@ -59,16 +58,10 @@ export function NewRunDialog({
   open,
   onOpenChange,
   onCreated,
-  initialWizardState,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onCreated: (run: AgentRun) => void;
-  // When provided, the dialog opens STRAIGHT into the manual wizard prefilled
-  // with this state (skipping the Describe/Configure chooser). The Fleet "Record
-  // a sandbox profile" entry uses this to pre-fill a recording run (allow-all
-  // egress + interactive). undefined => the normal chooser flow.
-  initialWizardState?: WizardState;
 }) {
   const [mode, setMode] = React.useState<Mode>("choose");
   const [backends, setBackends] = React.useState<ComposerBackend[] | null>(null);
@@ -126,8 +119,6 @@ export function NewRunDialog({
   // toast — an actionable failure (e.g. an api_key grant referencing a not-yet-stored
   // secret) keeps the operator on the proposal with a fix in reach.
   const [launchError, setLaunchError] = React.useState<string | null>(null);
-  const [addSecretOpen, setAddSecretOpen] = React.useState(false);
-  const [addSecretName, setAddSecretName] = React.useState("");
 
   // wizard prefill (set when "Edit in wizard" hands off a proposal)
   const [wizardInitial, setWizardInitial] = React.useState<WizardState | undefined>(undefined);
@@ -163,7 +154,7 @@ export function NewRunDialog({
     );
   }, [result, satisfiedOverrides]);
 
-  const composerEnabled = COMPOSER_UI_ENABLED && !!backends && backends.length > 0;
+  const composerEnabled = !!backends && backends.length > 0;
 
   // On open: probe backends. While probing we show the chooser skeleton; once we
   // know whether the composer is available we land on the right initial mode. A
@@ -195,22 +186,6 @@ export function NewRunDialog({
     setSatisfiedOverrides(new Set());
     setWorkspaces([]);
     loadWorkspaces();
-
-    // Recording-mode / prefilled entry: skip the chooser and the backend probe,
-    // hand the prefilled state straight to the manual wizard.
-    if (initialWizardState) {
-      setWizardInitial(initialWizardState);
-      setMode("wizard");
-      return;
-    }
-
-    // AI composer hidden (COMPOSER_UI_ENABLED=false): skip the probe + chooser and
-    // open straight into the manual wizard, same as the no-backends path.
-    if (!COMPOSER_UI_ENABLED) {
-      setBackends([]);
-      setMode("wizard");
-      return;
-    }
 
     let alive = true;
     api
@@ -245,7 +220,7 @@ export function NewRunDialog({
     return () => {
       alive = false;
     };
-  }, [open, initialWizardState, loadWorkspaces]);
+  }, [open, loadWorkspaces]);
 
   // Client telemetry beacon: fires once per mode transition (choose → describe →
   // clarify → review → wizard). Best-effort, fire-and-forget — mode + correlation
@@ -357,15 +332,6 @@ export function NewRunDialog({
     }
   };
 
-  // Open the Add-secret dialog pre-filled with the name a launch error OR a
-  // setup-checklist item named as missing (ComposeReview's onAddSecret — one
-  // handler, three callers: the launch-error banner, the no-model-access
-  // banner, and the checklist's own "Add secret" row action).
-  const openAddSecret = (name: string) => {
-    setAddSecretName(name);
-    setAddSecretOpen(true);
-  };
-
   // Decision 9 (no recheck endpoint in v1): after AddSecretDialog saves a name,
   // re-flip in place from data we already have rather than losing the proposal to
   // a re-compose. (a) optimistically satisfy every checklist item this exact
@@ -388,6 +354,20 @@ export function NewRunDialog({
       })
       .catch(() => {});
   };
+
+  // Shared add-secret recovery (run-warnings.ts): every save re-flips the checklist
+  // (flipSecretSatisfied); the launch-error fix ALSO re-launches. ComposeReview's
+  // single onAddSecret routes the launch-error banner through openFix (retry) and
+  // the no-model / checklist affordances through openManual — matching the old
+  // "retry iff a launchError was set" behaviour, decided at click time.
+  const secretFix = useAddSecretFix({
+    onManual: (name) => flipSecretSatisfied(name),
+    onRetry: (name) => {
+      flipSecretSatisfied(name);
+      setLaunchError(null);
+      void approveLaunch();
+    },
+  });
 
   // scan_workspace fix (Fix.WorkspaceID): the same best-effort re-scan already
   // wired below on AddWorkspaceDialog.onSaved — kick it off, then reload the
@@ -577,7 +557,7 @@ export function NewRunDialog({
               onInteractiveChange={setInteractive}
               onAcknowledge={setAcknowledged}
               onApproveLaunch={approveLaunch}
-              onAddSecret={openAddSecret}
+              onAddSecret={(name) => (launchError ? secretFix.openFix(name) : secretFix.openManual(name))}
               onFixWorkspace={fixWorkspace}
               onEditInWizard={editInWizard}
               onCancel={() => onOpenChange(false)}
@@ -613,20 +593,9 @@ export function NewRunDialog({
       {/* Opened from ComposeReview: the launch-error helper, the no-model-access
           banner, or a checklist row's "Add secret" action. Every caller gets the
           same re-flip (decision 9); only the launch-error path also auto-retries
-          the launch (its whole point is "fix and go" with no lost proposal). */}
-      <AddSecretDialog
-        open={addSecretOpen}
-        onOpenChange={setAddSecretOpen}
-        initialName={addSecretName}
-        onSaved={(name) => {
-          setAddSecretOpen(false);
-          flipSecretSatisfied(name);
-          if (launchError) {
-            setLaunchError(null);
-            void approveLaunch();
-          }
-        }}
-      />
+          the launch (its whole point is "fix and go" with no lost proposal). The
+          retry-vs-manual branch lives in the shared useAddSecretFix hook. */}
+      <AddSecretDialog {...secretFix.dialogProps} />
     </>
   );
 }

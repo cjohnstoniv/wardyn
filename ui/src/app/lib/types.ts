@@ -625,6 +625,18 @@ export interface SetupItem {
   residency?: SetupItemResidency;
 }
 
+// POST /api/v1/runs/preflight response — a DRY-RUN of run-create's resolution +
+// gating (mints/persists/dispatches nothing). setup_items is the SAME
+// deterministic checklist the composer Review shows (deriveSetupItems);
+// enforced_confinement_class is the class the run will ACTUALLY run at after the
+// policy floor + blast-radius CC3 raise (may exceed the operator's pick when the
+// run holds write-capable credentials). Advisory only — rendered on the wizard's
+// Review step, never gating.
+export interface PreflightResult {
+  setup_items: SetupItem[];
+  enforced_confinement_class: ConfinementClass;
+}
+
 // POST /api/v1/runs/compose/assist — the ESCALATION-only help agent. ADVISORY:
 // it answers the operator's free-text question with the current step's structured
 // context in view (never pixels). Reuses the composer backend + hardened client;

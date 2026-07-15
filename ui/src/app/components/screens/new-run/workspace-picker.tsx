@@ -63,8 +63,8 @@ export function WorkspacePicker({
 
       {selections.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">
-          No workspace selected yet. Only onboarded local directories and repos can be attached —
-          use "Add workspace" to onboard a new one.
+          No workspace attached — the run gets an empty scratch directory inside the sandbox (nothing
+          on your machine is reachable). Attach an onboarded directory or repo to work on real code.
         </p>
       ) : (
         <div className="space-y-2">

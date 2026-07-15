@@ -273,21 +273,31 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeInTheDocument();
   });
 
-  // F6: the inline launch button must honor canLaunch like the footer/fast-path.
-  it("LaunchStep gates its launch button until canLaunch, showing the essentials helper", () => {
+  // The inline launch button gates on a barrier only (canLaunch); with a barrier but
+  // no model it launches with a non-blocking "no model connected" notice.
+  it("LaunchStep gates on a barrier, then nudges (non-blocking) when no model is connected", () => {
+    // No barrier → disabled + the barrier-required helper.
     const { rerender } = render(
       <LaunchStep status={baseStatus()} onLaunch={vi.fn()} onOpenRuns={vi.fn()} canLaunch={false} />,
     );
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeDisabled();
-    expect(
-      screen.getByText(/a barrier and a connected model are both required/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/a sandbox barrier is required first/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no model connected yet/i)).not.toBeInTheDocument();
 
-    rerender(<LaunchStep status={baseStatus()} onLaunch={vi.fn()} onOpenRuns={vi.fn()} canLaunch />);
+    // Barrier up, no model → ENABLED + the amber "no model connected" notice.
+    rerender(
+      <LaunchStep status={baseStatus()} onLaunch={vi.fn()} onOpenRuns={vi.fn()} canLaunch llmReady={false} />,
+    );
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeEnabled();
-    expect(
-      screen.queryByText(/a barrier and a connected model are both required/i),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText(/no model connected yet/i)).toBeInTheDocument();
+
+    // Barrier up + model connected → ENABLED, no notice.
+    rerender(
+      <LaunchStep status={baseStatus()} onLaunch={vi.fn()} onOpenRuns={vi.fn()} canLaunch llmReady />,
+    );
+    expect(screen.getByRole("button", { name: /launch your first run/i })).toBeEnabled();
+    expect(screen.queryByText(/no model connected yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/a sandbox barrier is required first/i)).not.toBeInTheDocument();
   });
 
   // V2: a successful save PUTs through the orchestrator-owned saveSiteConfig

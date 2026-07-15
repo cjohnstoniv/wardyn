@@ -629,8 +629,9 @@ export function applyProfileSpecToState(
 export function validateStep(id: WizardStepId, state: WizardState): string | null {
   switch (id) {
     case "basics": {
-      if (!state.workspaces.length)
-        return "Select at least one onboarded workspace.";
+      // A workspace is OPTIONAL: zero mounts => an ephemeral scratch run (buildSpec
+      // leaves repo "" and emits no workspace_mounts/repos). Only a batch run needs
+      // a task; an interactive run comes up idle for the operator to drive.
       if (state.mode === "batch" && !state.task.trim())
         return "A batch run needs a task to perform.";
       return null;

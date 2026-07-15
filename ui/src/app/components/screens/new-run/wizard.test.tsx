@@ -31,6 +31,7 @@ const profileRunMock = vi.fn();
 const createRunMock = vi.fn();
 const createPolicyMock = vi.fn();
 const setSecretMock = vi.fn();
+const preflightRunMock = vi.fn();
 
 vi.mock("../../../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api")>("../../../lib/api");
@@ -45,6 +46,7 @@ vi.mock("../../../lib/api", async () => {
       createRun: (...a: unknown[]) => createRunMock(...a),
       createPolicy: (...a: unknown[]) => createPolicyMock(...a),
       setSecret: (...a: unknown[]) => setSecretMock(...a),
+      preflightRun: (...a: unknown[]) => preflightRunMock(...a),
       scanWorkspace: vi.fn(),
     },
   };
@@ -89,11 +91,26 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     createPolicyMock.mockReset();
     profileRunMock.mockReset();
     setSecretMock.mockReset();
+    preflightRunMock.mockReset();
 
     healthMock.mockResolvedValue({ confinement_classes: ["CC1", "CC2", "CC3"] });
     listSecretsMock.mockResolvedValue([]);
     listWorkspacesMock.mockResolvedValue([workspace]);
     setSecretMock.mockResolvedValue(undefined);
+    // Preflight fires when Review is entered — default to a benign checklist so
+    // the many go-to-Review tests don't each have to stub it.
+    preflightRunMock.mockResolvedValue({
+      setup_items: [
+        {
+          id: "backend:CC2",
+          kind: "backend",
+          label: "Sandbox barrier: Wall",
+          required_by: "the proposal's confinement class",
+          status: "satisfied",
+        },
+      ],
+      enforced_confinement_class: "CC2",
+    });
   });
 
   // Prefilled state that clears every step's validateStep so we can click
@@ -277,6 +294,24 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
 
     await screen.findByTestId("wizard-launch-error");
     expect(screen.queryByRole("button", { name: /add the .* secret/i })).toBeNull();
+  });
+
+  it("fires preflight on entering Review and renders its setup checklist", async () => {
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToLastStep(user);
+
+    // Preflight was fired with the SAME inline_policy the launch would send.
+    await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
+    const sent = preflightRunMock.mock.calls[0][0] as { inline_policy?: unknown };
+    expect(sent.inline_policy).toBeTruthy();
+    // Its checklist rows render on Review.
+    expect(await screen.findByTestId("preflight-checklist")).toBeInTheDocument();
+    expect(await screen.findByTestId("setup-item-backend:CC2")).toBeInTheDocument();
   });
 
   it("M19: an empty first health probe retries instead of rendering a definitive unavailable barrier", async () => {

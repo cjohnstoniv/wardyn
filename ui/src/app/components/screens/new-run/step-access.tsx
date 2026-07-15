@@ -146,7 +146,7 @@ export function StepAccess({
               title="Bedrock"
               badge="Auto"
               badgeTone="neutral"
-              hint="Amazon Bedrock is set up by your operator (Settings → Connect a model). When configured, Claude runs use it automatically — it isn't a per-run choice."
+              hint="Amazon Bedrock is set up by your operator (Getting started → Connect a model). When configured, Claude runs use it automatically — it isn't a per-run choice."
               checked={state.anthropicAuth === "bedrock"}
               disabled
             />

@@ -68,7 +68,7 @@ export function StepBasics({
 
       <Field
         label="Workspaces"
-        hint="Only onboarded local directories and repos can be attached — a raw host path is never accepted. The first one selected is the primary (drives the run's base image); the rest are attached alongside it."
+        hint="Only onboarded local directories and repos can be attached — a raw host path is never accepted. The first one selected is the primary (drives the run's base image); the rest are attached alongside it. Optional — leave empty for an ephemeral scratch run."
       >
         <WorkspacePicker
           selections={state.workspaces}

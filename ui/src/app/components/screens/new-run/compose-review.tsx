@@ -397,7 +397,10 @@ function RiskPanel({
 // (label/detail/required_by) is server-derived but rendered as plain React text
 // nodes ONLY — never dangerouslySetInnerHTML — the same caution as everywhere
 // else a field could in principle be influenced by the analyzer's output.
-function SetupChecklist({
+// Exported so the manual wizard's Review step can render the SAME checklist from
+// its preflight response (POST /runs/preflight) — one component, one vocabulary
+// across both the composer and manual paths.
+export function SetupChecklist({
   items,
   onAddSecret,
   onFixWorkspace,

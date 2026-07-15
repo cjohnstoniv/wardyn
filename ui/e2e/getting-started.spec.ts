@@ -82,7 +82,7 @@ test.describe("Getting Started funnel", () => {
     for (const btn of await page.getByRole("button", { name: /launch your first run/i }).all()) {
       await expect(btn).toBeDisabled();
     }
-    await expect(main.getByText(/a barrier and a connected model are both required/i)).toBeVisible();
+    await expect(main.getByText(/a sandbox barrier is required first/i)).toBeVisible();
   });
 
   test("Finish later dismisses to Runs and the sidebar entry returns", async ({ page }) => {
