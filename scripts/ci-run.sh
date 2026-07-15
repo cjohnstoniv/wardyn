@@ -110,15 +110,20 @@ export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
 cleanup() {
   local code=$?
   if [[ "${WARDYN_CI_KEEP:-}" == "1" ]]; then
-    warn "WARDYN_CI_KEEP=1 — leaving the stack up (tear down with: ${COMPOSE[*]} down)"
+    warn "WARDYN_CI_KEEP=1 — leaving the stack up (tear down with: ${COMPOSE[*]} down --volumes)"
   else
-    log "Tearing down the compose stack"
-    "${COMPOSE[@]}" down >/dev/null 2>&1 || true
+    log "Tearing down the compose stack (volumes included — the stack is ephemeral)"
+    "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
     rm -rf "${TOOLS_DIR}"
   fi
   exit "${code}"
 }
 trap cleanup EXIT
+
+# Ephemerality is load-bearing, not hygiene: a reused postgres volume holds
+# secrets age-encrypted to a PREVIOUS boot's ephemeral key, and wardynd fails
+# closed (by design) on the decrypt mismatch. Every invocation starts clean.
+"${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
 
 log "Starting postgres + wardynd (WARDYN_ENVBUILD on for the BYOA wrap)"
 "${COMPOSE[@]}" up -d postgres wardynd || die "compose up"
