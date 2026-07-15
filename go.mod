@@ -10,7 +10,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.56.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
-	github.com/coder/websocket v1.8.14
+	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/go-chi/chi/v5 v5.2.4
