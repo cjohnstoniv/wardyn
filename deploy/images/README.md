@@ -30,6 +30,13 @@ agent-run --selftest      # verify binaries + env wiring; no API key needed
 `--selftest` is used by e2e validation to confirm the image contract before a
 live task is scheduled.
 
+When the control plane sets `WARDYN_TASK_MODE=exec` (BYOA/CI lane — see
+`docs/CI.md`), `agent-run` runs the task as a plain shell command
+(`/bin/sh -lc "<task>"`) instead of the agent harness: same MITM-CA/clone/
+brokered-credential wiring, no model call. The selftest relaxes accordingly
+(the harness binary becomes optional; `git` gates only when repo wiring is
+present).
+
 ### 3. `/usr/local/bin/wardyn-rec`
 
 The session recorder binary, built from `cmd/wardyn-rec`.  It wraps the agent

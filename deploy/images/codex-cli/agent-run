@@ -52,12 +52,22 @@ source /usr/local/bin/agent-run-lib.sh
 if [[ "${1:-}" == "--selftest" ]]; then
     echo "=== wardyn agent-run selftest (codex-cli) ==="
     ok=1
+    # exec task mode (BYOA/CI): no agent harness, so codex is informational and
+    # git only gates when the run actually clones a repo (mirrors claude-code).
+    required=(wardyn-rec wardyn-git-helper git codex)
+    if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
+        required=(wardyn-rec wardyn-git-helper)
+        [[ -n "${WARDYN_REPO_URL:-}${WARDYN_REPOS:-}" ]] && required+=(git)
+        echo "  (task_mode=exec: codex optional; git required only with repo wiring)"
+    fi
     for bin in wardyn-rec wardyn-git-helper git codex; do
         if command -v "$bin" >/dev/null 2>&1; then
             echo "  FOUND   $bin ($(command -v "$bin"))"
         else
-            echo "  MISSING $bin"
-            ok=0
+            case " ${required[*]} " in
+                *" $bin "*) echo "  MISSING $bin"; ok=0 ;;
+                *) echo "  ABSENT  $bin (not required for this task mode)" ;;
+            esac
         fi
     done
     echo "--- env wiring ---"
@@ -180,6 +190,10 @@ if [[ "${WARDYN_SCAN_ONLY:-}" == "1" ]]; then
     echo "agent-run: scan-only mode — running wardyn-scan over ${WARDYN_WORKSPACE_DIR}" >&2
     exec wardyn-scan
 fi
+
+# Exec task mode (BYOA/CI): run the task as a plain shell command instead of
+# the agent harness. Never returns when WARDYN_TASK_MODE=exec (see agent-run-lib.sh).
+maybe_exec_task_mode "$task"
 
 # Run Codex CLI in non-interactive exec mode.
 # `codex exec "<prompt>"` runs a single task without REPL interaction.

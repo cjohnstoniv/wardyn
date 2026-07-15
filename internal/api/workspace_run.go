@@ -359,7 +359,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws); ok {
 		image = built
 	}
-	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, nil, false, commands)
+	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, nil, false, "", commands)
 	created = s.refreshRun(ctx, runID, created)
 	return created, nil
 }
@@ -558,7 +558,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var plan json.RawMessage
-	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, injections, interactive, plan)
+	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, injections, interactive, "", plan)
 	created = s.refreshRun(ctx, runID, created)
 	return created, weakCC, nil
 }
@@ -916,7 +916,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	}
 
 	image := agentImage("claude-code", s.cfg.AgentImages)
-	s.dispatch(ctx, created, id.Token, image, scanPolicy, ghGrantID, nil, sshGrants, nil, false)
+	s.dispatch(ctx, created, id.Token, image, scanPolicy, ghGrantID, nil, sshGrants, nil, false, "")
 	created = s.refreshRun(ctx, runID, created)
 	return created, nil
 }
