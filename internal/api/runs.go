@@ -169,7 +169,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// the configured default. resolveRunPolicy writes its own HTTP error and
 	// returns ok=false when it has already responded (XOR violation, invalid
 	// inline spec, missing/reserved inline secret ref, …) so we just stop.
-	spec, policyID, ok := s.resolveRunPolicy(ctx, w, r, &req)
+	spec, policyID, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
 	if !ok {
 		return
 	}
@@ -794,8 +794,14 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// api-key run) means the operator opted for api-key; letting managed fire would
 	// drop that grant below and silently bill the subscription instead, while the
 	// compose review said "api-key". So require no pre-existing anthropic injection.
+	// A zero-egress policy (no allow-all, empty allow-list — e.g. a sealed demo
+	// sandbox) suppresses the fallback entirely: managed injection APPENDS
+	// api.anthropic.com to the allow-list below, and a fallback must not silently
+	// widen a policy the operator authored as sealed. Operator-staged subscription
+	// mounts are policy-blessed and unaffected.
 	managed := !harnessLoginRun && !subscription && !bedrockReady &&
-		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent)
+		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent) &&
+		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
 	injectManaged := managed
 
 	if harnessLoginRun {

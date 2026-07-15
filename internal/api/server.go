@@ -391,6 +391,11 @@ func (s *Server) routes() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(s.humanOrAdminAuth)
 			r.Post("/runs", s.handleCreateRun)
+			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
+			// chokepoint (real 4xx errors), the enforced confinement class, and the
+			// deterministic setup checklist — mints/persists/dispatches nothing. The
+			// manual wizard fires it on the Review step (advisory, non-gating).
+			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Post("/runs/compose", s.handleComposeRun)
 			// Escalation-only Ask help agent + client funnel beacon (advisory only;
 			// same composer-enabled gate + hardened backend transport as compose).
