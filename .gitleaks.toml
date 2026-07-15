@@ -12,6 +12,10 @@ regexes = [
     # README prose "…: secret-output masking, eBPF/Tetragon …" trips
     # generic-api-key with "eBPF/Tetragon" parsed as the secret value.
     '''secret-output masking''',
+    # The compose demo admin token placeholder used across docs/scripts curl
+    # examples (curl-auth-header rule); it is the documented default, not a
+    # secret.
+    '''demo-admin-token''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
