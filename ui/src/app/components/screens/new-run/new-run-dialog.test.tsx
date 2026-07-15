@@ -14,9 +14,6 @@ import type { AgentRun, ComposeResponse, ComposerBackend } from "../../../lib/ty
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 const toastWarning = vi.fn();
-// The composer UI is hidden by default (COMPOSER_UI_ENABLED=false), but the code is
-// retained — these tests exercise that retained composer path, so force the flag on.
-vi.mock("../../../lib/features", () => ({ COMPOSER_UI_ENABLED: true }));
 vi.mock("sonner", () => ({
   toast: {
     error: (...a: unknown[]) => toastError(...a),

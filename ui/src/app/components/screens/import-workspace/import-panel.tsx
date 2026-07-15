@@ -31,7 +31,6 @@ import {
 import { toast } from "sonner";
 import type { SetupCommand, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { api } from "../../../lib/api";
-import { COMPOSER_UI_ENABLED } from "../../../lib/features";
 import { usePoll } from "../../../lib/use-poll";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { getErrorMessage as msg } from "../../../lib/format";
@@ -102,12 +101,11 @@ export function ImportWorkspaceDialog({
   // affordance on the Verify step (detected the same way new-run-dialog does: an
   // empty backend list means the composer is off / suggest-fix would 404).
   const [composerEnabled, setComposerEnabled] = React.useState(false);
-  // M18 fix: Record's "no model configured" warning used to be driven by
-  // composerEnabled too — but COMPOSER_UI_ENABLED is force-disabled, so that
-  // signal is always false and the warning fired even with a connected
-  // subscription or a stored provider key. Derive it instead from GET
-  // /setup/status via hasLlmPath (the same readiness check Getting Started
-  // uses), which is composer-independent.
+  // M18 fix: Record's "no model configured" warning must be composer-INDEPENDENT —
+  // driving it off composerEnabled fired the warning even with a connected
+  // subscription or a stored provider key (a run can have model access with no
+  // composer backend). Derive it from GET /setup/status via hasLlmPath instead —
+  // the same readiness check Getting Started uses.
   const [llmReady, setLlmReady] = React.useState(false);
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
   const [addSecretName, setAddSecretName] = React.useState("");
@@ -174,12 +172,8 @@ export function ImportWorkspaceDialog({
   }, []);
 
   const loadComposer = React.useCallback(() => {
-    // AI composer UI hidden for now (COMPOSER_UI_ENABLED=false) — skip the probe so
-    // the "Diagnose with AI" affordance never shows. Backend stays intact.
-    if (!COMPOSER_UI_ENABLED) {
-      setComposerEnabled(false);
-      return;
-    }
+    // The "Diagnose with AI" affordance shows only when a composer backend is
+    // actually configured (an empty list / probe error hides it, no crash).
     api
       .listComposerBackends()
       .then((bs) => setComposerEnabled(bs.length > 0))

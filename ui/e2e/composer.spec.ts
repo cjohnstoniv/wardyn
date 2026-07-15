@@ -42,7 +42,10 @@
 //   * footer actions are "Approve & launch" and "Edit in wizard".
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
-import { COMPOSER_UI_ENABLED } from "../src/app/lib/features";
+
+// The AI Run Composer is enabled (the old features.ts flag was deleted); with the
+// seeded 'fake' backends this suite self-activates.
+const COMPOSER_UI_ENABLED = true;
 
 // The compose + launch tests share one seeded backend; the launch test mutates
 // run state (creates a run). Serial mode keeps the read-only compose/review
@@ -108,7 +111,7 @@ async function compose(page: Page, dlg: Locator, prompt: string): Promise<void> 
 }
 
 test.describe("AI Run Composer — Describe your task", () => {
-  test.skip(!COMPOSER_UI_ENABLED, "AI Run Composer UI is flag-off (features.ts) — suite self-activates when the flag flips");
+  test.skip(!COMPOSER_UI_ENABLED, "AI Run Composer suite disabled via the local toggle above");
 
   test("the provider dropdown lists the configured backends with the default preselected", async ({
     page,
@@ -296,13 +299,14 @@ test.describe("AI Run Composer — Describe your task", () => {
     // Pick "Configure manually" from the chooser.
     await dlg.getByRole("button", { name: /Configure manually/ }).click();
 
-    // The manual wizard takes over as a CLEAN config: Basics on the onboarded-
-    // Workspaces field with nothing attached yet, so Next is gated (no prefill).
+    // The manual wizard takes over as a CLEAN config: Basics with nothing
+    // attached (no prefill). An ephemeral no-workspace run is valid, so Next
+    // is enabled immediately.
     const wiz = dialog(page);
     await expect(wiz.getByText("Compose the agent's permission envelope.")).toBeVisible();
     await expect(wiz.getByText("Workspaces", { exact: true })).toBeVisible();
     await expect(wiz.getByRole("button", { name: "Review" })).toBeVisible();
-    await expect(wiz.getByRole("button", { name: "Next" })).toBeDisabled();
+    await expect(wiz.getByRole("button", { name: "Next" })).toBeEnabled();
   });
 
   test("interview backend asks a clarifying question, then proposes after answers", async ({

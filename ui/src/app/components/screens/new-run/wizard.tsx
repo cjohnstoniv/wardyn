@@ -8,11 +8,17 @@
 // policy (createPolicy) then creates the run (createRun) with inline_policy.
 import * as React from "react";
 import { ArrowLeft, ArrowRight, KeyRound, Loader2, Rocket } from "lucide-react";
-import type { AgentRun, ConfinementClass, Workspace, WorkspaceProfile } from "../../../lib/types";
+import type {
+  AgentRun,
+  ConfinementClass,
+  PreflightResult,
+  Workspace,
+  WorkspaceProfile,
+} from "../../../lib/types";
 import { api } from "../../../lib/api";
 import { getErrorMessage as msg } from "../../../lib/format";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
-import { parseMissingSecret, surfaceRunWarnings } from "./run-warnings";
+import { parseMissingSecret, surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
 import { Button } from "../../ui/button";
 import {
   Dialog,
@@ -62,13 +68,6 @@ export function PermissionWizard({
   const [availableClasses, setAvailableClasses] = React.useState<string[] | null>(null);
   const [secrets, setSecrets] = React.useState<string[]>([]);
   const [secretsLoading, setSecretsLoading] = React.useState(false);
-  const [addSecretOpen, setAddSecretOpen] = React.useState(false);
-  // Prefill + retry wiring for the launch-error "add the missing secret" fix
-  // below (H3, ported from compose-review.tsx / 926da19): addSecretName seeds
-  // AddSecretDialog's name field; retryingSecretFix marks that THIS open came
-  // from the fix button, so onSaved re-launches instead of just patching state.
-  const [addSecretName, setAddSecretName] = React.useState("");
-  const [retryingSecretFix, setRetryingSecretFix] = React.useState(false);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = React.useState(false);
   // Workspaces whose recorded egress has already been merged into the Egress step,
@@ -77,6 +76,13 @@ export function PermissionWizard({
   const [addWorkspaceOpen, setAddWorkspaceOpen] = React.useState(false);
   const [launching, setLaunching] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Review preflight (advisory, non-blocking): a DRY-RUN of launch's resolution +
+  // gating so Review can show the setup checklist + the confinement class the run
+  // will ACTUALLY run at, before the operator commits. null until it resolves.
+  const [preflight, setPreflight] = React.useState<PreflightResult | null>(null);
+  const [preflightStatus, setPreflightStatus] = React.useState<"idle" | "loading" | "error">(
+    "idle",
+  );
   // A launch failure that names a not-yet-stored secret (H1: the stored/default
   // policy path now 422s on this too, same as inline) — offers the same
   // one-click fix the composer review panel does.
@@ -136,6 +142,8 @@ export function PermissionWizard({
     setStepIdx(0);
     setError(null);
     setLaunching(false);
+    setPreflight(null);
+    setPreflightStatus("idle");
     mergedWs.current = new Set();
     if (initialState) setState(initialState);
     setAvailableClasses(null);
@@ -228,6 +236,29 @@ export function PermissionWizard({
     }
   };
 
+  // A DRY-RUN of launch with the SAME body createRun would send: it resolves the
+  // policy through the real chokepoint (real 4xx errors), returns the setup
+  // checklist + the enforced confinement class, and mints/persists nothing. Any
+  // failure is swallowed to a quiet "preflight unavailable" — it NEVER blocks Review.
+  const runPreflight = React.useCallback(async () => {
+    setPreflightStatus("loading");
+    try {
+      const { run, inline_policy } = buildSpec(state, workspaces);
+      setPreflight(await api.preflightRun({ ...run, inline_policy }));
+      setPreflightStatus("idle");
+    } catch {
+      setPreflight(null);
+      setPreflightStatus("error");
+    }
+  }, [state, workspaces]);
+  // A ref so the enter-Review effect fires ONCE per entry with the latest spec —
+  // never re-firing on unrelated Review-step edits (e.g. typing a profile name).
+  const runPreflightRef = React.useRef(runPreflight);
+  runPreflightRef.current = runPreflight;
+  React.useEffect(() => {
+    if (step.id === "review") void runPreflightRef.current();
+  }, [step.id]);
+
   const launch = async () => {
     // Re-validate every step before launch so a skipped requirement can't slip in.
     for (const s of WIZARD_STEPS) {
@@ -270,6 +301,22 @@ export function PermissionWizard({
     }
   };
 
+  // Shared add-secret recovery (run-warnings.ts): a manual "Add secret" applies the
+  // saved name to llmSecretName; the launch-error fix re-launches once the named
+  // secret exists (H3, mirrors the composer review panel). Both reload the list.
+  const secretFix = useAddSecretFix({
+    onManual: (name) => {
+      loadSecrets();
+      patch({ llmSecretName: name });
+      // Refresh the Review checklist so a just-stored secret flips to Configured.
+      void runPreflightRef.current();
+    },
+    onRetry: () => {
+      loadSecrets();
+      void launch();
+    },
+  });
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -304,12 +351,7 @@ export function PermissionWizard({
                 patch={patch}
                 secrets={secrets}
                 secretsLoading={secretsLoading}
-                onAddSecret={() => {
-                  // A manual open (not the launch-error fix below) — blank name.
-                  setAddSecretName("");
-                  setRetryingSecretFix(false);
-                  setAddSecretOpen(true);
-                }}
+                onAddSecret={() => secretFix.openManual()}
               />
             )}
             {step.id === "egress" && <StepEgress state={state} patch={patch} />}
@@ -322,7 +364,25 @@ export function PermissionWizard({
               />
             )}
             {step.id === "review" && (
-              <StepReview state={state} patch={patch} workspaces={workspaces} />
+              <StepReview
+                state={state}
+                patch={patch}
+                workspaces={workspaces}
+                preflight={preflight}
+                preflightStatus={preflightStatus}
+                onAddSecret={(name) => secretFix.openManual(name)}
+                onFixWorkspace={(id) => {
+                  // Same scan-and-refresh pattern AddWorkspaceDialog uses, then
+                  // re-run preflight so the checklist reflects the new scan status.
+                  api
+                    .scanWorkspace(id)
+                    .catch(() => {})
+                    .finally(() => {
+                      loadWorkspaces();
+                      void runPreflightRef.current();
+                    });
+                }}
+              />
             )}
           </div>
 
@@ -337,11 +397,7 @@ export function PermissionWizard({
                   size="sm"
                   variant="outline"
                   className="gap-1.5"
-                  onClick={() => {
-                    setAddSecretName(missingSecret);
-                    setRetryingSecretFix(true);
-                    setAddSecretOpen(true);
-                  }}
+                  onClick={() => secretFix.openFix(missingSecret)}
                 >
                   <KeyRound className="size-3.5" /> Add the “{missingSecret}” secret
                 </Button>
@@ -381,25 +437,7 @@ export function PermissionWizard({
         </DialogContent>
       </Dialog>
 
-      <AddSecretDialog
-        open={addSecretOpen}
-        onOpenChange={setAddSecretOpen}
-        existingNames={secrets}
-        initialName={addSecretName}
-        onSaved={(name) => {
-          loadSecrets();
-          if (retryingSecretFix) {
-            // The launch-error fix: wizard state already names this secret
-            // correctly (the grant referencing it just didn't exist yet) — retry
-            // the same launch instead of patching state (H3, mirrors
-            // new-run-dialog.tsx's approveLaunch-on-save for compose-review).
-            setRetryingSecretFix(false);
-            void launch();
-          } else {
-            patch({ llmSecretName: name });
-          }
-        }}
-      />
+      <AddSecretDialog {...secretFix.dialogProps} existingNames={secrets} />
 
       <AddWorkspaceDialog
         open={addWorkspaceOpen}

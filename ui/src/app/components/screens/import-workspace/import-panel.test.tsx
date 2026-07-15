@@ -25,9 +25,8 @@ const listComposerBackendsMock = vi.fn();
 const suggestVerifyFixMock = vi.fn();
 const getSetupStatusMock = vi.fn();
 
-// The AI-diagnose affordance is composer-gated + hidden by default
-// (COMPOSER_UI_ENABLED=false); force the flag on so its retained code stays covered.
-vi.mock("../../../lib/features", () => ({ COMPOSER_UI_ENABLED: true }));
+// The AI-diagnose affordance is composer-gated: it shows only when a composer
+// backend is configured (listComposerBackends returns a non-empty list).
 vi.mock("../../../lib/api", () => ({
   api: {
     getWorkspace: (...a: unknown[]) => getWorkspaceMock(...a),
@@ -484,10 +483,9 @@ describe("ImportWorkspaceDialog — egress approvals confirm before applying (M1
   });
 });
 
-// M18: Record's "no model configured" warning used to be wired to composer
-// detection (force-disabled by COMPOSER_UI_ENABLED=false in prod), so it fired
-// even with a connected subscription or API key. It must instead reflect GET
-// /setup/status (hasLlmPath) — independent of the composer signal.
+// M18: Record's "no model configured" warning must be composer-INDEPENDENT —
+// wiring it to composer detection fired the warning even with a connected
+// subscription or API key. It reflects GET /setup/status (hasLlmPath) instead.
 describe("ImportWorkspaceDialog — Record model-readiness reflects /setup/status, not composer (M18)", () => {
   it("shows the connected note when a provider is logged in, even with no composer backend", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));

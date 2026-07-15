@@ -226,7 +226,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         onSelect={setStepId}
         onFinishLater={finish}
         onLaunch={() => setNewRunOpen(true)}
-        canLaunch={readiness.ready && readiness.llmReady}
+        // A barrier is enough to launch (an interactive run works with no model —
+        // the operator drives it over an attached terminal). The fast-path banner,
+        // below, still needs a connected model — it advertises a one-click run.
+        canLaunch={readiness.ready}
         fastPath={readiness.ready && readiness.llmReady && !fastPathHidden}
         onKeepSettingUp={() => setFastPathHidden(true)}
         connectedModelLabel={readiness.llmLabel}
@@ -309,7 +312,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             status={status}
             onLaunch={() => setNewRunOpen(true)}
             onOpenRuns={onDone}
-            canLaunch={readiness.ready && readiness.llmReady}
+            canLaunch={readiness.ready}
+            llmReady={readiness.llmReady}
           />
         )}
       </SetupLayout>

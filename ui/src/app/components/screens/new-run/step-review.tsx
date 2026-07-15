@@ -16,13 +16,19 @@ import { RUN_MODE } from "../../wardyn/copy";
 import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { Field } from "./step-shell";
 import { buildSpec, type WizardState } from "./wizard-types";
-import type { Workspace } from "../../../lib/types";
+import { SetupChecklist } from "./compose-review";
+import { CC_META } from "../../wardyn/cc-meta";
+import type { PreflightResult, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
 
 export function StepReview({
   state,
   patch,
   workspaces = [],
+  preflight = null,
+  preflightStatus = "idle",
+  onAddSecret,
+  onFixWorkspace,
 }: {
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
@@ -30,6 +36,13 @@ export function StepReview({
   // against — needed to render human-readable names/sources below. Optional
   // (defaults to []) so a caller that hasn't loaded it yet still renders.
   workspaces?: Workspace[];
+  // The Review preflight result (POST /runs/preflight) — the deterministic setup
+  // checklist + the class the run will ACTUALLY run at. Advisory: it NEVER blocks
+  // Review — while loading we show "Checking…", on error a quiet one-liner.
+  preflight?: PreflightResult | null;
+  preflightStatus?: "idle" | "loading" | "error";
+  onAddSecret?: (name: string) => void;
+  onFixWorkspace?: (workspaceId: string) => void;
 }) {
   const { run, inline_policy } = React.useMemo(
     () => buildSpec(state, workspaces),
@@ -52,6 +65,12 @@ export function StepReview({
   // Subscription mounts creds (has access); bedrock is its own path.
   const noLlmCred =
     (!isClaude || state.anthropicAuth === "apikey") && !state.llmSecretName && !isSubscription;
+
+  // The run will run at enforced_confinement_class, which the deterministic
+  // blast-radius floor can raise ABOVE the operator's pick when the run holds a
+  // write-capable / third-party production credential (RequiredConfinementFloor).
+  const enforced = preflight?.enforced_confinement_class;
+  const raised = !!enforced && enforced !== state.confinementClass;
 
   const egressValue = inline_policy.allow_all_egress
     ? `Allow all (deny-list only)${
@@ -80,11 +99,52 @@ export function StepReview({
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
           <div>
             <span className="font-semibold">No model access.</span> This run has no LLM credential, so it
-            will launch but its first model call will 404. Go back to Access and pick a stored key (or add
-            one).
+            will launch but its first model call will 404.{" "}
+            {state.mode === "batch" && (
+              <span data-testid="review-batch-no-model">
+                An autonomous run can't perform its task without model access.{" "}
+              </span>
+            )}
+            Go back to Access and pick a stored key (or add one).
           </div>
         </div>
       )}
+
+      {/* Preflight: a DRY-RUN of launch's resolution + gating (POST /runs/preflight).
+          Advisory only — while it resolves we show "Checking…", and any error shows a
+          quiet one-liner; neither ever blocks Review. */}
+      {preflightStatus === "loading" && (
+        <p className="text-xs text-muted-foreground" data-testid="preflight-checking">
+          Checking setup…
+        </p>
+      )}
+      {preflightStatus === "error" && (
+        <p className="text-xs text-muted-foreground" data-testid="preflight-unavailable">
+          Preflight unavailable — you can still launch.
+        </p>
+      )}
+      {raised && enforced && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-subtle p-3 text-xs leading-relaxed text-warning"
+          data-testid="preflight-cc-raise"
+        >
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <div>
+            Launches at {CC_META[enforced].label} — raised automatically because this run holds
+            write-capable or third-party production credentials.
+          </div>
+        </div>
+      )}
+      {preflight && preflight.setup_items.length > 0 && (
+        <div data-testid="preflight-checklist">
+          <SetupChecklist
+            items={preflight.setup_items}
+            onAddSecret={onAddSecret}
+            onFixWorkspace={onFixWorkspace}
+          />
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-border p-3 text-sm">
         <Summary label="Agent" value={<Mono className="text-foreground">{run.agent}</Mono>} />
         <Summary

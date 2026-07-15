@@ -976,14 +976,17 @@ export function LaunchStep({
   status,
   onLaunch,
   onOpenRuns,
-  // The footer/fast-path launch buttons honor canLaunch; this inline one must
-  // too — gate it unless a barrier is up AND a model is connected.
+  // canLaunch gates on a barrier only (readiness.ready) — an interactive run works
+  // with no model. llmReady drives a NON-blocking amber notice when a barrier is up
+  // but no model is connected: the run still launches, you just drive it by hand.
   canLaunch,
+  llmReady = false,
 }: {
   status: SetupStatus;
   onLaunch: () => void;
   onOpenRuns: () => void;
   canLaunch: boolean;
+  llmReady?: boolean;
 }) {
   const example: [string, React.ReactNode][] = [
     ["Task", '"Add a health check endpoint and a unit test for it"'],
@@ -999,9 +1002,9 @@ export function LaunchStep({
   return (
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
-        Describe a task in plain language — the composer proposes a safe config you review before anything
-        starts. Working on a specific repo? Onboard it in the Workspaces step first, or the run has no
-        access to it.
+        Configure your first run — pick the agent, what it can reach, and how strongly it&apos;s walled
+        off. If an AI composer backend is configured, you can describe the task in plain language instead.
+        Working on a specific repo? Onboard it in the Workspaces step first, or the run can&apos;t reach it.
       </p>
 
       {status.has_runs && (
@@ -1035,10 +1038,18 @@ export function LaunchStep({
             Open Runs
           </Button>
         </div>
-        {!canLaunch && (
+        {!canLaunch ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            Set up the essentials first — a barrier and a connected model are both required.
+            A sandbox barrier is required first.
           </p>
+        ) : (
+          !llmReady && (
+            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-xs leading-snug text-warning">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              No model connected yet — an interactive run still works (you drive it over an attached
+              terminal); connect a model for autonomous task runs.
+            </p>
+          )
         )}
       </div>
 

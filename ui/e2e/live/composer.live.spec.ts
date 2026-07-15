@@ -18,7 +18,10 @@ import {
   captureRunCreate,
   waitForRunTerminal,
 } from "./live-fixtures";
-import { COMPOSER_UI_ENABLED } from "../../src/app/lib/features";
+
+// The AI Run Composer is enabled (the old features.ts flag was deleted); this live
+// suite self-activates against a stack whose composer has backends.
+const COMPOSER_UI_ENABLED = true;
 
 liveOnly();
 
@@ -31,7 +34,7 @@ const PROMPT =
   "and one short paragraph. One file only, no build tools, no network access needed.";
 
 test.describe("AI Run Composer (live)", () => {
-  test.skip(!COMPOSER_UI_ENABLED, "AI Run Composer UI is flag-off (features.ts) — suite self-activates when the flag flips");
+  test.skip(!COMPOSER_UI_ENABLED, "AI Run Composer suite disabled via the local toggle above");
 
   test("describe → subscription on → compose → approve & launch → COMPLETED", async ({ page }) => {
     const dlg = await openNewRunChooser(page);

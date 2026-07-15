@@ -23,7 +23,12 @@
 // and the isolation SUBSTRATE (gVisor/runc/Kata) lives in tooltips too.
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
-import { COMPOSER_UI_ENABLED } from "../src/app/lib/features";
+
+// The AI Run Composer is enabled (the old features.ts flag was deleted). With
+// composer backends configured (scripts/e2e-backend.sh), "New run" opens the
+// chooser, and the manual wizard is reached via "Configure manually". The
+// dual-path helper below keeps the no-composer branch for safety.
+const COMPOSER_UI_ENABLED = true;
 
 // The wizard renders inside a Dialog; scope everything to it so step copy never
 // collides with the screen behind it.
@@ -81,16 +86,21 @@ test.describe("New Run wizard", () => {
     await expect(page.getByRole("dialog")).not.toBeVisible();
   });
 
-  test("validation gates advancing: Basics requires an onboarded workspace", async ({ page }) => {
+  test("ephemeral runs need no workspace: Next is enabled and Review shows no repo", async ({ page }) => {
     const dlg = await openWizard(page);
     const nextBtn = dlg.getByRole("button", { name: "Next" });
-    // No workspace attached yet → Next disabled (onboarded-only mount gate).
-    await expect(nextBtn).toBeDisabled();
-    await fillValidBasics(dlg);
+    // No workspace attached — an interactive ephemeral scratch run is valid, so
+    // Next un-gates immediately (the workspace requirement is gone).
     await expect(nextBtn).toBeEnabled();
-    // Detaching the only workspace re-gates Next.
-    await dlg.getByRole("button", { name: "Remove payments" }).click();
-    await expect(nextBtn).toBeDisabled();
+    await next(dlg); // → Access
+    await next(dlg); // → Egress
+    await next(dlg); // → Barrier
+    await next(dlg); // → Review
+    // With no workspace, the Review's Repo field renders the em-dash placeholder
+    // (step-review.tsx: `run.repo || "—"`), proving buildSpec left repo empty.
+    await expect(dlg.getByText("Repo")).toBeVisible();
+    // exact:true — the preflight checklist's prose also contains em-dashes.
+    await expect(dlg.getByText("—", { exact: true })).toBeVisible();
   });
 
   test("autonomous mode requires a task before advancing", async ({ page }) => {
@@ -223,7 +233,8 @@ test.describe("New Run wizard", () => {
     await next(dlg); // → Review
 
     // Structured summary reflects the agent + mode + local workspace chosen.
-    await expect(dlg.getByText("claude-code")).toBeVisible();
+    // exact:true — the preflight checklist rows also mention "claude-code".
+    await expect(dlg.getByText("claude-code", { exact: true })).toBeVisible();
     await expect(dlg.getByText("Interactive", { exact: true })).toBeVisible();
     await expect(dlg.getByText("local:payments")).toBeVisible();
 
@@ -233,6 +244,29 @@ test.describe("New Run wizard", () => {
     await expect(dlg.getByText(/telemetry\.evil\.example\.com/)).toBeVisible();
     await expect(dlg.getByText(/min_confinement_class/)).toBeVisible();
     await expect(dlg.getByText(/api\.anthropic\.com/).first()).toBeVisible();
+  });
+
+  test("Review fires preflight and renders the setup checklist (honest backend row)", async ({
+    page,
+  }) => {
+    const dlg = await openWizard(page);
+    // Ephemeral scratch run: no workspace needed — click straight to Review.
+    await next(dlg); // → Access
+    await next(dlg); // → Egress
+    await next(dlg); // → Barrier
+    const preflight = page.waitForResponse(
+      (r) => r.request().method() === "POST" && /\/api\/v1\/runs\/preflight$/.test(r.url()),
+    );
+    await next(dlg); // → Review
+    await preflight;
+
+    // The deterministic checklist renders from the REAL preflight response.
+    await expect(dlg.getByTestId("preflight-checklist")).toBeVisible();
+    // The `-runner none` seeded backend can't enforce any barrier, so the Fence
+    // backend row is honestly present (status "missing", never hidden) — and it
+    // uses the friendly tier label, never the CC1 wire code (honesty invariant).
+    await expect(dlg.getByTestId("setup-item-backend:CC1")).toBeVisible();
+    await expect(dlg.getByText("Sandbox barrier: Fence")).toBeVisible();
   });
 
   test("save-as-profile requires a name before launching", async ({ page }) => {

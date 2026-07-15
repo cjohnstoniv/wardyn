@@ -20,6 +20,7 @@ import type {
   CreateRunInput,
   CreateRunResult,
   EgressDecision,
+  PreflightResult,
   ProfileProposal,
   Recording,
   RunPolicy,
@@ -413,6 +414,35 @@ export const api = {
     if (input.compose_session_id) body.compose_session_id = input.compose_session_id;
     const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
+  },
+
+  // POST /api/v1/runs/preflight — a DRY-RUN of createRun's resolution + gating:
+  // mints/persists/dispatches NOTHING, just returns the deterministic setup
+  // checklist and the enforced confinement class (post floor + blast-radius
+  // raise). The wizard fires this when the operator enters Review, sending the
+  // SAME body createRun would, so the checklist and any 4xx (unknown-secret 422,
+  // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
+  // error as a quiet "preflight unavailable" and never block Review.
+  async preflightRun(
+    input: (Partial<AgentRun> | CreateRunInput) & {
+      interactive?: boolean;
+      inline_policy?: RunPolicySpec;
+    },
+  ): Promise<PreflightResult> {
+    const body: Record<string, unknown> = {
+      agent: input.agent,
+      repo: input.repo,
+      task: input.task,
+    };
+    if (input.policy_id) body.policy_id = input.policy_id;
+    let cc = input.confinement_class;
+    const floor = input.inline_policy?.min_confinement_class;
+    if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
+    if (cc) body.confinement_class = cc;
+    if (input.interactive) body.interactive = true;
+    if (input.inline_policy) body.inline_policy = input.inline_policy;
+    const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body) });
+    return asJson<PreflightResult>(res);
   },
 
   // POST /api/v1/runs/{id}/profile — Recording-Mode profile synthesis (ADVISORY,
