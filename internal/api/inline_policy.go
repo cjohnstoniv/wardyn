@@ -35,7 +35,11 @@ import (
 //     is configured. This is a deliberate behavior change (see CHANGELOG): a
 //     stored or default policy naming a missing/reserved secret now 422s at
 //     create instead of only failing later at first proxy injection or clone.
-func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest) (types.RunPolicySpec, *uuid.UUID, bool) {
+// dryRun suppresses the policy.inline audit write: a preflight preview is not an
+// inline-policy USE, and the audit feed is the system of record — orphan
+// policy.inline rows with no following run.create would be indistinguishable
+// from real authorizations.
+func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, bool) {
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
 		writeError(w, http.StatusBadRequest, "specify either policy_id or inline_policy, not both")
@@ -57,13 +61,16 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
 		// secret.* admin events); the subsequent run.create event records
-		// inline_policy=true bound to the run id for correlation.
-		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"policy.inline", "", "success", mustJSON(map[string]any{
-				"min_confinement_class": spec.MinConfinementClass,
-				"workspace_mounts":      len(spec.WorkspaceMounts),
-				"eligible_grants":       len(spec.EligibleGrants),
-			})))
+		// inline_policy=true bound to the run id for correlation. Skipped for a
+		// preflight dry-run (see the doc comment).
+		if !dryRun {
+			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"policy.inline", "", "success", mustJSON(map[string]any{
+					"min_confinement_class": spec.MinConfinementClass,
+					"workspace_mounts":      len(spec.WorkspaceMounts),
+					"eligible_grants":       len(spec.EligibleGrants),
+				})))
+		}
 		return spec, nil, true
 	}
 
