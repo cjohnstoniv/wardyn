@@ -159,6 +159,9 @@ type createRunBody struct {
 	ConfinementClass string `json:"confinement_class,omitempty"`
 	// Interactive comes up idle (no agent task exec'd) for `wardyn attach`.
 	Interactive bool `json:"interactive,omitempty"`
+	// InlinePolicy applies a RunPolicySpec directly on the request (from
+	// --policy-file). XOR with PolicyID — the server enforces the exclusivity.
+	InlinePolicy *types.RunPolicySpec `json:"inline_policy,omitempty"`
 }
 
 // policyBody is the POST/PUT /policies body: a name plus the RunPolicySpec.

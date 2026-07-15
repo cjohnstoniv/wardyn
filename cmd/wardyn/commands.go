@@ -11,25 +11,44 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // clientFn lazily builds the API client after persistent flags are parsed.
 type clientFn func() *apiClient
 
 func runCmd(client clientFn) *cobra.Command {
-	var repo, agent, task, policyID, confinement string
+	var repo, agent, task, policyID, confinement, policyFile string
 	var interactive bool
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Create a new governed agent run",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if repo == "" || agent == "" {
-				return fmt.Errorf("--repo and --agent are required")
+			// --repo is optional now: a run with no repo comes up in an ephemeral
+			// scratch dir (matches the wizard's workspace-optional ephemeral runs).
+			if agent == "" {
+				return fmt.Errorf("--agent is required")
 			}
-			run, err := client().createRun(cmd.Context(), createRunBody{
+			body := createRunBody{
 				Agent: agent, Repo: repo, Task: task, PolicyID: policyID,
 				ConfinementClass: confinement, Interactive: interactive,
-			})
+			}
+			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
+			// mutually exclusive with --policy; the server enforces that XOR — we
+			// only surface a clear parse error client-side.
+			if policyFile != "" {
+				data, err := os.ReadFile(policyFile)
+				if err != nil {
+					return fmt.Errorf("read --policy-file: %w", err)
+				}
+				var spec types.RunPolicySpec
+				if err := json.Unmarshal(data, &spec); err != nil {
+					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+				}
+				body.InlinePolicy = &spec
+			}
+			run, err := client().createRun(cmd.Context(), body)
 			if err != nil {
 				return err
 			}
@@ -41,10 +60,11 @@ func runCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
+	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for `wardyn attach`; use a never-reap policy (auto_stop_after_sec < 0)")
 	return cmd
