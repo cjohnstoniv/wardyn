@@ -126,22 +126,96 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	}
 }
 
-// run requires --repo and --agent; missing them must fail BEFORE any request.
-func TestRunCmd_RequiresRepoAndAgent(t *testing.T) {
+// run requires only --agent now (--repo is optional: an ephemeral scratch run).
+// A missing --agent must fail BEFORE any request; a missing --repo must NOT.
+func TestRunCmd_RequiresAgentOnly(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
 
-	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code")
+	// Missing --agent → error, no request.
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--repo", "org/name")
 	if err == nil {
-		t.Fatal("expected error when --repo missing, got nil")
+		t.Fatal("expected error when --agent missing, got nil")
 	}
-	if !strings.Contains(err.Error(), "--repo and --agent are required") {
-		t.Errorf("error = %q, want the required-flags message", err)
+	if !strings.Contains(err.Error(), "--agent is required") {
+		t.Errorf("error = %q, want the required-agent message", err)
 	}
 	srv.mu.Lock()
 	n := len(srv.reqs)
 	srv.mu.Unlock()
 	if n != 0 {
 		t.Errorf("server saw %d requests, want 0 (validation must short-circuit)", n)
+	}
+
+	// Missing --repo but --agent present → the request fires (ephemeral run).
+	if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code"); err != nil {
+		t.Fatalf("run with no --repo should succeed (ephemeral), got: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/runs" {
+		t.Errorf("got %s %s, want POST /api/v1/runs", got.method, got.path)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if body["repo"] != "" {
+		t.Errorf("repo = %v, want empty for an ephemeral run", body["repo"])
+	}
+}
+
+// --policy-file reads a JSON RunPolicySpec and sends it as inline_policy on the body.
+func TestRunCmd_PolicyFileInlinePolicy(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
+		ID: uuid.New(), State: types.RunPending, ConfinementClass: types.CC1,
+	})
+
+	dir := t.TempDir()
+	file := dir + "/spec.json"
+	writeFile(t, file, `{"allowed_domains":["example.com"],"first_use_approval":"always_deny","min_confinement_class":"CC1"}`)
+
+	if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--policy-file", file); err != nil {
+		t.Fatalf("run --policy-file returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/runs" {
+		t.Errorf("got %s %s, want POST /api/v1/runs", got.method, got.path)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	inline, ok := body["inline_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("inline_policy missing/not an object: %v", body["inline_policy"])
+	}
+	if inline["min_confinement_class"] != "CC1" {
+		t.Errorf("inline_policy.min_confinement_class = %v, want CC1", inline["min_confinement_class"])
+	}
+	domains, _ := inline["allowed_domains"].([]any)
+	if len(domains) != 1 || domains[0] != "example.com" {
+		t.Errorf("inline_policy.allowed_domains = %v, want [example.com]", inline["allowed_domains"])
+	}
+}
+
+// A --policy-file that doesn't parse fails with a clear error BEFORE any request.
+func TestRunCmd_PolicyFileParseError(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
+
+	dir := t.TempDir()
+	file := dir + "/bad.json"
+	writeFile(t, file, `{not valid json`)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--policy-file", file)
+	if err == nil {
+		t.Fatal("expected error for an unparseable --policy-file, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse --policy-file") {
+		t.Errorf("error = %q, want a parse error", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (parse must short-circuit)", n)
 	}
 }
 
