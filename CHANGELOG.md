@@ -4,10 +4,26 @@ All notable changes to Wardyn are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); Wardyn is **pre-alpha**
 and does not yet follow semantic versioning (interfaces are not stable).
 
-## [Unreleased]
+## [0.3.0] — 2026-07-14
 
 ### Added
 
+- **CI mode (BYOA)** ([docs/CI.md](docs/CI.md)): run a governed sandboxed job from a
+  pipeline with no pre-running Wardyn, no UI, no human.
+  - `wardyn run --wait [--timeout]` blocks to the run's terminal state and exits with
+    the outcome (`COMPLETED`=0, `FAILED`=the agent/task's real exit code from the
+    `run.complete` audit event, `KILLED`/`STOPPED`=2, timeout=124); `wardyn runs get
+    <id> [--json]` wraps `GET /api/v1/runs/{id}`.
+  - `wardyn run --image <ref>` exposes the existing BYOI wrap from the CLI: any
+    user-supplied container is wrapped with the runner tools and governed.
+  - `task_mode: "exec"` (`wardyn run --task-mode exec`): the task runs as a plain
+    shell command instead of the agent harness — same clone/creds/egress/recording
+    wiring, no agent, no LLM credentials. Recorded in the `run.create` audit event.
+  - `scripts/ci-run.sh`: one-shot fresh control plane → preflight → governed run →
+    `--wait` → artifacts (`run.json`, `audit.json`) → teardown, exit code propagated.
+    Plus `examples/policies/ci.json` (unattended fail-closed baseline),
+    `deploy/compose/docker-compose.ci.yaml` (envbuild overlay), and copy-paste
+    pipeline examples `docs/ci/github-actions.yml` / `docs/ci/azure-pipelines.yml`.
 - **Demo sandboxes** (`/demos`): four hands-on scenarios (sealed box, fail-then-approve,
   held-at-the-door, unconditional metadata/private-IP denial) that launch interactive,
   workspace-free, model-free sandboxes with an embedded terminal + live approvals —

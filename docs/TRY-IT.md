@@ -92,6 +92,12 @@ wardyn run --agent claude-code --interactive --policy-file demo3.json
 wardyn attach <id>    # attach the terminal; approve live from the Approvals UI or `wardyn approve`
 ```
 
+Fully unattended (CI, batch) is the same command minus the human: `wardyn run
+--wait` blocks to the run's outcome and exits with the task's exit code, and
+`--image <ref> --task-mode exec` runs a plain command in **your** container
+under the same governance. [`docs/CI.md`](CI.md) has the pipeline story
+(GitHub Actions / Azure DevOps, one-shot `scripts/ci-run.sh`).
+
 ## Level 1 — governance demo (no keys)
 
 ```sh

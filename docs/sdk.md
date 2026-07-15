@@ -124,6 +124,16 @@ curl -s -X POST http://localhost:8080/api/v1/runs \
   -H 'Authorization: Bearer demo-admin-token' \
   -H 'Content-Type: application/json' \
   -d '{"agent":"claude-code","repo":"org/repo","task":"fix the flaky test"}'
+# Optional create fields: "image" (bring-your-own-container, wrapped + governed),
+# "task_mode":"exec" (run the task as a plain shell command — no agent),
+# "inline_policy" (full RunPolicySpec instead of policy_id).
+
+# Wait for the outcome (poll until terminal; the run.complete audit event
+# carries the task's real exit code). The CLI wraps this: `wardyn run --wait`.
+curl -s -H 'Authorization: Bearer demo-admin-token' \
+  http://localhost:8080/api/v1/runs/<id>          # .state: COMPLETED | FAILED | ...
+curl -s -H 'Authorization: Bearer demo-admin-token' \
+  'http://localhost:8080/api/v1/audit?run_id=<id>' # run.complete -> .data.exit_code
 
 # List pending approvals
 curl -s -H 'Authorization: Bearer demo-admin-token' \

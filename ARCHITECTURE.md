@@ -76,6 +76,14 @@ decisions and session casts back into the append-only audit log.
   plus a pasted `claude setup-token` credential, stored age-encrypted and
   injected proxy-side like the resident-login path
   (`internal/api/harnesscred.go`, `POST /api/v1/setup/harness-login`).
+- **CI mode (BYOA)** — headless one-shot launches from pipelines: `wardyn run
+  --wait` maps the run outcome to the CLI exit code (the real task exit code
+  rides the `run.complete` audit event), `--image` exposes the BYOI wrap,
+  and `task_mode: "exec"` runs the task as a plain shell command instead of
+  the agent harness (same governance, no agent/LLM; the branch lives in
+  `deploy/images/common/agent-run-lib.sh`). `scripts/ci-run.sh` composes it:
+  fresh compose stack → preflight → run → artifacts → teardown. Docs:
+  `docs/CI.md`.
 
 ## The four nouns (`internal/types`)
 
