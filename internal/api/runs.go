@@ -68,6 +68,15 @@ type createRunRequest struct {
 	// the auto-task runs — it grants no new capability, host path, or egress; the
 	// attach itself is still admin-gated and confined (invariant 3).
 	Interactive bool `json:"interactive,omitempty"`
+	// TaskMode selects HOW a non-interactive run executes Task: "" / "harness"
+	// (default) runs the agent harness (`claude -p <task>`), "exec" runs Task as
+	// a plain shell command inside the same governed sandbox (no agent, no LLM
+	// credentials — the BYOA/CI lane). Request-controlled for the same reason as
+	// Interactive: it only chooses WHAT agent-run execs, granting no new
+	// capability — clone, brokered creds, egress, recording, and confinement are
+	// identical in both modes. Ignored for interactive runs (nothing is exec'd).
+	// api-local request field; the four nouns in internal/types are untouched.
+	TaskMode string `json:"task_mode,omitempty"`
 	// InlinePolicy, when set, supplies the run's full RunPolicySpec INLINE on the
 	// create request instead of referencing a stored policy_id. It is MUTUALLY
 	// EXCLUSIVE (XOR) with PolicyID — supplying both is a 400; supplying neither
@@ -152,6 +161,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
 	if !ccOK {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
+		return
+	}
+
+	// task_mode is a tiny closed enum; reject anything else up front (fail
+	// closed, same shape as confinement_class above).
+	if req.TaskMode != "" && req.TaskMode != "harness" && req.TaskMode != "exec" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown task_mode %q (want harness or exec)", req.TaskMode))
 		return
 	}
 
@@ -412,6 +428,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// UUID-validated at the top of the handler, so it can land in Data as-is.
 		createAuditData["compose_session_id"] = req.ComposeSessionID
 	}
+	if req.TaskMode == "exec" {
+		// The run row doesn't store task_mode (request-scoped), so the audit
+		// event is the provenance record that this run ran a plain command.
+		createAuditData["task_mode"] = req.TaskMode
+	}
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(createAuditData)))
 
@@ -515,7 +536,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {
-		s.dispatch(ctx, created, id.Token, image, spec, firstGitHubGrantID, gitPATGrants, sshGrants, injections, req.Interactive)
+		s.dispatch(ctx, created, id.Token, image, spec, firstGitHubGrantID, gitPATGrants, sshGrants, injections, req.Interactive, req.TaskMode)
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)
 	}
@@ -546,8 +567,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // human can `wardyn attach <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
-func (s *Server) dispatch(ctx context.Context, run types.AgentRun, runToken, image string, policy types.RunPolicySpec, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, injections []runner.InjectionGrant, interactive bool) {
-	s.dispatchWithVerify(ctx, run, runToken, image, policy, firstGitHubGrantID, gitPATGrants, sshGrants, injections, interactive, nil)
+func (s *Server) dispatch(ctx context.Context, run types.AgentRun, runToken, image string, policy types.RunPolicySpec, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string) {
+	s.dispatchWithVerify(ctx, run, runToken, image, policy, firstGitHubGrantID, gitPATGrants, sshGrants, injections, interactive, taskMode, nil)
 }
 
 // dispatchWithVerify is dispatch plus an optional verify-plan (JSON
@@ -556,7 +577,7 @@ func (s *Server) dispatch(ctx context.Context, run types.AgentRun, runToken, ima
 // agent, and the commands ride WARDYN_VERIFY_COMMANDS. A verify run still sets
 // WorkspaceID (for the trusted result linkage), so verifyPlan is the
 // discriminator between scan-only and verify-only in the same dispatch.
-func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, runToken, image string, policy types.RunPolicySpec, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, injections []runner.InjectionGrant, interactive bool, verifyPlan json.RawMessage) {
+func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, runToken, image string, policy types.RunPolicySpec, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, verifyPlan json.RawMessage) {
 	// Client-disconnect isolation (M26): dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
 	// also fail the compensating StopSandbox below on the same dead ctx and orphan a
@@ -665,6 +686,12 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// An INTERACTIVE workspace-linked run (interactive Record Mode) is a
 		// human-driven sandbox, not a scan — never mark it WARDYN_SCAN_ONLY.
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
+	}
+	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell
+	// command instead of the agent harness. Only the discriminator rides env —
+	// everything above/below (clone, grants, egress, recording) is identical.
+	if taskMode == "exec" {
+		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
 	}
 	if firstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = firstGitHubGrantID.String()

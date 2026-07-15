@@ -259,12 +259,23 @@ wipe_ssh_grants() {
 if [[ "${1:-}" == "--selftest" ]]; then
     echo "=== wardyn agent-run selftest (claude-code) ==="
     ok=1
+    # exec task mode (BYOA/CI) runs the task as a plain shell command: no agent
+    # harness, so claude is informational, and git only gates when the run
+    # actually clones a repo. Harness mode requires all four.
+    required=(wardyn-rec wardyn-git-helper git claude)
+    if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
+        required=(wardyn-rec wardyn-git-helper)
+        [[ -n "${WARDYN_REPO_URL:-}${WARDYN_REPOS:-}" ]] && required+=(git)
+        echo "  (task_mode=exec: claude optional; git required only with repo wiring)"
+    fi
     for bin in wardyn-rec wardyn-git-helper git claude; do
         if command -v "$bin" >/dev/null 2>&1; then
             echo "  FOUND   $bin ($(command -v "$bin"))"
         else
-            echo "  MISSING $bin"
-            ok=0
+            case " ${required[*]} " in
+                *" $bin "*) echo "  MISSING $bin"; ok=0 ;;
+                *) echo "  ABSENT  $bin (not required for this task mode)" ;;
+            esac
         fi
     done
     echo "--- env wiring ---"
@@ -459,6 +470,11 @@ if [[ "${WARDYN_VERIFY_ONLY:-}" == "1" ]]; then
     echo "agent-run: verify-only mode — running wardyn-verify over ${WARDYN_WORKSPACE_DIR}" >&2
     exec wardyn-verify
 fi
+
+# Exec task mode (BYOA/CI): run the task as a plain shell command instead of
+# the agent harness — no model call, so the anthropic auth wiring below is
+# skipped. Never returns when WARDYN_TASK_MODE=exec (see agent-run-lib.sh).
+maybe_exec_task_mode "$task"
 
 # Detect how claude should authenticate and wire ANTHROPIC_BASE_URL / API key
 # accordingly (subscription OAuth creds, Bedrock, or the proxy inject gateway).

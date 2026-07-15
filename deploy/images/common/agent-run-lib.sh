@@ -210,3 +210,17 @@ resolve_workdir() {
         fi
     fi
 }
+
+# maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
+# control plane set WARDYN_TASK_MODE=exec, run the task as a plain shell
+# command INSTEAD of the agent harness and never return. No-op otherwise.
+# Everything before this call (MITM CA, clone, brokered creds, recording) is
+# identical to a harness run — this only chooses WHAT gets exec'd, and it
+# deliberately skips the LLM auth wiring (a plain command needs no model).
+# The command's exit code propagates to the caller (0 -> COMPLETED, else FAILED).
+maybe_exec_task_mode() {
+    if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
+        echo "agent-run: exec task mode — running task as a shell command (no agent harness)" >&2
+        exec /bin/sh -lc "$1"
+    fi
+}

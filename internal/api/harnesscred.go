@@ -235,7 +235,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// No injections, no repo, no verify plan: a blank interactive box. The `--idle`
 	// path installs the MITM CA (unused here) and attaches; the human runs
 	// `claude setup-token` and pastes the result into the UI.
-	s.dispatchWithVerify(ctx, created, id.Token, image, policy, nil, nil, nil, nil, true, nil)
+	s.dispatchWithVerify(ctx, created, id.Token, image, policy, nil, nil, nil, nil, true, "", nil)
 	return s.refreshRun(ctx, runID, created), nil
 }
 
