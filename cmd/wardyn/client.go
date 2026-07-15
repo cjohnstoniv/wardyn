@@ -79,6 +79,12 @@ func (c *apiClient) listRuns(ctx context.Context) ([]types.AgentRun, error) {
 	return runs, err
 }
 
+func (c *apiClient) getRun(ctx context.Context, id string) (types.AgentRun, error) {
+	var run types.AgentRun
+	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+id, nil, &run)
+	return run, err
+}
+
 func (c *apiClient) killRun(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/runs/"+id+"/kill", nil, nil)
 }
@@ -162,6 +168,12 @@ type createRunBody struct {
 	// InlinePolicy applies a RunPolicySpec directly on the request (from
 	// --policy-file). XOR with PolicyID — the server enforces the exclusivity.
 	InlinePolicy *types.RunPolicySpec `json:"inline_policy,omitempty"`
+	// Image is a USER-supplied base image (Bring Your Own Image); the server
+	// wraps it with the runner tools and requires an image builder to be wired.
+	Image string `json:"image,omitempty"`
+	// TaskMode selects how the sandbox executes the task: "" / "harness" runs
+	// the agent harness; "exec" runs the task as a plain shell command.
+	TaskMode string `json:"task_mode,omitempty"`
 }
 
 // policyBody is the POST/PUT /policies body: a name plus the RunPolicySpec.

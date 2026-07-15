@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,8 +20,9 @@ import (
 type clientFn func() *apiClient
 
 func runCmd(client clientFn) *cobra.Command {
-	var repo, agent, task, policyID, confinement, policyFile string
-	var interactive bool
+	var repo, agent, task, policyID, confinement, policyFile, image, taskMode string
+	var interactive, wait bool
+	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Create a new governed agent run",
@@ -30,9 +32,13 @@ func runCmd(client clientFn) *cobra.Command {
 			if agent == "" {
 				return fmt.Errorf("--agent is required")
 			}
+			if wait && interactive {
+				return fmt.Errorf("--wait and --interactive are mutually exclusive (an interactive run never finishes on its own)")
+			}
 			body := createRunBody{
 				Agent: agent, Repo: repo, Task: task, PolicyID: policyID,
 				ConfinementClass: confinement, Interactive: interactive,
+				Image: image, TaskMode: taskMode,
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we
@@ -57,6 +63,9 @@ func runCmd(client clientFn) *cobra.Command {
 			if interactive {
 				fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
 			}
+			if wait {
+				return waitForRun(cmd.Context(), client(), run.ID.String(), timeout)
+			}
 			return nil
 		},
 	}
@@ -67,7 +76,99 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for `wardyn attach`; use a never-reap policy (auto_stop_after_sec < 0)")
+	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side)")
+	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, no LLM credentials)")
+	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124)")
 	return cmd
+}
+
+// waitPollInterval is how often --wait polls the run state (var for tests).
+var waitPollInterval = 2 * time.Second
+
+// terminalRunState mirrors internal/api.isTerminalRunState.
+// ponytail: 5 constants, not worth exporting the server's helper for.
+func terminalRunState(s types.RunState) bool {
+	switch s {
+	case types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived:
+		return true
+	}
+	return false
+}
+
+// waitForRun polls the run until it is terminal and maps the outcome to the
+// CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
+// run.complete audit event (fallback 1), KILLED/STOPPED/ARCHIVED→2, timeout→124.
+func waitForRun(ctx context.Context, c *apiClient, runID string, timeout time.Duration) error {
+	fmt.Printf("waiting for run %s (timeout %s)\n", runID, timeout)
+	deadline := time.Now().Add(timeout)
+	consecutiveErrs := 0
+	var lastState types.RunState
+	for {
+		run, err := c.getRun(ctx, runID)
+		if err != nil {
+			// Tolerate transient poll blips (a CI stack mid-restart shouldn't
+			// fail the pipeline); a persistent error still aborts fast.
+			consecutiveErrs++
+			if consecutiveErrs >= 5 {
+				return fmt.Errorf("polling run %s failed %d times in a row: %w", runID, consecutiveErrs, err)
+			}
+		} else {
+			consecutiveErrs = 0
+			lastState = run.State
+			if terminalRunState(run.State) {
+				code := agentExitCode(ctx, c, runID)
+				if run.State == types.RunFailed && code == 0 {
+					// The terminal state commits just before the run.complete
+					// audit write; one retry covers that tiny window.
+					time.Sleep(waitPollInterval)
+					code = agentExitCode(ctx, c, runID)
+				}
+				fmt.Printf("run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
+				switch run.State {
+				case types.RunCompleted:
+					return nil
+				case types.RunFailed:
+					if code == 0 {
+						code = 1 // run.complete event missing/unparseable: still fail
+					}
+					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
+				default: // KILLED / STOPPED / ARCHIVED: lifecycle termination, not an agent result
+					return &exitError{code: 2, err: fmt.Errorf("run %s terminated: %s", runID, run.State)}
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitPollInterval):
+		}
+	}
+}
+
+// agentExitCode reads the agent's real exit code from the last run.complete
+// audit event. Best-effort: 0 when the event is missing or unparseable.
+func agentExitCode(ctx context.Context, c *apiClient, runID string) int {
+	events, err := c.audit(ctx, runID)
+	if err != nil {
+		return 0
+	}
+	code := 0
+	for _, e := range events {
+		if e.Action != "run.complete" || len(e.Data) == 0 {
+			continue
+		}
+		var d struct {
+			ExitCode *int `json:"exit_code"`
+		}
+		if json.Unmarshal(e.Data, &d) == nil && d.ExitCode != nil {
+			code = *d.ExitCode
+		}
+	}
+	return code
 }
 
 func runsCmd(client clientFn) *cobra.Command {
@@ -93,7 +194,31 @@ func runsCmd(client clientFn) *cobra.Command {
 			return tw.Flush()
 		},
 	}
-	cmd.AddCommand(list)
+	var asJSON bool
+	get := &cobra.Command{
+		Use:   "get <run-id>",
+		Short: "Show one run",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			run, err := client().getRun(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(run)
+			}
+			tw := newTab()
+			fmt.Fprintln(tw, "ID\tAGENT\tREPO\tCC\tSTATE\tIMAGE\tCREATED")
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				run.ID, run.Agent, run.Repo, run.ConfinementClass, run.State,
+				run.Image, run.CreatedAt.Format(time.RFC3339))
+			return tw.Flush()
+		},
+	}
+	get.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	cmd.AddCommand(list, get)
 	return cmd
 }
 

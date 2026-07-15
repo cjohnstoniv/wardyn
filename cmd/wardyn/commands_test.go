@@ -5,12 +5,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -219,9 +221,200 @@ func TestRunCmd_PolicyFileParseError(t *testing.T) {
 	}
 }
 
+func TestRunCmd_ImageAndTaskModeInBody(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{ID: uuid.New(), State: types.RunPending})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "byoa", "--image", "ubuntu:24.04", "--task", "make test", "--task-mode", "exec")
+	if err != nil {
+		t.Fatalf("run command returned error: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(srv.last().body, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if body["image"] != "ubuntu:24.04" || body["task_mode"] != "exec" {
+		t.Errorf("run body image/task_mode wrong: %v", body)
+	}
+}
+
+func TestRunCmd_WaitInteractiveConflict(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--interactive", "--wait")
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("err = %v, want a --wait/--interactive conflict error", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (conflict must short-circuit)", n)
+	}
+}
+
+// waitServer routes create/get/audit like the real API so --wait's poll loop
+// can be driven through a scripted sequence of run states.
+func waitServer(t *testing.T, runID uuid.UUID, states []types.RunState, audit []types.AuditEvent) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/runs":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunPending})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runs/"+runID.String():
+			mu.Lock()
+			i := polls
+			if i >= len(states) {
+				i = len(states) - 1 // pin on the last scripted state
+			}
+			polls++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: states[i]})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/audit":
+			_ = json.NewEncoder(w).Encode(audit)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func setWaitPollInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := waitPollInterval
+	waitPollInterval = d
+	t.Cleanup(func() { waitPollInterval = old })
+}
+
+func TestRunCmd_WaitRunningThenCompleted(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunRunning, types.RunCompleted}, nil)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--wait")
+	if err != nil {
+		t.Fatalf("run --wait on a COMPLETED run returned error: %v", err)
+	}
+}
+
+func TestRunCmd_WaitFailedPropagatesAgentExitCode(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunRunning, types.RunFailed}, []types.AuditEvent{
+		{Action: "run.exec", Data: json.RawMessage(`{}`)},
+		{Action: "run.complete", Data: json.RawMessage(`{"exit_code":3,"state":"FAILED"}`)},
+	})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--wait")
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("err = %v, want *exitError", err)
+	}
+	if ee.code != 3 {
+		t.Errorf("exit code = %d, want the agent's real exit code 3", ee.code)
+	}
+}
+
+func TestRunCmd_WaitFailedNoAuditFallsBackTo1(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunFailed}, nil)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--wait")
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("err = %v, want *exitError", err)
+	}
+	if ee.code != 1 {
+		t.Errorf("exit code = %d, want fallback 1", ee.code)
+	}
+}
+
+func TestRunCmd_WaitKilledExits2(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunKilled}, nil)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--wait")
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("err = %v, want *exitError", err)
+	}
+	if ee.code != 2 {
+		t.Errorf("exit code = %d, want 2 for lifecycle termination", ee.code)
+	}
+}
+
+func TestRunCmd_WaitPersistentPollErrorAborts(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	var mu sync.Mutex
+	created := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !created && r.Method == http.MethodPost {
+			created = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunPending})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError) // every poll fails
+	}))
+	t.Cleanup(srv.Close)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--wait")
+	if err == nil || !strings.Contains(err.Error(), "failed 5 times in a row") {
+		t.Fatalf("err = %v, want a persistent-poll-failure abort", err)
+	}
+	var ee *exitError
+	if errors.As(err, &ee) {
+		t.Errorf("persistent poll failure should be a plain error (exit 1), got *exitError code %d", ee.code)
+	}
+}
+
+func TestRunCmd_WaitTimeoutExits124(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunRunning}, nil)
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code",
+		"--wait", "--timeout", "1ms")
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("err = %v, want *exitError", err)
+	}
+	if ee.code != 124 {
+		t.Errorf("exit code = %d, want 124 on timeout", ee.code)
+	}
+}
+
 // --------------------------------------------------------------------------
-// runs list command
+// runs list / get commands
 // --------------------------------------------------------------------------
+
+func TestRunsGetCmd(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, types.AgentRun{
+		ID: id, Agent: "claude-code", State: types.RunCompleted, Image: "wardyn-byoi/x:latest",
+	})
+
+	if err := execCmd(t, "runs", "get", id.String(), "--url", srv.URL, "--token", "tok", "--json"); err != nil {
+		t.Fatalf("runs get returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/runs/"+id.String() {
+		t.Errorf("got %s %s, want GET /api/v1/runs/%s", got.method, got.path, id)
+	}
+}
 
 func TestRunsListCmd(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{
