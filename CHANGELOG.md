@@ -6,7 +6,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Demo sandboxes** (`/demos`): four hands-on scenarios (sealed box, fail-then-approve,
+  held-at-the-door, unconditional metadata/private-IP denial) that launch interactive,
+  workspace-free, model-free sandboxes with an embedded terminal + live approvals —
+  prove the egress boundary before onboarding any workspace. Entry from the Welcome
+  hero and the setup funnel; gated only on the sandbox barrier. TRY-IT gains Level 0.5.
+- **Run preflight** (`POST /api/v1/runs/preflight`): a dry-run of launch resolution +
+  gating; the manual wizard's Review step now shows the composer's setup-readiness
+  checklist (secrets/workspaces/backend/egress) and the automatic blast-radius
+  confinement raise before launch.
+- **CLI**: `wardyn run --policy-file <spec.json>` sends a full inline policy; `--repo`
+  is now optional (server parity — repo-less scratch runs).
+- `make screenshots`: reproducible docs screenshot capture against a dedicated seeded
+  backend (dark theme, 1440×900); docs/img PNGs regenerated for the 0.2 UI.
+
+### Changed
+
+- **AI Run Composer surfaces automatically** when a composer backend is configured
+  (`WARDYN_COMPOSER_CONFIG`); the compile-time `COMPOSER_UI_ENABLED` flag is gone.
+  Without a backend the New Run dialog falls back to the manual wizard, as before.
+- The New Run wizard no longer requires a workspace: an empty selection launches an
+  ephemeral scratch-directory run (the API always allowed this).
+- Getting Started's "Launch your first run" now gates on the sandbox barrier only;
+  a missing model shows a non-blocking notice (interactive runs work without one).
+- The managed-subscription fallback no longer silently widens a zero-egress policy
+  with `api.anthropic.com`; a policy authored sealed stays sealed.
+- README rewritten for concision (530 → ~300 lines): quickstart defers to
+  `docs/TRY-IT.md`, raw curl examples moved to `docs/sdk.md`, `WARDYN_LOCAL_MODE`
+  detail moved to `deploy/compose/README.md`, egress table to `ARCHITECTURE.md`.
+
+### Fixed
+
+- Preflight/inline-policy previews no longer write `policy.inline` audit events
+  (dry-runs are not authorizations; the audit feed stays a clean system of record).
+- `scripts/setup.sh` now ends with prominent warnings when the agent-image build or
+  age-key persistence quietly failed mid-setup (both previously warn-and-continue).
 
 ## [0.2.0] — 2026-07-13
 

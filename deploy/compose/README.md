@@ -81,6 +81,31 @@ docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex
 and set `WARDYN_OIDC_ISSUER=http://localhost:5556` in `deploy/compose/.env`
 before restarting `wardynd`.
 
+## No-login local mode (`WARDYN_LOCAL_MODE`)
+
+`scripts/up.sh up` already runs in local mode. To bring the raw stack up by hand
+(no demo run) use the Compose file directly — note the extension is `.yaml`, not
+`.yml` — and set **`WARDYN_LOCAL_MODE`** to skip SSO/Dex and the bearer token
+entirely, so you open the UI on localhost and spawn agents with no login:
+
+```sh
+docker compose -f deploy/compose/docker-compose.yaml up   # full stack
+WARDYN_LOCAL_MODE=true docker compose -f deploy/compose/docker-compose.yaml up postgres wardynd
+# then open http://localhost:8080 — no token, no login
+```
+
+Actions are attributed to the local operator (`local:<os-user>`, or set
+`WARDYN_LOCAL_OPERATOR`), so the `sub`/`sponsor`/`decided_by`/audit attribution
+chain stays meaningful. Sidecar/run-token auth is unaffected. Local mode
+**refuses to start on an explicit publicly-routable IP** (it will not serve a
+no-auth API on a public IP), but on an **unspecified bind** (`0.0.0.0`, the
+`WARDYN_LISTEN` default) it only **warns** — it does not refuse — because that
+bind might be host-firewalled or purely a docker-bridge address. For a real
+guarantee, bind/publish loopback-only (the Compose default already publishes
+`127.0.0.1`) — do not rely on the warning alone, and keep local mode on a
+trusted single-dev machine. The `wardyn` CLI also works with no token against a
+local-mode daemon.
+
 ## ⚠️ Daemon-trust tradeoff (read before running)
 
 The `wardynd` service bind-mounts **`/var/run/docker.sock`**. That grants wardynd

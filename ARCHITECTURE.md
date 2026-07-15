@@ -26,7 +26,7 @@ the governance target.
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
 | `wardyn-verify` | In-sandbox verify runner: executes the workspace's operator-approved setup commands (install/build/test/lint) in the built devcontainer image under confinement and reports the result — it does NOT replay a recorded PTY session. |
-| `wardyn` | CLI: `wardyn run`, `wardyn approve`, `wardyn audit`, `wardyn policy`. |
+| `wardyn` | CLI: `wardyn run`, `wardyn attach`, `wardyn approve`, `wardyn audit`, `wardyn policy`, `wardyn setup wall\|vault`. |
 
 How they fit together (same diagram as the README):
 
@@ -225,6 +225,13 @@ L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftabl
 / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path) **[v0.5+ — planned]**
 → L2 wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 **[v0.5+ — planned]**.
+
+| Layer | Mechanism | What it stops |
+|---|---|---|
+| L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
+| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); block `169.254.169.254` | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
+| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
+| L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
 ## Deployment surface (anti-sprawl constraint)
 

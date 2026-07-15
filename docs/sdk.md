@@ -111,3 +111,27 @@ if errors.As(err, &apiErr) {
 ```go
 c.Principal = "alice@example.com"
 ```
+
+## Raw HTTP (curl)
+
+The API is **fail-closed behind a bearer token** (it also accepts a valid OIDC
+session cookie); the Compose default is `WARDYN_ADMIN_TOKEN=demo-admin-token`,
+sent as a bearer header on **every** call (omitting it returns `401`):
+
+```sh
+# Create a run
+curl -s -X POST http://localhost:8080/api/v1/runs \
+  -H 'Authorization: Bearer demo-admin-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"agent":"claude-code","repo":"org/repo","task":"fix the flaky test"}'
+
+# List pending approvals
+curl -s -H 'Authorization: Bearer demo-admin-token' \
+  'http://localhost:8080/api/v1/approvals?state=PENDING'
+
+# Approve
+curl -s -X POST http://localhost:8080/api/v1/approvals/<id>/approve \
+  -H 'Authorization: Bearer demo-admin-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"reviewed scope, looks correct"}'
+```
