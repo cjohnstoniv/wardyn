@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -33,6 +33,7 @@ help:
 	@echo "  ui-typecheck          - Typecheck the web UI (tsc --noEmit)"
 	@echo "  ui-test               - Run web UI vitest unit/component tests + coverage"
 	@echo "  test-e2e-ui           - Playwright UI e2e vs a seeded backend (needs Docker + chromium)"
+	@echo "  screenshots           - Regenerate docs/img UI screenshots (run after visible UI changes, commit the diff)"
 	@echo "  test-e2e              - Live security e2e: L0 egress, metadata block, kill cascade (needs Docker)"
 	@echo "  test-e2e-live         - Live TASK e2e: real sandboxes run the corpus, graded on state (needs Docker)"
 	@echo "  test-e2e-subscription - Live SUBSCRIPTION e2e: proxy-side inject-on attach + inject-off escape hatch (restarts wardynd)"
@@ -198,6 +199,10 @@ test-e2e-ui:
 	@echo "Running Playwright UI e2e (fresh seed per spec)..."
 	cd ui && pnpm install --frozen-lockfile
 	./scripts/run-ui-e2e.sh
+
+# regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.
+screenshots:
+	./scripts/screenshots.sh
 
 # HOST mode (the only supported deployment for now): wardynd runs as you and uses
 # your existing Claude login (no re-login, no stale credential copy). Team/compose
