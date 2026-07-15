@@ -1,8 +1,9 @@
 # Try Wardyn in 10 minutes
 
-Everything below runs on a single machine with Docker. Three levels, easiest
-first: the **fastest start** (just the UI + Getting-started — no keys, no login),
-the **governance demo** (a scripted governed run, no API keys), and the **real
+Everything below runs on a single machine with Docker, easiest first: the
+**fastest start** (just the UI + Getting-started — no keys, no login), the
+**hands-on demo sandboxes** (prove the egress boundary yourself, no keys), the
+**governance demo** (a scripted governed run, no API keys), and the **real
 agent run** (bring an Anthropic API key).
 
 ## Level 0 — fastest start: the UI + Getting-started (no keys, no login)
@@ -33,7 +34,12 @@ Kata microVM; whichever are missing show a copy-paste
 setup), whether an LLM path exists, and secret-store durability — then links
 straight into your first run. This is all you need to look around. On WSL, run it
 inside your WSL distro's shell; it opens the UI in your Windows browser
-automatically.
+automatically. **Native Windows** (cmd.exe/PowerShell) is not a target — install
+WSL2 + Docker Desktop with WSL integration and run `make setup` inside the WSL
+distro; `make doctor` detects a native Windows shell and blocks with this same
+guidance rather than failing confusingly partway through.
+
+![The New Run wizard's barrier comparison — Fence / Wall / Vault with this host's real availability](img/tier-matrix.png)
 
 > **Inside a corporate network?** The enterprise-engineer path is built in:
 > the Getting Started wizard's **Corporate network** steps chain the sandbox
@@ -43,6 +49,48 @@ automatically.
 > broker); **AWS Bedrock** (below) gives Claude access with no direct Anthropic
 > egress, billed through AWS; and `make setup`'s build retries with
 > `GOTOOLCHAIN=local` when a proxy blocks the public Go module proxy.
+
+A couple of config facts before you customize:
+
+- **Policy defaults are launch-path-specific.** A bare hand-launched `wardynd`
+  loads `examples/policies/default.json` (CC2, no `api_key` grant — composed runs
+  can't reach a model under it); `make setup` / `scripts/up.sh` auto-pick a policy
+  by what's configured — host mode picks `examples/policies/composer-dev.json`,
+  or your staged subscription ceiling after `make stage-claude`. The Getting
+  Started **Model access for composed runs** check warns when your stored
+  credential and the live `WARDYN_DEFAULT_POLICY` disagree.
+- **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist a
+  `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age
+  key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a
+  durable one.
+
+## Level 0.5 — hands-on demo sandboxes (no keys)
+
+Prove the egress boundary yourself before onboarding any workspace. The UI has a
+**/demos** screen — click **"Try a 2-minute demo sandbox"** on the Welcome hero,
+or open <http://localhost:8080/demos> — with four hands-on scenarios. Each launches
+an interactive sandbox with an embedded terminal and live approvals; none needs a
+repo, an API key, or any model access — only the sandbox barrier itself:
+
+1. **The sealed box** (`always_deny`) — `curl` an unlisted domain and it fails
+   instantly with a 403; check the Audit tab.
+2. **Fail, then approve** (`deny_with_review`) — `curl` fails, an approval appears,
+   Approve it, retry the same command → it succeeds.
+3. **Held at the door** (`wait_for_review`) — `curl` **hangs**, held open at the
+   proxy; Approve within ~30 seconds and the same in-flight command completes.
+4. **Lines that can't be crossed** (allow-all policy) — general egress works, yet
+   cloud-metadata (`169.254.169.254`) and private-IP probes stay denied
+   unconditionally — no policy can grant them.
+
+**Headless?** The CLI runs the same sandboxes — no repo required:
+
+```sh
+cat > demo3.json <<'EOF'
+{"allowed_domains":[],"first_use_approval":"wait_for_review","min_confinement_class":"CC1","auto_stop_after_sec":900}
+EOF
+wardyn run --agent claude-code --interactive --policy-file demo3.json
+wardyn attach <id>    # attach the terminal; approve live from the Approvals UI or `wardyn approve`
+```
 
 ## Level 1 — governance demo (no keys)
 
@@ -60,10 +108,13 @@ Then:
 
 ```sh
 export WARDYN_URL=http://localhost:8080 WARDYN_ADMIN_TOKEN=demo-admin-token
-wardyn run --agent claude-code --repo octocat/hello-world --task "explain this repo"
+wardyn run --agent claude-code --repo octocat/Hello-World --task "explain this repo"
 wardyn runs list       # watch state
 wardyn audit --run <id>
+wardyn approve <approval-id> --reason "reviewed scope, looks correct"
 ```
+
+![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
 
 What you can verify live, even without keys:
 
@@ -88,7 +139,7 @@ WARDYN_DEFAULT_POLICY=/examples/policies/claude-llm.json docker compose \
   -f deploy/compose/docker-compose.yaml up -d wardynd
 
 # 3. Create a real run:
-wardyn run --agent claude-code --repo octocat/hello-world \
+wardyn run --agent claude-code --repo octocat/Hello-World \
   --task "Read the repository and write a SUMMARY.md describing it"
 ```
 
@@ -154,11 +205,10 @@ governed sandbox to prove the environment builds.)
 ## Level 3 — enable the AI Composer (describe a task, get a proposed run)
 
 The **AI Run Composer** turns a plain-English task into a *proposed* confined run
-(agent, repo, confinement, egress, grants) that Wardyn grades for you to review before
-launch. It's off by default, and in this release the Describe surface is
-additionally hidden in the UI: enabling it needs a backend via
-`WARDYN_COMPOSER_CONFIG` **and** the `COMPOSER_UI_ENABLED` flag flipped to
-`true` in `ui/src/app/lib/features.ts` (a UI rebuild).
+(agent, repo, confinement, egress, grants) that Wardyn grades for you to review
+before launch. It's off by default; set a backend via `WARDYN_COMPOSER_CONFIG` to
+enable it. The Describe surface then appears automatically in the New Run dialog —
+with no backend configured, the dialog falls back to the manual wizard.
 
 No API key — deterministic demo:
 
@@ -175,12 +225,12 @@ echo 'WARDYN_COMPOSER_CONFIG={"default":"claude","backends":[{"name":"claude","w
 docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 ```
 
-`wardynd` logs `AI Run Composer enabled (backends=[...] default="...")` on boot. With
-`COMPOSER_UI_ENABLED=true` built into the UI, the New Run dialog offers
-**Describe your task**: type a task and review the proposal — the provider/model is
-shown, every choice is risk-graded, and you can pick **Interactive** (attach and
-drive) vs **Autonomous**. More templates (incl. the Claude CLI via your
-subscription, and OpenAI) are in [`examples/composer-configs/`](../examples/composer-configs/).
+`wardynd` logs `AI Run Composer enabled (backends=[...] default="...")` on boot, and
+the New Run dialog then offers **Describe your task**: type a task and review the
+proposal — the provider/model is shown, every choice is risk-graded, and you can
+pick **Interactive** (attach and drive) vs **Autonomous**. More templates (incl. the
+Claude CLI via your subscription, and OpenAI) are in
+[`examples/composer-configs/`](../examples/composer-configs/).
 
 ## Stop / Reset
 
@@ -193,7 +243,8 @@ make reset               # start over from an empty Runs list: wipes Postgres + 
 
 `make reset` operates on the **compose** stack: it wipes those volumes and
 brings up a *containerized* wardynd. It does not touch a host-mode daemon — to
-reset host mode, `make stop-host && make setup`.
+reset host mode, `make stop-host && make setup`. `make doctor` is read-only —
+re-run it any time to re-check this host's capabilities.
 
 Honest limits of this demo deployment (see `threatmodel/`): single host,
 CC1/CC2 only unless a Kata runtime is registered (CC3/Vault is experimental —
