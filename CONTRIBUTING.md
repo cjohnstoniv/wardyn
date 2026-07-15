@@ -137,6 +137,8 @@ make ui                   # production build (vite)
 ./scripts/run-ui-e2e.sh   # Playwright e2e (starts Postgres + wardynd, mocked model)
 ```
 
+UI visibly changed? Run `make screenshots` and commit the updated `docs/img` PNGs.
+
 ## Questions?
 
 Open an issue or reach out to the maintainers. We're here to help!

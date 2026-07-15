@@ -5,7 +5,7 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
-// Playwright E2E config — TWO projects:
+// Playwright E2E config — THREE projects:
 //
 //   chromium (hermetic, the default): specs in ui/e2e/ drive the built UI against
 //   a seeded test backend (real wardynd + Postgres + the `none` runner, seeded
@@ -47,7 +47,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   projects: [
-    { name: "chromium", testIgnore: "live/**", use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: ["live/**", "screenshots/**"], use: { ...devices["Desktop Chrome"] } },
     {
       name: "live",
       // *.spec.ts only — a bare "live/**" would classify live-fixtures.ts as a
@@ -59,6 +59,19 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: process.env.WARDYN_E2E_LIVE_BASE_URL || "http://localhost:8080",
+      },
+    },
+    {
+      // screenshots: regenerates the docs/img UI PNGs (e2e/screenshots/docs.spec.ts)
+      // against the dedicated backend booted by scripts/screenshots.sh. Its own
+      // project so the hermetic chromium gate never runs it (chromium's testIgnore
+      // drops screenshots/**). Fixed 1440×900 viewport for stable doc images.
+      // Run: `make screenshots` (NOT in CI — no pixel gate).
+      name: "screenshots",
+      testMatch: "screenshots/**/*.spec.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
       },
     },
   ],
