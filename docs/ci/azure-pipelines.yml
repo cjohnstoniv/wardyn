@@ -1,0 +1,38 @@
+# Wardyn CI — Azure DevOps pipeline example (copy into your repo).
+#
+# Same one-shot flow as docs/ci/github-actions.yml: fresh control plane ->
+# governed sandboxed run -> wait -> artifacts -> teardown, with the sandboxed
+# task's exit code as the step result. See docs/CI.md.
+#
+# BYOA: WARDYN_CI_IMAGE is any OCI image (yours); task_mode=exec runs a plain
+# command in it under Wardyn's governance — no agent, no credentials.
+
+trigger: none # set your own triggers; nothing here is interactive
+
+pool:
+  vmImage: ubuntu-latest # Microsoft-hosted agents ship docker + compose v2
+
+steps:
+  - checkout: self
+
+  - bash: |
+      git clone --depth 1 https://github.com/cjohnstoniv/wardyn "$(Agent.TempDirectory)/wardyn"
+    displayName: Fetch wardyn
+
+  - bash: |
+      set -euo pipefail
+      export WARDYN_CI_IMAGE="ubuntu:24.04"
+      export WARDYN_CI_TASK_MODE="exec"
+      export WARDYN_CI_TASK="echo hello from a governed sandbox && uname -a"
+      export WARDYN_CI_OUT="$(Build.ArtifactStagingDirectory)/wardyn-run"
+      # Variant — real agent (claude-code): see docs/ci/github-actions.yml's
+      # commented block; seed the key from a secret pipeline variable:
+      # export WARDYN_CI_SECRETS="anthropic-api-key=$(ANTHROPIC_API_KEY)"
+      "$(Agent.TempDirectory)/wardyn/scripts/ci-run.sh"
+    displayName: Run the governed sandboxed task
+
+  - task: PublishBuildArtifacts@1
+    condition: always()
+    inputs:
+      pathToPublish: $(Build.ArtifactStagingDirectory)/wardyn-run
+      artifactName: wardyn-run-artifacts

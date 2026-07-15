@@ -1,0 +1,58 @@
+# Wardyn CI — GitHub Actions example (copy into your repo's .github/workflows/).
+#
+# Runs ONE governed sandboxed job on the runner via scripts/ci-run.sh:
+# fresh control plane -> sandboxed run -> wait -> artifacts -> teardown.
+# The job's pass/fail IS the sandboxed task's exit code.
+#
+# BYOA: bring your own container (WARDYN_CI_IMAGE) — Wardyn wraps it with its
+# runner tools and governs it (default-deny egress, brokered creds, audit).
+# It doesn't have to be an agent: task_mode=exec runs a plain command.
+#
+# Images build from source on each job (a few minutes; nothing is published
+# to a registry yet — see docs/CI.md "Images").
+name: wardyn-sandboxed-job
+
+on:
+  workflow_dispatch:
+  # or: pull_request / push / schedule — any trigger works; nothing here is
+  # interactive.
+
+jobs:
+  sandboxed-task:
+    runs-on: ubuntu-latest # native dockerd — all ci-run.sh needs
+    steps:
+      - name: Check out your repo
+        uses: actions/checkout@v4
+
+      - name: Check out wardyn
+        uses: actions/checkout@v4
+        with:
+          repository: cjohnstoniv/wardyn
+          path: wardyn
+
+      - name: Run the governed sandboxed task
+        env:
+          # BYOA default: a plain command in a stock image, zero credentials.
+          # The policy is sealed (examples/policies/ci.json: always_deny, empty
+          # allowlist) — the sandbox cannot reach anything.
+          WARDYN_CI_IMAGE: ubuntu:24.04
+          WARDYN_CI_TASK_MODE: exec
+          WARDYN_CI_TASK: "echo hello from a governed sandbox && uname -a"
+          WARDYN_CI_OUT: ${{ github.workspace }}/ci-artifacts
+          #
+          # Variant — run a real agent (claude-code) instead: drop the two
+          # WARDYN_CI_IMAGE/TASK_MODE lines, use a policy that grants model
+          # access (see wardyn/examples/policies/claude-llm.json), and seed the
+          # api key from your repo secrets:
+          # WARDYN_CI_TASK: "fix the failing unit test in pkg/foo"
+          # WARDYN_CI_REPO: your-org/your-repo
+          # WARDYN_CI_POLICY_FILE: ${{ github.workspace }}/wardyn-ci-policy.json
+          # WARDYN_CI_SECRETS: anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}
+        run: wardyn/scripts/ci-run.sh
+
+      - name: Upload run artifacts (state + audit trail)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wardyn-run-artifacts
+          path: ci-artifacts/

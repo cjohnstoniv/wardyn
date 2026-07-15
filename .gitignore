@@ -88,4 +88,6 @@ ds-bundle/
 /REPO_AUDIT_*.md
 
 # Claude Code local config (contributors bring their own)
-.claude/
+.claude/*
+# Skills ship with the repo (Claude Code picks them up per-project).
+!.claude/skills/

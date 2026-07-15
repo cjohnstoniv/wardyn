@@ -230,6 +230,11 @@ NAT; add an API key or Bedrock for model access. **Team mode** (multi-user SSO/R
 Prove the egress boundary hands-on first? The UI's **/demos** screen launches
 interactive sandboxes with no repo and no keys — see [TRY-IT Level 0.5](docs/TRY-IT.md).
 
+**In a pipeline instead of on a desktop?** [`docs/CI.md`](docs/CI.md) — one script
+brings up a fresh control plane on any CI runner (GitHub Actions, Azure DevOps),
+runs one governed BYOA sandbox (your image, or just a plain command), and exits
+with the task's exit code. No UI, no human.
+
 ### The local access model in one picture
 
 ![The local access model: your machine is the hard ceiling — everything you can do bounds everything a sandbox can; the Wardyn policy ceiling clamps that down; and each run receives only the minimal subset (scoped credential, task egress allowlist, onboarded mounts) its task needs](docs/img/access-model.png)
@@ -267,7 +272,8 @@ kind — today only the Docker target runs functionally (see Status below).
 |---|---|---|
 | **v0.1** | Per-run identity (embedded provider), approval FSM, credential broker, L2 egress proxy, append-only Postgres audit + PTY replay, CC1/CC2 confinement gating, Compose deploy | **Shipped (pre-alpha)** |
 | **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, policy CRUD, run-completion state, control-plane TLS, real conformance gate + supply-chain CI | **Shipped (pre-alpha)** |
-| **v0.5** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway, arbitrary-domain L2 TLS-intercept (targeted LLM/registry MITM already ships), Helm chart, cloud STS federation, OTLP/OCSF SIEM sinks | Planned |
+| **v0.3** | CI mode (BYOA): headless pipeline launches with no pre-running control plane — `wardyn run --wait` (outcome exit codes), `--image` (bring-your-own-container, wrapped + governed), `task_mode: exec` (plain commands, no agent/LLM), one-shot `scripts/ci-run.sh`, GitHub Actions / Azure DevOps examples ([docs/CI.md](docs/CI.md)) | **Shipped (pre-alpha)** |
+| **v0.5** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway, arbitrary-domain L2 TLS-intercept (targeted LLM/registry MITM already ships), Helm chart, cloud STS federation, OTLP/OCSF SIEM sinks, signed image publishing (turns CI-mode builds into pulls + enables a reusable GitHub Action) | Planned |
 | **v1.0** | CC3 Kata packaged/GA (experimental today — see Confinement Classes), Cilium toFQDNs, hash-chained audit + signed action receipts, separation-of-duty on control plane, conformance suite across both targets | Planned |
 
 ---
