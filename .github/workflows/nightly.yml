@@ -69,6 +69,46 @@ jobs:
           name: task-e2e-live-results
           path: test/e2e/RESULTS.md
 
+  # CI-mode dogfood: the exact flow docs/ci/github-actions.yml tells users to
+  # run — scripts/ci-run.sh brings up a fresh control plane, launches ONE
+  # governed BYOA run (stock ubuntu, task_mode exec, sealed ci.json policy),
+  # waits, collects artifacts, tears down. Also asserts exit-code propagation:
+  # a task that exits 3 must fail the script with exit 3.
+  ci-mode-dogfood:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker available
+        run: docker --version
+      - name: One-shot governed run (BYOA exec mode, sealed policy)
+        env:
+          WARDYN_CI_IMAGE: ubuntu:24.04
+          WARDYN_CI_TASK_MODE: exec
+          WARDYN_CI_TASK: "echo hello from a governed sandbox && uname -a"
+          WARDYN_CI_OUT: ${{ github.workspace }}/ci-artifacts
+        run: scripts/ci-run.sh
+      - name: Exit-code propagation (task exit 3 -> script exit 3)
+        env:
+          WARDYN_CI_IMAGE: ubuntu:24.04
+          WARDYN_CI_TASK_MODE: exec
+          WARDYN_CI_TASK: "exit 3"
+          WARDYN_CI_OUT: ${{ github.workspace }}/ci-artifacts-negative
+          WARDYN_CI_SKIP_BUILD: "1"
+        run: |
+          set +e
+          scripts/ci-run.sh
+          code=$?
+          set -e
+          [ "$code" -eq 3 ] || { echo "expected exit 3, got $code"; exit 1; }
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-mode-dogfood-artifacts
+          path: |
+            ci-artifacts/
+            ci-artifacts-negative/
+
   # Real-Docker envbuild/runner smoke test (the "E" / envbuild workstream).
   # Unlike the PR-time `test-docker-tagged` job (ci.yml), this sets
   # WARDYN_TEST_DOCKER=1 so the real-Docker-gated cases (internal/runner/docker
