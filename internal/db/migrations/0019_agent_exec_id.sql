@@ -1,0 +1,15 @@
+-- Persist the agent's docker exec id on the run row (U008/U039).
+--
+-- For the default exec-based path (CC1 runc / CC2 gVisor / CC3 kata on docker)
+-- the sandbox container's PID 1 is an idle `sleep infinity` and the agent runs
+-- as a separate `docker exec`. The in-process completion watcher tracks that
+-- exec via an in-memory map, but a wardynd crash/restart loses the map, and the
+-- boot reconciler could then only observe CONTAINER liveness — which for an idle
+-- container never terminalizes. So a crashed-and-restarted RUNNING exec-run was
+-- stranded forever with a live sandbox + un-revoked credentials (C3 defeated).
+--
+-- Persisting the exec id lets the reconciler ExecInspect the AGENT across a
+-- restart and finalize (+ revoke + teardown) when it has exited. Empty for
+-- exec-less / main-process substrates (krun), where the container IS the agent
+-- and container Status is already authoritative. Idempotent (IF NOT EXISTS).
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS agent_exec_id TEXT NOT NULL DEFAULT '';

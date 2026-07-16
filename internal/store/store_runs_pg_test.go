@@ -119,7 +119,8 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	r.PolicyID = &polID
 	r.ConfinementClass = types.CC3
 	r.SandboxRef = "container-" + r.ID.String()
-	r.AutoStopAfterSec = 900 // U006: the effective idle cap persists on the run row
+	r.AutoStopAfterSec = 900        // U006: the effective idle cap persists on the run row
+	r.AgentExecID = "agent-exec-01" // U008: the exec id persists for restart-safe liveness
 	created := persistRun(t, ctx, pool, r)
 
 	// CreateRun returns the hydrated row.
@@ -159,6 +160,17 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	}
 	if got.AutoStopAfterSec != 900 {
 		t.Errorf("auto_stop_after_sec = %d, want 900 (U006: effective idle cap on the run row)", got.AutoStopAfterSec)
+	}
+	if got.AgentExecID != "agent-exec-01" {
+		t.Errorf("agent_exec_id = %q, want %q (U008: exec id persists for restart-safe liveness)", got.AgentExecID, "agent-exec-01")
+	}
+	// SetRunAgentExecID scoped-writes the column post-create (the real path: the
+	// exec id is only known after Exec runs).
+	if err := store.NewPG(pool).SetRunAgentExecID(ctx, r.ID, "agent-exec-02"); err != nil {
+		t.Fatalf("set run agent exec id: %v", err)
+	}
+	if reread, _ := store.NewPG(pool).GetRun(ctx, r.ID); reread.AgentExecID != "agent-exec-02" {
+		t.Errorf("after SetRunAgentExecID, agent_exec_id = %q, want agent-exec-02", reread.AgentExecID)
 	}
 	if got.RunnerTarget != r.RunnerTarget {
 		t.Errorf("runner_target = %q, want %q", got.RunnerTarget, r.RunnerTarget)

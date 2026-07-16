@@ -260,7 +260,7 @@ func TestStandalone_LifecycleEndToEnd(t *testing.T) {
 	// the agent process exit code. A distinctive 42 cannot pass by an accidental
 	// 0/1.
 	const wantCode = 42
-	if err := drv.Exec(ctx, sb.Ref, []string{"sh", "-c", "exit 42"}); err != nil {
+	if _, err := drv.Exec(ctx, sb.Ref, []string{"sh", "-c", "exit 42"}); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
 	got, err := drv.Wait(ctx, sb.Ref)

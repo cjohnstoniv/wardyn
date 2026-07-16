@@ -119,6 +119,14 @@ type AgentRun struct {
 	// policy — which has no stored policy_id to JOIN — is reaped like any other.
 	// 0 = never auto-stop; <0 = explicitly never (interactive). See adapters.go.
 	AutoStopAfterSec int `json:"auto_stop_after_sec,omitempty"`
+	// AgentExecID is the docker exec id of the agent process for exec-based runs
+	// (the default idle-container + `docker exec` path). Empty for exec-less /
+	// main-process substrates (krun) and before Exec runs. Persisted so the crash
+	// reconciler can observe AGENT liveness via ExecInspect across a wardynd
+	// restart: for an idle-container run the container is `sleep infinity`, so
+	// container liveness != agent liveness, and the exec id otherwise lived only in
+	// the driver's in-memory map — lost on restart, stranding the run (U008/U039).
+	AgentExecID string `json:"agent_exec_id,omitempty"`
 }
 
 // RunPolicy is the declarative policy attached to runs: egress allowlist,

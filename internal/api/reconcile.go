@@ -19,8 +19,10 @@ import (
 // The per-run completion watcher is an in-process goroutine that does not survive
 // a restart; this rebuilds the safety net at boot. Best-effort: errors are logged,
 // never fatal. Re-attached watchers run on the daemon base context so they outlive
-// this call. Status (unlike Wait) reconstructs from the container's run-id label,
-// so it works even though the previous process's in-memory exec state is gone.
+// this call. AgentStatus observes the AGENT (via the persisted agent_exec_id), not
+// just the container, so an idle-container exec run whose agent already exited is
+// finalized instead of stranded: the previous process's in-memory exec map is gone,
+// but the exec id survives on the run row (U008/U039).
 func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if s.cfg.Runner == nil {
 		return nil
@@ -45,7 +47,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 			finalized++
 			continue
 		}
-		st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
+		st, serr := s.cfg.Runner.AgentStatus(ctx, run.SandboxRef, run.AgentExecID)
 		if serr != nil || isTerminalRunState(st.State) {
 			// The sandbox is gone or already exited: finalize from the exit code
 			// (0 => COMPLETED, else FAILED) and run the revoke + teardown cascade.
@@ -59,7 +61,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 		}
 		// Still alive: re-attach a Status-polling watcher so the run finalizes when
 		// the agent exits.
-		go s.reconcileWatch(base, run.ID, run.SandboxRef)
+		go s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID)
 		reattached++
 	}
 	if reattached > 0 || finalized > 0 {
@@ -71,7 +73,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 // reconcileWatch polls a re-adopted sandbox's Status until it exits, then
 // finalizes the run and runs the revoke cascade. Panic-safe (a panic here must
 // not crash the control plane).
-func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref string) {
+func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agentExecID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("wardynd: PANIC in reconcile watcher for %s (contained): %v", runID, r)
@@ -84,7 +86,7 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref string
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			st, err := s.cfg.Runner.Status(ctx, ref)
+			st, err := s.cfg.Runner.AgentStatus(ctx, ref, agentExecID)
 			if err != nil || isTerminalRunState(st.State) {
 				final := types.RunFailed
 				if err == nil && st.ExitCode != nil && *st.ExitCode == 0 {

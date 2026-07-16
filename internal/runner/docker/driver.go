@@ -634,17 +634,18 @@ func (d *Driver) recordCmd(runID uuid.UUID, castDir string, argv []string) []str
 // Exec launches the agent process inside the sandbox with a TTY attached.
 // When recording, the argv is wrapped by wardyn-rec (which execs asciinema or
 // falls back to a .log). Returns once the process is started, not finished.
-func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
+func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, error) {
 	if len(argv) == 0 {
-		return errors.New("docker: exec: empty argv")
+		return "", errors.New("docker: exec: empty argv")
 	}
 	// EXEC-LESS path: a deferred (krun) agent is created NOW with the workload as
-	// its main process — there is no exec to attach.
+	// its main process — there is no exec to attach, and the container IS the agent
+	// (empty exec id => the reconciler uses container Status for liveness).
 	d.mu.Lock()
 	p, isPending := d.pending[ref]
 	d.mu.Unlock()
 	if isPending {
-		return d.runAsMainProcess(ctx, ref, p, argv)
+		return "", d.runAsMainProcess(ctx, ref, p, argv)
 	}
 	cmd := argv
 	if d.cfg.Record {
@@ -668,7 +669,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
 	}
 	created, err := d.cli.ExecCreate(ctx, ref, execCfg)
 	if err != nil {
-		return fmt.Errorf("docker: exec create: %w", err)
+		return "", fmt.Errorf("docker: exec create: %w", err)
 	}
 	// Track this exec id as the agent process for ref so Wait can observe its
 	// completion + exit code. The latest Exec for a ref wins (re-exec replaces).
@@ -680,7 +681,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
 	// we start detached after establishing the attach to confirm liveness.
 	attachRes, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{TTY: true})
 	if err != nil {
-		return fmt.Errorf("docker: exec attach: %w", err)
+		return "", fmt.Errorf("docker: exec attach: %w", err)
 	}
 	resp := attachRes.HijackedResponse
 	// We do not block on the process; drain in the background so the PTY does
@@ -689,7 +690,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
 		defer resp.Close()
 		_, _ = io.Copy(io.Discard, resp.Reader)
 	}()
-	return nil
+	return created.ID, nil
 }
 
 // runAsMainProcess is the exec-less agent-launch path (krun microVMs): it creates
@@ -803,6 +804,32 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 		return runner.Status{}, fmt.Errorf("docker: inspect: %w", err)
 	}
 	return statusFromInspect(res.Container), nil
+}
+
+// AgentStatus reports the agent's liveness in a restart-safe way. For an
+// exec-based ref (agentExecID != "") it inspects that exec: Running => alive
+// (RUNNING); exited => terminal with the real exit code, EVEN while the idle
+// sandbox container is still up — the case container Status cannot detect after a
+// restart dropped the in-memory exec map (U008/U039). A vanished exec (its
+// container already gone) reads as stopped => the reconciler finalizes + tears
+// down. When agentExecID is "" (exec-less/main-process, or Exec never ran) the
+// container IS the agent, so fall back to Status.
+func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
+	if agentExecID == "" {
+		return d.Status(ctx, ref)
+	}
+	insp, err := d.cli.ExecInspect(ctx, agentExecID, client.ExecInspectOptions{})
+	if err != nil {
+		if isNotFound(err) {
+			return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
+		}
+		return runner.Status{}, fmt.Errorf("docker: agent exec inspect: %w", err)
+	}
+	if insp.Running {
+		return runner.Status{State: types.RunRunning}, nil
+	}
+	code := insp.ExitCode
+	return runner.Status{State: types.RunStopped, ExitCode: &code}, nil
 }
 
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,

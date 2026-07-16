@@ -406,7 +406,7 @@ func TestExec_WrapsWithRecorderWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
-	if err := d.Exec(context.Background(), sb.Ref, []string{"claude", "code"}); err != nil {
+	if _, err := d.Exec(context.Background(), sb.Ref, []string{"claude", "code"}); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
 	cmd := f.lastExecCmd
@@ -430,7 +430,7 @@ func TestExec_NoRecorderWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
-	if err := d.Exec(context.Background(), sb.Ref, []string{"bash"}); err != nil {
+	if _, err := d.Exec(context.Background(), sb.Ref, []string{"bash"}); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
 	if got := f.lastExecCmd; len(got) != 1 || got[0] != "bash" {
@@ -469,7 +469,7 @@ func TestExecLess_MainProcessLifecycle(t *testing.T) {
 	}
 
 	// Exec creates the agent with the workload as its main process (no docker exec).
-	if err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"}); err != nil {
 		t.Fatalf("Exec (main process): %v", err)
 	}
 	c, ok := f.containers[agentName]
@@ -504,7 +504,7 @@ func TestExec_RejectsEmptyArgv(t *testing.T) {
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
 	sb, _ := d.CreateSandbox(context.Background(), testSpec())
-	if err := d.Exec(context.Background(), sb.Ref, nil); err == nil {
+	if _, err := d.Exec(context.Background(), sb.Ref, nil); err == nil {
 		t.Error("empty argv must error")
 	}
 }

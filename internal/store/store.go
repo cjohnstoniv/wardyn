@@ -44,15 +44,16 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	const q = `
 		INSERT INTO agent_runs
 			(id, created_at, updated_at, created_by, agent, repo, task,
-			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec`
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id`
 
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.Image, r.AutoStopAfterSec,
+		r.AgentExecID,
 	)
 	return scanRun(row)
 }
@@ -61,7 +62,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id
 		FROM agent_runs WHERE id = $1`
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
@@ -70,7 +71,7 @@ func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 func (s PG) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id
 		FROM agent_runs ORDER BY created_at DESC`
 	rows, err := s.Pool.Query(ctx, q)
 	if err != nil {
@@ -152,6 +153,24 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 	return nil
 }
 
+// SetRunAgentExecID scoped-writes ONLY the agent_exec_id column. Called once
+// right after the driver execs the agent (the exec id exists only after Exec, so
+// this is a scoped update, not a CreateRun column value). The crash reconciler
+// reads it to observe agent liveness across a restart (U008/U039).
+func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET agent_exec_id=$1, updated_at=now() WHERE id=$2`,
+		execID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set run agent exec id: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // TouchRun bumps a run's updated_at to now() without changing any other field.
 // It is the activity keepalive the interactive-attach handler calls so the idle
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
@@ -174,6 +193,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.Image, &r.AutoStopAfterSec,
+		&r.AgentExecID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
