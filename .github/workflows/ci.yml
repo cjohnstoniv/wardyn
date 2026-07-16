@@ -347,7 +347,7 @@ jobs:
         with:
           go-version: '1.26.5'
       - name: Scan full git history for secrets with gitleaks
-        run: go run github.com/gitleaks/gitleaks/v8@v8.30.1 git -c .gitleaks.toml -v
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git -c .gitleaks.toml -v
 
   # ── supply-chain: dependency license gate ─────────────────────────────────
   # Forbid copyleft / non-permissive Go dependencies.
