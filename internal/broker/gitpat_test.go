@@ -96,6 +96,8 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	secrets := newMemSecrets()
 	secrets.m["real-pat"] = []byte("pat-value-1234567890")
 	secrets.m["wardyn-signing-key"] = []byte("super-secret-signing-key")
+	// Seeded so the reserved-name check (not missing-secret) is what fails closed.
+	secrets.m["wardyn-harness-anthropic-oauth"] = []byte("resident-oauth-blob")
 
 	cases := []struct {
 		name string
@@ -105,6 +107,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		{"empty-host", types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"secret_name":"real-pat"}`)}},
 		{"empty-secret-name", types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"gitlab.com"}`)}},
 		{"reserved-secret", gitPATSpec("gitlab.com", "wardyn-signing-key", "")},
+		{"reserved-harness-oauth", gitPATSpec("gitlab.com", "wardyn-harness-anthropic-oauth", "")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
