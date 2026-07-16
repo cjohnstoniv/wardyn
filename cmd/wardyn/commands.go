@@ -21,7 +21,7 @@ type clientFn func() *apiClient
 
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode string
-	var interactive, wait bool
+	var interactive, wait, asJSON bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -58,10 +58,21 @@ func runCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
-			fmt.Printf("  spiffe id: %s\n", run.SPIFFEID)
-			if interactive {
-				fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
+			// --json emits the raw run object for scripting (a pipeline can read
+			// .ID/.State instead of scraping the human lines below). Printed before
+			// the --wait blocking loop so the run identity is captured immediately.
+			if asJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(run); err != nil {
+					return err
+				}
+			} else {
+				fmt.Printf("created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
+				fmt.Printf("  spiffe id: %s\n", run.SPIFFEID)
+				if interactive {
+					fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
+				}
 			}
 			if wait {
 				return waitForRun(cmd.Context(), client(), run.ID.String(), timeout)
@@ -80,6 +91,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, no LLM credentials)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the created run as raw JSON (for scripting/CI instead of scraping human output)")
 	return cmd
 }
 
