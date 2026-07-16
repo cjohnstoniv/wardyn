@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main, master]
 
+# Least-privilege default: CI only needs to read the repo. The gitleaks job gets
+# its token via the step env; nothing here writes back. Mirrors nightly.yml, which
+# already sets this — closing the ci.yml inconsistency (U092).
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -261,6 +267,12 @@ jobs:
           go-version: '1.26.5'
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      # Also scan the ACTUAL shipped build: wardynd ships with -tags docker
+      # (Dockerfile.wardynd), whose runner/docker + envbuild tree is invisible to
+      # the tagless scan above. This is where the moby-module CVEs lived; the v29
+      # migration cleared them, so this is now green and must stay green (U024).
+      - name: Run govulncheck (-tags docker, the shipped build)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags docker ./...
 
   # ── supply-chain: static analysis ─────────────────────────────────────────
   staticcheck:
@@ -272,6 +284,10 @@ jobs:
           go-version: '1.26.5'
       - name: Run staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+      # Lint the -tags docker tree too (the shipped runner/docker + envbuild code),
+      # otherwise it never gets a static-analysis pass in CI (U024/U112).
+      - name: Run staticcheck (-tags docker)
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -tags docker ./...
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
@@ -348,6 +364,11 @@ jobs:
         run: go install github.com/google/go-licenses@v1.6.0
       - name: Check dependency licenses
         run: go-licenses check --disallowed_types=forbidden,restricted ./...
+      # go-licenses has no -tags flag, so the docker-tagged deps (moby/moby/*,
+      # containerd/errdefs) were never license-scanned; drive the tag via GOFLAGS
+      # so the shipped build's transitive licenses are covered too (U112).
+      - name: Check dependency licenses (-tags docker)
+        run: GOFLAGS=-tags=docker go-licenses check --disallowed_types=forbidden,restricted ./...
 
   license-headers:
     runs-on: ubuntu-latest

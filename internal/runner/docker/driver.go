@@ -193,12 +193,11 @@ const mainProcCastDir = "/tmp/wardyn-rec"
 // present the runner.Runner surface to the control plane.
 var _ substrate.Substrate = (*Driver)(nil)
 
-// New constructs a Driver against the host Docker daemon, negotiating the API
-// version with the server (forward/backward compatibility).
+// New constructs a Driver against the host Docker daemon. API-version negotiation
+// with the server is on by default in the moby v29 client (forward/backward compat).
 func New(cfg Config) (*Driver, error) {
-	cli, err := client.NewClientWithOpts(
+	cli, err := client.New(
 		client.FromEnv,
-		client.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("docker: new client: %w", err)

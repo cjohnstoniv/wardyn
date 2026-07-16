@@ -46,9 +46,8 @@ import (
 // (FromEnv + API-version negotiation). Used by helpers that read daemon state
 // the driver does not expose (network presence, raw exec output).
 func dockerclientFromEnv() (*dockerclient.Client, error) {
-	return dockerclient.NewClientWithOpts(
+	return dockerclient.New(
 		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
 	)
 }
 
