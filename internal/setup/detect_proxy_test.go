@@ -384,6 +384,129 @@ func TestParseScutilProxyOutput(t *testing.T) {
 	}
 }
 
+// ─── OS-level: Windows via WSL (fake exec) ──────────────────────────────────
+
+// TestDetectWindowsProxyViaWSL_RegistryHit exercises the primary probe: a
+// successful powershell.exe call reporting an enabled proxy must produce
+// candidates and must NOT fall back to netsh.exe (netsh is only consulted
+// when the registry probe yields nothing).
+func TestDetectWindowsProxyViaWSL_RegistryHit(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		if name != "powershell.exe" {
+			t.Fatalf("unexpected command %q; netsh.exe must not run once the registry probe found a proxy", name)
+		}
+		return []byte(`{"ProxyServer":"http=corp.proxy:8080;https=corp.proxy:8443","ProxyEnable":1,"AutoConfigURL":""}`), nil
+	}
+
+	candidates, pac := detectWindowsProxyViaWSL()
+	byCategory := map[string]string{}
+	for _, c := range candidates {
+		byCategory[c.category] = c.value
+	}
+	if byCategory["http"] != "corp.proxy:8080" || byCategory["https"] != "corp.proxy:8443" {
+		t.Fatalf("candidates = %+v, want http=corp.proxy:8080 https=corp.proxy:8443", candidates)
+	}
+	if pac != nil {
+		t.Errorf("pac = %+v, want nil (AutoConfigURL empty)", pac)
+	}
+}
+
+// TestDetectWindowsProxyViaWSL_FallsBackToNetsh exercises the secondary
+// probe: when the registry probe yields no proxy, netsh.exe winhttp is
+// consulted next.
+func TestDetectWindowsProxyViaWSL_FallsBackToNetsh(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+
+	var calls []string
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		calls = append(calls, name)
+		switch name {
+		case "powershell.exe":
+			return []byte(`{"ProxyServer":"","ProxyEnable":0,"AutoConfigURL":""}`), nil
+		case "netsh.exe":
+			return []byte("Current WinHTTP proxy settings:\n\n    Proxy Server(s) :  corp.proxy:8080\n"), nil
+		default:
+			t.Fatalf("unexpected command %q", name)
+			return nil, nil
+		}
+	}
+
+	candidates, pac := detectWindowsProxyViaWSL()
+	byCategory := map[string]string{}
+	for _, c := range candidates {
+		byCategory[c.category] = c.value
+	}
+	if byCategory["http"] != "corp.proxy:8080" || byCategory["https"] != "corp.proxy:8080" {
+		t.Fatalf("candidates = %+v, want the netsh fallback value on both categories", candidates)
+	}
+	if pac != nil {
+		t.Errorf("pac = %+v, want nil", pac)
+	}
+	if len(calls) != 2 || calls[0] != "powershell.exe" || calls[1] != "netsh.exe" {
+		t.Errorf("calls = %v, want [powershell.exe netsh.exe] in that order", calls)
+	}
+}
+
+// TestDetectWindowsProxyViaWSL_BothUnavailable proves the dispatch tolerates
+// powershell.exe/netsh.exe both being absent (e.g. interop off, or not
+// actually running under WSL).
+func TestDetectWindowsProxyViaWSL_BothUnavailable(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		return nil, &exec.ExitError{}
+	}
+
+	candidates, pac := detectWindowsProxyViaWSL()
+	if candidates != nil || pac != nil {
+		t.Errorf("candidates=%+v pac=%+v, want nil/nil when both probes are unavailable", candidates, pac)
+	}
+}
+
+// ─── OS-level: macOS (fake exec) ─────────────────────────────────────────────
+
+// TestDetectMacOSProxy_FakeExec exercises the scutil dispatch+parse wiring
+// end to end via the execCommandOutput seam (mirroring
+// TestDetectGitProxyConfig_FakeExec's pattern for the git probe).
+func TestDetectMacOSProxy_FakeExec(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		if name != "scutil" || len(args) != 1 || args[0] != "--proxy" {
+			t.Fatalf("unexpected command %q %v, want `scutil --proxy`", name, args)
+		}
+		return []byte("<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 8080\n  HTTPProxy : proxy.corp.com\n}\n"), nil
+	}
+
+	candidates, pac := detectMacOSProxy()
+	if len(candidates) != 1 || candidates[0].category != "http" || candidates[0].value != "proxy.corp.com:8080" {
+		t.Fatalf("candidates = %+v, want one http candidate proxy.corp.com:8080", candidates)
+	}
+	if pac != nil {
+		t.Errorf("pac = %+v, want nil", pac)
+	}
+}
+
+// TestDetectMacOSProxy_Unavailable proves the dispatch tolerates scutil being
+// absent (e.g. not actually running on macOS).
+func TestDetectMacOSProxy_Unavailable(t *testing.T) {
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		return nil, &exec.ExitError{}
+	}
+
+	candidates, pac := detectMacOSProxy()
+	if candidates != nil || pac != nil {
+		t.Errorf("candidates=%+v pac=%+v, want nil/nil when scutil is unavailable", candidates, pac)
+	}
+}
+
 // ─── precedence merge ────────────────────────────────────────────────────────
 
 func TestWinningSetting_PrecedenceEnvBeatsShellBeatsOS(t *testing.T) {
