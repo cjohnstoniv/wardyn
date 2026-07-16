@@ -86,9 +86,16 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 		port: port,
 	}
 	if u.User != nil {
-		// user[:pass] -> "Basic base64(user:pass)". The cleartext credential is
-		// NEVER logged; NewServer registers maskValues() in the mask registry.
-		up.authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.String()))
+		// user[:pass] -> "Basic base64(user:pass)". Use the DECODED username/password,
+		// not u.User.String(), which percent-encodes them: a password like "p@ss/w0rd"
+		// would otherwise be sent as "p%40ss%2Fw0rd" — the wrong credential, so the
+		// upstream proxy rejects the CONNECT. The cleartext credential is NEVER logged;
+		// NewServer registers maskValues() in the mask registry.
+		cred := u.User.Username()
+		if pw, ok := u.User.Password(); ok {
+			cred += ":" + pw
+		}
+		up.authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(cred))
 	}
 	return up, nil
 }
