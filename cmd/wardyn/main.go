@@ -9,6 +9,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
@@ -31,6 +32,12 @@ func main() {
 		var ee *exitError
 		if errors.As(err, &ee) {
 			os.Exit(ee.code)
+		}
+		// An auth/authz failure exits 2 so a script can tell "not authorized" apart
+		// from a 404/409/other API error or a network failure (all were exit 1) (U087).
+		var ae *apiError
+		if errors.As(err, &ae) && (ae.StatusCode == http.StatusUnauthorized || ae.StatusCode == http.StatusForbidden) {
+			os.Exit(2)
 		}
 		os.Exit(1)
 	}
@@ -58,6 +65,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(
 		runCmd(client),
 		runsCmd(client),
+		approvalsCmd(client),
 		approveCmd(client),
 		denyCmd(client),
 		auditCmd(client),

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,6 +105,30 @@ func TestClientCreateRun_OmitsEmptyOptionals(t *testing.T) {
 		if _, present := body[k]; present {
 			t.Errorf("body should omit empty %q, got %v", k, body[k])
 		}
+	}
+}
+
+// TestClient_DoReturnsTypedAPIError is the U087 regression: a non-2xx response
+// must surface a *apiError carrying the STATUS CODE + server body, so callers can
+// distinguish auth / not-found / conflict programmatically instead of collapsing
+// every failure into one opaque error that always exits 1.
+func TestClient_DoReturnsTypedAPIError(t *testing.T) {
+	var cap capture
+	_, c := newCapturingServer(t, &cap, http.StatusConflict, map[string]string{"error": "run is already terminal"})
+
+	err := c.killRun(context.Background(), uuid.New().String())
+	if err == nil {
+		t.Fatal("expected an error on a 409 response")
+	}
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		t.Fatalf("error should be *apiError, got %T: %v", err, err)
+	}
+	if ae.StatusCode != http.StatusConflict {
+		t.Errorf("apiError.StatusCode = %d, want 409", ae.StatusCode)
+	}
+	if !strings.Contains(ae.Body, "already terminal") {
+		t.Errorf("apiError.Body should carry the server's actionable message, got %q", ae.Body)
 	}
 }
 

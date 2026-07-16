@@ -22,6 +22,22 @@ type apiClient struct {
 	token   string
 }
 
+// apiError is a non-2xx response from the control plane. It carries the status
+// CODE (not just the text) so callers can distinguish auth / not-found / conflict
+// programmatically instead of collapsing every failure to a single exit 1 (U087).
+// Its Error() string is unchanged from the previous inline format.
+type apiError struct {
+	StatusCode int
+	Status     string
+	Method     string
+	Path       string
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("%s %s: %s: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
 func (c *apiClient) do(ctx context.Context, method, path string, body any, out any) error {
 	// No token is fine against a LOCAL HOST MODE wardynd (it bypasses public-API
 	// auth on a loopback bind). Against an auth-gated server the request simply
@@ -55,7 +71,7 @@ func (c *apiClient) do(ctx context.Context, method, path string, body any, out a
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		return &apiError{StatusCode: resp.StatusCode, Status: resp.Status, Method: method, Path: path, Body: strings.TrimSpace(string(data))}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {

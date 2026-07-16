@@ -129,20 +129,20 @@ func waitForRun(ctx context.Context, c *apiClient, runID string, timeout time.Du
 			consecutiveErrs = 0
 			lastState = run.State
 			if terminalRunState(run.State) {
-				code := agentExitCode(ctx, c, runID)
-				if run.State == types.RunFailed && code == 0 {
+				code, found := agentExitCode(ctx, c, runID)
+				if run.State == types.RunFailed && !found {
 					// The terminal state commits just before the run.complete
 					// audit write; one retry covers that tiny window.
 					time.Sleep(waitPollInterval)
-					code = agentExitCode(ctx, c, runID)
+					code, found = agentExitCode(ctx, c, runID)
 				}
 				fmt.Printf("run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
 				switch run.State {
 				case types.RunCompleted:
 					return nil
 				case types.RunFailed:
-					if code == 0 {
-						code = 1 // run.complete event missing/unparseable: still fail
+					if !found || code == 0 {
+						code = 1 // completion event missing, or FAILED despite a 0 agent code: never exit 0 on FAILED
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
 				default: // KILLED / STOPPED / ARCHIVED: lifecycle termination, not an agent result
@@ -161,14 +161,17 @@ func waitForRun(ctx context.Context, c *apiClient, runID string, timeout time.Du
 	}
 }
 
-// agentExitCode reads the agent's real exit code from the last run.complete
-// audit event. Best-effort: 0 when the event is missing or unparseable.
-func agentExitCode(ctx context.Context, c *apiClient, runID string) int {
+// agentExitCode reads the agent's real exit code from the last run.complete audit
+// event. The bool reports whether such an event with an exit code was FOUND, so the
+// caller can tell "agent genuinely exited 0" from "the completion event is missing/
+// unreadable" — they otherwise both read as 0 (U088). Best-effort: (0,false) on any
+// audit error.
+func agentExitCode(ctx context.Context, c *apiClient, runID string) (int, bool) {
 	events, err := c.audit(ctx, runID)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	code := 0
+	code, found := 0, false
 	for _, e := range events {
 		if e.Action != "run.complete" || len(e.Data) == 0 {
 			continue
@@ -177,10 +180,10 @@ func agentExitCode(ctx context.Context, c *apiClient, runID string) int {
 			ExitCode *int `json:"exit_code"`
 		}
 		if json.Unmarshal(e.Data, &d) == nil && d.ExitCode != nil {
-			code = *d.ExitCode
+			code, found = *d.ExitCode, true
 		}
 	}
-	return code
+	return code, found
 }
 
 func runsCmd(client clientFn) *cobra.Command {
@@ -231,6 +234,38 @@ func runsCmd(client clientFn) *cobra.Command {
 	}
 	get.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	cmd.AddCommand(list, get)
+	return cmd
+}
+
+// approvalsCmd exposes the fully-implemented listApprovals client method as a
+// command, so a CLI-only operator can discover a pending approval's id to
+// approve/deny — previously the docs pointed only at "the Approvals UI" (U086).
+func approvalsCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "approvals",
+		Short: "List pending and decided approval requests",
+	}
+	var state string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List approval requests (optionally filtered by --state)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			approvals, err := client().listApprovals(cmd.Context(), state)
+			if err != nil {
+				return err
+			}
+			tw := newTab()
+			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tREQUESTED\tDECIDED_BY\tREASON")
+			for _, a := range approvals {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					short(a.ID.String()), short(a.RunID.String()), a.Kind, a.State,
+					a.RequestedAt.Format(time.RFC3339), a.DecidedBy, a.Reason)
+			}
+			return tw.Flush()
+		},
+	}
+	list.Flags().StringVar(&state, "state", "", "filter by state (e.g. PENDING, APPROVED, DENIED)")
+	cmd.AddCommand(list)
 	return cmd
 }
 

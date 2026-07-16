@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -380,6 +381,50 @@ func TestRunCmd_WaitKilledExits2(t *testing.T) {
 	}
 	if ee.code != 2 {
 		t.Errorf("exit code = %d, want 2 for lifecycle termination", ee.code)
+	}
+}
+
+// TestApprovalsListCmd is the U086 regression: `wardyn approvals list` must exist
+// and GET /api/v1/approvals (honoring --state) so a CLI-only operator can discover
+// a pending approval's id — previously only the Approvals UI exposed these.
+func TestApprovalsListCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: uuid.New(), Kind: "egress", State: "PENDING", RequestedAt: time.Now()},
+	})
+	if err := execCmd(t, "approvals", "list", "--url", srv.URL, "--token", "tok", "--state", "PENDING"); err != nil {
+		t.Fatalf("approvals list returned error: %v", err)
+	}
+	last := srv.last()
+	if last.method != http.MethodGet || last.path != "/api/v1/approvals" {
+		t.Errorf("approvals list hit %s %s, want GET /api/v1/approvals", last.method, last.path)
+	}
+	if last.query != "state=PENDING" {
+		t.Errorf("approvals list query = %q, want state=PENDING", last.query)
+	}
+}
+
+// TestAgentExitCode_FoundDistinguishesMissingFromZero is the U088 regression: the
+// bool return lets the --wait path tell "agent genuinely exited 0" from "the
+// run.complete event is missing/unreadable" — they otherwise both read as code 0.
+func TestAgentExitCode_FoundDistinguishesMissingFromZero(t *testing.T) {
+	makeClient := func(events []types.AuditEvent) *apiClient {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(events)
+		}))
+		t.Cleanup(srv.Close)
+		return &apiClient{baseURL: srv.URL, token: "tok"}
+	}
+	runID := uuid.New().String()
+	// No run.complete event → (0, false).
+	if code, found := agentExitCode(context.Background(), makeClient([]types.AuditEvent{{Action: "run.exec"}}), runID); found || code != 0 {
+		t.Errorf("missing run.complete: got (%d,%v), want (0,false)", code, found)
+	}
+	// run.complete carrying exit_code 0 → (0, true), distinct from the missing case.
+	if code, found := agentExitCode(context.Background(), makeClient([]types.AuditEvent{
+		{Action: "run.complete", Data: json.RawMessage(`{"exit_code":0}`)},
+	}), runID); !found || code != 0 {
+		t.Errorf("run.complete exit 0: got (%d,%v), want (0,true)", code, found)
 	}
 }
 
