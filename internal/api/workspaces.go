@@ -551,6 +551,18 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Refuse to finalize while an import step is still LIVE: finalize zeroes
+	// active_run_id and marks the workspace ready, which would silently drop the
+	// running verify/record run's real result — its later result upload then 409s
+	// on the now-cleared pointer. Mirror the same live-run guard verify/record use
+	// (a stale pointer to a terminal run does not block — only a genuinely live one).
+	if ws.ActiveRunID != nil {
+		if active, gerr := s.cfg.Store.GetRun(r.Context(), *ws.ActiveRunID); gerr == nil && !isTerminalRunState(active.State) {
+			writeError(w, http.StatusConflict, "an import step is still running for this workspace; wait for it to finish before finalizing")
+			return
+		}
+	}
+
 	emitted := map[string]string{}
 	if req.EmitEnvAsCode {
 		profile, ok := workspaceProfile(ws)
