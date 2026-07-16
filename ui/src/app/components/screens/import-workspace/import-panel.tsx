@@ -59,6 +59,7 @@ import {
   activeStepForStatus,
   isTransientStatus,
   isRecording,
+  recordSessions,
   sessionKeyOf,
   newEgressHosts,
   verifyPhase,
@@ -473,10 +474,15 @@ export function ImportWorkspaceDialog({
             {/* Verify = re-run your steps in a CONFINED session (default-deny egress,
                 limited to the approved set); off-policy hosts are blocked live. The
                 older automated setup-command verify (VerifyPane) is still shown when
-                an auto-verify is in flight or has a result — driven via the API. */}
+                an auto-verify is in flight or has a result — driven via the API.
+                U035 fix: it's ALSO the fallback when Record was skipped (zero open
+                recordings to replay) — otherwise "Skip recording" stranded the
+                operator at RecordPane's confined dead-end, contradicting
+                STEP_BLURB.record's "Verify still proves it either way". */}
             {step === "verify" && ws &&
               (ws.verify_result ||
-              ["building", "build_error", "verifying", "verify_failed"].includes(ws.status) ? (
+              ["building", "build_error", "verifying", "verify_failed"].includes(ws.status) ||
+              recordSessions(ws, false).length === 0 ? (
                 <VerifyPane
                   ws={ws}
                   busy={verifyBusy}
