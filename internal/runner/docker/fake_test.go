@@ -9,26 +9,39 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
-	dockertypes "github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	dockerclient "github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 )
 
-// fakeNotFound is a Docker-shaped not-found error: IsErrNotFound matches on
-// the NotFound() method, which errdefs recognizes.
+// fakeNotFound is a Docker-shaped not-found error: the driver's isNotFound now
+// classifies via containerd errdefs.IsNotFound, which recognizes any error
+// implementing the NotFound() marker method (the same shape the moby v29 client
+// returns for a 404).
 type fakeNotFound struct{ msg string }
 
 func (e fakeNotFound) Error() string { return e.msg }
 func (e fakeNotFound) NotFound()     {}
+
+// fakePullResponse adapts an io.ReadCloser to client.ImagePullResponse (the v29
+// ImagePull return type). PullImage only drains the reader, so the extra
+// progress helpers are inert no-ops.
+type fakePullResponse struct{ io.ReadCloser }
+
+func (fakePullResponse) JSONMessages(context.Context) iter.Seq2[jsonstream.Message, error] {
+	return nil
+}
+func (fakePullResponse) Wait(context.Context) error { return nil }
 
 // createdContainer records a ContainerCreate call for assertions.
 type createdContainer struct {
@@ -52,7 +65,7 @@ type fakeDocker struct {
 
 	images map[string]bool // ref -> present
 
-	networks map[string]network.CreateOptions // name -> opts (id == name here)
+	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 
 	containers map[string]*createdContainer // id (== name) -> record
 
@@ -61,117 +74,118 @@ type fakeDocker struct {
 	failImagePull       bool   // ImagePull returns an error (image absent + unpullable)
 
 	lastExecCmd []string // argv of the most recent exec
-	// lastResize records the most recent ContainerExecResize options so attach
+	// lastResize records the most recent ExecResize options so attach
 	// tests can assert the PTY was resized.
-	lastResize *container.ResizeOptions
+	lastResize *client.ExecResizeOptions
 }
 
 func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
-		networks:   map[string]network.CreateOptions{},
+		networks:   map[string]client.NetworkCreateOptions{},
 		containers: map[string]*createdContainer{},
 	}
 }
 
-func (f *fakeDocker) Info(ctx context.Context) (system.Info, error) {
-	return f.info, nil
+func (f *fakeDocker) Info(ctx context.Context, _ client.InfoOptions) (client.SystemInfoResult, error) {
+	return client.SystemInfoResult{Info: f.info}, nil
 }
 
-func (f *fakeDocker) ImageList(ctx context.Context, opts image.ListOptions) ([]image.Summary, error) {
+func (f *fakeDocker) ImageList(ctx context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// The driver passes a reference filter; we just report presence for any
 	// image marked present.
 	for ref, present := range f.images {
 		if present {
-			return []image.Summary{{ID: ref}}, nil
+			return client.ImageListResult{Items: []image.Summary{{ID: ref}}}, nil
 		}
 	}
-	return nil, nil
+	return client.ImageListResult{}, nil
 }
 
-func (f *fakeDocker) ImagePull(ctx context.Context, ref string, opts image.PullOptions) (io.ReadCloser, error) {
+func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failImagePull {
 		return nil, fmt.Errorf("registry: denied")
 	}
 	f.images[ref] = true
-	return io.NopCloser(strings.NewReader(`{"status":"pulled"}`)), nil
+	return fakePullResponse{io.NopCloser(strings.NewReader(`{"status":"pulled"}`))}, nil
 }
 
-func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...dockerclient.ImageInspectOption) (image.InspectResponse, error) {
+func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.images[imageID] {
-		return image.InspectResponse{ID: imageID}, nil
+		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID}}, nil
 	}
-	return image.InspectResponse{}, fakeNotFound{msg: "no such image: " + imageID}
+	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
 
-func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error) {
+func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.networks[name] = opts
-	return network.CreateResponse{ID: name}, nil
+	return client.NetworkCreateResult{ID: name}, nil
 }
 
-func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID, containerID string, cfg *network.EndpointSettings) error {
+func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c := f.containers[containerID]
+	c := f.containers[opts.Container]
 	if c == nil {
-		return fakeNotFound{msg: "no such container: " + containerID}
+		return client.NetworkConnectResult{}, fakeNotFound{msg: "no such container: " + opts.Container}
 	}
 	c.connectedTo = append(c.connectedTo, networkID)
-	return nil
+	return client.NetworkConnectResult{}, nil
 }
 
-func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string) error {
+func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.networks[networkID]; !ok {
-		return fakeNotFound{msg: "no such network: " + networkID}
+		return client.NetworkRemoveResult{}, fakeNotFound{msg: "no such network: " + networkID}
 	}
 	delete(f.networks, networkID)
-	return nil
+	return client.NetworkRemoveResult{}, nil
 }
 
-func (f *fakeDocker) ContainerCreate(ctx context.Context, cfg *container.Config, host *container.HostConfig, netCfg *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
+func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	name := opts.Name
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
-		return container.CreateResponse{}, fmt.Errorf("boom: create %s", name)
+		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
 	f.containers[name] = &createdContainer{
 		name:  name,
-		cfg:   cfg,
-		host:  host,
-		net:   netCfg,
+		cfg:   opts.Config,
+		host:  opts.HostConfig,
+		net:   opts.NetworkingConfig,
 		state: &container.State{Status: "created"},
 	}
-	return container.CreateResponse{ID: name}, nil
+	return client.ContainerCreateResult{ID: name}, nil
 }
 
-func (f *fakeDocker) ContainerStart(ctx context.Context, id string, opts container.StartOptions) error {
+func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
 	if c == nil {
-		return fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.state = &container.State{Status: "running", Running: true}
-	return nil
+	return client.ContainerStartResult{}, nil
 }
 
-func (f *fakeDocker) ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error) {
+func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
 	if c == nil || c.removed {
-		return container.InspectResponse{}, fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerInspectResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	// Synthesize NetworkSettings from the container's known networks (primary
 	// NetworkMode + explicit endpoints + NetworkConnect'd nets) with a
@@ -184,7 +198,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string) (container
 			return
 		}
 		if _, ok := nets[name]; !ok {
-			nets[name] = &network.EndpointSettings{IPAddress: "10.88.0.2", NetworkID: name}
+			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr("10.88.0.2"), NetworkID: name}
 		}
 	}
 	if c.host != nil {
@@ -198,53 +212,57 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string) (container
 	for _, n := range c.connectedTo {
 		addNet(n)
 	}
-	return container.InspectResponse{
+	return client.ContainerInspectResult{Container: container.InspectResponse{
 		// Real Docker reports the name with a leading slash; mirror that so
-		// name-based run-id recovery is exercised faithfully.
-		ContainerJSONBase: &container.ContainerJSONBase{ID: id, Name: "/" + c.name, State: c.state},
-		Config:            c.cfg,
-		NetworkSettings:   &container.NetworkSettings{Networks: nets},
-	}, nil
+		// name-based run-id recovery is exercised faithfully. (v29 inlined the
+		// old ContainerJSONBase fields onto InspectResponse.)
+		ID:              id,
+		Name:            "/" + c.name,
+		State:           c.state,
+		Config:          c.cfg,
+		NetworkSettings: &container.NetworkSettings{Networks: nets},
+	}}, nil
 }
 
-func (f *fakeDocker) ContainerStop(ctx context.Context, id string, opts container.StopOptions) error {
+func (f *fakeDocker) ContainerStop(ctx context.Context, id string, _ client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
 	if c == nil || c.removed {
-		return fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerStopResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.state = &container.State{Status: "exited", ExitCode: 0}
-	return nil
+	return client.ContainerStopResult{}, nil
 }
 
-func (f *fakeDocker) ContainerKill(ctx context.Context, id, signal string) error {
+func (f *fakeDocker) ContainerKill(ctx context.Context, id string, _ client.ContainerKillOptions) (client.ContainerKillResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
 	if c == nil || c.removed {
-		return fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerKillResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.state = &container.State{Status: "exited", ExitCode: 137}
-	return nil
+	return client.ContainerKillResult{}, nil
 }
 
-func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts container.RemoveOptions) error {
+func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
 	if c == nil {
-		return fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerRemoveResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.removed = true
-	return nil
+	return client.ContainerRemoveResult{}, nil
 }
 
 // ContainerWait yields the container's exit code (from its recorded state, or 0
 // if it never exited), mirroring dockerd's WaitConditionNotRunning behaviour of
 // returning immediately for an already-exited container. Used by the exec-less
-// (main-process) Wait path.
-func (f *fakeDocker) ContainerWait(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+// (main-process) Wait path. v29 returns both channels wrapped in a
+// ContainerWaitResult.
+func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.ContainerWaitOptions) client.ContainerWaitResult {
 	statusCh := make(chan container.WaitResponse, 1)
 	errCh := make(chan error, 1)
 	f.mu.Lock()
@@ -252,46 +270,48 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, condition con
 	f.mu.Unlock()
 	if !ok || c == nil || c.removed {
 		errCh <- fakeNotFound{msg: "no such container: " + id}
-		return statusCh, errCh
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
 	}
 	var code int64
 	if c.state != nil {
 		code = int64(c.state.ExitCode)
 	}
 	statusCh <- container.WaitResponse{StatusCode: code}
-	return statusCh, errCh
+	return client.ContainerWaitResult{Result: statusCh, Error: errCh}
 }
 
-func (f *fakeDocker) ContainerExecCreate(ctx context.Context, id string, opts container.ExecOptions) (container.ExecCreateResponse, error) {
+func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c := f.containers[id]; c == nil || c.removed {
-		return container.ExecCreateResponse{}, fakeNotFound{msg: "no such container: " + id}
+		return client.ExecCreateResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd
-	return container.ExecCreateResponse{ID: execID}, nil
+	return client.ExecCreateResult{ID: execID}, nil
 }
 
-func (f *fakeDocker) ContainerExecAttach(ctx context.Context, execID string, opts container.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
-	return dockertypes.NewHijackedResponse(fakeConn{}, "application/vnd.docker.raw-stream"), nil
+func (f *fakeDocker) ExecAttach(ctx context.Context, execID string, opts client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	return client.ExecAttachResult{
+		HijackedResponse: client.NewHijackedResponse(fakeConn{}, "application/vnd.docker.raw-stream"),
+	}, nil
 }
 
-func (f *fakeDocker) ContainerExecStart(ctx context.Context, execID string, opts container.ExecStartOptions) error {
-	return nil
+func (f *fakeDocker) ExecStart(ctx context.Context, execID string, opts client.ExecStartOptions) (client.ExecStartResult, error) {
+	return client.ExecStartResult{}, nil
 }
 
-func (f *fakeDocker) ContainerExecInspect(ctx context.Context, execID string) (container.ExecInspect, error) {
-	return container.ExecInspect{ExecID: execID, Running: true}, nil
+func (f *fakeDocker) ExecInspect(ctx context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
+	return client.ExecInspectResult{ID: execID, Running: true}, nil
 }
 
-func (f *fakeDocker) ContainerExecResize(ctx context.Context, execID string, opts container.ResizeOptions) error {
+func (f *fakeDocker) ExecResize(ctx context.Context, execID string, opts client.ExecResizeOptions) (client.ExecResizeResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	o := opts
 	f.lastResize = &o
-	return nil
+	return client.ExecResizeResult{}, nil
 }
 
 // fakeConn is a net.Conn whose reads return EOF immediately, so the Exec

@@ -23,10 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	dockernetwork "github.com/docker/docker/api/types/network"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	dockerclient "github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
@@ -104,7 +102,7 @@ func dockerRouteProbe(t *testing.T, ref string) {
 
 	// `ip route` lists the full routing table. On a container attached only to
 	// an Internal=true network (no gateway), there is no "default" route entry.
-	created, err := cli.ContainerExecCreate(ctx, ref, container.ExecOptions{
+	created, err := cli.ExecCreate(ctx, ref, dockerclient.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          []string{"ip", "route"},
@@ -113,10 +111,11 @@ func dockerRouteProbe(t *testing.T, ref string) {
 		t.Fatalf("dockerRouteProbe: exec create: %v", err)
 	}
 
-	resp, err := cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attachRes, err := cli.ExecAttach(ctx, created.ID, dockerclient.ExecAttachOptions{})
 	if err != nil {
 		t.Fatalf("dockerRouteProbe: exec attach: %v", err)
 	}
+	resp := attachRes.HijackedResponse
 	defer resp.Close()
 
 	// Demultiplex the Docker stream protocol (8-byte framed header per chunk)
@@ -149,7 +148,7 @@ func ensureConformanceNetwork(t *testing.T, name string) {
 	defer cli.Close()
 
 	ctx := context.Background()
-	_, err = cli.NetworkCreate(ctx, name, dockernetwork.CreateOptions{Driver: "bridge"})
+	_, err = cli.NetworkCreate(ctx, name, dockerclient.NetworkCreateOptions{Driver: "bridge"})
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "exists") {
 		// Non-fatal: log and continue; the test will fail later if the
 		// network is truly absent and the driver cannot connect the proxy.

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/network"
 	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -182,7 +182,7 @@ func mountRWFlag(line string) string {
 func ensureNetwork(t *testing.T, d *Driver, name string) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := d.cli.NetworkCreate(ctx, name, network.CreateOptions{Driver: "bridge"})
+	_, err := d.cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge"})
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "exists") {
 		t.Logf("ensureNetwork %q: %v (continuing; may already exist)", name, err)
 	}

@@ -9,8 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	dockertypes "github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -32,7 +31,7 @@ var attachShell = []string{"/bin/sh", "-c", "if command -v tmux >/dev/null 2>&1;
 
 // Attach opens a NEW interactive exec (an interactive shell) inside the running
 // sandbox ref and returns a live PTY runner.Session. It mirrors Exec's
-// interactive-style hijack (Tty + AttachStdin/out/err + ContainerExecAttach)
+// interactive-style hijack (Tty + AttachStdin/out/err + ExecAttach)
 // but is deliberately SEPARATE from the agent process:
 //
 //   - The new exec is NOT registered in d.agentExecs. That map is exclusively
@@ -54,8 +53,8 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 		return nil, fmt.Errorf("docker: attach: empty sandbox ref")
 	}
 
-	execCfg := container.ExecOptions{
-		Tty:          true,
+	execCfg := client.ExecCreateOptions{
+		TTY:          true,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -73,19 +72,19 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 			"LC_ALL=C.UTF-8",
 		},
 	}
-	// Seed the initial PTY size when the client supplied one; ContainerExecCreate
+	// Seed the initial PTY size when the client supplied one; ExecCreate
 	// accepts ConsoleSize so the very first output is already correctly wrapped.
 	if opts.Cols > 0 && opts.Rows > 0 {
-		execCfg.ConsoleSize = &[2]uint{uint(opts.Rows), uint(opts.Cols)}
+		execCfg.ConsoleSize = client.ConsoleSize{Height: uint(opts.Rows), Width: uint(opts.Cols)}
 	}
 
-	created, err := d.cli.ContainerExecCreate(ctx, ref, execCfg)
+	created, err := d.cli.ExecCreate(ctx, ref, execCfg)
 	if err != nil {
 		return nil, fmt.Errorf("docker: attach exec create: %w", err)
 	}
 
 	// TTY hijack: resp.Reader is the PTY output, resp.Conn is the input writer.
-	resp, err := d.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{Tty: true})
+	attachRes, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{TTY: true})
 	if err != nil {
 		return nil, fmt.Errorf("docker: attach exec attach: %w", err)
 	}
@@ -93,18 +92,18 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	return &dockerSession{
 		cli:    d.cli,
 		execID: created.ID,
-		resp:   resp,
+		resp:   attachRes.HijackedResponse,
 	}, nil
 }
 
 // dockerSession is the runner.Session backed by a Docker exec TTY hijack. The
 // hijacked response carries the bidirectional PTY: Reader is terminal output,
-// Conn is keystroke input. Resize drives ContainerExecResize; Close closes the
+// Conn is keystroke input. Resize drives ExecResize; Close closes the
 // hijack (and only the hijack).
 type dockerSession struct {
 	cli    dockerAPI
 	execID string
-	resp   dockertypes.HijackedResponse
+	resp   client.HijackedResponse
 }
 
 var _ runner.Session = (*dockerSession)(nil)
@@ -121,13 +120,13 @@ func (s *dockerSession) Write(p []byte) (int, error) {
 	return s.resp.Conn.Write(p)
 }
 
-// Resize informs the exec PTY of a new window size. Docker's ResizeOptions takes
-// Height (rows) and Width (cols).
+// Resize informs the exec PTY of a new window size. Docker's ExecResizeOptions
+// takes Height (rows) and Width (cols).
 func (s *dockerSession) Resize(ctx context.Context, cols, rows uint16) error {
 	if cols == 0 || rows == 0 {
 		return nil // ignore degenerate sizes rather than erroring the stream
 	}
-	if err := s.cli.ContainerExecResize(ctx, s.execID, container.ResizeOptions{
+	if _, err := s.cli.ExecResize(ctx, s.execID, client.ExecResizeOptions{
 		Height: uint(rows),
 		Width:  uint(cols),
 	}); err != nil {

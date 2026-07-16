@@ -16,13 +16,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	dockerclient "github.com/docker/docker/client"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -198,9 +196,9 @@ var _ substrate.Substrate = (*Driver)(nil)
 // New constructs a Driver against the host Docker daemon, negotiating the API
 // version with the server (forward/backward compatibility).
 func New(cfg Config) (*Driver, error) {
-	cli, err := dockerclient.NewClientWithOpts(
-		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
+	cli, err := client.NewClientWithOpts(
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("docker: new client: %w", err)
@@ -225,11 +223,11 @@ func (d *Driver) Name() string { return driverName }
 // Classes probes the daemon for available runtimes and reports the Confinement
 // Classes this host can actually enforce, with the per-class substrate label.
 func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
-	info, err := d.cli.Info(ctx)
+	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return substrate.ClassSupport{}, fmt.Errorf("docker: info: %w", err)
 	}
-	c := capabilitiesForWith(info, d.cfg.ConfinementRuntimes)
+	c := capabilitiesForWith(infoRes.Info, d.cfg.ConfinementRuntimes)
 	return substrate.ClassSupport{
 		Classes:          c.ConfinementClasses,
 		Resolved:         c.Resolved,
@@ -242,10 +240,11 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 // the agent container with L0 confinement. Order matters for fail-closed
 // teardown: anything created before an error is rolled back.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	info, err := d.cli.Info(ctx)
+	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("docker: info: %w", err)
 	}
+	info := infoRes.Info
 
 	// Resolve confinement runtime FIRST and fail closed before creating
 	// anything if the demanded class cannot be enforced (invariant 5).
@@ -275,7 +274,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// (1) Per-run internal network. Internal=true => Docker provisions no
 	// gateway, so the network cannot route off-host: this is what upholds L0
 	// even though the agent is *connected* to it.
-	intNet, err := d.cli.NetworkCreate(ctx, internalNetName(spec.RunID), network.CreateOptions{
+	intNet, err := d.cli.NetworkCreate(ctx, internalNetName(spec.RunID), client.NetworkCreateOptions{
 		Driver:   "bridge",
 		Internal: true,
 		Labels:   wardynLabels(spec.RunID, "network", spec.Labels),
@@ -285,7 +284,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	// rollback collects teardown steps to run on any later failure.
 	var rollback []func()
-	rollback = append(rollback, func() { _ = d.cli.NetworkRemove(context.Background(), intNet.ID) })
+	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNet.ID, client.NetworkRemoveOptions{}) })
 	fail := func(err error) (runner.Sandbox, error) {
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
@@ -338,22 +337,29 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ProxyBinaryHostPath != "" {
 		proxyHost.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
 	}
-	proxyResp, err := d.cli.ContainerCreate(ctx, proxyCfg, proxyHost, nil, nil, proxyContainerName(spec.RunID))
+	proxyResp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     proxyCfg,
+		HostConfig: proxyHost,
+		Name:       proxyContainerName(spec.RunID),
+	})
 	if err != nil {
 		return fail(fmt.Errorf("docker: create proxy: %w", err))
 	}
 	rollback = append(rollback, func() {
-		_ = d.cli.ContainerRemove(context.Background(), proxyResp.ID, container.RemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), proxyResp.ID, client.ContainerRemoveOptions{Force: true})
 	})
 
 	// Connect the proxy to the control-plane-facing network so it can reach
 	// the control plane. This network is the ONLY route off the per-run
 	// segment, and only the proxy is on it.
-	if err := d.cli.NetworkConnect(ctx, d.cfg.InternalNetwork, proxyResp.ID, &network.EndpointSettings{}); err != nil {
+	if _, err := d.cli.NetworkConnect(ctx, d.cfg.InternalNetwork, client.NetworkConnectOptions{
+		Container:      proxyResp.ID,
+		EndpointConfig: &network.EndpointSettings{},
+	}); err != nil {
 		return fail(fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err))
 	}
 
-	if err := d.cli.ContainerStart(ctx, proxyResp.ID, container.StartOptions{}); err != nil {
+	if _, err := d.cli.ContainerStart(ctx, proxyResp.ID, client.ContainerStartOptions{}); err != nil {
 		return fail(fmt.Errorf("docker: start proxy: %w", err))
 	}
 
@@ -364,14 +370,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// runsc (the agent then cannot reach its only egress path). A static hosts
 	// entry works under every runtime and weakens nothing: the agent still has no
 	// default route — the proxy remains its sole path off the gatewayless segment.
-	proxyInspect, err := d.cli.ContainerInspect(ctx, proxyResp.ID)
+	proxyInspectRes, err := d.cli.ContainerInspect(ctx, proxyResp.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		return fail(fmt.Errorf("docker: inspect proxy for its network IP: %w", err))
 	}
+	proxyInspect := proxyInspectRes.Container
 	proxyIP := ""
 	if proxyInspect.NetworkSettings != nil {
-		if ep := proxyInspect.NetworkSettings.Networks[internalNetName(spec.RunID)]; ep != nil {
-			proxyIP = ep.IPAddress
+		// v29: EndpointSettings.IPAddress is a netip.Addr (was string). Guard on
+		// IsValid so the zero Addr maps to "" (fail closed below), not the
+		// "invalid IP" string a zero Addr would stringify to.
+		if ep := proxyInspect.NetworkSettings.Networks[internalNetName(spec.RunID)]; ep != nil && ep.IPAddress.IsValid() {
+			proxyIP = ep.IPAddress.String()
 		}
 	}
 	if proxyIP == "" {
@@ -494,15 +504,20 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced}, nil
 	}
 
-	agentResp, err := d.cli.ContainerCreate(ctx, agentCfg, agentHost, agentNetCfg, nil, agentContainerName(spec.RunID))
+	agentResp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           agentCfg,
+		HostConfig:       agentHost,
+		NetworkingConfig: agentNetCfg,
+		Name:             agentContainerName(spec.RunID),
+	})
 	if err != nil {
 		return fail(fmt.Errorf("docker: create agent: %w", err))
 	}
 	rollback = append(rollback, func() {
-		_ = d.cli.ContainerRemove(context.Background(), agentResp.ID, container.RemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true})
 	})
 
-	if err := d.cli.ContainerStart(ctx, agentResp.ID, container.StartOptions{}); err != nil {
+	if _, err := d.cli.ContainerStart(ctx, agentResp.ID, client.ContainerStartOptions{}); err != nil {
 		return fail(fmt.Errorf("docker: start agent: %w", err))
 	}
 
@@ -554,26 +569,26 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 	// `mkdir -p <each> && chmod 0777 <each>` — idempotent; the mount already
 	// exists (chmod still applies), the cast dir is created fresh.
 	args := append([]string{"-p"}, dirs...)
-	created, err := d.cli.ContainerExecCreate(ctx, ref, container.ExecOptions{
+	created, err := d.cli.ExecCreate(ctx, ref, client.ExecCreateOptions{
 		User: "0:0", // root, regardless of the image's default USER
 		Cmd:  append([]string{"mkdir"}, args...),
 	})
 	if err != nil {
 		return
 	}
-	if err := d.cli.ContainerExecStart(ctx, created.ID, container.ExecStartOptions{}); err != nil {
+	if _, err := d.cli.ExecStart(ctx, created.ID, client.ExecStartOptions{}); err != nil {
 		return
 	}
 	d.waitExec(ctx, created.ID)
 
-	chmodCreated, err := d.cli.ContainerExecCreate(ctx, ref, container.ExecOptions{
+	chmodCreated, err := d.cli.ExecCreate(ctx, ref, client.ExecCreateOptions{
 		User: "0:0",
 		Cmd:  append([]string{"chmod", "0777"}, dirs...),
 	})
 	if err != nil {
 		return
 	}
-	if err := d.cli.ContainerExecStart(ctx, chmodCreated.ID, container.ExecStartOptions{}); err != nil {
+	if _, err := d.cli.ExecStart(ctx, chmodCreated.ID, client.ExecStartOptions{}); err != nil {
 		return
 	}
 	d.waitExec(ctx, chmodCreated.ID)
@@ -584,7 +599,7 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 // stuck exec cannot stall sandbox bring-up.
 func (d *Driver) waitExec(ctx context.Context, execID string) {
 	for i := 0; i < 50; i++ {
-		insp, ierr := d.cli.ContainerExecInspect(ctx, execID)
+		insp, ierr := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if ierr != nil || !insp.Running {
 			return
 		}
@@ -637,21 +652,21 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
 		// recording deterministically. If we cannot, record under a nil id
 		// rather than failing the exec.
 		runID := uuid.Nil
-		if insp, err := d.cli.ContainerInspect(ctx, ref); err == nil && insp.Config != nil {
-			if id, perr := parseRunID(insp.Config.Labels[labelRun]); perr == nil {
+		if insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{}); err == nil && insp.Container.Config != nil {
+			if id, perr := parseRunID(insp.Container.Config.Labels[labelRun]); perr == nil {
 				runID = id
 			}
 		}
 		cmd = d.recordCmd(runID, defaultCastDir, argv)
 	}
-	execCfg := container.ExecOptions{
-		Tty:          true,
+	execCfg := client.ExecCreateOptions{
+		TTY:          true,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          cmd,
 	}
-	created, err := d.cli.ContainerExecCreate(ctx, ref, execCfg)
+	created, err := d.cli.ExecCreate(ctx, ref, execCfg)
 	if err != nil {
 		return fmt.Errorf("docker: exec create: %w", err)
 	}
@@ -663,10 +678,11 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) error {
 	// Attach (TTY hijack) so output can be wired to wardyn-rec / a sink. The
 	// caller (control plane) owns the lifecycle of the returned stream; for v0
 	// we start detached after establishing the attach to confirm liveness.
-	resp, err := d.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{Tty: true})
+	attachRes, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{TTY: true})
 	if err != nil {
 		return fmt.Errorf("docker: exec attach: %w", err)
 	}
+	resp := attachRes.HijackedResponse
 	// We do not block on the process; drain in the background so the PTY does
 	// not stall. A real recorder pipeline replaces this drain.
 	go func() {
@@ -697,11 +713,16 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 		cmd = d.recordCmd(runID, mainProcCastDir, argv)
 	}
 	p.cfg.Cmd = cmd
-	created, err := d.cli.ContainerCreate(ctx, p.cfg, p.host, p.netcfg, nil, ref)
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           p.cfg,
+		HostConfig:       p.host,
+		NetworkingConfig: p.netcfg,
+		Name:             ref,
+	})
 	if err != nil {
 		return fmt.Errorf("docker: create main-process agent: %w", err)
 	}
-	if err := d.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start main-process agent: %w", err)
 	}
 	d.mu.Lock()
@@ -737,7 +758,7 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	// waitExec; the unbounded loop is what distinguishes Wait from it.
 	const pollInterval = 200 * time.Millisecond
 	for {
-		insp, err := d.cli.ContainerExecInspect(ctx, execID)
+		insp, err := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
 			return 0, fmt.Errorf("docker: wait: exec inspect: %w", err)
 		}
@@ -756,13 +777,16 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 // code. ContainerWait with WaitConditionNotRunning returns the code even if the
 // container has already exited, so there is no create/exit race.
 func (d *Driver) waitMainProcess(ctx context.Context, ref string) (int, error) {
-	statusCh, errCh := d.cli.ContainerWait(ctx, ref, container.WaitConditionNotRunning)
+	// v29: ContainerWait returns a single result carrying both the status and
+	// error channels (was a bare two-channel return); the select is otherwise
+	// unchanged.
+	wait := d.cli.ContainerWait(ctx, ref, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
 	case <-ctx.Done():
 		return 0, fmt.Errorf("docker: wait (main process): %w", ctx.Err())
-	case err := <-errCh:
+	case err := <-wait.Error:
 		return 0, fmt.Errorf("docker: wait (main process): %w", err)
-	case res := <-statusCh:
+	case res := <-wait.Result:
 		if res.Error != nil {
 			return int(res.StatusCode), fmt.Errorf("docker: wait (main process): %s", res.Error.Message)
 		}
@@ -771,21 +795,21 @@ func (d *Driver) waitMainProcess(ctx context.Context, ref string) (int, error) {
 }
 
 func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) {
-	insp, err := d.cli.ContainerInspect(ctx, ref)
+	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
 		if isNotFound(err) {
 			return runner.Status{State: types.RunStopped, Message: "container not found"}, nil
 		}
 		return runner.Status{}, fmt.Errorf("docker: inspect: %w", err)
 	}
-	return statusFromInspect(insp), nil
+	return statusFromInspect(res.Container), nil
 }
 
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
 // then remove. Idempotent on a missing sandbox.
 func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 	timeout := int(stopTimeout.Seconds())
-	if err := d.cli.ContainerStop(ctx, ref, container.StopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: stop: %w", err)
 	}
 	return d.teardown(ctx, ref)
@@ -794,7 +818,7 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 // KillSandbox is the kill-switch path: immediate SIGKILL + force remove. The
 // control plane cascades identity/credential revocation around this call.
 func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
-	if err := d.cli.ContainerKill(ctx, ref, "KILL"); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerKill(ctx, ref, client.ContainerKillOptions{Signal: "KILL"}); err != nil && !isNotFound(err) {
 		// A stopped container cannot be killed; treat "not running" as benign
 		// and proceed to force-remove below.
 		if !isNotRunning(err) {
@@ -822,19 +846,22 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	d.mu.Unlock()
 
 	var id uuid.UUID
-	insp, err := d.cli.ContainerInspect(ctx, agentRef)
+	res, err := d.cli.ContainerInspect(ctx, agentRef, client.ContainerInspectOptions{})
 	switch {
 	case err == nil:
+		insp := res.Container
 		var runID string
 		if insp.Config != nil {
 			runID = insp.Config.Labels[labelRun]
 		}
 		if parsed, perr := parseRunID(runID); perr == nil {
 			id = parsed
-		} else if insp.ContainerJSONBase != nil {
+		} else if insp.Name != "" {
 			// Label missing OR corrupt (non-UUID): recover the run id from the
 			// deterministic agent container name so the sibling proxy (routable
-			// network, run token) and per-run network are not orphaned.
+			// network, run token) and per-run network are not orphaned. (v29
+			// inlined the old ContainerJSONBase fields, so a present Name is the
+			// "we got a real inspect body" guard.)
 			if nid, nerr := runIDFromAgentName(insp.Name); nerr == nil {
 				id = nid
 			}
@@ -843,7 +870,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: inspect for teardown: %w", err)
 	}
 
-	if err := d.cli.ContainerRemove(ctx, agentRef, container.RemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
 
@@ -861,10 +888,10 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: teardown of agent %s: %w", agentRef, errTeardownUnresolved)
 	}
 
-	if err := d.cli.ContainerRemove(ctx, proxyContainerName(id), container.RemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove proxy: %w", err)
 	}
-	if err := d.cli.NetworkRemove(ctx, internalNetName(id)); err != nil && !isNotFound(err) {
+	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove internal network: %w", err)
 	}
 	return nil
@@ -905,13 +932,13 @@ func (d *Driver) imagePresent(ctx context.Context, ref string) (bool, error) {
 		}
 		return true, nil
 	}
-	f := filters.NewArgs()
-	f.Add("reference", ref)
-	summaries, err := d.cli.ImageList(ctx, image.ListOptions{Filters: f})
+	// v29: the filter set is client.Filters (was filters.Args); .Add returns the
+	// populated map. Same "reference"=<ref> tag-shaped filter as before.
+	res, err := d.cli.ImageList(ctx, client.ImageListOptions{Filters: client.Filters{}.Add("reference", ref)})
 	if err != nil {
 		return false, fmt.Errorf("docker: image list: %w", err)
 	}
-	return len(summaries) > 0, nil
+	return len(res.Items) > 0, nil
 }
 
 // statusFromInspect maps Docker container state to a Wardyn RunState.

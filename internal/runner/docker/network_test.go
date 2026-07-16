@@ -33,10 +33,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -49,9 +50,13 @@ func newNetworkTestDriver(t *testing.T) *Driver {
 	t.Helper()
 	d, err := New(Config{
 		// busybox doubles as the proxy image: these tests assert the L3/L4
-		// network topology, not the real proxy's L7 behaviour, so a sidecar
-		// that exits quickly is sufficient — the network attachments persist.
+		// network topology, not the real proxy's L7 behaviour. Keep the sidecar
+		// alive with `sleep infinity` (mirroring conformance_docker_test.go):
+		// busybox's default `sh` exits immediately, and a modern dockerd releases
+		// an exited container's endpoint IP, so CreateSandbox would then fail
+		// resolving the proxy's per-run IP. A real wardyn-proxy is long-running.
 		ProxyImage: "busybox:latest",
+		ProxyCmd:   []string{"sleep", "infinity"},
 	})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
@@ -97,7 +102,7 @@ func createNetworkSandbox(t *testing.T, ctx context.Context) (*Driver, uuid.UUID
 // conformance dockerRouteProbe).
 func execInSandbox(ctx context.Context, t *testing.T, d *Driver, ref string, argv []string) string {
 	t.Helper()
-	created, err := d.cli.ContainerExecCreate(ctx, ref, container.ExecOptions{
+	created, err := d.cli.ExecCreate(ctx, ref, client.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          argv,
@@ -105,10 +110,11 @@ func execInSandbox(ctx context.Context, t *testing.T, d *Driver, ref string, arg
 	if err != nil {
 		t.Fatalf("exec create %v: %v", argv, err)
 	}
-	resp, err := d.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attachRes, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
 	if err != nil {
 		t.Fatalf("exec attach %v: %v", argv, err)
 	}
+	resp := attachRes.HijackedResponse
 	defer resp.Close()
 
 	var stdout, stderr bytes.Buffer
@@ -221,20 +227,20 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	intNet := internalNetName(runID)
 	const peerAlias = "wardyn-egress-peer"
 	peerName := "wardyn-test-egress-peer-" + runID.String()
-	peerResp, err := d.cli.ContainerCreate(ctx,
-		&container.Config{
+	peerResp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: "busybox:latest",
 			// httpd -f stays in the foreground listening on :3128 (the proxy port).
 			Cmd: []string{"httpd", "-f", "-p", "3128"},
 		},
-		&container.HostConfig{NetworkMode: container.NetworkMode(intNet)},
-		&network.NetworkingConfig{
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(intNet)},
+		NetworkingConfig: &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				intNet: {Aliases: []string{peerAlias}},
 			},
 		},
-		nil, peerName,
-	)
+		Name: peerName,
+	})
 	if err != nil {
 		t.Fatalf("create egress peer: %v", err)
 	}
@@ -245,15 +251,15 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 		// behind because Docker refuses to remove a net with active endpoints, and
 		// force-remove's endpoint detach is not strictly synchronous.
 		cctx := context.Background()
-		_ = d.cli.ContainerRemove(cctx, peerResp.ID, container.RemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(cctx, peerResp.ID, client.ContainerRemoveOptions{Force: true})
 		for i := 0; i < 20; i++ {
-			if err := d.cli.NetworkRemove(cctx, intNet); err == nil || isNotFound(err) {
+			if _, err := d.cli.NetworkRemove(cctx, intNet, client.NetworkRemoveOptions{}); err == nil || isNotFound(err) {
 				return
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	})
-	if err := d.cli.ContainerStart(ctx, peerResp.ID, container.StartOptions{}); err != nil {
+	if _, err := d.cli.ContainerStart(ctx, peerResp.ID, client.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start egress peer: %v", err)
 	}
 	// Give httpd a moment to bind before the agent probes it.
@@ -317,10 +323,11 @@ func TestL0_ProxyOnlyDualHomedBridge(t *testing.T) {
 	intNet := internalNetName(runID)
 
 	// Agent: on the per-run internal net ONLY; never the control-plane net.
-	agent, err := d.cli.ContainerInspect(ctx, sb.Ref)
+	agentRes, err := d.cli.ContainerInspect(ctx, sb.Ref, client.ContainerInspectOptions{})
 	if err != nil {
 		t.Fatalf("inspect agent: %v", err)
 	}
+	agent := agentRes.Container
 	agentNets := networkNames(agent)
 	if !slices.Contains(agentNets, intNet) {
 		t.Errorf("agent must be attached to the per-run internal net %q, got %v", intNet, agentNets)
@@ -332,16 +339,18 @@ func TestL0_ProxyOnlyDualHomedBridge(t *testing.T) {
 		t.Errorf("agent must be attached to EXACTLY the per-run internal net; got %v", agentNets)
 	}
 	// The agent's per-run endpoint must have NO gateway (Internal=true network),
-	// which is the structural reason it has no default route.
-	if gw := agent.NetworkSettings.Networks[intNet].Gateway; gw != "" {
+	// which is the structural reason it has no default route. v29 types the
+	// Gateway as a netip.Addr, so a valid Addr means a gateway is present.
+	if gw := agent.NetworkSettings.Networks[intNet].Gateway; gw.IsValid() {
 		t.Errorf("per-run internal net must be gatewayless (Internal=true) so the agent has no default route; got gateway %q", gw)
 	}
 
 	// Proxy: dual-homed across the per-run net AND the control-plane net.
-	proxy, err := d.cli.ContainerInspect(ctx, proxyContainerName(runID))
+	proxyRes, err := d.cli.ContainerInspect(ctx, proxyContainerName(runID), client.ContainerInspectOptions{})
 	if err != nil {
 		t.Fatalf("inspect proxy: %v", err)
 	}
+	proxy := proxyRes.Container
 	proxyNets := networkNames(proxy)
 	if !slices.Contains(proxyNets, intNet) {
 		t.Errorf("proxy must be on the per-run internal net %q (shared with the agent), got %v", intNet, proxyNets)
