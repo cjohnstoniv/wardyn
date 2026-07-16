@@ -4,11 +4,36 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # Batch low-risk minor/patch bumps into one PR so a CVE-driven or major bump
+      # (e.g. React 18->19) stands out instead of drowning in the weekly pile (U114).
+      minor-and-patch:
+        update-types: [minor, patch]
   - package-ecosystem: npm
     directory: /ui
     schedule:
       interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  # Base-image CVE bumps: the pinned production Dockerfiles (golang/node/alpine/
+  # distroless/postgres/tetragon/dex) got no automated updates before (U093).
+  - package-ecosystem: docker
+    directories:
+      - /deploy/compose
+      - /deploy/images/claude-code
+      - /deploy/images/codex-cli
+      - /deploy/images/campaign
+      - /deploy/images/oracle
+    schedule:
+      interval: weekly
+    groups:
+      docker-base-images:
+        patterns: ["*"]

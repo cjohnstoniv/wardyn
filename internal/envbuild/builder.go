@@ -168,9 +168,8 @@ type BuildSpec struct {
 // New constructs a Builder connected to the host Docker daemon with API version
 // negotiation. envbuilderImage may be empty to use the default.
 func New(envbuilderImage, cacheRepo string) (*Builder, error) {
-	cli, err := client.NewClientWithOpts(
+	cli, err := client.New(
 		client.FromEnv,
-		client.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("envbuild: new docker client: %w", err)

@@ -88,9 +88,8 @@ func TestConformanceDocker(t *testing.T) {
 func dockerRouteProbe(t *testing.T, ref string) {
 	t.Helper()
 
-	cli, err := dockerclient.NewClientWithOpts(
+	cli, err := dockerclient.New(
 		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
 		t.Fatalf("dockerRouteProbe: create client: %v", err)
@@ -138,9 +137,8 @@ func dockerRouteProbe(t *testing.T, ref string) {
 func ensureConformanceNetwork(t *testing.T, name string) {
 	t.Helper()
 
-	cli, err := dockerclient.NewClientWithOpts(
+	cli, err := dockerclient.New(
 		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
 		t.Fatalf("ensureConformanceNetwork: create client: %v", err)

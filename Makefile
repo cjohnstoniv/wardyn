@@ -168,12 +168,14 @@ test-e2e-byoi:
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-byoi.sh
 
 govulncheck:
-	@echo "Running govulncheck..."
+	@echo "Running govulncheck (tagless + -tags docker, the shipped build)..."
 	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags docker ./...
 
 staticcheck:
-	@echo "Running staticcheck..."
+	@echo "Running staticcheck (tagless + -tags docker)..."
 	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -tags docker ./...
 
 lint:
 	@echo "Running go vet (default + docker tags)..."
