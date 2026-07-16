@@ -250,9 +250,12 @@ func (r spoolingRecorder) Record(ctx context.Context, ev types.AuditEvent) error
 // ─── lifecycle adapters ───────────────────────────────────────────────────────
 
 // lifecycleStore adapts the function-style store package to lifecycle.Store.
-// ListRunningWithPolicy joins agent_runs to run_policies and surfaces the
-// per-policy auto_stop_after_sec (0 when no policy is attached). The policy spec
-// is stored as JSONB, so auto_stop_after_sec is extracted with a JSON path.
+// ListRunningWithPolicy reads each run's EFFECTIVE idle cap from the run row's
+// auto_stop_after_sec column (captured from the resolved policy at CreateRun).
+// It previously LEFT JOINed run_policies on policy_id and read the policy JSONB —
+// but inline/default/scan/verify/record/harness-login runs have no stored
+// policy_id, so the join was NULL and COALESCE'd to 0 (never auto-stop),
+// silently exempting every such run from idle reaping (U006).
 type lifecycleStore struct {
 	pool *pgxpool.Pool
 }
@@ -261,11 +264,9 @@ var _ lifecycle.Store = lifecycleStore{}
 
 func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSummary, error) {
 	const q = `
-		SELECT r.id, r.updated_at,
-		       COALESCE((p.spec->>'auto_stop_after_sec')::int, 0) AS auto_stop_after_sec
-		FROM agent_runs r
-		LEFT JOIN run_policies p ON p.id = r.policy_id
-		WHERE r.state = $1`
+		SELECT id, updated_at, auto_stop_after_sec
+		FROM agent_runs
+		WHERE state = $1`
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
 		return nil, fmt.Errorf("wardynd: list running with policy: %w", err)
