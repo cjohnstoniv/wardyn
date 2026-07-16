@@ -117,11 +117,12 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Repair-on-read: capture any record entry stranded `recording` by a
-	// terminal-transition path with no reconcile hook (the idle reaper, a
-	// watcher lost to a crash). reconcileRecordRun is idempotent + CAS-guarded,
-	// and this only fires while an entry claims to be recording.
-	ws = s.repairStaleRecordings(r.Context(), ws)
+	// Repair-on-read: settle any import run stranded by a terminal-transition path
+	// with no reconcile hook — a record entry stuck `recording`, or a workspace
+	// stuck `verifying`/`scanning` whose run already terminated (the idle reaper, a
+	// crashed watcher, or a dispatch-time failure that raced a wardynd crash). The
+	// reconcilers are idempotent + CAS-guarded, and this only fires on a real strand.
+	ws = s.repairStaleWorkspaceRuns(r.Context(), ws)
 	// The import panel renders Record Mode from the workspace's own record_results
 	// map (per-session state); sessions are user-named, not a derived taxonomy.
 	writeJSON(w, http.StatusOK, ws)
