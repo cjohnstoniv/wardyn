@@ -16,6 +16,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Select the tier-capable docker daemon the same way up.sh/e2e-backend.sh/run-local.sh
+# do: on a dual-daemon box an unset DOCKER_HOST otherwise lands wardynd on the default
+# Docker Desktop socket, silently downgrading confinement to Fence/Wall-only.
+. "$ROOT/scripts/lib/common.sh"
+wardyn_pick_docker_host
+echo "wardynd (host mode): docker daemon = ${DOCKER_HOST:-<default socket>}"
+
 # Pull the pinned age key from the gitignored compose env (so persisted secrets decrypt).
 if [ -z "${WARDYN_AGE_KEY:-}" ] && [ -f deploy/compose/.env ]; then
   WARDYN_AGE_KEY="$(grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | head -1 | cut -d= -f2-)"
