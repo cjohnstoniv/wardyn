@@ -54,6 +54,7 @@ type Store interface {
 	ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error)
 	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error)
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, verifyResult json.RawMessage, verifiedHash string, verifiedAt *time.Time) (types.Workspace, error)
+	SetWorkspaceScanResult(ctx context.Context, id uuid.UUID, profile json.RawMessage, runID uuid.UUID) (types.Workspace, bool, error)
 	DeleteWorkspace(ctx context.Context, id uuid.UUID) error
 
 	// CredentialGrant.
