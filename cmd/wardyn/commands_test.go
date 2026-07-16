@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -92,6 +93,36 @@ func execCmd(t *testing.T, args ...string) error {
 // --------------------------------------------------------------------------
 // run command
 // --------------------------------------------------------------------------
+
+// TestRunCmd_JSONOutput asserts `wardyn run --json` emits a machine-readable run
+// object (so CI reads .ID instead of scraping human text — finding U032).
+func TestRunCmd_JSONOutput(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
+		ID: id, State: types.RunPending, ConfinementClass: types.CC2,
+	})
+
+	orig := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--json")
+	w.Close()
+	os.Stdout = orig
+	if err != nil {
+		t.Fatalf("run --json returned error: %v", err)
+	}
+	out, _ := io.ReadAll(r)
+	var got types.AgentRun
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("run --json did not emit valid JSON: %v\noutput: %q", err, out)
+	}
+	if got.ID != id {
+		t.Errorf("run --json ID = %v, want %v", got.ID, id)
+	}
+	if strings.Contains(string(out), "created run ") {
+		t.Errorf("run --json leaked human output: %q", out)
+	}
+}
 
 func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
