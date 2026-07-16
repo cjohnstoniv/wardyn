@@ -517,15 +517,24 @@ type gitPATScope struct {
 	Username   string `json:"username"`
 }
 
-// reservedBrokerSecretNames mirrors internal/api.reservedSecretNames at the
-// broker SINK: platform-internal keys that must never be resolved into a
-// credential VALUE. Returning wardyn-signing-key / wardyn-session-key as a git
-// password would let a policy exfiltrate the identity-signing or session-HMAC
-// key. The broker cannot import the api package, so this small list is kept in
-// sync by hand; the policy validator rejects these earlier at write time.
+// reservedBrokerSecretNames mirrors internal/api.sinkReservedSecret at the broker
+// SINK: names that must never be resolved into a credential VALUE. Returning
+// wardyn-signing-key / wardyn-session-key as a git password would let a policy
+// exfiltrate the identity-signing or session-HMAC key. The three resident AWS
+// Bedrock SigV4 credentials (aws-access-key-id / aws-secret-access-key /
+// aws-session-token) are here for the same reason: resolveBedrockAuth reads them
+// DIRECTLY to sign requests, never via a grant, so a git_pat/ssh_key grant naming
+// one is only an exfil attempt. bedrock-api-key is intentionally ABSENT — the
+// Bedrock BEARER path authors a host-pinned api_key grant that legitimately
+// resolves it, and api_key values never leave the broker anyway (resolved at the
+// injection sink, not here). The broker cannot import the api package, so this
+// list is kept in sync by hand; the policy validator rejects these at write time.
 var reservedBrokerSecretNames = map[string]bool{
-	"wardyn-signing-key": true,
-	"wardyn-session-key": true,
+	"wardyn-signing-key":    true,
+	"wardyn-session-key":    true,
+	"aws-access-key-id":     true,
+	"aws-secret-access-key": true,
+	"aws-session-token":     true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the

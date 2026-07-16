@@ -122,7 +122,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 				// fail closed rather than silently skipping it.
 				return http.StatusUnprocessableEntity, fmt.Errorf("api_key grant scope invalid: %w", derr)
 			}
-			if reservedSecret(rule.SecretName) {
+			if sinkReservedSecret(rule.SecretName) {
 				return http.StatusUnprocessableEntity, fmt.Errorf(
 					"api_key grant references reserved secret name %q", rule.SecretName)
 			}
@@ -152,7 +152,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 			if derr != nil {
 				return http.StatusUnprocessableEntity, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
-			if reservedSecret(secretName) {
+			if sinkReservedSecret(secretName) {
 				return http.StatusUnprocessableEntity, fmt.Errorf(
 					"git_pat grant references reserved secret name %q", secretName)
 			}
@@ -162,7 +162,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 			if derr != nil {
 				return http.StatusUnprocessableEntity, fmt.Errorf("ssh_key grant scope invalid: %w", derr)
 			}
-			if reservedSecret(keyRef) || reservedSecret(khRef) {
+			if sinkReservedSecret(keyRef) || sinkReservedSecret(khRef) {
 				return http.StatusUnprocessableEntity, errors.New(
 					"ssh_key grant references a reserved secret name")
 			}
