@@ -209,6 +209,24 @@ func run() error {
 		if listenIsRoutablePublic(*listen) {
 			return fmt.Errorf("refusing to start: -local-mode bypasses authentication but the listen address %q is a publicly-routable IP; bind to loopback (127.0.0.1) or a private address, or configure auth (WARDYN_ADMIN_TOKEN / OIDC)", *listen)
 		}
+		// -local-trust-forwarder DISABLES the unspoofable loopback-PEER gate (it
+		// trusts a loopback-only host publish so the peer is always the docker
+		// gateway). That holds ONLY on a loopback bind or the compose
+		// 0.0.0.0-in-container topology whose host publishes 127.0.0.1:PORT. On a
+		// SPECIFIC non-loopback interface (private/RFC1918, link-local, or public)
+		// it re-opens UNAUTHENTICATED LAN admin access, so refuse to start. The
+		// unspecified all-interfaces bind is indistinguishable from the safe
+		// compose case from inside the container (wardynd cannot see the host's
+		// docker publish), so it earns a DISTINCT error-level log naming the exact
+		// requirement rather than a refusal.
+		if *localTrustFwd {
+			if listenBindsSpecificRoutable(*listen) {
+				return fmt.Errorf("refusing to start: -local-trust-forwarder disables the loopback-peer gate but the listen address %q binds a specific non-loopback interface — this re-opens UNAUTHENTICATED LAN admin access; use it ONLY when the port is published loopback-only (127.0.0.1:PORT), i.e. bind loopback here or an unspecified address inside a compose container", *listen)
+			}
+			if !loopbackBind {
+				log.Printf("wardynd: ERROR -local-trust-forwarder on unspecified bind %s DISABLES the loopback-peer gate — the UNAUTHENTICATED public API is exposed to the LAN unless the host publishes 127.0.0.1:PORT ONLY (the Compose default). Verify your docker publish / host firewall.", *listen)
+			}
+		}
 		if localOp == "" {
 			localOp = defaultLocalOperator()
 		}
@@ -1012,6 +1030,28 @@ func listenIsRoutablePublic(listen string) bool {
 		return false
 	}
 	return ip.IsGlobalUnicast()
+}
+
+// listenBindsSpecificRoutable reports whether the listen address binds a
+// SPECIFIC non-loopback interface — a private/RFC1918, link-local, or public IP
+// a LAN peer can reach directly. It EXCLUDES loopback (peers are already local)
+// and the unspecified all-interfaces bind (0.0.0.0/[::]), which from inside a
+// container is indistinguishable from the safe compose 127.0.0.1-publish
+// topology. It is the fail-closed gate for -local-trust-forwarder, which
+// disables the loopback-PEER check and is therefore safe ONLY on a loopback or
+// unspecified/compose bind. Unlike listenIsRoutablePublic this DELIBERATELY
+// catches private and link-local too: with the peer gate disabled, those are
+// LAN-reachable no-auth surfaces as well.
+func listenBindsSpecificRoutable(listen string) bool {
+	host := listenHost(listen)
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // a hostname we can't classify — don't refuse
+	}
+	return !ip.IsLoopback() && !ip.IsUnspecified()
 }
 
 func marshalECPrivateKeyPEM(key *ecdsa.PrivateKey) ([]byte, error) {
