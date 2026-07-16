@@ -96,6 +96,14 @@ export function hasLlmPath(status: SetupStatus): boolean {
   // Counting it would render "LLM ✓ / Composer backend ready" for the default
   // `make setup` demo config, which has no model behind it.
   if (status.composer.backends.some((b) => b.key_resolved && b.wire !== "fake")) return true;
+  // AWS Bedrock is a first-class model path (bearer / access-key / ~/.aws mount).
+  // Mirror llm-access.tsx's bedrockReady so the funnel-wide readiness AGREES with
+  // the model step — previously a Bedrock-ready host showed "Connected" on the
+  // model step while the whole funnel read "Needs setup" (split-brain).
+  const b = status.bedrock;
+  if (b && (b.ready ?? (!!b.region && !!b.model && (b.creds_present || !!b.aws_mount || !!b.bearer_present)))) {
+    return true;
+  }
   return false;
 }
 
