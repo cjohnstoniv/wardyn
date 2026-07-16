@@ -604,7 +604,7 @@ export const api = {
   async killRun(id: string): Promise<void> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}/kill`, { method: "POST" });
     if (!res.ok) {
-      throw new HttpError(res.status, `HTTP ${res.status}: failed to kill run`);
+      throw new HttpError(res.status, await errText(res));
     }
   },
 
@@ -692,7 +692,7 @@ export const api = {
   async deletePolicy(id: string): Promise<void> {
     const res = await wfetch(`/policies/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!res.ok && res.status !== 404) {
-      throw new HttpError(res.status, `HTTP ${res.status}: failed to delete policy`);
+      throw new HttpError(res.status, await errText(res));
     }
   },
 
@@ -712,14 +712,7 @@ export const api = {
       body: JSON.stringify({ value }),
     });
     if (!res.ok) {
-      let detail = res.statusText;
-      try {
-        const body = await res.text();
-        if (body) detail = body;
-      } catch {
-        /* ignore */
-      }
-      throw new HttpError(res.status, `HTTP ${res.status}: ${detail}`);
+      throw new HttpError(res.status, await errText(res));
     }
   },
 
@@ -727,7 +720,7 @@ export const api = {
   async deleteSecret(name: string): Promise<void> {
     const res = await wfetch(`/secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
     if (!res.ok && res.status !== 404) {
-      throw new HttpError(res.status, `HTTP ${res.status}: failed to delete secret`);
+      throw new HttpError(res.status, await errText(res));
     }
   },
 
@@ -926,7 +919,7 @@ export const api = {
   async deleteWorkspace(id: string): Promise<void> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!res.ok && res.status !== 404) {
-      throw new HttpError(res.status, `HTTP ${res.status}: failed to delete workspace`);
+      throw new HttpError(res.status, await errText(res));
     }
   },
 

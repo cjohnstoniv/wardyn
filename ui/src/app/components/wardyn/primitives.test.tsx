@@ -114,4 +114,11 @@ describe("ConfinementChip tooltip honesty", () => {
       expect(title).not.toMatch(/permissive sandbox/i);
     }
   });
+
+  it("exposes the tooltip to assistive tech as sr-only text, not just the title attr (U116)", () => {
+    const { container } = render(<ConfinementChip value="CC1" />);
+    const title = container.querySelector("[title]")?.getAttribute("title") ?? "";
+    expect(title).not.toBe("");
+    expect(screen.getByText(title)).toBeInTheDocument();
+  });
 });
