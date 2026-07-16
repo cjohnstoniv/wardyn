@@ -617,10 +617,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// running impl; recommended_production may differ (honest advertisement).
 		"components": s.cfg.Components,
 		// ebpf_groundtruth is the honest health of the SECOND audit stream. It
-		// is driven by the most recent kernel.sensor.heartbeat: healthy only
-		// while beats arrive within the TTL, degraded if stale, unavailable if
-		// no sensor has ever beaten. The overclaim ("we have eBPF ground truth")
-		// is structurally impossible — the state reflects real arriving events.
+		// is driven by the most recent kernel.sensor.heartbeat: healthy only when
+		// beats are fresh AND real kernel events have been observed, idle when the
+		// sidecar is alive but blind (no events), degraded if the beat is stale,
+		// unavailable if no sensor has ever beaten. The overclaim ("we have eBPF
+		// ground truth") is structurally impossible — healthy reflects real events.
 		"ebpf_groundtruth": s.ebpfGroundtruthStatus(r.Context()),
 		// llm_egress_inspection advertises that the OPTIONAL outbound content-
 		// inspection capability is built in. Whether a given run actually scans
@@ -635,13 +636,18 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 // from the latest kernel.sensor.heartbeat:
 //
 //	unavailable — no heartbeat ever (no sensor configured on this host)
-//	degraded    — last heartbeat older than ebpfHeartbeatTTL (sensor stalled)
-//	healthy     — last heartbeat within ebpfHeartbeatTTL (events arriving)
+//	degraded    — last heartbeat older than ebpfHeartbeatTTL (sensor stalled/dead)
+//	idle        — heartbeat fresh but observed_total==0: the sidecar process is
+//	              alive and reachable, yet has mapped ZERO kernel events (sensor
+//	              blind, or the run is genuinely quiet) — NOT proof of ground truth
+//	healthy     — heartbeat fresh AND real kernel events observed (ground truth flowing)
 //
-// last_heartbeat is the RFC3339 time of the most recent beat (omitted if none).
-// dropped_total is the sensor-reported backpressure-drop count carried on the
-// heartbeat's data (0 when absent). When no Pool is wired (tests), reports
-// unavailable.
+// A live heartbeat alone only proves the sidecar PROCESS is alive; "healthy"
+// additionally requires observed kernel events, so the "we have eBPF ground
+// truth" overclaim is structurally impossible. last_heartbeat is the RFC3339
+// time of the most recent beat (omitted if none). dropped_total/observed_total
+// are the sensor-reported counts carried on the heartbeat's data (0 when
+// absent). When no Store is wired (tests), reports unavailable.
 func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	out := map[string]any{"state": "unavailable", "dropped_total": uint64(0)}
 	if s.cfg.Store == nil {
@@ -653,20 +659,32 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		return out
 	}
 	out["last_heartbeat"] = ev.Time.UTC().Format(rfc3339)
-	if s.cfg.Now().Sub(ev.Time) <= ebpfHeartbeatTTL {
-		out["state"] = "healthy"
-	} else {
-		out["state"] = "degraded"
-	}
-	// dropped_total is published by the sensor on the heartbeat data when
-	// available; tolerate its absence.
+	// dropped_total and observed_total are published by the sensor on the
+	// heartbeat data when available; tolerate their absence.
 	var hb struct {
-		DroppedTotal uint64 `json:"dropped_total"`
+		DroppedTotal  uint64 `json:"dropped_total"`
+		ObservedTotal uint64 `json:"observed_total"`
 	}
 	if len(ev.Data) > 0 {
 		_ = json.Unmarshal(ev.Data, &hb)
 	}
 	out["dropped_total"] = hb.DroppedTotal
+	out["observed_total"] = hb.ObservedTotal
+	switch {
+	case s.cfg.Now().Sub(ev.Time) > ebpfHeartbeatTTL:
+		// Heartbeat stale: the sensor process itself has stalled/died.
+		out["state"] = "degraded"
+	case hb.ObservedTotal == 0:
+		// Process alive and beating, but it has mapped ZERO kernel events: the
+		// sensor is blind (Tetragon dead / wrong export path / no TracingPolicy)
+		// or the run is genuinely idle. Either way there is no ground truth yet,
+		// so report "idle" with a reason rather than the "healthy" overclaim.
+		out["state"] = "idle"
+		out["reason"] = "no kernel events observed"
+	default:
+		// Beating within the TTL AND real kernel events have been observed.
+		out["state"] = "healthy"
+	}
 	return out
 }
 

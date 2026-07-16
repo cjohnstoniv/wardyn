@@ -131,3 +131,86 @@ func appendLine(t *testing.T, path, line string) {
 		t.Fatal(err)
 	}
 }
+
+// TestTailExport_ReassemblesLineSplitAcrossEOF is the red-first regression for
+// U030/U031: a Tetragon JSON line whose bytes straddle an EOF read boundary (the
+// writer flushes it in two syscalls) must be REASSEMBLED, not split into two
+// undecodable fragments that both drop. Pre-fix, ReadBytes returns the first
+// half with io.EOF, that half is processed (JSON parse fails -> dropped), and the
+// later-arriving remainder is processed as its own fragment (also dropped), so
+// the event is silently lost from the tamper-proof stream.
+func TestTailExport_ReassemblesLineSplitAcrossEOF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tetragon.log")
+
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sink := newEventSink(srv.URL, "tok", 64, 8, 20*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+	mapper := groundtruth.NewMapper(nil) // unmapped is fine; we only need ok=true
+
+	bodyContains := func(want string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, b := range bodies {
+			if strings.Contains(b, want) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tailExport(ctx, path, mapper, sink)
+
+	// Prime: land one COMPLETE line so the tailer is provably attached (its
+	// initial open seeks to END) and its read offset sits at EOF with an empty
+	// pending buffer. Retry absorbs the initial-open race.
+	const primeBin = "/usr/bin/prime-marker"
+	primeLine := `{"process_exec":{"process":{"binary":"` + primeBin + `"}}}` + "\n"
+	deadline := time.Now().Add(3 * time.Second)
+	for !bodyContains(primeBin) && time.Now().Before(deadline) {
+		appendLine(t, path, primeLine)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !bodyContains(primeBin) {
+		t.Fatal("prime event never read (tailer not attached)")
+	}
+
+	// Write ONE line in two halves straddling an EOF poll: append the first half
+	// with NO newline, wait past the 250ms EOF poll so the tailer definitely
+	// consumes it at EOF, then append the remainder + newline.
+	const stradBin = "/x-straddle-marker"
+	full := `{"process_exec":{"process":{"binary":"` + stradBin + `"}}}`
+	half := len(full) / 2
+	appendLine(t, path, full[:half])
+	time.Sleep(300 * time.Millisecond)
+	appendLine(t, path, full[half:]+"\n")
+
+	waitDeadline := time.Now().Add(3 * time.Second)
+	for !bodyContains(stradBin) && time.Now().Before(waitDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !bodyContains(stradBin) {
+		t.Fatal("straddling event dropped: a line split across an EOF boundary was not reassembled")
+	}
+}

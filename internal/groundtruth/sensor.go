@@ -14,18 +14,21 @@ import (
 // HeartbeatEventWithDropped builds the periodic sensor liveness beat. run_id is
 // NULL (the sensor is host-scoped, not per-run); actor_type=system,
 // actor=sensor. The control plane records these append-only and /healthz keys
-// the ebpf_groundtruth state off the most recent one within a TTL — so the
-// stream reports "healthy" only while beats are actually arriving. droppedTotal
-// is the sensor's cumulative backpressure-drop count, surfaced on /healthz so
-// operators see the gap size.
-func HeartbeatEventWithDropped(droppedTotal uint64) types.AuditEvent {
+// the ebpf_groundtruth state off the most recent one within a TTL. droppedTotal
+// is the sensor's cumulative backpressure-drop count and observedTotal the
+// cumulative count of real kernel events mapped off the tail; both are surfaced
+// on /healthz so it can tell "sensor alive but observing nothing" (idle) apart
+// from "events flowing" (healthy) and show the drop-gap size. A live heartbeat
+// ALONE never proves kernel ground truth is arriving.
+func HeartbeatEventWithDropped(droppedTotal, observedTotal uint64) types.AuditEvent {
 	data := heartbeatData{
 		EventData: EventData{
 			Stream:      Stream,
 			Subtype:     "heartbeat",
 			Correlation: CorrelationUnmapped, // host-scoped, not bound to a run
 		},
-		DroppedTotal: droppedTotal,
+		DroppedTotal:  droppedTotal,
+		ObservedTotal: observedTotal,
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -41,11 +44,17 @@ func HeartbeatEventWithDropped(droppedTotal uint64) types.AuditEvent {
 	}
 }
 
-// heartbeatData extends EventData with the sensor's cumulative drop count. It
-// is JSONB on audit_events.data; /healthz reads dropped_total off it.
+// heartbeatData extends EventData with the sensor's cumulative drop and observed
+// counts. It is JSONB on audit_events.data; /healthz reads dropped_total and
+// observed_total off it.
 type heartbeatData struct {
 	EventData
 	DroppedTotal uint64 `json:"dropped_total"`
+	// ObservedTotal is the cumulative count of real kernel ground-truth events
+	// the sensor has mapped off the tail (NOT heartbeats/blinds). /healthz reads
+	// it to tell "sensor alive but observing nothing" (idle) apart from "events
+	// flowing" (healthy) — a live heartbeat alone never proves ground truth.
+	ObservedTotal uint64 `json:"observed_total"`
 }
 
 // BlindEvent builds the one-time event emitted for a run the host eBPF sensor

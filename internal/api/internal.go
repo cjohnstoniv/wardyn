@@ -128,8 +128,13 @@ type groundtruthBatch struct {
 //     event server-side (the sensor can never impersonate a human or an agent
 //     run), (b) the audit-write-only token scope (aud=wardyn-groundtruth cannot
 //     mint or approve), and (c) validating any non-NULL run_id against
-//     agent_runs (a forged run_id that names no real run is rejected). The
-//     residual is published, not hidden.
+//     agent_runs: a run_id naming no real run (stale/orphaned after a DB
+//     reset/re-point or a run-row purge, or a forged id) is DOWNGRADED to
+//     unmapped — run_id cleared, data.correlation="unmapped",
+//     data.reason="run_id_not_found" — rather than rejected, so one bad
+//     correlation costs only that event's attribution, never the rest of the
+//     batch (see handleGroundtruthEvents below). The residual is published,
+//     not hidden.
 //   - Every event's action MUST carry the "kernel." prefix; anything else is
 //     rejected (the sensor cannot forge an egress./credential./identity. event).
 //   - run_id NULL is allowed (unmapped events + heartbeat + blind events).
@@ -160,7 +165,8 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// committed, so good events are never half-dropped behind a 4xx. Validation is
 	// read-only (kernel-prefix check + run_id existence), so doing it up front is
 	// cheap and side-effect-free.
-	for _, ev := range batch.Events {
+	for i := range batch.Events {
+		ev := &batch.Events[i]
 		// Enforce the kernel.* namespace (fail closed): the host sensor may only
 		// write kernel-prefixed events. This prevents a compromised sensor from
 		// forging egress./credential./identity./policy. events.
@@ -169,16 +175,23 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		// Validate a non-NULL run_id against agent_runs. NULL is allowed for
-		// unmapped events, the sensor heartbeat, and blind events. A forged
-		// run_id that names no real run is rejected (fail closed).
+		// unmapped events, the sensor heartbeat, and blind events. A run_id
+		// that names no real run (stale/orphaned after a DB reset/re-point or
+		// a run-row purge, or a forged id) is DOWNGRADED to unmapped rather
+		// than rejecting the whole batch: this stream's own rule is that
+		// blindness must stay visible, never that a good event gets dropped
+		// behind someone else's bad one. One stale correlation now costs only
+		// that event's attribution instead of every co-batched event (and any
+		// heartbeat) behind it. Only a genuine store failure stays a hard
+		// error (fail closed).
 		if ev.RunID != nil {
 			if _, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID); err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					writeError(w, http.StatusBadRequest, "run_id does not exist")
+				if !errors.Is(err, store.ErrNotFound) {
+					writeError(w, http.StatusInternalServerError, "validate run_id: "+err.Error())
 					return
 				}
-				writeError(w, http.StatusInternalServerError, "validate run_id: "+err.Error())
-				return
+				ev.RunID = nil
+				ev.Data = downgradeToUnmapped(ev.Data, "run_id_not_found")
 			}
 		}
 	}
@@ -217,6 +230,24 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		accepted++
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": accepted})
+}
+
+// downgradeToUnmapped marks a kernel event's data unmapped with reason,
+// preserving every other field the sensor already set (subtype, cgroup_id,
+// container_id, argv/dst/path, loader, ...). Used when a sensor-supplied
+// run_id fails validation (see the Phase 1 loop above): the event is still
+// recorded — blindness must stay visible, per this stream's own rule —
+// just without the stale/forged run attribution.
+func downgradeToUnmapped(data json.RawMessage, reason string) json.RawMessage {
+	var ed groundtruth.EventData
+	_ = json.Unmarshal(data, &ed) // best-effort; missing/invalid data still gets marked
+	ed.Correlation = groundtruth.CorrelationUnmapped
+	ed.Reason = reason
+	out, err := json.Marshal(ed)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 // recordGroundtruthAudit records a ground-truth event and RETURNS the Recorder

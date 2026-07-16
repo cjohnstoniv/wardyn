@@ -91,7 +91,7 @@ type TetragonSockArg struct {
 type TetragonProcess struct {
 	Binary    string `json:"binary,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	CgroupID  uint64 `json:"cgroup_id,omitempty"`
+	CgroupID  uint64 `json:"cgroup_id,string,omitempty"`
 	Docker    string `json:"docker,omitempty"` // container id (truncated)
 }
 

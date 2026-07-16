@@ -118,7 +118,9 @@ func run() error {
 		// the current cumulative drop count so /healthz can surface the gap
 		// size. Runs in its own goroutine so this initial beat never blocks
 		// startup on a control-plane POST.
-		beat := func() { sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount())) }
+		beat := func() {
+			sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount(), sink.observedCount()))
+		}
 		beat()
 		every(ctx, heartbeatIval, beat)
 	}()
@@ -146,6 +148,13 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 	var (
 		f      *os.File
 		reader *bufio.Reader
+		// pending holds the bytes of a line not yet '\n'-terminated. ReadBytes
+		// returns a partial line together with io.EOF when the writer has not
+		// finished it; those bytes are already consumed from the bufio buffer, so
+		// we accumulate them here and only map once a real newline arrives —
+		// otherwise a line straddling an EOF boundary is split into two dropped
+		// fragments (silent ground-truth loss on the tamper-proof stream).
+		pending []byte
 		// rotationPending is set when a rotation was detected but the new file
 		// was not yet visible to reopen: the NEXT successful open must then seek
 		// to START (the post-rotation file is entirely unread), closing the race
@@ -196,9 +205,20 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 			}
 			rotationPending = false
 		}
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			processLine(line, mapper, sink)
+		chunk, err := reader.ReadBytes('\n')
+		// Reassemble lines that straddle an EOF read boundary. ReadBytes returns a
+		// NON-newline-terminated partial together with io.EOF when the writer has
+		// not finished the line; those bytes are already consumed from the bufio
+		// buffer and can't be re-read. Processing the partial (it fails JSON parse
+		// -> dropped) and later processing its remainder as a second fragment
+		// silently splits and loses one kernel event on the tamper-proof stream.
+		// Hold the bytes in pending; only map once ReadBytes signals a real
+		// '\n'-terminated record (err == nil).
+		pending = append(pending, chunk...)
+		if err == nil {
+			processLine(pending, mapper, sink)
+			pending = pending[:0]
+			continue
 		}
 		if err == io.EOF {
 			// Detect rotation/truncation: if the file shrank, reopen at the
@@ -207,6 +227,8 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 			// the f==nil retry path also seeks to START once it appears (no head
 			// drop), rather than falling back to SeekEnd.
 			if rotated(f, path) {
+				// The pending partial belongs to the old inode — genuinely gone.
+				pending = pending[:0]
 				_ = f.Close()
 				if !openFile(false) {
 					f = nil
@@ -219,13 +241,17 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 				}
 				continue
 			}
+			// Not rotated: keep pending across the sleep. The writer finishes the
+			// line and the next ReadBytes returns its remainder to append.
 			if sleepCtx(ctx, 250*time.Millisecond) {
 				return
 			}
 			continue
 		}
 		if err != nil {
-			// Read error: reopen on next loop.
+			// Read error: the handle and any partial are suspect. Discard pending
+			// and reopen on next loop.
+			pending = pending[:0]
 			_ = f.Close()
 			f = nil
 			if sleepCtx(ctx, time.Second) {
@@ -247,6 +273,10 @@ func processLine(line []byte, mapper *groundtruth.Mapper, sink *eventSink) {
 		// Unrecorded kind or filtered (non-sensitive) write: not an error.
 		return
 	}
+	// Count real kernel ground-truth mapped off the tail. /healthz keys the
+	// ebpf_groundtruth state off this (carried on the heartbeat): a live
+	// heartbeat with observed==0 means the sensor is blind, not healthy.
+	sink.markObserved()
 	sink.emit(ev)
 }
 

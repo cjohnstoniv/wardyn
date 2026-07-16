@@ -54,6 +54,7 @@ type eventSink struct {
 	ch        chan types.AuditEvent
 	dropped   atomic.Uint64
 	posted    atomic.Uint64
+	observed  atomic.Uint64
 	batchSize int
 	flushIval time.Duration
 
@@ -277,6 +278,17 @@ func (s *eventSink) doPost(body []byte, token string) int {
 
 func (s *eventSink) droppedCount() uint64 { return s.dropped.Load() }
 func (s *eventSink) postedCount() uint64  { return s.posted.Load() }
+
+// observedCount is the cumulative number of real kernel ground-truth events
+// mapped off the tail (exec/connect/sensitive-write) — NOT heartbeats or blind
+// events. It is the honest "are we actually seeing kernel events" signal
+// /healthz keys off (carried on the heartbeat): a sensor whose heartbeat is
+// alive but observed==0 is blind (Tetragon dead / wrong export path / no
+// TracingPolicy) or the run is idle — either way NOT "healthy".
+func (s *eventSink) observedCount() uint64 { return s.observed.Load() }
+
+// markObserved records that one real kernel event was mapped off the tail.
+func (s *eventSink) markObserved() { s.observed.Add(1) }
 
 // close drains and stops the sink, blocking until the worker exits or ctx done.
 func (s *eventSink) close(ctx context.Context) {
