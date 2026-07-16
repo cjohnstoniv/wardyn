@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -527,6 +528,18 @@ var reservedBrokerSecretNames = map[string]bool{
 	"wardyn-session-key": true,
 }
 
+// reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
+// static keys above PLUS the managed-harness OAuth-blob pattern
+// (wardyn-harness-<provider>-oauth). The static map alone missed the pattern, so
+// a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
+// secret and have the broker resolve the resident OAuth token into the sandbox.
+func reservedBrokerSecret(name string) bool {
+	if reservedBrokerSecretNames[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
+}
+
 // mintGitPAT resolves a stored Personal Access Token and returns its VALUE to
 // the git credential helper as username/password for a matched non-GitHub host.
 //
@@ -550,7 +563,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, spec types.GrantSpec) (Minted, 
 	if sc.Host == "" || sc.SecretName == "" {
 		return Minted{}, errors.New("broker: git_pat scope requires host and secret_name")
 	}
-	if reservedBrokerSecretNames[sc.SecretName] {
+	if reservedBrokerSecret(sc.SecretName) {
 		return Minted{}, fmt.Errorf("broker: git_pat secret name %q is reserved for platform internals", sc.SecretName)
 	}
 	if b.secrets == nil {
@@ -605,7 +618,7 @@ func (b *Broker) mintSSHKey(ctx context.Context, spec types.GrantSpec) (Minted, 
 	if sc.Host == "" || sc.KeySecretRef == "" {
 		return Minted{}, errors.New("broker: ssh_key scope requires host and key_secret_ref")
 	}
-	if reservedBrokerSecretNames[sc.KeySecretRef] || reservedBrokerSecretNames[sc.KnownHostsSecretRef] {
+	if reservedBrokerSecret(sc.KeySecretRef) || reservedBrokerSecret(sc.KnownHostsSecretRef) {
 		return Minted{}, fmt.Errorf("broker: ssh_key secret name is reserved for platform internals")
 	}
 	if b.secrets == nil {

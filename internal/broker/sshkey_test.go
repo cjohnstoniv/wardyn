@@ -93,6 +93,8 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 	secrets := newMemSecrets()
 	secrets.m["real-key"] = []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----\n")
 	secrets.m["wardyn-signing-key"] = []byte("super-secret-signing-key")
+	// Seeded so the reserved-name check (not missing-secret) is what fails closed.
+	secrets.m["wardyn-harness-anthropic-oauth"] = []byte("resident-oauth-blob")
 
 	cases := []struct {
 		name string
@@ -103,6 +105,7 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 		{"empty-key-ref", types.GrantSpec{Kind: types.GrantSSHKey, Scope: json.RawMessage(`{"host":"github.com"}`)}},
 		{"reserved-key-secret", sshKeySpec("github.com", "wardyn-signing-key", "", "")},
 		{"reserved-known-hosts", sshKeySpec("github.com", "real-key", "", "wardyn-signing-key")},
+		{"reserved-harness-oauth-key", sshKeySpec("github.com", "wardyn-harness-anthropic-oauth", "", "")},
 		{"missing-known-hosts", sshKeySpec("github.com", "real-key", "", "no-such-known-hosts")},
 	}
 	for _, c := range cases {
