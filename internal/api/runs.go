@@ -493,7 +493,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		if berr != nil {
 			// CAS from PENDING so a run a concurrent kill already moved to KILLED
 			// is not silently clobbered back to FAILED (was: unconditional write).
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed)
+			s.failAndRevoke(ctx, runID, types.RunPending)
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"byoi_base": req.Image, "error": berr.Error(),
@@ -513,7 +513,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		if berr != nil {
 			// CAS from PENDING so a run a concurrent kill already moved to KILLED
 			// is not silently clobbered back to FAILED (was: unconditional write).
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed)
+			s.failAndRevoke(ctx, runID, types.RunPending)
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error(),
@@ -930,7 +930,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		if caErr != nil {
 			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 			// KILLED state is preserved rather than clobbered back to FAILED.
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
+			s.failAndRevoke(ctx, run.ID, types.RunStarting)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": "mitm ca: " + caErr.Error()})))
 			return
@@ -997,7 +997,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		}); gerr != nil {
 			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 			// KILLED state is preserved rather than clobbered back to FAILED.
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
+			s.failAndRevoke(ctx, run.ID, types.RunStarting)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
 			return
@@ -1036,7 +1036,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		}); gerr != nil {
 			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 			// KILLED state is preserved rather than clobbered back to FAILED.
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
+			s.failAndRevoke(ctx, run.ID, types.RunStarting)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": "bedrock bearer inject grant: " + gerr.Error()})))
 			return
@@ -1064,7 +1064,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		li.Mode != "" && !strings.EqualFold(li.Mode, "off") &&
 		((subscription && !li.InterceptTLS && !injectSub) || (bedrockReady && !bedrock.bearer)) {
 		// CAS from STARTING so a concurrent kill's KILLED is not clobbered to FAILED.
-		_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport"})))
 		return
@@ -1191,7 +1191,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that
 		// terminal state (mirrors the STARTING->RUNNING guard below).
-		_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
@@ -1257,7 +1257,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// BYOI: gate the task exec on a passing selftest (fail closed).
 		if byoi && !s.byoiSelftest(ctx, run, sb.Ref, true /* fail-closed */) {
 			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunRunning, types.RunFailed)
+			s.failAndRevoke(ctx, run.ID, types.RunRunning)
 			return
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
@@ -1268,7 +1268,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.
-			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunRunning, types.RunFailed)
+			s.failAndRevoke(ctx, run.ID, types.RunRunning)
 			return
 		}
 		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
@@ -1514,6 +1514,20 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
+// failAndRevoke transitions a run from `from` to FAILED and, if that CAS won, runs
+// the credential revoke cascade — so a run that dies on ANY create/dispatch failure
+// path has its minted identity + broker credentials revoked, not merely its state
+// flipped. Every terminal transition must revoke (the documented cascade-on-every-
+// stop promise); previously only the completion watcher, kill, and reconciler did,
+// leaving the create/dispatch FAILED paths leaking a live run token + broker creds
+// (C003). Revoke runs only when THIS transition won, so a concurrent kill that
+// already moved the run is not double-handled.
+func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState) {
+	if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, types.RunFailed); applied {
+		s.revokeRunCascade(ctx, runID)
+	}
+}
+
 // handleKillRun is the kill-switch: it cascades in a FIXED order — runner
 // teardown, identity revocation, broker credential revocation, state KILLED —
 // then audits run.kill. The order matters: tear the sandbox down first so it
@@ -1562,41 +1576,47 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	killData := map[string]any{}
-
-	// (1) Runner teardown (immediate). Idempotent on a gone sandbox.
-	if s.cfg.Runner != nil && run.SandboxRef != "" {
-		if kerr := s.cfg.Runner.KillSandbox(cascadeCtx, run.SandboxRef); kerr != nil {
-			killData["runner_error"] = kerr.Error()
-		}
-	}
-	// (2) Identity revocation: deny every (current+future) token for the run. A
-	// bounded retry guards against a transient store error leaving the run's
-	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
-	if rerr := retryQuick(cascadeCtx, func() error { return s.cfg.Identity.RevokeRun(cascadeCtx, id) }); rerr != nil {
-		killData["identity_error"] = rerr.Error()
-	}
-	// (3) Broker credential revocation (best-effort; audits per minted jti).
-	if s.cfg.Broker != nil {
-		if berr := retryQuick(cascadeCtx, func() error { return s.cfg.Broker.RevokeRun(cascadeCtx, id) }); berr != nil {
-			killData["broker_error"] = berr.Error()
-		}
-	}
-	// (4) Durable state. Conditional from the (non-terminal) state we read so a
-	// terminal transition that raced in between us reading and writing (e.g. the
-	// completion watcher winning RUNNING->COMPLETED) is not clobbered.
+	// (1) WIN THE TERMINAL TRANSITION FIRST (C002). Revoking before this CAS meant a
+	// kill that then LOST the CAS to a concurrent dispatch forward-transition
+	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
+	// RUNNING run with dead creds behind a silent 409. Own the KILLED transition
+	// first; only then tear down + revoke what is now unambiguously ours. Conditional
+	// from the (non-terminal) state we read, so a completion watcher winning
+	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
+	// CASes KILLED->KILLED (applied), re-running the idempotent teardown (U040).
 	applied, serr := s.cfg.Store.UpdateRunStateIf(cascadeCtx, id, run.State, types.RunKilled)
 	if serr != nil {
 		writeError(w, http.StatusInternalServerError, "update run state: "+serr.Error())
 		return
 	}
 	if !applied {
-		// The run moved to another state between our read and our write (a
-		// concurrent terminal transition). Do not emit a bogus run.kill; report
-		// the conflict. The teardown/revocation above are idempotent.
+		// The run moved to another state between our read and our write (a concurrent
+		// terminal transition, or a dispatch forward-transition). Report the conflict
+		// WITHOUT revoking — the run legitimately advanced, and a losing kill must not
+		// strip a still-live run's credentials.
 		writeError(w, http.StatusConflict,
 			"run state changed concurrently; not overwriting with KILLED")
 		return
+	}
+
+	killData := map[string]any{}
+	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
+	if s.cfg.Runner != nil && run.SandboxRef != "" {
+		if kerr := s.cfg.Runner.KillSandbox(cascadeCtx, run.SandboxRef); kerr != nil {
+			killData["runner_error"] = kerr.Error()
+		}
+	}
+	// (3) Identity revocation: deny every (current+future) token for the run. A
+	// bounded retry guards against a transient store error leaving the run's
+	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
+	if rerr := retryQuick(cascadeCtx, func() error { return s.cfg.Identity.RevokeRun(cascadeCtx, id) }); rerr != nil {
+		killData["identity_error"] = rerr.Error()
+	}
+	// (4) Broker credential revocation (best-effort; audits per minted jti).
+	if s.cfg.Broker != nil {
+		if berr := retryQuick(cascadeCtx, func() error { return s.cfg.Broker.RevokeRun(cascadeCtx, id) }); berr != nil {
+			killData["broker_error"] = berr.Error()
+		}
 	}
 
 	// HONEST OUTCOME (C2): the kill-switch is the central governance control and
