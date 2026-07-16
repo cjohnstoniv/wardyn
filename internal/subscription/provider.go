@@ -118,7 +118,7 @@ func (p *provider) Current(ctx context.Context) (Token, error) {
 
 	// Near/at expiry (or unreadable): delegate the refresh to the resident
 	// claude, which rotates + writes back the token, then re-read.
-	if rerr := p.delegateRefresh(ctx); rerr != nil {
+	if rerr := p.delegateRefresh(); rerr != nil {
 		if err != nil {
 			return Token{}, fmt.Errorf("subscription token unavailable and refresh failed: read: %v; refresh: %w", err, rerr)
 		}
@@ -169,8 +169,15 @@ func (p *provider) read() (Token, error) {
 // authenticated request, which refreshes + rotates the resident token as a side
 // effect (claude owns the write-back). ANTHROPIC_API_KEY is scrubbed so claude
 // uses the subscription session, never an API key.
-func (p *provider) delegateRefresh(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, p.refreshTO)
+func (p *provider) delegateRefresh() error {
+	// Bind the refresh subprocess to a FRESH background context, NOT the caller's
+	// request ctx. The caller here is the /internal/injection HTTP handler, whose
+	// client (wardyn-proxy) times out at seconds; deriving the subprocess deadline
+	// from that request ctx meant a client give-up SIGKILLed `claude` mid
+	// credential-write (corrupting the resident token) and made the full
+	// refreshTO budget unreachable. Detached, the refresh runs to completion up to
+	// refreshTO regardless of whether the original caller is still waiting.
+	ctx, cancel := context.WithTimeout(context.Background(), p.refreshTO)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p.claudeBin, //nolint:gosec // operator-configured CLI path
 		"-p", "ok", "--permission-mode", "plan", "--max-turns", "1", "--output-format", "json")
