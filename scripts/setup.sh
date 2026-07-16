@@ -379,9 +379,10 @@ if [ ! -x ./bin/wardynd ] || [ ! -f ./ui/dist/index.html ]; then
     GOTOOLCHAIN=local go build -tags docker -o bin/wardynd ./cmd/wardynd
     GOTOOLCHAIN=local go build -o bin/wardyn ./cmd/wardyn
   fi
-  # `pnpm install` first (a fresh clone has no node_modules; behind a corp
-  # registry it also picks up ui/.npmrc) — matches the `make ui` target.
-  ( cd ui && pnpm install && pnpm build )
+  # `pnpm install --frozen-lockfile` first (a fresh clone has no node_modules;
+  # behind a corp registry it also picks up ui/.npmrc) — reproducible, and matches
+  # the `make ui` target + the sibling install sites.
+  ( cd ui && pnpm install --frozen-lockfile && pnpm build )
   ok "built"
 fi
 

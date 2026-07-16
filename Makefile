@@ -184,7 +184,7 @@ lint:
 
 ui:
 	@echo "Building embedded web UI..."
-	cd ui && pnpm install && pnpm build
+	cd ui && pnpm install --frozen-lockfile && pnpm build
 
 ui-typecheck:
 	@echo "Typechecking web UI (tsc --noEmit)..."
