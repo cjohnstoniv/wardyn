@@ -25,8 +25,10 @@
   --popover: #ffffff;
   --popover-foreground: #171717;
 
-  /* brand / accent — teal primary (distinct from success emerald) */
-  --primary: #0d9488;
+  /* brand / accent — teal primary (distinct from success emerald).
+     teal-700 not teal-500: white-on-primary needs WCAG AA 4.5:1 for button text
+     (#0d9488 was 3.74:1); #0f766e is 5.47:1 (C004). Dark theme keeps its lighter teal. */
+  --primary: #0f766e;
   --primary-foreground: #ffffff;
   --secondary: #f4f4f5;
   --secondary-foreground: #171717;
@@ -35,12 +37,16 @@
   --accent: #f4f4f5;
   --accent-foreground: #171717;
 
-  /* semantic */
-  --success: #10b981;
+  /* semantic — the -subtle tokens are light background tints; the base tokens are
+     used as TEXT/dot colors on light backgrounds, so they must clear WCAG AA 4.5:1
+     on white AND on their own -subtle tint. The teal-500-family values failed badly
+     (success 2.25:1, warning 1.94:1, danger 3.18:1 on -subtle); darkened to the
+     700/800 family (C004). Dark theme keeps the brighter values (they pass at 6-8:1). */
+  --success: #047857;
   --success-subtle: rgba(16, 185, 129, 0.13);
-  --warning: #f59e0b;
+  --warning: #92400e;
   --warning-subtle: rgba(245, 158, 11, 0.13);
-  --danger: #ef4444;
+  --danger: #b91c1c;
   --danger-foreground: #ffffff;
   --danger-subtle: rgba(239, 68, 68, 0.13);
   --info: #3b82f6;
