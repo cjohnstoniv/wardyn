@@ -327,7 +327,7 @@ describe("ImportWorkspaceDialog — finalize", () => {
 });
 
 describe("ImportWorkspaceDialog — Record step nav (Configure → Record → Verify)", () => {
-  it("steps Configure → Record, then Continue to Verify lands on the Verify pane", async () => {
+  it("steps Configure → Record, then Continue to Verify with zero recordings falls back to the automated Verify pane (U035)", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
     render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -340,20 +340,31 @@ describe("ImportWorkspaceDialog — Record step nav (Configure → Record → Ve
     expect(await screen.findByText(/record sessions/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /continue to verify/i }));
-    // Verify replays a RECORDING confined — with none recorded yet, it points back
-    // to Record (no free-text session naming here).
-    expect(await screen.findByTestId("verify-no-recordings")).toBeInTheDocument();
+    // No open recordings to replay confined -> falls back to the automated
+    // setup-command VerifyPane instead of RecordPane's "no recordings" dead end.
+    expect(await screen.findByRole("button", { name: /verify environment/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("verify-no-recordings")).not.toBeInTheDocument();
   });
 
-  it("Skip recording also lands on Verify (recording is never required)", async () => {
+  // U035 regression: "Skip recording" used to strand the operator at RecordPane's
+  // confined dead end (no recordings to replay), contradicting STEP_BLURB.record's
+  // "Verify still proves it either way" — the automated verifyWorkspace path must
+  // be reachable instead.
+  it("Skip recording lands on the automated Verify pane, not a dead end (U035)", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
+    verifyWorkspaceMock.mockResolvedValue({ ok: true });
     render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await screen.findByText(/secrets are brokered/i);
     await user.click(screen.getByRole("button", { name: /next: record/i }));
     await user.click(await screen.findByRole("button", { name: /skip recording/i }));
-    expect(await screen.findByTestId("verify-no-recordings")).toBeInTheDocument();
+
+    const verifyBtn = await screen.findByRole("button", { name: /verify environment/i });
+    expect(screen.queryByTestId("verify-no-recordings")).not.toBeInTheDocument();
+
+    await user.click(verifyBtn);
+    await waitFor(() => expect(verifyWorkspaceMock).toHaveBeenCalledWith("ws-1"));
   });
 });
 
