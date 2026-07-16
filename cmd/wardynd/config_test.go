@@ -324,3 +324,42 @@ func TestFlagDuration_FlagOverridesEnv(t *testing.T) {
 		t.Fatalf("explicit flag = %v, want 10s (flag must beat env)", *p)
 	}
 }
+
+// ─── -local-trust-forwarder bind cross-check (U027) ──
+
+// TestListenBindsSpecificRoutable pins the fail-closed gate for
+// -local-trust-forwarder: because that flag DISABLES the loopback-peer check,
+// wardynd must refuse to boot when it ALSO binds a specific non-loopback
+// interface (private, link-local, or public) — each is a LAN-reachable no-auth
+// admin surface. Loopback and the unspecified all-interfaces bind (the compose
+// 127.0.0.1-publish topology, which earns a loud log instead) must NOT trip it.
+// This is deliberately broader than listenIsRoutablePublic, which excludes
+// private/RFC1918 — with the peer gate disabled a private bind is precisely the
+// LAN no-auth hole this finding closes.
+func TestListenBindsSpecificRoutable(t *testing.T) {
+	tests := []struct {
+		listen string
+		want   bool
+	}{
+		// specific non-loopback → refuse (the -local-trust-forwarder hole)
+		{"203.0.113.5:8080", true},   // public v4
+		{"10.0.0.5:8080", true},      // private RFC1918 — listenIsRoutablePublic MISSES this
+		{"192.168.1.10:8080", true},  // private RFC1918
+		{"172.16.0.1:8080", true},    // private RFC1918
+		{"169.254.10.1:8080", true},  // link-local
+		{"[2001:db8::1]:8080", true}, // global-unicast v6
+		// safe binds → no refusal
+		{"127.0.0.1:8080", false},   // loopback
+		{"[::1]:8080", false},       // loopback v6
+		{"localhost:8080", false},   // loopback name
+		{":8080", false},            // unspecified — compose case (loud log, not refusal)
+		{"0.0.0.0:8080", false},     // unspecified v4
+		{"[::]:8080", false},        // unspecified v6
+		{"not-an-ip:8080", false},   // unclassifiable hostname — don't refuse
+	}
+	for _, tt := range tests {
+		if got := listenBindsSpecificRoutable(tt.listen); got != tt.want {
+			t.Errorf("listenBindsSpecificRoutable(%q) = %v, want %v", tt.listen, got, tt.want)
+		}
+	}
+}
