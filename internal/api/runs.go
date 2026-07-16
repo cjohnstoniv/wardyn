@@ -288,6 +288,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		RunnerTarget:     s.cfg.RunnerTarget,
 		Interactive:      req.Interactive,
 		WorkspacePath:    workspacePath,
+		AutoStopAfterSec: spec.AutoStopAfterSec,
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {

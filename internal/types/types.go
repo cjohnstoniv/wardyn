@@ -113,6 +113,12 @@ type AgentRun struct {
 	// agent, and the scan-result endpoint persists the derived profile onto this
 	// workspace from this TRUSTED linkage (not sandbox input). Nil for ordinary runs.
 	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty"`
+	// AutoStopAfterSec is the run's EFFECTIVE idle auto-stop cap, captured from the
+	// resolved RunPolicySpec at creation (frozen for the run's life). The idle
+	// reaper reads it from the run row so a run launched with an inline/default
+	// policy — which has no stored policy_id to JOIN — is reaped like any other.
+	// 0 = never auto-stop; <0 = explicitly never (interactive). See adapters.go.
+	AutoStopAfterSec int `json:"auto_stop_after_sec,omitempty"`
 }
 
 // RunPolicy is the declarative policy attached to runs: egress allowlist,

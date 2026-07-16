@@ -346,6 +346,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		// `verifying`). The verify binary self-bounds the actual work.
 		AutoStopAfterSec: 3600,
 	}
+	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
 	ghGrantID, sshGrants := s.wireWorkspaceSource(ctx, runID, now, &run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -495,6 +496,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if interactive {
 		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
 	}
+	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
 	ghGrantID, sshGrants := s.wireWorkspaceSource(ctx, runID, now, &run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -867,6 +869,12 @@ func (s *Server) mintedSecretNames(ctx context.Context, runID uuid.UUID, minted 
 // (run.WorkspaceID) — never from sandbox input. Mirrors handleCreateRun's
 // mint → CreateRun → dispatch flow, minus the request surface: no grants, no user
 // mounts, a minimal git-egress policy, no model call. Returns the created run.
+
+// scanIdleCapSec bounds an idle scan run: short, since wardyn-scan clones + scans
+// and uploads promptly. Written to both the run row (for the reaper) and the
+// dispatch scanPolicy so the two never drift.
+const scanIdleCapSec = 600
+
 func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Workspace) (types.AgentRun, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
@@ -917,6 +925,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		SPIFFEID:         id.SPIFFEID,
 		RunnerTarget:     s.cfg.RunnerTarget,
 		WorkspaceID:      &wsID, // marks this a scan run + the trusted linkage
+		AutoStopAfterSec: scanIdleCapSec, // reaper reads the run row (U006); == scanPolicy below
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -950,7 +959,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	scanPolicy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		AllowedDomains:      scanEgressDomains(url),
-		AutoStopAfterSec:    600,
+		AutoStopAfterSec:    scanIdleCapSec,
 	}
 
 	image := agentImage("claude-code", s.cfg.AgentImages)

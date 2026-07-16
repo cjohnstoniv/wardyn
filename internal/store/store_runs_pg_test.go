@@ -119,6 +119,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	r.PolicyID = &polID
 	r.ConfinementClass = types.CC3
 	r.SandboxRef = "container-" + r.ID.String()
+	r.AutoStopAfterSec = 900 // U006: the effective idle cap persists on the run row
 	created := persistRun(t, ctx, pool, r)
 
 	// CreateRun returns the hydrated row.
@@ -155,6 +156,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	}
 	if got.SPIFFEID != r.SPIFFEID {
 		t.Errorf("spiffe_id = %q, want %q", got.SPIFFEID, r.SPIFFEID)
+	}
+	if got.AutoStopAfterSec != 900 {
+		t.Errorf("auto_stop_after_sec = %d, want 900 (U006: effective idle cap on the run row)", got.AutoStopAfterSec)
 	}
 	if got.RunnerTarget != r.RunnerTarget {
 		t.Errorf("runner_target = %q, want %q", got.RunnerTarget, r.RunnerTarget)
