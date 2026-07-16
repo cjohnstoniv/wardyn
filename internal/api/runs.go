@@ -490,7 +490,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, req.Image, outTag)
 		if berr != nil {
-			_ = s.cfg.Store.UpdateRunState(ctx, runID, types.RunFailed)
+			// CAS from PENDING so a run a concurrent kill already moved to KILLED
+			// is not silently clobbered back to FAILED (was: unconditional write).
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed)
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"byoi_base": req.Image, "error": berr.Error(),
@@ -508,7 +510,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(ctx, req.DevcontainerRepo, req.DevcontainerRef, outTag)
 		if berr != nil {
-			_ = s.cfg.Store.UpdateRunState(ctx, runID, types.RunFailed)
+			// CAS from PENDING so a run a concurrent kill already moved to KILLED
+			// is not silently clobbered back to FAILED (was: unconditional write).
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed)
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 				runID.String(), "failure", mustJSON(map[string]any{
 					"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error(),
@@ -923,7 +927,9 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	if injectSub || injectManaged || mitmForInspect || artifactInject || injectBedrockBearer {
 		certPEM, keyPEM, caErr := generateRunCA(time.Now())
 		if caErr != nil {
-			_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
+			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
+			// KILLED state is preserved rather than clobbered back to FAILED.
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": "mitm ca: " + caErr.Error()})))
 			return
@@ -988,7 +994,9 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			ID: subGrantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: subScope, TTLSeconds: 3600},
 		}); gerr != nil {
-			_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
+			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
+			// KILLED state is preserved rather than clobbered back to FAILED.
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
 			return
@@ -1025,7 +1033,9 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			ID: beGrantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: beScope, TTLSeconds: 3600},
 		}); gerr != nil {
-			_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
+			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
+			// KILLED state is preserved rather than clobbered back to FAILED.
+			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": "bedrock bearer inject grant: " + gerr.Error()})))
 			return
@@ -1052,7 +1062,8 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	if li := policy.LLMInspection; li != nil && li.RequireInspectableLLM &&
 		li.Mode != "" && !strings.EqualFold(li.Mode, "off") &&
 		((subscription && !li.InterceptTLS && !injectSub) || (bedrockReady && !bedrock.bearer)) {
-		_ = s.cfg.Store.UpdateRunState(ctx, run.ID, types.RunFailed)
+		// CAS from STARTING so a concurrent kill's KILLED is not clobbered to FAILED.
+		_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunFailed)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport"})))
 		return
