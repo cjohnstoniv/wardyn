@@ -1513,10 +1513,14 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 // cannot use a credential it already holds, then deny any future mints
 // (identity + broker), then mark the durable state.
 //
-// IDEMPOTENCY / TERMINAL GUARD: a run that is ALREADY terminal
-// (COMPLETED/FAILED/KILLED/STOPPED/ARCHIVED) is NOT re-killed: blindly writing
-// KILLED would corrupt a COMPLETED/FAILED outcome and emit a bogus run.kill
-// audit. We return 409 without touching state, the runner, or the cascade.
+// IDEMPOTENCY / TERMINAL GUARD: a run in a NON-KILLED terminal state
+// (COMPLETED/FAILED/STOPPED/ARCHIVED) is NOT re-killed — blindly writing KILLED
+// would corrupt that recorded outcome — so we 409 without touching state, the
+// runner, or the cascade. An already-KILLED run is the EXCEPTION (U040): its
+// first kill may have failed a teardown/revoke step (the honest fail-loud path
+// marks KILLED but reports the failure and advises a retry), so a re-kill must
+// re-run the idempotent KillSandbox + revoke cascade to actually free the
+// orphaned sandbox/credentials. Re-writing KILLED->KILLED is a value no-op.
 func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := parseIDParam(w, r, "id", "run")
@@ -1532,11 +1536,12 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TERMINAL GUARD: do not clobber an already-ended run. No state write, no
-	// runner teardown, no revocation, no run.kill audit — the run already ended
-	// and its terminal transition (the watcher's COMPLETED/FAILED, or a prior
-	// kill/stop) already ran the cascade.
-	if isTerminalRunState(run.State) {
+	// TERMINAL GUARD: do not clobber a NON-KILLED already-ended run. A KILLED run
+	// is exempt — re-killing re-runs the idempotent teardown/revoke cascade so a
+	// first kill whose teardown failed can still free the sandbox + credentials
+	// (U040). COMPLETED/FAILED/STOPPED/ARCHIVED still 409 (writing KILLED would
+	// corrupt the recorded outcome).
+	if isTerminalRunState(run.State) && run.State != types.RunKilled {
 		writeError(w, http.StatusConflict,
 			"run is already terminal (state="+string(run.State)+"); not re-killing")
 		return
