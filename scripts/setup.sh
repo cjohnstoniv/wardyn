@@ -35,6 +35,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Fail fast on a native-Windows shell. The default (host) path never reaches
+# up.sh's guard, and every docker/socket assumption below is POSIX — proceeding
+# would fail later with a cryptic error. Mirror up.sh's WSL2 redirect.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    printf 'native Windows shell detected. Install WSL2 + Docker Desktop (enable WSL integration), then run `make setup` INSIDE your WSL distro — not from cmd.exe/PowerShell.\n' >&2
+    exit 1 ;;
+esac
+[ "${OS:-}" = "Windows_NT" ] && { printf 'native Windows detected — run `make setup` inside WSL2, not cmd.exe/PowerShell.\n' >&2; exit 1; }
+
 # ── tiny UI helpers ──────────────────────────────────────────────────────────
 if [ -t 1 ]; then B="\033[1m"; G="\033[32m"; Y="\033[33m"; C="\033[36m"; R="\033[0m"; else B=""; G=""; Y=""; C=""; R=""; fi
 say()  { printf "%b\n" "$*"; }
@@ -67,16 +77,14 @@ ask_yn() {
 # ── daemon selection: prefer a tier-capable native dockerd if one is present ──
 # A dedicated native dockerd (own data-root) can register runsc/kata; Docker Desktop's
 # managed engine resets custom runtimes on restart, so it's Fence-only. Honor an
-# explicit DOCKER_HOST; else pick the wardyn socket if it exists, else the default.
-pick_daemon() {
-  if [ -n "${DOCKER_HOST:-}" ]; then echo "${DOCKER_HOST#unix://}"; return; fi
-  for s in /run/wardyn-docker.sock /var/run/wardyn-docker.sock; do
-    [ -S "$s" ] && { echo "$s"; return; }
-  done
-  echo /var/run/docker.sock
-}
-DSOCK="$(pick_daemon)"
-export DOCKER_HOST="unix://${DSOCK}"
+# explicit DOCKER_HOST (any scheme, UNMANGLED) or the active docker context; else
+# pick the wardyn socket if it exists — via the shared picker up.sh/e2e-backend.sh/
+# run-local.sh/ci-run.sh already use. (The old hand-rolled pick_daemon re-wrapped a
+# tcp://ssh:// DOCKER_HOST as unix://tcp://… and hardcoded /var/run/docker.sock,
+# bypassing docker-context resolution.)
+. "$ROOT/scripts/lib/common.sh"
+wardyn_pick_docker_host
+DSOCK="${DOCKER_HOST:-unix:///var/run/docker.sock}"; DSOCK="${DSOCK#unix://}"
 
 runtimes_json() { docker info -f '{{json .Runtimes}}' 2>/dev/null || echo '{}'; }
 
