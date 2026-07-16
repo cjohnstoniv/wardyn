@@ -276,13 +276,22 @@ func auditCmd(client clientFn) *cobra.Command {
 	var runID string
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "audit",
+		Use:   "audit <run-id>",
 		Short: "Show the audit trail for a run",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if runID == "" {
-				return fmt.Errorf("--run is required")
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Accept the run id positionally like every sibling command (runs get,
+			// approve, kill, …); keep --run as a still-supported alias. Previously
+			// audit was the only target-resource command that ignored a positional
+			// arg, silently discarding `wardyn audit <id>`.
+			id := runID
+			if id == "" && len(args) == 1 {
+				id = args[0]
 			}
-			events, err := client().audit(cmd.Context(), runID)
+			if id == "" {
+				return fmt.Errorf("run id required: pass it positionally (wardyn audit <run-id>) or via --run")
+			}
+			events, err := client().audit(cmd.Context(), id)
 			if err != nil {
 				return err
 			}
@@ -301,7 +310,7 @@ func auditCmd(client clientFn) *cobra.Command {
 			return tw.Flush()
 		},
 	}
-	cmd.Flags().StringVar(&runID, "run", "", "run id")
+	cmd.Flags().StringVar(&runID, "run", "", "run id (alias for the positional arg)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	return cmd
 }
