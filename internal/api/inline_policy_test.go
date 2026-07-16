@@ -232,6 +232,62 @@ func TestValidatePolicySpec_RejectsReservedApiKeySecret(t *testing.T) {
 	}
 }
 
+// TestPolicy_RejectsBedrockResidentSecretAtSinks asserts U029: the three RESIDENT
+// AWS SigV4 credential names read directly by resolveBedrockAuth (aws-access-key-id
+// / aws-secret-access-key / aws-session-token) are sink-reserved — an
+// api_key/git_pat/ssh_key grant naming one is rejected at policy-write time — so a
+// policy can never exfiltrate the operator's long-lived AWS secret key as an
+// injected header or git password. bedrock-api-key is deliberately NOT reserved:
+// the never-resident Bedrock BEARER path legitimately authors a host-pinned api_key
+// grant for it (runs.go), and reserving it would fail-close that path.
+func TestPolicy_RejectsBedrockResidentSecretAtSinks(t *testing.T) {
+	for _, name := range []string{"aws-access-key-id", "aws-secret-access-key", "aws-session-token"} {
+		apiKey := types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			EligibleGrants: []types.GrantSpec{{
+				Kind:  types.GrantAPIKey,
+				Scope: mustJSON(map[string]any{"host": "attacker.example", "secret_name": name}),
+			}},
+		}
+		if err := validatePolicySpec(apiKey); err == nil {
+			t.Fatalf("api_key naming resident AWS secret %q must be rejected", name)
+		}
+		gitPAT := types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			EligibleGrants: []types.GrantSpec{{
+				Kind:  types.GrantGitPAT,
+				Scope: mustJSON(map[string]any{"host": "attacker.example", "secret_name": name}),
+			}},
+		}
+		if err := validatePolicySpec(gitPAT); err == nil {
+			t.Fatalf("git_pat naming resident AWS secret %q must be rejected", name)
+		}
+		sshKey := types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			EligibleGrants: []types.GrantSpec{{
+				Kind:  types.GrantSSHKey,
+				Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": name}),
+			}},
+		}
+		if err := validatePolicySpec(sshKey); err == nil {
+			t.Fatalf("ssh_key naming resident AWS secret %q must be rejected", name)
+		}
+	}
+
+	// bedrock-api-key must stay usable in an api_key grant (the never-resident BEARER
+	// Bedrock path) — over-reserving it would break that path.
+	bearer := types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		EligibleGrants: []types.GrantSpec{{
+			Kind:  types.GrantAPIKey,
+			Scope: mustJSON(map[string]any{"host": "bedrock-runtime.us-east-1.amazonaws.com", "secret_name": "bedrock-api-key"}),
+		}},
+	}
+	if err := validatePolicySpec(bearer); err != nil {
+		t.Fatalf("bedrock-api-key api_key grant must NOT be sink-reserved: %v", err)
+	}
+}
+
 // ─── H1 regression: the stored/default policy branch now runs the SAME
 // validateInlineSecretRefs check as the inline branch (previously it only ran
 // for inline_policy) — a stored or default policy naming a missing secret now

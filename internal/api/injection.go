@@ -172,15 +172,15 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Defense-in-depth at the SINK: never resolve a reserved platform-internal
-	// secret (wardyn-signing-key / wardyn-session-key) into an injectable header
+	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
+	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header
 	// VALUE, regardless of how the grant was authored (stored policy, inline,
 	// auto-mint, or a row written before the write-time guard existed). Leaking
 	// the identity-signing or session-HMAC key as a Bearer header to ANY host
 	// would let a policy forge run identities or session cookies. Fail closed +
 	// audit BEFORE reading the value. This is the single chokepoint that protects
 	// every current and future caller; the policy validator rejects it earlier.
-	if reservedSecret(minted.Injection.SecretName) {
+	if sinkReservedSecret(minted.Injection.SecretName) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
 			mustJSON(map[string]any{"reason": "reserved-secret-name", "grant_id": grantID})))

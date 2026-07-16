@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // secretNameRE constrains secret names to a safe, predictable identifier set.
@@ -48,6 +49,41 @@ func reservedSecret(name string) bool {
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
 }
 
+// sinkReservedSecret is the reserved-name guard at the credential SINKS — the
+// api_key injection resolver (handleInternalInjection), the git_pat/ssh_key
+// broker mints, and the policy write-time checks that mirror them. It is
+// reservedSecret() PLUS the three RESIDENT AWS SigV4 credential names that
+// resolveBedrockAuth reads DIRECTLY from the store to sign Bedrock requests
+// (aws-access-key-id / aws-secret-access-key / aws-session-token). Those never
+// flow through a grant on the legitimate Bedrock path, so an api_key/git_pat/
+// ssh_key grant naming one is only ever an attempt to exfiltrate the operator's
+// long-lived AWS secret key to an allowlisted host (as a Bearer header or git
+// password) — reject it at every sink. bedrock-api-key is deliberately EXCLUDED:
+// the Bedrock BEARER path authors a host-pinned api_key grant that legitimately
+// resolves it through the injection sink (see runs.go), so reserving it here
+// would break that path.
+func sinkReservedSecret(name string) bool {
+	return reservedSecret(name) ||
+		name == bedrockAccessKeyIDSecret ||
+		name == bedrockSecretAccessKeySecret ||
+		name == bedrockSessionTokenSecret
+}
+
+// secretsAPIReserved is the reserved-name guard for the GENERIC secrets API
+// (Put/Delete/List). It is reservedSecret() PLUS the two Anthropic OAuth
+// injection SENTINELS (types.SubscriptionOAuthSecret / types.ManagedOAuthSecret).
+// A sentinel is name-privileged — an api_key grant carrying it resolves at the
+// injection sink to a LIVE OAuth token via oauthProviderForSentinel, IGNORING any
+// stored value — so letting an operator Put a value under that name (silently
+// shadowed) or listing it is confusing at best and hides that the name is
+// credential-privileged at worst. Reserved from the generic API ONLY, never at
+// the sinks: a subscription/managed policy legitimately names the sentinel in an
+// api_key grant, which validateInlineSecretRefs and the injection sink allow via
+// the provider switch (oauthProviderForSentinel), which runs AFTER this guard.
+func secretsAPIReserved(name string) bool {
+	return reservedSecret(name) || name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret
+}
+
 // identifierSecretNames hold non-credential IDENTIFIER values (not maskable
 // secret material) that are legitimately shorter than secretmask.MinLen — e.g.
 // a numeric GitHub App ID. They are exempt from the MinLen gate below; masking
@@ -68,7 +104,7 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name string) bool {
 		writeError(w, http.StatusBadRequest, "invalid secret name (lowercase alphanumerics, '.', '_', '-')")
 		return false
 	}
-	if reservedSecret(name) {
+	if secretsAPIReserved(name) {
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}
@@ -148,7 +184,7 @@ func (s *Server) listUserSecretNames(ctx context.Context) ([]string, error) {
 	}
 	names := make([]string, 0, len(all))
 	for _, n := range all {
-		if reservedSecret(n) {
+		if secretsAPIReserved(n) {
 			continue
 		}
 		names = append(names, n)

@@ -87,7 +87,7 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 		// decode as an injection rule is left to the broker/sink — this check is
 		// solely the reserved-name deny.
 		if g.Kind == types.GrantAPIKey {
-			if rule, derr := injectionRuleFromScope(g.Scope); derr == nil && reservedSecret(rule.SecretName) {
+			if rule, derr := injectionRuleFromScope(g.Scope); derr == nil && sinkReservedSecret(rule.SecretName) {
 				return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
 			}
 		}
@@ -102,7 +102,7 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 			if derr != nil {
 				return fmt.Errorf("eligible_grants[%d]: git_pat scope invalid: %w", i, derr)
 			}
-			if reservedSecret(secretName) {
+			if sinkReservedSecret(secretName) {
 				return fmt.Errorf("eligible_grants[%d]: git_pat references reserved secret name %q", i, secretName)
 			}
 		}
@@ -117,7 +117,7 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 			if derr != nil {
 				return fmt.Errorf("eligible_grants[%d]: ssh_key scope invalid: %w", i, derr)
 			}
-			if reservedSecret(keyRef) || reservedSecret(khRef) {
+			if sinkReservedSecret(keyRef) || sinkReservedSecret(khRef) {
 				return fmt.Errorf("eligible_grants[%d]: ssh_key references a reserved secret name", i)
 			}
 			if _, ok := sshOver443Endpoint(host); !ok {

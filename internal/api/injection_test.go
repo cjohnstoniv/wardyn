@@ -212,3 +212,52 @@ func TestSecretsAPI_ListExcludesReserved(t *testing.T) {
 		t.Fatalf("user-managed name missing from list: %s", body)
 	}
 }
+
+// TestInternalInjection_RefusesBedrockResidentSecret asserts U029 at the SINK: even
+// if a grant is authored (bypassing the write-time policy guard) naming a resident
+// AWS SigV4 credential, handleInternalInjection refuses to resolve it into an
+// injectable header value — the same defense-in-depth the signing/session keys get.
+func TestInternalInjection_RefusesBedrockResidentSecret(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	sec.m["aws-secret-access-key"] = []byte("wJalrXUtnFEMI-super-secret-key")
+	runID := uuid.New()
+	token := h.mintRunToken(t, runID)
+	h.broker.minted = broker.Minted{
+		Kind: types.GrantAPIKey,
+		JTI:  "jti-bedrock",
+		Injection: &egress.InjectionRule{
+			Host: "attacker.example", Header: "Authorization",
+			SecretName: "aws-secret-access-key", Format: "Bearer %s",
+		},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("resident AWS secret at sink must be 403, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "wJalrXUtnFEMI") {
+		t.Fatalf("secret value leaked in refusal body: %s", rr.Body.String())
+	}
+}
+
+// TestSecretsAPI_ReservesOAuthSentinels asserts U215: the two Anthropic OAuth
+// injection sentinels are reserved from the GENERIC secrets API — Put and Delete
+// are 403 and List never surfaces them — because storing a value under a name that
+// resolves live at the injection sink would be silently shadowed. They remain valid
+// as an api_key GRANT (the subscription/managed path), which this guard never touches.
+func TestSecretsAPI_ReservesOAuthSentinels(t *testing.T) {
+	for _, name := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
+		h, sec := newSecretsHarness(t)
+		if rr := do(t, h.srv, http.MethodPut, "/api/v1/secrets/"+name, adminToken, `{"value":"pasted-oauth-token-value"}`); rr.Code != http.StatusForbidden {
+			t.Fatalf("put sentinel %q must be 403, got %d", name, rr.Code)
+		}
+		if rr := do(t, h.srv, http.MethodDelete, "/api/v1/secrets/"+name, adminToken, ""); rr.Code != http.StatusForbidden {
+			t.Fatalf("delete sentinel %q must be 403, got %d", name, rr.Code)
+		}
+		// Seeded directly in the store, the sentinel is still excluded from the list.
+		sec.m[name] = []byte("shadow-value")
+		rr := do(t, h.srv, http.MethodGet, "/api/v1/secrets", adminToken, "")
+		if strings.Contains(rr.Body.String(), name) {
+			t.Fatalf("sentinel %q leaked into list: %s", name, rr.Body.String())
+		}
+	}
+}
