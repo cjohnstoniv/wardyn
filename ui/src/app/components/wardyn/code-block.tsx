@@ -17,7 +17,7 @@ export function JsonBlock({ value, className }: { value: unknown; className?: st
     <div className={cn("group relative rounded-lg border border-border bg-surface-2/60", className)}>
       <button
         onClick={() => copy(text)}
-        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground"
+        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:text-foreground"
         aria-label="Copy"
       >
         {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
@@ -64,7 +64,7 @@ export function YamlBlock({ value: v, className }: { value: unknown; className?:
     <div className={cn("group relative rounded-lg border border-border bg-surface-2/60", className)}>
       <button
         onClick={() => copy(text)}
-        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground"
+        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:text-foreground"
         aria-label="Copy"
       >
         {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}

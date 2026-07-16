@@ -41,12 +41,16 @@ export function StatusChip({
       <Chip tone="neutral" title={reason}>
         <Minus className="size-3" aria-hidden />
         {label ?? "Optional"}
+        {/* AT copy of the native title (tier-illustration.tsx pattern) — `title`
+            isn't reliably announced by screen readers. */}
+        {reason && <span className="sr-only">{reason}</span>}
       </Chip>
     );
   }
   return (
     <Chip tone={STATUS_TONE[status]} dot title={reason}>
       {label ?? STATUS_LABEL[status]}
+      {reason && <span className="sr-only">{reason}</span>}
     </Chip>
   );
 }

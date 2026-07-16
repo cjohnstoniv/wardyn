@@ -161,14 +161,18 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
   const label = meta?.label ?? String(value);
   const mechanism = meta?.mechanism ?? String(value);
   const m = metaFor(ccMeta, value as string, ccMetaFallback);
+  const title = `${label} — ${mechanism} · internal class ${value}`;
   return (
     <Chip
       tone="neutral"
-      title={`${label} — ${mechanism} · internal class ${value}`}
+      title={title}
       className={cn(m.cls, "gap-1 px-1.5")}
     >
       <m.Icon className="size-3" />
       {label}
+      {/* AT copy of the native title (tier-illustration.tsx pattern) — `title`
+          isn't reliably announced by screen readers. */}
+      <span className="sr-only">{title}</span>
     </Chip>
   );
 }

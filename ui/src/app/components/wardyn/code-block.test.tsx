@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { toYaml } from "./code-block";
+import { render, screen } from "@testing-library/react";
+import { toYaml, JsonBlock, YamlBlock } from "./code-block";
 
 describe("toYaml", () => {
   it("renders a policy spec as pretty, indented YAML (arrays of scalars + maps)", () => {
@@ -40,5 +41,20 @@ describe("toYaml", () => {
 
   it("handles empties + null", () => {
     expect(toYaml({ a: [], b: {}, c: null, d: "" })).toBe(['a: []', "b: {}", "c: null", 'd: ""'].join("\n"));
+  });
+});
+
+// U117: the copy button was opacity-0 + group-hover:opacity-100 only, so a
+// keyboard user tabbing to it landed on a visually-invisible control (WCAG 2.4.7).
+// focus-visible:opacity-100 reveals it on keyboard focus.
+describe("copy button keyboard-focus reveal (U117)", () => {
+  it("JsonBlock's copy button reveals on focus-visible, not just hover", () => {
+    render(<JsonBlock value={{ a: 1 }} />);
+    expect(screen.getByRole("button", { name: /copy/i }).className).toMatch(/focus-visible:opacity-100/);
+  });
+
+  it("YamlBlock's copy button reveals on focus-visible, not just hover", () => {
+    render(<YamlBlock value={{ a: 1 }} />);
+    expect(screen.getByRole("button", { name: /copy/i }).className).toMatch(/focus-visible:opacity-100/);
   });
 });
