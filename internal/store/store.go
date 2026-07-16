@@ -532,6 +532,33 @@ func (s PG) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
 		string(status), activeRunID, workspaceProfileParam(verifyResult), verifiedHash, verifiedAt, id))
 }
 
+// SetWorkspaceScanResult records a governed scan run's derived profile — a SCOPED,
+// FENCED write mirroring ClaimWorkspaceActiveRun: it sets ONLY profile + status=
+// scanned and RELEASES the import-step slot, conditional on the run STILL owning it
+// (active_run_id=runID). A superseded / lagging upload (a newer run claimed the
+// slot, or a reconcile released it) matches no row → applied=false, so it can
+// neither clobber a fresher profile nor revert a concurrently-persisted column
+// (approved_egress, setup_commands) the way the old full-row UpdateWorkspace did.
+// Returns ErrNotFound only when the workspace does not exist.
+func (s PG) SetWorkspaceScanResult(ctx context.Context, id uuid.UUID, profile json.RawMessage, runID uuid.UUID) (types.Workspace, bool, error) {
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx,
+		`UPDATE workspaces SET profile=$1, status=$2, active_run_id=NULL, updated_at=now()
+		 WHERE id=$3 AND active_run_id=$4 RETURNING `+wsCols,
+		workspaceProfileParam(profile), string(types.WorkspaceScanned), id, runID))
+	if errors.Is(err, ErrNotFound) {
+		// Distinguish a guard miss (slot no longer owned) from a missing workspace.
+		ws, gerr := s.GetWorkspace(ctx, id)
+		if gerr != nil {
+			return types.Workspace{}, false, gerr
+		}
+		return ws, false, nil
+	}
+	if err != nil {
+		return types.Workspace{}, false, err
+	}
+	return ws, true, nil
+}
+
 // DeleteWorkspace removes a workspace by id. Returns ErrNotFound when no row matched.
 func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, id)

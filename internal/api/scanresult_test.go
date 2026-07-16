@@ -79,6 +79,18 @@ func (s *scanUploadStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws typ
 	return ws, nil
 }
 
+// SetWorkspaceScanResult is the scoped, slot-releasing profile write the upload
+// handler now uses instead of the full-row UpdateWorkspace: it captures the
+// derived profile, flips status=scanned, and clears the active-run pointer.
+func (s *scanUploadStore) SetWorkspaceScanResult(_ context.Context, _ uuid.UUID, profile json.RawMessage, _ uuid.UUID) (types.Workspace, bool, error) {
+	ws := s.ws
+	ws.Profile = profile
+	ws.Status = types.WorkspaceScanned
+	ws.ActiveRunID = nil
+	s.saved = &ws
+	return ws, true, nil
+}
+
 // newScanUploadSrv wires a Server over a scanUploadStore with the given advisor
 // seam (nil = feature off) and returns a valid run token for the scan run.
 func newScanUploadSrv(t *testing.T, adv func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile) (*Server, *scanUploadStore, string, uuid.UUID) {
@@ -87,7 +99,9 @@ func newScanUploadSrv(t *testing.T, adv func(context.Context, workspacescan.Scan
 	wsID, runID := uuid.New(), uuid.New()
 	st := &scanUploadStore{
 		run: types.AgentRun{ID: runID, Task: "workspace scan", WorkspaceID: &wsID},
-		ws:  types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
+		// active_run_id == the scan run: the upload handler's fence requires the run
+		// to still own the workspace's import-step slot.
+		ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanning, ActiveRunID: &runID},
 	}
 	cfg := baseTestConfig(h, st)
 	cfg.ScanAIAdvisor = adv
@@ -198,5 +212,47 @@ func TestUploadScanResult_AIAdditions(t *testing.T) {
 	}
 	if ran, changed := auditAI(t, srv.cfg.Audit.(*recRecorder).events); !ran || !changed {
 		t.Fatalf("audit ai_advisor/ai_changed = %v/%v, want true/true", ran, changed)
+	}
+}
+
+// U214: a scan upload whose run no longer owns the workspace's import-step slot
+// (active_run_id points at a DIFFERENT run) is fenced with 409 and writes nothing —
+// a superseded / lagging scan can never clobber a fresher profile. Mirrors the
+// verify lane's superseded-run fence.
+func TestUploadScanResult_SupersededRunFenced(t *testing.T) {
+	h := newHarness(t)
+	wsID, runID, other := uuid.New(), uuid.New(), uuid.New()
+	st := &scanUploadStore{
+		run: types.AgentRun{ID: runID, Task: "workspace scan", WorkspaceID: &wsID},
+		ws:  types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanning, ActiveRunID: &other},
+	}
+	srv := New(baseTestConfig(h, st))
+	tok := h.mintRunToken(t, runID)
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+runID.String(), tok, `{"has_devcontainer":true}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("superseded scan upload: code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if st.saved != nil {
+		t.Errorf("a fenced upload must persist nothing, got %+v", st.saved)
+	}
+}
+
+// U212: a successful scan upload RELEASES the import-step slot (clears
+// active_run_id) so the scan-run reconcile self-heal correctly no-ops once the
+// profile has landed — otherwise the slot leaks and reconcile can later mark a
+// successfully-scanned workspace `error`.
+func TestUploadScanResult_SuccessClearsActiveRun(t *testing.T) {
+	srv, st, tok, _ := newScanUploadSrv(t, nil)
+	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusNoContent {
+		t.Fatalf("upload code = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+	if st.saved == nil {
+		t.Fatal("success must persist the derived profile")
+	}
+	if st.saved.Status != types.WorkspaceScanned {
+		t.Errorf("success status = %q, want scanned", st.saved.Status)
+	}
+	if st.saved.ActiveRunID != nil {
+		t.Errorf("success must release the import-step slot (active_run_id cleared), got %v", st.saved.ActiveRunID)
 	}
 }

@@ -49,7 +49,7 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, id, 0)
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, id, maxCaptureAuditEvents)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query audit events: "+err.Error())
 		return
@@ -105,6 +105,9 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	warnings := append(append([]string{}, synthWarns...), clampWarns...)
 	if confWarn != "" {
 		warnings = append(warnings, confWarn)
+	}
+	if len(events) >= maxCaptureAuditEvents {
+		warnings = append(warnings, captureAuditTruncatedNote)
 	}
 
 	s.recordAudit(ctx, s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r), "run.record.synthesize",

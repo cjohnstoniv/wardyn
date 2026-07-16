@@ -500,8 +500,10 @@ func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Flip to verifying + set the in-flight run pointer, preserving any prior
-	// verify result / verified markers.
+	// launchVerifyRun flips the workspace to `verifying` + claims the in-flight run
+	// pointer BEFORE it dispatches (U013) — like the scan/record lanes — so a fast
+	// verify whose result upload lands immediately isn't regressed by a status write
+	// that arrives after it. No post-launch state write here.
 	actorType, actor := actorFromRequest(r)
 	run, lerr := s.launchVerifyRun(r.Context(), actor, ws, ws.SetupCommands)
 	if errors.Is(lerr, errImportStepBusy) {
@@ -514,11 +516,6 @@ func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"workspace.import.verify", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
 		writeError(w, http.StatusInternalServerError, "launch verify run: "+lerr.Error())
-		return
-	}
-	if _, uerr := s.cfg.Store.SetWorkspaceImportState(r.Context(), id, types.WorkspaceVerifying,
-		&run.ID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt); uerr != nil {
-		writeError(w, http.StatusInternalServerError, "persist verifying state: "+uerr.Error())
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,

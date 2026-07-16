@@ -352,6 +352,15 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		return release(fmt.Errorf("create verify run: %w", err))
 	}
 
+	// Flip to `verifying` BEFORE dispatch — mirror launchScanRun's pre-dispatch
+	// status write (U013). The old post-launch flip in handleVerifyWorkspace could
+	// REGRESS a fast verify whose result upload already landed (status ready /
+	// verify_failed, active_run_id cleared) back to `verifying`. active_run_id was
+	// already CAS-claimed to runID above; preserve any prior verify markers. Best
+	// effort: the verify run reports + flips status regardless of this write.
+	_, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifying,
+		&runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
+
 	// Run IN the built devcontainer image (build it now if needed — this is
 	// Stage 5 folded into verify). Fall back to the convention image if no
 	// builder is configured.
@@ -422,6 +431,14 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	abort := func(reason error) (types.AgentRun, bool, error) {
 		now := s.cfg.Now().UTC()
+		// A CreateGrant failure AFTER CreateRun (below) would otherwise orphan the
+		// persisted RunPending run + leave its minted run token / eligible grants
+		// un-revoked. Fail the run and run the revoke cascade — mirrors reconcileFinalize
+		// (minus the sandbox teardown: dispatch has not run yet). Conditional on
+		// RunPending, so an abort BEFORE CreateRun (mint / create failure) cleanly no-ops.
+		if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed); applied {
+			s.revokeRunCascade(ctx, runID)
+		}
 		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 			RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined, Status: recordStatusFailed, StartedAt: now, FinishedAt: &now,
 			FailureHint: "launch failed: " + reason.Error(),
@@ -695,10 +712,13 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.verify",
 			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_result_uploaded"})))
 	case types.WorkspaceScanning:
-		// A repo scan run ended without uploading facts — leave a clear error.
-		ws.Status = types.WorkspaceError
-		ws.ActiveRunID = nil
-		_, _ = s.cfg.Store.UpdateWorkspace(ctx, ws.ID, ws)
+		// A repo scan run ended without uploading facts — leave a clear error via a
+		// SCOPED write that MIRRORS the verify branch above: touch only status +
+		// clear the in-flight pointer. The previous full-row UpdateWorkspace replayed
+		// this stale pre-read snapshot over EVERY column, clobbering any
+		// concurrently-persisted async field (profile, record_results, approvals).
+		_, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceError, nil,
+			ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.scan",
 			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_facts_uploaded"})))
 	}
@@ -712,6 +732,21 @@ const recordEmptyCaptureHint = "no egress evidence was captured for this recordi
 	"proxy sidecar's decision callbacks cannot reach the control plane (Docker Desktop + WSL2 NAT needs " +
 	"mirrored networking or the compose stack, `make setup`). Treat this recording as failed, NOT as " +
 	"proof the task needs no egress."
+
+// maxCaptureAuditEvents bounds a single server-side record/synthesis capture's
+// audit-event read. It is a DoS ceiling far ABOVE any realistic recording — its
+// only job is to replace QueryAuditEvents' SILENT 1000-row default, which
+// truncated a long recording's later egress out of the derived least-privilege
+// profile (a scanned-clean-but-actually-incomplete result). It never caps a
+// legitimate run; a capture that somehow reaches it stamps captureAuditTruncatedNote
+// so the truncation is VISIBLE, never silent.
+const maxCaptureAuditEvents = 100000
+
+// captureAuditTruncatedNote is the honest signal stamped on a capture / synthesis
+// whose audit read reached maxCaptureAuditEvents — its observations/profile may be
+// incomplete for an exceptionally long run.
+const captureAuditTruncatedNote = "audit-event capture reached its ceiling; the derived observations/profile " +
+	"may be incomplete for an exceptionally long run"
 
 // reconcileRecordRun captures a record run's evidence when it reaches a
 // terminal state — for ANY reason: auto completion, the operator's "Done
@@ -743,7 +778,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 		return // a newer recording superseded this run, or already finalized
 	}
 
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 0)
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, maxCaptureAuditEvents)
 	if err != nil {
 		return // transient store failure: leave `recording`; a later reconcile retries
 	}
@@ -753,6 +788,9 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	res.Observations = &obs
 	res.KernelSensorBlind = run.ConfinementClass == types.CC3
 	res.Caveats = []string{recordMaskingCaveat}
+	if len(events) >= maxCaptureAuditEvents {
+		res.Caveats = append(res.Caveats, captureAuditTruncatedNote)
+	}
 	if len(obs.Domains) == 0 {
 		res.Status = recordStatusFailed
 		res.FailureHint = recordEmptyCaptureHint

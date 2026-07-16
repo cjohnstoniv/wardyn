@@ -76,9 +76,22 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Re-derive the authority object from the untrusted facts, persist it, and
-	// flip the workspace to ready. Identity fields are preserved from the fetched
-	// row; only the scan-owned fields change.
+	// Active-run fence (mirror the verify lane in reconcileWorkspaceRun): only the
+	// run that STILL owns the workspace's import-step slot may land a profile. A
+	// superseded / lagging scan upload — the slot was reclaimed by a newer run or
+	// released by a reconcile — must not clobber a fresher profile. The scoped write
+	// below re-checks this atomically (WHERE active_run_id=runID) to close the
+	// read→write TOCTOU; this early check fails such an upload fast + honestly.
+	if ws.ActiveRunID == nil || *ws.ActiveRunID != claims.RunID {
+		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "superseded scan upload (active-run mismatch)", nil)
+		writeError(w, http.StatusConflict, "scan upload superseded: another import step owns this workspace")
+		return
+	}
+
+	// Re-derive the authority object from the untrusted facts and persist it via a
+	// SCOPED, fenced write (profile + status only). Identity fields and any
+	// concurrently-persisted column (approved_egress / setup_commands) are left
+	// untouched — never round-tripped from this stale snapshot.
 	profile := workspacescan.DeriveProfile(facts)
 
 	// ADVISORY AI fallback (opt-in; nil advisor = OFF, byte-identical behavior).
@@ -94,13 +107,19 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 		aiChanged = profile.Source == workspacescan.SourceAIAssisted
 	}
 
-	ws.Profile = mustJSON(profile)
-	// Scanned, not ready: the import flow continues (configure → verify →
-	// finalize). `ready` now means the import was finalized/verified.
-	ws.Status = types.WorkspaceScanned
-	if _, err := s.cfg.Store.UpdateWorkspace(r.Context(), wsID, ws); err != nil {
+	// Scoped + fenced persist: profile + status=scanned, releasing the import-step
+	// slot only while this run still owns it (active_run_id=runID). Off the old
+	// full-row UpdateWorkspace so it cannot revert a concurrently-persisted column;
+	// applied=false means the slot was reclaimed between the fence and here (409).
+	_, applied, err := s.cfg.Store.SetWorkspaceScanResult(r.Context(), wsID, mustJSON(profile), claims.RunID)
+	if err != nil {
 		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "persist: "+err.Error(), nil)
 		writeError(w, http.StatusInternalServerError, "persist scan profile: "+err.Error())
+		return
+	}
+	if !applied {
+		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "superseded scan upload (slot reclaimed before write)", nil)
+		writeError(w, http.StatusConflict, "scan upload superseded: another import step owns this workspace")
 		return
 	}
 
