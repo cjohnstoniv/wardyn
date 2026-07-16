@@ -215,3 +215,77 @@ func TestLaunchRecordRun_CreateGrantFailureFinalizesRun(t *testing.T) {
 		t.Error("aborted launch must release the workspace import-step slot")
 	}
 }
+
+// ─── U007: verify/scan settle when the run goes terminal during dispatch ──────
+
+// TestSettleTerminalLaunch_StuckVerifyRunSettles is the U007 regression for the
+// synchronous path: a verify run CAS'd to terminal FAILED during dispatch (before
+// Exec, so no completion watcher and no reconcile hook ever fires) must settle its
+// workspace out of `verifying` — record already self-healed here, verify/scan did
+// not. The counterfactual: without the settleTerminalLaunch call the 3 launch fns
+// now make, the workspace stays `verifying` forever (fake.state stays nil).
+func TestSettleTerminalLaunch_StuckVerifyRunSettles(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &scanReconcileStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify", State: types.RunFailed},
+		importStateFake: importStateFake{ws: types.Workspace{
+			ID: wsID, Status: types.WorkspaceVerifying, ActiveRunID: &runID,
+		}},
+	}
+	cfg := baseTestConfig(h, fake)
+	cfg.ControlPlaneURL = "http://x"
+	s := New(cfg)
+
+	s.settleTerminalLaunch(context.Background(), runID, fake.run)
+
+	if fake.state == nil || fake.state.Status != types.WorkspaceVerifyFailed {
+		t.Fatalf("a dispatch-time terminal verify run must settle the workspace to verify_failed (U007); got %+v", fake.state)
+	}
+	if fake.state.ActiveRunID != nil {
+		t.Error("settle must clear active_run_id")
+	}
+}
+
+// TestSettleTerminalLaunch_NonTerminalRunNoOp guards the other direction: a run
+// still coming up RUNNING must NOT be settled — its terminal transition belongs to
+// the completion watcher/kill, and settling it here would double-finalize.
+func TestSettleTerminalLaunch_NonTerminalRunNoOp(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &scanReconcileStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify", State: types.RunRunning},
+		importStateFake: importStateFake{ws: types.Workspace{
+			ID: wsID, Status: types.WorkspaceVerifying, ActiveRunID: &runID,
+		}},
+	}
+	s := New(baseTestConfig(h, fake))
+
+	s.settleTerminalLaunch(context.Background(), runID, fake.run)
+
+	if fake.state != nil {
+		t.Errorf("a still-RUNNING run must not be settled (the watcher owns its terminal transition); got %+v", fake.state)
+	}
+}
+
+// TestRepairStaleWorkspaceRuns_HealsStuckVerify is the U007 regression for the
+// crash-window catch-all: if wardynd died between the terminal CAS and the
+// synchronous settle, the next status read must heal a workspace stuck `verifying`
+// behind a terminal run — the same repair-on-read record already had.
+func TestRepairStaleWorkspaceRuns_HealsStuckVerify(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	fake := &scanReconcileStore{
+		run: types.AgentRun{ID: runID, WorkspaceID: &wsID, Task: "workspace verify", State: types.RunFailed},
+		importStateFake: importStateFake{ws: types.Workspace{
+			ID: wsID, Status: types.WorkspaceVerifying, ActiveRunID: &runID,
+		}},
+	}
+	s := New(baseTestConfig(h, fake))
+
+	s.repairStaleWorkspaceRuns(context.Background(), fake.ws)
+
+	if fake.state == nil || fake.state.Status != types.WorkspaceVerifyFailed {
+		t.Fatalf("repair-on-read must heal a workspace stuck `verifying` behind a terminal run (U007); got %+v", fake.state)
+	}
+}

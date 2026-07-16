@@ -371,6 +371,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	}
 	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, nil, false, "", commands)
 	created = s.refreshRun(ctx, runID, created)
+	s.settleTerminalLaunch(ctx, runID, created)
 	return created, nil
 }
 
@@ -579,6 +580,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	var plan json.RawMessage
 	s.dispatchWithVerify(ctx, created, id.Token, image, policy, ghGrantID, nil, sshGrants, injections, interactive, "", plan)
 	created = s.refreshRun(ctx, runID, created)
+	s.settleTerminalLaunch(ctx, runID, created)
 	return created, weakCC, nil
 }
 
@@ -724,6 +726,23 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.scan",
 			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_facts_uploaded"})))
 	}
+}
+
+// settleTerminalLaunch settles a workspace/record run that reached a TERMINAL
+// state DURING dispatch — a CreateSandbox error or a STARTING→FAILED grant/MITM
+// path CAS's the run to FAILED before Exec runs, so the completion watcher (which
+// starts only after a successful Exec) never fires and no reconcile hook would
+// otherwise settle the workspace. Without this, verify/scan strand in
+// `verifying`/`scanning` forever and a record capture is never taken (U007).
+// Both reconcilers are idempotent + self-scoping — reconcileRecordRun no-ops for a
+// non-record run, reconcileWorkspaceRun no-ops unless the workspace still points at
+// this run in verifying/scanning — so calling both is safe for any launch kind.
+func (s *Server) settleTerminalLaunch(ctx context.Context, runID uuid.UUID, created types.AgentRun) {
+	if !isTerminalRunState(created.State) {
+		return
+	}
+	s.reconcileWorkspaceRun(ctx, runID)
+	s.reconcileRecordRun(ctx, runID)
 }
 
 // recordEmptyCaptureHint explains a capture that produced ZERO egress evidence.
@@ -965,6 +984,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	image := agentImage("claude-code", s.cfg.AgentImages)
 	s.dispatch(ctx, created, id.Token, image, scanPolicy, ghGrantID, nil, sshGrants, nil, false, "")
 	created = s.refreshRun(ctx, runID, created)
+	s.settleTerminalLaunch(ctx, runID, created)
 	return created, nil
 }
 

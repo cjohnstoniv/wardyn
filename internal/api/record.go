@@ -149,12 +149,15 @@ func recordSessionKey(name string) string {
 	return s
 }
 
-// repairStaleRecordings settles any task entry still `recording` whose run has
-// ALREADY terminated — the catch-all for terminal paths with no reconcile hook
-// (idle reaper, crashed watcher). Cheap: it does nothing unless an entry
-// claims to be recording, and reconcileRecordRun's CAS makes it race-free
-// against the normal capture triggers. Returns the (possibly refreshed) row.
-func (s *Server) repairStaleRecordings(ctx context.Context, ws types.Workspace) types.Workspace {
+// repairStaleWorkspaceRuns settles any import run stranded by a terminal-transition
+// path with no reconcile hook — the idle reaper, a watcher lost to a crash, or a
+// dispatch-time failure racing a wardynd crash before settleTerminalLaunch ran.
+// Two strand shapes: (a) a task entry still `recording` whose run has terminated,
+// and (b) a workspace stuck `verifying`/`scanning` whose active run has terminated
+// (U007 — record already self-healed on read; verify/scan did not). Cheap +
+// race-free: the reconcilers are CAS-guarded and no-op unless a strand is real.
+// Returns the (possibly refreshed) row.
+func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspace) types.Workspace {
 	repaired := false
 	for _, res := range recordResultsMap(ws) {
 		if res.Status != recordStatusRecording {
@@ -162,6 +165,16 @@ func (s *Server) repairStaleRecordings(ctx context.Context, ws types.Workspace) 
 		}
 		if run, err := s.cfg.Store.GetRun(ctx, res.RunID); err == nil && isTerminalRunState(run.State) {
 			s.reconcileRecordRun(ctx, res.RunID)
+			repaired = true
+		}
+	}
+	// Verify/scan strand: the workspace is mid-import but its in-flight run has
+	// already terminated — settle it to a clear failure so the operator sees a
+	// reason instead of an endless spinner. reconcileWorkspaceRun re-fences on the
+	// active_run_id, so a newer run that has taken the slot is left untouched.
+	if ws.ActiveRunID != nil && (ws.Status == types.WorkspaceVerifying || ws.Status == types.WorkspaceScanning) {
+		if run, err := s.cfg.Store.GetRun(ctx, *ws.ActiveRunID); err == nil && isTerminalRunState(run.State) {
+			s.reconcileWorkspaceRun(ctx, *ws.ActiveRunID)
 			repaired = true
 		}
 	}
