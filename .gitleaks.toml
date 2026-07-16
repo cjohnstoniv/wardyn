@@ -1,6 +1,9 @@
-# Gitleaks config: default rules plus allowlists for the two classes of
-# deliberate non-secrets in this repo. CI (gitleaks job) and any local
-# `gitleaks detect` pick this up automatically from the repo root.
+# Gitleaks config: default rules plus path/regex allowlists for broad
+# prose/doc false positives and the leaked-value detector's own test
+# fixtures. CI (gitleaks job) and any local `gitleaks git` scan pick this up
+# automatically from the repo root. Individual accepted findings (exact
+# commit/file/line) are allowlisted by fingerprint instead, in the sibling
+# .gitleaksignore file — see that file for why each one is safe.
 
 [extend]
 useDefault = true
