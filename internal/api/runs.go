@@ -1302,7 +1302,14 @@ func hasAnthropicAPIKeyInjection(injections []runner.InjectionGrant) bool {
 // the caller decides what to do with a false (fail the batch run, or warn-only
 // for interactive). A selftest that cannot even start (missing shell/binary,
 // exit 127) surfaces as a non-nil Exec/Wait error → returns false.
+// byoiSelftestTimeout bounds the fail-closed BYOI selftest gate so a hostile or
+// broken base image whose agent-run --selftest hangs cannot block the dispatch
+// goroutine forever — on timeout the gate fails closed (returns false).
+const byoiSelftestTimeout = 2 * time.Minute
+
 func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, failClosed bool) bool {
+	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
+	defer cancel()
 	if xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
