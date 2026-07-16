@@ -749,8 +749,8 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// (artifact redirection here + the upstream/corp proxy near ProxyConfig) share
 	// this snapshot, so a concurrent admin PUT /api/v1/site-config can never compose
 	// a single run from two different snapshots (e.g. new SCM hosts with stale
-	// artifact overrides). Store is guaranteed non-nil in dispatch (UpdateRunState
-	// is called unconditionally below).
+	// artifact overrides). Store is guaranteed non-nil in dispatch (the run-state
+	// CAS transitions below are called unconditionally).
 	siteCfg, siteCfgErr := s.cfg.Store.GetSiteConfig(ctx)
 
 	var artifactPlan artifactRedirectPlan

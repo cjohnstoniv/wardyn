@@ -80,21 +80,6 @@ func (s PG) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
 	return collectRuns(rows)
 }
 
-// UpdateRunState sets the state and bumps updated_at.
-func (s PG) UpdateRunState(ctx context.Context, id uuid.UUID, state types.RunState) error {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2`,
-		string(state), id,
-	)
-	if err != nil {
-		return fmt.Errorf("store: update run state: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // UpdateRunStateIf conditionally transitions a run from fromState to toState in
 // a single UPDATE ... WHERE id=$ AND state=$from, returning whether the update
 // applied. It is the optimistic guard the completion watcher uses: it only
