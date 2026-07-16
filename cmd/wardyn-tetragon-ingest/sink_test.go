@@ -231,3 +231,34 @@ func TestEventSink_Persistent401Drops(t *testing.T) {
 		t.Errorf("nothing should have posted against an always-401 server; posted=%d", sink.postedCount())
 	}
 }
+
+// TestEventSink_ConcurrentEmitDuringCloseNoPanic is the groundtruth-latch
+// regression the completed crown review live-reproduced: emit() read `closed` and
+// then sent on s.ch as two separate steps, so close() closing the channel in that
+// gap made emit send on a closed channel -> panic, crashing wardyn-tetragon-ingest
+// on shutdown. emit now holds the lock across the send. Run under -race; reaching
+// the end without a panic is the assertion.
+func TestEventSink_ConcurrentEmitDuringCloseNoPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	src := func() (string, error) { return "tok", nil }
+	sink := newEventSinkWithSource(srv.URL, src, 4, 2, time.Millisecond, srv.Client())
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				sink.emit(types.AuditEvent{Action: "kernel.process.exec"})
+			}
+		}()
+	}
+	// Close CONCURRENTLY with the in-flight emits — the send-on-closed race window.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sink.close(ctx)
+	wg.Wait()
+}

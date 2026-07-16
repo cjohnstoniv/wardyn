@@ -154,10 +154,14 @@ func (s *eventSink) refreshToken() string {
 // emit queues an event without blocking. On a full buffer the event is dropped
 // and the drop counter is incremented (mirrors decisionSink.emit).
 func (s *eventSink) emit(ev types.AuditEvent) {
+	// Hold the lock ACROSS the send. close() takes the same lock to set closed +
+	// close(s.ch), so emit either fully precedes close (sends to an open channel)
+	// or observes closed and returns — it can never send on a closed channel (which
+	// panics even inside a select). The select's default keeps the send
+	// non-blocking, so holding the lock here cannot deadlock against run()'s drain.
 	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
+	defer s.mu.Unlock()
+	if s.closed {
 		return
 	}
 	select {
