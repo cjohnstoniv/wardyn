@@ -48,19 +48,22 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 			continue
 		}
 		st, serr := s.cfg.Runner.AgentStatus(ctx, run.SandboxRef, run.AgentExecID)
-		if serr != nil || isTerminalRunState(st.State) {
-			// The sandbox is gone or already exited: finalize from the exit code
-			// (0 => COMPLETED, else FAILED) and run the revoke + teardown cascade.
+		// A genuinely-gone sandbox/agent reports a terminal STATE (RunStopped), not
+		// an error — an error means the probe couldn't determine liveness (a docker
+		// daemon blip at boot). Do NOT finalize a possibly-healthy run on a transient
+		// error; re-attach a watcher that retries and only gives up after a bounded
+		// error run. Only a definitive terminal STATE finalizes here.
+		if serr == nil && isTerminalRunState(st.State) {
 			final := types.RunFailed
-			if serr == nil && st.ExitCode != nil && *st.ExitCode == 0 {
+			if st.ExitCode != nil && *st.ExitCode == 0 {
 				final = types.RunCompleted
 			}
 			s.reconcileFinalize(ctx, run.ID, final, run.SandboxRef, "reconciled after restart")
 			finalized++
 			continue
 		}
-		// Still alive: re-attach a Status-polling watcher so the run finalizes when
-		// the agent exits.
+		// Still alive (or momentarily unreachable): re-attach a watcher so the run
+		// finalizes when the agent actually exits, not on a transient probe error.
 		go s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID)
 		reattached++
 	}
@@ -70,7 +73,14 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	return nil
 }
 
-// reconcileWatch polls a re-adopted sandbox's Status until it exits, then
+// reconcileMaxProbeErrors bounds how many CONSECUTIVE AgentStatus probe errors a
+// reconcile watcher tolerates before giving up on a persistently-unreachable
+// sandbox. A transient error (a docker daemon blip) must NOT finalize a healthy
+// RUNNING run — but a permanently-broken ref must not poll forever either. ~1 min
+// at the 5s tick.
+const reconcileMaxProbeErrors = 12
+
+// reconcileWatch polls a re-adopted sandbox's agent liveness until it exits, then
 // finalizes the run and runs the revoke cascade. Panic-safe (a panic here must
 // not crash the control plane).
 func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agentExecID string) {
@@ -81,15 +91,28 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	}()
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
+	errs := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
 			st, err := s.cfg.Runner.AgentStatus(ctx, ref, agentExecID)
-			if err != nil || isTerminalRunState(st.State) {
+			if err != nil {
+				// A transient probe error is NOT "the run finished" — finalizing here
+				// would false-kill a healthy RUNNING run on a docker daemon blip.
+				// Tolerate a bounded run of consecutive errors, then give up.
+				errs++
+				if errs < reconcileMaxProbeErrors {
+					continue
+				}
+				s.reconcileFinalize(ctx, runID, types.RunFailed, ref, "reconciled: sandbox persistently unreachable")
+				return
+			}
+			errs = 0
+			if isTerminalRunState(st.State) {
 				final := types.RunFailed
-				if err == nil && st.ExitCode != nil && *st.ExitCode == 0 {
+				if st.ExitCode != nil && *st.ExitCode == 0 {
 					final = types.RunCompleted
 				}
 				s.reconcileFinalize(ctx, runID, final, ref, "reconciled exit")
