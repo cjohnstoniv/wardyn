@@ -85,6 +85,43 @@ func TestCurrent_DelegatesRefreshWhenNearExpiry(t *testing.T) {
 	}
 }
 
+// TestCurrent_RefreshSurvivesCallerCancel proves the delegated refresh subprocess
+// is detached from the caller's request ctx: a caller that cancels early (as the
+// proxy's short-timeout injection client would) must NOT kill the in-flight
+// `claude` refresh. Regression guard for the timeout-inversion fix (U001).
+func TestCurrent_RefreshSurvivesCallerCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fake-claude is POSIX")
+	}
+	now := time.Unix(1_700_000_000, 0)
+	dir := t.TempDir()
+	cred := filepath.Join(dir, ".credentials.json")
+	writeCreds(t, cred, "stale-token", now.Add(time.Minute)) // near expiry → refresh path
+
+	// Fake claude sleeps well past the caller's cancel deadline, THEN writes the
+	// fresh token. If the subprocess were bound to the caller ctx it would be
+	// SIGKILLed before the write and Current would error.
+	freshExp := now.Add(4 * time.Hour).UnixMilli()
+	fake := filepath.Join(dir, "claude")
+	script := fmt.Sprintf("#!/bin/sh\nsleep 0.4\ncat > %q <<'EOF'\n"+
+		`{"claudeAiOauth":{"accessToken":"refreshed-token","refreshToken":"rt2","expiresAt":%d,"subscriptionType":"max"}}`+
+		"\nEOF\n", cred, freshExp)
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newTestProvider(t, cred, fake, now)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	tok, err := p.Current(ctx) // caller ctx cancels at 50ms; refresh needs ~400ms
+	if err != nil {
+		t.Fatalf("Current with an early-cancelling ctx should still complete the detached refresh, got: %v", err)
+	}
+	if tok.Value != "refreshed-token" {
+		t.Errorf("token = %q, want refreshed-token (refresh must survive caller cancel)", tok.Value)
+	}
+}
+
 func TestCurrent_FailsClosedWhenRefreshDoesNotHelp(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fake-claude is POSIX")

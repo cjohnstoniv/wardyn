@@ -64,7 +64,14 @@ func main() {
 	startupCtx, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelStartup()
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	// This client serves the control-plane API calls (injection resolve, decision
+	// log, approval checks) — NOT egress forwards, which use the proxy's own
+	// transport. Its timeout must EXCEED the subscription delegated-refresh budget
+	// (subscription.defaultRefreshTimeout, 120s): an injection resolve at the
+	// token-expiry boundary triggers that refresh server-side, and a shorter
+	// client timeout would fail the resolve closed before it can complete. Decision
+	// posts are async-buffered, so the longer ceiling never blocks the egress path.
+	client := &http.Client{Timeout: 130 * time.Second}
 	srv, err := proxy.NewServer(startupCtx, cfg, client, os.Stdout)
 	if err != nil {
 		log.Fatalf("wardyn-proxy: %v", err)
