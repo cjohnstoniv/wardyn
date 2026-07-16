@@ -10,9 +10,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/system"
-	dockerseccomp "github.com/docker/docker/profiles/seccomp"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
+	dockerseccomp "github.com/moby/profiles/seccomp"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -575,10 +575,10 @@ func TestHardenedHostConfig_SeccompApparmor(t *testing.T) {
 // _register must fall through to the profile's defaultAction (ERRNO/deny),
 // not an explicit or accidental ALLOW.
 //
-// This calls docker/docker's OWN profiles/seccomp.DefaultProfile() (the exact
-// code the daemon serves as "runtime/default") rather than re-deriving the
-// syscall list, so a future `go get -u github.com/docker/docker` that changes
-// the default profile re-runs this check for free.
+// This calls moby's OWN profiles/seccomp.DefaultProfile() (github.com/moby/
+// profiles/seccomp — the exact code the daemon serves as "runtime/default")
+// rather than re-deriving the syscall list, so a future bump of that module
+// that changes the default profile re-runs this check for free.
 func TestDockerDefaultSeccompProfile_BlocksIoUring(t *testing.T) {
 	profile := dockerseccomp.DefaultProfile()
 	if profile.DefaultAction != "SCMP_ACT_ERRNO" {

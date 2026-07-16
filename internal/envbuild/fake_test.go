@@ -8,16 +8,26 @@ package envbuild
 import (
 	"context"
 	"io"
+	"iter"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/docker/docker/api/types/build"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/client"
 )
+
+// fakePullResponse adapts an io.ReadCloser to client.ImagePullResponse (the v29
+// ImagePull return type). PullImage only drains the reader, so the extra
+// progress helpers are inert no-ops.
+type fakePullResponse struct{ io.ReadCloser }
+
+func (fakePullResponse) JSONMessages(context.Context) iter.Seq2[jsonstream.Message, error] {
+	return nil
+}
+func (fakePullResponse) Wait(context.Context) error { return nil }
 
 // fakeEnvbuilderDocker is an in-memory envbuilderDockerAPI for unit tests.
 // It simulates a Docker daemon without requiring one to be present.
@@ -62,7 +72,7 @@ func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
 	}
 }
 
-func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ image.ListOptions) ([]image.Summary, error) {
+func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []image.Summary
@@ -78,10 +88,10 @@ func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ image.ListOptions)
 			out = append(out, image.Summary{RepoTags: []string{ref}})
 		}
 	}
-	return out, nil
+	return client.ImageListResult{Items: out}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {
+func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {
 	f.mu.Lock()
 	f.pullCalled = true
 	if f.imagesPresent == nil {
@@ -89,10 +99,10 @@ func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ image.
 	}
 	f.imagesPresent[ref] = true
 	f.mu.Unlock()
-	return io.NopCloser(strings.NewReader(`{"status":"pulled"}`)), nil
+	return fakePullResponse{io.NopCloser(strings.NewReader(`{"status":"pulled"}`))}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error) {
+func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error) {
 	f.mu.Lock()
 	f.imageBuildCalled = true
 	f.lastBuildTags = options.Tags
@@ -104,49 +114,49 @@ func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Rea
 	if buildErr != "" {
 		body = `{"error":` + strconv.Quote(buildErr) + `}` + "\n"
 	}
-	return build.ImageBuildResponse{Body: io.NopCloser(strings.NewReader(body)), OSType: "linux"}, nil
+	return client.ImageBuildResult{Body: io.NopCloser(strings.NewReader(body))}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, cfg *container.Config, hostCfg *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalled++
-	if cfg != nil {
-		f.lastEnv = cfg.Env
+	if opts.Config != nil {
+		f.lastEnv = opts.Config.Env
 	}
-	if hostCfg != nil {
-		f.lastBinds = hostCfg.Binds
-		f.lastNetworkMode = hostCfg.NetworkMode
-		f.lastResources = hostCfg.Resources
-		f.lastStorageOpt = hostCfg.StorageOpt
+	if opts.HostConfig != nil {
+		f.lastBinds = opts.HostConfig.Binds
+		f.lastNetworkMode = opts.HostConfig.NetworkMode
+		f.lastResources = opts.HostConfig.Resources
+		f.lastStorageOpt = opts.HostConfig.StorageOpt
 	}
-	return container.CreateResponse{ID: "fake-build-container"}, nil
+	return client.ContainerCreateResult{ID: "fake-build-container"}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ container.StartOptions) error {
+func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startCalled++
-	return nil
+	return client.ContainerStartResult{}, nil
 }
 
-func (f *fakeEnvbuilderDocker) ContainerLogs(_ context.Context, _ string, _ container.LogsOptions) (io.ReadCloser, error) {
+func (f *fakeEnvbuilderDocker) ContainerLogs(_ context.Context, _ string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	return io.NopCloser(strings.NewReader("build log output\n")), nil
 }
 
-func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ client.ContainerWaitOptions) client.ContainerWaitResult {
 	resultC := make(chan container.WaitResponse, 1)
 	errC := make(chan error, 1)
 	f.mu.Lock()
 	code := f.exitCode
 	f.mu.Unlock()
 	resultC <- container.WaitResponse{StatusCode: code}
-	return resultC, errC
+	return client.ContainerWaitResult{Result: resultC, Error: errC}
 }
 
-func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, _ string, _ container.RemoveOptions) error {
+func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, _ string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = true
-	return nil
+	return client.ContainerRemoveResult{}, nil
 }

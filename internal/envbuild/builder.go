@@ -21,12 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/build"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	dockerclient "github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 )
@@ -92,19 +88,19 @@ var requiredTools = []string{"agent-run", "wardyn-verify", "wardyn-git-helper"}
 // defined locally (not imported from that package) so the dep graph stays
 // clean while the same *client.Client satisfies both interfaces.
 type envbuilderDockerAPI interface {
-	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
-	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
-	ImageBuild(ctx context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error)
+	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
+	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	ImageBuild(ctx context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error)
 
-	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
-	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
-	ContainerLogs(ctx context.Context, container string, options container.LogsOptions) (io.ReadCloser, error)
-	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
-	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 }
 
 // the real client must implement our slice.
-var _ envbuilderDockerAPI = (*dockerclient.Client)(nil)
+var _ envbuilderDockerAPI = (*client.Client)(nil)
 
 // Builder drives coder/envbuilder as a container to turn a devcontainer.json
 // repository into a local workspace image.
@@ -172,9 +168,9 @@ type BuildSpec struct {
 // New constructs a Builder connected to the host Docker daemon with API version
 // negotiation. envbuilderImage may be empty to use the default.
 func New(envbuilderImage, cacheRepo string) (*Builder, error) {
-	cli, err := dockerclient.NewClientWithOpts(
-		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
+	cli, err := client.NewClientWithOpts(
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("envbuild: new docker client: %w", err)
@@ -262,7 +258,7 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	hostCfg := b.hardenedHostConfig()
 	hostCfg.Binds = append(hostCfg.Binds, extraBinds...)
 
-	created, err := b.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
+	created, err := b.cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: hostCfg})
 	if err != nil {
 		return "", fmt.Errorf("envbuild: create build container: %w", err)
 	}
@@ -273,10 +269,10 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		// Use a fresh background context: the parent ctx may already be done.
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
-		_ = b.cli.ContainerRemove(rmCtx, containerID, container.RemoveOptions{Force: true})
+		_, _ = b.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true})
 	}()
 
-	if err := b.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+	if _, err := b.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
 		return "", fmt.Errorf("envbuild: start build container: %w", err)
 	}
 
@@ -285,18 +281,19 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		go b.streamLogs(ctx, containerID, logSink)
 	}
 
-	// Wait for the container to exit.
-	waitCh, errCh := b.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	// Wait for the container to exit. v29 folds the old (status, error) channel
+	// pair into one ContainerWaitResult carrying both channels.
+	wait := b.cli.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
 	case <-ctx.Done():
 		// Timeout or caller cancellation: force-kill the container. The defer
 		// above will remove it.
 		return "", fmt.Errorf("envbuild: build cancelled or timed out: %w", ctx.Err())
 
-	case waitErr := <-errCh:
+	case waitErr := <-wait.Error:
 		return "", fmt.Errorf("envbuild: waiting for build container: %w", waitErr)
 
-	case resp := <-waitCh:
+	case resp := <-wait.Result:
 		if resp.Error != nil {
 			return "", fmt.Errorf("envbuild: build container error: %s", resp.Error.Message)
 		}
@@ -571,7 +568,7 @@ func buildEnv(spec BuildSpec, cacheRepo string) []string {
 // Errors are silently swallowed; log streaming is best-effort and must not
 // affect the build result.
 func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Writer) {
-	rc, err := b.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+	rc, err := b.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
@@ -593,11 +590,11 @@ func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Write
 // imagePresent @sha256: handling, so FinalizeBase honors the same pre-pull
 // workflow the docker driver does).
 func (b *Builder) ensureImage(ctx context.Context, ref string) error {
-	summaries, err := b.cli.ImageList(ctx, image.ListOptions{})
+	res, err := b.cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return fmt.Errorf("envbuild: list images: %w", err)
 	}
-	for _, s := range summaries {
+	for _, s := range res.Items {
 		for _, tag := range s.RepoTags {
 			if tag == ref {
 				return nil
@@ -687,7 +684,7 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 	if err != nil {
 		return "", err
 	}
-	resp, err := b.cli.ImageBuild(ctx, tarCtx, build.ImageBuildOptions{
+	resp, err := b.cli.ImageBuild(ctx, tarCtx, client.ImageBuildOptions{
 		Tags:        []string{outputTag},
 		Dockerfile:  "Dockerfile",
 		Remove:      true,

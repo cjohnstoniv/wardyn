@@ -16,59 +16,65 @@ package docker
 
 import (
 	"context"
-	"io"
 
-	dockertypes "github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	dockerclient "github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/containerd/errdefs"
+	"github.com/moby/moby/client"
 )
 
 // dockerAPI is the narrow slice of the Docker client the driver uses. It
 // exists so lifecycle logic can be exercised against a fake with no daemon
 // present. *client.Client satisfies it directly (asserted below).
+//
+// The moby v29 client redesigned every method onto an options/result shape:
+// the arguments collapse into one options struct and the return values into a
+// result struct (e.g. ContainerCreate takes ContainerCreateOptions and returns
+// ContainerCreateResult). The interface mirrors that shape exactly so the real
+// *client.Client keeps satisfying it.
 type dockerAPI interface {
-	Info(ctx context.Context) (system.Info, error)
+	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
 
-	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
-	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
+	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
+	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
 	// ImageInspect resolves a ref (including a digest-pinned repo@sha256:... ref,
 	// which the tag-shaped ImageList reference filter cannot match) to check
 	// local presence without a registry round-trip.
-	ImageInspect(ctx context.Context, imageID string, opts ...dockerclient.ImageInspectOption) (image.InspectResponse, error)
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 
-	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
-	NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
-	NetworkRemove(ctx context.Context, networkID string) error
+	NetworkCreate(ctx context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error)
+	NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
+	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
 
-	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
-	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
-	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
-	ContainerKill(ctx context.Context, containerID, signal string) error
-	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	// ContainerWait blocks until the container reaches condition and yields its
 	// exit code. Used by Wait for EXEC-LESS runtimes (krun microVMs), whose agent
 	// workload runs as the container's MAIN process rather than a docker exec.
-	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	// The v29 client folds the old (status, error) channel pair into a single
+	// ContainerWaitResult carrying both channels (.Result / .Error).
+	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
 
-	ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error)
-	ContainerExecAttach(ctx context.Context, execID string, options container.ExecAttachOptions) (dockertypes.HijackedResponse, error)
-	ContainerExecStart(ctx context.Context, execID string, options container.ExecStartOptions) error
-	ContainerExecInspect(ctx context.Context, execID string) (container.ExecInspect, error)
-	// ContainerExecResize resizes the PTY of an interactive exec. Used by an
-	// attach Session to honour client window-size changes.
-	ContainerExecResize(ctx context.Context, execID string, options container.ResizeOptions) error
+	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
+	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecStart(ctx context.Context, execID string, options client.ExecStartOptions) (client.ExecStartResult, error)
+	ExecInspect(ctx context.Context, execID string, options client.ExecInspectOptions) (client.ExecInspectResult, error)
+	// ExecResize resizes the PTY of an interactive exec. Used by an attach
+	// Session to honour client window-size changes.
+	ExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) (client.ExecResizeResult, error)
 }
 
 // the real client must implement our slice.
-var _ dockerAPI = (*dockerclient.Client)(nil)
+var _ dockerAPI = (*client.Client)(nil)
 
 // isNotFound reports whether err is a Docker "no such object" error. Teardown
 // paths treat this as success so Stop/Kill are idempotent on a gone sandbox.
+// The moby v29 client surfaces 404s as containerd errdefs errors (it dropped
+// the old client.IsErrNotFound helper), so we classify via errdefs.IsNotFound —
+// which matches both an errdefs.ErrNotFound wrap and any error implementing the
+// NotFound() marker method.
 func isNotFound(err error) bool {
-	return err != nil && dockerclient.IsErrNotFound(err)
+	return err != nil && errdefs.IsNotFound(err)
 }

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -95,6 +95,7 @@ func stripDangerousKataAnnotations(ann map[string]string) map[string]string {
 //     RUNTIME binary, invoked through containerd's standard runc shim exactly like
 //     runsc (CC2). That plug-in shape sidesteps the shim-version coupling that
 //     makes Kata brittle against a very new containerd.
+//
 // Probed in this order; the first installed one wins. NOTE: bare "crun" (no
 // libkrun) is a shared-kernel runtime and is deliberately NOT accepted for CC3.
 var cc3Runtimes = []string{runtimeKata, runtimeKrun}

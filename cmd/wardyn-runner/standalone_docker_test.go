@@ -32,11 +32,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	dockerclient "github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	dockerdriver "github.com/cjohnstoniv/wardyn/internal/runner/docker"
@@ -73,7 +71,7 @@ func sdEnsureInternalNetwork(t *testing.T, d *dockerdriver.Driver, name string) 
 		t.Fatalf("docker client: %v", err)
 	}
 	defer cli.Close()
-	_, err = cli.NetworkCreate(context.Background(), name, network.CreateOptions{Driver: "bridge"})
+	_, err = cli.NetworkCreate(context.Background(), name, dockerclient.NetworkCreateOptions{Driver: "bridge"})
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "exists") {
 		t.Logf("ensure network %q: %v (continuing; may already exist)", name, err)
 	}
@@ -157,7 +155,11 @@ func TestStandalone_SpecContract_Defaults(t *testing.T) {
 func TestStandalone_CapabilityHonesty(t *testing.T) {
 	sdSkipNoDocker(t)
 
-	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest"})
+	// ProxyCmd keeps the busybox stand-in proxy alive (sleep infinity): its
+	// default `sh` exits at once, and a modern dockerd releases an exited
+	// container's endpoint IP, so CreateSandbox could not resolve the proxy's
+	// per-run IP. Mirrors conformance_docker_test.go; a real proxy is long-running.
+	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
 	}
@@ -200,7 +202,11 @@ func TestStandalone_CapabilityHonesty(t *testing.T) {
 func TestStandalone_LifecycleEndToEnd(t *testing.T) {
 	sdSkipNoDocker(t)
 
-	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest"})
+	// ProxyCmd keeps the busybox stand-in proxy alive (sleep infinity): its
+	// default `sh` exits at once, and a modern dockerd releases an exited
+	// container's endpoint IP, so CreateSandbox could not resolve the proxy's
+	// per-run IP. Mirrors conformance_docker_test.go; a real proxy is long-running.
+	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
 	}
@@ -295,7 +301,11 @@ func TestStandalone_LifecycleEndToEnd(t *testing.T) {
 func TestStandalone_L0AfterStandaloneCreate(t *testing.T) {
 	sdSkipNoDocker(t)
 
-	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest"})
+	// ProxyCmd keeps the busybox stand-in proxy alive (sleep infinity): its
+	// default `sh` exits at once, and a modern dockerd releases an exited
+	// container's endpoint IP, so CreateSandbox could not resolve the proxy's
+	// per-run IP. Mirrors conformance_docker_test.go; a real proxy is long-running.
+	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
 	}
@@ -351,7 +361,7 @@ func sdExecCapture(ctx context.Context, t *testing.T, ref string, argv []string)
 	}
 	defer cli.Close()
 
-	created, err := cli.ContainerExecCreate(ctx, ref, container.ExecOptions{
+	created, err := cli.ExecCreate(ctx, ref, dockerclient.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          argv,
@@ -359,10 +369,11 @@ func sdExecCapture(ctx context.Context, t *testing.T, ref string, argv []string)
 	if err != nil {
 		t.Fatalf("exec create %v: %v", argv, err)
 	}
-	resp, err := cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attachRes, err := cli.ExecAttach(ctx, created.ID, dockerclient.ExecAttachOptions{})
 	if err != nil {
 		t.Fatalf("exec attach %v: %v", argv, err)
 	}
+	resp := attachRes.HijackedResponse
 	defer resp.Close()
 
 	var stdout, stderr bytes.Buffer
@@ -380,6 +391,6 @@ func sdNetworkExists(t *testing.T, name string) bool {
 		t.Fatalf("docker client: %v", err)
 	}
 	defer cli.Close()
-	_, err = cli.NetworkInspect(context.Background(), name, network.InspectOptions{})
+	_, err = cli.NetworkInspect(context.Background(), name, dockerclient.NetworkInspectOptions{})
 	return err == nil
 }
