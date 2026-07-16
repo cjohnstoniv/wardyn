@@ -274,6 +274,21 @@ func TestUpstreamCredentialMasked(t *testing.T) {
 	}
 }
 
+// TestUpstreamBasicAuthRawCredential guards against percent-encoding the Basic
+// credential: a proxy password with reserved characters must be sent decoded
+// (user:p@ss/w0rd), not url.Userinfo.String()'s encoded form (user:p%40ss%2Fw0rd).
+func TestUpstreamBasicAuthRawCredential(t *testing.T) {
+	up, err := parseUpstreamProxy("http://alice:p%40ss%2Fw0rd@proxy.corp:8080")
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	// The raw password is "p@ss/w0rd" (%40 -> '@', %2F -> '/').
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("alice:p@ss/w0rd"))
+	if up.authHeader != want {
+		t.Fatalf("authHeader = %q, want %q (must use decoded credential, not percent-encoded)", up.authHeader, want)
+	}
+}
+
 // TestUpstreamParseRejectsBadScheme guards the config-validation path.
 func TestUpstreamParseRejectsBadScheme(t *testing.T) {
 	for _, raw := range []string{"ftp://proxy:1080", "socks5://proxy:1080", "http://", "://nohost"} {
