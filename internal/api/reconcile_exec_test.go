@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -135,4 +136,41 @@ func TestReconcileOnBoot_ExecRunFailsFromNonZeroExit(t *testing.T) {
 	}
 }
 
+// errProbeRunner's AgentStatus always errors — a persistent docker-daemon blip,
+// NOT a terminal state.
+type errProbeRunner struct{ *fakeRunner }
+
+func (r *errProbeRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	return runner.Status{}, errors.New("docker: daemon unreachable")
+}
+
+// TestReconcileOnBoot_TransientProbeErrorDoesNotFinalize is the runs-fsm regression
+// the completed crown review surfaced: a transient AgentStatus error at boot must
+// NOT finalize a possibly-healthy RUNNING run (that would false-kill it + revoke its
+// creds on a daemon blip). A genuinely-gone sandbox reports a terminal STATE, not an
+// error, so an error means "couldn't determine" → re-attach a watcher and retry.
+func TestReconcileOnBoot_TransientProbeErrorDoesNotFinalize(t *testing.T) {
+	h := newHarness(t)
+	fr := &errProbeRunner{fakeRunner: &fakeRunner{}}
+	fake := &bootReconcileStore{run: execRun(t, "agent-exec-id")}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = fr
+	cfg.Broker = h.broker
+	// Cancel the watcher base ctx right after boot so the re-attached goroutine
+	// exits promptly (it would otherwise need reconcileMaxProbeErrors ticks anyway).
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg.BaseCtx = ctx
+	srv := New(cfg)
+
+	err := srv.ReconcileOnBoot(context.Background())
+	cancel()
+	if err != nil {
+		t.Fatalf("reconcile on boot: %v", err)
+	}
+	if fake.transitioned {
+		t.Fatalf("a transient AgentStatus probe error must NOT finalize a healthy run (crown runs-fsm); it re-attaches instead — got a %q transition", fake.toState)
+	}
+}
+
 var _ runner.Runner = (*execExitRunner)(nil)
+var _ runner.Runner = (*errProbeRunner)(nil)
