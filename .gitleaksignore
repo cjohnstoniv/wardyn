@@ -1,0 +1,34 @@
+# Gitleaks fingerprint allowlist for accepted findings that a real
+# full-history scan (`gitleaks git -c .gitleaks.toml`, see
+# .github/workflows/ci.yml) would otherwise flag. This is gitleaks' own
+# fingerprint mechanism — one exact commit:file:rule:line per entry — kept
+# separate from the broader path/regex allowlist in .gitleaks.toml.
+#
+# To regenerate an entry: run the scan locally with
+# `--report-format json --report-path -`, then copy the finding's
+# "Fingerprint" field verbatim. Never hand-type one; a single wrong
+# character means it silently stops suppressing anything.
+#
+# Format: commit:file:rule-id:start-line
+
+# Test/dev fixtures: intentionally realistic-shaped FAKE tokens (AWS's own
+# AKIAIOSFODNN7EXAMPLE placeholder, sequential-character PATs, "abc"-body
+# SSH/RSA key bodies) that exercise the secret-masking and credential-mint
+# code paths. None of these are live credentials.
+ce1203da2c954784276d8f0e0292f2833796cd92:internal/workspacescan/verify_test.go:curl-auth-header:134
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/workspacescan/verify_test.go:private-key:130
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/workspacescan/verify_test.go:github-pat:20
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/workspacescan/verify_test.go:github-pat:35
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/broker/gitpat_test.go:gitlab-pat:125
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/broker/sshkey_test.go:private-key:35
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:scripts/e2e-backend.sh:age-secret-key:36
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:scripts/run-local.sh:age-secret-key:31
+
+# knownPublicAgeKey (cmd/wardynd/main.go): a DELIBERATELY public demo age
+# identity that earlier Compose files shipped as a baked-in default. Its doc
+# comment there states plainly that it is published in git history by
+# design, and wardynd fail-closed REFUSES TO BOOT if WARDYN_AGE_KEY is ever
+# set to it — a runtime invariant, not just a comment, so "inert" is already
+# confirmed by the shipped code. Kept as its own entry rather than folded
+# into the fixtures above.
+ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:cmd/wardynd/main.go:age-secret-key:707
