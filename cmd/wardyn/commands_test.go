@@ -525,16 +525,29 @@ func TestAuditCmd_BuildsQuery(t *testing.T) {
 	}
 }
 
+// TestAuditCmd_PositionalArg proves the run id works positionally, like every
+// sibling command (finding U021).
+func TestAuditCmd_PositionalArg(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+
+	if err := execCmd(t, "audit", "run-77", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("audit <id> returned error: %v", err)
+	}
+	if got := srv.last(); got.query != "run_id=run-77" {
+		t.Errorf("query = %q, want run_id=run-77 (positional id must be used)", got.query)
+	}
+}
+
 // audit requires --run; without it the command fails before any request.
 func TestAuditCmd_RequiresRun(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
 
 	err := execCmd(t, "audit", "--url", srv.URL, "--token", "tok")
 	if err == nil {
-		t.Fatal("expected error when --run missing, got nil")
+		t.Fatal("expected error when run id missing, got nil")
 	}
-	if !strings.Contains(err.Error(), "--run is required") {
-		t.Errorf("error = %q, want --run is required", err)
+	if !strings.Contains(err.Error(), "run id required") {
+		t.Errorf("error = %q, want 'run id required'", err)
 	}
 	srv.mu.Lock()
 	n := len(srv.reqs)
