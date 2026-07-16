@@ -54,15 +54,19 @@ func (f *fakeSubstrate) rec(slot *[]string, ref string) {
 	f.mu.Unlock()
 }
 
-func (f *fakeSubstrate) Exec(_ context.Context, ref string, _ []string) error {
+func (f *fakeSubstrate) Exec(_ context.Context, ref string, _ []string) (string, error) {
 	f.rec(&f.execs, ref)
-	return nil
+	return "", nil
 }
 func (f *fakeSubstrate) Wait(context.Context, string) (int, error) { return 0, nil }
 func (f *fakeSubstrate) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, nil
 }
 func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, error) {
+	f.rec(&f.statuses, ref)
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (f *fakeSubstrate) AgentStatus(_ context.Context, ref, _ string) (runner.Status, error) {
 	f.rec(&f.statuses, ref)
 	return runner.Status{State: types.RunRunning}, nil
 }
@@ -115,7 +119,7 @@ func TestOrchestrator_RoutesByClassAndTracksRef(t *testing.T) {
 		t.Fatalf("CC3 must route to vmm; vmm.created=%d oci.created=%d", len(vmm.created), len(oci.created))
 	}
 	// ...and subsequent lifecycle ops must follow the ref to the SAME substrate.
-	_ = o.Exec(context.Background(), sb.Ref, []string{"x"})
+	_, _ = o.Exec(context.Background(), sb.Ref, []string{"x"})
 	_ = o.KillSandbox(context.Background(), sb.Ref)
 	if len(vmm.execs) != 1 || vmm.execs[0] != sb.Ref {
 		t.Fatalf("Exec must route to vmm by ref; got %v", vmm.execs)

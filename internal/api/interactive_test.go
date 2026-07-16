@@ -49,11 +49,11 @@ func (f *fakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (
 	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: "fake", EnforcedClass: spec.ConfinementClass}, nil
 }
 
-func (f *fakeRunner) Exec(context.Context, string, []string) error {
+func (f *fakeRunner) Exec(context.Context, string, []string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.execCalls++
-	return nil
+	return "fake-exec-id", nil
 }
 
 // Wait blocks forever (until ctx is done): in a non-interactive run the watcher
@@ -68,6 +68,9 @@ func (f *fakeRunner) Attach(context.Context, string, runner.AttachOptions) (runn
 	return nil, context.Canceled
 }
 func (f *fakeRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (f *fakeRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (f *fakeRunner) StopSandbox(context.Context, string) error { return nil }

@@ -216,8 +216,13 @@ type Runner interface {
 	// with L0 confinement: no default route, egress only via the proxy.
 	CreateSandbox(ctx context.Context, spec SandboxSpec) (Sandbox, error)
 	// Exec starts the agent process inside the sandbox (PTY attached when
-	// recording). Returns when the process has been started, not finished.
-	Exec(ctx context.Context, ref string, argv []string) error
+	// recording). Returns when the process has been started, not finished. The
+	// returned agentExecID identifies the started process for exec-based substrates
+	// (the docker idle-container + `docker exec` path); it is "" for exec-less /
+	// main-process substrates (krun), where the container IS the agent. Persist it
+	// so the crash reconciler can observe agent liveness across a wardynd restart
+	// via AgentStatus (U008/U039).
+	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process started by Exec for this sandbox ref
 	// has exited, returning its exit code. It is ONLY valid after a successful
 	// Exec on the same ref (it observes the agent exec Exec created). Wait
@@ -238,6 +243,14 @@ type Runner interface {
 	// (invariant 4) at the call site (the runner is identity-agnostic).
 	Attach(ctx context.Context, ref string, opts AttachOptions) (Session, error)
 	Status(ctx context.Context, ref string) (Status, error)
+	// AgentStatus reports the AGENT's observed state in a restart-safe way, given
+	// the agentExecID Exec returned (persisted on the run row). For exec-based
+	// substrates it inspects that exec, so a run whose agent has exited reports a
+	// terminal State + ExitCode even while the idle container is still up — the
+	// distinction container-level Status cannot make after a restart lost the
+	// in-memory exec map. When agentExecID is "" (exec-less/main-process, or Exec
+	// never ran) it falls back to Status, where the container IS the agent.
+	AgentStatus(ctx context.Context, ref, agentExecID string) (Status, error)
 	// StopSandbox is the graceful path (lifecycle auto-stop).
 	StopSandbox(ctx context.Context, ref string) error
 	// KillSandbox is the kill-switch path: immediate teardown. The control

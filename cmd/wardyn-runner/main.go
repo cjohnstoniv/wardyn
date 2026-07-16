@@ -139,7 +139,7 @@ func run() error {
 
 	if *execArg != "" {
 		argv := strings.Fields(*execArg)
-		if err := run.Exec(ctx, sb.Ref, argv); err != nil {
+		if _, err := run.Exec(ctx, sb.Ref, argv); err != nil {
 			return fmt.Errorf("exec: %w", err)
 		}
 		fmt.Printf("exec started: %v\n", argv)

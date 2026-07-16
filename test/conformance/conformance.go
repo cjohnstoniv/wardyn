@@ -257,7 +257,7 @@ func testWaitExitCode(t *testing.T, r runner.Runner, opts Options) {
 	// FAILED from COMPLETED. Use a distinctive code so a spurious 0/1 cannot
 	// pass by accident.
 	const wantCode = 42
-	if err := r.Exec(ctx, sb.Ref, opts.ExitArgv(wantCode)); err != nil {
+	if _, err := r.Exec(ctx, sb.Ref, opts.ExitArgv(wantCode)); err != nil {
 		t.Fatalf("Exec(exit %d): %v", wantCode, err)
 	}
 
@@ -451,7 +451,7 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 	// Run a short-lived recorded command if the driver supplied an argv builder,
 	// so the recorder has something to capture before the probe inspects it.
 	if opts.ExitArgv != nil {
-		if err := r.Exec(ctx, sb.Ref, opts.ExitArgv(0)); err != nil {
+		if _, err := r.Exec(ctx, sb.Ref, opts.ExitArgv(0)); err != nil {
 			t.Fatalf("Exec(recorded command): %v", err)
 		}
 		if _, err := r.Wait(ctx, sb.Ref); err != nil {

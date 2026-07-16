@@ -148,10 +148,10 @@ func (o *Orchestrator) subForRef(ref string) (substrate.Substrate, error) {
 	return nil, fmt.Errorf("orchestrator: no substrate tracked for ref %q", ref)
 }
 
-func (o *Orchestrator) Exec(ctx context.Context, ref string, argv []string) error {
+func (o *Orchestrator) Exec(ctx context.Context, ref string, argv []string) (string, error) {
 	s, err := o.subForRef(ref)
 	if err != nil {
-		return err
+		return "", err
 	}
 	return s.Exec(ctx, ref, argv)
 }
@@ -178,6 +178,14 @@ func (o *Orchestrator) Status(ctx context.Context, ref string) (runner.Status, e
 		return runner.Status{}, err
 	}
 	return s.Status(ctx, ref)
+}
+
+func (o *Orchestrator) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
+	s, err := o.subForRef(ref)
+	if err != nil {
+		return runner.Status{}, err
+	}
+	return s.AgentStatus(ctx, ref, agentExecID)
 }
 
 func (o *Orchestrator) StopSandbox(ctx context.Context, ref string) error {

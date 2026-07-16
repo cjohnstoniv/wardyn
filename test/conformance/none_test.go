@@ -63,12 +63,17 @@ func (noneRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 func (noneRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
 	return runner.Sandbox{}, errNoneNotImplemented
 }
-func (noneRunner) Exec(context.Context, string, []string) error { return errNoneNotImplemented }
+func (noneRunner) Exec(context.Context, string, []string) (string, error) {
+	return "", errNoneNotImplemented
+}
 func (noneRunner) Wait(context.Context, string) (int, error)    { return 0, errNoneNotImplemented }
 func (noneRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errNoneNotImplemented
 }
 func (noneRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{}, errNoneNotImplemented
+}
+func (noneRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
 	return runner.Status{}, errNoneNotImplemented
 }
 func (noneRunner) StopSandbox(context.Context, string) error { return errNoneNotImplemented }
@@ -94,12 +99,15 @@ func (downgradingRunner) CreateSandbox(_ context.Context, _ runner.SandboxSpec) 
 	// sandbox is created with NO enforced class — a silent downgrade below CC1.
 	return runner.Sandbox{Ref: "wardyn-downgrade-" + uuid.NewString(), Driver: "downgrading", EnforcedClass: ""}, nil
 }
-func (downgradingRunner) Exec(context.Context, string, []string) error { return nil }
+func (downgradingRunner) Exec(context.Context, string, []string) (string, error) { return "", nil }
 func (downgradingRunner) Wait(context.Context, string) (int, error)    { return 0, nil }
 func (downgradingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("downgrading: no attach")
 }
 func (downgradingRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (downgradingRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (downgradingRunner) StopSandbox(context.Context, string) error { return nil }
@@ -136,17 +144,20 @@ func (*recordingRunner) CreateSandbox(_ context.Context, _ runner.SandboxSpec) (
 	return runner.Sandbox{Ref: "wardyn-rec-" + uuid.NewString(), Driver: "recording", EnforcedClass: types.CC1}, nil
 }
 
-func (r *recordingRunner) Exec(_ context.Context, ref string, _ []string) error {
+func (r *recordingRunner) Exec(_ context.Context, ref string, _ []string) (string, error) {
 	// Honour the declared recording capability: a recorded exec produces an
 	// artifact for ref. A real driver wraps argv with wardyn-rec here.
 	r.recorded[ref] = true
-	return nil
+	return "", nil
 }
 func (*recordingRunner) Wait(context.Context, string) (int, error) { return 0, nil }
 func (*recordingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("recording: no attach")
 }
 func (*recordingRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (*recordingRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (*recordingRunner) StopSandbox(context.Context, string) error { return nil }
@@ -169,12 +180,17 @@ func (pretendingRecordingRunner) Capabilities(context.Context) (runner.Capabilit
 func (pretendingRecordingRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
 	return runner.Sandbox{Ref: "wardyn-pretend-" + uuid.NewString(), Driver: "pretending", EnforcedClass: types.CC1}, nil
 }
-func (pretendingRecordingRunner) Exec(context.Context, string, []string) error { return nil } // ...but records nothing
+func (pretendingRecordingRunner) Exec(context.Context, string, []string) (string, error) {
+	return "", nil
+} // ...but records nothing
 func (pretendingRecordingRunner) Wait(context.Context, string) (int, error)    { return 0, nil }
 func (pretendingRecordingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("pretending: no attach")
 }
 func (pretendingRecordingRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (pretendingRecordingRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (pretendingRecordingRunner) StopSandbox(context.Context, string) error { return nil }
@@ -253,7 +269,7 @@ func TestNoneStubLifecycleNotImplemented(t *testing.T) {
 		call func() error
 	}{
 		{"CreateSandbox", func() error { _, err := r.CreateSandbox(ctx, spec); return err }},
-		{"Exec", func() error { return r.Exec(ctx, "any-ref", []string{"echo", "hi"}) }},
+		{"Exec", func() error { _, err := r.Exec(ctx, "any-ref", []string{"echo", "hi"}); return err }},
 		{"Wait", func() error { _, err := r.Wait(ctx, "any-ref"); return err }},
 		{"Attach", func() error { _, err := r.Attach(ctx, "any-ref", runner.AttachOptions{}); return err }},
 		{"Status", func() error { _, err := r.Status(ctx, "any-ref"); return err }},

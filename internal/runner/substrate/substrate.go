@@ -56,14 +56,20 @@ type Substrate interface {
 	// CreateSandbox provisions the run's isolated network + proxy + agent unit,
 	// fail-closed with full rollback on any error.
 	CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error)
-	// Exec launches the agent process inside the sandbox ref.
-	Exec(ctx context.Context, ref string, argv []string) error
+	// Exec launches the agent process inside the sandbox ref, returning the
+	// substrate-specific agent exec id ("" for exec-less/main-process substrates)
+	// so the control plane can persist it for restart-safe liveness (U008/U039).
+	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process for ref exits and returns its code.
 	Wait(ctx context.Context, ref string) (int, error)
 	// Attach opens an interactive PTY session inside ref.
 	Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error)
 	// Status reports the sandbox lifecycle state.
 	Status(ctx context.Context, ref string) (runner.Status, error)
+	// AgentStatus reports the AGENT's state restart-safely given the persisted
+	// agentExecID (inspects the exec for exec-based substrates; falls back to
+	// Status when agentExecID is "").
+	AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error)
 	// StopSandbox is the graceful teardown (idempotent on a gone sandbox).
 	StopSandbox(ctx context.Context, ref string) error
 	// KillSandbox is the immediate kill-switch teardown (idempotent).

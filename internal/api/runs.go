@@ -1261,7 +1261,8 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			return
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
-		if xerr := s.cfg.Runner.Exec(ctx, sb.Ref, argv); xerr != nil {
+		execID, xerr := s.cfg.Runner.Exec(ctx, sb.Ref, argv)
+		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error()})))
 			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
@@ -1270,6 +1271,11 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			_, _ = s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunRunning, types.RunFailed)
 			return
 		}
+		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
+		// (ExecInspect) across a wardynd restart: an idle-container exec run whose
+		// agent already exited must finalize + revoke, not strand RUNNING (U008/U039).
+		// Best-effort like SetSandboxRef; "" for exec-less substrates (container==agent).
+		_ = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, execID)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 			run.ID.String(), "success", mustJSON(map[string]any{"argv": argv})))
 
@@ -1311,7 +1317,7 @@ const byoiSelftestTimeout = 2 * time.Minute
 func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, failClosed bool) bool {
 	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
 	defer cancel()
-	if xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
+	if _, xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
 				"error": xerr.Error(), "fail_closed": failClosed,
