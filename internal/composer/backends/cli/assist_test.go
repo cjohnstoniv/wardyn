@@ -47,6 +47,10 @@ func TestClaude_Assist_NoSchema(t *testing.T) {
 	if v, _ := flagValue(argv, "--permission-mode"); v != "plan" {
 		t.Errorf("Assist --permission-mode = %q, want plan (read-only host posture)", v)
 	}
+	// The assist path also drops operator MCP servers on the host, same as Propose.
+	if !slices.Contains(argv, "--strict-mcp-config") {
+		t.Error("Assist must pass --strict-mcp-config (no operator MCP servers load)")
+	}
 	if v, _ := flagValue(argv, "--append-system-prompt"); v != composer.AssistSystemPrompt {
 		t.Errorf("--append-system-prompt is not the assist prompt")
 	}

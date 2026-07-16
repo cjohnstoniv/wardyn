@@ -14,8 +14,9 @@
 // ambient default: codex gets `--sandbox read-only --ask-for-approval never` (which
 // also blocks the network); claude gets `--permission-mode plan` PLUS an explicit
 // `--disallowedTools` denylist (composerDisallowedTools) — plan mode ALONE still
-// permits read-only tools including WebFetch/WebSearch (network) and host file
-// reads, so the denylist is what actually closes host file-exfiltration / SSRF from
+// permits read-only tools including WebFetch/WebSearch (network), host file reads,
+// and any resident MCP tool, so the denylist PLUS `--strict-mcp-config` (which drops
+// every operator MCP server) is what actually closes host file-exfiltration / SSRF from
 // a prompt-injected attachment (H12). The CLI is used purely as a structured-output
 // text generator; its output is Grade+Clamped downstream. ANTHROPIC_API_KEY is
 // scrubbed from the child env for the claude tool so it uses the subscription
@@ -55,15 +56,21 @@ const defaultTimeout = 120 * time.Second
 // backstop on runaway analysis.
 const composerMaxTurns = "6"
 
-// composerDisallowedTools denies EVERY tool for the claude invocations. The
+// composerDisallowedTools denies EVERY built-in tool for the claude invocations. The
 // composer uses the CLI purely as a structured-output text generator — it needs
 // ZERO tools. `--permission-mode plan` blocks MUTATING tools but still permits
 // read-only ones — file Read/Glob/Grep and, crucially, WebFetch/WebSearch network
 // reads — so a prompt-injected attachment run on the CONTROL-PLANE host could
 // exfiltrate host file contents or reach the network. Denying the tools outright
-// closes that (H12). (codex needs no equivalent: `--sandbox read-only` fully
+// closes that (H12). The operator's MCP tools are a separate, unbounded class an
+// enumerated denylist can't cover: the claude invocations also pass
+// `--strict-mcp-config` with no `--mcp-config`, so NO MCP servers load and there
+// are no mcp__* tools to call. (codex needs no equivalent: `--sandbox read-only` fully
 // sandboxes it, blocking both writes and the network.)
-const composerDisallowedTools = "Read,Glob,Grep,Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,TodoWrite"
+//
+// ponytail: enumerated built-in denylist; a NEW built-in tool must be added here.
+// The unbounded operator-MCP class is instead closed structurally by --strict-mcp-config.
+const composerDisallowedTools = "Read,Glob,Grep,Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,TodoWrite,Skill,SlashCommand,ToolSearch"
 
 // Config configures the CLI composer backend.
 type Config struct {
@@ -204,6 +211,7 @@ func (c *cliComposer) assistClaude(ctx context.Context, system, user string) (st
 		"--output-format", "json",
 		"--append-system-prompt", system,
 		"--permission-mode", "plan",
+		"--strict-mcp-config", // no --mcp-config below => load ZERO operator MCP servers
 		"--disallowedTools", composerDisallowedTools,
 		"--max-turns", composerMaxTurns,
 	}
@@ -321,6 +329,7 @@ func (c *cliComposer) runClaude(ctx context.Context, schema map[string]any, syst
 		"--json-schema", string(schemaJSON),
 		"--append-system-prompt", system,
 		"--permission-mode", "plan",
+		"--strict-mcp-config", // no --mcp-config below => load ZERO operator MCP servers
 		"--disallowedTools", composerDisallowedTools,
 		"--max-turns", composerMaxTurns,
 	}

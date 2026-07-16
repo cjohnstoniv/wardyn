@@ -185,6 +185,52 @@ func TestClaude_LeastPrivilegePermissionMode(t *testing.T) {
 	}
 }
 
+func TestClaude_ToolAndMCPLockdown(t *testing.T) {
+	// The claude composer invocations run on the CONTROL-PLANE host against
+	// UNTRUSTED task text / attachments and need ZERO tools. Beyond --permission-mode
+	// plan (which alone still permits read-only AND operator MCP tools) two controls
+	// must be present: (1) --strict-mcp-config with NO --mcp-config, so the operator's
+	// resident MCP servers (an unbounded, un-enumerable class) do not load and an
+	// mcp__* tool is unreachable because it structurally does not exist; and (2) an
+	// expanded --disallowedTools that also denies the newer built-in tools
+	// (Skill, SlashCommand, ToolSearch) a stale enumerated denylist would miss.
+	fake := writeFakeCLI(t, "claude",
+		`printf '%s' '{"is_error":false,"structured_output":`+composertest.ValidProposalJSON+`}'`)
+	c, err := NewComposer(Config{Tool: ToolClaude, BinPath: fake.bin})
+	if err != nil {
+		t.Fatalf("NewComposer: %v", err)
+	}
+	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	argv := fake.argv(t)
+
+	// (1) Operator MCP servers are dropped structurally, not by enumeration.
+	if !slices.Contains(argv, "--strict-mcp-config") {
+		t.Error("argv must pass --strict-mcp-config so operator MCP servers do not load")
+	}
+	if slices.Contains(argv, "--mcp-config") {
+		t.Error("argv must NOT pass --mcp-config (composer loads no MCP servers)")
+	}
+
+	// (2) The denylist also covers the newer built-in tools.
+	deny, ok := flagValue(argv, "--disallowedTools")
+	if !ok {
+		t.Fatalf("argv missing --disallowedTools: %v", argv)
+	}
+	denied := strings.Split(deny, ",")
+	for _, tool := range []string{"Skill", "SlashCommand", "ToolSearch", "WebFetch", "Bash"} {
+		if !slices.Contains(denied, tool) {
+			t.Errorf("--disallowedTools %q does not deny %q", deny, tool)
+		}
+	}
+	// An MCP-shaped tool name is NOT enumerated in the denylist (it cannot be);
+	// --strict-mcp-config is what makes mcp__* unreachable.
+	if strings.Contains(deny, "mcp__") {
+		t.Errorf("--disallowedTools should not try to enumerate MCP tools: %q", deny)
+	}
+}
+
 func TestClaude_ScrubsAnthropicAPIKey(t *testing.T) {
 	// The fake records its environment so we can assert ANTHROPIC_API_KEY is gone
 	// (subscription auth) while an unrelated var survives.
