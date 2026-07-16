@@ -53,6 +53,22 @@ func TestMaskProxyURL(t *testing.T) {
 	}
 }
 
+// An unparseable proxy value that still contains credentials must be redacted
+// entirely, never echoed raw (regression guard for the credential-leak fix).
+func TestMaskProxyURL_UnparseableRedacts(t *testing.T) {
+	in := "http://user:s3cr3t@%zzproxy.corp:8080" // %zz is an invalid escape → url.Parse errors
+	masked, hasCred := maskProxyURL(in)
+	if strings.Contains(masked, "s3cr3t") {
+		t.Fatalf("masked output %q leaks the raw password", masked)
+	}
+	if !hasCred {
+		t.Errorf("hasCred = false, want true for a credentialed-but-unparseable proxy URL")
+	}
+	if masked == in {
+		t.Errorf("masked output was returned verbatim (unredacted): %q", masked)
+	}
+}
+
 // ─── env vars ────────────────────────────────────────────────────────────────
 
 func TestDetectEnvProxyCandidates_LowercasePreferredAndMismatch(t *testing.T) {

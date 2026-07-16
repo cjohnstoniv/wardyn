@@ -243,7 +243,17 @@ func maskProxyURL(raw string) (masked string, hasCredentials bool) {
 		parseTarget = "http://" + raw
 	}
 	u, err := url.Parse(parseTarget)
-	if err != nil || u.User == nil || u.User.Username() == "" {
+	if err != nil {
+		// Parse failed → we cannot locate embedded userinfo to redact. If the value
+		// could carry credentials (contains '@'), redact it entirely rather than echo
+		// a possibly-credentialed URL. Previously this returned the raw string here,
+		// leaking credentials on any proxy value net/url rejected.
+		if strings.Contains(raw, "@") {
+			return "<redacted: unparseable proxy URL>", true
+		}
+		return raw, false
+	}
+	if u.User == nil || u.User.Username() == "" {
 		return raw, false
 	}
 	display := u.User.Username()
