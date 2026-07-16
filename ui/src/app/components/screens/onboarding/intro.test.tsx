@@ -56,6 +56,19 @@ describe("hasLlmPath — honesty guard for the fake composer backend", () => {
   it("counts an anthropic key secret", () => {
     expect(hasLlmPath(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }))).toBe(true);
   });
+  it("counts a Bedrock-ready host (server-computed ready) — no split-brain with the model step", () => {
+    expect(hasLlmPath(status({ bedrock: { creds_present: false, ready: true } }))).toBe(true);
+  });
+  it("counts a Bedrock host via the derived criteria when `ready` is absent (older daemon)", () => {
+    expect(
+      hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: true } })),
+    ).toBe(true);
+  });
+  it("does NOT count Bedrock with a region+model but no credential source", () => {
+    expect(
+      hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false } })),
+    ).toBe(false);
+  });
 });
 
 describe("deriveReadiness — must not overclaim a fake backend as a connected model", () => {
