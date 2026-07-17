@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
@@ -585,5 +586,173 @@ func TestCapabilities_FromDaemonInfo(t *testing.T) {
 	}
 	if !slices.Equal(caps.Classes, []types.ConfinementClass{types.CC1, types.CC2}) {
 		t.Errorf("Classes = %v", caps.Classes)
+	}
+}
+
+// TestExecLess_KillDuringAgentCreate_RemovesResurrectedAgent locks the atomicity
+// of the pending->created transition on the EXEC-LESS (krun/CC3) path. A kill
+// that lands while runAsMainProcess is inside ContainerCreate finds no container
+// to remove and reports idempotent success — so the create must NOT leave a live
+// agent behind. Before the claim/tombstone, the container was created after the
+// kill, mainProc[ref] was re-added behind teardown's back, and the agent ran the
+// task to completion on a KILLED run.
+func TestExecLess_KillDuringAgentCreate_RemovesResurrectedAgent(t *testing.T) {
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun") // CC3 via krun: exec-less, agent creation deferred
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	agentName := agentContainerName(spec.RunID)
+
+	// Kill lands in the window between Exec claiming the pending config and the
+	// agent container existing on the daemon.
+	var killErr error
+	f.mu.Lock()
+	f.onCreate = func(name string) {
+		if name != agentName {
+			return
+		}
+		f.mu.Lock()
+		f.onCreate = nil // once: the cleanup remove must not re-enter
+		f.mu.Unlock()
+		killErr = d.KillSandbox(context.Background(), sb.Ref)
+	}
+	f.mu.Unlock()
+
+	_, execErr := d.Exec(ctx, sb.Ref, []string{"agent-run", "task"})
+
+	if killErr != nil {
+		t.Fatalf("KillSandbox during agent create: %v", killErr)
+	}
+	if execErr == nil {
+		t.Error("Exec must fail once its sandbox was torn down mid-create, got nil")
+	}
+	// The invariant: a killed sandbox has no live agent, whoever created it.
+	f.mu.Lock()
+	c, exists := f.containers[agentName]
+	removed := exists && c.removed
+	f.mu.Unlock()
+	if exists && !removed {
+		t.Fatal("agent container created during a kill survived: a KILLED run is running the task")
+	}
+	// And the driver's own state must not resurrect the ref.
+	d.mu.Lock()
+	live := d.mainProc[sb.Ref] || d.creating[sb.Ref] || d.pending[sb.Ref] != nil
+	d.mu.Unlock()
+	if live {
+		t.Error("driver still tracks a torn-down ref as live")
+	}
+}
+
+// TestWait_TolerantOfTransientProbeErrors: a docker API blip is NOT "the agent
+// exited". Wait's error is terminal for the completion watcher (it stops
+// watching, stranding a RUNNING run with a live sandbox), so a transient
+// ExecInspect error must be retried, not returned. Not-found stays authoritative
+// (asserted by the sibling test) so a kill still unblocks Wait promptly.
+func TestWait_TolerantOfTransientProbeErrors(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	f.mu.Lock()
+	f.execInspectErrs = 3 // daemon blip across three polls, then the exec is visible again
+	f.execExited = true
+	f.execExitCode = 5
+	f.mu.Unlock()
+
+	code, err := d.Wait(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("Wait must ride out a transient probe error, got: %v", err)
+	}
+	if code != 5 {
+		t.Errorf("Wait code = %d, want 5", code)
+	}
+}
+
+// TestWait_NotFoundFailsFast: the retry budget must not blunt teardown. A
+// not-found exec is authoritative (the container is gone), so Wait returns at
+// once rather than polling out its transient-error budget.
+func TestWait_NotFoundFailsFast(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	// Re-point the agent exec at an id the fake reports as gone.
+	d.mu.Lock()
+	d.agentExecs[sb.Ref] = "vanished"
+	d.mu.Unlock()
+	f.mu.Lock()
+	f.execGone = "vanished"
+	f.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() { _, werr := d.Wait(ctx, sb.Ref); done <- werr }()
+	select {
+	case werr := <-done:
+		if werr == nil {
+			t.Fatal("Wait must return an error for a vanished exec")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait retried a not-found exec instead of failing fast")
+	}
+}
+
+// TestWaitMainProcess_TolerantOfTransientProbeErrors: the exec-less (krun/CC3)
+// sibling of TestWait_TolerantOfTransientProbeErrors — same root cause, same
+// rule, the other Wait path.
+func TestWaitMainProcess_TolerantOfTransientProbeErrors(t *testing.T) {
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun")
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	f.mu.Lock()
+	f.waitErrs = 3
+	f.containers[agentContainerName(spec.RunID)].state = &container.State{Status: "exited", ExitCode: 9}
+	f.mu.Unlock()
+
+	code, err := d.Wait(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("Wait (main process) must ride out a transient probe error, got: %v", err)
+	}
+	if code != 9 {
+		t.Errorf("Wait code = %d, want 9", code)
 	}
 }

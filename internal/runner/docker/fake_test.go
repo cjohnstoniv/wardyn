@@ -72,6 +72,21 @@ type fakeDocker struct {
 	// failpoints
 	failCreateContainer string // name prefix that should fail on create
 	failImagePull       bool   // ImagePull returns an error (image absent + unpullable)
+	// onCreate, when set, runs INSIDE ContainerCreate (before the container is
+	// recorded) so a test can interleave another driver call with an in-flight
+	// create. Called without f.mu held.
+	onCreate func(name string)
+	// execInspectErrs / waitErrs make the next N ExecInspect / ContainerWait
+	// probes fail with a transient (non-not-found) error, modelling a daemon blip.
+	execInspectErrs int
+	waitErrs        int
+	// execExitCode is reported once execInspectErrs is exhausted; when
+	// execExited is true ExecInspect reports the process as finished.
+	execExitCode int
+	execExited   bool
+	// execGone is an exec id ExecInspect reports as not-found (the authoritative
+	// "it is really gone", as opposed to the transient execInspectErrs blip).
+	execGone string
 
 	lastExecCmd []string // argv of the most recent exec
 	// lastResize records the most recent ExecResize options so attach
@@ -153,6 +168,12 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ clie
 }
 
 func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	f.mu.Lock()
+	hook := f.onCreate
+	f.mu.Unlock()
+	if hook != nil {
+		hook(opts.Name)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := opts.Name
@@ -266,6 +287,13 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	statusCh := make(chan container.WaitResponse, 1)
 	errCh := make(chan error, 1)
 	f.mu.Lock()
+	if f.waitErrs > 0 {
+		f.waitErrs--
+		f.mu.Unlock()
+		// A daemon blip: NOT a not-found (the container still exists).
+		errCh <- fmt.Errorf("Cannot connect to the Docker daemon: EOF")
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
 	c, ok := f.containers[id]
 	f.mu.Unlock()
 	if !ok || c == nil || c.removed {
@@ -303,7 +331,17 @@ func (f *fakeDocker) ExecStart(ctx context.Context, execID string, opts client.E
 }
 
 func (f *fakeDocker) ExecInspect(ctx context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
-	return client.ExecInspectResult{ID: execID, Running: true}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.execGone != "" && execID == f.execGone {
+		return client.ExecInspectResult{}, fakeNotFound{msg: "no such exec: " + execID}
+	}
+	if f.execInspectErrs > 0 {
+		f.execInspectErrs--
+		// A daemon blip: NOT a not-found (the exec still exists).
+		return client.ExecInspectResult{}, fmt.Errorf("Cannot connect to the Docker daemon: EOF")
+	}
+	return client.ExecInspectResult{ID: execID, Running: !f.execExited, ExitCode: f.execExitCode}, nil
 }
 
 func (f *fakeDocker) ExecResize(ctx context.Context, execID string, opts client.ExecResizeOptions) (client.ExecResizeResult, error) {

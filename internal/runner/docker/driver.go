@@ -84,6 +84,20 @@ const (
 	stopTimeout    = 10 * time.Second
 )
 
+// pollInterval is Wait's probe cadence, and waitMaxProbeErrors is how many
+// CONSECUTIVE transient probe errors it tolerates before giving up (~1 min,
+// matching the control plane's reconcileMaxProbeErrors budget).
+//
+// A transient daemon/API blip is NOT "the agent exited": Wait's error is terminal
+// for its caller — the completion watcher stops watching and the run is stranded
+// RUNNING with a live sandbox — so a blip must not surface as an error at all. A
+// not-found is authoritative (the exec/container really is gone) and is never
+// retried, so a kill/teardown still unblocks Wait immediately.
+const (
+	pollInterval       = 200 * time.Millisecond
+	waitMaxProbeErrors = 300
+)
+
 // recordingSourceProbeTarget is a known-allowed workspace target used ONLY to
 // exercise runner.ValidateMount's host-SOURCE deny-list against a host-bind
 // RecordingMount. The real in-container target is RecordingMountTarget, a fixed
@@ -103,8 +117,8 @@ type Driver struct {
 	cli dockerAPI
 	cfg Config
 
-	// mu guards agentExecs, pending, and mainProc. The driver is safe for
-	// concurrent use; these maps are the only mutable state.
+	// mu guards agentExecs, pending, mainProc, and creating. The driver is safe
+	// for concurrent use; these maps are the only mutable state.
 	mu sync.Mutex
 	// agentExecs maps a sandbox ref (agent container id) to the exec id of the
 	// agent process started by Exec. Wait inspects this exec id to observe the
@@ -118,6 +132,15 @@ type Driver struct {
 	// mainProc marks refs whose workload runs as the container main process (the
 	// exec-less path), so Wait blocks on container exit instead of an exec.
 	mainProc map[string]bool
+	// creating marks exec-less refs whose agent container is being created RIGHT
+	// NOW by runAsMainProcess (Exec claimed the pending entry, the ContainerCreate
+	// has not returned yet). It is the tombstone that makes the pending->created
+	// transition atomic w.r.t. teardown: teardown finds no container to remove in
+	// that window, so it deletes the mark instead, and runAsMainProcess — seeing
+	// its mark gone — removes the container it just made rather than leaving a
+	// killed run's agent alive. Fail closed: the entry only ever means "this ref
+	// is still live".
+	creating map[string]bool
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers for
@@ -214,6 +237,7 @@ func newWithClient(cli dockerAPI, cfg Config) *Driver {
 		agentExecs: make(map[string]string),
 		pending:    make(map[string]*pendingAgent),
 		mainProc:   make(map[string]bool),
+		creating:   make(map[string]bool),
 	}
 }
 
@@ -640,8 +664,14 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	// EXEC-LESS path: a deferred (krun) agent is created NOW with the workload as
 	// its main process — there is no exec to attach, and the container IS the agent
 	// (empty exec id => the reconciler uses container Status for liveness).
+	// CLAIM the pending entry (delete + mark creating) in ONE critical section so a
+	// concurrent teardown cannot observe a ref that is neither pending nor created.
 	d.mu.Lock()
 	p, isPending := d.pending[ref]
+	if isPending {
+		delete(d.pending, ref)
+		d.creating[ref] = true
+	}
 	d.mu.Unlock()
 	if isPending {
 		return "", d.runAsMainProcess(ctx, ref, p, argv)
@@ -720,15 +750,36 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 		Name:             ref,
 	})
 	if err != nil {
+		d.mu.Lock()
+		delete(d.creating, ref)
+		d.mu.Unlock()
 		return fmt.Errorf("docker: create main-process agent: %w", err)
 	}
-	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("docker: start main-process agent: %w", err)
-	}
+	_, startErr := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{})
+	// The container now exists on the daemon, so re-check the claim: a teardown
+	// that ran during the create found NO container to remove and reported
+	// idempotent success, so removing this one is our job — a killed sandbox must
+	// never end up with a live agent.
 	d.mu.Lock()
-	delete(d.pending, ref)
-	d.mainProc[ref] = true
+	tornDown := !d.creating[ref]
+	delete(d.creating, ref)
+	if !tornDown && startErr == nil {
+		d.mainProc[ref] = true
+	}
 	d.mu.Unlock()
+	if tornDown {
+		// Not ctx: the kill cascade that tore this ref down may already have
+		// cancelled it, and the removal must still happen (fail closed).
+		rmCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true}); rerr != nil && !isNotFound(rerr) {
+			return fmt.Errorf("docker: sandbox %s torn down during agent create, and removing the created agent failed: %w", ref, rerr)
+		}
+		return fmt.Errorf("docker: sandbox %s torn down during agent create", ref)
+	}
+	if startErr != nil {
+		return fmt.Errorf("docker: start main-process agent: %w", startErr)
+	}
 	return nil
 }
 
@@ -756,14 +807,21 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	// Poll the exec to completion. ExecInspect.Running flips to false once the
 	// process exits; ExitCode is then authoritative. The poll cadence matches
 	// waitExec; the unbounded loop is what distinguishes Wait from it.
-	const pollInterval = 200 * time.Millisecond
+	errs := 0
 	for {
 		insp, err := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-		if err != nil {
+		switch {
+		case err == nil:
+			errs = 0
+			if !insp.Running {
+				return insp.ExitCode, nil
+			}
+		case isNotFound(err):
 			return 0, fmt.Errorf("docker: wait: exec inspect: %w", err)
-		}
-		if !insp.Running {
-			return insp.ExitCode, nil
+		default:
+			if errs++; errs >= waitMaxProbeErrors {
+				return 0, fmt.Errorf("docker: wait: exec inspect (%d consecutive errors): %w", errs, err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -777,20 +835,35 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 // code. ContainerWait with WaitConditionNotRunning returns the code even if the
 // container has already exited, so there is no create/exit race.
 func (d *Driver) waitMainProcess(ctx context.Context, ref string) (int, error) {
-	// v29: ContainerWait returns a single result carrying both the status and
-	// error channels (was a bare two-channel return); the select is otherwise
-	// unchanged.
-	wait := d.cli.ContainerWait(ctx, ref, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
-	select {
-	case <-ctx.Done():
-		return 0, fmt.Errorf("docker: wait (main process): %w", ctx.Err())
-	case err := <-wait.Error:
-		return 0, fmt.Errorf("docker: wait (main process): %w", err)
-	case res := <-wait.Result:
-		if res.Error != nil {
-			return int(res.StatusCode), fmt.Errorf("docker: wait (main process): %s", res.Error.Message)
+	errs := 0
+	for {
+		// v29: ContainerWait returns a single result carrying both the status and
+		// error channels (was a bare two-channel return); the select is otherwise
+		// unchanged.
+		wait := d.cli.ContainerWait(ctx, ref, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+		var err error
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("docker: wait (main process): %w", ctx.Err())
+		case res := <-wait.Result:
+			if res.Error != nil {
+				return int(res.StatusCode), fmt.Errorf("docker: wait (main process): %s", res.Error.Message)
+			}
+			return int(res.StatusCode), nil
+		case err = <-wait.Error:
 		}
-		return int(res.StatusCode), nil
+		// Same budget as the exec path: a transient daemon error is not an exit.
+		if isNotFound(err) {
+			return 0, fmt.Errorf("docker: wait (main process): %w", err)
+		}
+		if errs++; errs >= waitMaxProbeErrors {
+			return 0, fmt.Errorf("docker: wait (main process) (%d consecutive errors): %w", errs, err)
+		}
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("docker: wait (main process): %w", ctx.Err())
+		case <-time.After(pollInterval):
+		}
 	}
 }
 
@@ -865,10 +938,14 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	// Drop any tracked agent exec for this ref: the container is going away, so
 	// a pending Wait (if any) will observe the inspect error/ctx and return.
 	// This also keeps agentExecs from growing without bound across runs.
+	// Dropping creating[agentRef] is what tells an in-flight runAsMainProcess that
+	// its ref was torn down mid-create: the container it is about to make is not
+	// visible to the ContainerRemove below, so IT must remove it.
 	d.mu.Lock()
 	delete(d.agentExecs, agentRef)
 	delete(d.pending, agentRef)
 	delete(d.mainProc, agentRef)
+	delete(d.creating, agentRef)
 	d.mu.Unlock()
 
 	var id uuid.UUID

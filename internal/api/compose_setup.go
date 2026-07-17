@@ -502,9 +502,12 @@ func setupEgressWorkspaceItem(spec types.RunPolicySpec, workspaces []types.Works
 
 // setupBackendItem is the "backend" checklist row: can THIS host actually
 // enforce the proposal's FINAL (post-floor/clamp) confinement class right now?
-// It reuses the SAME runner-capability probe and rank compare the launch gate
-// itself uses (runs.go: bestClass + confinementGE) — never a duplicate probe —
-// so this row can never disagree with what create-run would 422 on. When the
+// It reuses the SAME runner-capability probe and MEMBERSHIP check the launch gate
+// itself uses (runs.go: slices.Contains over caps.ConfinementClasses) — never a
+// duplicate probe, never a rank compare (M8: CC2/CC3 are independent runtimes, so
+// a Kata-only host advertises the non-contiguous set [CC1, CC3] and a rank compare
+// would call a CC2 proposal "satisfied" here while create-run 422s on it) — so this
+// row can never disagree with what create-run would 422 on. When the
 // class isn't live it distinguishes an honest "needs setup" (an installable
 // runtime — CC2/CC3 with the substrate simply not registered yet) from an
 // honest "not fixable on this host" (Vault without /dev/kvm), reusing the exact
@@ -539,7 +542,9 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 		it.Detail = "could not probe the runner's capabilities: " + err.Error()
 		return it, true
 	}
-	if confinementGE(bestClass(caps.ConfinementClasses), final) {
+	// Mirror of the launch gate (runs.go): the runner must advertise EXACTLY
+	// final, not merely something that outranks it.
+	if slices.Contains(caps.ConfinementClasses, final) {
 		it.Status = "satisfied"
 		if sub := caps.Resolved[final]; sub != "" {
 			it.Detail = "enforced here as " + sub + "."
