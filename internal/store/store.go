@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -36,6 +37,14 @@ var ErrNotFound = errors.New("store: not found")
 // that has already left the PENDING state. Fail closed: never allow a second
 // decision to silently overwrite the first.
 var ErrAlreadyDecided = errors.New("store: approval already decided")
+
+// ErrDuplicatePending is returned by CreateApproval when a partial unique index
+// (approvals_pending_credential_uniq / approvals_pending_noncred_uniq) rejects a
+// second open PENDING approval for the same dedup key — i.e. a concurrent raise
+// lost the race. Callers treat it as a dedup signal (re-read the existing PENDING
+// row and return it), NOT a hard failure. The message string is matched by
+// approval.RequestApproval, which cannot import this package (import cycle).
+var ErrDuplicatePending = errors.New("store: duplicate pending approval")
 
 // ─── AgentRun ────────────────────────────────────────────────────────────────
 
@@ -732,10 +741,22 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
 			decided_at, decided_by, minted_jti, reason`
-	return scanApproval(s.Pool.QueryRow(ctx, q,
+	out, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
 	))
+	if err != nil {
+		// A partial unique index (0002 credential / 0022 non-credential) rejecting
+		// the insert means a concurrent raise already persisted the open PENDING row.
+		// Surface a distinct sentinel so RequestApproval can dedup to the winner
+		// instead of erroring.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return types.ApprovalRequest{}, ErrDuplicatePending
+		}
+		return types.ApprovalRequest{}, err
+	}
+	return out, nil
 }
 
 // GetApproval returns the approval for id, or ErrNotFound.
