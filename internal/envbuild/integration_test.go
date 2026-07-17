@@ -58,10 +58,26 @@ func TestBuild_SmokeDockerd(t *testing.T) {
 	}
 	b.BuildTimeout = 10 * time.Minute
 	b.ToolsDir = toolsDir
-	// The build-time network now defaults to "none"; envbuilder needs the
-	// network to clone the fixture, pull the alpine base image, and PUSH the
-	// built image, so the smoke test explicitly opts in (trusted-repo trade-off).
-	b.BuildNetwork = "bridge"
+	// The build-time network defaults to "none"; envbuilder needs the network to
+	// clone the fixture, pull the alpine base image, and PUSH the built image, so
+	// the smoke test explicitly opts in (trusted-repo trade-off).
+	//
+	// It must be "host": the fixture git daemon and the throwaway registry both
+	// listen on the test's host loopback (127.0.0.1), and only host networking
+	// puts the build container in the daemon host's network namespace where that
+	// loopback resolves. Under "bridge" the container's 127.0.0.1 is its OWN
+	// loopback, so the clone can never reach the daemon — verified to fail with
+	// `dial tcp 127.0.0.1:<port>: connect: connection refused`. This only works
+	// when the daemon shares the host network namespace, i.e. a host-native
+	// dockerd (GitHub's ubuntu-latest runner, or a native local dockerd). Against
+	// a VM-based daemon like Docker Desktop the container cannot reach the
+	// WSL/host loopback in ANY mode, so the test cannot pass there regardless of
+	// this setting. The env override is retained only for experimentation.
+	buildNet := os.Getenv("WARDYN_ENVBUILD_TEST_NETWORK")
+	if buildNet == "" {
+		buildNet = "host"
+	}
+	b.BuildNetwork = buildNet
 
 	var logs bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
