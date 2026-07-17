@@ -150,7 +150,7 @@ directly — it is fully non-interactive with `WARDYN_URL` +
 wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --wait --timeout 30m
 wardyn run get <id> --json    # final state, resolved image
-wardyn audit --run <id> --json
+wardyn audit <id> --json
 ```
 
 `POST /api/v1/runs/preflight` (same body as create) is a dry-run of launch

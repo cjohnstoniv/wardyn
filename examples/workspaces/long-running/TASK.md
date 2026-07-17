@@ -63,7 +63,7 @@ CLI equivalents:
     docker ps | grep wardyn-agent
 
     # audit
-    wardyn audit --run <run-id>
+    wardyn audit <run-id>
     # expect: action=run.autostop actor_type=system
 
 ## PASS criteria

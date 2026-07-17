@@ -36,7 +36,7 @@ first and denies the connection.
 
 CLI equivalent:
 
-    wardyn audit --run <run-id>
+    wardyn audit <run-id>
     # expect: action=egress.deny rule_source=builtin:private-ip
 
 ## PASS criteria

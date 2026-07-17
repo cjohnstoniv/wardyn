@@ -110,7 +110,7 @@ a workspace only goes green once its status is genuinely `ready`.
 ```bash
 ./wardyn run --agent claude-code --repo <org/name> --task "..." --confinement CC2
 ./wardyn attach <run-id>          # live terminal into the sandbox
-./wardyn audit --run <run-id> --json | head
+./wardyn audit <run-id> --json | head
 ```
 
 **Proving containment** (this is the point of the product — check it yourself):
@@ -121,7 +121,7 @@ docker inspect --format '{{.Name}} runtime={{.HostConfig.Runtime}}' wardyn-agent
 # => runtime=runsc      (CC2/Wall; runc = CC1/Fence, kata/krun = CC3/Vault)
 
 # both an allow AND a deny — a deny-everything box proves nothing
-./wardyn audit --run <run-id> --json | grep -E 'egress.(allow|deny)'
+./wardyn audit <run-id> --json | grep -E 'egress.(allow|deny)'
 ```
 
 Cloud metadata (`169.254.169.254`) and every private range are unconditionally
