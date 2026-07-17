@@ -63,10 +63,9 @@ jobs:
           name: go-test-reports
           path: test/reports/go/**
 
-  # ── web UI: typecheck + unit/component tests + build ──────────────────────
-  # The React admin UI previously had ZERO CI coverage (a HIGH finding). This
-  # job typechecks (tsc was entirely broken before), runs vitest with coverage,
-  # and builds the embedded bundle.
+  # ── docs: mermaid diagram gate ────────────────────────────────────────────
+  # Validate every fenced mermaid diagram in the public docs (syntax + label-
+  # truth). Needs the ui node_modules (mermaid-cli), so it installs UI deps first.
   diagrams:
     runs-on: ubuntu-latest
     steps:
@@ -85,8 +84,12 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: '1'
         run: pnpm install --frozen-lockfile
       - name: Diagram gate (mermaid syntax + label-truth)
-        run: ./scripts/check-diagrams.sh
+        run: make diagrams
 
+  # ── web UI: typecheck + unit/component tests + build ──────────────────────
+  # The React admin UI previously had ZERO CI coverage (a HIGH finding). This
+  # job typechecks (tsc was entirely broken before), runs vitest with coverage,
+  # and builds the embedded bundle.
   ui:
     runs-on: ubuntu-latest
     steps:
@@ -107,15 +110,17 @@ jobs:
       # and are excluded by --prod, so they do not trip this gate.
       - name: Check UI production dependency licenses (no copyleft)
         run: make npm-license
+      # Routed through make so the gate is single-sourced (make = CI reality).
+      # The ui-* targets bundle an idempotent `pnpm install --frozen-lockfile`;
+      # against the already-installed tree above it is a no-op, so behavior is
+      # identical to the raw `pnpm` steps this replaced. The targets `cd ui`
+      # themselves, so no working-directory here.
       - name: Typecheck
-        working-directory: ui
-        run: pnpm typecheck
+        run: make ui-typecheck
       - name: Unit/component tests (vitest + coverage)
-        working-directory: ui
-        run: pnpm test:coverage
+        run: make ui-test
       - name: Build UI bundle
-        working-directory: ui
-        run: pnpm build
+        run: make ui
       - name: Upload UI test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -158,7 +163,7 @@ jobs:
         working-directory: ui
         run: pnpm exec playwright install --with-deps chromium
       - name: Run Playwright UI e2e (fresh seed per spec)
-        run: ./scripts/run-ui-e2e.sh
+        run: make test-e2e-ui
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
@@ -344,7 +349,7 @@ jobs:
         with:
           go-version: '1.26.5'
       - name: Check SPDX headers on source files
-        run: ./scripts/check-license-headers.sh
+        run: make license-headers
 
   # ── supply-chain: SBOM + cosign (release stub) ────────────────────────────
   # This job is a clearly-marked stub. It produces a CycloneDX SBOM via syft
