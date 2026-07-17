@@ -254,6 +254,90 @@ func TestFlagIntEnv_InvalidIsLoud(t *testing.T) {
 	}
 }
 
+// ─── EnvBool / EnvDuration (non-flag twins) ──
+//
+// These register no flag, so there is no flag.Parse() step — the return value
+// is read directly. The loudness contract is identical to FlagBool/FlagDuration.
+
+func TestEnvBool_UnsetAndValid(t *testing.T) {
+	// unset keeps the default, both directions, quietly.
+	for _, def := range []bool{false, true} {
+		out := resetFlags(t)
+		code := stubExit(t)
+		t.Setenv("CLIUTIL_TEST_EBOOL", "x")
+		os.Unsetenv("CLIUTIL_TEST_EBOOL")
+		if got := EnvBool("CLIUTIL_TEST_EBOOL", def); got != def {
+			t.Fatalf("unset env: got %v, want default %v", got, def)
+		}
+		// empty (compose `VAR=` / docker `-e VAR`) is unset, not false.
+		t.Setenv("CLIUTIL_TEST_EBOOL", "")
+		if got := EnvBool("CLIUTIL_TEST_EBOOL", def); got != def {
+			t.Fatalf("empty env: got %v, want default %v", got, def)
+		}
+		if *code != -1 || out.Len() != 0 {
+			t.Fatalf("unset/empty must be silent, got exit=%d out=%q", *code, out.String())
+		}
+	}
+	cases := map[string]bool{"1": true, "TRUE": true, " Yes ": true, "on": true,
+		"0": false, "false": false, "no": false, "OFF": false}
+	for val, want := range cases {
+		out := resetFlags(t)
+		code := stubExit(t)
+		t.Setenv("CLIUTIL_TEST_EBOOL", val)
+		if got := EnvBool("CLIUTIL_TEST_EBOOL", !want); got != want {
+			t.Fatalf("EnvBool(%q) = %v, want %v", val, got, want)
+		}
+		if *code != -1 || out.Len() != 0 {
+			t.Fatalf("valid value %q must be silent, got exit=%d out=%q", val, *code, out.String())
+		}
+	}
+}
+
+// THE BUG: a typo used to map to the default branch, silently disabling a
+// security toggle (WARDYN_SUBSCRIPTION_INJECT=of would have stayed ON).
+func TestEnvBool_InvalidIsLoud(t *testing.T) {
+	for _, val := range []string{"treu", "banana", "2", "yes please", "-1"} {
+		t.Run(val, func(t *testing.T) {
+			out := resetFlags(t)
+			code := stubExit(t)
+			t.Setenv("CLIUTIL_TEST_EBOOL", val)
+			EnvBool("CLIUTIL_TEST_EBOOL", true)
+			assertLoud(t, out, code, "CLIUTIL_TEST_EBOOL", val)
+		})
+	}
+}
+
+func TestEnvDuration_UnsetAndValid(t *testing.T) {
+	out := resetFlags(t)
+	code := stubExit(t)
+	t.Setenv("CLIUTIL_TEST_EDUR", "x")
+	os.Unsetenv("CLIUTIL_TEST_EDUR")
+	if got := EnvDuration("CLIUTIL_TEST_EDUR", time.Minute); got != time.Minute {
+		t.Fatalf("unset env: got %v, want 1m", got)
+	}
+	t.Setenv("CLIUTIL_TEST_EDUR", " 45s ")
+	if got := EnvDuration("CLIUTIL_TEST_EDUR", time.Minute); got != 45*time.Second {
+		t.Fatalf("EnvDuration = %v, want 45s", got)
+	}
+	if *code != -1 || out.Len() != 0 {
+		t.Fatalf("unset/valid must be silent, got exit=%d out=%q", *code, out.String())
+	}
+}
+
+// THE BUG: an unparseable duration used to keep the compiled default, so
+// WARDYN_APPROVAL_TIMEOUT=30 (no unit) ran on the wrong timeout with no signal.
+func TestEnvDuration_InvalidIsLoud(t *testing.T) {
+	for _, val := range []string{"not-a-duration", "30", "5 minutes"} {
+		t.Run(val, func(t *testing.T) {
+			out := resetFlags(t)
+			code := stubExit(t)
+			t.Setenv("CLIUTIL_TEST_EDUR", val)
+			EnvDuration("CLIUTIL_TEST_EDUR", 90*time.Second)
+			assertLoud(t, out, code, "CLIUTIL_TEST_EDUR", val)
+		})
+	}
+}
+
 func TestSplitCSV(t *testing.T) {
 	cases := map[string][]string{
 		"":          nil,

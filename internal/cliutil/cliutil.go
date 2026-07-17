@@ -101,6 +101,42 @@ func FlagIntEnv(name, env string, def int, usage string) *int {
 	return flag.Int(name, def, usage+" (env "+env+")")
 }
 
+// EnvBool reads a bool directly from an env var, with no flag registered — for
+// sites where flag.Parse() has already run before the read (so FlagBool's flag
+// would never be parsed: a dead flag). Same token set and loudness contract as
+// FlagBool: unset/empty keeps def quietly (correct for `docker run -e VAR`),
+// 1/true/yes/on is true, 0/false/no/off is false, anything else exits 2.
+func EnvBool(name string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	switch strings.ToLower(v) {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		envFatal(name, v, "one of 1/true/yes/on or 0/false/no/off")
+		return def // unreachable in prod (envFatal exits); reached only under a stubbed exit in tests.
+	}
+}
+
+// EnvDuration reads a time.Duration directly from an env var, with no flag
+// registered — the non-flag twin of FlagDuration for post-flag.Parse() sites.
+// Unset/empty keeps def quietly; an unparseable value exits 2 rather than
+// silently reinstating the default (a typo'd interval must not be reinterpreted).
+func EnvDuration(name string, def time.Duration) time.Duration {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			envFatal(name, v, "a Go duration such as 30s, 5m or 1h30m")
+			return def // unreachable in prod (envFatal exits); reached only under a stubbed exit in tests.
+		}
+		return d
+	}
+	return def
+}
+
 // SplitCSV splits a comma-separated list, trimming whitespace and dropping
 // empties. Returns nil for an empty input (meaning "no restriction").
 func SplitCSV(s string) []string {
