@@ -20,12 +20,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   failures exit `2`, distinguishable from a 404/409/network failure).
 - **SDK**: `CreateRunRequest` gains `DevcontainerRepo`/`DevcontainerRef`, so the
   public Go SDK carries every user-facing create-run field.
+- **Every `WARDYN_*` variable is documented** in a single reference
+  ([docs/ENV.md](docs/ENV.md)), enforced by a test that fails if a variable read
+  in the code is missing from the doc.
 
 ### Changed
 
 - Bad `WARDYN_*` environment values (e.g. `WARDYN_ENVBUILD=treu`) now fail loud
   (exit 2, naming the variable and value) instead of silently falling back to
   the default.
+- **The runner/substrate seam self-registers.** Adding a confinement substrate
+  (e.g. a future Kubernetes driver) no longer requires editing the control-plane
+  boot path — it registers through the component registry like the identity,
+  secret-store, and recording seams, and `/healthz` reports the substrate that
+  is actually selected.
+- **Control-plane API and egress-proxy logs are now structured** (`slog` with
+  typed attributes). Previously these two packages still emitted unstructured
+  `log.Printf` lines — including the panic-in-reconcile and "run may be stranded"
+  lines — which were lost when shipping to a structured log sink.
 
 ### Fixed
 
@@ -39,6 +51,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Recording no longer swallows upload errors that should trip the 64 MiB
   capture cap, and the managed-harness login run (which prints a long-lived
   Anthropic OAuth token to its PTY) is never recorded.
+- **The sandbox kill switch survives a control-plane restart.** The
+  orchestrator's ref→substrate routing is now persisted, so after a `wardynd`
+  restart with more than one confinement substrate wired, `Exec`/`Attach`/`Stop`/
+  `Kill` for in-flight runs still resolve — previously they failed "no substrate
+  tracked for ref", breaking teardown and credential revocation for pre-restart
+  runs.
 
 ### Security
 
