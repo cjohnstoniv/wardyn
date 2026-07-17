@@ -22,6 +22,7 @@ export function JsonBlock({ value, className }: { value: unknown; className?: st
       >
         {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
       </button>
+      <span aria-live="polite" className="sr-only">{copied ? "Copied" : ""}</span>
       <pre className="scroll-thin overflow-x-auto p-3 text-xs leading-relaxed">
         <code className="font-mono">{highlight(text)}</code>
       </pre>
@@ -69,6 +70,7 @@ export function YamlBlock({ value: v, className }: { value: unknown; className?:
       >
         {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
       </button>
+      <span aria-live="polite" className="sr-only">{copied ? "Copied" : ""}</span>
       <pre className="scroll-thin overflow-x-auto p-3 text-xs leading-relaxed">
         <code className="font-mono">{highlightYaml(text)}</code>
       </pre>

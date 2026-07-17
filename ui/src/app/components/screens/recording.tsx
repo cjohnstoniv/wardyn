@@ -338,7 +338,15 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
   const { run, durationSec, bytes } = entry;
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onPlay}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onPlay();
+        }
+      }}
       className="flex cursor-pointer flex-col overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-border-strong"
     >
       {/* ponytail: skipped a fake per-card terminal-output preview (the design

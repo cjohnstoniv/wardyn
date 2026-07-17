@@ -44,10 +44,8 @@ describe("SecretsScreen — delete error handling", () => {
   // userEvent (pointer checks disabled for jsdom).
   async function deleteFirstSecret() {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    // The per-row menu trigger is the only button with no accessible name
-    // (Refresh has aria-label, Add secret has text). Find it within the table.
-    const menuBtns = await screen.findAllByRole("button", { name: "" });
-    await user.click(menuBtns[0]);
+    const menuBtn = await screen.findByRole("button", { name: /secret actions/i });
+    await user.click(menuBtn);
     const deleteItem = await screen.findByRole("menuitem", { name: /delete/i });
     await user.click(deleteItem);
     const confirm = await screen.findByRole("button", { name: /delete secret/i });

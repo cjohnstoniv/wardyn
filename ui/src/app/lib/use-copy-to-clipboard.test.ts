@@ -11,14 +11,28 @@ describe("useCopyToClipboard", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("copy() flips copied immediately and auto-resets after resetMs", () => {
-    Object.assign(navigator, { clipboard: { writeText: vi.fn() } });
+  it("copy() flips copied once the write resolves, and auto-resets after resetMs", async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     const { result } = renderHook(() => useCopyToClipboard(1000));
 
-    act(() => result.current.copy("hi"));
+    await act(async () => {
+      result.current.copy("hi");
+      await Promise.resolve(); // let the fire-and-forget copyAsync() microtask settle
+    });
     expect(result.current.copied).toBe(true);
 
     act(() => vi.advanceTimersByTime(1000));
+    expect(result.current.copied).toBe(false);
+  });
+
+  it("copy() never flips copied when navigator.clipboard is unavailable (no false 'Copied' on LAN HTTP)", async () => {
+    Object.assign(navigator, { clipboard: undefined });
+    const { result } = renderHook(() => useCopyToClipboard(1000));
+
+    await act(async () => {
+      result.current.copy("hi");
+      await Promise.resolve();
+    });
     expect(result.current.copied).toBe(false);
   });
 
@@ -41,11 +55,14 @@ describe("useCopyToClipboard", () => {
     expect(result.current.copied).toBe(true);
   });
 
-  it("with resetMs=null, copied stays true until reset externally", () => {
-    Object.assign(navigator, { clipboard: { writeText: vi.fn() } });
+  it("with resetMs=null, copied stays true until reset externally", async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     const { result } = renderHook(() => useCopyToClipboard(null));
 
-    act(() => result.current.copy("hi"));
+    await act(async () => {
+      result.current.copy("hi");
+      await Promise.resolve();
+    });
     expect(result.current.copied).toBe(true);
 
     act(() => vi.advanceTimersByTime(10_000));
