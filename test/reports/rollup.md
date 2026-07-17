@@ -42,10 +42,18 @@ keys fail closed on decrypt error.
 | Layer | Before | After |
 |---|---|---|
 | Go coverage (union of both shipped builds) | 47.7% | **66.1%** (enforced floor: `make cover-check COVER_MIN=65`, wired into CI) |
-| Go unit tests (passing) | 327 | **832** |
+| Go unit tests (top-level test funcs) | 327 | **~1,254** |
 | Go integration | sparse | store/db/secretstore/broker PG, new `test/apie2e` black-box pkg (27 + compose), runner/docker L0 (docker-gated), conformance none-runner |
 | UI vitest | 0 | **84** |
 | UI Playwright | 0 | **94** (86 across 9 screens + 8 composer) |
+
+> Go test count method (2026-07-17 recount, correcting a stale 832): top-level
+> test functions in the shipped union build, counted reproducibly with
+> `go test -tags docker -list '.*' ./... | grep -cE '^(Test|Example|Fuzz)'` =
+> **1,254** (the tagless build alone lists 1,144; the `-tags docker` build is a
+> strict superset, so the union is 1,254). `t.Run` subtests add ~165 more executed
+> cases on top. The earlier "832" undercounted by ~400 and predated the
+> post-review suite build-out.
 
 New harnesses/tooling: detailed report tooling (`scripts/test2md.py`,
 `test-report.sh`, `make test-report`/`cover-check`/`test-e2e-ui`); seeded
