@@ -78,6 +78,30 @@ func TestExitCodeFor_UnknownIs1(t *testing.T) {
 	}
 }
 
+// A down daemon must get a recovery hint appended; a reached-but-erroring server
+// must not. dialHint keys on the transport-failure class (*url.Error) so a real
+// refused connection carries the "is wardynd running?" nudge while a typed API
+// error (we did reach wardynd) stays silent.
+func TestDialHint_RefusedVsAPI(t *testing.T) {
+	// Real refused connection (port 1 on loopback refuses immediately).
+	c := &sdk.Client{BaseURL: "http://127.0.0.1:1"}
+	_, err := c.ListRuns(context.Background())
+	if err == nil {
+		t.Fatal("expected a transport error dialing 127.0.0.1:1, got nil")
+	}
+	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
+		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
+	}
+	// A reached server returning an API error must not get the hint.
+	if hint := dialHint(&sdk.APIError{Status: 500}); hint != "" {
+		t.Errorf("dialHint(APIError) = %q, want empty (server was reached)", hint)
+	}
+	// Wrapped transport errors must still resolve through errors.As.
+	if hint := dialHint(fmt.Errorf("poll: %w", err)); !strings.Contains(hint, "is wardynd running?") {
+		t.Errorf("dialHint(wrapped refused) = %q, want the recovery hint", hint)
+	}
+}
+
 // The CLI owns the "wardyn:" prefix (main() prints `wardyn: <err>`); the SDK
 // must not also prefix its errors, or the composed line doubles up
 // ("wardyn: wardyn: ..."). This pins the single-prefix contract at the seam
