@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -432,6 +433,119 @@ func (s *Server) writeMintError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusInternalServerError, "mint: "+err.Error())
 	}
+}
+
+// tokenRenewResponse is the POST /api/v1/internal/token/renew success body: a
+// FRESH run token carrying the same short TTL, plus its expiry so the caller can
+// schedule the next renew before this one lapses.
+type tokenRenewResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// handleInternalTokenRenew issues a FRESH run token to a caller presenting a
+// still-valid one for the same run — the missing producer for the per-run
+// internal-audience token.
+//
+// WHY THIS EXISTS: a run token is minted ONCE at dispatch with a 1h TTL and
+// handed to the per-run proxy sidecar in its config env. A process env is fixed
+// after exec, so with no renew producer EVERY run outliving that TTL began
+// getting 401s on /internal/* — silently losing credential mints, approvals,
+// decision-log posts and subscription re-resolves, with no recovery. (The
+// ground-truth sensor already had a producer — see wardynd's token rotator —
+// but the per-run internal token had no counterpart.)
+//
+// THE FIX IS A RENEW ROUTE, NOT A LONGER TTL. The short TTL is the security
+// property, not the bug: it forces a re-authorization checkpoint roughly every
+// half-life, at which revocation and run state are re-checked. Raising it would
+// trade away exactly the invariant the design rests on, so tokenTTL stays put
+// and the token is instead re-issued while authority still holds.
+//
+// NO NEW CREDENTIAL: renewal is authenticated by the CURRENT, still-valid run
+// token, so the caller (the out-of-sandbox proxy, already the token's sole
+// holder) needs no additional long-lived secret. The sandbox never holds a run
+// token at all and gains nothing here: the brokered local routes forward only
+// mint/approvals/recordings, never this route.
+//
+// FAIL CLOSED, TWICE OVER:
+//  1. internalAuth has already verified signature, expiry, audience AND the
+//     identity revocation list (a RevocationStore error is itself treated as
+//     revoked). Revocation is RUN-scoped: the kill cascade's Identity.RevokeRun
+//     marks the whole run, so every token of that run — including one renewed
+//     after the kill — fails Verify. A revoked run can never reach this handler.
+//  2. Independently, the run's own state is re-read here and a TERMINAL run is
+//     refused. This is NOT redundant with (1): revokeRunCascade is best-effort
+//     (its error is audited, never propagated), so a run that went terminal while
+//     its revocation write failed would still present a verifiable token. This
+//     gate closes that window, which is precisely the one that matters — a run
+//     whose authority ended but whose denial did not land.
+//
+// A renewed token is a NEW jti with a NEW TTL. The presented token is left to
+// expire on its own rather than being revoked, so a request already in flight
+// with it is never broken by a concurrent renew.
+func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "missing run claims")
+		return
+	}
+	// Fail closed: with no run store we cannot prove the run is still alive, so
+	// we refuse rather than renew on an unverifiable authority.
+	if s.cfg.Store == nil {
+		writeError(w, http.StatusServiceUnavailable, "run store not configured")
+		return
+	}
+	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.auditRenewDenied(r, claims, "run_not_found")
+			writeError(w, http.StatusForbidden, "run not found")
+			return
+		}
+		// Transient store failure: refuse (fail closed) but signal retryable, so a
+		// Postgres blip costs a renew attempt and not the run's credentials.
+		writeError(w, http.StatusServiceUnavailable, "read run: "+err.Error())
+		return
+	}
+	if isTerminalRunState(run.State) {
+		s.auditRenewDenied(r, claims, "run_terminal:"+string(run.State))
+		writeError(w, http.StatusForbidden, "run is terminal")
+		return
+	}
+
+	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "renew run identity: "+err.Error())
+		return
+	}
+
+	// HONEST TRAIL: the provider records its own identity.mint for the new token;
+	// this SEPARATE identity.renew names the run, the retiring jti and the fresh
+	// one, so a long run reads as an explicit chain of re-authorized ~1h segments
+	// rather than as an unexplained second mint out of nowhere.
+	ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+		"identity.renew", id.JTI, "success", mustJSON(map[string]any{
+			"prev_jti":   claims.JTI,
+			"expires_at": id.Expiry.UTC().Format(rfc3339),
+			"run_state":  run.State,
+		}))
+	ev.SourceIP = r.RemoteAddr
+	s.recordAudit(r.Context(), ev)
+
+	writeJSON(w, http.StatusOK, tokenRenewResponse{
+		Token:     id.Token,
+		ExpiresAt: id.Expiry.UTC().Format(rfc3339),
+	})
+}
+
+// auditRenewDenied records a REFUSED renew. A token asking to outlive its run's
+// authority is security-relevant whether it is a dead sidecar or an attacker
+// replaying a stolen token, so the refusal is never silent.
+func (s *Server) auditRenewDenied(r *http.Request, claims *identity.Claims, reason string) {
+	ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+		"identity.renew", claims.JTI, "denied", mustJSON(map[string]any{"reason": reason}))
+	ev.SourceIP = r.RemoteAddr
+	s.recordAudit(r.Context(), ev)
 }
 
 // rfc3339 is the timestamp format used in mint responses.

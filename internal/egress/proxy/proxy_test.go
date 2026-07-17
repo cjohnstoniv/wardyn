@@ -238,7 +238,7 @@ func TestFirstUsePendingPath(t *testing.T) {
 	}))
 	defer cp.Close()
 
-	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	p, buf := newTestProxy(t, types.RunPolicySpec{
 		AllowedDomains:   []string{"known.test"},
 		FirstUseApproval: types.FirstUseDenyWithReview,
@@ -293,7 +293,7 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	// Drive pollInterval to zero so the second request polls immediately.
 	p, _ := newTestProxy(t, types.RunPolicySpec{
 		AllowedDomains:   []string{"known.test"},
@@ -326,7 +326,7 @@ func TestFirstUseDeniedCached(t *testing.T) {
 	cp := approvalCPStub(apState(types.ApprovalDenied), nil, &getCount)
 	defer cp.Close()
 
-	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	p, _ := newTestProxy(t, types.RunPolicySpec{FirstUseApproval: types.FirstUseDenyWithReview}, "127.0.0.1:1", ap, nil)
 
 	// raise

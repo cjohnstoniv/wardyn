@@ -222,7 +222,7 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 		Resolver:        publicResolver{},
 		Upstream:        up,
 		ControlPlaneURL: cp.URL,
-		RunToken:        "run-tok",
+		RunToken:        newTokenSource("run-tok"),
 	})
 
 	// Control-plane forward: must reach the CP directly, corp proxy untouched.

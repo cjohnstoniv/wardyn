@@ -35,7 +35,7 @@ const (
 // lazily poll the approval and transition the cached state.
 type approvalClient struct {
 	base   string // control plane base URL
-	token  string
+	token  *tokenSource
 	runID  uuid.UUID
 	client *http.Client
 
@@ -82,7 +82,7 @@ var holdPollInterval = 1 * time.Second
 // the window are still served from cache with no per-request network call.
 const approvalTTL = 60 * time.Second
 
-func newApprovalClient(base, token string, runID uuid.UUID, client *http.Client) *approvalClient {
+func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client *http.Client) *approvalClient {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -282,7 +282,7 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 		return uuid.Nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Authorization", "Bearer "+a.token.Get())
 	resp, err := a.client.Do(req)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("raise approval: %w", err)
@@ -310,7 +310,7 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 	if err != nil {
 		return false, apPending
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Authorization", "Bearer "+a.token.Get())
 	resp, err := a.client.Do(req)
 	if err != nil {
 		return false, apPending

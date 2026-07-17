@@ -27,7 +27,7 @@ import (
 // mirrored to stdout as a JSON line for local observability.
 type decisionSink struct {
 	endpoint string
-	token    string
+	token    *tokenSource
 	client   *http.Client
 	out      io.Writer
 
@@ -39,7 +39,7 @@ type decisionSink struct {
 	closed bool
 }
 
-func newDecisionSink(controlPlaneURL, token string, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
+func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -196,7 +196,7 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.token)
+	req.Header.Set("Authorization", "Bearer "+s.token.Get())
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return err

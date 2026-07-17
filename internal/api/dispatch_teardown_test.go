@@ -306,9 +306,14 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 	srv.dispatch(context.Background(), run, "run-token", "wardyn/claude-code:latest",
 		types.RunPolicySpec{MinConfinementClass: types.CC1}, nil, nil, nil, nil, false, "")
 
-	// The watcher is detached; reconcileWatch probes on a 5s tick.
+	// The watcher is detached; reconcileWatch probes on a 5s tick. Wait for the
+	// WHOLE finalize, not just the state flip: the cascade wins the terminal CAS
+	// FIRST and revokes after (deliberately — C002), so a poll that stops at
+	// "terminal" can observe the run finalized microseconds before its revoke
+	// lands and read revocations=0. Wait for both, then assert exactly-once.
 	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) && !isTerminalRunState(st.State()) {
+	for time.Now().Before(deadline) &&
+		!(isTerminalRunState(st.State()) && brk.revocations(runID) > 0) {
 		time.Sleep(20 * time.Millisecond)
 	}
 

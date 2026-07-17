@@ -36,7 +36,7 @@ func TestApprovalStaleApprovedRevalidatesFailClosed(t *testing.T) {
 	}))
 	defer cp.Close()
 
-	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	// Seed a granted entry whose observation is older than the TTL (the grant
 	// has since expired/been revoked upstream).
 	ap.mu.Lock()
@@ -76,7 +76,7 @@ func TestApprovalConcurrentFirstUseRaisesOnce(t *testing.T) {
 	}))
 	defer cp.Close()
 
-	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 
 	const n = 8
 	start := make(chan struct{})
@@ -113,7 +113,7 @@ func TestApprovalFreshApprovedServedFromCache(t *testing.T) {
 	}))
 	defer cp.Close()
 
-	ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	apID := uuid.New()
 	ap.mu.Lock()
 	ap.hosts["egress.test"] = &hostApproval{
@@ -147,7 +147,7 @@ func TestResolveWaitHold(t *testing.T) {
 	t.Run("approved -> holds then allows", func(t *testing.T) {
 		cp := approvalCPStub(apState(types.ApprovalApproved), nil, nil)
 		defer cp.Close()
-		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+		ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 2*time.Second, 4)
 		if res := ap.ResolveWait(context.Background(), "egress.test"); res.State != apApproved {
 			t.Fatalf("wait_for_review approved -> %v, want apApproved", res.State)
@@ -157,7 +157,7 @@ func TestResolveWaitHold(t *testing.T) {
 	t.Run("denied -> holds then denies", func(t *testing.T) {
 		cp := approvalCPStub(apState(types.ApprovalDenied), nil, nil)
 		defer cp.Close()
-		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+		ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 2*time.Second, 4)
 		if res := ap.ResolveWait(context.Background(), "egress.test"); res.State != apDenied {
 			t.Fatalf("wait_for_review denied -> %v, want apDenied", res.State)
@@ -168,7 +168,7 @@ func TestResolveWaitHold(t *testing.T) {
 		var raises atomic.Int32
 		cp := approvalCPStub(apState(types.ApprovalPending), &raises, nil)
 		defer cp.Close()
-		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+		ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 40*time.Millisecond, 4)
 		start := time.Now()
 		res := ap.ResolveWait(context.Background(), "egress.test")
@@ -186,7 +186,7 @@ func TestResolveWaitHold(t *testing.T) {
 	t.Run("hold cap saturated -> fails fast pending", func(t *testing.T) {
 		cp := approvalCPStub(apState(types.ApprovalPending), nil, nil)
 		defer cp.Close()
-		ap := newApprovalClient(cp.URL, "tok", uuid.New(), cp.Client())
+		ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 		ap.configureHold(types.FirstUseWaitForReview, 5*time.Second, 1)
 		ap.holdSem <- struct{}{} // saturate the single hold slot
 		start := time.Now()
