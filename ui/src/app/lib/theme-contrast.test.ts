@@ -48,6 +48,14 @@ function subtleBg(name: string): string {
 
 const WHITE = "#ffffff";
 
+// All .tsx under src/app, for the source-scanning guards below.
+function walkTsx(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    return e.isDirectory() ? walkTsx(p) : p.endsWith(".tsx") ? [p] : [];
+  });
+}
+
 describe("light-theme WCAG AA contrast (C004)", () => {
   it("white button text on --primary is >= 4.5:1", () => {
     expect(ratio(WHITE, token("primary"))).toBeGreaterThanOrEqual(4.5);
@@ -72,13 +80,8 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // `text-muted-foreground/70` at 11px composites to ~2.7:1. Forbid the diluted
   // form on text tokens so a de-emphasis tweak can't silently drop below AA.
   it("no opacity-diluted muted/foreground text anywhere in src/app (U302)", () => {
-    const walk = (dir: string): string[] =>
-      readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-        const p = join(dir, e.name);
-        return e.isDirectory() ? walk(p) : p.endsWith(".tsx") ? [p] : [];
-      });
     const offenders: string[] = [];
-    for (const f of walk("src/app")) {
+    for (const f of walkTsx("src/app")) {
       readFileSync(f, "utf8")
         .split("\n")
         .forEach((ln, i) => {
@@ -88,5 +91,26 @@ describe("light-theme WCAG AA contrast (C004)", () => {
         });
     }
     expect(offenders, `diluted muted/foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
+  });
+
+  // U121/S3: raw Tailwind palette *text* colors (e.g. text-amber-600 ≈ 3.4:1)
+  // bypass the WCAG-verified semantic tokens proven above. Forbid them so a
+  // revert of the compose-Q&A risk text (text-warning) back to text-amber-600 —
+  // or any new palette-color status text — fails here instead of shipping
+  // sub-AA text. (Palette border-/bg- utilities are unaffected; only text- is.)
+  it("no raw palette text colors in src/app — use text-warning/success/danger (U121)", () => {
+    const rawText = /\btext-(amber|red|green|yellow|orange|emerald|rose|lime|teal|cyan|blue|indigo|violet|purple|pink)-[0-9]{2,3}\b/;
+    const offenders: string[] = [];
+    for (const f of walkTsx("src/app")) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          if (rawText.test(ln)) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(
+      offenders,
+      `raw palette text color — use the guarded semantic token:\n${offenders.join("\n")}`,
+    ).toHaveLength(0);
   });
 });
