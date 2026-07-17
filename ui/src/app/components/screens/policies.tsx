@@ -211,7 +211,19 @@ export function PoliciesScreen() {
                 const egress = egressSummary(p.spec);
                 const grants = p.spec.eligible_grants ?? [];
                 return (
-                  <TableRow key={p.id} onClick={() => setSelected(p.id)} className="cursor-pointer">
+                  <TableRow
+                    key={p.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelected(p.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelected(p.id);
+                      }
+                    }}
+                    className="cursor-pointer"
+                  >
                     <TableCell>
                       <span className="font-medium text-foreground">{p.name}</span>
                     </TableCell>
@@ -257,7 +269,7 @@ export function PoliciesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label="Policy actions">
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>

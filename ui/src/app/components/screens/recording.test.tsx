@@ -167,4 +167,33 @@ describe("RecordingScreen", () => {
     // bg-danger-subtle dot chip (no bg-danger token at all).
     expect(screen.getByText("Killed")).toHaveClass("bg-danger");
   });
+
+  // A11y: the card is a plain <div onClick>, invisible to keyboard/screen-reader
+  // users without role="button" + tabIndex + a key handler. getByRole("button")
+  // only resolves the card at all once role="button" is present.
+  it("is keyboard-reachable: getByRole('button') resolves the card, and Enter fires onPlay", async () => {
+    listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
+    getRecordingMock.mockResolvedValue(rec("run_1"));
+    renderScreen();
+
+    await screen.findByText("ship the fix");
+    // The header's "Refresh" button is also role="button" — name the card by
+    // its task text to resolve it specifically.
+    const card = screen.getByRole("button", { name: /ship the fix/i });
+    fireEvent.keyDown(card, { key: "Enter" });
+
+    await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
+  });
+
+  it("is keyboard-reachable: Space also fires onPlay", async () => {
+    listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
+    getRecordingMock.mockResolvedValue(rec("run_1"));
+    renderScreen();
+
+    await screen.findByText("ship the fix");
+    const card = screen.getByRole("button", { name: /ship the fix/i });
+    fireEvent.keyDown(card, { key: " " });
+
+    await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
+  });
 });

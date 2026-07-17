@@ -676,7 +676,19 @@ function RunsTable({
             const terminal = isTerminalRunState(run.state);
             const attachable = !!run.interactive && run.state === "RUNNING";
             return (
-              <TableRow key={run.id} onClick={() => onOpen(run.id)} className="cursor-pointer">
+              <TableRow
+                key={run.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpen(run.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpen(run.id);
+                  }
+                }}
+                className="cursor-pointer"
+              >
                 <TableCell>
                   <div className="flex min-w-0 items-center gap-2.5">
                     <AgentBadge agent={run.agent} withLabel={false} />

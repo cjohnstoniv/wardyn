@@ -14,9 +14,10 @@ import * as React from "react";
 //
 // Two copy variants, since call sites split on whether they need to know the
 // write actually succeeded before flipping the flag:
-//  - `copy`: fire-and-forget — flips `copied` immediately (matches the
-//    non-secure-context reality that most of these buttons don't bother
-//    checking Clipboard API availability).
+//  - `copy`: fire-and-forget for a plain onClick — still only flips `copied`
+//    once the write actually resolves, so a caller that doesn't check the
+//    return value never lies with "Copied" when navigator.clipboard is
+//    unavailable (e.g. LAN HTTP / an insecure context).
 //  - `copyAsync`: awaits the write and only flips `copied` (returns true) on
 //    success — for callers that show a distinct success/failure toast.
 export function useCopyToClipboard(resetMs: number | null = 1500) {
@@ -24,12 +25,6 @@ export function useCopyToClipboard(resetMs: number | null = 1500) {
 
   const scheduleReset = () => {
     if (resetMs != null) setTimeout(() => setCopied(false), resetMs);
-  };
-
-  const copy = (text: string) => {
-    navigator.clipboard?.writeText(text);
-    setCopied(true);
-    scheduleReset();
   };
 
   const copyAsync = async (text: string): Promise<boolean> => {
@@ -41,6 +36,10 @@ export function useCopyToClipboard(resetMs: number | null = 1500) {
     } catch {
       return false;
     }
+  };
+
+  const copy = (text: string) => {
+    void copyAsync(text);
   };
 
   return { copied, setCopied, copy, copyAsync };
