@@ -1528,11 +1528,13 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 	}
 }
 
-// handleKillRun is the kill-switch: it cascades in a FIXED order — runner
-// teardown, identity revocation, broker credential revocation, state KILLED —
-// then audits run.kill. The order matters: tear the sandbox down first so it
-// cannot use a credential it already holds, then deny any future mints
-// (identity + broker), then mark the durable state.
+// handleKillRun is the kill-switch: it cascades in a FIXED order — WIN the KILLED
+// terminal CAS first, THEN runner teardown, identity revocation, broker credential
+// revocation — then audits run.kill. The order matters: winning the CAS first means
+// a kill that loses to a concurrent forward-transition 409s WITHOUT revoking, so it
+// can never strip a still-live run's credentials (C002); once the transition is ours
+// we tear the sandbox down (so it cannot use a credential it holds) and deny any
+// future mints (identity + broker).
 //
 // IDEMPOTENCY / TERMINAL GUARD: a run in a NON-KILLED terminal state
 // (COMPLETED/FAILED/STOPPED/ARCHIVED) is NOT re-killed — blindly writing KILLED
