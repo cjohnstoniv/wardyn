@@ -81,6 +81,12 @@ type Store interface {
 	// SiteConfig.
 	GetSiteConfig(ctx context.Context) (types.SiteConfig, error)
 	PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error)
+
+	// Sandbox ref -> substrate routing (the orchestrator's RefStore seam; see
+	// store_sandbox_ref.go). GetRef reports a missing row as found=false, nil.
+	PutRef(ctx context.Context, ref, substrateName string) error
+	GetRef(ctx context.Context, ref string) (substrateName string, found bool, err error)
+	DeleteRef(ctx context.Context, ref string) error
 }
 
 // PG is the Postgres-backed Store: its methods (defined in store.go) hold the
