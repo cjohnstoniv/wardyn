@@ -21,14 +21,14 @@ jobs:
         with:
           go-version: '1.26.5'
       - name: Build
-        run: go build ./...
+        run: make build
       # The production Docker runner lives behind //go:build docker. Compile and
       # vet it in CI too, otherwise the entire runner/docker + envbuild tree can
       # rot uncaught (was a HIGH finding: CI only ever built default tags).
       - name: Build (docker tags)
-        run: go build -tags docker ./...
+        run: make build-docker
       - name: Vet
-        run: go vet ./... && go vet -tags docker ./...
+        run: make lint
       # Runs the suite under BOTH tag sets and enforces the floor on the union of
       # the two coverage profiles. The tagless build alone cannot compile the
       # container-hardening driver or internal/envbuild, so a tagless-only floor
@@ -99,22 +99,7 @@ jobs:
       # known MPL/EPL hits (lightningcss, elkjs, dompurify) are devDependencies
       # and are excluded by --prod, so they do not trip this gate.
       - name: Check UI production dependency licenses (no copyleft)
-        working-directory: ui
-        run: |
-          set -euo pipefail
-          pnpm licenses list --prod --json > /tmp/ui-prod-licenses.json
-          # GPL/AGPL/LGPL/MPL/EPL require source disclosure / relicensing on
-          # distribution. A dual-licensed "X OR Apache-2.0" still fails closed
-          # here — we don't assume the OR resolves in our favor without review.
-          bad=$(jq -r 'keys[]' /tmp/ui-prod-licenses.json \
-            | grep -Ei '(^|[^A-Za-z])(A?GPL|LGPL|MPL|EPL)([-0-9]|$)' || true)
-          if [ -n "$bad" ]; then
-            echo "Copyleft license(s) found in PRODUCTION dependencies:"
-            echo "$bad"
-            jq . /tmp/ui-prod-licenses.json
-            exit 1
-          fi
-          echo "No copyleft licenses in production dependencies."
+        run: make npm-license
       - name: Typecheck
         working-directory: ui
         run: pnpm typecheck
@@ -186,16 +171,8 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: latest
-      - name: helm lint
-        run: helm lint ./deploy/helm/wardyn
-      - name: helm template (must render objects)
-        run: |
-          out=$(helm template wardyn ./deploy/helm/wardyn)
-          echo "$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }
-          echo "$out" | grep -q "kind: Service" || { echo "chart rendered no Service"; exit 1; }
-          echo "$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }
-          echo "$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }
-          echo "$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }
+      - name: helm lint + template (must render load-bearing objects)
+        run: make helm-lint
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -203,7 +180,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: docker compose config (validate)
-        run: docker compose -f deploy/compose/docker-compose.yaml config >/dev/null
+        run: make compose-config
 
   conformance:
     runs-on: ubuntu-latest
@@ -281,14 +258,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
-      - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-      # Also scan the ACTUAL shipped build: wardynd ships with -tags docker
-      # (Dockerfile.wardynd), whose runner/docker + envbuild tree is invisible to
-      # the tagless scan above. This is where the moby-module CVEs lived; the v29
+      # Scans BOTH the tagless build and the ACTUAL shipped build (-tags docker,
+      # Dockerfile.wardynd), whose runner/docker + envbuild tree is invisible to
+      # a tagless-only scan. This is where the moby-module CVEs lived; the v29
       # migration cleared them, so this is now green and must stay green (U024).
-      - name: Run govulncheck (-tags docker, the shipped build)
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags docker ./...
+      - name: Run govulncheck (tagless + -tags docker)
+        run: make govulncheck
 
   # ── supply-chain: static analysis ─────────────────────────────────────────
   staticcheck:
@@ -298,12 +273,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
-      - name: Run staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
-      # Lint the -tags docker tree too (the shipped runner/docker + envbuild code),
-      # otherwise it never gets a static-analysis pass in CI (U024/U112).
-      - name: Run staticcheck (-tags docker)
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -tags docker ./...
+      # Lints BOTH tag sets — including the -tags docker tree (the shipped
+      # runner/docker + envbuild code), which otherwise never gets a
+      # static-analysis pass in CI (U024/U112).
+      - name: Run staticcheck (tagless + -tags docker)
+        run: make staticcheck
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
@@ -313,36 +287,22 @@ jobs:
         with:
           # Fetch full history so all commits in the PR are visible.
           fetch-depth: 0
+      # The commit-range selection stays here (it depends on the GH event); the
+      # per-commit Signed-off-by check lives in `make dco`, single-sourced.
       - name: Check DCO sign-off (Signed-off-by on all commits)
         run: |
           BASE=${{ github.event.pull_request.base.sha }}
           if [ -z "$BASE" ]; then
-            # On push to main, just check HEAD commit. --no-merges keeps this
-            # consistent with the PR branch below (see next comment).
-            COMMITS=$(git log -1 --no-merges --format='%H')
+            # On push to main, just check the HEAD commit. `-1 HEAD` is the
+            # single-commit range equivalent of the PR BASE..HEAD below.
+            make dco DCO_RANGE="-1 HEAD"
           else
             # checkout@v4 on pull_request lands on the ephemeral auto-generated
-            # merge commit, whose message has no Signed-off-by. --no-merges
-            # excludes that synthetic commit so only real contributor commits
-            # are checked (otherwise DCO fails on essentially every PR).
-            COMMITS=$(git log --no-merges "$BASE"..HEAD --format='%H')
+            # merge commit, whose message has no Signed-off-by. `make dco` uses
+            # --no-merges to exclude that synthetic commit so only real
+            # contributor commits are checked (otherwise DCO fails on every PR).
+            make dco DCO_RANGE="$BASE..HEAD"
           fi
-          MISSING=0
-          for sha in $COMMITS; do
-            msg=$(git log -1 --format='%B' "$sha")
-            if ! echo "$msg" | grep -qE '^Signed-off-by: .+ <.+@.+>'; then
-              echo "MISSING Signed-off-by in commit $sha:"
-              echo "$msg" | head -3
-              MISSING=$((MISSING+1))
-            fi
-          done
-          if [ "$MISSING" -gt 0 ]; then
-            echo ""
-            echo "ERROR: $MISSING commit(s) lack a Signed-off-by trailer."
-            echo "Add it with: git commit --signoff (or git commit -s)"
-            exit 1
-          fi
-          echo "All commits carry Signed-off-by. DCO check passed."
 
   # ── supply-chain: secret scanning ────────────────────────────────────────
   # Wardyn mints credentials; a committed secret is a critical supply-chain risk.
@@ -363,7 +323,7 @@ jobs:
         with:
           go-version: '1.26.5'
       - name: Scan full git history for secrets with gitleaks
-        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git -c .gitleaks.toml -v
+        run: make gitleaks
 
   # ── supply-chain: dependency license gate ─────────────────────────────────
   # Forbid copyleft / non-permissive Go dependencies.
@@ -376,15 +336,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
-      - name: Install go-licenses
-        run: go install github.com/google/go-licenses@v1.6.0
-      - name: Check dependency licenses
-        run: go-licenses check --disallowed_types=forbidden,restricted ./...
-      # go-licenses has no -tags flag, so the docker-tagged deps (moby/moby/*,
-      # containerd/errdefs) were never license-scanned; drive the tag via GOFLAGS
-      # so the shipped build's transitive licenses are covered too (U112).
-      - name: Check dependency licenses (-tags docker)
-        run: GOFLAGS=-tags=docker go-licenses check --disallowed_types=forbidden,restricted ./...
+      # Checks BOTH tag sets. go-licenses has no -tags flag, so the docker-tagged
+      # deps (moby/moby/*, containerd/errdefs) are covered by driving the tag via
+      # GOFLAGS on the second pass inside the target (U112).
+      - name: Check dependency licenses (tagless + -tags docker)
+        run: make licenses
 
   license-headers:
     runs-on: ubuntu-latest
@@ -406,12 +362,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-      - name: Install syft (SBOM generator)
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.46.0/install.sh \
-            | sh -s -- -b /usr/local/bin v1.46.0
-      - name: Generate SBOM (CycloneDX JSON)
-        run: syft . -o cyclonedx-json > wardyn-sbom.cdx.json
+      - name: Generate SBOM (CycloneDX JSON via syft, version pinned in the Makefile)
+        run: make sbom
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v7
         with:
