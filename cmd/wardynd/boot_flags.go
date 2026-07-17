@@ -95,7 +95,7 @@ func parseBootFlags() *bootFlags {
 		localOperator:  flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default: local:<os-user>)"),
 		localTrustFwd:  flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access."),
 		uiDir:          flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
-		runnerSel:      flagEnv("runner", "WARDYN_RUNNER", "none", `runner driver: "docker" | "none"`),
+		runnerSel:      flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
 		identitySel:    flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`),
 		secretStoreSel: flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", `secret store (pluggable seam): "pg" (default)`),
 		recordingSel:   flagEnv("recording-store", "WARDYN_RECORDING_STORE", "fs", `recording store (pluggable seam): "fs" (default)`),

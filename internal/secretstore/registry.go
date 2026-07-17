@@ -28,6 +28,9 @@ var reg = component.NewRegistry[Constructor]("pg")
 // Register adds a secret-store implementation; call it from an init().
 func Register(name string, c Constructor) { reg.Register(name, c) }
 
+// Names returns the registered store names (for /healthz and error messages).
+func Names() []string { return reg.Names() }
+
 // New constructs the secret store selected by name (empty => default).
 func New(name string, d Deps) (Store, error) {
 	ctor, _, err := reg.Resolve(name)

@@ -19,8 +19,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -117,32 +120,43 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool 
 	return masked, fan, nil
 }
 
-// buildRunnerFromFlags resolves the optional sandbox runner: docker | none. The
-// docker driver is compiled in only under the "docker" build tag (parity rule:
-// the control plane carries zero target-specific code by default). Confinement
-// substrate/runtime pins (pluggable CC3) are parsed fail-closed so a typo never
-// silently downgrades isolation. Returns the runner (nil for "none") and the
-// resolved runner target advertised on /healthz — M31: reflect the ACTUAL
-// resolved runner, not a hardcoded "docker". Extracted verbatim from run().
-func buildRunnerFromFlags(f *bootFlags) (runner.Runner, string, error) {
+// buildRunnerFromFlags resolves the optional sandbox runner: "none" (nil runner,
+// headless API-only) or any substrate registered in the substrate registry
+// (internal/runner/substrate). Substrates SELF-REGISTER at init() like every
+// other pluggable seam: the OCI/Docker substrate registers only under the
+// "docker" build tag (parity rule: the control plane carries zero
+// target-specific code by default), so a tagless `-runner docker` fails closed
+// at resolve with a "not registered" error, and adding a substrate needs no
+// edit here. Confinement substrate/runtime pins (pluggable CC3) are parsed
+// fail-closed so a typo never silently downgrades isolation. Returns the
+// orchestrator-wrapped runner (nil for "none") and the resolved runner target
+// advertised on /healthz — M31: reflect the ACTUAL resolved substrate, not a
+// hardcoded "docker".
+//
+// refs is the durable ref->substrate RefStore (store.PG in production) wired
+// into the orchestrator so lifecycle routing — and therefore the kill switch —
+// survives a control-plane restart; nil keeps the in-memory-only behavior.
+func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runner, string, error) {
 	confRuntimes, err := parseConfinementMap(*f.confinementMap)
 	if err != nil {
 		return nil, "", err
 	}
-	switch *f.runnerSel {
-	case "docker":
-		d, derr := newDockerRunner(*f.proxyImage, confRuntimes)
-		if derr != nil {
-			return nil, "", fmt.Errorf("docker runner: %w", derr)
-		}
-		slog.Info("wardynd: docker runner enabled", slog.String("proxy_image", *f.proxyImage))
-		return d, "docker", nil
-	case "none", "":
+	if sel := *f.runnerSel; sel == "none" || sel == "" {
 		slog.Info("wardynd: no runner selected; runs stay PENDING (headless API-only)")
 		return nil, "none", nil
-	default:
-		return nil, "", fmt.Errorf("unknown -runner %q (want docker|none)", *f.runnerSel)
 	}
+	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
+		ProxyImage:          *f.proxyImage,
+		ConfinementRuntimes: confRuntimes,
+	})
+	if err != nil {
+		// FAIL CLOSED on both a typo'd -runner and a substrate that is not
+		// compiled into this build (e.g. "docker" without -tags docker) — the
+		// registry error lists what IS registered.
+		return nil, "", fmt.Errorf("unknown -runner %q (want \"none\" or a registered substrate; the docker substrate requires a wardynd built with -tags docker): %w", *f.runnerSel, err)
+	}
+	slog.Info("wardynd: runner enabled", slog.String("substrate", sub.Name()), slog.String("proxy_image", *f.proxyImage))
+	return orchestrator.New(sub).WithRefStore(refs), sub.Name(), nil
 }
 
 // optionalFeatures groups the off-by-default subsystems run() wires into
@@ -284,10 +298,13 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 }
 
 // componentsInfo builds the pluggable-component selection advertised on
-// /healthz. "selected" is the ACTUAL running impl; "recommended_production" is
-// the standard Wardyn recommends converging to (may differ from the shipped
-// default — the honest recommended-vs-shipped split, see docs/PLUGGABILITY.md).
-// Extracted verbatim from run().
+// /healthz. "selected" is the ACTUAL running impl; "available" is what each
+// seam's registry has self-registered in THIS build (so a newly registered
+// substrate/provider appears with no edit here — and a tagless build honestly
+// shows sandbox.available=[]); "recommended_production" is the standard Wardyn
+// recommends converging to (may differ from the shipped default — the honest
+// recommended-vs-shipped split, see docs/PLUGGABILITY.md). policy_engine has no
+// registry yet, so it carries no "available".
 func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentInfo {
 	sourceOf := func(selected, def string) string {
 		if selected == def {
@@ -296,10 +313,10 @@ func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentI
 		return "configured"
 	}
 	return map[string]api.ComponentInfo{
-		"identity":      {Selected: *f.identitySel, RecommendedProduction: "spire", Source: sourceOf(*f.identitySel, "embedded")},
-		"secret_store":  {Selected: *f.secretStoreSel, RecommendedProduction: "openbao", Source: sourceOf(*f.secretStoreSel, "pg")},
-		"recording":     {Selected: *f.recordingSel, RecommendedProduction: "fs", Source: sourceOf(*f.recordingSel, "fs")},
+		"identity":      {Selected: *f.identitySel, Available: identity.Names(), RecommendedProduction: "spire", Source: sourceOf(*f.identitySel, "embedded")},
+		"secret_store":  {Selected: *f.secretStoreSel, Available: secretstore.Names(), RecommendedProduction: "openbao", Source: sourceOf(*f.secretStoreSel, "pg")},
+		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), RecommendedProduction: "fs", Source: sourceOf(*f.recordingSel, "fs")},
 		"policy_engine": {Selected: "builtin", RecommendedProduction: "opa"},
-		"sandbox":       {Selected: runnerTarget, RecommendedProduction: "kata-cc3", Source: sourceOf(*f.runnerSel, "none")},
+		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), RecommendedProduction: "kata-cc3", Source: sourceOf(*f.runnerSel, "none")},
 	}
 }

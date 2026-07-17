@@ -24,6 +24,9 @@ var reg = component.NewRegistry[Constructor]("fs")
 func Register(name string, c Constructor) { reg.Register(name, c) }
 
 
+// Names returns the registered store names (for /healthz and error messages).
+func Names() []string { return reg.Names() }
+
 // New constructs the recording store selected by name (empty => default).
 func New(name string, d Deps) (Store, error) {
 	ctor, _, err := reg.Resolve(name)
