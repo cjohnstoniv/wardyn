@@ -4,6 +4,52 @@ All notable changes to Wardyn are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); Wardyn is **pre-alpha**
 and does not yet follow semantic versioning (interfaces are not stable).
 
+## [Unreleased]
+
+### Added
+
+- **CLI: run is now one noun** (bare `create` + `list`/`get`/`kill` subcommands,
+  `runs` alias), a central exit-code taxonomy (`0`=ok, `2`=auth, `3`=client 4xx,
+  `4`=server 5xx, `5`=network, `124`=wait-timeout), `--json` on all list/mutate
+  commands, and unwrapped API error messages.
+- **`wardyn run --json`** for machine-readable output — emits the raw run object
+  immediately (before the `--wait` loop), so scripts no longer have to
+  sed-scrape the run ID out of human-readable text.
+- **`wardyn approvals list [--state]`**: discover a pending approval id from the
+  CLI without the UI. API errors are now typed with the real HTTP status (auth
+  failures exit `2`, distinguishable from a 404/409/network failure).
+- **SDK**: `CreateRunRequest` gains `DevcontainerRepo`/`DevcontainerRef`, so the
+  public Go SDK carries every user-facing create-run field.
+
+### Changed
+
+- Bad `WARDYN_*` environment values (e.g. `WARDYN_ENVBUILD=treu`) now fail loud
+  (exit 2, naming the variable and value) instead of silently falling back to
+  the default.
+
+### Fixed
+
+- **Concurrent runs no longer share one egress allowlist.** Two runs created at
+  the same time could alias the same policy slice backing array and clobber
+  each other's allowed domains under load.
+- **A run outliving 1 hour keeps working.** The per-run identity token now
+  renews instead of expiring with no refresh path, which previously killed
+  decision logs, approvals, credential mints, and subscription re-resolution
+  all at once.
+- Recording no longer swallows upload errors that should trip the 64 MiB
+  capture cap, and the managed-harness login run (which prints a long-lived
+  Anthropic OAuth token to its PTY) is never recorded.
+
+### Security
+
+- **NAT64-smuggled metadata targets are now blocked** in the composer's egress
+  transport (a `64:ff9b::a9fe:a9fe`-style literal previously reached
+  `169.254.169.254` past the SSRF guard).
+- Base images are now digest-pinned across Dockerfiles, `go-github` is
+  collapsed to a single v88 major, and `GO-2026-5932` (unmaintained
+  `x/crypto/openpgp`, reached only via `filippo.io/age`, no called path) is
+  documented in `SECURITY.md`.
+
 ## [0.3.0] — 2026-07-14
 
 ### Added
