@@ -53,6 +53,14 @@ const (
 	RunPending  RunState = "PENDING"
 	RunStarting RunState = "STARTING"
 	RunRunning  RunState = "RUNNING"
+	// RunWaiting is a RESERVED, not-yet-produced state (U067): no backend path
+	// transitions a run into WAITING_FOR_CONFIRMATION today. It is the planned
+	// human-in-the-loop gate — a run that pauses for an operator to confirm a
+	// risky action mid-flight — and is deliberately kept wired end to end (UI
+	// attention badge in App.tsx/runs.tsx, primitives.tsx label, SDK alias, e2e
+	// fixtures) so the display + attention semantics are proven before the
+	// producer lands with the approval-gated-run feature. Reserved, not dead:
+	// removing it would strip a designed seam the UI already renders.
 	RunWaiting  RunState = "WAITING_FOR_CONFIRMATION"
 	RunStopped  RunState = "STOPPED"
 	RunArchived RunState = "ARCHIVED"
