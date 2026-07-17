@@ -180,8 +180,10 @@ func TestDispatch_KillRaceTeardownFailure_AuditsTeardownError(t *testing.T) {
 		st.mu.Unlock()
 	}
 
-	srv.dispatch(context.Background(), run, "run-token", "wardyn/claude-code:latest",
-		types.RunPolicySpec{MinConfinementClass: types.CC1}, nil, nil, nil, nil, false, "")
+	srv.dispatchRun(context.Background(), run, dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+	})
 
 	if rn.stopCount() != 1 {
 		t.Fatalf("dispatch must tear the orphaned sandbox down exactly once, got %d stops", rn.stopCount())
@@ -222,8 +224,10 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	}
 	srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
 
-	srv.dispatch(context.Background(), run, "run-token", "wardyn/claude-code:latest",
-		types.RunPolicySpec{MinConfinementClass: types.CC1}, nil, nil, nil, nil, false, "")
+	srv.dispatchRun(context.Background(), run, dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+	})
 
 	if rn.stopCount() != 1 {
 		t.Fatalf("a failed Exec must tear the sandbox down exactly once, got %d stops", rn.stopCount())
@@ -303,8 +307,10 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 	cfg.BaseCtx = baseCtx
 	srv := New(cfg)
 
-	srv.dispatch(context.Background(), run, "run-token", "wardyn/claude-code:latest",
-		types.RunPolicySpec{MinConfinementClass: types.CC1}, nil, nil, nil, nil, false, "")
+	srv.dispatchRun(context.Background(), run, dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+	})
 
 	// The watcher is detached; reconcileWatch probes on a 5s tick. Wait for the
 	// WHOLE finalize, not just the state flip: the cascade wins the terminal CAS

@@ -146,26 +146,14 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if !applied {
 		return // someone else won the transition
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.reconcile",
-		runID.String(), "success", mustJSON(map[string]any{"to": string(to), "reason": reason})))
-	s.revokeRunCascade(ctx, runID)
-	// Tear the sandbox down and RECORD a failed teardown. A swallowed StopSandbox
-	// error leaves a live/routable container that the next boot skips (the run is
-	// now terminal ⇒ not reconciled), abandoning it forever with no record. Mirror
-	// the completion watcher's teardown_error audit (runs.go) so the abandoned
-	// sandbox is visible in the system of record instead of vanishing silently.
-	if ref != "" && s.cfg.Runner != nil {
-		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.reconcile",
-				ref, "failure", mustJSON(map[string]any{
-					"to": string(to), "reason": reason, "teardown_error": serr.Error(),
-				})))
-		}
-	}
-	// Settle any workspace this stranded run was an import step for: a scan/
-	// verify run that never delivered its result fails fast instead of hanging
-	// the workspace across the restart, and a record run's evidence is captured
-	// from whatever audit events landed before the crash. Both are idempotent.
-	s.reconcileWorkspaceRun(ctx, runID)
-	s.reconcileRecordRun(ctx, runID)
+	// Shared terminal tail (audit run.reconcile → revoke cascade → sandbox
+	// teardown with a teardown_error audit on failure → workspace/record
+	// settlement). The completion watcher runs the IDENTICAL sequence via
+	// finalizeRunTail, so a swallowed StopSandbox error (which would abandon a
+	// live/routable container the now-terminal run's next boot skips) can never
+	// creep back into just one of the two finalize paths. A scan/verify run that
+	// never delivered its result fails fast instead of hanging the workspace; a
+	// record run's evidence is captured from whatever audit events landed.
+	s.finalizeRunTail(ctx, runID, ref, "run.reconcile", "success",
+		map[string]any{"to": string(to), "reason": reason})
 }
