@@ -54,6 +54,12 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 			}
 			return nil
 		}
+		// Never descend a repo's .git internals: detection stats <parent>/.git
+		// directly (below), so re-walking objects/refs/logs is pure waste that
+		// makes the scan O(git-objects) instead of O(repo-roots).
+		if d.Name() == ".git" {
+			return fs.SkipDir
+		}
 		if depthUnder(root, p) > maxDepth {
 			return fs.SkipDir
 		}
