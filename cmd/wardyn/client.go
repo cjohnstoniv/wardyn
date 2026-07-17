@@ -22,6 +22,13 @@ type apiClient struct {
 	token   string
 }
 
+// httpClient is shared across every apiClient request — hoisted to package
+// scope (rather than built fresh inside do()) so `wardyn run --wait`'s poll
+// loop, which can call do() up to ~900 times over its default 30m timeout,
+// reuses one connection pool instead of paying a fresh TCP/TLS handshake (and
+// discarding a fresh idle-conn pool) on every poll.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
 // apiError is a typed non-2xx API response. It carries the numeric status so
 // exitCodeFor can map it to a process exit code, and its Error() unwraps the
 // server's {"error"|"message":...} envelope into a bare human message (while
@@ -75,19 +82,25 @@ func (c *apiClient) do(ctx context.Context, method, path string, body any, out a
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
-	data, _ := io.ReadAll(resp.Body)
+	// Error path: cap the body at 2 KiB (matches pkg/client.Client.do) so a
+	// hostile or runaway server cannot exhaust CLI memory via an oversized
+	// error response.
 	if resp.StatusCode >= 400 {
+		const maxErrBody = 2048
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
 		return &apiError{method: method, path: path, statusCode: resp.StatusCode, status: resp.Status, body: data}
 	}
-	if out != nil && len(data) > 0 {
-		if err := json.Unmarshal(data, out); err != nil {
+	// Success path: decode the FULL body (no cap) via a streaming decoder; an
+	// empty body (e.g. 204) leaves out untouched (io.EOF is the "no body"
+	// signal, not an error here).
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && err != io.EOF {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}

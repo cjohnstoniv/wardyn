@@ -97,6 +97,16 @@ type CreateRunRequest struct {
 	// (mounts pass the same deny-list; api_key grants must reference an existing
 	// secret) and attaches it with no stored policy id.
 	InlinePolicy *RunPolicySpec `json:"inline_policy,omitempty"`
+	// Image, when set, is a USER-supplied base image (Bring Your Own Image); the
+	// server wraps it with the runner tools via a trusted finalize stage and
+	// requires an image builder to be wired (WARDYN_ENVBUILD) — an explicit
+	// Image with no builder wired is a hard 400 rather than a silent fallback.
+	Image string `json:"image,omitempty"`
+	// TaskMode selects how a non-interactive run executes Task: "" / "harness"
+	// (default) runs the agent harness; "exec" runs Task as a plain shell
+	// command in the same governed sandbox (no agent, no LLM credentials — the
+	// BYOA/CI lane; see docs/CI.md). Ignored for an interactive run.
+	TaskMode string `json:"task_mode,omitempty"`
 }
 
 // CreateRun submits a new agent run to the control plane.
@@ -304,7 +314,13 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	// Omit rather than send a bare "Bearer " for an empty token: a LOCAL HOST
+	// MODE wardynd bypasses public-API auth on a loopback bind (no token
+	// needed), and an auth-gated server still returns a clean 401 either way.
+	// Matches cmd/wardyn/client.go's apiClient.
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	req.Header.Set("Accept", "application/json")
 	if c.Principal != "" {
 		req.Header.Set("X-Wardyn-Principal", c.Principal)
