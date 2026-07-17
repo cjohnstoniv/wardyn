@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,14 +45,18 @@ func decodePolicyRequest(r *http.Request) (policyRequest, string) {
 	return req, ""
 }
 
-// handleListPolicies returns all policies in reverse creation order.
+// handleListPolicies returns policies in reverse creation order, paginated by
+// ?limit=&offset= (see parseListPage).
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
-	policies, err := s.cfg.Store.ListPolicies(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list policies: "+err.Error())
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, policies)
+	var pageFn func(store.Page) ([]types.RunPolicy, error)
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		pageFn = func(p store.Page) ([]types.RunPolicy, error) { return pg.ListPoliciesPage(r.Context(), p) }
+	}
+	servePage(w, page, pageFn, func() ([]types.RunPolicy, error) { return s.cfg.Store.ListPolicies(r.Context()) })
 }
 
 // handleGetPolicy returns one policy by id (404 when unknown).

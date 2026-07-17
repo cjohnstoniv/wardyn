@@ -7,22 +7,117 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// handleListRuns returns all runs in reverse creation order.
+// Pagination defaults for the public list endpoints. defaultListLimit is what an
+// unparameterised caller (every existing SDK/CLI/UI list call) gets; maxListLimit
+// hard-caps a client-supplied ?limit so a long-lived daemon's /runs, the Fleet
+// view, and the compose healthcheck can never pull down an unbounded payload
+// (U049/U070). A ?limit of 0 or above the max clamps to the max — never to
+// "unbounded", which only internal store callers get.
+const (
+	defaultListLimit = 200
+	maxListLimit     = 1000
+)
+
+// parseListPage reads ?limit=&offset= into a store.Page. An absent ?limit uses
+// defaultLimit (each endpoint supplies its own — the list endpoints use
+// defaultListLimit, the audit trail keeps its historical caps); a present one is
+// hard-capped at maxListLimit. It writes a 400 and returns ok=false on a
+// malformed value; callers must return immediately when ok is false.
+func parseListPage(w http.ResponseWriter, r *http.Request, defaultLimit int) (store.Page, bool) {
+	limit := defaultLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return store.Page{}, false
+		}
+		limit = n
+	}
+	if limit <= 0 || limit > maxListLimit {
+		limit = maxListLimit
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return store.Page{}, false
+		}
+		offset = n
+	}
+	return store.Page{Limit: limit, Offset: offset}, true
+}
+
+// pageWindow returns items[offset : offset+limit] (clamped) and whether the full
+// slice extended past that window. It is the fetch-all fallback path (test fakes
+// and the approvals lister, which is not a store.Pager) — the store already
+// applies LIMIT/OFFSET on the pager path.
+func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
+	if offset >= len(items) {
+		return []T{}, false
+	}
+	end := offset + limit
+	if end >= len(items) {
+		return items[offset:], false
+	}
+	return items[offset:end], true
+}
+
+// servePage writes one page of a list endpoint. When pageFn is non-nil (the
+// store implements store.Pager — production PG) it fetches page.Limit+1 rows at
+// the DB so truncation is exact and the payload is bounded there; otherwise it
+// falls back to allFn (fetch-all) + in-Go windowing for test doubles and the
+// approvals lister, which is not a store.Pager. X-Wardyn-Truncated is set when a
+// further page exists.
+func servePage[T any](w http.ResponseWriter, page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) {
+	var items []T
+	var truncated bool
+	if pageFn != nil {
+		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list: "+err.Error())
+			return
+		}
+		items = got
+		if truncated = len(items) > page.Limit; truncated {
+			items = items[:page.Limit]
+		}
+	} else {
+		got, err := allFn()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list: "+err.Error())
+			return
+		}
+		items, truncated = pageWindow(got, page.Offset, page.Limit)
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// handleListRuns returns runs in reverse creation order, paginated by
+// ?limit=&offset= (see parseListPage).
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.cfg.Store.ListRuns(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list runs: "+err.Error())
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, runs)
+	var pageFn func(store.Page) ([]types.AgentRun, error)
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		pageFn = func(p store.Page) ([]types.AgentRun, error) { return pg.ListRunsPage(r.Context(), p) }
+	}
+	servePage(w, page, pageFn, func() ([]types.AgentRun, error) { return s.cfg.Store.ListRuns(r.Context()) })
 }
 
 // handleGetRun returns one run by id.
