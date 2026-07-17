@@ -167,6 +167,17 @@ func IsBlocked(ip net.IP, allowPrivate bool) (bool, string) {
 	if ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
 		return true, "link-local/metadata/multicast/unspecified"
 	}
+	// NAT64-embedded IPv4 smuggling: 64:ff9b::a9fe:a9fe reaches 169.254.169.254
+	// while To4()==nil lets it slip every check below. Block the prefix wholesale
+	// and re-run the embedded v4 through this same guard (BEFORE the allowPrivate
+	// bypass, so a NAT64-smuggled metadata target stays blocked even under it,
+	// while a NAT64-embedded RFC1918 target follows allowPrivate like a direct one).
+	if embedded, ok := ipguard.NAT64EmbeddedV4(ip); ok {
+		if blocked, why := IsBlocked(embedded, allowPrivate); blocked {
+			return true, "nat64-embedded " + why
+		}
+		return true, "nat64 prefix (RFC 6052/8215)"
+	}
 	if allowPrivate {
 		return false, ""
 	}

@@ -3,7 +3,11 @@
 
 package proxy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+)
 
 // TestBlockedTablesMatchPreExtractionLists pins the composed tables (shared
 // internal/ipguard core + proxy-only entries) to the exact CIDR sets this file
@@ -26,7 +30,7 @@ func TestBlockedTablesMatchPreExtractionLists(t *testing.T) {
 	for _, n := range blockedV6 {
 		got["v6"][n.String()] = true
 	}
-	for _, n := range nat64Prefixes {
+	for _, n := range ipguard.NAT64Prefixes {
 		got["nat64"][n.String()] = true
 	}
 	for k, ws := range want {
