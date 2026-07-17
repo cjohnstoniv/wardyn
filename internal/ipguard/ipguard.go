@@ -32,7 +32,35 @@ var (
 	UniqueLocalV6 = MustCIDRs(
 		"fc00::/7", // unique local (ULA)
 	)
+
+	// NAT64Prefixes are the well-known + local-use NAT64 translation prefixes
+	// (RFC 6052 / RFC 8215). An address inside one carries a real IPv4 in its
+	// low 32 bits, so a private/metadata target can be smuggled as an IPv6
+	// literal (64:ff9b::a9fe:a9fe -> 169.254.169.254) past every stdlib
+	// predicate (To4() is nil for it). Every guard must block these wholesale
+	// and re-check the embedded v4 so the denial names the real target.
+	NAT64Prefixes = MustCIDRs(
+		"64:ff9b::/96",   // well-known NAT64 (RFC 6052)
+		"64:ff9b:1::/48", // local-use NAT64 (RFC 8215)
+	)
 )
+
+// NAT64EmbeddedV4 returns the IPv4 embedded in the low 32 bits of ip and true
+// when ip falls inside a NAT64 prefix; otherwise (nil, false). Callers block
+// the prefix wholesale and re-run the embedded v4 through their own v4 guard so
+// a NAT64-smuggled private/metadata target cannot slip past To4()==nil.
+func NAT64EmbeddedV4(ip net.IP) (net.IP, bool) {
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return nil, false
+	}
+	for _, n := range NAT64Prefixes {
+		if n.Contains(ip) {
+			return net.IP(ip16[12:16]), true
+		}
+	}
+	return nil, false
+}
 
 // MustCIDRs parses CIDR literals, panicking on a bad entry — for package-level
 // tables of programmer-authored constants only (init-time failure, never on a

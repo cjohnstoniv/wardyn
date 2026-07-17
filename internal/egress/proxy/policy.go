@@ -338,13 +338,6 @@ func VetHost(host string, res resolver) IPGuardResult {
 var (
 	blockedV4 []*net.IPNet
 	blockedV6 []*net.IPNet
-	// nat64Prefixes are the well-known + local-use NAT64 translation prefixes
-	// (RFC 6052 / RFC 8215). An address inside one of these carries a real IPv4
-	// in its low 32 bits, so a private/metadata target can be smuggled as an
-	// IPv6 literal (64:ff9b::a9fe:a9fe -> 169.254.169.254) that .To4()==nil lets
-	// pass every stdlib predicate. Blocked wholesale, and the embedded v4 is
-	// re-checked so the denial reason names the real target.
-	nat64Prefixes []*net.IPNet
 )
 
 func init() {
@@ -361,10 +354,6 @@ func init() {
 		"fe80::/10", // link-local
 		"::/128",    // unspecified
 	), ipguard.UniqueLocalV6...)
-	nat64Prefixes = ipguard.MustCIDRs(
-		"64:ff9b::/96",   // well-known NAT64 (RFC 6052)
-		"64:ff9b:1::/48", // local-use NAT64 (RFC 8215)
-	)
 }
 
 // isBlockedIP reports whether ip is in an unconditionally-denied range.
@@ -400,14 +389,11 @@ func isBlockedIP(ip net.IP) (bool, string) {
 	// embedded check is scoped to NAT64 prefixes on purpose — running it on every
 	// IPv6 would false-positive legit addresses whose low 32 bits happen to fall
 	// in a reserved v4 range (e.g. any address ending ::1 -> 0.0.0.1 in 0/8).
-	for _, n := range nat64Prefixes {
-		if n.Contains(ip) {
-			embedded := net.IP(ip.To16()[12:16])
-			if blocked, why := isBlockedIP(embedded); blocked {
-				return true, "nat64-embedded " + why
-			}
-			return true, "nat64 prefix " + n.String()
+	if embedded, ok := ipguard.NAT64EmbeddedV4(ip); ok {
+		if blocked, why := isBlockedIP(embedded); blocked {
+			return true, "nat64-embedded " + why
 		}
+		return true, "nat64 prefix (RFC 6052/8215)"
 	}
 	return false, ""
 }
