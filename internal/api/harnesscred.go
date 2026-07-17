@@ -186,6 +186,16 @@ func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedC
 // `claude setup-token` in the attach terminal. It mints nothing and mounts no
 // credential — it is a blank, egress-pinned box whose only purpose is to host
 // the interactive OAuth. Modeled on launchRecordRun, minus workspace/claim.
+//
+// KNOWN GAP (harnessLoginTask must not be recorded): this run's terminal exists
+// to PRINT a ~1yr credential, and because the run mints nothing its mask snapshot
+// is empty by construction — liveMaskWriter is a pass-through, so handleAttach's
+// unconditional session recorder persists a replayable asciicast containing the
+// token verbatim. The paste-time AddGlobal in handleHarnessCredentialPaste lands
+// too late for that cast (masking is write-time). The fix belongs at the
+// newSessionRecorder call site in attach.go — gate it on
+// run.Task != harnessLoginTask — and operators who ran the flow on an affected
+// build should purge the login run's .cast from the recording root.
 func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin) (types.AgentRun, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
@@ -322,8 +332,17 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "store managed credential: "+err.Error())
 		return
 	}
-	// Mask the token everywhere it might otherwise surface (this run has no id, so
-	// register globally is not available; per-run masking happens at inject time).
+	// Register the token PROCESS-GLOBALLY so it is masked out of every run's PTY
+	// capture, asciicast and decision log — not just the runs it is injected into.
+	// A per-run Add cannot cover it: the value is minted outside any run's mint
+	// path, so nothing else ever tells the registry it exists.
+	//
+	// HONEST RESIDUAL: masking is write-time, never retroactive. The login run's
+	// OWN asciicast has already buffered the `claude setup-token` output verbatim
+	// by the time this handler runs, so this does not redact that cast — see
+	// launchHarnessLoginRun for why the login terminal must not be recorded at all.
+	s.cfg.MaskRegistry.AddGlobal([]byte(token)) // nil-safe
+
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"harness.credential.captured", hl.secretName, "success",
 		mustJSON(map[string]any{"provider": hl.provider, "source": "paste"})))

@@ -198,7 +198,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// memory for the session's lifetime and written once at close, which is fine
 	// for human-length interactive sessions but is not a streaming sink.
 	sessionID := uuid.New().String()
-	castTee, finishRecording := s.newSessionRecorder(id, sessionID, opts)
+	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
 	// A keepalive ping bumps updated_at while attached. We run it on a context
 	// derived from the request so it stops when the handler returns.
@@ -357,6 +357,20 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 	}
 }
 
+// runIsUnrecordable reports whether a run's terminal must never be persisted as
+// an asciicast, because the run exists precisely to display a live credential.
+//
+// The managed-harness login run shells out to `claude setup-token`, which PRINTS
+// a ~1-year Anthropic OAuth token to the PTY. Recording it would write that
+// credential verbatim into a replayable artifact that long outlives the run —
+// and no masking can prevent it (the token is unknown to wardynd until the
+// operator pastes it back, by which point the cast already holds it). Dropping
+// the cast costs no provenance: harness.login.started and session.attach still
+// record who attached, when, and why.
+func runIsUnrecordable(run types.AgentRun) bool {
+	return run.Task == harnessLoginTask
+}
+
 // newSessionRecorder builds the interactive-session recording pipeline and
 // returns (tee, finish):
 //
@@ -377,11 +391,19 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 // is live, so the masker RE-SNAPSHOTS the registry on each write to catch a
 // credential minted mid-session. When MaskRegistry is nil it is a safe
 // pass-through (documented residual unchanged).
-func (s *Server) newSessionRecorder(runID uuid.UUID, sessionID string, opts runner.AttachOptions) (io.Writer, func(ctx context.Context, principalType types.ActorType, principal string)) {
+//
+// NOT-RECORDED RUNS: a run whose terminal exists to PRINT a credential is never
+// recorded at all — see runIsUnrecordable. Masking cannot protect those: the
+// registry only masks values it already holds, and such a token is unknown to
+// wardynd until the operator pastes it back, which is strictly AFTER the bytes
+// would have landed in the cast. The gate lives here, not at the call site, so
+// a future second caller cannot miss it.
+func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts runner.AttachOptions) (io.Writer, func(ctx context.Context, principalType types.ActorType, principal string)) {
 	noop := func(context.Context, types.ActorType, string) {}
-	if s.cfg.RecordingStore == nil {
+	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
 		return nil, noop
 	}
+	runID := run.ID
 
 	buf := &bytes.Buffer{}
 	cast := recording.NewCastWriter(buf, int(opts.Cols), int(opts.Rows), s.cfg.Now().UTC())
