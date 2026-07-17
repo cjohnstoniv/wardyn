@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -97,14 +98,18 @@ func decodeWorkspaceRequest(r *http.Request) (workspaceRequest, string) {
 	return req, ""
 }
 
-// handleListWorkspaces returns all onboarded workspaces in reverse creation order.
+// handleListWorkspaces returns onboarded workspaces in reverse creation order,
+// paginated by ?limit=&offset= (see parseListPage).
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
-	workspaces, err := s.cfg.Store.ListWorkspaces(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list workspaces: "+err.Error())
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, workspaces)
+	var pageFn func(store.Page) ([]types.Workspace, error)
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		pageFn = func(p store.Page) ([]types.Workspace, error) { return pg.ListWorkspacesPage(r.Context(), p) }
+	}
+	servePage(w, page, pageFn, func() ([]types.Workspace, error) { return s.cfg.Store.ListWorkspaces(r.Context()) })
 }
 
 // handleGetWorkspace returns one workspace by id (404 when unknown).

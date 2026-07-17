@@ -76,28 +76,11 @@ func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
 
-// ListRuns returns all runs in reverse creation order.
+// ListRuns returns all runs in reverse creation order (unbounded).
 func (s PG) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
-	const q = `
-		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id
-		FROM agent_runs ORDER BY created_at DESC`
-	rows, err := s.Pool.Query(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("store: list runs: %w", err)
-	}
-	defer rows.Close()
-	return collectRuns(rows)
+	return s.ListRunsPage(ctx, Page{})
 }
 
-// UpdateRunStateIf conditionally transitions a run from fromState to toState in
-// a single UPDATE ... WHERE id=$ AND state=$from, returning whether the update
-// applied. It is the optimistic guard the completion watcher uses: it only
-// transitions a run that is STILL in fromState (e.g. RUNNING), so a concurrent
-// kill/stop that already moved the run to a terminal state is never clobbered
-// (TOCTOU-safe, like DecideApproval). A false return with a nil error means the
-// run existed but was no longer in fromState (or did not exist) — the caller
-// treats this as "someone else won the transition" and does nothing.
 func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2 AND state=$3`,
@@ -257,33 +240,9 @@ func (s PG) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error
 // ListPolicies returns all policies in reverse creation order. The slice is
 // empty (never nil) when no policies exist.
 func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
-	const q = `SELECT id, name, created_at, updated_at, spec FROM run_policies ORDER BY created_at DESC`
-	rows, err := s.Pool.Query(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("store: list policies: %w", err)
-	}
-	defer rows.Close()
-	var out []types.RunPolicy
-	for rows.Next() {
-		p, err := scanPolicy(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate policies: %w", err)
-	}
-	if out == nil {
-		out = []types.RunPolicy{}
-	}
-	return out, nil
+	return s.ListPoliciesPage(ctx, Page{})
 }
 
-// UpdatePolicy replaces a policy's name and spec and bumps updated_at, returning
-// the persisted row. Returns ErrNotFound when no policy has the given id. The
-// caller is responsible for validating the spec before calling (policies are
-// admin-gated config; the API validates every spec before it reaches the store).
 func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
@@ -392,40 +351,9 @@ func (s PG) GetWorkspaceBySource(ctx context.Context, kind types.WorkspaceKind, 
 // ListWorkspaces returns all workspaces in reverse creation order. The slice
 // is empty (never nil) when no workspaces exist.
 func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
-	q := `SELECT ` + wsCols + ` FROM workspaces ORDER BY created_at DESC`
-	rows, err := s.Pool.Query(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("store: list workspaces: %w", err)
-	}
-	defer rows.Close()
-	var out []types.Workspace
-	for rows.Next() {
-		ws, err := scanWorkspace(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ws)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate workspaces: %w", err)
-	}
-	if out == nil {
-		out = []types.Workspace{}
-	}
-	return out, nil
+	return s.ListWorkspacesPage(ctx, Page{})
 }
 
-// UpdateWorkspace replaces a workspace's editable identity fields (name, kind,
-// source, ref, default_target) and bumps updated_at, returning the persisted
-// row. It does NOT touch the scan-owned fields (profile, image_ref,
-// built_profile_hash, status) — those are exclusively written by the scan flow
-// (core A; handleScanWorkspace is a stub as of this wave). Returns ErrNotFound
-// when no workspace has the given id.
-//
-// Callers must round-trip the fetched row (handleUpdateWorkspace does, and
-// resets the scan-owned fields + ApprovedEgress itself when source/kind
-// changed — the persisted profile and egress approvals were reviewed against
-// the OLD source).
 func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
@@ -770,46 +698,9 @@ func (s PG) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalReques
 
 // ListApprovals returns approvals filtered by state. Pass empty string to list all.
 func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error) {
-	var (
-		rows pgx.Rows
-		err  error
-	)
-	if stateFilter == "" {
-		rows, err = s.Pool.Query(ctx, `
-			SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
-				decided_at, decided_by, minted_jti, reason
-			FROM approvals ORDER BY requested_at DESC`)
-	} else {
-		rows, err = s.Pool.Query(ctx, `
-			SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
-				decided_at, decided_by, minted_jti, reason
-			FROM approvals WHERE state=$1 ORDER BY requested_at DESC`,
-			string(stateFilter))
-	}
-	if err != nil {
-		return nil, fmt.Errorf("store: list approvals: %w", err)
-	}
-	defer rows.Close()
-	var out []types.ApprovalRequest
-	for rows.Next() {
-		a, err := scanApproval(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate approvals: %w", err)
-	}
-	if out == nil {
-		out = []types.ApprovalRequest{}
-	}
-	return out, nil
+	return s.ListApprovalsPage(ctx, stateFilter, Page{})
 }
 
-// DecideApproval transitions an approval from PENDING to the given state.
-// Returns ErrAlreadyDecided if the approval is not PENDING (fail-closed).
-// Uses a single UPDATE with WHERE state='PENDING' to prevent TOCTOU races.
 func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
 	now := time.Now().UTC()
 	const q = `
@@ -880,68 +771,16 @@ func (s PG) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([
 	if limit <= 0 {
 		limit = 1000
 	}
-	const q = `
-		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
-		FROM audit_events WHERE run_id=$1 ORDER BY seq ASC LIMIT $2`
-	rows, err := s.Pool.Query(ctx, q, runID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("store: query audit events: %w", err)
-	}
-	defer rows.Close()
-	var out []types.AuditEvent
-	for rows.Next() {
-		ev, err := scanAuditEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ev)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate audit events: %w", err)
-	}
-	if out == nil {
-		out = []types.AuditEvent{}
-	}
-	return out, nil
+	return s.QueryAuditEventsPage(ctx, runID, Page{Limit: limit})
 }
 
-// QueryRecentAuditEvents returns the most-recent audit events across ALL runs,
-// newest first — the global SIEM-style feed the Audit view renders. Per-run
-// queries (QueryAuditEvents) stay chronological; this global tail is reverse-
-// chronological and bounded by limit.
 func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.AuditEvent, error) {
 	if limit <= 0 {
 		limit = 500
 	}
-	const q = `
-		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
-		FROM audit_events ORDER BY seq DESC LIMIT $1`
-	rows, err := s.Pool.Query(ctx, q, limit)
-	if err != nil {
-		return nil, fmt.Errorf("store: query recent audit events: %w", err)
-	}
-	defer rows.Close()
-	var out []types.AuditEvent
-	for rows.Next() {
-		ev, err := scanAuditEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ev)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate recent audit events: %w", err)
-	}
-	if out == nil {
-		out = []types.AuditEvent{}
-	}
-	return out, nil
+	return s.QueryRecentAuditEventsPage(ctx, Page{Limit: limit})
 }
 
-// LatestAuditEventByAction returns the most recent audit event whose action
-// equals the given action, or ErrNotFound when none exists. Used by /healthz to
-// find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
-// health state (so the stream reports healthy only while beats are arriving).
 func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
 	const q = `
 		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data

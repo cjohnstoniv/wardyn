@@ -18,7 +18,16 @@ type decisionRequest struct {
 	Reason string `json:"reason"`
 }
 
-// handleListApprovals returns approvals filtered by ?state= (empty = all).
+// handleListApprovals returns approvals filtered by ?state= (empty = all),
+// paginated by ?limit=&offset= (see parseListPage).
+//
+// ponytail: the store's ListApprovalsPage applies LIMIT/OFFSET at the DB, but the
+// approvals list here routes through the cfg.Approvals lister (an interface owned
+// by the approval package, not a store.Pager), so this endpoint bounds the
+// PAYLOAD in Go via servePage's fetch-all fallback rather than the query. The
+// approvals_requested_at / approvals_state_requested_at indexes keep the
+// underlying sort cheap; thread Page through the Approvals interface if the
+// full-table read itself ever bites.
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
@@ -27,12 +36,11 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid state filter")
 		return
 	}
-	out, err := s.cfg.Approvals.List(r.Context(), state)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list approvals: "+err.Error())
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	servePage(w, page, nil, func() ([]types.ApprovalRequest, error) { return s.cfg.Approvals.List(r.Context(), state) })
 }
 
 // handleApproveApproval transitions an approval to APPROVED. For credential

@@ -133,6 +133,16 @@ type Config struct {
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// AuditSpool is the SAME durable fallback spool the recorder chain appends to on
+	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
+	// AuditDrainRecorder, New starts a background loop that replays spooled events
+	// back into the durable store once it recovers and empties the file, so the
+	// queryable audit trail heals automatically (U094). Nil disables the drain.
+	AuditSpool *AuditSpool
+	// AuditDrainRecorder is the RAW durable recorder (store.Recorder — NOT the
+	// spooling chain) the spool drain replays into. It must bypass the spool to
+	// avoid a re-spool loop / lock re-entry; a nil recorder disables the drain.
+	AuditDrainRecorder audit.Recorder
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// AdminToken gates the public API (constant-time bearer compare). Empty
@@ -361,8 +371,23 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg}
 	s.router = s.routes()
+	// U094: drain the durable audit-fallback spool back into the store once it
+	// recovers, so a PG outage no longer leaves spooled events permanently invisible
+	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives
+	// individual requests and stops on shutdown. No-op unless both are wired.
+	if cfg.AuditSpool != nil && cfg.AuditDrainRecorder != nil {
+		go cfg.AuditSpool.StartDrain(cfg.BaseCtx, cfg.AuditDrainRecorder, auditSpoolDrainInterval, auditSpoolDrainBatch)
+	}
 	return s
 }
+
+// Audit-spool drain cadence: a modest ticker with a bounded per-tick batch so a
+// large post-outage backlog replays over several ticks without holding the spool
+// lock (blocking Append) for long or hammering the store in one burst.
+const (
+	auditSpoolDrainInterval = 30 * time.Second
+	auditSpoolDrainBatch    = 200
+)
 
 // Handler returns the configured http.Handler (the chi router).
 func (s *Server) Handler() http.Handler { return s.router }
