@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -177,7 +177,10 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	if f.fanout != nil {
 		// Best-effort: log a total fanout failure, but do not propagate it.
 		if ferr := f.fanout.Emit(ctx, ev); ferr != nil {
-			log.Printf("wardynd: audit fanout emit failed (event %s): %v", ev.Action, ferr)
+			slog.ErrorContext(ctx, "wardynd: audit fanout emit failed",
+				slog.String("action", ev.Action),
+				slog.Any("err", ferr),
+			)
 		}
 	}
 	return err
@@ -238,10 +241,18 @@ func (r spoolingRecorder) Record(ctx context.Context, ev types.AuditEvent) error
 	if err == nil {
 		return nil
 	}
-	log.Printf("wardynd: AUDIT WRITE FAILED action=%s actor=%s outcome=%s: %v", ev.Action, ev.Actor, ev.Outcome, err)
+	slog.ErrorContext(ctx, "wardynd: AUDIT WRITE FAILED",
+		slog.String("action", ev.Action),
+		slog.String("actor", ev.Actor),
+		slog.String("outcome", ev.Outcome),
+		slog.Any("err", err),
+	)
 	if r.spool != nil {
 		if ferr := r.spool.Append(ev); ferr != nil {
-			log.Printf("wardynd: AUDIT FALLBACK SPOOL FAILED action=%s: %v (EVENT LOST)", ev.Action, ferr)
+			slog.ErrorContext(ctx, "wardynd: AUDIT FALLBACK SPOOL FAILED (EVENT LOST)",
+				slog.String("action", ev.Action),
+				slog.Any("err", ferr),
+			)
 		}
 	}
 	return err
@@ -341,19 +352,28 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	errs := map[string]string{}
 	if l.runner != nil && run.SandboxRef != "" {
 		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
-			log.Printf("wardynd: lifecycle idle-stop sandbox teardown FAILED (run %s): %v -- sandbox may still be routable", runID, serr)
+			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
+				slog.String("run_id", runID.String()),
+				slog.Any("err", serr),
+			)
 			errs["teardown_error"] = serr.Error()
 		}
 	}
 	if l.identity != nil {
 		if rerr := l.identity.RevokeRun(ctx, runID); rerr != nil {
-			log.Printf("wardynd: lifecycle idle-stop identity revoke FAILED (run %s): %v -- run token may still be usable", runID, rerr)
+			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop identity revoke FAILED -- run token may still be usable",
+				slog.String("run_id", runID.String()),
+				slog.Any("err", rerr),
+			)
 			errs["identity_error"] = rerr.Error()
 		}
 	}
 	if l.broker != nil {
 		if rerr := l.broker.RevokeRun(ctx, runID); rerr != nil {
-			log.Printf("wardynd: lifecycle idle-stop broker revoke FAILED (run %s): %v -- minted broker credentials may still be usable", runID, rerr)
+			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop broker revoke FAILED -- minted broker credentials may still be usable",
+				slog.String("run_id", runID.String()),
+				slog.Any("err", rerr),
+			)
 			errs["broker_error"] = rerr.Error()
 		}
 	}
@@ -377,11 +397,13 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 		case <-ticker.C:
 			n, err := approval.ExpireStale(ctx, st, after)
 			if err != nil {
-				log.Printf("wardynd: approval sweep error: %v", err)
+				slog.ErrorContext(ctx, "wardynd: approval sweep error", slog.Any("err", err))
 				continue
 			}
 			if n > 0 {
-				log.Printf("wardynd: approval sweep expired %d stale PENDING approval(s)", n)
+				slog.InfoContext(ctx, "wardynd: approval sweep expired stale PENDING approvals",
+					slog.Int("expired", n),
+				)
 			}
 		}
 	}

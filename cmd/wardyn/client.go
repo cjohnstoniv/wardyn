@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // apiClient is a thin JSON client for the wardynd public API.
@@ -109,7 +110,13 @@ func (c *apiClient) do(ctx context.Context, method, path string, body any, out a
 
 // API helper methods mirroring the REST contract.
 
-func (c *apiClient) createRun(ctx context.Context, req createRunBody) (types.AgentRun, error) {
+// createRun posts the create-run body. The body type is pkg/client.CreateRunRequest
+// — the SDK's declaration IS the CLI's declaration, so the CLI can never drift a
+// field behind the SDK (it would not compile). The SDK struct in turn is pinned
+// field-for-field against internal/api's createRunRequest by the structural
+// parity test in pkg/client/dto_parity_test.go. Only the transport differs: this
+// apiClient, not client.Client, so the CLI keeps its own error/exit-code mapping.
+func (c *apiClient) createRun(ctx context.Context, req client.CreateRunRequest) (types.AgentRun, error) {
 	var run types.AgentRun
 	err := c.do(ctx, http.MethodPost, "/api/v1/runs", req, &run)
 	return run, err
@@ -195,26 +202,6 @@ func (c *apiClient) recordWorkspaceTask(ctx context.Context, wsID, taskKey strin
 	var out recordTaskResp
 	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID+"/record", body, &out)
 	return out, err
-}
-
-// createRunBody is the POST /runs body.
-type createRunBody struct {
-	Agent            string `json:"agent"`
-	Repo             string `json:"repo"`
-	Task             string `json:"task"`
-	PolicyID         string `json:"policy_id,omitempty"`
-	ConfinementClass string `json:"confinement_class,omitempty"`
-	// Interactive comes up idle (no agent task exec'd) for `wardyn attach`.
-	Interactive bool `json:"interactive,omitempty"`
-	// InlinePolicy applies a RunPolicySpec directly on the request (from
-	// --policy-file). XOR with PolicyID — the server enforces the exclusivity.
-	InlinePolicy *types.RunPolicySpec `json:"inline_policy,omitempty"`
-	// Image is a USER-supplied base image (Bring Your Own Image); the server
-	// wraps it with the runner tools and requires an image builder to be wired.
-	Image string `json:"image,omitempty"`
-	// TaskMode selects how the sandbox executes the task: "" / "harness" runs
-	// the agent harness; "exec" runs the task as a plain shell command.
-	TaskMode string `json:"task_mode,omitempty"`
 }
 
 // policyBody is the POST/PUT /policies body: a name plus the RunPolicySpec.

@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -154,7 +154,7 @@ func (s *eventSink) refreshToken() string {
 	tok, err := s.tokSrc()
 	if err != nil || strings.TrimSpace(tok) == "" {
 		// Keep the existing token; a persistent 401 will be counted as a drop.
-		log.Printf("wardyn-tetragon-ingest: ground-truth token refresh failed: %v", err)
+		slog.Error("wardyn-tetragon-ingest: ground-truth token refresh failed", slog.Any("err", err))
 		return s.currentToken()
 	}
 	s.token.Store(tok)
@@ -240,7 +240,9 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 		// periodic stats line.
 		if status == http.StatusUnauthorized {
 			refreshed := s.refreshToken()
-			log.Printf("wardyn-tetragon-ingest: ground-truth token rejected (401); refreshed and retrying batch (%d)", len(batch))
+			slog.Warn("wardyn-tetragon-ingest: ground-truth token rejected (401); refreshed and retrying batch",
+				slog.Int("events", len(batch)),
+			)
 			status = s.doPost(body, refreshed)
 		}
 
@@ -251,16 +253,28 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 			// tamper-proof, so a transient outage must not silently lose events.
 			if attempt == maxPostAttempts {
 				s.dropped.Add(uint64(len(batch)))
-				log.Printf("wardyn-tetragon-ingest: control plane batch failed after %d attempts (%d events): status %d", attempt, len(batch), status)
+				slog.Error("wardyn-tetragon-ingest: control plane batch failed; events dropped",
+					slog.Int("attempts", attempt),
+					slog.Int("events", len(batch)),
+					slog.Int("status", status),
+				)
 				return
 			}
-			log.Printf("wardyn-tetragon-ingest: control plane batch retry %d/%d (%d events) after status %d", attempt, maxPostAttempts, len(batch), status)
+			slog.Warn("wardyn-tetragon-ingest: control plane batch retry",
+				slog.Int("attempt", attempt),
+				slog.Int("max_attempts", maxPostAttempts),
+				slog.Int("events", len(batch)),
+				slog.Int("status", status),
+			)
 			time.Sleep(backoff)
 			backoff *= 2
 		case status >= 300:
 			// Client error (4xx): non-retryable, the batch itself is rejected.
 			s.dropped.Add(uint64(len(batch)))
-			log.Printf("wardyn-tetragon-ingest: control plane rejected batch (%d): status %d", len(batch), status)
+			slog.Error("wardyn-tetragon-ingest: control plane rejected batch",
+				slog.Int("events", len(batch)),
+				slog.Int("status", status),
+			)
 			return
 		default:
 			s.posted.Add(uint64(len(batch)))

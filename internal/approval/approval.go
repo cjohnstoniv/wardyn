@@ -21,11 +21,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -129,7 +129,7 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedBy
 	// dropped approval.decide event is visible. The write does not shadow the
 	// primary return value (the decision itself already succeeded and is durable).
 	if err := st.Record(ctx, ev); err != nil {
-		log.Printf("wardyn: AUDIT WRITE FAILED action=%s target=%s outcome=%s: %v", ev.Action, ev.Target, ev.Outcome, err)
+		audit.LogWriteFailure(ctx, ev, err)
 	}
 
 	return result, nil
@@ -178,7 +178,7 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 		// FIX #5: log-loud instead of swallowing — a dropped approval.expire audit
 		// must be visible, not silently lost.
 		if err := st.Record(ctx, ev); err != nil {
-			log.Printf("wardyn: AUDIT WRITE FAILED action=%s target=%s outcome=%s: %v", ev.Action, ev.Target, ev.Outcome, err)
+			audit.LogWriteFailure(ctx, ev, err)
 		}
 	}
 	return expired, nil

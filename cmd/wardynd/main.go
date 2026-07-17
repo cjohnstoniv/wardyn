@@ -19,7 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -80,7 +80,8 @@ var groundtruthSensorRunID = uuid.Nil
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("wardynd: %v", err)
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
 	}
 }
 
@@ -195,7 +196,7 @@ func run() error {
 		if err := json.Unmarshal([]byte(*agentImagesJSON), &agentImages); err != nil {
 			return fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
 		}
-		log.Printf("wardynd: agent image overrides: %v", agentImages)
+		slog.Info("wardynd: agent image overrides", slog.Any("images", agentImages))
 	}
 
 	// LOCAL HOST MODE (single-developer localhost path): bypass public-API auth so
@@ -225,16 +226,24 @@ func run() error {
 				return fmt.Errorf("refusing to start: -local-trust-forwarder disables the loopback-peer gate but the listen address %q binds a specific non-loopback interface — this re-opens UNAUTHENTICATED LAN admin access; use it ONLY when the port is published loopback-only (127.0.0.1:PORT), i.e. bind loopback here or an unspecified address inside a compose container", *listen)
 			}
 			if !loopbackBind {
-				log.Printf("wardynd: ERROR -local-trust-forwarder on unspecified bind %s DISABLES the loopback-peer gate — the UNAUTHENTICATED public API is exposed to the LAN unless the host publishes 127.0.0.1:PORT ONLY (the Compose default). Verify your docker publish / host firewall.", *listen)
+				slog.Error("wardynd: -local-trust-forwarder on an unspecified bind DISABLES the loopback-peer gate — the UNAUTHENTICATED public API is exposed to the LAN unless the host publishes 127.0.0.1:PORT ONLY (the Compose default). Verify your docker publish / host firewall.",
+					slog.String("listen", *listen),
+				)
 			}
 		}
 		if localOp == "" {
 			localOp = defaultLocalOperator()
 		}
 		if loopbackBind {
-			log.Printf("wardynd: LOCAL HOST MODE — public-API auth disabled; operator=%q (loopback bind %s). No SSO/token required.", localOp, *listen)
+			slog.Info("wardynd: LOCAL HOST MODE — public-API auth disabled; loopback bind. No SSO/token required.",
+				slog.String("operator", localOp),
+				slog.String("listen", *listen),
+			)
 		} else {
-			log.Printf("wardynd: WARNING LOCAL HOST MODE on a non-loopback bind %s — the UNAUTHENTICATED public API is reachable beyond localhost; ensure a host firewall or configure auth. operator=%q", *listen, localOp)
+			slog.Warn("wardynd: LOCAL HOST MODE on a non-loopback bind — the UNAUTHENTICATED public API is reachable beyond localhost; ensure a host firewall or configure auth.",
+				slog.String("listen", *listen),
+				slog.String("operator", localOp),
+			)
 		}
 
 		// Host-mode Bedrock auto-detect: region+model configured but NO credential
@@ -249,7 +258,9 @@ func run() error {
 				awsDir := filepath.Join(home, ".aws")
 				if st, serr := os.Stat(awsDir); serr == nil && st.IsDir() {
 					*bedrockAWSDir = awsDir
-					log.Printf("wardynd: host-mode Bedrock — no credential configured; auto-mounting %s read-only (the AWS SDK resolves your host creds, SSO auto-refreshes)", awsDir)
+					slog.Info("wardynd: host-mode Bedrock — no credential configured; auto-mounting the host AWS dir read-only (the AWS SDK resolves your host creds, SSO auto-refreshes)",
+						slog.String("aws_dir", awsDir),
+					)
 				}
 			}
 		}
@@ -293,15 +304,15 @@ func run() error {
 			return fmt.Errorf("verify audit ddl protection: %w", perr)
 		}
 		if protected {
-			log.Printf("wardynd: migrations applied via WARDYN_PG_MIGRATE_DSN (owner/migrator role); app role is a verified non-owner of audit_events — the append-only guard is DDL-protected")
+			slog.InfoContext(bootCtx, "wardynd: migrations applied via WARDYN_PG_MIGRATE_DSN (owner/migrator role); app role is a verified non-owner of audit_events — the append-only guard is DDL-protected")
 		} else {
-			log.Printf("wardynd: WARNING WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) still owns audit_events or is a superuser — DDL protection is NOT in effect; connect wardynd as a distinct non-owner role that has only INSERT/SELECT on audit_events")
+			slog.WarnContext(bootCtx, "wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) still owns audit_events or is a superuser — DDL protection is NOT in effect; connect wardynd as a distinct non-owner role that has only INSERT/SELECT on audit_events")
 		}
 	} else {
 		if err := db.Migrate(bootCtx, pool); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
-		log.Printf("wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
+		slog.InfoContext(bootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
 	}
 
 	// Audit recorder: the Postgres store is the source of truth. When audit
@@ -316,7 +327,7 @@ func run() error {
 	}
 	if fan != nil {
 		auditRec = fanoutRecorder{primary: store.Recorder{Pool: pool}, fanout: fan}
-		log.Printf("wardynd: audit fanout enabled")
+		slog.Info("wardynd: audit fanout enabled")
 	}
 	// SecretRegistry: process-wide secret masking registry. Minted github_token
 	// values and resolved api_key injection values are registered here so they
@@ -346,10 +357,13 @@ func run() error {
 	if strings.TrimSpace(*auditSpool) != "" {
 		af, aerr := api.NewAuditSpool(*auditSpool)
 		if aerr != nil {
-			log.Printf("wardynd: WARNING audit spool unavailable at %s: %v (failed audit writes will be logged only)", *auditSpool, aerr)
+			slog.Warn("wardynd: audit spool unavailable (failed audit writes will be logged only)",
+				slog.String("path", *auditSpool),
+				slog.Any("err", aerr),
+			)
 		} else {
 			auditFallback = af
-			log.Printf("wardynd: audit fallback spool at %s", *auditSpool)
+			slog.Info("wardynd: audit fallback spool", slog.String("path", *auditSpool))
 		}
 	}
 	// Recorder chain: maskingRecorder → spoolingRecorder → auditRec (fanout → store).
@@ -445,9 +459,9 @@ func run() error {
 		}
 		run = d
 		runnerTarget = "docker"
-		log.Printf("wardynd: docker runner enabled (proxy image %q)", *proxyImage)
+		slog.Info("wardynd: docker runner enabled", slog.String("proxy_image", *proxyImage))
 	case "none", "":
-		log.Printf("wardynd: no runner selected; runs stay PENDING (headless API-only)")
+		slog.Info("wardynd: no runner selected; runs stay PENDING (headless API-only)")
 	default:
 		return fmt.Errorf("unknown -runner %q (want docker|none)", *runnerSel)
 	}
@@ -458,7 +472,7 @@ func run() error {
 	}
 
 	if *adminToken == "" && !effLocalMode {
-		log.Printf("wardynd: WARNING admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
+		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 
 	// Recording store (pluggable seam; default "fs"). The fs store serves replays
@@ -469,7 +483,10 @@ func run() error {
 		return fmt.Errorf("recording store: %w", rerr)
 	}
 	if recStore != nil {
-		log.Printf("wardynd: recording store (%s) at %s", *recordingSel, *recordingDir)
+		slog.Info("wardynd: recording store",
+			slog.String("store", *recordingSel),
+			slog.String("dir", *recordingDir),
+		)
 	}
 
 	// Human SSO (OIDC), optional. The session-cookie HMAC key is loaded from the
@@ -492,8 +509,8 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("oidc: %w", err)
 		}
-		log.Printf("wardynd: OIDC SSO enabled (issuer=%s)", *oidcIssuer)
-		log.Printf("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment is coming soon; the UI's 'Sign in with SSO' button is disabled, so use the admin token or the CLI for now")
+		slog.Info("wardynd: OIDC SSO enabled", slog.String("issuer", *oidcIssuer))
+		slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment is coming soon; the UI's 'Sign in with SSO' button is disabled, so use the admin token or the CLI for now")
 	}
 
 	// Devcontainer image builder (optional; docker build tag only). When -envbuild
@@ -506,7 +523,7 @@ func run() error {
 			return fmt.Errorf("envbuild: %w", berr)
 		}
 		imgBuilder = b
-		log.Printf("wardynd: devcontainer builds enabled")
+		slog.Info("wardynd: devcontainer builds enabled")
 	}
 
 	// AI Run Composer (optional): build the backend registry from -composer-config.
@@ -527,7 +544,10 @@ func run() error {
 		for _, b := range composerReg.List() {
 			names = append(names, b.Name)
 		}
-		log.Printf("wardynd: AI Run Composer enabled (backends=%v default=%q)", names, composerReg.Default())
+		slog.Info("wardynd: AI Run Composer enabled",
+			slog.Any("backends", names),
+			slog.String("default", composerReg.Default()),
+		)
 	}
 
 	// Pluggable-component selection advertised on /healthz. "selected" is the
@@ -557,7 +577,9 @@ func run() error {
 	// the legacy resident-copy behavior.
 	subToken, subErr := subscription.New(subscription.Config{})
 	if subErr != nil {
-		log.Printf("wardynd: subscription token provider unavailable (%v); subscription runs fall back to the resident-copy behavior", subErr)
+		slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
+			slog.Any("err", subErr),
+		)
 		subToken = nil
 	}
 	disableSubInject := strings.EqualFold(strings.TrimSpace(os.Getenv("WARDYN_SUBSCRIPTION_INJECT")), "off")
@@ -577,7 +599,7 @@ func run() error {
 		scanAdvisor = func(ctx context.Context, facts workspacescan.ScanFacts, base workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile {
 			return workspacescan.AdviseProfile(ctx, facts, base, workspacescan.AIOptions{Timeout: 60 * time.Second})
 		}
-		log.Printf("wardynd: advisory AI workspace-scan fallback ENABLED (WARDYN_SCAN_AI_ADVISOR); advisory-only + fail-open, needs a resident read-only claude CLI on PATH")
+		slog.Info("wardynd: advisory AI workspace-scan fallback ENABLED (WARDYN_SCAN_AI_ADVISOR); advisory-only + fail-open, needs a resident read-only claude CLI on PATH")
 	}
 
 	srv := api.New(api.Config{
@@ -635,7 +657,7 @@ func run() error {
 			lifecycle.Config{Interval: *autoStopInterval},
 		)
 		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
-		log.Printf("wardynd: lifecycle reaper started (interval=%s)", *autoStopInterval)
+		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *autoStopInterval))
 	}
 
 	// Groundtruth token rotator: keep a shared token file fresh so the eBPF/Tetragon
@@ -645,7 +667,7 @@ func run() error {
 	// shared-volume file. The static WARDYN_GROUNDTRUTH_TOKEN env path cannot refresh.
 	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
 		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotator(rootCtx, idp, gtFile) })
-		log.Printf("wardynd: groundtruth token rotator started (file=%s)", gtFile)
+		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
 	}
 
 	// Approval expiry sweeper: transition PENDING approvals older than the
@@ -657,7 +679,10 @@ func run() error {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
 			runApprovalSweeper(rootCtx, approvalStore{pool: pool, rec: maskedRec}, *approvalExpiryInterval, *approvalExpiryAfter)
 		})
-		log.Printf("wardynd: approval expiry sweeper started (interval=%s, after=%s)", *approvalExpiryInterval, *approvalExpiryAfter)
+		slog.Info("wardynd: approval expiry sweeper started",
+			slog.Duration("interval", *approvalExpiryInterval),
+			slog.Duration("after", *approvalExpiryAfter),
+		)
 	}
 
 	// Boot-time reconciliation (C3): re-derive the state of any run left
@@ -666,7 +691,7 @@ func run() error {
 	// a reconciliation error never blocks startup.
 	if run != nil {
 		if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
-			log.Printf("wardynd: boot reconciliation: %v", rerr)
+			slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 		}
 	}
 
@@ -686,16 +711,24 @@ func run() error {
 	go func() {
 		switch {
 		case tlsEnabled:
-			log.Printf("wardynd: listening on %s with built-in TLS (identity=%s trust-domain=%s)", *listen, idp.Name(), *trustDomain)
+			slog.Info("wardynd: listening with built-in TLS",
+				slog.String("listen", *listen),
+				slog.String("identity", idp.Name()),
+				slog.String("trust_domain", *trustDomain),
+			)
 			if err := httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- err
 			}
 		default:
-			log.Printf("wardynd: listening on %s (identity=%s trust-domain=%s)", *listen, idp.Name(), *trustDomain)
+			slog.Info("wardynd: listening",
+				slog.String("listen", *listen),
+				slog.String("identity", idp.Name()),
+				slog.String("trust_domain", *trustDomain),
+			)
 			if *tlsTerminated {
-				log.Printf("wardynd: serving plain HTTP behind a TLS-terminating reverse proxy (WARDYN_TLS_TERMINATED=true); cookies marked Secure")
+				slog.Info("wardynd: serving plain HTTP behind a TLS-terminating reverse proxy (WARDYN_TLS_TERMINATED=true); cookies marked Secure")
 			} else {
-				log.Printf("wardynd: WARNING serving PLAIN HTTP with no TLS — the control plane MUST be fronted by TLS for any non-localhost deployment (set WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, or WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy)")
+				slog.Warn("wardynd: serving PLAIN HTTP with no TLS — the control plane MUST be fronted by TLS for any non-localhost deployment (set WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, or WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy)")
 			}
 			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- err
@@ -705,7 +738,7 @@ func run() error {
 
 	select {
 	case <-rootCtx.Done():
-		log.Printf("wardynd: shutdown signal received")
+		slog.Info("wardynd: shutdown signal received")
 	case err := <-errCh:
 		return fmt.Errorf("serve: %w", err)
 	}
@@ -723,7 +756,7 @@ func run() error {
 	// shutdown, so the last batch and the drain goroutine were abandoned.
 	if fan != nil {
 		if cerr := fan.Close(); cerr != nil {
-			log.Printf("wardynd: audit sink shutdown: %v", cerr)
+			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
 		}
 	}
 	return nil
@@ -861,7 +894,9 @@ func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore
 		// the default umask (~/.wardyn/host-wardynd.log), leaking the secret-store
 		// master key. To persist, mint one with `wardynd -gen-age-key` (prints to
 		// stdout by design) and set WARDYN_AGE_KEY — do not copy it out of this log.
-		log.Printf("wardynd: WARNING generated ephemeral age identity (public %s); secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY", id.Recipient().String())
+		slog.Warn("wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY",
+			slog.String("public_recipient", id.Recipient().String()),
+		)
 	} else {
 		if isKnownPublicAgeKey(ageKey) {
 			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
@@ -954,7 +989,7 @@ func loadOrCreateSigningKey(ctx context.Context, secrets secretKeyStore) (*ecdsa
 			if merr != nil {
 				return nil, merr
 			}
-			log.Printf("wardynd: generated and persisted embedded identity signing key")
+			slog.Info("wardynd: generated and persisted embedded identity signing key")
 			return pemBytes, nil
 		},
 	)
@@ -983,7 +1018,7 @@ func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte
 			if _, gerr := rand.Read(key); gerr != nil {
 				return nil, fmt.Errorf("generate session key: %w", gerr)
 			}
-			log.Printf("wardynd: generated and persisted OIDC session key")
+			slog.Info("wardynd: generated and persisted OIDC session key")
 			return key, nil
 		},
 	)
@@ -996,7 +1031,10 @@ func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte
 func goSafe(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("wardynd: PANIC in background goroutine %q (contained): %v", name, r)
+			slog.Error("wardynd: PANIC in background goroutine (contained)",
+				slog.String("goroutine", name),
+				slog.Any("panic", r),
+			)
 		}
 	}()
 	fn()
@@ -1109,10 +1147,13 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 		PrivateKeySecret: secretGitHubAppKey,
 	})
 	if err != nil {
-		log.Printf("wardynd: github minter unavailable: %v (github_token grants will fail closed)", err)
+		slog.Warn("wardynd: github minter unavailable (github_token grants will fail closed)", slog.Any("err", err))
 		return nil
 	}
-	log.Printf("wardynd: lazy github minter armed; App credentials (%s/%s) are read on first mint (no restart needed after adding them)", secretGitHubAppID, secretGitHubAppKey)
+	slog.Info("wardynd: lazy github minter armed; App credentials are read on first mint (no restart needed after adding them)",
+		slog.String("app_id_secret", secretGitHubAppID),
+		slog.String("app_key_secret", secretGitHubAppKey),
+	)
 	return gh
 }
 

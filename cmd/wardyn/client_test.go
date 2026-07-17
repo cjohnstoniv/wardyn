@@ -81,14 +81,14 @@ func decodeBody(t *testing.T, cap *capture) map[string]any {
 // createRun: POST /api/v1/runs with the run body
 // --------------------------------------------------------------------------
 
-// createRunBody omits empty optional fields so a minimal run does not send
-// policy_id / confinement_class / interactive on the wire.
+// The create-run body omits empty optional fields so a minimal run does not
+// send policy_id / confinement_class / interactive on the wire.
 func TestClientCreateRun_OmitsEmptyOptionals(t *testing.T) {
 	id := uuid.New()
 	var cap capture
 	_, c := newCapturingServer(t, &cap, http.StatusCreated, types.AgentRun{ID: id})
 
-	got, err := c.createRun(context.Background(), createRunBody{Agent: "a", Repo: "o/r"})
+	got, err := c.createRun(context.Background(), client.CreateRunRequest{Agent: "a", Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("createRun returned error: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestClientDo_APIErrorSurfaced(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := &apiClient{baseURL: srv.URL, token: testToken}
 
-	_, err := c.createRun(context.Background(), createRunBody{})
+	_, err := c.createRun(context.Background(), client.CreateRunRequest{})
 	if err == nil {
 		t.Fatal("expected error on 400 response, got nil")
 	}
@@ -299,59 +299,18 @@ func TestClientDo_BaseURLTrailingSlashTrimmed(t *testing.T) {
 // Image/TaskMode, divergent empty-token auth header, uncapped error body).
 // --------------------------------------------------------------------------
 
-// TestU089_CreateRunRequest_ImageTaskModeRoundTrip asserts pkg/client.CreateRunRequest
-// carries Image and TaskMode with the exact wire tags internal/api/runs.go's
-// createRunRequest uses ("image"/"task_mode"). Before this fix the public SDK
-// had no way to drive BYOI (`wardyn run --image`) or CI exec mode
-// (`task_mode: "exec"`) even though the CLI's own createRunBody supported both.
-func TestU089_CreateRunRequest_ImageTaskModeRoundTrip(t *testing.T) {
-	req := client.CreateRunRequest{
-		Agent:            "claude-code",
-		Repo:             "org/repo",
-		Image:            "ubuntu:24.04",
-		TaskMode:         "exec",
-		DevcontainerRepo: "org/devc",
-		DevcontainerRef:  "main",
-	}
-	b, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(b, &raw); err != nil {
-		t.Fatalf("unmarshal to map: %v", err)
-	}
-	if raw["image"] != "ubuntu:24.04" {
-		t.Errorf(`wire "image" = %v, want "ubuntu:24.04"`, raw["image"])
-	}
-	if raw["task_mode"] != "exec" {
-		t.Errorf(`wire "task_mode" = %v, want "exec"`, raw["task_mode"])
-	}
-	if raw["devcontainer_repo"] != "org/devc" || raw["devcontainer_ref"] != "main" {
-		t.Errorf(`wire devcontainer_repo/ref = %v/%v, want "org/devc"/"main"`, raw["devcontainer_repo"], raw["devcontainer_ref"])
-	}
-
-	var got client.CreateRunRequest
-	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatalf("round-trip unmarshal: %v", err)
-	}
-	if got.Image != req.Image || got.TaskMode != req.TaskMode {
-		t.Errorf("round-trip = %+v, want Image=%q TaskMode=%q preserved", got, req.Image, req.TaskMode)
-	}
-
-	// Both omitempty: a zero-value request must carry neither key on the wire.
-	empty, err := json.Marshal(client.CreateRunRequest{Agent: "a", Repo: "o/r"})
-	if err != nil {
-		t.Fatalf("marshal empty: %v", err)
-	}
-	var emptyRaw map[string]any
-	_ = json.Unmarshal(empty, &emptyRaw)
-	for _, k := range []string{"image", "task_mode"} {
-		if _, present := emptyRaw[k]; present {
-			t.Errorf("body should omit empty %q, got %v", k, emptyRaw[k])
-		}
-	}
-}
+// M3: the CLI/SDK create-run DTO parity test that used to live here listed the
+// wire fields BY HAND, so a new server field drifted past it silently — which is
+// how the CLI ended up missing compose_session_id, devcontainer_repo, and
+// devcontainer_ref. Both halves of that check are now enforced structurally
+// instead of by hand:
+//
+//   - CLI vs SDK: createRun takes pkg/client.CreateRunRequest, so the CLI cannot
+//     lack a field the SDK has. It would not compile. TestRunCmd_BuildsCreateRequest
+//     below drives the whole flag set through it against a real wire body.
+//   - SDK vs server: pkg/client/dto_parity_test.go compares the SDK's json tag
+//     set against internal/api.createRunRequest's, in both directions, by parsing
+//     the server's source. A 4th server field now fails that test automatically.
 
 // TestU089_EmptyTokenOmitsAuthHeader asserts BOTH clients skip the
 // Authorization header entirely when the token is empty, rather than sending a

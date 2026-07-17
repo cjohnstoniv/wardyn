@@ -11,9 +11,13 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	// Aliased: every command constructor here takes a `client clientFn`
+	// parameter that would otherwise shadow the package name.
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // clientFn lazily builds the API client after persistent flags are parsed.
@@ -37,10 +41,21 @@ func runCmd(client clientFn) *cobra.Command {
 			if wait && interactive {
 				return fmt.Errorf("--wait and --interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
-			body := createRunBody{
-				Agent: agent, Repo: repo, Task: task, PolicyID: policyID,
+			body := sdk.CreateRunRequest{
+				Agent: agent, Repo: repo, Task: task,
 				ConfinementClass: confinement, Interactive: interactive,
 				Image: image, TaskMode: taskMode,
+			}
+			// --policy is a policy UUID. The server's policy_id is a *uuid.UUID,
+			// so a malformed value could only ever have come back as an opaque
+			// "invalid JSON body" 400 — parse it here to fail fast with a clear
+			// message instead, exactly like --policy-file below.
+			if policyID != "" {
+				id, err := uuid.Parse(policyID)
+				if err != nil {
+					return fmt.Errorf("parse --policy %q: %w", policyID, err)
+				}
+				body.PolicyID = &id
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we

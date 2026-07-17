@@ -5,7 +5,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -37,11 +37,14 @@ func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {
 		cancel()
 		switch {
 		case err != nil:
-			log.Printf("wardynd: groundtruth token rotate: mint: %v", err)
+			slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: mint failed", slog.Any("err", err))
 			next = time.Minute // retry soon
 		default:
 			if werr := writeTokenFileAtomic(path, ri.Token); werr != nil {
-				log.Printf("wardynd: groundtruth token rotate: write %s: %v", path, werr)
+				slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: write failed",
+					slog.String("path", path),
+					slog.Any("err", werr),
+				)
 				next = time.Minute
 			} else if !ri.Expiry.IsZero() {
 				if half := time.Until(ri.Expiry) / 2; half < time.Minute {

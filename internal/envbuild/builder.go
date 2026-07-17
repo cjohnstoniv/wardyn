@@ -257,7 +257,10 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		Env:   env,
 		// envbuilder is the image entrypoint; Cmd is left nil intentionally.
 	}
-	hostCfg := b.hardenedHostConfig()
+	hostCfg, err := b.hardenedHostConfig()
+	if err != nil {
+		return "", err
+	}
 	hostCfg.Binds = append(hostCfg.Binds, extraBinds...)
 
 	created, err := b.cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: hostCfg})
@@ -349,8 +352,23 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string) (
 // caps, and an optional writable-layer size cap. No Docker socket is ever
 // mounted — kaniko-based envbuilder pushes to the registry and never talks to
 // dockerd, so the build container is never granted host-daemon access.
-func (b *Builder) hardenedHostConfig() *container.HostConfig {
-	mem := b.effectiveMemoryBytes()
+//
+// Returns an error when an env-tunable cap is set to something unparseable: a
+// build whose blast-radius controls cannot be resolved as the operator wrote
+// them must not run with silently-substituted ones.
+func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
+	mem, err := b.effectiveMemoryBytes()
+	if err != nil {
+		return nil, err
+	}
+	cpus, err := b.effectiveNanoCPUs()
+	if err != nil {
+		return nil, err
+	}
+	maxCtx, err := b.effectiveMaxContextBytes()
+	if err != nil {
+		return nil, err
+	}
 	pids := b.effectivePidsLimit()
 	hostCfg := &container.HostConfig{
 		AutoRemove: false, // we remove explicitly via defer to always force-remove.
@@ -375,7 +393,7 @@ func (b *Builder) hardenedHostConfig() *container.HostConfig {
 		Resources: container.Resources{
 			Memory:     mem,
 			MemorySwap: mem, // == Memory disables swap growth on top of the RAM cap
-			NanoCPUs:   b.effectiveNanoCPUs(),
+			NanoCPUs:   cpus,
 			PidsLimit:  &pids,
 		},
 	}
@@ -384,11 +402,11 @@ func (b *Builder) hardenedHostConfig() *container.HostConfig {
 	// default: StorageOpt "size" requires a storage driver that supports
 	// per-container quotas (e.g. overlay2 on xfs with pquota); enabling it on an
 	// unsupported driver makes ContainerCreate fail, so operators must opt in.
-	if maxCtx := b.effectiveMaxContextBytes(); maxCtx > 0 {
+	if maxCtx > 0 {
 		hostCfg.StorageOpt = map[string]string{"size": strconv.FormatInt(maxCtx, 10)}
 	}
 
-	return hostCfg
+	return hostCfg, nil
 }
 
 // effectiveBuildNetwork resolves the build-container network mode: the
@@ -405,19 +423,27 @@ func (b *Builder) effectiveBuildNetwork() string {
 }
 
 // effectiveMemoryBytes resolves the build-container memory cap.
-func (b *Builder) effectiveMemoryBytes() int64 {
-	if mb := envInt64(envBuildMemoryMB); mb > 0 {
-		return mb << 20
+func (b *Builder) effectiveMemoryBytes() (int64, error) {
+	mb, err := envInt64(envBuildMemoryMB)
+	if err != nil {
+		return 0, err
 	}
-	return defaultBuildMemoryBytes
+	if mb > 0 {
+		return mb << 20, nil
+	}
+	return defaultBuildMemoryBytes, nil
 }
 
 // effectiveNanoCPUs resolves the build-container CPU cap (1e9 == 1 CPU).
-func (b *Builder) effectiveNanoCPUs() int64 {
-	if c := envFloat(envBuildCPUs); c > 0 {
-		return int64(c * 1e9)
+func (b *Builder) effectiveNanoCPUs() (int64, error) {
+	c, err := envFloat(envBuildCPUs)
+	if err != nil {
+		return 0, err
 	}
-	return defaultBuildNanoCPUs
+	if c > 0 {
+		return int64(c * 1e9), nil
+	}
+	return defaultBuildNanoCPUs, nil
 }
 
 // effectivePidsLimit resolves the build-container process cap.
@@ -427,37 +453,47 @@ func (b *Builder) effectivePidsLimit() int64 {
 
 // effectiveMaxContextBytes resolves the optional writable-layer size cap. Zero
 // (the default) means no StorageOpt size limit is applied.
-func (b *Builder) effectiveMaxContextBytes() int64 {
-	if mb := envInt64(envMaxContextMB); mb > 0 {
-		return mb << 20
+func (b *Builder) effectiveMaxContextBytes() (int64, error) {
+	mb, err := envInt64(envMaxContextMB)
+	if err != nil {
+		return 0, err
 	}
-	return 0
+	if mb > 0 {
+		return mb << 20, nil
+	}
+	return 0, nil
 }
 
-// envInt64 parses a non-negative int64 from env key, or 0 if unset/invalid.
-func envInt64(key string) int64 {
+// envInt64 parses a non-negative int64 from env key. Unset/empty is 0, meaning
+// "not configured" — the caller then applies its own default. A value that is
+// present but unparseable or negative is an ERROR, never 0: mapping bad input
+// onto "not configured" silently discards an operator-set bound, and for
+// envMaxContextMB that specific misread turns the build's writable-layer cap
+// OFF. The build fails closed instead, naming the variable and its value.
+func envInt64(key string) (int64, error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		return 0
+		return 0, nil
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n < 0 {
-		return 0
+		return 0, fmt.Errorf("envbuild: invalid %s=%q: want a non-negative integer", key, v)
 	}
-	return n
+	return n, nil
 }
 
-// envFloat parses a non-negative float64 from env key, or 0 if unset/invalid.
-func envFloat(key string) float64 {
+// envFloat parses a non-negative float64 from env key. Same contract as
+// envInt64: unset/empty is 0 ("not configured"), bad input is an error.
+func envFloat(key string) (float64, error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		return 0
+		return 0, nil
 	}
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil || f < 0 {
-		return 0
+		return 0, fmt.Errorf("envbuild: invalid %s=%q: want a non-negative number", key, v)
 	}
-	return f
+	return f, nil
 }
 
 // validateBuildInput enforces a scheme allowlist on the caller-supplied git

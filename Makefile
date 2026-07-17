@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-campaign
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -44,6 +44,8 @@ help:
 	@echo "                          WARDYN_TEST_DOCKER=1 adds the real-daemon cases)"
 	@echo "  cover-check           - Enforce the COVER_MIN coverage floor over BOTH shipped builds"
 	@echo "                          (tagless + -tags docker, unioned; see scripts/cover-union.sh)"
+	@echo "  release-check         - Pre-tag gate: the RELEASING.md gate list in one command"
+	@echo "                          (pushes/tags nothing; WARDYN_TEST_PG adds the Postgres lane)"
 	@echo "  compose-build         - Build compose images (wardynd -tags docker + proxy)"
 	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
 	@echo "  compose-down          - Stop docker-compose stack"
@@ -139,6 +141,31 @@ cover-check: test-report test-report-docker
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
 		test/reports/go/unit/cover.out test/reports/go/docker/cover.out
+
+# ── pre-tag release gate ────────────────────────────────────────────────────
+# The gate list RELEASING.md names, as ONE command, so cutting a release is not a
+# hand-copied checklist. Runs the same commands the CI jobs run, at the same
+# pinned tool versions. It PUSHES NOTHING and TAGS NOTHING — it only tells you
+# whether the commit is tag-able.
+#
+# Deliberately NOT a full CI replica: test-report-pg runs only when
+# WARDYN_TEST_PG is set (and says so loudly when it isn't), and the
+# service-dependent lanes (test-conformance-docker), the UI jobs, and DCO are
+# CI-only. CI remains the authority — see RELEASING.md.
+release-check: build build-docker lint cover-check test-race staticcheck govulncheck license-headers
+	@if [ -n "$$WARDYN_TEST_PG" ]; then \
+	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
+	else \
+	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
+	fi
+	@echo "==> Dependency licenses (tagless + -tags docker)"
+	go run github.com/google/go-licenses@v1.6.0 check --disallowed_types=forbidden,restricted ./...
+	GOFLAGS=-tags=docker go run github.com/google/go-licenses@v1.6.0 check --disallowed_types=forbidden,restricted ./...
+	@echo "==> Secret scan (full git history)"
+	go run github.com/zricethezav/gitleaks/v8@v8.30.1 git -c .gitleaks.toml -v
+	@echo ""
+	@echo "release-check PASSED. NOT covered here: test-conformance-docker, the UI"
+	@echo "jobs, and DCO — confirm CI is green on the commit before tagging."
 
 test-conformance-docker:
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."

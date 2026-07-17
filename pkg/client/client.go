@@ -6,8 +6,10 @@
 // It mirrors the REST API surface of wardynd exactly — same paths, same
 // status codes, same JSON vocabulary (internal/types is the shared source of
 // truth). The SDK adds zero non-stdlib dependencies so it can be embedded in
-// external tooling without dependency friction. (The in-repo `wardyn` CLI
-// keeps its own minimal client in cmd/wardyn/client.go.)
+// external tooling without dependency friction. (The in-repo `wardyn` CLI keeps
+// its own minimal TRANSPORT in cmd/wardyn/client.go — for CLI-specific error and
+// exit-code mapping — but posts THIS package's CreateRunRequest rather than
+// redeclaring the body, so the two can never drift.)
 //
 // Usage:
 //
@@ -116,6 +118,12 @@ type CreateRunRequest struct {
 	// command in the same governed sandbox (no agent, no LLM credentials — the
 	// BYOA/CI lane; see docs/CI.md). Ignored for an interactive run.
 	TaskMode string `json:"task_mode,omitempty"`
+	// ComposeSessionID correlates a run launched from the AI Run Composer back
+	// to the compose conversation that produced it. It is stamped into the
+	// run.create audit event, so filtering the audit feed on it reconstructs the
+	// whole compose→launch trail. Purely a correlation label: it grants nothing
+	// and is not validated server-side.
+	ComposeSessionID string `json:"compose_session_id,omitempty"`
 }
 
 // CreateRun submits a new agent run to the control plane.

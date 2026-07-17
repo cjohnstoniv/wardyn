@@ -34,7 +34,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -50,7 +50,8 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("wardyn-tetragon-ingest: %v", err)
+		slog.Error("wardyn-tetragon-ingest: fatal", slog.Any("err", err))
+		os.Exit(1)
 	}
 }
 
@@ -93,7 +94,9 @@ func run() error {
 		// Non-fatal: the daemon may not be reachable yet (compose ordering).
 		// Everything correlates as unmapped until the first successful refresh —
 		// visible blindness, not a crash.
-		log.Printf("wardyn-tetragon-ingest: initial container index refresh failed: %v (continuing; events correlate as unmapped until docker is reachable)", err)
+		slog.WarnContext(ctx, "wardyn-tetragon-ingest: initial container index refresh failed (continuing; events correlate as unmapped until docker is reachable)",
+			slog.Any("err", err),
+		)
 	}
 	mapper := groundtruth.NewMapper(corr)
 
@@ -101,11 +104,16 @@ func run() error {
 	for _, rs := range splitCSV(*blindRuns) {
 		runID, perr := uuid.Parse(rs)
 		if perr != nil {
-			log.Printf("wardyn-tetragon-ingest: skipping invalid blind run id %q: %v", rs, perr)
+			slog.WarnContext(ctx, "wardyn-tetragon-ingest: skipping invalid blind run id",
+				slog.String("run_id", rs),
+				slog.Any("err", perr),
+			)
 			continue
 		}
 		sink.emit(groundtruth.BlindEvent(runID, "cc3-kata-host-ebpf-blind"))
-		log.Printf("wardyn-tetragon-ingest: emitted kernel.sensor.blind for run %s", runID)
+		slog.InfoContext(ctx, "wardyn-tetragon-ingest: emitted kernel.sensor.blind",
+			slog.String("run_id", runID.String()),
+		)
 	}
 
 	// Background loops: heartbeat, index refresh, stats.
@@ -123,18 +131,28 @@ func run() error {
 	}()
 	go every(ctx, refreshIval, func() {
 		if err := corr.Refresh(ctx); err != nil {
-			log.Printf("wardyn-tetragon-ingest: container index refresh failed: %v", err)
+			slog.WarnContext(ctx, "wardyn-tetragon-ingest: container index refresh failed", slog.Any("err", err))
 		}
 	})
 	go every(ctx, statsIval, func() {
-		log.Printf("wardyn-tetragon-ingest: stats posted=%d dropped=%d", sink.postedCount(), sink.droppedCount())
+		slog.InfoContext(ctx, "wardyn-tetragon-ingest: stats",
+			slog.Uint64("posted", sink.postedCount()),
+			slog.Uint64("dropped", sink.droppedCount()),
+		)
 	})
 
-	log.Printf("wardyn-tetragon-ingest: tailing %s -> %s/api/v1/internal/groundtruth (heartbeat=%s)", *exportPath, *controlURL, heartbeatIval)
+	slog.InfoContext(ctx, "wardyn-tetragon-ingest: tailing export to the control plane groundtruth endpoint",
+		slog.String("export_path", *exportPath),
+		slog.String("endpoint", *controlURL+"/api/v1/internal/groundtruth"),
+		slog.Duration("heartbeat", heartbeatIval),
+	)
 
 	// Tail the export. Returns on ctx cancellation.
 	tailExport(ctx, *exportPath, mapper, sink)
-	log.Printf("wardyn-tetragon-ingest: shutdown (posted=%d dropped=%d)", sink.postedCount(), sink.droppedCount())
+	slog.Info("wardyn-tetragon-ingest: shutdown",
+		slog.Uint64("posted", sink.postedCount()),
+		slog.Uint64("dropped", sink.droppedCount()),
+	)
 	return nil
 }
 
@@ -156,7 +174,7 @@ func checkBootTokenSource(flagToken string) error {
 		return fmt.Errorf("missing host-sensor token: set -token / WARDYN_GROUNDTRUTH_TOKEN or WARDYN_GROUNDTRUTH_TOKEN_FILE (aud=wardyn-groundtruth): %w", err)
 	}
 	if gtFile != "" {
-		log.Printf("wardyn-tetragon-ingest: token source = file %s (rotatable)", gtFile)
+		slog.Info("wardyn-tetragon-ingest: token source = file (rotatable)", slog.String("path", gtFile))
 	}
 	return nil
 }
@@ -219,9 +237,9 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 				continue
 			}
 			if rotationPending {
-				log.Printf("wardyn-tetragon-ingest: reopened rotated export %s at offset 0", path)
+				slog.InfoContext(ctx, "wardyn-tetragon-ingest: reopened rotated export at offset 0", slog.String("path", path))
 			} else {
-				log.Printf("wardyn-tetragon-ingest: opened export %s", path)
+				slog.InfoContext(ctx, "wardyn-tetragon-ingest: opened export", slog.String("path", path))
 			}
 			rotationPending = false
 		}
@@ -257,7 +275,7 @@ func tailExport(ctx context.Context, path string, mapper *groundtruth.Mapper, si
 						return
 					}
 				} else {
-					log.Printf("wardyn-tetragon-ingest: reopened rotated export %s at offset 0", path)
+					slog.InfoContext(ctx, "wardyn-tetragon-ingest: reopened rotated export at offset 0", slog.String("path", path))
 				}
 				continue
 			}
