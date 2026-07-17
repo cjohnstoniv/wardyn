@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -16,8 +18,60 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// getErrStore is a secretstore.Store whose Get returns a fixed error (or value),
+// so readManagedBlob's error-classification branch can be exercised without a
+// real backend.
+type getErrStore struct {
+	getErr error
+	val    []byte
+}
+
+func (getErrStore) Name() string                                  { return "get-err" }
+func (getErrStore) Put(context.Context, string, []byte) error     { return nil }
+func (getErrStore) Delete(context.Context, string) error          { return nil }
+func (getErrStore) List(context.Context) ([]string, error)        { return nil, nil }
+func (s getErrStore) Get(context.Context, string) ([]byte, error) { return s.val, s.getErr }
+
+// TestReadManagedBlob_DistinguishesStoreErrors pins U078: only ErrNotFound is
+// "not connected" (found=false, err=nil). Any OTHER store error (decrypt failure
+// after key rotation, backend down) MUST propagate rather than masquerade as
+// "no credential connected". Reverting to a blanket `if err != nil { return
+// false, nil }` makes the decrypt-failure case return a nil error and fails here.
+func TestReadManagedBlob_DistinguishesStoreErrors(t *testing.T) {
+	goodBlob, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-real-token"})
+	tests := []struct {
+		name    string
+		store   secretstore.Store
+		wantOK  bool
+		wantErr bool
+	}{
+		{"absent is not-connected", getErrStore{getErr: secretstore.ErrNotFound}, false, false},
+		{"wrapped absent is not-connected", getErrStore{getErr: fmt.Errorf("pg: %w", secretstore.ErrNotFound)}, false, false},
+		{"decrypt failure propagates", getErrStore{getErr: errors.New("age: no identity matched key")}, false, true},
+		{"backend down propagates", getErrStore{getErr: errors.New("dial tcp: connection refused")}, false, true},
+		{"connected", getErrStore{val: goodBlob}, true, false},
+		{"nil store is not-connected", nil, false, false},
+	}
+	h := newHarness(t)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := h.srv.cfg
+			cfg.Secrets = tc.store
+			s := New(cfg)
+			_, ok, err := s.readManagedBlob(context.Background(), "anthropic")
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (err %v)", ok, tc.wantOK, err)
+			}
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
 
 func TestManagedCredProvider(t *testing.T) {
 	store := &memSecrets{m: map[string][]byte{}}

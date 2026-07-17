@@ -203,6 +203,60 @@ func TestSyslogSink_RemoteWriteTimeoutCounts(t *testing.T) {
 	}
 }
 
+// wedgedWriter is a syslogWriter whose Info blocks until released, simulating a
+// wedged local syslog daemon / a full /dev/log datagram peer buffer.
+type wedgedWriter struct{ release chan struct{} }
+
+func (w *wedgedWriter) Info(string) error { <-w.release; return nil }
+func (w *wedgedWriter) Close() error      { return nil }
+
+// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon is the U095
+// regression: the LOCAL-socket path (Network=="") must not block Emit when the
+// syslog daemon wedges. Emit is reached synchronously from request handlers via
+// Fanout.Emit, so a blocked local write stalls the API request path (and the
+// kill cascade) even after the PG write already succeeded.
+//
+// RED-FIRST: against the previous implementation the local path called
+// s.w.Info directly with no buffer/timeout, so once the daemon wedged Emit would
+// block on the write and this test would hang. Routing the local socket through
+// the same bounded async buffer as the remote path fixes it.
+func TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon(t *testing.T) {
+	ww := &wedgedWriter{release: make(chan struct{})}
+	// Network=="" is the local /dev/log transport — the path that was synchronous.
+	s := newSyslogSinkWith(ww, "", "")
+	t.Cleanup(func() {
+		close(ww.release) // unblock parked write goroutines so drain/Close is fast
+		done := make(chan struct{})
+		go func() { _ = s.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	})
+
+	const events = syslogBufferSize * 2
+	perEmitBudget := 200 * time.Millisecond
+	for i := 0; i < events; i++ {
+		start := time.Now()
+		if err := s.Emit(context.Background(), makeSyslogEvent("syslog.local.wedged")); err != nil {
+			t.Fatalf("Emit returned error: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > perEmitBudget {
+			t.Fatalf("local-socket Emit blocked for %s on wedged daemon (want < %s)", elapsed, perEmitBudget)
+		}
+	}
+
+	// The wedged write parks the writer; the bounded buffer fills and overflow is
+	// dropped + counted — never silently discarded, never blocking the caller.
+	deadline := time.Now().Add(syslogWriteTimeout + 3*time.Second)
+	for s.Drops() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s.Drops() == 0 {
+		t.Errorf("expected non-zero drop counter with a wedged local daemon; got 0")
+	}
+}
+
 // syslogPadActor is an oversized Actor value (~4 KiB) used purely to grow each
 // serialised event so the collector's TCP send buffer fills quickly. Without a
 // large payload the kernel send buffer can absorb thousands of small writes

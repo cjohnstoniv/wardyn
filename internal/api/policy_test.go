@@ -4,12 +4,53 @@
 package api
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// TestValidatePolicySpec_GrantScopeShapes pins U081: github_token and cloud_sts
+// grant scopes are now validated at policy-write time (they previously received
+// ONLY the kind-membership + non-negative-TTL check, unlike api_key/git_pat/
+// ssh_key). Reverting the new branches makes every "want error" case accepted
+// and fails here.
+func TestValidatePolicySpec_GrantScopeShapes(t *testing.T) {
+	grant := func(kind types.GrantKind, scope string) types.RunPolicySpec {
+		return types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			EligibleGrants:      []types.GrantSpec{{Kind: kind, Scope: json.RawMessage(scope)}},
+		}
+	}
+	tests := []struct {
+		name    string
+		spec    types.RunPolicySpec
+		wantErr bool
+	}{
+		// github_token: shipped templates carry empty repos + a valid perm map.
+		{"github valid read", grant(types.GrantGitHubToken, `{"repos":[],"permissions":{"contents":"read"}}`), false},
+		{"github valid write multi", grant(types.GrantGitHubToken, `{"repos":["acme/api","acme/web"],"permissions":{"contents":"write","pull_requests":"write"}}`), false},
+		{"github no scope", grant(types.GrantGitHubToken, `null`), false},
+		{"github unknown permission key", grant(types.GrantGitHubToken, `{"repos":[],"permissions":{"totally_bogus":"read"}}`), true},
+		{"github malformed repo", grant(types.GrantGitHubToken, `{"repos":["not-owner-name"],"permissions":{"contents":"read"}}`), true},
+		{"github mixed owners", grant(types.GrantGitHubToken, `{"repos":["acme/api","other/web"]}`), true},
+		{"github scope not object", grant(types.GrantGitHubToken, `["contents"]`), true},
+		// cloud_sts: empty object is the only shape; a non-object is rejected.
+		{"cloudsts empty object", grant(types.GrantCloudSTS, `{}`), false},
+		{"cloudsts null", grant(types.GrantCloudSTS, `null`), false},
+		{"cloudsts non-object", grant(types.GrantCloudSTS, `"role-arn"`), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePolicySpec(tc.spec)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validatePolicySpec err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
 
 func TestConfinementGE(t *testing.T) {
 	cases := []struct {

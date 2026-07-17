@@ -6,7 +6,9 @@ package orchestrator
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -28,11 +30,13 @@ type fakeSubstrate struct {
 	mu                            sync.Mutex
 	created                       []runner.SandboxSpec
 	execs, statuses, stops, kills []string
+	classesCalls                  atomic.Int64 // counts live Classes() probes
 }
 
 func (f *fakeSubstrate) Name() string { return f.name }
 
 func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error) {
+	f.classesCalls.Add(1)
 	return substrate.ClassSupport{
 		Classes:          f.classes,
 		Resolved:         f.resolved,
@@ -271,5 +275,39 @@ func TestOrchestrator_NameIsSoleSubstrate(t *testing.T) {
 	}
 	if got := New(&fakeSubstrate{name: "a"}, &fakeSubstrate{name: "b"}).Name(); got != "orchestrator" {
 		t.Fatalf("multi-substrate Name = %q, want orchestrator", got)
+	}
+}
+
+// TestOrchestrator_ClassesCachedWithinTTL pins U055: Capabilities()/substrateFor()
+// memoize each substrate's ClassSupport for capsCacheTTL, so repeated hot-path
+// calls collapse to ONE daemon probe per substrate per TTL (they previously did a
+// live docker Info() round-trip every call). A countable fake proves the probe
+// count; a fake clock proves the TTL boundary forces exactly one refresh.
+func TestOrchestrator_ClassesCachedWithinTTL(t *testing.T) {
+	oci := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1, types.CC2}, resolved: map[types.ConfinementClass]string{types.CC1: "oci/runc"}}
+	o := New(oci)
+	clock := time.Now()
+	o.now = func() time.Time { return clock }
+
+	// Many hot-path reads within the TTL must probe the daemon exactly once.
+	for i := 0; i < 5; i++ {
+		if _, err := o.Capabilities(context.Background()); err != nil {
+			t.Fatalf("Capabilities: %v", err)
+		}
+	}
+	if _, err := o.substrateFor(context.Background(), types.CC1); err != nil {
+		t.Fatalf("substrateFor: %v", err)
+	}
+	if n := oci.classesCalls.Load(); n != 1 {
+		t.Fatalf("within TTL: Classes probed %d times, want 1", n)
+	}
+
+	// Crossing the TTL boundary forces exactly one refresh (not one-per-call).
+	clock = clock.Add(capsCacheTTL + time.Second)
+	if _, err := o.Capabilities(context.Background()); err != nil {
+		t.Fatalf("Capabilities after TTL: %v", err)
+	}
+	if n := oci.classesCalls.Load(); n != 2 {
+		t.Fatalf("after TTL: Classes probed %d times, want 2", n)
 	}
 }

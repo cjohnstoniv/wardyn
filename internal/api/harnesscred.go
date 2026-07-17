@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -160,14 +162,24 @@ type managedCredBlob struct {
 const harnessTokenAging = 11 * 30 * 24 * time.Hour
 
 // readManagedBlob loads and parses a provider's captured token blob.
-// (found=false, nil) means "not connected"; a parse error is a real error.
+// Only secretstore.ErrNotFound means "not connected" (found=false, nil). Any
+// other store error is a genuine failure (age-key mismatch after rotation, PG
+// down, …) — it is logged and PROPAGATED so a caller never mistakes a wedged
+// store for "no credential connected" (which would flip setup status to a false
+// "LLM access not configured" for an operator who IS connected). A parse error
+// is likewise a real error.
 func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedCredBlob, bool, error) {
 	if s.cfg.Secrets == nil {
 		return managedCredBlob{}, false, nil
 	}
 	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(provider))
-	if err != nil {
+	if errors.Is(err, secretstore.ErrNotFound) {
 		return managedCredBlob{}, false, nil // absent == not connected (not an error)
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read managed credential from secret store failed",
+			slog.String("provider", provider), slog.Any("err", err))
+		return managedCredBlob{}, false, fmt.Errorf("read managed credential: %w", err)
 	}
 	var blob managedCredBlob
 	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
@@ -403,8 +415,14 @@ func NewManagedCredProvider(store secretstore.Store, provider string) subscripti
 
 func (p *managedCredProvider) read() (subscription.Token, error) {
 	raw, err := p.store.Get(context.Background(), harnessCredSecretName(p.provider))
+	if errors.Is(err, secretstore.ErrNotFound) {
+		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
+	}
 	if err != nil {
-		return subscription.Token{}, fmt.Errorf("no managed %s credential connected: %w", p.provider, err)
+		// A store-layer failure (decrypt/age-key mismatch, backend down) is NOT
+		// "not connected" — surface it distinctly so the sink fails closed on a
+		// real error rather than silently reading as "unconfigured".
+		return subscription.Token{}, fmt.Errorf("read managed %s credential: %w", p.provider, err)
 	}
 	var blob managedCredBlob
 	if uerr := json.Unmarshal(raw, &blob); uerr != nil {

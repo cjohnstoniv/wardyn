@@ -6,8 +6,8 @@
 // All implementations are stdlib-only: no third-party logging or HTTP clients.
 //
 // Constraint: sinks must never block the caller's goroutine beyond the time
-// required for a buffered channel send (webhook) or a local syscall (syslog,
-// file). Drop counters are incremented and logged on overflow; events are
+// required for a buffered channel send (webhook, syslog) or a local syscall
+// (file). Drop counters are incremented and logged on overflow; events are
 // never silently discarded.
 package sinks
 
@@ -27,92 +27,105 @@ import (
 
 // syslog sink tuning constants.
 //
-// These bound the request path when the sink is pointed at a remote (tcp/udp)
-// collector that stalls. log/syslog.Writer does not expose the underlying
+// These bound the request path for EVERY transport (remote tcp/udp collector AND
+// the local /dev/log socket). log/syslog.Writer does not expose the underlying
 // net.Conn, so we cannot set a SetWriteDeadline on it directly; instead we run
 // the actual write on a single background goroutine fed by a bounded buffer.
 // Emit only does a non-blocking channel send, so it can never be parked by a
-// hung collector. See HIGH finding: "Bound the remote syslog sink so a hung
-// collector can't block the request path."
+// hung collector — nor by a wedged local syslog daemon or a full /dev/log
+// datagram peer buffer (a unixgram send blocks when the receiver's buffer is
+// full). See HIGH finding "Bound the remote syslog sink…" and U095 (the same
+// bug class on the local socket, originally left synchronous on the false
+// assumption that a /dev/log write is always a fast syscall).
 const (
-	// syslogBufferSize is the capacity of the in-process event queue for remote
-	// syslog. Events that would overflow the buffer are dropped and counted
-	// (never silently discarded — Drops() exposes the count).
+	// syslogBufferSize is the capacity of the in-process event queue. Events that
+	// would overflow the buffer are dropped and counted (never silently discarded
+	// — Drops() exposes the count).
 	syslogBufferSize = 1024
-	// syslogWriteTimeout bounds a single blocked write to the collector. If the
-	// background writer is stuck on s.w.Info for longer than this, the event is
-	// counted as dropped so the writer can move on and never wedge permanently
-	// on one TCP write.
+	// syslogWriteTimeout bounds a single blocked write. If the background writer
+	// is stuck on s.w.Info for longer than this, the event is counted as dropped
+	// so the writer can move on and never wedge permanently on one write.
 	syslogWriteTimeout = 2 * time.Second
 )
+
+// syslogWriter is the minimal write surface a SyslogSink needs; *syslog.Writer
+// satisfies it. It exists so tests can inject a wedged writer and prove Emit
+// never blocks even when the underlying transport hangs (log/syslog.Writer is a
+// concrete type dialing a real socket, otherwise un-fakeable).
+type syslogWriter interface {
+	Info(string) error
+	Close() error
+}
 
 // SyslogSink emits audit events to the system syslog daemon as RFC 5424-ish
 // messages (using Go's log/syslog, which writes RFC 3164 to local sockets and
 // RFC 5424-ish via the "wardyn" tag). The JSON-serialised AuditEvent is the
 // message body.
 //
-// If Network and Addr are both empty the sink dials the local syslog socket
-// (/dev/log on Linux, /var/run/syslog on macOS) and Emit writes synchronously
-// (a fast local syscall, the original behavior). When Network is non-empty
-// (remote "tcp"/"udp" collector) Emit instead hands the event to a bounded
-// async buffer drained by a single background writer goroutine, so a hung or
-// slow collector can never block the calling request handler (Fanout.Emit waits
-// for every child synchronously from the request path).
+// EVERY transport — the local socket (/dev/log on Linux, /var/run/syslog on
+// macOS; Network=="") and a remote "tcp"/"udp" collector — routes through a
+// bounded async buffer drained by a single background writer goroutine, so a
+// wedged local syslog daemon, a full /dev/log datagram peer buffer, or a hung
+// remote collector can never block the calling request handler (Fanout.Emit
+// waits for every child synchronously from the request path).
 type SyslogSink struct {
 	// Network is the syslog transport: "tcp", "udp", or "" for local socket.
 	Network string
 	// Addr is the syslog endpoint, e.g. "host:514". Ignored when Network is "".
 	Addr string
 
-	w *syslog.Writer
+	w syslogWriter
 
-	// remote async machinery (nil/unused for local-socket sinks).
-	queue  chan []byte    // bounded buffer of pre-marshalled JSON messages
-	drops  atomic.Int64   // events dropped due to overflow or write timeout
-	wg     sync.WaitGroup // tracks the background writer goroutine
-	stop   chan struct{}  // closed by Close to drain+terminate the writer
-	remote bool           // true when the async path is in use
+	// async machinery (always in use; no transport writes synchronously).
+	queue chan []byte    // bounded buffer of pre-marshalled JSON messages
+	drops atomic.Int64   // events dropped due to overflow or write timeout
+	wg    sync.WaitGroup // tracks the background writer goroutine
+	stop  chan struct{}  // closed by Close to drain+terminate the writer
 }
 
 // NewSyslogSink constructs and dials the syslog connection.
 // Returns an error if the connection cannot be established.
 //
-// For remote transports (network "tcp"/"udp") a single background writer
-// goroutine is started so that Emit stays non-blocking even if the collector
-// stalls; it is shut down by Close.
+// A single background writer goroutine is started for every transport so that
+// Emit stays non-blocking even if the daemon/collector stalls; it is shut down
+// by Close.
 func NewSyslogSink(network, addr string) (*SyslogSink, error) {
 	w, err := syslog.Dial(network, addr, syslog.LOG_INFO|syslog.LOG_DAEMON, "wardyn")
 	if err != nil {
 		return nil, fmt.Errorf("sinks.syslog: dial: %w", err)
 	}
-	s := &SyslogSink{Network: network, Addr: addr, w: w}
+	return newSyslogSinkWith(w, network, addr), nil
+}
 
-	// Only remote collectors can stall arbitrarily; local socket writes are a
-	// fast syscall and keep the original synchronous behavior.
-	if network != "" {
-		s.remote = true
-		s.queue = make(chan []byte, syslogBufferSize)
-		s.stop = make(chan struct{})
-		s.wg.Add(1)
-		go s.writeLoop()
+// newSyslogSinkWith wraps an already-open writer and starts the background
+// writer. Test seam: a wedged fake writer proves Emit never blocks on a stalled
+// transport (incl. the local socket) without dialing a real syslog.
+func newSyslogSinkWith(w syslogWriter, network, addr string) *SyslogSink {
+	s := &SyslogSink{
+		Network: network,
+		Addr:    addr,
+		w:       w,
+		queue:   make(chan []byte, syslogBufferSize),
+		stop:    make(chan struct{}),
 	}
-	return s, nil
+	s.wg.Add(1)
+	go s.writeLoop()
+	return s
 }
 
 // Name implements audit.Sink.
 func (s *SyslogSink) Name() string { return "syslog" }
 
-// Emit serialises ev to JSON and writes it as an INFO syslog entry.
-// A cancelled context causes the write to be skipped without error (the
-// recorder is shutting down).
+// Emit serialises ev to JSON and hands it to the background writer as an INFO
+// syslog entry. A cancelled context causes the write to be skipped without error
+// (the recorder is shutting down).
 //
-// For local-socket sinks the write is synchronous (a fast local syscall). For
-// remote (tcp/udp) sinks Emit performs only a non-blocking enqueue onto a
-// bounded buffer: if the buffer is full (e.g. the collector is hung and the
-// background writer is stalled) the event is dropped and counted rather than
-// blocking the caller's request goroutine. This is the HIGH-severity fix that
-// prevents a hung remote collector from wedging the synchronous request path
-// via Fanout.Emit.
+// Emit NEVER blocks: it performs only a non-blocking enqueue onto a bounded
+// buffer for every transport. If the buffer is full (the daemon/collector is
+// hung and the background writer is stalled) the event is dropped and counted
+// rather than blocking the caller's request goroutine. This prevents a hung
+// remote collector OR a wedged local syslog daemon from stalling the synchronous
+// request path via Fanout.Emit.
 func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 	select {
 	case <-ctx.Done():
@@ -124,21 +137,13 @@ func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 		return fmt.Errorf("sinks.syslog: marshal: %w", err)
 	}
 
-	if !s.remote {
-		// Local socket: fast syscall, keep synchronous behavior.
-		if err := s.w.Info(string(b)); err != nil {
-			return fmt.Errorf("sinks.syslog: write: %w", err)
-		}
-		return nil
-	}
-
-	// Remote collector: never block the caller. Non-blocking enqueue; on
-	// overflow drop + count (never silently discarded — Drops() reports it).
+	// Never block the caller. Non-blocking enqueue; on overflow drop + count
+	// (never silently discarded — Drops() reports it).
 	select {
 	case s.queue <- b:
 	default:
 		s.drops.Add(1)
-		slog.WarnContext(ctx, "sinks.syslog: queue overflow (collector slow/hung)",
+		slog.WarnContext(ctx, "sinks.syslog: queue overflow (daemon/collector slow/hung)",
 			slog.String("network", s.Network),
 			slog.String("addr", s.Addr),
 			slog.Int64("drops", s.drops.Load()))
@@ -204,22 +209,20 @@ func (s *SyslogSink) timedWrite(b []byte) {
 }
 
 // Drops returns the number of events dropped due to buffer overflow or write
-// timeout (remote sinks only; always 0 for local-socket sinks). Exposed so the
-// never-drop-silently invariant can be observed, matching WebhookSink.Drops.
+// timeout. Exposed so the never-drop-silently invariant can be observed,
+// matching WebhookSink.Drops.
 func (s *SyslogSink) Drops() int64 { return s.drops.Load() }
 
-// Close closes the underlying syslog connection. For remote sinks it first
-// signals the background writer to drain and stop.
+// Close signals the background writer to drain and stop, then closes the
+// underlying syslog connection.
 func (s *SyslogSink) Close() error {
-	if s.remote {
-		// Signal the writer to drain and exit; guard against a double Close.
-		select {
-		case <-s.stop:
-		default:
-			close(s.stop)
-		}
-		s.wg.Wait()
+	// Signal the writer to drain and exit; guard against a double Close.
+	select {
+	case <-s.stop:
+	default:
+		close(s.stop)
 	}
+	s.wg.Wait()
 	return s.w.Close()
 }
 
