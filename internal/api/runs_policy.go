@@ -45,15 +45,23 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 // resolvePolicy returns the spec + policy id to attach. When policyID is nil it
 // returns the configured default with a nil id (the default is not a stored row).
 func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID) (types.RunPolicySpec, *uuid.UUID, error) {
+	// Clone before handing the spec out. cfg.DefaultPolicy is a process-global
+	// shared by every run; a shallow struct copy still shares its slice backing
+	// arrays, so a caller's `append` to AllowedDomains (unionAllowedDomains, the
+	// SCM/workspace egress unions) wrote into the global's spare capacity — two
+	// concurrent create-runs then raced the same element, one run's egress domain
+	// replacing another's in the allowlist passed to its proxy sidecar, and any
+	// in-place edit (e.g. the preflight dry-run's grant filter) leaked into every
+	// subsequent run. Cloning at this single seam fixes every caller at once.
 	if policyID == nil {
-		return s.cfg.DefaultPolicy, nil, nil
+		return s.cfg.DefaultPolicy.Clone(), nil, nil
 	}
 	p, err := s.cfg.Store.GetPolicy(ctx, *policyID)
 	if err != nil {
 		return types.RunPolicySpec{}, nil, err
 	}
 	pid := p.ID
-	return p.Spec, &pid, nil
+	return p.Spec.Clone(), &pid, nil
 }
 
 // bestClass returns the strongest class a runner declares (slice is
