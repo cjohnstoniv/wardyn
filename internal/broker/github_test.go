@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	gh "github.com/google/go-github/v74/github"
+	gh "github.com/google/go-github/v88/github"
 )
 
 // These are PURE unit tests for the github.go helpers that the DB-backed broker

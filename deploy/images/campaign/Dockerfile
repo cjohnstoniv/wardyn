@@ -4,6 +4,9 @@
 # resolve to ONE image that carries BOTH the wardyn binaries (agent-run,
 # wardyn-verify, wardyn-rec, wardyn-scan, claude, git — inherited from the base)
 # AND the toolchains, so real build/test commands run in-sandbox.
+# Not digest-pinned: this is a locally-built image tag (produced by
+# deploy/images/claude-code/Dockerfile), not a registry image — it has no
+# resolvable upstream digest and is rebuilt+retagged on every local build.
 FROM wardyn/agent-claude-code:local
 
 # SSH SCM lane note: openssh-client + corkscrew (CONNECT ProxyCommand helper) and
