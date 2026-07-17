@@ -157,6 +157,28 @@ func TestDetect_DepthCap(t *testing.T) {
 	}
 }
 
+// TestDetect_DoesNotDescendGitInternals pins U076: the walk must SkipDir the
+// .git subtree, not re-descend objects/refs/logs on every scan. A sentinel
+// .gitmodules is buried deep in .git/objects — the only way its remote reaches
+// the result set is if the walk (wrongly) descends into .git internals.
+func TestDetect_DoesNotDescendGitInternals(t *testing.T) {
+	root := t.TempDir()
+	writeRepo(t, root, "https://github.com/acme/web.git")
+	junk := filepath.Join(root, ".git", "objects", "ab", "cd")
+	if err := os.MkdirAll(junk, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A file named .gitmodules deep inside .git — must never be scanned.
+	if err := os.WriteFile(filepath.Join(junk, ".gitmodules"),
+		[]byte("[submodule \"x\"]\n\turl = https://github.com/evil/internal.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gh, _ := DetectGitHubRepos(root)
+	if !reflect.DeepEqual(gh, []string{"acme/web"}) {
+		t.Errorf("github = %v, want only [acme/web]; .git internals must not be walked", gh)
+	}
+}
+
 func TestDetect_RejectsUnsafeURL(t *testing.T) {
 	root := t.TempDir()
 	// A URL with an embedded newline/space must be rejected by safe().
