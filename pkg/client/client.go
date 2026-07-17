@@ -97,10 +97,19 @@ type CreateRunRequest struct {
 	// (mounts pass the same deny-list; api_key grants must reference an existing
 	// secret) and attaches it with no stored policy id.
 	InlinePolicy *RunPolicySpec `json:"inline_policy,omitempty"`
+	// DevcontainerRepo, when set AND an image builder is wired (WARDYN_ENVBUILD),
+	// triggers a devcontainer build of that git repo whose resulting image becomes
+	// the sandbox image. Ignored (degrades to the convention image) when no builder
+	// is wired. Mutually exclusive with Image.
+	DevcontainerRepo string `json:"devcontainer_repo,omitempty"`
+	// DevcontainerRef is the optional git ref (branch/tag/sha) to build for
+	// DevcontainerRepo.
+	DevcontainerRef string `json:"devcontainer_ref,omitempty"`
 	// Image, when set, is a USER-supplied base image (Bring Your Own Image); the
 	// server wraps it with the runner tools via a trusted finalize stage and
 	// requires an image builder to be wired (WARDYN_ENVBUILD) — an explicit
 	// Image with no builder wired is a hard 400 rather than a silent fallback.
+	// Mutually exclusive with DevcontainerRepo.
 	Image string `json:"image,omitempty"`
 	// TaskMode selects how a non-interactive run executes Task: "" / "harness"
 	// (default) runs the agent harness; "exec" runs Task as a plain shell
