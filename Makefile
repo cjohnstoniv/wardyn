@@ -1,6 +1,17 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-campaign
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-campaign gitleaks licenses helm-lint compose-config dco sbom npm-license ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
+
+# ── pinned tool versions (single source of truth for CI + release-check) ─────
+# CI (.github/workflows/ci.yml) routes its gates through the make targets below
+# so a bump here is the ONLY place a version changes — no more drift between the
+# Makefile and the workflow. Override on the CLI for a one-off (e.g.
+# `make govulncheck GOVULNCHECK_VERSION=v1.7.0`).
+GOVULNCHECK_VERSION  ?= v1.6.0
+STATICCHECK_VERSION  ?= v0.7.0
+GITLEAKS_VERSION     ?= v8.30.1
+GO_LICENSES_VERSION  ?= v1.6.0
+SYFT_VERSION         ?= v1.46.0
 
 help:
 	@echo "Wardyn governance control plane"
@@ -46,6 +57,8 @@ help:
 	@echo "                          (tagless + -tags docker, unioned; see scripts/cover-union.sh)"
 	@echo "  release-check         - Pre-tag gate: the RELEASING.md gate list in one command"
 	@echo "                          (pushes/tags nothing; WARDYN_TEST_PG adds the Postgres lane)"
+	@echo "  ci                    - Daemon-free merge gate (the CI checks that need no daemon/service);"
+	@echo "                          excludes docker-conformance, WARDYN_TEST_DOCKER e2e, PG + UI-e2e lanes"
 	@echo "  compose-build         - Build compose images (wardynd -tags docker + proxy)"
 	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
 	@echo "  compose-down          - Stop docker-compose stack"
@@ -153,16 +166,16 @@ cover-check: test-report test-report-docker
 # service-dependent lanes (test-conformance-docker), the UI jobs, and DCO are
 # CI-only. CI remains the authority — see RELEASING.md.
 release-check: build build-docker lint cover-check test-race staticcheck govulncheck license-headers
+	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
 	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
 	else \
 	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
 	fi
 	@echo "==> Dependency licenses (tagless + -tags docker)"
-	go run github.com/google/go-licenses@v1.6.0 check --disallowed_types=forbidden,restricted ./...
-	GOFLAGS=-tags=docker go run github.com/google/go-licenses@v1.6.0 check --disallowed_types=forbidden,restricted ./...
+	@$(MAKE) licenses
 	@echo "==> Secret scan (full git history)"
-	go run github.com/zricethezav/gitleaks/v8@v8.30.1 git -c .gitleaks.toml -v
+	@$(MAKE) gitleaks
 	@echo ""
 	@echo "release-check PASSED. NOT covered here: test-conformance-docker, the UI"
 	@echo "jobs, and DCO — confirm CI is green on the commit before tagging."
@@ -211,18 +224,101 @@ test-e2e-byoi:
 
 govulncheck:
 	@echo "Running govulncheck (tagless + -tags docker, the shipped build)..."
-	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags docker ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker ./...
 
 staticcheck:
 	@echo "Running staticcheck (tagless + -tags docker)..."
-	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
-	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -tags docker ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
 
 lint:
 	@echo "Running go vet (default + docker tags)..."
 	go vet ./...
 	go vet -tags docker ./...
+
+# ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
+# Each target below is the authority for one CI gate: ci.yml runs `make <target>`
+# so the tool + version + flags live in exactly one place.
+
+# Secret scan over full git history (NOT gitleaks-action, whose default scan
+# range is only the triggering diff — see ci.yml's gitleaks-job comment).
+gitleaks:
+	@echo "Scanning full git history for secrets with gitleaks $(GITLEAKS_VERSION)..."
+	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml -v
+
+# Forbid copyleft / non-permissive Go dependencies. go-licenses has no -tags
+# flag, so the docker-tagged deps (moby/moby/*, containerd/errdefs) are covered
+# by driving the tag through GOFLAGS on the second pass (U112).
+licenses:
+	@echo "Checking Go dependency licenses (tagless + -tags docker)..."
+	go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
+	GOFLAGS=-tags=docker go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
+
+# Helm chart lint + template-render (must render the load-bearing objects).
+helm-lint:
+	@echo "Linting + rendering the Helm chart..."
+	helm lint ./deploy/helm/wardyn
+	@out=$$(helm template wardyn ./deploy/helm/wardyn); \
+	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
+	echo "$$out" | grep -q "kind: Service" || { echo "chart rendered no Service"; exit 1; }; \
+	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
+	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
+	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }
+
+# Validate the docker-compose file parses (does NOT need a running daemon).
+compose-config:
+	@echo "Validating docker-compose config..."
+	docker compose -f $(COMPOSE_FILE) config >/dev/null
+
+# DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
+# CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
+DCO_RANGE ?= origin/main..HEAD
+dco:
+	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
+	@COMMITS=$$(git log --no-merges $(DCO_RANGE) --format='%H') || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
+	MISSING=0; \
+	for sha in $$COMMITS; do \
+	  msg=$$(git log -1 --format='%B' "$$sha"); \
+	  if ! echo "$$msg" | grep -qE '^Signed-off-by: .+ <.+@.+>'; then \
+	    echo "MISSING Signed-off-by in commit $$sha:"; \
+	    echo "$$msg" | head -3; \
+	    MISSING=$$((MISSING+1)); \
+	  fi; \
+	done; \
+	if [ "$$MISSING" -gt 0 ]; then \
+	  echo ""; \
+	  echo "ERROR: $$MISSING commit(s) lack a Signed-off-by trailer."; \
+	  echo "Add it with: git commit --signoff (or git commit -s)"; \
+	  exit 1; \
+	fi; \
+	echo "All commits carry Signed-off-by. DCO check passed."
+
+# CycloneDX SBOM via syft (release stub; installs syft if absent, pinned).
+sbom:
+	@echo "Generating CycloneDX SBOM via syft $(SYFT_VERSION)..."
+	@command -v syft >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/anchore/syft/$(SYFT_VERSION)/install.sh | sh -s -- -b /usr/local/bin $(SYFT_VERSION)
+	syft . -o cyclonedx-json > wardyn-sbom.cdx.json
+
+# Fail closed on a copyleft license in a SHIPPED (prod) UI dependency.
+npm-license:
+	@echo "Checking UI production dependency licenses (no copyleft)..."
+	./scripts/check-ui-licenses.sh
+
+# ── daemon-free merge gate ───────────────────────────────────────────────────
+# ponytail: green `make ci` != CI is green. This runs the merge-gating checks
+# that need NO Docker daemon and NO live service — it deliberately EXCLUDES
+# test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
+# (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
+# remains the authority; use this locally to catch most failures before pushing.
+ci: build build-docker lint cover-check test-race staticcheck govulncheck \
+    license-headers licenses gitleaks helm-lint compose-config dco diagrams \
+    npm-license ui-typecheck ui-test ui test-conformance-stub
+	@echo ""
+	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
+	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
+	@echo "  Postgres suite (test-pg), the Playwright UI e2e (ui-e2e), and the"
+	@echo "  push-only SBOM stub — confirm CI is green before merging."
 
 ui:
 	@echo "Building embedded web UI..."
