@@ -135,6 +135,18 @@ it and injects it only when forwarding internal API calls.
 |-----------------|------------------------------|------------|
 | `claude-code/`  | `wardyn/agent-claude-code:local` | `claude` (`@anthropic-ai/claude-code`) |
 | `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
+| `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in) |
+| `campaign/`     | `wardyn/agent-campaign:local`    | `claude` (inherited) |
+
+`claude-code/` and `codex-cli/` are the two user-facing agent harnesses
+(`make agent-images-core`). `make agent-images` additionally builds `oracle/`
+— NOT a real coding agent: it runs a task's scripted, known-good solution so
+the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its
+grader scores correctly. `campaign/` is a separate, fat opt-in image (`make
+agent-image-campaign`) built `FROM wardyn/agent-claude-code:local` plus real
+Go/Python/Rust/JDK+Maven/pnpm toolchains, for workspaces whose import
+Record/Verify setup commands need an actual toolchain rather than the
+toolchain-less core image (which dies "command not found").
 
 ---
 

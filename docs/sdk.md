@@ -1,9 +1,21 @@
 # Wardyn Go SDK — Quickstart
 
 Import `github.com/cjohnstoniv/wardyn/pkg/client` (one non-stdlib dependency,
-`github.com/google/uuid`). The package is self-sufficient: every type its
-methods return or accept is named through `client.*` (e.g. `client.AgentRun`,
-`client.ApprovalPending`), so you never import `internal/types`.
+`github.com/google/uuid`). Every type its methods return or accept is named
+through `client.*` (e.g. `client.AgentRun`, `client.ApprovalPending`), so you
+never import `internal/types`.
+
+> **Coverage gap (read this first).** `pkg/client` is a partial SDK, not a
+> full API client. It wraps exactly five surfaces: **run** (create/get/list/kill
+> + grants), **approval** (list/approve/deny), **policy** (CRUD), **audit**
+> (events), and **secret** (list/set/delete). It does **not** expose
+> workspaces, compose, site-config, harness (the managed-Claude-subscription
+> credential flow), attach (the interactive terminal WebSocket), preflight, or
+> the internal-groundtruth ingest endpoint. Those surfaces exist only on
+> wardynd's REST API today (see the matching handlers under `internal/api/`)
+> or via the `wardyn` CLI / UI — widening the SDK to cover them is unscheduled
+> work, not a hidden default (same honesty rule as
+> [`docs/PLUGGABILITY.md`](PLUGGABILITY.md)).
 
 ```go
 package main

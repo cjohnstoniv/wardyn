@@ -167,6 +167,25 @@ Wardyn **fails closed** — it refuses to launch a run it cannot confine
 WARDYN_DEFAULT_POLICY=/examples/policies/default.json make demo
 ```
 
+## Environment variable reference
+
+Beyond the vars covered above, the stack respects these — set them via
+`deploy/compose/.env` (copy `.env.example`) or the shell environment:
+
+| Var | Purpose | Default |
+|---|---|---|
+| `WARDYN_SUBSCRIPTION_INJECT` | `off` (this stack's default) makes a run that mounts `~/.claude` use those creds directly (RESIDENT-COPY) — the distroless compose `wardynd` has no `claude` binary of its own, so proxy-side OAuth injection would fail-lazily and crash the run's proxy. Stage creds with `WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`. Host mode (`make setup`) defaults to proxy-side injection instead. | `off` |
+| `WARDYN_SETUP_MODE` | Picks `make setup`'s installer path non-interactively. The friendly name shown in prompts is **host**, but the token this var actually accepts is **`local`** (`container` selects this compose stack; `team` prints a coming-soon notice and exits). | unset (interactive prompt) |
+| `WARDYN_WORKSPACES_ROOT` | Bind-mounts a host directory READ-ONLY at the *same path* inside the `wardynd` container, so `local_dir` workspace onboarding (scanned in-process — `internal/api/workspaces.go`) can see host source. Point it at the narrowest project directory you have — **never** your home directory (wardynd would then be able to read `~/.ssh`, `~/.aws`, `~/.claude`, and staged Claude creds). Unset = local-directory import stays unavailable rather than silently exposing anything. | unset (no host path exposed) |
+| `WARDYN_DOCKER_SOCK` | Which host Docker socket `wardynd` binds and drives. Matters on hosts running two daemons (e.g. Docker Desktop's `/var/run/docker.sock` vs. a native in-distro `dockerd`) — the driver probes CC2/CC3 runtimes against *this socket's* daemon and fails closed when they're absent, so pointing at a runc-only daemon caps the whole stack at CC1. | `/var/run/docker.sock` |
+
+**CI overlay.** [`docker-compose.ci.yaml`](docker-compose.ci.yaml) layers onto
+the base stack (`docker compose -f docker-compose.yaml -f docker-compose.ci.yaml`)
+to turn on devcontainer image builds for BYOA CI runs (`wardyn run --image
+<ref>`): it sets `WARDYN_ENVBUILD=true` and mounts the runner-tools directory
+`scripts/ci-run.sh` assembles as `WARDYN_CI_TOOLS_DIR`. See
+[`docs/CI.md`](../../docs/CI.md).
+
 ## OIDC issuer / hostname note
 
 `wardynd` discovers and exchanges tokens with Dex server-side at `http://dex:5556`
