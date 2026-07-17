@@ -57,7 +57,7 @@ Then observe:
 
 CLI equivalent:
 
-    wardyn audit --run <run-id>
+    wardyn audit <run-id>
     # expect: action=approval.create then action=approval.decide
 
 ## PASS criteria

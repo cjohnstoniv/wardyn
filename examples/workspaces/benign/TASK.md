@@ -35,7 +35,7 @@ empty ~/work if not — either way the task exercises the same controls.)
 
 CLI equivalent:
 
-    wardyn audit --run <run-id>
+    wardyn audit <run-id>
 
 ## PASS criteria
 

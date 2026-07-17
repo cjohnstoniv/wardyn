@@ -39,7 +39,7 @@ deny instead.
 
 CLI equivalent:
 
-    wardyn audit --run <run-id>
+    wardyn audit <run-id>
     # look for action=egress.deny or action=approval.create
 
 To confirm data did not leave, inspect the proxy decision log:
