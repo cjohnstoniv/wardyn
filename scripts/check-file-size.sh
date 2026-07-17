@@ -20,14 +20,15 @@ THRESHOLD=1000
 
 # path -> frozen cap (lines at 2026-07-16 + headroom). Shrinking is always fine.
 declare -A ALLOWLIST=(
-  ["./internal/api/compose.go"]=1360       # 1259 at freeze
   ["./internal/workspacescan/detect.go"]=1340 # 1244 at freeze
   ["./internal/runner/docker/driver.go"]=1230 # 1137 at freeze
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
-  ["./internal/store/store.go"]=1090       # 1001 at freeze
   ["./ui/src/app/components/screens/import-workspace/import-panel.tsx"]=1420 # 1312 at freeze
   ["./ui/src/app/components/screens/setup/step-bodies.tsx"]=1150 # 1062 at freeze
+  # compose.go and store.go were decomposed below 1000 in R4 (llmcred.go /
+  # pagination.go splits) and came OFF this list — they are gated at the plain
+  # 1000-line threshold like any other file now.
 )
 
 fail=0

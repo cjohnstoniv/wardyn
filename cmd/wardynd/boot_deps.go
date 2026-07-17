@@ -210,7 +210,11 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 		if kerr != nil {
 			return of, kerr
 		}
-		authn, err := oidc.New(rootCtx, oidc.Config{
+		// bootCtx (30s), not rootCtx: the ctx is used ONLY for the discovery
+		// HTTP round trip (go-oidc's Provider.Verifier fetches JWKS on a
+		// background ctx per its doc), so an unreachable/stalled IdP must fail
+		// boot loudly inside the boot budget instead of hanging wardynd forever.
+		authn, err := oidc.New(bootCtx, oidc.Config{
 			IssuerURL:           *f.oidcIssuer,
 			InternalIssuerURL:   *f.oidcInternalIss,
 			ClientID:            *f.oidcClientID,

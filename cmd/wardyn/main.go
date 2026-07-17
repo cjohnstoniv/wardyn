@@ -53,6 +53,13 @@ func dialHint(err error) string {
 	if errors.As(err, &ue) {
 		return "is wardynd running? (start it with `make setup` or `wardyn setup`; point the CLI elsewhere with --url or WARDYN_URL)"
 	}
+	// Auth failure: we DID reach wardynd but it refused the bearer token. Name
+	// the two ways to supply one, so first contact against the compose stack
+	// (which boots with an admin token set) is recoverable without docs.
+	var ae *sdk.APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
+		return "authenticate with --token or WARDYN_ADMIN_TOKEN (the compose quick-start prints its token in `wardyn setup`/deploy/compose/README.md)"
+	}
 	return ""
 }
 

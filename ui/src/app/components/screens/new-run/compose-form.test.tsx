@@ -168,13 +168,15 @@ describe("ComposeForm — file attach enforces the size cap", () => {
     expect(screen.getByText("Provider")).toBeInTheDocument();
   });
 
-  it("captures the Interactive vs Background run mode UPFRONT in the initial panel", async () => {
+  it("captures the Interactive vs Autonomous run mode UPFRONT in the initial panel", async () => {
     const onInteractiveChange = vi.fn();
     renderForm({ interactive: false, onInteractiveChange });
-    // The selector is in the compose panel (not just the review), defaulting to Background.
+    // The selector is in the compose panel (not just the review), defaulting to
+    // Autonomous — labels come verbatim from RUN_MODE (copy.ts D3 bans
+    // Batch/Background as mode names).
     expect(screen.getByRole("radiogroup", { name: /run mode/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Interactive/ })).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByRole("radio", { name: /Background/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: /Autonomous/ })).toHaveAttribute("aria-checked", "true");
     const user = userEvent.setup();
     await user.click(screen.getByRole("radio", { name: /Interactive/ }));
     expect(onInteractiveChange).toHaveBeenCalledWith(true);
