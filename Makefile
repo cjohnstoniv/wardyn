@@ -92,6 +92,13 @@ test:
 	@echo "Running Go tests..."
 	go test ./...
 
+# Race-detector sweep. The kill/dispatch FSM has dedicated concurrent tests
+# (internal/api/kill_dispatch_race_test.go) that only mean something under -race;
+# the rest of the tree rides along. Required green before restructuring runs.go.
+test-race:
+	@echo "Running Go tests under the race detector..."
+	go test -race ./...
+
 test-docker:
 	@echo "Running Go tests (-tags docker)..."
 	go test -tags docker ./...
