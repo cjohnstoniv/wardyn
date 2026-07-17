@@ -520,6 +520,7 @@ func isConventionNodeOnlyImage(ref string) bool {
 // session, or the admin bearer), so it may enumerate resident CLIs, present
 // secret names, and per-backend composer readiness — capability disclosure that
 // must never appear on the public /healthz.
+//nolint:funlen,gocyclo,gocognit // Deliberate: one linear checklist that computes EVERY /setup/status readiness item in reading order (DB, runner, composer, LLM cred, workspaces, …); splitting it would scatter the checklist that operators and the wizard read as one unit. Next candidate if it grows: one helper per checklist item.
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

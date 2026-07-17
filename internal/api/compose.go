@@ -315,6 +315,7 @@ func composerBackendKnown(reg *composer.Registry, name string) bool {
 //
 // ponytail: closure over the ResponseWriter (SSE) or a discard (buffer); no
 // channel/goroutine — the pipeline is synchronous, so emit runs inline.
+//nolint:funlen,gocyclo // Deliberate: the compose pipeline's stage order (compose → risk → reconcile → ceiling-clamp → review) IS the security contract; each stage already lives in its own helper and this function is the one place the sequencing can be audited top-to-bottom.
 func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, principalType types.ActorType, principal string, emit func(composer.ComposeEvent)) (any, *composeError) {
 	// Correlation id stamped at pipeline start and echoed on every advisory audit
 	// event so a compose can be tied together across rounds and to the eventual

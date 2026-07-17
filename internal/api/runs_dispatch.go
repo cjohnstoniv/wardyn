@@ -132,282 +132,44 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	}
 	artifactInject := len(artifactPlan.injections) > 0
 
-	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
-	// INTERACTIVE run never invokes agent-run (the human runs `claude` in the
-	// attach shell), so the auth env must live on the container itself or the
-	// manual claude session inherits the image's inject-gateway default and is
-	// denied. Detect SUBSCRIPTION by the resident ~/.claude bind mount: claude
-	// then talks DIRECTLY to api.anthropic.com with its own OAuth creds over the
-	// HTTPS_PROXY tunnel, bypassing /wardyn/llm/anthropic (which would deny a run
-	// that has no api_key grant to inject). Otherwise (API-key mode) keep the
-	// image's gateway default and seed a NON-SECRET placeholder so claude emits a
-	// request the proxy strips + re-injects (invariant 1: the real key is never
-	// resident; the placeholder is a sentinel, not a credential).
-	subscription := specHasMountTarget(&policy, claudeCredTarget)
-	// Subscription runs: inject the operator's LIVE OAuth token PROXY-SIDE (the
-	// sandbox holds only an inert sentinel) instead of the resident copy, which
-	// goes stale — the access token expires (~hours) and the refresh token ROTATES
-	// as the operator's own host `claude` refreshes, locking the copy out. This
-	// REQUIRES TLS-MITM of api.anthropic.com so the proxy can swap the credential;
-	// it is the safe default whenever a token provider is wired. Escape hatch:
-	// WARDYN_SUBSCRIPTION_INJECT=off keeps the legacy resident-copy behavior.
-	injectSub := subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
+	// LLM transport resolution (precedence: host-staged subscription > managed >
+	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
+	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
+	// which proxy-side injections / TLS-MITM this run needs.
+	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, verifyPlan, interactive, proxyURL)
 
-	// Bedrock: a third Anthropic transport, mutually exclusive with subscription
-	// (checked first) and api-key mode (the fallback). See resolveBedrockAuth for
-	// the readiness rule and the resident-AWS-cred rationale.
-	//
-	// modelRun gates Bedrock on a run that actually invokes the model: a verify run
-	// (execs wardyn-verify — verifyPlan present) or a scan run (execs wardyn-scan —
-	// WorkspaceID set, non-interactive) makes no model call, so it must NOT receive
-	// the resident AWS SigV4 creds (least privilege — the creds are masked + confined
-	// regardless, but there's no reason to place them in a sandbox that never signs a
-	// Bedrock request). Mirrors the WARDYN_VERIFY_ONLY / WARDYN_SCAN_ONLY discriminator.
-	modelRun := len(verifyPlan) == 0 && !(run.WorkspaceID != nil && !interactive)
-	bedrock := s.resolveBedrockAuth(ctx, run.Agent, subscription, modelRun)
-	bedrockReady := bedrock.ready
-	// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
-	// (never-resident); set in the bedrock handling block below and consumed by the
-	// CA / injection / MITM-host wiring alongside the subscription path.
-	injectBedrockBearer := bedrockReady && bedrock.bearer
-
-	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
-	// operator to run `claude setup-token` in the attach shell and mint one. Point
-	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
-	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
-	// mis-signals api-key mode. No mount, no injection, no MITM.
-	harnessLoginRun := run.Task == harnessLoginTask
-
-	// MANAGED subscription: when there is no resident ~/.claude mount and no
-	// Bedrock, and the operator connected a Wardyn-managed setup-token, inject it
-	// PROXY-SIDE exactly like a resident subscription (the sandbox holds only an
-	// inert sentinel). This is the compose-mode subscription path. Precedence:
-	// host-staged mount > managed > Bedrock > api-key.
-	//
-	// OPT-OUT (do NOT override an explicit api-key choice): managed is the FALLBACK
-	// when nothing else credentials the run — NOT a silent replacement for an
-	// operator who chose api-key. An anthropic api-key grant already present in
-	// `injections` (compose's ensureLLMGrant on UseSubscription=false, or a direct
-	// api-key run) means the operator opted for api-key; letting managed fire would
-	// drop that grant below and silently bill the subscription instead, while the
-	// compose review said "api-key". So require no pre-existing anthropic injection.
-	// A zero-egress policy (no allow-all, empty allow-list — e.g. a sealed demo
-	// sandbox) suppresses the fallback entirely: managed injection APPENDS
-	// api.anthropic.com to the allow-list below, and a fallback must not silently
-	// widen a policy the operator authored as sealed. Operator-staged subscription
-	// mounts are policy-blessed and unaffected.
-	managed := !harnessLoginRun && !subscription && !bedrockReady &&
-		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent) &&
-		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
-	injectManaged := managed
-
-	if harnessLoginRun {
-		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
-	} else if subscription {
-		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
-		// The subscription creds are bind-mounted READ-ONLY at ~/.claude, but
-		// claude-code needs a WRITABLE config dir (session-env/, history) — it fails
-		// EROFS trying to mkdir under a read-only ~/.claude. Point CLAUDE_CONFIG_DIR at
-		// a writable path that agent-run populates from the read-only mount (creds +
-		// ~/.claude.json). Set on the sandbox env so BOTH agent-run and an interactive
-		// `wardyn attach` shell inherit it.
-		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
-	} else if managed {
-		// Managed subscription (compose, no host ~/.claude mount): same wire posture
-		// as resident subscription — talk direct to api.anthropic.com over the tunnel
-		// with a writable config dir — but the sentinel creds are DELIVERED via env
-		// (WARDYN_CLAUDE_MANAGED_B64) instead of a mount, since there is nothing to
-		// mount. agent-run materializes them; the proxy injects the live token.
-		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
-		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
-		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
-	} else if bedrockReady {
-		for k, v := range bedrock.env {
-			sandboxEnv[k] = v
-		}
-		// Resident SigV4 creds must stay out of PTY/recording streams and any
-		// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
-		// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
-		// neither has anything secret to mask here.
-		if s.cfg.MaskRegistry != nil && !bedrock.bearer && !bedrock.awsMount {
-			s.cfg.MaskRegistry.Add(run.ID, []byte(bedrock.env["AWS_ACCESS_KEY_ID"]))
-			s.cfg.MaskRegistry.Add(run.ID, []byte(bedrock.env["AWS_SECRET_ACCESS_KEY"]))
-			if tok := bedrock.env["AWS_SESSION_TOKEN"]; tok != "" {
-				s.cfg.MaskRegistry.Add(run.ID, []byte(tok))
-			}
-		}
-		for _, h := range bedrock.egressHosts {
-			if !domainAllowedExact(policy.AllowedDomains, h) {
-				policy.AllowedDomains = append(policy.AllowedDomains, h)
-			}
-		}
-		detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
-		mode := "resident"
-		switch {
-		case bedrock.bearer:
-			detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
-			mode = "bearer"
-		case bedrock.awsMount:
-			detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
-			mode = "aws-dir-mount"
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"region": s.cfg.BedrockRegion, "model": s.cfg.BedrockModel, "hosts": bedrock.egressHosts,
-				"mode": mode, "detail": detail,
-			})))
-	} else {
-		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
-	}
-	// Operator model pin: force a specific Anthropic model (e.g. "opus") so the
-	// agent doesn't fall back to the account/CLI default (a promo can push that to
-	// a cheaper model like Fable). Off unless configured; Claude agent only; never
-	// overrides the Bedrock model id (that IS the pin, in inference-profile form).
-	if s.cfg.AgentAnthropicModel != "" && run.Agent == "claude-code" && !bedrockReady {
-		sandboxEnv["ANTHROPIC_MODEL"] = s.cfg.AgentAnthropicModel
-	}
-
-	// Codex (OpenAI) reverse-proxy route: point the OpenAI SDK at the proxy's
-	// inspectable /wardyn/llm/openai gateway with a non-secret placeholder; the
-	// proxy strips it and injects the brokered OpenAI key (mirrors Anthropic
-	// api-key mode). A subscription Codex reaching api.openai.com directly is
-	// covered by TLS-MITM when intercept_tls is enabled.
-	if run.Agent == "codex-cli" && !subscription {
-		sandboxEnv["OPENAI_BASE_URL"] = proxyURL + "/wardyn/llm/openai"
-		sandboxEnv["OPENAI_API_KEY"] = "wardyn-proxy-injected"
-	}
-
-	// Optional TLS-MITM of opaque LLM CONNECT tunnels (intercept_tls): provision a
-	// per-run CA. The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig,
-	// below); the sandbox trusts the PUBLIC cert, installed by agent-run from
-	// WARDYN_MITM_CA_PEM and pointed at via NODE_EXTRA_CA_CERTS (additive for Node
-	// clients like Claude Code). This makes the subscription-OAuth path inspectable.
-	// MITM is provisioned for content inspection (intercept_tls) AND, now, for
-	// subscription credential injection (injectSub) — the proxy must terminate the
-	// TLS to api.anthropic.com to swap in the live token.
-	mitmForInspect := false
-	if li := policy.LLMInspection; li != nil && li.InterceptTLS && li.Mode != "" && !strings.EqualFold(li.Mode, "off") {
-		mitmForInspect = true
-	}
+	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
+	// when ANY consumer needs one — intercept_tls content inspection,
+	// subscription/managed credential injection, artifact-token injection, or
+	// Bedrock bearer injection. The PRIVATE key reaches ONLY the proxy sidecar
+	// (ProxyConfig below); the sandbox trusts the PUBLIC cert. See
+	// provisionDispatchMITMCA for the trust-store wiring.
+	mitmForInspect := llmInspectMITMEnabled(&policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if injectSub || injectManaged || mitmForInspect || artifactInject || injectBedrockBearer {
-		certPEM, keyPEM, caErr := generateRunCA(time.Now())
-		if caErr != nil {
-			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
-			// KILLED state is preserved rather than clobbered back to FAILED.
-			s.failAndRevoke(ctx, run.ID, types.RunStarting)
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": "mitm ca: " + caErr.Error()})))
+	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer {
+		var ok bool
+		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return
 		}
-		mitmCACertPEM, mitmCAKeyPEM = string(certPEM), string(keyPEM)
-		sandboxEnv["WARDYN_MITM_CA_PEM"] = mitmCACertPEM
-		// CA files live under /tmp/wardyn (any-uid-writable, works for images with
-		// arbitrary USER/HOME — the old /home/agent/.wardyn pin dangled for
-		// envbuilder/BYOI images whose HOME differs; precedent: mainProcCastDir).
-		// NODE_EXTRA_CA_CERTS is ADDITIVE (Node keeps its bundled roots), so it
-		// points at the bare CA. Everything OpenSSL-shaped REPLACES its trust store
-		// via these vars, so they point at the COMBINED bundle (system roots + the
-		// per-run CA) that install_mitm_ca/agentIdleScript assemble — the bare CA
-		// there would break verification of non-MITM'd CONNECT-tunneled hosts.
-		// JVM (keystore) and Deno (DENO_CERT) are documented as not covered.
-		sandboxEnv["NODE_EXTRA_CA_CERTS"] = "/tmp/wardyn/mitm-ca.pem"
-		sandboxEnv["SSL_CERT_FILE"] = "/tmp/wardyn/ca-bundle.pem"
-		sandboxEnv["REQUESTS_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
-		sandboxEnv["CURL_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
 	}
 
-	// Subscription / managed: author a re-mintable api_key grant whose SENTINEL
-	// secret name resolves to a LIVE Anthropic OAuth token (resident host token, or
-	// the Wardyn-managed captured setup-token) rather than a stored secret; append
-	// its injection and ensure the exact host is egress-allowed (the injector's hard
-	// requirement). Non-approval api_key grants are re-mintable by design, so the
-	// proxy re-resolves the token indefinitely. This is what makes the sandbox's
-	// sentinel sufficient. injectSub and injectManaged are mutually exclusive by
-	// construction (managed requires !subscription).
-	if injectSub || injectManaged {
-		const anthropicAPIHost = "api.anthropic.com"
-		sentinelName := subscriptionOAuthSecret
-		injectSource := "subscription"
-		detail := "live subscription OAuth token injected proxy-side; sandbox's staged copy holds only inert sentinel tokens (access + refresh both replaced at staging)"
-		if injectManaged {
-			sentinelName = types.ManagedOAuthSecret
-			injectSource = "managed"
-			detail = "Wardyn-managed subscription (setup-token) injected proxy-side; sandbox holds only an inert sentinel delivered via env (no host ~/.claude mount)"
-		}
-		// Subscription/managed REPLACES any api-key injection for the same host. A
-		// ceiling that also lists an anthropic-api-key grant (e.g. the composer-dev
-		// ceiling) would otherwise leave TWO injections for api.anthropic.com; the
-		// proxy resolves both at startup and the api-key mint fails closed when its
-		// secret is absent — crashing the sidecar. Drop it here (the direct-run
-		// equivalent of reconcileLLMAccess's removeAPIKeyGrantForHost).
-		kept := injections[:0]
-		for _, ig := range injections {
-			if strings.EqualFold(strings.TrimSuffix(ig.Rule.Host, "."), anthropicAPIHost) {
-				continue
-			}
-			kept = append(kept, ig)
-		}
-		injections = kept
-		subGrantID := uuid.New()
-		subScope, _ := json.Marshal(map[string]string{
-			"host":        anthropicAPIHost,
-			"header":      "Authorization",
-			"format":      "Bearer %s",
-			"secret_name": sentinelName,
-		})
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
-			ID: subGrantID, RunID: run.ID, CreatedAt: time.Now(),
-			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: subScope, TTLSeconds: 3600},
-		}); gerr != nil {
-			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
-			// KILLED state is preserved rather than clobbered back to FAILED.
-			s.failAndRevoke(ctx, run.ID, types.RunStarting)
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
+	// Subscription / managed: author the proxy-side sentinel credential grant
+	// (see authorSubscriptionInjection for the re-mint + api-key-replacement
+	// rationale). A failed grant write already marked the run FAILED — stop.
+	if llm.injectSub || llm.injectManaged {
+		var ok bool
+		if injections, ok = s.authorSubscriptionInjection(ctx, run, llm, &policy, injections); !ok {
 			return
 		}
-		if rule, derr := injectionRuleFromScope(subScope); derr == nil {
-			injections = append(injections, runner.InjectionGrant{GrantID: subGrantID, Rule: rule})
-		}
-		if !domainAllowedExact(policy.AllowedDomains, anthropicAPIHost) {
-			policy.AllowedDomains = append(policy.AllowedDomains, anthropicAPIHost)
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"host": anthropicAPIHost, "tls_mitm": true, "source": injectSource, "detail": detail,
-			})))
 	}
 
-	// Bedrock BEARER injection: author an api_key grant whose Authorization: Bearer
-	// header injects the operator's Bedrock API key into bedrock-runtime, and mark
-	// that host TLS-MITM-eligible for THIS run. This is the same operator-configured
-	// MITM-host + paired-injection pattern as corp artifact hosts (isCorpMITMHost) —
-	// bedrock-runtime is not a wildcard, the token is the operator's own, and the CA
-	// key stays in proxy memory. The sandbox holds only the placeholder bearer.
+	// Bedrock BEARER injection + its per-run MITM host (see
+	// authorBedrockBearerInjection). Same stop-on-failure contract.
 	var bedrockMITMHosts []string
-	if injectBedrockBearer {
-		bedrockMITMHosts = append(bedrockMITMHosts, bedrock.runtimeHost)
-		beScope, _ := json.Marshal(map[string]string{
-			"host":        bedrock.runtimeHost,
-			"header":      "Authorization",
-			"format":      "Bearer %s",
-			"secret_name": bedrockAPIKeySecret,
-		})
-		beGrantID := uuid.New()
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
-			ID: beGrantID, RunID: run.ID, CreatedAt: time.Now(),
-			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: beScope, TTLSeconds: 3600},
-		}); gerr != nil {
-			// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
-			// KILLED state is preserved rather than clobbered back to FAILED.
-			s.failAndRevoke(ctx, run.ID, types.RunStarting)
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": "bedrock bearer inject grant: " + gerr.Error()})))
+	if llm.injectBedrockBearer {
+		var ok bool
+		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
 			return
-		}
-		if rule, derr := injectionRuleFromScope(beScope); derr == nil {
-			injections = append(injections, runner.InjectionGrant{GrantID: beGrantID, Rule: rule})
 		}
 	}
 
@@ -417,91 +179,19 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// block, which reslices `injections` in place.
 	injections = append(injections, artifactPlan.injections...)
 
-	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved LLM
-	// transport is OPAQUE (M24). Opaque transports: (a) a subscription/OAuth transport
-	// that is NOT being MITM'd (injectSub / intercept_tls auto-enable MITM, making it
-	// inspectable); (b) SigV4 Bedrock via ~/.aws or resident keys — uninspectable by
-	// construction (we cannot re-sign a MITM'd SigV4 request), so only the Bedrock
-	// BEARER path (proxy-injected, MITM'd) is inspectable. Previously only the
-	// subscription case failed closed, silently exempting opaque Bedrock. The default
-	// (require_inspectable_llm=false) instead degrades visibly rather than failing.
-	if li := policy.LLMInspection; li != nil && li.RequireInspectableLLM &&
-		li.Mode != "" && !strings.EqualFold(li.Mode, "off") &&
-		((subscription && !li.InterceptTLS && !injectSub) || (bedrockReady && !bedrock.bearer)) {
-		// CAS from STARTING so a concurrent kill's KILLED is not clobbered to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting)
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport"})))
+	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
+	// LLM transport is OPAQUE (M24) — see enforceInspectableLLM.
+	if !s.enforceInspectableLLM(ctx, run, &policy, llm) {
 		return
 	}
 
-	// Host bind mounts: copy the resolved POLICY's WorkspaceMounts into the spec.
-	// Mounts may be authored on a stored policy (admin-gated policy CRUD) OR
-	// INLINE on the create request by an admin / SSO-gated human operator
-	// (createRunRequest.InlinePolicy) — both flow through the SAME resolved
-	// RunPolicySpec here, so this is still the only path that populates
-	// spec.Mounts. They are NEVER chosen by the in-sandbox agent: the agent-run
-	// entrypoint has no access to this surface, so a prompt-injected agent can
-	// never pick a host mount (invariants 1 & 3). Every mount was already
-	// deny-list-validated by runner.ValidateMount at policy-write/inline-validate
-	// time (validatePolicySpec); the docker driver re-validates it
-	// defense-in-depth at sandbox-create time. runner.ValidateMount is unchanged.
-	var mounts []runner.Mount
-	for _, wm := range policy.WorkspaceMounts {
-		mounts = append(mounts, runner.Mount{
-			Source: wm.Source,
-			Target: wm.Target,
-			// Safe default: omitted read_only => read-only. RW only on explicit
-			// read_only=false in the policy.
-			ReadOnly: wm.ReadOnlyOrDefault(),
-		})
-	}
+	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
+	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
+	mounts := buildRunMounts(policy, llm)
 
-	// Host-mode Bedrock ~/.aws mount (operator config, not agent-chosen; same trust
-	// and the same driver deny-list re-validation as the WorkspaceMounts above).
-	// READ-ONLY: the sandbox reads the SSO cache / config but can never write to the
-	// operator's host AWS state. Only set on the host-mode path (resolveBedrockAuth
-	// gated it on BedrockAWSConfigDir existing); never present for a team deployment.
-	if bedrockReady && bedrock.awsMount {
-		mounts = append(mounts, runner.Mount{
-			Source:   bedrock.awsMountSource,
-			Target:   sandboxAWSDir,
-			ReadOnly: true,
-		})
-	}
-
-	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL).
-	// A locked-down corporate network may give the sandbox host NO direct internet
-	// route at all — site_config.UpstreamProxySecretRef (admin-authored via
-	// PUT /api/v1/site-config) names the secret holding the corp CONNECT-proxy URL.
-	// The resolved cred-bearing URL lands in the sidecar's WARDYN_PROXY_CONFIG_JSON
-	// env var, the SAME posture as RunToken today: proxy-process-only, never on the
-	// sandbox side, masked from decision-log/stdout by the proxy — a deliberate,
-	// already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
-	// new one. Fail SAFE: an unconfigured ref, an unresolvable secret, or a
-	// non-http URL all leave this "" (direct egress, today's behavior) plus an
-	// audit event; none of them fail the run or crash dispatch.
-	upstreamProxyURL := ""
-	if siteCfgErr != nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-			run.ID.String(), "failure", mustJSON(map[string]any{"reason": "site-config-read-error"})))
-	} else if siteCfg.UpstreamProxySecretRef != "" {
-		var getSecret func(context.Context, string) ([]byte, error)
-		if s.cfg.Secrets != nil {
-			getSecret = s.cfg.Secrets.Get
-		}
-		resolved, failReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxySecretRef, getSecret)
-		if failReason != "" {
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-				run.ID.String(), "failure", mustJSON(map[string]any{
-					"reason": failReason, "secret_ref": siteCfg.UpstreamProxySecretRef,
-				})))
-		} else {
-			upstreamProxyURL = resolved
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-				run.ID.String(), "success", mustJSON(map[string]any{"secret_ref": siteCfg.UpstreamProxySecretRef})))
-		}
-	}
+	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
+	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
+	upstreamProxyURL := s.resolveRunUpstreamProxy(ctx, run.ID, siteCfg, siteCfgErr)
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
@@ -534,7 +224,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			// The CA above may also be minted purely for artifact-token injection, so
 			// this keeps an artifact-only run from TLS-terminating a direct CONNECT to
 			// Anthropic/OpenAI it never asked to intercept.
-			MITMLLM: injectSub || injectManaged || mitmForInspect,
+			MITMLLM: llm.injectSub || llm.injectManaged || mitmForInspect,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
@@ -591,27 +281,35 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		return
 	}
 
-	// INTERACTIVE MODE: skip the agent Exec AND the completion watcher. The
-	// sandbox is RUNNING and idle (the container holds open), ready for a human to
-	// `wardyn attach`. There is no agent process, so there is nothing for the
-	// watcher to Wait on — starting it would have it observe an immediate Wait
-	// failure (no tracked agent exec) and could prematurely terminate the run.
-	// BYOI runtime preflight: a wrapped arbitrary base is guaranteed to carry the
-	// runner tools (the wrap COPYs them), but may still lack a shell or the harness
-	// CLI. Run `agent-run --selftest` and observe its exit — for a batch run, fail
-	// CLOSED on nonzero (honest FAILED + audit, never a hang or a silent bad run);
-	// for an interactive/login box, warn-only (a login box legitimately lacks repo
-	// wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
-	// image tag so convention/devcontainer runs are unaffected.
+	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
+	s.startAgentOrIdle(ctx, run, sb.Ref, image, interactive)
+}
+
+// startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
+//
+// INTERACTIVE MODE: skip the agent Exec AND the completion watcher. The
+// sandbox is RUNNING and idle (the container holds open), ready for a human to
+// `wardyn attach`. There is no agent process, so there is nothing for the
+// watcher to Wait on — starting it would have it observe an immediate Wait
+// failure (no tracked agent exec) and could prematurely terminate the run.
+// BYOI runtime preflight: a wrapped arbitrary base is guaranteed to carry the
+// runner tools (the wrap COPYs them), but may still lack a shell or the harness
+// CLI. Run `agent-run --selftest` and observe its exit — for a batch run, fail
+// CLOSED on nonzero (honest FAILED + audit, never a hang or a silent bad run);
+// for an interactive/login box, warn-only (a login box legitimately lacks repo
+// wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
+// image tag so convention/devcontainer runs are unaffected. Extracted verbatim
+// from dispatchWithVerify.
+func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
 		if byoi {
-			s.byoiSelftest(ctx, run, sb.Ref, false /* warn-only */)
+			s.byoiSelftest(ctx, run, ref, false /* warn-only */)
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive",
 			run.ID.String(), "success", mustJSON(map[string]any{
-				"sandbox_ref": sb.Ref,
+				"sandbox_ref": ref,
 				"note":        "interactive run: no agent task exec'd; awaiting attach",
 			})))
 		return
@@ -622,17 +320,17 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
 	if run.Task != "" {
 		// BYOI: gate the task exec on a passing selftest (fail closed).
-		if byoi && !s.byoiSelftest(ctx, run, sb.Ref, true /* fail-closed */) {
-			s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.selftest")
+		if byoi && !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
+			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
 			s.failAndRevoke(ctx, run.ID, types.RunRunning)
 			return
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
-		execID, xerr := s.cfg.Runner.Exec(ctx, sb.Ref, argv)
+		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error()})))
-			s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.exec")
+			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.
 			s.failAndRevoke(ctx, run.ID, types.RunRunning)
@@ -650,8 +348,87 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// outcome. The watcher runs on a DETACHED context (NOT ctx — that is the
 		// request context, cancelled when the create-run handler returns, which
 		// would kill the watcher immediately). See startCompletionWatcher.
-		s.startCompletionWatcher(run.ID, sb.Ref, execID)
+		s.startCompletionWatcher(run.ID, ref, execID)
 	}
+}
+
+// buildRunMounts assembles the sandbox bind mounts.
+//
+// Host bind mounts: copy the resolved POLICY's WorkspaceMounts into the spec.
+// Mounts may be authored on a stored policy (admin-gated policy CRUD) OR
+// INLINE on the create request by an admin / SSO-gated human operator
+// (createRunRequest.InlinePolicy) — both flow through the SAME resolved
+// RunPolicySpec here, so this is still the only path that populates
+// spec.Mounts. They are NEVER chosen by the in-sandbox agent: the agent-run
+// entrypoint has no access to this surface, so a prompt-injected agent can
+// never pick a host mount (invariants 1 & 3). Every mount was already
+// deny-list-validated by runner.ValidateMount at policy-write/inline-validate
+// time (validatePolicySpec); the docker driver re-validates it
+// defense-in-depth at sandbox-create time. runner.ValidateMount is unchanged.
+//
+// Host-mode Bedrock ~/.aws mount (operator config, not agent-chosen; same trust
+// and the same driver deny-list re-validation as the WorkspaceMounts above).
+// READ-ONLY: the sandbox reads the SSO cache / config but can never write to the
+// operator's host AWS state. Only set on the host-mode path (resolveBedrockAuth
+// gated it on BedrockAWSConfigDir existing); never present for a team deployment.
+// Extracted verbatim from dispatchWithVerify.
+func buildRunMounts(policy types.RunPolicySpec, llm llmTransport) []runner.Mount {
+	var mounts []runner.Mount
+	for _, wm := range policy.WorkspaceMounts {
+		mounts = append(mounts, runner.Mount{
+			Source: wm.Source,
+			Target: wm.Target,
+			// Safe default: omitted read_only => read-only. RW only on explicit
+			// read_only=false in the policy.
+			ReadOnly: wm.ReadOnlyOrDefault(),
+		})
+	}
+	if llm.bedrockReady && llm.bedrock.awsMount {
+		mounts = append(mounts, runner.Mount{
+			Source:   llm.bedrock.awsMountSource,
+			Target:   sandboxAWSDir,
+			ReadOnly: true,
+		})
+	}
+	return mounts
+}
+
+// resolveRunUpstreamProxy resolves the operator-wide upstream/corp proxy
+// (site-config → ProxyConfig.UpstreamProxyURL). A locked-down corporate network
+// may give the sandbox host NO direct internet route at all —
+// site_config.UpstreamProxySecretRef (admin-authored via PUT /api/v1/site-config)
+// names the secret holding the corp CONNECT-proxy URL. The resolved cred-bearing
+// URL lands in the sidecar's WARDYN_PROXY_CONFIG_JSON env var, the SAME posture
+// as RunToken today: proxy-process-only, never on the sandbox side, masked from
+// decision-log/stdout by the proxy — a deliberate, already-documented tradeoff
+// (see runner.ProxyConfig.UpstreamProxyURL), not a new one. Fail SAFE: an
+// unconfigured ref, an unresolvable secret, or a non-http URL all return ""
+// (direct egress, today's behavior) plus an audit event; none of them fail the
+// run or crash dispatch. Extracted verbatim from dispatchWithVerify.
+func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
+	if siteCfgErr != nil {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+			runID.String(), "failure", mustJSON(map[string]any{"reason": "site-config-read-error"})))
+		return ""
+	}
+	if siteCfg.UpstreamProxySecretRef == "" {
+		return ""
+	}
+	var getSecret func(context.Context, string) ([]byte, error)
+	if s.cfg.Secrets != nil {
+		getSecret = s.cfg.Secrets.Get
+	}
+	resolved, failReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxySecretRef, getSecret)
+	if failReason != "" {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+			runID.String(), "failure", mustJSON(map[string]any{
+				"reason": failReason, "secret_ref": siteCfg.UpstreamProxySecretRef,
+			})))
+		return ""
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+		runID.String(), "success", mustJSON(map[string]any{"secret_ref": siteCfg.UpstreamProxySecretRef})))
+	return resolved
 }
 
 // buildBaseSandboxEnv assembles dispatchWithVerify's baseline non-secret sandbox

@@ -1,0 +1,70 @@
+# golangci-lint configuration — the function-size / complexity gate.
+#
+# SCOPE (deliberate): this gate enforces exactly one review criterion — no more
+# god-functions — via funlen + gocyclo + gocognit, plus a pathological-line
+# guard (lll). It is NOT the general linter suite: correctness/style linting is
+# covered by `go vet` (both tag sets) and staticcheck in `make lint` /
+# release-check. Do not enable broad defaults here without cleaning the tree
+# under them first.
+#
+# THRESHOLDS (measured against the whole repo at introduction, 2026-07-16, so
+# the gate lands GREEN at HEAD — they are ratchets, not aspirations):
+#   funlen lines=150 (ignore-comments): the largest legitimate remaining
+#     function measures 141 non-comment lines; the next offenders above 150 are
+#     the three explicitly //nolint'd long-but-linear functions. New code has no
+#     business beating the worst of the cleaned-up tree.
+#   funlen statements=100: same shape — worst passing function has ~89.
+#   gocyclo 30: golangci's historical default; everything except the two
+#     //nolint'd pipeline/status functions is ≤30.
+#   gocognit 60 (2x the common 30): only the //nolint'd setup-status checklist
+#     exceeds it. Tightening to 30 today would demand ~13 refactors out of scope.
+#   lll 350: catches runaway generated-style lines while tolerating this repo's
+#     documented-flag style (long flag usage strings are excluded below).
+#
+# Every //nolint for these linters must carry a reason. Current justified set
+# (grep '//nolint:funlen'): api.handleSetupStatus, api.runComposePipeline,
+# docker.CreateSandbox.
+version: "2"
+
+run:
+  # Lint the shipped build too: the docker-tagged tree (runner/docker, envbuild)
+  # is production code and must meet the same bar.
+  build-tags:
+    - docker
+
+linters:
+  default: none
+  enable:
+    - funlen
+    - gocyclo
+    - gocognit
+    - lll
+  settings:
+    funlen:
+      lines: 150
+      statements: 100
+      # Count code, not documentation: this repo deliberately carries heavy
+      # rationale comments, and the gate must never punish explaining a decision.
+      ignore-comments: true
+    gocyclo:
+      min-complexity: 30
+    gocognit:
+      min-complexity: 60
+    lll:
+      line-length: 350
+  exclusions:
+    # Skip generated files (none in-tree today; future-proofing).
+    generated: lax
+    rules:
+      # Test functions legitimately enumerate long case tables.
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocyclo
+          - gocognit
+          - lll
+      # Flag declarations carry the operator-facing documentation in their usage
+      # string; wrapping those strings would break `-help` output readability.
+      - linters:
+          - lll
+        source: 'flag(Env|Bool|Duration)\('

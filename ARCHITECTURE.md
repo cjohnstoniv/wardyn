@@ -329,3 +329,43 @@ sandbox itself.
 There is no Kubernetes runner driver yet (**[v0.5 — planned]**); a feature is
 not done on Kubernetes until a real driver passes conformance against a live
 cluster.
+
+## Large files (the 1000-line allowlist)
+
+Function size and complexity are gated by `.golangci.yml`
+(funlen/gocyclo/gocognit/lll) and file size by `scripts/check-file-size.sh`
+(both run in `make lint`): no new non-test `.go` file may exceed 1000 lines,
+and no new function may exceed the funlen/complexity thresholds without an
+inline `//nolint` carrying a real reason. Six pre-existing files sit above
+1000 lines on a frozen allowlist (they may shrink freely; material growth
+fails the gate). Why each is cohesive enough to keep for now:
+
+- `internal/api/compose.go` (~1.26k) — the AI Run Composer pipeline: compose →
+  risk grading → ceiling reconciliation → review payload. The stage ORDER is a
+  security contract; the stages already live in helpers and the file is the one
+  audit surface for the sequence. Split candidate: move the reconcile helpers
+  out once the composer API stabilizes.
+- `internal/workspacescan/detect.go` (~1.24k) — the deterministic workspace
+  scanner's detection tables: per-ecosystem filename/content rules and derived
+  setup commands. It is long because the ecosystem TABLE is long, not because
+  the logic branches; splitting per-ecosystem would scatter one table across
+  files.
+- `internal/runner/docker/driver.go` (~1.14k) — the Docker sandbox driver:
+  network, proxy sidecar, hardening, mounts, lifecycle against one client. One
+  driver, one file mirrors the planned k8s driver layout; the hardening
+  specifics already live in `hardening.go`.
+- `internal/api/workspace_run.go` (~1.09k) — the workspace scan/record/verify
+  run launchers, which share sandbox-launch plumbing deliberately kept private
+  to this file rather than exported.
+- `internal/api/setup.go` (~1.03k) — GET/POST setup: the first-run readiness
+  checklist. `handleSetupStatus` is the one intentionally long checklist
+  function (see its `//nolint`); the file is that checklist plus its helpers.
+- `internal/store/store.go` (~1.0k) — the Postgres store: one method per query
+  for every noun. Pure repetitive CRUD with near-zero branching; splitting by
+  noun is the obvious refactor when it next grows (the cap forces that
+  conversation).
+
+The former top-two god-files were decomposed instead of allowlisted:
+`cmd/wardynd/main.go` boot phases now live in `boot_flags.go` / `boot_deps.go`
+/ `boot_serve.go`, and `internal/api/runs_dispatch.go`'s LLM-transport phases
+in `runs_dispatch_llm.go` (both files are now under the threshold).

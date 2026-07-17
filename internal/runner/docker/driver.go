@@ -262,6 +262,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 // CreateSandbox provisions the per-run network, the wardyn-proxy sidecar, and
 // the agent container with L0 confinement. Order matters for fail-closed
 // teardown: anything created before an error is rolled back.
+//nolint:funlen // Deliberate: a single linear container-assembly sequence (network → proxy sidecar → hardening → mounts → sandbox container) whose teardown-on-failure compensations must stay in one scope to be verifiably complete; low branching (passes gocyclo/gocognit), just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
