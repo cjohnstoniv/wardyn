@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"testing"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // exitCodeFor is the process-exit taxonomy CI branches on. These pin each
@@ -16,7 +18,7 @@ import (
 // by status class, then a transport (*url.Error) failure, then the catch-all.
 
 func TestExitCodeFor_ClientErrorIs3(t *testing.T) {
-	err := &apiError{method: "GET", path: "/x", statusCode: 404, status: "404 Not Found"}
+	err := &sdk.APIError{Status: 404}
 	if got := exitCodeFor(err); got != 3 {
 		t.Errorf("exitCodeFor(404) = %d, want 3", got)
 	}
@@ -27,7 +29,7 @@ func TestExitCodeFor_ClientErrorIs3(t *testing.T) {
 }
 
 func TestExitCodeFor_ServerErrorIs4(t *testing.T) {
-	err := &apiError{method: "POST", path: "/x", statusCode: 503, status: "503 Service Unavailable"}
+	err := &sdk.APIError{Status: 503}
 	if got := exitCodeFor(err); got != 4 {
 		t.Errorf("exitCodeFor(503) = %d, want 4", got)
 	}
@@ -35,7 +37,7 @@ func TestExitCodeFor_ServerErrorIs4(t *testing.T) {
 
 func TestExitCodeFor_AuthIs2(t *testing.T) {
 	for _, code := range []int{401, 403} {
-		err := &apiError{method: "GET", path: "/x", statusCode: code}
+		err := &sdk.APIError{Status: code}
 		if got := exitCodeFor(err); got != 2 {
 			t.Errorf("exitCodeFor(%d) = %d, want 2", code, got)
 		}
@@ -46,8 +48,8 @@ func TestExitCodeFor_NetworkUnreachableIs5(t *testing.T) {
 	// A real refused connection: the client's transport returns a *url.Error,
 	// which do() wraps — exitCodeFor must still see it via errors.As. Port 1 on
 	// loopback refuses immediately (no timeout wait).
-	c := &apiClient{baseURL: "http://127.0.0.1:1"}
-	_, err := c.listRuns(context.Background())
+	c := &sdk.Client{BaseURL: "http://127.0.0.1:1"}
+	_, err := c.ListRuns(context.Background())
 	if err == nil {
 		t.Fatal("expected a transport error dialing 127.0.0.1:1, got nil")
 	}
@@ -63,7 +65,7 @@ func TestExitCodeFor_NetworkUnreachableIs5(t *testing.T) {
 func TestExitCodeFor_ExitErrorWins(t *testing.T) {
 	// An *exitError wrapping an API 500 must yield the exitError's code, NOT the
 	// apiError's server-class 4 — the run outcome from --wait always wins.
-	err := &exitError{code: 42, err: &apiError{statusCode: 500}}
+	err := &exitError{code: 42, err: &sdk.APIError{Status: 500}}
 	if got := exitCodeFor(err); got != 42 {
 		t.Errorf("exitCodeFor(exitError over apiError) = %d, want 42 (exitError wins)", got)
 	}

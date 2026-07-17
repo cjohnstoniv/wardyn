@@ -15,7 +15,7 @@ import (
 // secretCmd manages named secrets in the control plane's store. Values are
 // write-only: the API never returns them (reads happen only inside the broker
 // and the proxy injection-resolve path, both audited).
-func secretCmd(client func() *apiClient) *cobra.Command {
+func secretCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secret",
 		Short: "Manage platform secrets (write-only; values are never readable back)",
@@ -43,7 +43,7 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 			if v == "" {
 				return fmt.Errorf("empty secret value")
 			}
-			if err := client().putSecret(cmd.Context(), args[0], v); err != nil {
+			if err := client().SetSecret(cmd.Context(), args[0], v); err != nil {
 				return err
 			}
 			fmt.Printf("secret %q stored\n", args[0])
@@ -59,7 +59,7 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 		Short:   "List secret names (never values)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			names, err := client().listSecrets(cmd.Context())
+			names, err := client().ListSecrets(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -80,7 +80,7 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 		Short:   "Delete a secret",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := client().deleteSecret(cmd.Context(), args[0]); err != nil {
+			if err := client().DeleteSecret(cmd.Context(), args[0]); err != nil {
 				return err
 			}
 			fmt.Printf("secret %q deleted\n", args[0])

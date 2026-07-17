@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // These tests drive the real cobra command tree built by rootCmd() end to end:
@@ -464,13 +465,15 @@ func TestApproveCmd_PostsApproveWithReason(t *testing.T) {
 		ID: uuid.New(), State: types.ApprovalApproved,
 	})
 
-	err := execCmd(t, "approve", "ap-42", "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
+	apID := uuid.New()
+	err := execCmd(t, "approve", apID.String(), "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
 	if err != nil {
 		t.Fatalf("approve returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodPost || got.path != "/api/v1/approvals/ap-42/approve" {
-		t.Errorf("got %s %s, want POST /api/v1/approvals/ap-42/approve", got.method, got.path)
+	want := "/api/v1/approvals/" + apID.String() + "/approve"
+	if got.method != http.MethodPost || got.path != want {
+		t.Errorf("got %s %s, want POST %s", got.method, got.path, want)
 	}
 	var body map[string]any
 	_ = json.Unmarshal(got.body, &body)
@@ -484,12 +487,14 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 		ID: uuid.New(), State: types.ApprovalDenied,
 	})
 
-	if err := execCmd(t, "deny", "ap-7", "--url", srv.URL, "--token", "tok"); err != nil {
+	apID := uuid.New()
+	if err := execCmd(t, "deny", apID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("deny returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodPost || got.path != "/api/v1/approvals/ap-7/deny" {
-		t.Errorf("got %s %s, want POST /api/v1/approvals/ap-7/deny", got.method, got.path)
+	want := "/api/v1/approvals/" + apID.String() + "/deny"
+	if got.method != http.MethodPost || got.path != want {
+		t.Errorf("got %s %s, want POST %s", got.method, got.path, want)
 	}
 }
 
@@ -507,15 +512,16 @@ func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
 func TestAuditCmd_BuildsQuery(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
 
-	if err := execCmd(t, "audit", "--run", "run-55", "--url", srv.URL, "--token", "tok"); err != nil {
+	runID := uuid.New()
+	if err := execCmd(t, "audit", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("audit returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodGet || got.path != "/api/v1/audit" {
 		t.Errorf("got %s %s, want GET /api/v1/audit", got.method, got.path)
 	}
-	if got.query != "run_id=run-55" {
-		t.Errorf("query = %q, want run_id=run-55", got.query)
+	if got.query != "run_id="+runID.String() {
+		t.Errorf("query = %q, want run_id=%s", got.query, runID)
 	}
 }
 
@@ -543,14 +549,35 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestKillCmd(t *testing.T) {
-	srv := newCmdServer(t, http.StatusAccepted, nil)
+	// KillRun replies with a JSON body (id + final state), which the SDK decodes;
+	// an empty 202 body would leave the decode a no-op, so return a real one.
+	runID := uuid.New()
+	srv := newCmdServer(t, http.StatusAccepted, map[string]any{"id": runID, "state": types.RunKilled})
 
-	if err := execCmd(t, "run", "kill", "run-77", "--url", srv.URL, "--token", "tok"); err != nil {
+	if err := execCmd(t, "run", "kill", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("run kill returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodPost || got.path != "/api/v1/runs/run-77/kill" {
-		t.Errorf("got %s %s, want POST /api/v1/runs/run-77/kill", got.method, got.path)
+	want := "/api/v1/runs/" + runID.String() + "/kill"
+	if got.method != http.MethodPost || got.path != want {
+		t.Errorf("got %s %s, want POST %s", got.method, got.path, want)
+	}
+}
+
+// A non-UUID run id is rejected client-side before any request (the SDK's typed
+// path takes a uuid.UUID; the CLI parses the positional arg up front).
+func TestKillCmd_RejectsNonUUID(t *testing.T) {
+	srv := newCmdServer(t, http.StatusAccepted, nil)
+
+	err := execCmd(t, "run", "kill", "run-77", "--url", srv.URL, "--token", "tok")
+	if err == nil || !strings.Contains(err.Error(), "invalid run id") {
+		t.Fatalf("err = %v, want a client-side invalid-run-id error", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (parse must short-circuit)", n)
 	}
 }
 
@@ -627,24 +654,28 @@ func TestPolicyListCmd(t *testing.T) {
 func TestPolicyGetCmd(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "p"})
 
-	if err := execCmd(t, "policy", "get", "p-1", "--url", srv.URL, "--token", "tok"); err != nil {
+	polID := uuid.New()
+	if err := execCmd(t, "policy", "get", polID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("policy get returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodGet || got.path != "/api/v1/policies/p-1" {
-		t.Errorf("got %s %s, want GET /api/v1/policies/p-1", got.method, got.path)
+	want := "/api/v1/policies/" + polID.String()
+	if got.method != http.MethodGet || got.path != want {
+		t.Errorf("got %s %s, want GET %s", got.method, got.path, want)
 	}
 }
 
 func TestPolicyDeleteCmd(t *testing.T) {
 	srv := newCmdServer(t, http.StatusNoContent, nil)
 
-	if err := execCmd(t, "policy", "delete", "p-3", "--url", srv.URL, "--token", "tok"); err != nil {
+	polID := uuid.New()
+	if err := execCmd(t, "policy", "delete", polID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("policy delete returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodDelete || got.path != "/api/v1/policies/p-3" {
-		t.Errorf("got %s %s, want DELETE /api/v1/policies/p-3", got.method, got.path)
+	want := "/api/v1/policies/" + polID.String()
+	if got.method != http.MethodDelete || got.path != want {
+		t.Errorf("got %s %s, want DELETE %s", got.method, got.path, want)
 	}
 }
 
@@ -684,12 +715,14 @@ func TestPolicyUpdateCmd_NameOverride(t *testing.T) {
 	// A bare spec (no top-level "name"); --name must supply it.
 	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
 
-	if err := execCmd(t, "policy", "update", "p-2", "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"); err != nil {
+	polID := uuid.New()
+	if err := execCmd(t, "policy", "update", polID.String(), "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("policy update returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodPut || got.path != "/api/v1/policies/p-2" {
-		t.Errorf("got %s %s, want PUT /api/v1/policies/p-2", got.method, got.path)
+	want := "/api/v1/policies/" + polID.String()
+	if got.method != http.MethodPut || got.path != want {
+		t.Errorf("got %s %s, want PUT %s", got.method, got.path, want)
 	}
 	var body map[string]any
 	_ = json.Unmarshal(got.body, &body)
@@ -866,14 +899,16 @@ func TestSecretListCmd_JSON(t *testing.T) {
 }
 
 func TestRecordSynthesizeCmd_JSON(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, profileResp{OverallRisk: "low"})
+	srv := newCmdServer(t, http.StatusOK, sdk.ProfileResult{OverallRisk: "low"})
 
-	if err := execCmd(t, "record", "synthesize", "run-9", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+	runID := uuid.New()
+	if err := execCmd(t, "record", "synthesize", runID.String(), "--json", "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("record synthesize --json returned error: %v", err)
 	}
 	got := srv.last()
-	if got.method != http.MethodPost || got.path != "/api/v1/runs/run-9/profile" {
-		t.Errorf("got %s %s, want POST /api/v1/runs/run-9/profile", got.method, got.path)
+	want := "/api/v1/runs/" + runID.String() + "/profile"
+	if got.method != http.MethodPost || got.path != want {
+		t.Errorf("got %s %s, want POST %s", got.method, got.path, want)
 	}
 }
 
@@ -945,9 +980,9 @@ func TestSecretDeleteCmd(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestRecordSaveCmd_RequiresName(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, profileResp{})
+	srv := newCmdServer(t, http.StatusOK, sdk.ProfileResult{})
 
-	err := execCmd(t, "record", "save", "run-1", "--url", srv.URL, "--token", "tok")
+	err := execCmd(t, "record", "save", uuid.New().String(), "--url", srv.URL, "--token", "tok")
 	if err == nil {
 		t.Fatal("expected error when --name is missing, got nil")
 	}

@@ -18,6 +18,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // attachCmd returns the cobra command for `wardyn attach <run-id>`.
@@ -57,12 +59,12 @@ Authentication: WARDYN_ADMIN_TOKEN (or --token).
 //  3. Switches stdin to raw mode (deferred restore).
 //  4. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
 //  5. Runs the bidirectional pump until disconnect/EOF/Ctrl-C.
-func runAttach(ctx context.Context, c *apiClient, runID string) error {
-	wsURL := buildWSURL(c.baseURL, runID)
+func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
+	wsURL := buildWSURL(c.BaseURL, runID)
 
 	// Dial the WebSocket with the bearer token in the HTTP Upgrade header, when
-	// one is configured (mirrors apiClient.do: local host-mode deployments run
-	// without a token, so an empty token is not a client-side error here either
+	// one is configured (mirrors pkg/client.Client.do: local host-mode deployments
+	// run without a token, so an empty token is not a client-side error here either
 	// — let the server's 401 be the signal if auth is actually required).
 	// InsecureSkipVerify is intentionally NOT set on the client — the CLI is a
 	// CLI-origin connection (not a browser), but we still want TLS validation
@@ -70,8 +72,8 @@ func runAttach(ctx context.Context, c *apiClient, runID string) error {
 	// clients (no Origin header in the dial) so the accept will succeed as long as
 	// the token is valid.
 	var hdr http.Header
-	if c.token != "" {
-		hdr = http.Header{"Authorization": []string{"Bearer " + c.token}}
+	if c.Token != "" {
+		hdr = http.Header{"Authorization": []string{"Bearer " + c.Token}}
 	}
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: hdr,
