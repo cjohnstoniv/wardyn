@@ -35,8 +35,25 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
+		if hint := dialHint(err); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		}
 		os.Exit(exitCodeFor(err))
 	}
+}
+
+// dialHint returns a first-contact recovery line when err is a transport
+// failure reaching the daemon (a *url.Error — the same class exitCodeFor maps to
+// 5: connection refused, timeout, no-such-host), else "". A typed API error means
+// we did reach wardynd, so it gets no hint.
+// ponytail: keys on the whole *url.Error transport class, not just ECONNREFUSED —
+// any failure to reach the daemon deserves the same "is wardynd running?" nudge.
+func dialHint(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return "is wardynd running? (start it with `make setup` or `wardyn setup`; point the CLI elsewhere with --url or WARDYN_URL)"
+	}
+	return ""
 }
 
 // exitCodeFor maps an error to a process exit code CI can branch on. A run
