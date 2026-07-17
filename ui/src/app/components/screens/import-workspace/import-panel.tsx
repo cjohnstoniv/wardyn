@@ -698,7 +698,7 @@ function ScanPane({
             : "Reading committed files — detecting languages, package managers, declared secret names (never values), and the egress hosts a build would need."}
         </p>
         {isRepo && (
-          <p className="text-[11px] text-muted-foreground/80">
+          <p className="text-[11px] text-muted-foreground">
             Runs as a real confined run — watch it in <span className="font-medium">Runs</span>, or it clears
             here the moment it finishes.
           </p>

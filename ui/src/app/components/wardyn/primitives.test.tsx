@@ -115,10 +115,17 @@ describe("ConfinementChip tooltip honesty", () => {
     }
   });
 
-  it("exposes the tooltip to assistive tech as sr-only text, not just the title attr (U116)", () => {
-    const { container } = render(<ConfinementChip value="CC1" />);
+  it("keeps the internal wire class in the tooltip ONLY, never in accessible content (D4)", () => {
+    const { container } = render(<ConfinementChip value="CC2" />);
+    // The tooltip carries the mechanism + internal class for a sighted power-user's hover…
     const title = container.querySelector("[title]")?.getAttribute("title") ?? "";
-    expect(title).not.toBe("");
-    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(title).toMatch(/CC2/);
+    // …but the wire code must NEVER reach accessible content — no sr-only twin,
+    // no aria-label leak. A screen reader reads the DOM text (the visible label),
+    // and getByText / textContent must not surface the internal class or mechanism.
+    expect(container.textContent).not.toMatch(/\bCC[123]\b/);
+    expect(container.textContent).not.toMatch(/gVisor|runc|Kata/i);
+    // The visible barrier label IS the accessible name.
+    expect(screen.getByText(/Fence|Wall|Vault/)).toBeInTheDocument();
   });
 });

@@ -212,7 +212,7 @@ export function RunDetailScreen() {
         <Link to="/runs" className="text-muted-foreground hover:text-foreground hover:underline">
           Runs
         </Link>
-        <ChevronRight className="size-3.5 text-muted-foreground/60" />
+        <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
         <Mono className="text-foreground" title={id}>
           {shortId}
         </Mono>
@@ -547,7 +547,7 @@ function OverviewTab({
                   <span className="min-w-0 truncate font-mono text-muted-foreground" title={e.domain}>
                     {e.domain}
                   </span>
-                  <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground/70">
+                  <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground">
                     {relativeTime(e.time)}
                   </span>
                 </div>
@@ -613,7 +613,7 @@ function GrantsCard({ grants, audit }: { grants: CredentialGrant[]; audit: Audit
                 <span className="min-w-0 truncate font-mono text-muted-foreground" title={e.target}>
                   {e.target || "credential"}
                 </span>
-                <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground/70">
+                <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground">
                   {relativeTime(e.time)}
                 </span>
               </div>
@@ -652,7 +652,7 @@ function Timeline({ events }: { events: AuditEvent[] }) {
                   {e.action}
                 </span>
                 <ActorTypeChip type={e.actor_type} />
-                <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground/70">
+                <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground">
                   {new Date(e.time).toLocaleTimeString(undefined, {
                     hour: "2-digit",
                     minute: "2-digit",

@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 // C004: the light-theme (:root) semantic tokens are used as button/badge text
 // (white on them) and as text/dot colors on white + their own -subtle tint, so each
@@ -62,4 +63,30 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       expect(ratio(token(t), subtleBg(t))).toBeGreaterThanOrEqual(4.5);
     });
   }
+
+  it("--muted-foreground text is >= 4.5:1 on white (the borderline body/caption token)", () => {
+    expect(ratio(token("muted-foreground"), WHITE)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // U302: --muted-foreground clears AA at full strength but NOT diluted — a
+  // `text-muted-foreground/70` at 11px composites to ~2.7:1. Forbid the diluted
+  // form on text tokens so a de-emphasis tweak can't silently drop below AA.
+  it("no opacity-diluted muted/foreground text anywhere in src/app (U302)", () => {
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const p = join(dir, e.name);
+        return e.isDirectory() ? walk(p) : p.endsWith(".tsx") ? [p] : [];
+      });
+    const offenders: string[] = [];
+    for (const f of walk("src/app")) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          // Any --muted-foreground dilution drops the borderline 4.74:1 token below
+          // AA. (text-foreground is near-black and safe even diluted, so not forbidden.)
+          if (/text-muted-foreground\/[0-9]0/.test(ln)) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(offenders, `diluted muted/foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
+  });
 });
