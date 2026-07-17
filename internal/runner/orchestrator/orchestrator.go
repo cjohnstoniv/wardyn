@@ -15,11 +15,28 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// capsCacheTTL bounds how long a substrate's ClassSupport is memoized. Host
+// capabilities (installed runtimes) change only on daemon restart or a runtime
+// install, but Capabilities()/substrateFor() were recomputing them on ~8 hot
+// HTTP paths (incl. /healthz) — a full docker Info() round-trip each. A few
+// seconds of staleness is harmless here and collapses the repeated round-trips
+// to at most one per substrate per TTL. CreateSandbox keeps its own live
+// provision-time Info() (driver-level), so nothing that needs fresh runtime
+// data reads through this cache.
+const capsCacheTTL = 5 * time.Second
+
+// cachedClasses is a substrate's ClassSupport plus when it was fetched.
+type cachedClasses struct {
+	val substrate.ClassSupport
+	at  time.Time
+}
 
 // RefStore is the durable ref->substrate mapping seam. Substrates are persisted
 // by NAME (a substrate object is not serialisable); GetRef tolerates missing
@@ -46,6 +63,14 @@ type Orchestrator struct {
 	// byRef maps a sandbox ref to the substrate that created it, so lifecycle
 	// ops (Exec/Wait/Attach/Status/Stop/Kill) route to the right substrate.
 	byRef map[string]substrate.Substrate
+
+	// capsMu guards classCache. It is SEPARATE from mu so a slow/wedged daemon
+	// probe (held outside the lock, see classesFor) never blocks byRef routing or
+	// the kill switch.
+	capsMu     sync.Mutex
+	classCache map[string]cachedClasses // substrate name -> memoized ClassSupport
+	// now is the clock (overridable in tests to exercise TTL expiry).
+	now func() time.Time
 }
 
 var _ runner.Runner = (*Orchestrator)(nil)
@@ -53,7 +78,37 @@ var _ runner.Runner = (*Orchestrator)(nil)
 // New constructs an Orchestrator over the given substrates (at least one). With
 // a single substrate it is a thin pass-through; with several it routes by class.
 func New(substrates ...substrate.Substrate) *Orchestrator {
-	return &Orchestrator{substrates: substrates, byRef: make(map[string]substrate.Substrate)}
+	return &Orchestrator{
+		substrates: substrates,
+		byRef:      make(map[string]substrate.Substrate),
+		classCache: make(map[string]cachedClasses),
+		now:        time.Now,
+	}
+}
+
+// classesFor returns a substrate's ClassSupport, served from a short-TTL cache
+// when fresh so repeated Capabilities()/substrateFor() calls collapse to at most
+// one daemon round-trip per substrate per TTL. The daemon probe runs OUTSIDE
+// capsMu (a wedged daemon must not block other cache readers or byRef routing),
+// and errors are NEVER cached — an unhealthy substrate re-probes next call and
+// fail-closed selection semantics are unchanged.
+func (o *Orchestrator) classesFor(ctx context.Context, s substrate.Substrate) (substrate.ClassSupport, error) {
+	name := s.Name()
+	o.capsMu.Lock()
+	if e, ok := o.classCache[name]; ok && o.now().Sub(e.at) < capsCacheTTL {
+		o.capsMu.Unlock()
+		return e.val, nil
+	}
+	o.capsMu.Unlock()
+
+	cs, err := s.Classes(ctx)
+	if err != nil {
+		return substrate.ClassSupport{}, err
+	}
+	o.capsMu.Lock()
+	o.classCache[name] = cachedClasses{val: cs, at: o.now()}
+	o.capsMu.Unlock()
+	return cs, nil
 }
 
 // WithRefStore wires a durable RefStore (chainable, call before serving
@@ -84,7 +139,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
 	for _, s := range o.substrates {
-		cs, err := s.Classes(ctx)
+		cs, err := o.classesFor(ctx, s)
 		if err != nil {
 			return runner.Capabilities{}, fmt.Errorf("orchestrator: %s classes: %w", s.Name(), err)
 		}
@@ -144,7 +199,7 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 func (o *Orchestrator) substrateFor(ctx context.Context, class types.ConfinementClass) (substrate.Substrate, error) {
 	var probeErrs []error
 	for _, s := range o.substrates {
-		cs, err := s.Classes(ctx)
+		cs, err := o.classesFor(ctx, s)
 		if err != nil {
 			// A substrate that can't report capabilities can't be selected, but
 			// RETAIN the cause so a real probe failure (e.g. "docker: info:

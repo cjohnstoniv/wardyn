@@ -444,6 +444,13 @@ func (s *Server) routes() chi.Router {
 			// long-lived subscription token so Wardyn injects it proxy-side into
 			// every run (compose-mode subscription without a host ~/.claude).
 			// Secret store required (the token is stored age-encrypted).
+			//
+			// RBAC caveat (same as policy/workspace below): these sit in the
+			// humanOrAdminAuth group, which is AUTHENTICATION only — dedicated
+			// admin-role gating is planned, so today ANY authenticated human in
+			// OIDC mode (not just an admin) can connect/disconnect the shared
+			// managed subscription every run inherits. Every connect/disconnect is
+			// audited (harness.credential.captured/disconnected).
 			if s.cfg.Secrets != nil {
 				r.Post("/setup/harness-login", s.handleHarnessLogin)
 				r.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
@@ -514,6 +521,13 @@ func (s *Server) routes() chi.Router {
 			// overrides, default SCM hosts). GET/PUT only — there is exactly one
 			// config row; every write is validated (SSRF/injection hardening on
 			// the URL/host fields) and audited (site_config.write).
+			//
+			// RBAC caveat (same as policy/workspace above): this is in the
+			// humanOrAdminAuth group — AUTHENTICATION only, no admin-role gate yet
+			// (planned), so today ANY authenticated human in OIDC mode can CRUD it,
+			// not just admins. Blast radius is corp-wide (this baseline feeds every
+			// run's upstream proxy / artifact mirror / SCM hosts) — arguably higher
+			// than a single policy — so the missing role gate matters most here.
 			r.Get("/site-config", s.handleGetSiteConfig)
 			r.Put("/site-config", s.handlePutSiteConfig)
 

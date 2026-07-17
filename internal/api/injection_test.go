@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -16,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -33,7 +33,9 @@ func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
 func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
 	v, ok := s.m[name]
 	if !ok {
-		return nil, errors.New("not found")
+		// Honor the store contract: absent == ErrNotFound (a real Store wraps this
+		// so callers can tell "never stored" from a backend failure).
+		return nil, secretstore.ErrNotFound
 	}
 	return v, nil
 }
