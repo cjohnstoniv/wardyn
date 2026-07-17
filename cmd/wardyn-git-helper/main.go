@@ -93,6 +93,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 )
 
 const (
@@ -238,13 +240,9 @@ func runGet(secretFile string, stdin io.Reader, stdout, stderr io.Writer) error 
 		return nil
 	}
 
-	timeoutStr := os.Getenv("WARDYN_APPROVAL_TIMEOUT")
-	approvalTimeout := defaultApprovalTimeout
-	if timeoutStr != "" {
-		if d, err := time.ParseDuration(timeoutStr); err == nil {
-			approvalTimeout = d
-		}
-	}
+	// EnvDuration, not a bare ParseDuration: a typo'd interval (e.g. "30" with
+	// no unit) must fail loud at exit 2, not silently keep the default.
+	approvalTimeout := cliutil.EnvDuration("WARDYN_APPROVAL_TIMEOUT", defaultApprovalTimeout)
 
 	// Direct transport: ignore HTTP_PROXY env — the proxy address is a known
 	// on-segment address, never accessed through another proxy.

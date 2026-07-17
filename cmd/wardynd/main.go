@@ -582,7 +582,11 @@ func run() error {
 		)
 		subToken = nil
 	}
-	disableSubInject := strings.EqualFold(strings.TrimSpace(os.Getenv("WARDYN_SUBSCRIPTION_INJECT")), "off")
+	// Default ON: unset (and the compose ${…:-off} passthrough when actually set
+	// to a truthy) injects proxy-side. off/0/false/no disable it; garbage exits 2
+	// via EnvBool rather than silently staying ON. (Previously only the literal
+	// "off" disabled; 0/false/no silently left injection ON — the security gap.)
+	disableSubInject := !cliutil.EnvBool("WARDYN_SUBSCRIPTION_INJECT", true)
 
 	// Managed subscription token: a long-lived `claude setup-token` captured via
 	// the container-login flow and stored age-encrypted. Serves subscription runs

@@ -53,12 +53,22 @@ func main() {
 	// deploy path (compose/Helm do not propagate it from a central config), so
 	// it is NOT a fleet-wide kill-switch today; an operator would need to set
 	// this env on every sidecar individually.
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))) {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))); v {
 	case "off", "0", "false", "no", "disable", "disabled", "none":
 		if cfg.Policy.LLMInspection != nil {
 			slog.Info("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
 			cfg.Policy.LLMInspection = nil
 		}
+	case "", "on", "1", "true", "yes", "enable", "enabled":
+		// Unset or an explicit "leave as policy" token: the switch only DISABLES,
+		// so these are a no-op — inspection stays exactly as the policy authorizes.
+	default:
+		// A value that is neither a disable token nor an enable token states no
+		// intent this kill-switch can honor. Fail loud rather than silently
+		// ignore it (the operator may have typo'd "of" and think scanning is off).
+		slog.Error("wardyn-proxy: WARDYN_LLM_SCAN has an unrecognized value; want off/0/false/no/disable to disable, or on/1/true/yes to leave as policy",
+			slog.String("value", v))
+		os.Exit(2)
 	}
 
 	// Startup mint of injection credentials is bounded: fail closed if the
