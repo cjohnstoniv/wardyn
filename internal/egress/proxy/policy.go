@@ -115,11 +115,6 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 // deny_with_review / wait_for_review), normalized (never empty).
 func (p *Policy) FirstUseMode() types.FirstUseMode { return p.firstUse }
 
-// FirstUseApproval reports whether unknown domains escalate to approval (either
-// review mode). Retained as a convenience for callers that only need the
-// boolean "does this raise an approval" answer.
-func (p *Policy) FirstUseApproval() bool { return p.firstUse.RaisesApproval() }
-
 // builtinEvaluator is the default egress.Evaluator: it wraps the compiled
 // RunPolicySpec Policy. It decides only the host verdict + method; the proxy
 // keeps the IP guard, approval FSM, IP vetting, and injection hardwired.

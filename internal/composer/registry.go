@@ -86,16 +86,27 @@ func NewRegistry(def string, entries []RegistryEntry) (*Registry, error) {
 	return r, nil
 }
 
-// Propose runs the named backend ("" = the configured default). It returns
-// ErrUnknownBackend (wrapped) when the name is not configured.
-func (r *Registry) Propose(ctx context.Context, backend string, req ComposeRequest) (Proposal, error) {
+// resolve maps a request backend name ("" = the configured default) to its
+// Composer, returning ErrUnknownBackend (wrapped, with the resolved name) when
+// the name is not configured. Shared by Propose/Clarify/Assist.
+func (r *Registry) resolve(backend string) (Composer, error) {
 	name := backend
 	if name == "" {
 		name = r.def
 	}
 	c, ok := r.backends[name]
 	if !ok {
-		return Proposal{}, fmt.Errorf("%w: %q", ErrUnknownBackend, name)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownBackend, name)
+	}
+	return c, nil
+}
+
+// Propose runs the named backend ("" = the configured default). It returns
+// ErrUnknownBackend (wrapped) when the name is not configured.
+func (r *Registry) Propose(ctx context.Context, backend string, req ComposeRequest) (Proposal, error) {
+	c, err := r.resolve(backend)
+	if err != nil {
+		return Proposal{}, err
 	}
 	return c.Propose(ctx, req)
 }
@@ -104,13 +115,9 @@ func (r *Registry) Propose(ctx context.Context, backend string, req ComposeReque
 // that does not implement Clarifier degrades to Clarification{Ready:true} (no
 // questions — straight to Propose). Returns ErrUnknownBackend for an unknown name.
 func (r *Registry) Clarify(ctx context.Context, backend string, req ComposeRequest) (Clarification, error) {
-	name := backend
-	if name == "" {
-		name = r.def
-	}
-	c, ok := r.backends[name]
-	if !ok {
-		return Clarification{}, fmt.Errorf("%w: %q", ErrUnknownBackend, name)
+	c, err := r.resolve(backend)
+	if err != nil {
+		return Clarification{}, err
 	}
 	// Optional capability: a backend that can't interview is treated as ready.
 	if cl, ok := c.(Clarifier); ok {
@@ -151,13 +158,9 @@ func AssistUserMessage(req ComposeRequest, question string) string {
 // error). Returns ErrUnknownBackend for an unknown name. The answer carries NO
 // authority: it is never re-graded, clamped, or fed back into the pipeline.
 func (r *Registry) Assist(ctx context.Context, backend string, req ComposeRequest, question string) (string, error) {
-	name := backend
-	if name == "" {
-		name = r.def
-	}
-	c, ok := r.backends[name]
-	if !ok {
-		return "", fmt.Errorf("%w: %q", ErrUnknownBackend, name)
+	c, err := r.resolve(backend)
+	if err != nil {
+		return "", err
 	}
 	// Optional capability: a backend that can't explain degrades to a friendly
 	// advisory string (mirrors Clarify's degrade), never an error.
