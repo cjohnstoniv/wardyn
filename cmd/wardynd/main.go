@@ -129,7 +129,7 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, pool, maskReg)
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, pool, maskReg)
 	if err != nil {
 		return err
 	}
@@ -217,11 +217,16 @@ func run() error {
 	}
 
 	srv := api.New(api.Config{
-		Store:                     store.NewPG(pool),
-		Identity:                  idp,
-		Approvals:                 approvals,
-		Broker:                    brk,
-		Audit:                     maskedRec,
+		Store:     store.NewPG(pool),
+		Identity:  idp,
+		Approvals: approvals,
+		Broker:    brk,
+		Audit:     maskedRec,
+		// U094: hand the raw spool + raw store recorder to the server so it starts
+		// the background drain that replays spooled events back into the store once
+		// PG recovers (both nil when no spool is configured => drain is a no-op).
+		AuditSpool:                auditSpool,
+		AuditDrainRecorder:        auditDrainRec,
 		Runner:                    run,
 		AdminToken:                *f.adminToken,
 		LocalMode:                 lm.enabled,
