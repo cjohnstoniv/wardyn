@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -713,7 +713,8 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
 			// Configured to inspect but the effective secret corpus is empty —
 			// scanning is a no-op. Surface it so the operator is not misled.
-			log.Printf("wardyn-proxy: llm_inspection mode=%q but no effective secret corpus — scanning disabled", spec.Mode)
+			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled",
+				slog.String("mode", spec.Mode))
 		}
 	}
 
@@ -730,7 +731,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 			_ = sink.close(context.Background())
 			return nil, fmt.Errorf("build mitm CA: %w", err)
 		}
-		log.Printf("wardyn-proxy: TLS-MITM enabled (content inspection and/or subscription credential injection)")
+		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM enabled (content inspection and/or subscription credential injection)")
 	}
 
 	// Upstream/parent corp proxy (optional). Parse+validate; register any
@@ -745,7 +746,8 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		for _, v := range up.maskValues() {
 			procRegistry.AddGlobal(v)
 		}
-		log.Printf("wardyn-proxy: chaining egress through upstream proxy %s (private-IP guard relaxed for this hop; control-plane bypasses it)", up.addr)
+		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
+			slog.String("upstream_addr", up.addr))
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
@@ -767,7 +769,8 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		Upstream:        up,
 	})
 	if ca != nil && len(cfg.MITMHosts) > 0 {
-		log.Printf("wardyn-proxy: TLS-MITM also enabled for %d operator-configured corp artifact host(s) (token injection)", len(cfg.MITMHosts))
+		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
+			slog.Int("host_count", len(cfg.MITMHosts)))
 	}
 
 	srv := &http.Server{
