@@ -200,7 +200,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {
-		s.dispatch(ctx, created, id.Token, image, spec, gw.firstGitHubGrantID, gw.gitPATGrants, gw.sshGrants, gw.injections, req.Interactive, req.TaskMode)
+		s.dispatchRun(ctx, created, dispatchParams{
+			RunToken:           id.Token,
+			Image:              image,
+			Policy:             spec,
+			FirstGitHubGrantID: gw.firstGitHubGrantID,
+			GitPATGrants:       gw.gitPATGrants,
+			SSHGrants:          gw.sshGrants,
+			Injections:         gw.injections,
+			Interactive:        req.Interactive,
+			TaskMode:           req.TaskMode,
+		})
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)
 	}

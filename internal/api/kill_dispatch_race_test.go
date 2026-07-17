@@ -322,8 +322,10 @@ func dispatchRun(runID uuid.UUID) types.AgentRun {
 }
 
 func runDispatch(srv *Server, run types.AgentRun) {
-	srv.dispatch(context.Background(), run, "run-token", "wardyn/claude-code:latest",
-		types.RunPolicySpec{MinConfinementClass: types.CC1}, nil, nil, nil, nil, false, "")
+	srv.dispatchRun(context.Background(), run, dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+	})
 }
 
 // TestKillRun_DispatchSandboxInFlight_TeardownOrdering is the DETERMINISTIC
