@@ -14,10 +14,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' . | grep -v _test.go \
 
 Most `wardynd` / `wardyn-tetragon-ingest` variables are the env form of a CLI
 flag: the flag wins when both are set, and the env value only moves the flag's
-default (`internal/cliutil`). Every parseable read (bool / duration / int) is
-**loud** — an unparseable value exits 2 rather than silently reinstating the
-default. Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default
-quietly.
+default (`internal/cliutil`). Every parseable read through `internal/cliutil`
+(bool / duration / int) is **loud** — an unparseable value exits 2 rather than
+silently reinstating the default. Unset or empty (`docker run -e VAR` / compose
+`VAR=`) keeps the default quietly.
 
 Values that are secrets (tokens, DSNs, keys, base64 blobs) are marked 🔒 — never
 log them.

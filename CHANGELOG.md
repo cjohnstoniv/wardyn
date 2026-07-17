@@ -57,6 +57,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `Kill` for in-flight runs still resolve — previously they failed "no substrate
   tracked for ref", breaking teardown and credential revocation for pre-restart
   runs.
+- **Light theme now meets WCAG AA contrast (C004).** The teal-500-family
+  semantic tokens (primary text, and success/warning/danger text on their
+  `-subtle` tints) fell as low as 1.94:1, below the 4.5:1 floor for normal text;
+  darkened to the 700/800 family (5.47–6.47:1). Dark theme is unchanged.
+- **Keyboard access + ARIA for recordings, table rows, and skip-navigation.**
+  Recording cards and clickable runs/policies table rows are now reachable and
+  activatable by keyboard (Enter/Space), icon-only row-action menus
+  (secrets/workspaces/policies) gained `aria-label`s, a skip-to-content link was
+  added, and copy-to-clipboard only reports "Copied" once the write actually
+  resolves (no false positive on insecure-context/LAN HTTP).
+- **Finalizing a workspace no longer silently drops a live verify/record run's
+  result.** `handleFinalizeWorkspace` marked the workspace ready and cleared its
+  active-run pointer with no liveness check, unlike its verify/record siblings;
+  a still-`RUNNING` verify/record run's later result then 409'd on the cleared
+  pointer, and the workspace was marked ready on zero evidence. It now refuses
+  (409) while the run is live, and the store write behind it is fenced so a run
+  that claims the slot between the guard's read and its write can no longer be
+  clobbered either.
+- **A transient docker-daemon probe error no longer fails a healthy run.** Boot
+  reconcile and the live completion watcher treated any liveness-probe error the
+  same as a genuine terminal state, finalizing a still-`RUNNING` run `FAILED`
+  and revoking its credentials on a momentary blip. Only a definitive terminal
+  state finalizes now; a persistently-unreachable sandbox still gives up, but
+  only after about a minute of consecutive probe errors.
+- **The eBPF/Tetragon ground-truth audit stream no longer goes permanently
+  blind about an hour into a run.** The shipped compose wiring held a single
+  static host-sensor token with nothing to refresh it; `wardynd` now runs a
+  rotator that mints and writes a fresh token before the old one expires.
 
 ### Security
 
@@ -67,6 +95,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   collapsed to a single v88 major, and `GO-2026-5932` (unmaintained
   `x/crypto/openpgp`, reached only via `filippo.io/age`, no called path) is
   documented in `SECURITY.md`.
+- **Credential revocation on the kill/failure paths fixed (C002 + C003).** A
+  kill that lost its terminal-state race to a concurrent dispatch used to
+  already have stripped a run's credentials before knowing whether it actually
+  won — leaving a run that turns out to stay live with dead credentials behind
+  a silent 409; revocation now runs only after the terminal transition is won.
+  Separately, none of the 9 internal create/dispatch `FAILED` transitions ran
+  the revoke cascade, so a run that failed during creation or dispatch left its
+  minted identity token and broker credentials un-revoked; every failure
+  transition now revokes.
+- **A sandbox could no longer escape the workspace via a planted symlink.**
+  `handleFinalizeWorkspace`'s env-as-code emit followed sandbox-planted
+  symlinks out of the workspace directory, letting a compromised sandbox
+  overwrite host files outside it; the emit no longer leaves the workspace.
 
 ## [0.3.0] — 2026-07-14
 

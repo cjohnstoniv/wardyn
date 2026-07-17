@@ -185,10 +185,12 @@ hiding them would repeat the failure mode we are designed to avoid.
    (CONNECT/SNI mode) is domain-frontable. The TLS-MITM tier itself is now
    **shipped**, off by default, opt-in per policy (`intercept_tls`) — see §5.1a
    for the exact contract — but its coverage is bounded: only operator-listed
-   MITM-eligible hosts (LLM hosts today) are intercepted, the full container
-   path is not yet live-validated (proven so far by an in-process test only),
-   and per-workspace ephemeral-CA injection into arbitrary agent images, plus
-   QUIC/UDP/raw-TCP coverage, remain unconfirmed/unbuilt.
+   MITM-eligible hosts (LLM hosts plus any operator-configured corp artifact
+   hosts today — `internal/egress/proxy/mitm.go:145-151`) are intercepted, the
+   full container path is not yet live-validated (proven so far by an
+   in-process test only), and per-workspace ephemeral-CA injection into
+   arbitrary agent images, plus QUIC/UDP/raw-TCP coverage, remain
+   unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual
    channel below the TLS-intercept tier.
@@ -396,10 +398,23 @@ postures:
   inspection extends to the GENERIC plaintext-HTTP forward path (custom connectors)
   and to MCP/JSON-RPC bodies via the generic walker, and operator `classified_markers`
   flag proprietary-content egress. But an **HTTPS** connector tunnels via opaque
-  CONNECT and is **uninspected** unless its host is MITM-eligible — only LLM hosts
-  are MITM'd today, so most non-LLM HTTPS egress remains opaque (a `MITM-all-egress`
-  mode is a deliberate future option, gated on the cert-pinning/non-HTTP-over-443
-  risks). DNS-tunnel/domain-fronting residuals (§5 #2, #3) are unchanged.
+  CONNECT and is **uninspected** unless its host is MITM-eligible — the LLM hosts
+  plus any operator-configured corp artifact hosts are MITM'd today
+  (`internal/egress/proxy/mitm.go:145-151`), so most non-LLM HTTPS egress remains
+  opaque (a `MITM-all-egress` mode is a deliberate future option, gated on the
+  cert-pinning/non-HTTP-over-443 risks). DNS-tunnel/domain-fronting residuals
+  (§5 #2, #3) are unchanged.
+- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** When an
+  operator configures an upstream corp proxy (`p.upstream`, site-config-only —
+  not sandbox- or agent-controlled), the proxy hands the corp proxy the target
+  HOSTNAME rather than a proxy-resolved-and-pinned IP: `VetHost` is skipped for
+  that hop because the corp proxy performs its own outbound DNS+dial, and the
+  sandbox host frequently cannot resolve external names at all
+  (`internal/egress/proxy/proxy.go:370-382`). Policy default-deny and the
+  method/approval checks above it are unaffected, and an agent naming a literal
+  private/loopback/link-local/metadata IP directly is still denied at the
+  earlier literal-IP guard — only the resolved-IP re-check for a *hostname*
+  target is deferred to the operator's own corp proxy for this hop.
 - The optional out-of-process **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: it fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so `block`
@@ -418,11 +433,24 @@ postures:
   proven by an in-process test (agent trusts the CA, handshake + block/alert work),
   but the full container path — the agent image trusting the per-run CA and a real
   subscription handshake through the proxy — is NOT yet live-validated (same posture
-  as the eBPF ground-truth residual #12). **Interactive** runs do not execute
-  `agent-run`, so the CA-install step runs only for batch runs today; an interactive
-  MITM run needs the CA installed by the entrypoint (follow-up). SDK certificate
-  pinning would break MITM (none today); the reverse-proxy API-key route remains the
-  robust default.
+  as the eBPF ground-truth residual #12). **Interactive** runs now install the
+  per-run CA too: the container's main process is `agent-run --idle`
+  (`internal/runner/docker/driver.go:431-434`), which calls the same
+  `install_mitm_ca` batch runs use before holding the container open for attach
+  (`deploy/images/claude-code/agent-run:373-394`, `deploy/images/common/agent-run-lib.sh:25-47`)
+  — so a human driving `claude` in the attach shell trusts the proxy's TLS
+  termination exactly as a batch run does. SDK certificate pinning would break
+  MITM (none today); the reverse-proxy API-key route remains the robust default.
+- **JVM (keystore) and Deno (`DENO_CERT`) trust stores are not wired.**
+  `install_mitm_ca` (`deploy/images/common/agent-run-lib.sh:25-47`) writes the
+  per-run CA for OpenSSL-shaped clients (`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/
+  `CURL_CA_BUNDLE`) and Node (`NODE_EXTRA_CA_CERTS`) — it never imports the CA
+  into a JVM's `cacerts` keystore or sets `DENO_CERT`. A run whose task trusts a
+  MITM'd host through a JVM HTTP client or the Deno runtime fails the TLS
+  handshake to that host (closed-direction failure — a loud error, not a
+  silent trust bypass or leaked credential) rather than succeeding through the
+  intercept. Fixing this needs a per-runtime trust-store import at the same
+  install point, tracked as a follow-up.
 
 ---
 
