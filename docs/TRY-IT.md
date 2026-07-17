@@ -115,7 +115,7 @@ Then:
 ```sh
 export WARDYN_URL=http://localhost:8080 WARDYN_ADMIN_TOKEN=demo-admin-token
 wardyn run --agent claude-code --repo octocat/Hello-World --task "explain this repo"
-wardyn runs list       # watch state
+wardyn run list        # watch state
 wardyn audit --run <id>
 wardyn approve <approval-id> --reason "reviewed scope, looks correct"
 ```
@@ -131,7 +131,7 @@ What you can verify live, even without keys:
 | Approval queue | the Approvals tab; approve/deny and watch the audit trail |
 | Attributed audit | Audit tab: every event carries `actor_type` human/agent/system |
 | Terminal replay | Runs tab → Replay (the recorder captures even failed agent starts) |
-| Kill switch | `wardyn kill <id>` → container gone, run token revoked (401), audit `run.kill` |
+| Kill switch | `wardyn run kill <id>` → container gone, run token revoked (401), audit `run.kill` |
 | Brokered credentials | `docker exec wardyn-agent-<id> sh -c 'printf "protocol=https\nhost=github.com\n\n" \| wardyn-git-helper get'` → raises a credential approval; approving it hits the fail-closed mint (no GitHub App configured) — the whole chain is visible in audit |
 
 ## Level 2 — real Claude Code run (bring an Anthropic API key)

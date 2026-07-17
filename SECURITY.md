@@ -26,7 +26,8 @@ In your report, please include:
   `wardyn-proxy`, `wardyn-rec`, `wardyn-git-helper`, the `wardyn` CLI, or a
   deployment artifact (`deploy/compose`, `deploy/helm`).
 - The version / commit, deployment surface (Docker Compose), and Confinement
-  Class in use (CC1/CC2).
+  Class in use (CC1/CC2/CC3 — CC3/Vault is experimental; see `ARCHITECTURE.md`
+  "Security invariants" #5).
 - A clear description, impact, and the most minimal reproduction you can provide.
 - Which **security invariant** you believe is broken (see `ARCHITECTURE.md`):
   (1) secrets never enter the sandbox, (2) approval mints the credential,

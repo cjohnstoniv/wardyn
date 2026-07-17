@@ -50,14 +50,24 @@ scripts/ci-run.sh
 
 ### Exit codes
 
-`ci-run.sh` propagates `wardyn run --wait`'s exit code:
+`ci-run.sh` propagates `wardyn run --wait`'s exit code. Every `wardyn`
+command shares one taxonomy — codes `2`-`5` classify a failed CLI-to-control-
+plane request itself (auth/client/server/network), independent of what the
+run inside it did:
 
-| Outcome | Exit |
+| Exit | Meaning |
 |---|---|
-| run `COMPLETED` (task/agent exited 0) | `0` |
-| run `FAILED` | the task's real exit code (fallback `1`) |
-| run `KILLED` / `STOPPED` (lifecycle termination, not a task result) | `2` |
-| `--wait` timeout | `124` |
+| `0` | ok — the command succeeded (`run --wait`: the run `COMPLETED`, task/agent exited 0) |
+| `2` | auth — the control plane rejected the request as unauthenticated/unauthorized. **Also** `run --wait`: the run ended `KILLED`, `STOPPED`, or `ARCHIVED` (lifecycle termination, not a task result) |
+| `3` | client-4xx — any other client error (bad request, not found, conflict, ...) |
+| `4` | server-5xx — the control plane returned a server error |
+| `5` | network — couldn't reach the control plane at all (DNS, connection refused, TLS) |
+| `124` | `run --wait` only: the wait timed out before the run reached a terminal state |
+| _task's own code_ | `run --wait`: the run ended `FAILED` — the exit is the task/agent's own real exit code (from the `run.complete` audit event), or `1` if that code is missing/unreadable (never `0` on `FAILED`) |
+
+`wardyn run get <id> --json` (or the `run.complete` audit event) always has
+the authoritative outcome — check it when the process's own exit status alone
+doesn't say why a run didn't complete.
 
 ## Writing a CI policy
 
@@ -117,7 +127,7 @@ directly — it is fully non-interactive with `WARDYN_URL` +
 ```sh
 wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --wait --timeout 30m
-wardyn runs get <id> --json   # final state, resolved image
+wardyn run get <id> --json    # final state, resolved image
 wardyn audit --run <id> --json
 ```
 

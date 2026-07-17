@@ -26,7 +26,7 @@ the governance target.
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
 | `wardyn-verify` | In-sandbox verify runner: executes the workspace's operator-approved setup commands (install/build/test/lint) in the built devcontainer image under confinement and reports the result — it does NOT replay a recorded PTY session. |
-| `wardyn` | CLI: `wardyn run`/`runs`, `attach`, `approve`/`deny`, `kill`, `audit`, `policy`, `secret`, `record`, `setup wall\|vault`. |
+| `wardyn` | CLI: `wardyn run` (create/list/get/kill), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn setup wall\|vault`. |
 
 How they fit together (same diagram as the README):
 

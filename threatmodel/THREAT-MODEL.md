@@ -67,10 +67,16 @@ invitation, not an embarrassment.
    PTY recordings. Tampering defeats incident response. NOTE: append-only
    protects what IS written; it does not yet guarantee every control-plane
    action produces an event. Control-plane audit writes (identity
-   mint/revoke, approval decide, broker mint/revoke) are currently best-effort — a
-   Postgres outage can drop one before it is ever written. Hardening this
-   path to fail-closed is in progress; the ground-truth ingest path (§4) is
-   already fail-closed.
+   mint/revoke, approval decide, broker mint/revoke) are still best-effort AT
+   THE CALL SITE (fire-and-forget, not wrapped in the mint transaction) — but
+   the shared recorder chain (`maskingRecorder -> spoolingRecorder ->
+   auditRec`, shared by every writer: API, broker, identity, approvals,
+   sweeper) now spools a failed primary Postgres write to a durable local
+   append-only JSONL fallback (`WARDYN_AUDIT_SPOOL`) instead of silently
+   dropping it. This is durability via a local fallback, not a transactional
+   guarantee — a write and its spool append can still both fail (logged
+   loudly when that happens); see `ARCHITECTURE.md` invariant 6. The
+   ground-truth ingest path (§4) is already fail-closed.
 6. **Tenant isolation** — one tenant's sandbox must not reach another's
    workload, secrets, or network.
 7. **The delegation chain** (`sub=human`, `act=agent-run-SPIFFE-ID`) —
