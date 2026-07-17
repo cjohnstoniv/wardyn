@@ -228,7 +228,7 @@ func pickRuntime(info system.Info, want string) string {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if len(name) >= len(want) && name[:len(want)] == want {
+		if strings.HasPrefix(name, want) {
 			return name
 		}
 	}

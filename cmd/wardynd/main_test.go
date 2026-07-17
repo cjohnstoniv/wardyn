@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -194,9 +193,6 @@ func TestLoadOrCreateSigningKey_DecryptErrorFailsClosed(t *testing.T) {
 		t.Fatalf("decrypt error must not overwrite signing key; got %d Put(s)", len(store.putCalls))
 	}
 }
-
-// keep rand imported for any future generator sanity checks.
-var _ = rand.Reader
 
 // -gen-age-key must print a parseable AGE-SECRET-KEY that is NOT the
 // publicly-known demo key, with no DSN/DB work (the flag returns via

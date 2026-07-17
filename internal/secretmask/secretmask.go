@@ -56,8 +56,7 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 	if r == nil || len(value) < MinLen {
 		return
 	}
-	cp := make([]byte, len(value))
-	copy(cp, value)
+	cp := bytes.Clone(value)
 	r.mu.Lock()
 	r.perRun[runID] = append(r.perRun[runID], cp)
 	r.mu.Unlock()
@@ -69,8 +68,7 @@ func (r *Registry) AddGlobal(value []byte) {
 	if r == nil || len(value) < MinLen {
 		return
 	}
-	cp := make([]byte, len(value))
-	copy(cp, value)
+	cp := bytes.Clone(value)
 	r.mu.Lock()
 	r.globals = append(r.globals, cp)
 	r.mu.Unlock()
@@ -89,14 +87,10 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 
 	out := make([][]byte, 0, len(perRun)+len(globals))
 	for _, v := range perRun {
-		cp := make([]byte, len(v))
-		copy(cp, v)
-		out = append(out, cp)
+		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		cp := make([]byte, len(v))
-		copy(cp, v)
-		out = append(out, cp)
+		out = append(out, bytes.Clone(v))
 	}
 	return out
 }
@@ -130,9 +124,7 @@ func NewMasker(secrets [][]byte) Masker {
 	var kept [][]byte
 	for _, s := range secrets {
 		if len(s) >= MinLen {
-			cp := make([]byte, len(s))
-			copy(cp, s)
-			kept = append(kept, cp)
+			kept = append(kept, bytes.Clone(s))
 		}
 	}
 	// Sort longest first for deterministic overlap handling.
@@ -223,8 +215,7 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 		tailLen = len(masked)
 	}
 	forward := masked[:len(masked)-tailLen]
-	w.tail = make([]byte, tailLen)
-	copy(w.tail, masked[len(masked)-tailLen:])
+	w.tail = bytes.Clone(masked[len(masked)-tailLen:])
 
 	if len(forward) > 0 {
 		if _, werr := w.dst.Write(forward); werr != nil {

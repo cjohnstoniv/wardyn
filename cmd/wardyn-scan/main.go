@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/sidecar"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -51,10 +52,7 @@ func main() {
 }
 
 func run() error {
-	dir := os.Getenv("WARDYN_WORKSPACE_DIR")
-	if dir == "" {
-		dir = defaultWorkspaceDir
-	}
+	dir := cliutil.EnvOr("WARDYN_WORKSPACE_DIR", defaultWorkspaceDir)
 	url, err := sidecar.ProxyRunURL("scan")
 	if err != nil {
 		return err

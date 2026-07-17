@@ -1022,7 +1022,7 @@ func HostOf(rawURL string) string {
 		s = s[:i]
 	}
 	s = strings.ToLower(s)
-	if strings.Contains(s, ".") && suggestedHostRE.MatchString(s) {
+	if ValidApprovedHost(s) {
 		return s
 	}
 	return ""
@@ -1156,20 +1156,14 @@ func validateServices(raw []string, needs []SecretNeed) []string {
 func validateSuggestedHosts(raw []string, allowedEgress map[string]struct{}) []string {
 	set := map[string]struct{}{}
 	for _, h := range raw {
-		h = strings.ToLower(strings.TrimSpace(h))
-		if i := strings.Index(h, "://"); i >= 0 {
-			h = h[i+3:]
-		}
-		if i := strings.IndexAny(h, "/:"); i >= 0 {
-			h = h[:i]
-		}
-		if !strings.Contains(h, ".") || !suggestedHostRE.MatchString(h) {
+		host := HostOf(h) // trim/strip-scheme/strip-port/lowercase + validity, or "" if invalid
+		if host == "" {
 			continue
 		}
-		if _, already := allowedEgress[h]; already {
+		if _, already := allowedEgress[host]; already {
 			continue
 		}
-		set[h] = struct{}{}
+		set[host] = struct{}{}
 	}
 	out := gitremote.ToSorted(set)
 	if len(out) > maxSuggested {

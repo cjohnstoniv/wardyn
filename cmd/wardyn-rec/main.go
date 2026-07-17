@@ -28,6 +28,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -89,17 +90,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		// Delivery MUST run before we propagate the agent's exit code: a failed
-		// copy/upload (e.g. the proxy denies the brokered:recording route in
-		// host-mode) is a recording problem, not a task failure — log it and
-		// still exit with the agent's real outcome below.
-		if derr := deliver(cast, *runID, *outDir, *uploadURL, *runToken); derr != nil {
-			fmt.Fprintln(os.Stderr, "wardyn-rec: recording delivery failed (non-fatal):", derr)
-		}
-		if exitCode != 0 {
-			os.Exit(exitCode)
-		}
-		return nil
+		return deliverAndExit(cast, *outDir, *uploadURL, *runToken, exitCode)
 	}
 
 	// Fallback: plain log capture.
@@ -108,15 +99,19 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *outDir == "" && *uploadURL == "" {
-		if exitCode != 0 {
-			os.Exit(exitCode)
-		}
-		return nil
-	}
-	// Best-effort delivery (see the asciinema path): never fail an otherwise
-	// successful agent run because the recording could not be copied/uploaded.
-	if derr := deliver(log, *runID, *outDir, *uploadURL, *runToken); derr != nil {
+	return deliverAndExit(log, *outDir, *uploadURL, *runToken, exitCode)
+}
+
+// deliverAndExit runs best-effort delivery of the finished recording, then
+// propagates the AGENT's exit code. Delivery MUST run before we propagate the
+// exit code: a failed copy/upload (e.g. the proxy denies the brokered:recording
+// route in host-mode) is a recording problem, not a task failure — log it and
+// still exit with the agent's real outcome. Never fail an otherwise successful
+// agent run because the recording could not be copied/uploaded. deliver() is a
+// no-op when neither -out-dir nor -upload-url is set, so this is safe to call
+// unconditionally (os.Exit only for a non-zero agent exit).
+func deliverAndExit(srcPath, outDir, uploadURL, runToken string, exitCode int) error {
+	if derr := deliver(srcPath, outDir, uploadURL, runToken); derr != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-rec: recording delivery failed (non-fatal):", derr)
 	}
 	if exitCode != 0 {
@@ -167,7 +162,7 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	// asciinema's exit code, which at least catches a hard recorder failure.
 	if runErr != nil {
 		var exitErr *exec.ExitError
-		if asExit(runErr, &exitErr) {
+		if errors.As(runErr, &exitErr) {
 			return exitErr.ExitCode(), nil
 		}
 		return 0, fmt.Errorf("asciinema: %w", runErr)
@@ -228,7 +223,7 @@ func recordToLog(logPath string, agentArgv []string) (int, error) {
 	cmd.Stderr = io.MultiWriter(os.Stderr, f)
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
-		if asExit(err, &exitErr) {
+		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode(), nil
 		}
 		return 0, fmt.Errorf("run agent: %w", err)
@@ -237,7 +232,7 @@ func recordToLog(logPath string, agentArgv []string) (int, error) {
 }
 
 // deliver copies/uploads the finished recording file. Both modes may be active.
-func deliver(srcPath, runID, outDir, uploadURL, runToken string) error {
+func deliver(srcPath, outDir, uploadURL, runToken string) error {
 	var errs []string
 
 	if outDir != "" {
@@ -355,14 +350,4 @@ func isShellSafe(s string) bool {
 		}
 	}
 	return true
-}
-
-// asExit is a tiny errors.As wrapper kept local to avoid an import just for
-// the type assertion at one call site.
-func asExit(err error, target **exec.ExitError) bool {
-	if e, ok := err.(*exec.ExitError); ok {
-		*target = e
-		return true
-	}
-	return false
 }

@@ -48,35 +48,12 @@ set -euo pipefail
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
 
-# ── selftest ─────────────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--selftest" ]]; then
-    echo "=== wardyn agent-run selftest (codex-cli) ==="
-    ok=1
-    # exec task mode (BYOA/CI): no agent harness, so codex is informational and
-    # git only gates when the run actually clones a repo (mirrors claude-code).
-    required=(wardyn-rec wardyn-git-helper git codex)
-    if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
-        required=(wardyn-rec wardyn-git-helper)
-        [[ -n "${WARDYN_REPO_URL:-}${WARDYN_REPOS:-}" ]] && required+=(git)
-        echo "  (task_mode=exec: codex optional; git required only with repo wiring)"
-    fi
-    for bin in wardyn-rec wardyn-git-helper git codex; do
-        if command -v "$bin" >/dev/null 2>&1; then
-            echo "  FOUND   $bin ($(command -v "$bin"))"
-        else
-            case " ${required[*]} " in
-                *" $bin "*) echo "  MISSING $bin"; ok=0 ;;
-                *) echo "  ABSENT  $bin (not required for this task mode)" ;;
-            esac
-        fi
-    done
-    echo "--- env wiring ---"
-    echo "  HTTP_PROXY=${HTTP_PROXY:-<unset>}"
-    echo "  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
-    echo "  NO_PROXY=${NO_PROXY:-<unset>}"
-    echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
-    echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
-    echo "  OPENAI_API_KEY=${OPENAI_API_KEY:+<set (${#OPENAI_API_KEY} chars)>}${OPENAI_API_KEY:-<unset — expected; proxy injects via grant>}"
+# selftest_report_shared prints the TLS-MITM CA, repo-wiring, and git-helper
+# selftest reports. This block is byte-identical to claude-code's agent-run;
+# it lives in a function so the two images keep one wording. Report-only: it
+# echoes/inspects, never mutates $ok or exits — the PASS/FAIL decision stays
+# with the caller.
+selftest_report_shared() {
     echo "--- TLS-MITM CA trust (selftest: report only) ---"
     if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
         [[ -f /tmp/wardyn/mitm-ca.pem ]] \
@@ -116,6 +93,38 @@ if [[ "${1:-}" == "--selftest" ]]; then
     else
         echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
     fi
+}
+
+# ── selftest ─────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--selftest" ]]; then
+    echo "=== wardyn agent-run selftest (codex-cli) ==="
+    ok=1
+    # exec task mode (BYOA/CI): no agent harness, so codex is informational and
+    # git only gates when the run actually clones a repo (mirrors claude-code).
+    required=(wardyn-rec wardyn-git-helper git codex)
+    if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
+        required=(wardyn-rec wardyn-git-helper)
+        [[ -n "${WARDYN_REPO_URL:-}${WARDYN_REPOS:-}" ]] && required+=(git)
+        echo "  (task_mode=exec: codex optional; git required only with repo wiring)"
+    fi
+    for bin in wardyn-rec wardyn-git-helper git codex; do
+        if command -v "$bin" >/dev/null 2>&1; then
+            echo "  FOUND   $bin ($(command -v "$bin"))"
+        else
+            case " ${required[*]} " in
+                *" $bin "*) echo "  MISSING $bin"; ok=0 ;;
+                *) echo "  ABSENT  $bin (not required for this task mode)" ;;
+            esac
+        fi
+    done
+    echo "--- env wiring ---"
+    echo "  HTTP_PROXY=${HTTP_PROXY:-<unset>}"
+    echo "  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
+    echo "  NO_PROXY=${NO_PROXY:-<unset>}"
+    echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
+    echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
+    echo "  OPENAI_API_KEY=${OPENAI_API_KEY:+<set (${#OPENAI_API_KEY} chars)>}${OPENAI_API_KEY:-<unset — expected; proxy injects via grant>}"
+    selftest_report_shared
     if [[ $ok -eq 1 ]]; then
         echo "=== selftest PASS ==="
         exit 0
