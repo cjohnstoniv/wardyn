@@ -74,7 +74,7 @@ type Proxy struct {
 	// held ONLY here in proxy memory and injected toward controlPlaneURL on the
 	// local mint/approvals routes; it is NEVER exposed to the sandbox and NEVER
 	// injected toward any LLM upstream.
-	runToken string
+	runToken *tokenSource
 	// localClient forwards local-route requests to the control plane. It uses
 	// the proxy's pinned, IP-vetted transport so the control-plane host is
 	// resolved+vetted once and dialed explicitly (no transport re-resolution).
@@ -125,7 +125,7 @@ type Options struct {
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
 	ControlPlaneURL string
-	RunToken        string
+	RunToken        *tokenSource
 	// Upstream is the OPTIONAL corporate parent proxy (parsed form). Nil ==
 	// direct dial. NewServer parses it from Config.UpstreamProxyURL; tests may
 	// build one via parseUpstreamProxy.
@@ -663,15 +663,30 @@ type Server struct {
 	proxy *Proxy
 	http  *http.Server
 	sink  *decisionSink
+	// renewStop stops the run-token renewer started by NewServer; renewStopped
+	// closes once it has exited. Both are set ONCE in NewServer (never from
+	// ListenAndServe) because production runs ListenAndServe in one goroutine and
+	// calls Shutdown from another — writing them at serve time would race the read
+	// in Shutdown. Nil when no renewer was started.
+	renewStop    context.CancelFunc
+	renewStopped chan struct{}
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
 // injection credentials once (fail-closed on error) before returning.
 func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
-	sink := newDecisionSink(cfg.ControlPlaneURL, cfg.RunToken, cfg.DecisionBufferSize, client, stdout)
 
-	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, cfg.RunToken, pol, cfg.Injection, client)
+	// ONE live token for the whole sidecar: the config's run token is the seed,
+	// and the renewer (started by ListenAndServe) rotates it in place before its
+	// short TTL lapses. Every control-plane caller below shares this source, so a
+	// renew reaches all of them at once — the sink, the injector's subscription
+	// re-resolves, the approval client, and the brokered local routes.
+	ts := newTokenSource(cfg.RunToken)
+
+	sink := newDecisionSink(cfg.ControlPlaneURL, ts, cfg.DecisionBufferSize, client, stdout)
+
+	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
 	if err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("build injector: %w", err)
@@ -733,7 +748,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		log.Printf("wardyn-proxy: chaining egress through upstream proxy %s (private-IP guard relaxed for this hop; control-plane bypasses it)", up.addr)
 	}
 
-	ap := newApprovalClient(cfg.ControlPlaneURL, cfg.RunToken, cfg.RunID, client)
+	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
 	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
 		time.Duration(cfg.HoldForReviewTimeoutSec)*time.Second, cfg.MaxConcurrentHolds)
 
@@ -748,7 +763,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		MITMHosts:       cfg.MITMHosts,
 		MITMLLM:         cfg.MITMLLM,
 		ControlPlaneURL: cfg.ControlPlaneURL,
-		RunToken:        cfg.RunToken,
+		RunToken:        ts,
 		Upstream:        up,
 	})
 	if ca != nil && len(cfg.MITMHosts) > 0 {
@@ -762,7 +777,25 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		WriteTimeout: 0,
 		IdleTimeout:  90 * time.Second,
 	}
-	return &Server{proxy: p, http: srv, sink: sink}, nil
+	out := &Server{proxy: p, http: srv, sink: sink}
+
+	// Start the run-token renewer, which keeps this sidecar's short-TTL token
+	// fresh for the life of the run. Without it every control-plane call (mints,
+	// approvals, decision logs, subscription re-resolves) starts 401ing once the
+	// startup token's 1h TTL lapses, with no recovery. It starts here — like the
+	// decision sink's own goroutine — so it is running before the first request
+	// and is torn down by Shutdown; the caller's ctx is a STARTUP context, so the
+	// renewer gets its own lifetime instead.
+	if cfg.ControlPlaneURL != "" {
+		rctx, cancel := context.WithCancel(context.Background())
+		out.renewStop = cancel
+		out.renewStopped = make(chan struct{})
+		go func() {
+			defer close(out.renewStopped)
+			runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
+		}()
+	}
+	return out, nil
 }
 
 // ListenAndServe starts serving and blocks until the server stops.
@@ -773,8 +806,13 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server and drains the decision sink.
+// Shutdown gracefully stops the HTTP server, stops the token renewer, and drains
+// the decision sink.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.renewStop != nil {
+		s.renewStop()
+		<-s.renewStopped
+	}
 	httpErr := s.http.Shutdown(ctx)
 	sinkErr := s.sink.close(ctx)
 	if httpErr != nil {

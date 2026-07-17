@@ -55,7 +55,7 @@ type injector struct {
 	mu     sync.Mutex // guards byHost lookups
 	byHost map[string]*injEntry
 	base   string
-	token  string
+	token  *tokenSource
 	client *http.Client
 }
 
@@ -79,7 +79,7 @@ type injEntry struct {
 // header. A rule whose host does not pass the EXACT allowlist is rejected:
 // injection must never widen egress nor leak a secret to a wildcard/approved
 // host. Returns an error if any mint fails (fail closed at startup).
-func buildInjector(ctx context.Context, base, token string, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
+func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -95,7 +95,7 @@ func buildInjector(ctx context.Context, base, token string, pol *Policy, rules [
 		if r.GrantID == uuid.Nil {
 			return nil, fmt.Errorf("injection rule for %q missing grant_id", host)
 		}
-		resolved, err := resolveInjection(ctx, base, token, r.GrantID, client)
+		resolved, err := resolveInjection(ctx, base, token.Get(), r.GrantID, client)
 		if err != nil {
 			return nil, fmt.Errorf("resolve injection for %q: %w", host, err)
 		}
@@ -148,7 +148,7 @@ func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 		return e.header, true, nil // static, or dynamic and still fresh
 	}
 
-	resolved, err := resolveInjection(context.Background(), i.base, i.token, e.grantID, i.client)
+	resolved, err := resolveInjection(context.Background(), i.base, i.token.Get(), e.grantID, i.client)
 	if err != nil {
 		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
 	}

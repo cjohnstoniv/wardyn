@@ -541,6 +541,13 @@ func (s *Server) routes() chi.Router {
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
+			// Token renew: POST /api/v1/internal/token/renew
+			// The per-run proxy re-issues its own (short-TTL) run token before it
+			// lapses, authenticated by the CURRENT token. Without this producer a
+			// run outliving the 1h TTL loses every /internal/* call. NOT forwarded
+			// by any brokered local route — the sandbox cannot reach it.
+			r.Post("/internal/token/renew", s.handleInternalTokenRenew)
+
 			// Injection resolve: returns the FORMATTED SECRET VALUE for an
 			// api_key grant. SECURITY: this path must NEVER be forwarded by a
 			// wardyn-proxy brokered local route — the proxy calls it directly

@@ -262,7 +262,7 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 		return nil, err
 	}
 	// Inject the run token ONLY toward the control plane.
-	req.Header.Set("Authorization", "Bearer "+p.runToken)
+	req.Header.Set("Authorization", "Bearer "+p.runToken.Get())
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

@@ -69,7 +69,7 @@ func TestDecisionSinkPostsAndMirrors(t *testing.T) {
 	defer cp.Close()
 
 	buf := &bytes.Buffer{}
-	s := newDecisionSink(cp.URL, "run-tok", 16, cp.Client(), buf)
+	s := newDecisionSink(cp.URL, newTokenSource("run-tok"), 16, cp.Client(), buf)
 
 	log := decisionLog(egress.Request{RunID: uuid.New(), Host: "x.test", Method: "GET"}, egress.Allow, "policy:allowed")
 	s.emit(log)
@@ -101,7 +101,7 @@ func TestDecisionSinkDropsOnBackpressure(t *testing.T) {
 	defer close(block)
 
 	buf := &bytes.Buffer{}
-	s := newDecisionSink(cp.URL, "tok", 2, cp.Client(), buf)
+	s := newDecisionSink(cp.URL, newTokenSource("tok"), 2, cp.Client(), buf)
 
 	// Emit far more than the buffer; the worker is stuck on the blocking POST.
 	for i := 0; i < 100; i++ {
@@ -148,7 +148,7 @@ func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
 	defer cp.Close()
 
 	buf := &bytes.Buffer{}
-	s := newDecisionSink(cp.URL, "tok", 2, cp.Client(), buf)
+	s := newDecisionSink(cp.URL, newTokenSource("tok"), 2, cp.Client(), buf)
 
 	for i := 0; i < 200; i++ {
 		s.emit(decisionLog(egress.Request{Host: "x.test"}, egress.Deny, "policy:denied"))
@@ -181,7 +181,7 @@ func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
 
 func TestDecisionSinkEmitAfterCloseDoesNotPanic(t *testing.T) {
 	buf := &bytes.Buffer{}
-	s := newDecisionSink("http://127.0.0.1:0", "tok", 4, &http.Client{Timeout: time.Second}, buf)
+	s := newDecisionSink("http://127.0.0.1:0", newTokenSource("tok"), 4, &http.Client{Timeout: time.Second}, buf)
 	if err := s.close(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestDroppedSummary_FailedPostDoesNotBurnDelta(t *testing.T) {
 	defer up.Close()
 
 	// post() itself must report delivery success/failure.
-	sDown := newDecisionSink(down.URL, "tok", 2, down.Client(), &bytes.Buffer{})
+	sDown := newDecisionSink(down.URL, newTokenSource("tok"), 2, down.Client(), &bytes.Buffer{})
 	defer func() { _ = sDown.close(context.Background()) }()
 	if err := sDown.post(droppedSummaryLog(3)); err == nil {
 		t.Fatal("post to a 500 control plane must return an error")
@@ -220,7 +220,7 @@ func TestDroppedSummary_FailedPostDoesNotBurnDelta(t *testing.T) {
 		t.Fatalf("failed summary must not advance reported, got %d", reported)
 	}
 
-	sUp := newDecisionSink(up.URL, "tok", 2, up.Client(), &bytes.Buffer{})
+	sUp := newDecisionSink(up.URL, newTokenSource("tok"), 2, up.Client(), &bytes.Buffer{})
 	defer func() { _ = sUp.close(context.Background()) }()
 	if err := sUp.post(droppedSummaryLog(3)); err != nil {
 		t.Fatalf("post to a healthy control plane must succeed, got %v", err)

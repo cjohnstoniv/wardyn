@@ -67,7 +67,7 @@ func TestBuildInjectorMintsAndFormats(t *testing.T) {
 		InjectionRule: egress.InjectionRule{Host: "api.test", Header: "Authorization", Format: "Bearer %s"},
 		GrantID:       gid,
 	}}
-	inj, err := buildInjector(context.Background(), cp.URL, "tok", pol, rules, cp.Client())
+	inj, err := buildInjector(context.Background(), cp.URL, newTokenSource("tok"), pol, rules, cp.Client())
 	if err != nil {
 		t.Fatalf("buildInjector: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestInjectorReResolvesNearExpiry(t *testing.T) {
 		InjectionRule: egress.InjectionRule{Host: "api.test", Header: "Authorization", Format: "Bearer %s"},
 		GrantID:       uuid.New(),
 	}}
-	inj, err := buildInjector(context.Background(), srv.URL, "tok", pol, rules, srv.Client())
+	inj, err := buildInjector(context.Background(), srv.URL, newTokenSource("tok"), pol, rules, srv.Client())
 	if err != nil {
 		t.Fatalf("buildInjector: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBuildInjectorRefusesNonExactHost(t *testing.T) {
 		InjectionRule: egress.InjectionRule{Host: "a.api.test", Header: "Authorization", Format: "Bearer %s"},
 		GrantID:       uuid.New(),
 	}}
-	_, err := buildInjector(context.Background(), cp.URL, "tok", pol, rules, cp.Client())
+	_, err := buildInjector(context.Background(), cp.URL, newTokenSource("tok"), pol, rules, cp.Client())
 	if err == nil {
 		t.Fatalf("expected refusal for wildcard-only host")
 	}
@@ -163,7 +163,7 @@ func TestBuildInjectorFailsClosedOnMintError(t *testing.T) {
 		InjectionRule: egress.InjectionRule{Host: "api.test"},
 		GrantID:       uuid.New(),
 	}}
-	_, err := buildInjector(context.Background(), cp.URL, "tok", pol, rules, cp.Client())
+	_, err := buildInjector(context.Background(), cp.URL, newTokenSource("tok"), pol, rules, cp.Client())
 	if err == nil {
 		t.Fatalf("expected fail-closed on 409 mint")
 	}
@@ -172,7 +172,7 @@ func TestBuildInjectorFailsClosedOnMintError(t *testing.T) {
 func TestBuildInjectorRequiresGrantID(t *testing.T) {
 	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"api.test"}})
 	rules := []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "api.test"}}}
-	if _, err := buildInjector(context.Background(), "http://unused", "tok", pol, rules, nil); err == nil {
+	if _, err := buildInjector(context.Background(), "http://unused", newTokenSource("tok"), pol, rules, nil); err == nil {
 		t.Fatalf("expected error for missing grant_id")
 	}
 }

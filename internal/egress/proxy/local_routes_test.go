@@ -37,7 +37,7 @@ func newLocalRouteProxy(t *testing.T, controlPlaneURL, runToken, upstreamAddr st
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr),
 		ControlPlaneURL: controlPlaneURL,
-		RunToken:        runToken,
+		RunToken:        newTokenSource(runToken),
 		TLSClientConfig: tlsCfg,
 	})
 	return p, buf
