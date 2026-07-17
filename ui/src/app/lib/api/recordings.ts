@@ -6,7 +6,7 @@
 // Session recordings (asciicast). The recording document is fetched as text and
 // parsed into the Recording shape the terminal player renders.
 import type { AsciicastEvent, Recording } from "../types";
-import { HttpError, num, str, wfetch } from "./core";
+import { errText, HttpError, num, str, wfetch } from "./core";
 
 // Parse an asciicast (v2) recording document into the Recording shape.
 // Accepts either JSON ({header, events|stdout}) or raw asciicast text
@@ -50,7 +50,7 @@ export const recordings = {
     );
     if (res.status === 404) return undefined;
     if (!res.ok) {
-      throw new HttpError(res.status, `HTTP ${res.status}: failed to load recording`);
+      throw new HttpError(res.status, await errText(res));
     }
     const text = await res.text();
     if (!text.trim()) return undefined;

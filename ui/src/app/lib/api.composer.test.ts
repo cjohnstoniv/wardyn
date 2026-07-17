@@ -218,6 +218,17 @@ describe("api.compose() + api.listComposerBackends()", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({}));
     await expect(api.listComposerBackends()).resolves.toEqual([]);
   });
+
+  // U097: a non-404 failure must surface the control plane's `{"error":"…"}`
+  // message, not a hardcoded "failed to list composer backends" string that
+  // discards the server's actionable reason.
+  it("listComposerBackends surfaces the server error message on a 500", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "composer backend registry unavailable" }, 500));
+    const err = await api.listComposerBackends().catch((e) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(500);
+    expect((err as HttpError).message).toBe("composer backend registry unavailable");
+  });
 });
 
 // api.createRun() gains an optional compose_session_id — correlates the launched

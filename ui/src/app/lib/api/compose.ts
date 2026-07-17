@@ -17,7 +17,7 @@ import type {
   Workspace,
   WorkspaceSelection,
 } from "../types";
-import { asJson, HttpError, wfetch } from "./core";
+import { asJson, errText, HttpError, wfetch } from "./core";
 
 // Resolve one WorkspaceSelection (from the compose form's onboarded multi-select)
 // against the fetched Workspace[] list into the compose wire shape. Mirrors
@@ -176,7 +176,7 @@ export const composer = {
     const res = await wfetch("/composer/backends", { method: "GET" });
     if (res.status === 404) return [];
     if (!res.ok) {
-      throw new HttpError(res.status, `HTTP ${res.status}: failed to list composer backends`);
+      throw new HttpError(res.status, await errText(res));
     }
     const payload = await asJson<{ backends?: unknown }>(res);
     return Array.isArray(payload?.backends) ? (payload.backends as ComposerBackend[]) : [];
