@@ -122,17 +122,30 @@ forward-compatibility values; no transition produces them today.
 
 ## Security invariants (every contributor and subagent MUST preserve these)
 
-1. **Secrets never enter the sandbox — with two named, bounded exceptions.**
+1. **Secrets never enter the sandbox — with three named, bounded exceptions.**
    Late binding via the broker; third-party API credentials are injected
    proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
-   disk, or args. Two documented residuals break that rule deliberately: an
+   disk, or args. Three documented residuals break that rule deliberately: an
    `ssh_key` grant materializes a RESIDENT private key (written 0400,
-   descendant-scoped, wiped after clone), and Bedrock **access-key** mode
+   descendant-scoped, wiped after clone); Bedrock **access-key** mode
    (as opposed to the preferred, never-resident bearer mode) places
    `aws-access-key-id`/`aws-secret-access-key` in the sandbox env because
-   SigV4 request-signing happens in-process and cannot be proxy-injected. Both
-   are bounded (output-masked, withheld from non-model runs) and named honestly
-   rather than hidden — see `threatmodel/THREAT-MODEL.md` §5.1a. Output masking
+   SigV4 request-signing happens in-process and cannot be proxy-injected; and
+   the `WARDYN_SUBSCRIPTION_INJECT=off` escape hatch (`cmd/wardynd/main.go`'s
+   subscription-token wiring) stages a sanitized RESIDENT COPY of the
+   operator's Claude subscription credential — `~/.claude` + `~/.claude.json`,
+   copied read-only into the sandbox by `scripts/stage-claude-creds.sh` from a
+   host staging dir (default `~/.wardyn/claude-creds`) — instead of the default
+   proxy-side injection. It is a real, refreshable OAuth token (unlike the
+   default's inert sentinel, which the proxy replaces with the live token on
+   the wire), it goes stale as the operator's own `claude` rotates its refresh
+   token (re-run the staging script to refresh), and its use is disclosed by
+   the ABSENCE of the `run.llm.subscription_inject` audit event on an
+   otherwise subscription-mounted run (present = proxy-injected; absent =
+   resident copy). All three are bounded (output-masked, withheld from
+   non-model runs, or — for the resident copy — opt-in and audit-visible by
+   that discriminator) and named honestly rather than hidden — see
+   `threatmodel/THREAT-MODEL.md` §5.1a. Output masking
    of secret values on the audit/recording/decision-log streams ships via
    `internal/secretmask`
    (verbatim-match; the encoded/transformed-exfil residual is documented).

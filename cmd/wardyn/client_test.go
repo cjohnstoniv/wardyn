@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // These tests exercise the cmd/wardyn apiClient request-building against a
@@ -290,5 +291,121 @@ func TestClientDo_BaseURLTrailingSlashTrimmed(t *testing.T) {
 	}
 	if cap.path != "/api/v1/runs" {
 		t.Errorf("path = %s, want /api/v1/runs (no doubled slash)", cap.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// U089/U047: cmd/wardyn <-> pkg/client parity regressions (SDK missing
+// Image/TaskMode, divergent empty-token auth header, uncapped error body).
+// --------------------------------------------------------------------------
+
+// TestU089_CreateRunRequest_ImageTaskModeRoundTrip asserts pkg/client.CreateRunRequest
+// carries Image and TaskMode with the exact wire tags internal/api/runs.go's
+// createRunRequest uses ("image"/"task_mode"). Before this fix the public SDK
+// had no way to drive BYOI (`wardyn run --image`) or CI exec mode
+// (`task_mode: "exec"`) even though the CLI's own createRunBody supported both.
+func TestU089_CreateRunRequest_ImageTaskModeRoundTrip(t *testing.T) {
+	req := client.CreateRunRequest{
+		Agent:    "claude-code",
+		Repo:     "org/repo",
+		Image:    "ubuntu:24.04",
+		TaskMode: "exec",
+	}
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if raw["image"] != "ubuntu:24.04" {
+		t.Errorf(`wire "image" = %v, want "ubuntu:24.04"`, raw["image"])
+	}
+	if raw["task_mode"] != "exec" {
+		t.Errorf(`wire "task_mode" = %v, want "exec"`, raw["task_mode"])
+	}
+
+	var got client.CreateRunRequest
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("round-trip unmarshal: %v", err)
+	}
+	if got.Image != req.Image || got.TaskMode != req.TaskMode {
+		t.Errorf("round-trip = %+v, want Image=%q TaskMode=%q preserved", got, req.Image, req.TaskMode)
+	}
+
+	// Both omitempty: a zero-value request must carry neither key on the wire.
+	empty, err := json.Marshal(client.CreateRunRequest{Agent: "a", Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("marshal empty: %v", err)
+	}
+	var emptyRaw map[string]any
+	_ = json.Unmarshal(empty, &emptyRaw)
+	for _, k := range []string{"image", "task_mode"} {
+		if _, present := emptyRaw[k]; present {
+			t.Errorf("body should omit empty %q, got %v", k, emptyRaw[k])
+		}
+	}
+}
+
+// TestU089_EmptyTokenOmitsAuthHeader asserts BOTH clients skip the
+// Authorization header entirely when the token is empty, rather than sending a
+// bare "Bearer " — cmd/wardyn's apiClient already did this; pkg/client.Client
+// previously always set the header regardless of Token. This pins the
+// now-consistent behavior on both sides against the same server.
+func TestU089_EmptyTokenOmitsAuthHeader(t *testing.T) {
+	var lastAuth string
+	var sawAuth bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAuth = r.Header.Get("Authorization")
+		sawAuth = lastAuth != ""
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]types.AgentRun{})
+	}))
+	defer srv.Close()
+
+	// cmd/wardyn's apiClient with an empty token.
+	c := &apiClient{baseURL: srv.URL, token: ""}
+	if _, err := c.listRuns(context.Background()); err != nil {
+		t.Fatalf("cmd/wardyn listRuns: %v", err)
+	}
+	if sawAuth {
+		t.Errorf("cmd/wardyn apiClient sent Authorization %q for an empty token, want omitted", lastAuth)
+	}
+
+	// pkg/client.Client with an empty Token, same server.
+	pc := &client.Client{BaseURL: srv.URL, Token: ""}
+	if _, err := pc.ListRuns(context.Background()); err != nil {
+		t.Fatalf("pkg/client ListRuns: %v", err)
+	}
+	if sawAuth {
+		t.Errorf("pkg/client sent Authorization %q for an empty token, want omitted", lastAuth)
+	}
+}
+
+// TestU089_ErrorBodyCappedAt2KiB is cmd/wardyn's counterpart to pkg/client's
+// TestErrorBody_CappedAt2KiB: apiError.body must be capped at 2048 bytes
+// rather than read in full, so a runaway/hostile server cannot exhaust CLI
+// memory via an oversized error response.
+func TestU089_ErrorBodyCappedAt2KiB(t *testing.T) {
+	huge := strings.Repeat("E", 5000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(huge))
+	}))
+	defer srv.Close()
+	c := &apiClient{baseURL: srv.URL, token: testToken}
+
+	_, err := c.listRuns(context.Background())
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		t.Fatalf("err = %v, want *apiError", err)
+	}
+	if len(ae.body) != 2048 {
+		t.Errorf("error body not capped: got %d bytes, want exactly 2048", len(ae.body))
+	}
+	if string(ae.body) != strings.Repeat("E", 2048) {
+		t.Errorf("error body content is not the first 2048 bytes of the response")
 	}
 }
