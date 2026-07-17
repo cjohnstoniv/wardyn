@@ -51,4 +51,14 @@ printf '{"state":"COMPLETED","id": "abcd1234-ef56-7890-abcd-ef1234567890"}' > "$
 run_json="$tmp"; eval "$run_id_line"
 check_eq "ci-run.sh run_id parses from --json output"       "$run_id" "abcd1234-ef56-7890-abcd-ef1234567890"
 
+# ── e2e-backend.sh: BASE_URL must be a valid URL for EVERY documented
+# WARDYN_E2E_ADDR shape (':PORT', 'host:PORT', '0.0.0.0:PORT'), not just ':PORT'.
+# The old ${ADDR#*:} produced 'http://localhost9000' (missing ':') for
+# non-':PORT' shapes. Extract the real derivation line and drive it.
+base_url_line="$(grep -F 'BASE_URL="http://localhost:' "$ROOT/scripts/e2e-backend.sh")"
+[ -n "$base_url_line" ] || { echo "FAIL - could not find the BASE_URL derivation in scripts/e2e-backend.sh"; exit 1; }
+ADDR=":8088";       eval "$base_url_line"; check_eq "BASE_URL from ':8088'"       "$BASE_URL" "http://localhost:8088"
+ADDR="0.0.0.0:9000"; eval "$base_url_line"; check_eq "BASE_URL from '0.0.0.0:9000'" "$BASE_URL" "http://localhost:9000"
+ADDR="host:80";     eval "$base_url_line"; check_eq "BASE_URL from 'host:80'"     "$BASE_URL" "http://localhost:80"
+
 exit "$fail"

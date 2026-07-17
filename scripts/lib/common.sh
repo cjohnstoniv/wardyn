@@ -39,6 +39,20 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# license_scope_files — the SINGLE source of truth for which tracked files must
+# carry the SPDX/copyright header, shared by the CI gate
+# (check-license-headers.sh) and the local fixer (add-license-headers.sh) so a
+# future edit to any exclude pattern updates both at once. Excludes generated
+# (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist), and the
+# MIT-origin shadcn primitives (ui/src/app/components/ui/). Run from the repo
+# root (both callers `cd` there first). Emits one path per line.
+license_scope_files() {
+  git ls-files '*.go' '*.ts' '*.tsx' '*.css' \
+    | grep -vE '^ui/(node_modules|dist)/' \
+    | grep -vE '\.gen\.go$|_gen\.go$|zz_generated' \
+    | grep -vE '^ui/src/app/components/ui/'
+}
+
 # wardyn_pick_docker_host — export the same daemon preference as
 # scripts/setup.sh's pick_daemon: honor an explicit DOCKER_HOST, else the
 # dedicated tier-capable native dockerd if present, else the default socket.

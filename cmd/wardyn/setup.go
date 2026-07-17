@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/spf13/cobra"
 )
 
@@ -114,13 +115,15 @@ func detectDocker() dockerEnv {
 	if _, err := exec.LookPath("docker"); err == nil {
 		e.hasDocker = true
 	}
-	e.wsl = strings.Contains(strings.ToLower(readFileTrim("/proc/version")), "microsoft")
+	// WSL + KVM come from internal/setup.DetectPlatform() — the single leaf
+	// detection library (stdlib-only) — so hardening either check benefits this
+	// CLI path and the API's setup surface at once, instead of drifting apart.
+	p := setup.DetectPlatform()
+	e.wsl = p.WSL
+	e.kvm = p.KVM
 	e.initSys = detectInit()
 	e.family = parseOSFamily(osReleaseField("ID"), osReleaseField("ID_LIKE"))
 	e.selinux = readFileTrim("/sys/fs/selinux/enforce") == "1"
-	if _, err := os.Stat("/dev/kvm"); err == nil {
-		e.kvm = true
-	}
 	if _, err := exec.LookPath("colima"); err == nil {
 		e.colima = true
 	}

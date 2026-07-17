@@ -422,6 +422,12 @@ func TestDeriveSetupItems_BackendCC3SplitsOnKVM(t *testing.T) {
 	} else if !strings.Contains(got.Detail, "/dev/kvm") {
 		t.Errorf("KVM-less host: detail = %q, want the not-fixable /dev/kvm reason", got.Detail)
 	}
+	// Pin the single-source wiring (U085): the CC3 copy must come from
+	// setup.VaultKVMDetail, not a re-inlined literal. Reverting to the bare
+	// "a hardware/VM limit no install can fix" string fails this.
+	if got.Detail != setup.VaultKVMDetail() {
+		t.Errorf("CC3 detail = %q, want it sourced verbatim from setup.VaultKVMDetail() = %q", got.Detail, setup.VaultKVMDetail())
+	}
 }
 
 func TestDeriveSetupItems_BackendNoRunner(t *testing.T) {
