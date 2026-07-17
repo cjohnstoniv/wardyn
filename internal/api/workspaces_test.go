@@ -5,6 +5,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -87,5 +89,65 @@ func TestGetDeleteScanWorkspaceBadID(t *testing.T) {
 	}
 	if w := do(t, h.srv, http.MethodPost, "/api/v1/workspaces/not-a-uuid/scan", adminToken, ""); w.Code != http.StatusBadRequest {
 		t.Errorf("scan bad id: code = %d, want 400", w.Code)
+	}
+}
+
+// ─── writeEnvAsCode containment ──────────────────────────────────────────────
+
+// TestWriteEnvAsCode_RefusesSymlinkEscape pins the containment guarantee the
+// finalize step's env-as-code emit depends on. The tree it writes into is
+// exactly the tree an in-sandbox (prompt-injectable) agent can write to on a
+// Writable local_dir — and a poisoned repo checked out into a local_dir needs no
+// Writable at all, since git happily carries symlinks. A lexical
+// filepath.Join/HasPrefix check passes for any path whose STRING stays under
+// root, so an `AGENTS.md -> <outside>` symlink would be FOLLOWED and truncate an
+// operator file (wardynd runs as the operator in host mode). The counterfactual:
+// with os.WriteFile restored, this overwrites `outside` and the test fails.
+func TestWriteEnvAsCode_RefusesSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "bashrc")
+	const sacred = "# the operator's real file"
+	if err := os.WriteFile(outside, []byte(sacred), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The sandbox plants the symlink before finalize runs.
+	if err := os.Symlink(outside, filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := writeEnvAsCode(root, map[string]string{"AGENTS.md": "generated content"})
+
+	if err == nil {
+		t.Error("writeEnvAsCode must REFUSE to write through a symlink escaping the workspace")
+	}
+	got, rerr := os.ReadFile(outside)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(got) != sacred {
+		t.Errorf("host file outside the workspace was overwritten through a symlink: got %q, want %q", got, sacred)
+	}
+}
+
+// TestWriteEnvAsCode_WritesNestedFiles keeps the fix honest: the containment
+// guard must not break the normal emit (a nested .devcontainer/ path).
+func TestWriteEnvAsCode_WritesNestedFiles(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		".devcontainer/devcontainer.json": `{"name":"x"}`,
+		"AGENTS.md":                       "# agents",
+	}
+	if err := writeEnvAsCode(root, files); err != nil {
+		t.Fatalf("writeEnvAsCode: %v", err)
+	}
+	for rel, want := range files {
+		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", rel, got, want)
+		}
 	}
 }

@@ -4,12 +4,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -17,6 +19,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// imageBuildTimeout bounds a per-run sandbox image build (BYOI wrap, devcontainer,
+// workspace profile). The build is detached from the request ctx so a client
+// disconnect cannot abort it — which leaves it needing a deadline of its own, or a
+// wedged docker pull would hold the create handler open forever. Generous: a cold
+// devcontainer build pulls a base image and runs the repo's full setup.
+const imageBuildTimeout = 30 * time.Minute
 
 // createRunRequest is the POST /api/v1/runs body.
 type createRunRequest struct {
@@ -469,6 +478,18 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 	}
 
+	// CLIENT-DISCONNECT ISOLATION (M26), same rationale as dispatchWithVerify's own
+	// detach — which sits AFTER this block and so never covered it. From here on the
+	// run row exists and MUST be driven to a terminal state or dispatched. An image
+	// build is a multi-minute docker pull+build that honours cancellation, so a
+	// client Ctrl-C, closed tab, or LB read timeout would abort an otherwise-healthy
+	// build AND — far worse — take the FAILED-compensators below down with it: their
+	// CAS runs on this same ctx and cannot write the state it exists to write, so the
+	// run strands PENDING with no audit and no revoke until the next daemon boot.
+	// Detach from cancellation (values preserved); the build gets its own explicit
+	// deadline below instead of the client's connection being the de-facto one.
+	ctx = context.WithoutCancel(ctx)
+
 	// Resolve the sandbox image. Default: the agent convention image. Precedence:
 	// a BYOI wrap (top) > a request-level devcontainer build > the primary onboarded
 	// workspace's profile. A BYOI or DEVCONTAINER-REPO build failure marks the run
@@ -481,7 +502,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
 		// shell or the harness binary).
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, req.Image, outTag)
+		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag)
+		cancelBuild()
 		if berr != nil {
 			// CAS from PENDING so a run a concurrent kill already moved to KILLED
 			// is not silently clobbered back to FAILED (was: unconditional write).
@@ -501,7 +524,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			})))
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
-		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(ctx, req.DevcontainerRepo, req.DevcontainerRef, outTag)
+		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag)
+		cancelBuild()
 		if berr != nil {
 			// CAS from PENDING so a run a concurrent kill already moved to KILLED
 			// is not silently clobbered back to FAILED (was: unconditional write).
@@ -520,9 +545,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 				"devcontainer_repo": req.DevcontainerRepo, "image": built,
 			})))
 	case len(wsRefs) > 0:
-		if built, ok := s.resolveWorkspaceImage(ctx, runID, wsRefs[0]); ok {
+		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0]); ok {
 			image = built
 		}
+		cancelBuild()
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write

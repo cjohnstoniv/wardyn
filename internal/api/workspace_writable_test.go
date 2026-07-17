@@ -4,9 +4,7 @@
 package api
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -22,7 +20,6 @@ import (
 // be edited. These tests pin both directions: read-only stays the default, and an
 // operator's explicit Writable opt-in is actually honored.
 func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
-	s := &Server{}
 	var run types.AgentRun
 	var policy types.RunPolicySpec
 	ws := types.Workspace{
@@ -32,7 +29,7 @@ func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 		// Writable deliberately left false.
 	}
 
-	s.wireWorkspaceSource(context.Background(), uuid.New(), time.Now(), &run, &policy, ws)
+	wireWorkspaceSource(&run, &policy, ws)
 
 	if len(policy.WorkspaceMounts) != 1 {
 		t.Fatalf("want exactly 1 workspace mount, got %d", len(policy.WorkspaceMounts))
@@ -52,7 +49,6 @@ func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 }
 
 func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
-	s := &Server{}
 	var run types.AgentRun
 	var policy types.RunPolicySpec
 	ws := types.Workspace{
@@ -62,7 +58,7 @@ func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 		Writable: true, // operator explicitly ticked it
 	}
 
-	s.wireWorkspaceSource(context.Background(), uuid.New(), time.Now(), &run, &policy, ws)
+	wireWorkspaceSource(&run, &policy, ws)
 
 	if len(policy.WorkspaceMounts) != 1 {
 		t.Fatalf("want exactly 1 workspace mount, got %d", len(policy.WorkspaceMounts))

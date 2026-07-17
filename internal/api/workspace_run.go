@@ -304,6 +304,13 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
 	}
+	// Detach from request cancellation BEFORE any of the launch's durable work: the
+	// claim, mint, CreateRun, status flip and the multi-minute devcontainer IMAGE
+	// BUILD all run here, and dispatch's own WithoutCancel lands too late to protect
+	// them. A client that walks away mid-build would otherwise cancel the build,
+	// and resolveWorkspaceImage's fail-open would silently downgrade the run to the
+	// convention image — which then fails on a missing toolchain (exit 127).
+	ctx = context.WithoutCancel(ctx)
 	runID := uuid.New()
 	// Atomically claim the workspace's serial import-step slot BEFORE dispatch (M1):
 	// CAS active_run_id from the value the caller observed (ws.ActiveRunID) to this
@@ -317,6 +324,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		return types.AgentRun{}, errImportStepBusy
 	}
 	release := func(e error) (types.AgentRun, error) {
+		s.failPendingRun(ctx, runID)
 		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
 		return types.AgentRun{}, e
 	}
@@ -347,10 +355,16 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		AutoStopAfterSec: 3600,
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
-	ghGrantID, sshGrants := s.wireWorkspaceSource(ctx, runID, now, &run, &policy, ws)
+	cloneURL := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return release(fmt.Errorf("create verify run: %w", err))
+	}
+	// Clone grants only AFTER the run row exists — credential_grants.run_id has an
+	// immediate FK to agent_runs(id).
+	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, cloneURL)
+	if gerr != nil {
+		return release(fmt.Errorf("create verify clone grants: %w", gerr))
 	}
 
 	// Flip to `verifying` BEFORE dispatch — mirror launchScanRun's pre-dispatch
@@ -408,6 +422,9 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
 	}
+	// Detach from request cancellation before the durable launch work + image build
+	// (same rationale as launchVerifyRun).
+	ctx = context.WithoutCancel(ctx)
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, false, fmt.Errorf("runner capabilities unavailable: %w", cerr)
@@ -435,12 +452,8 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		now := s.cfg.Now().UTC()
 		// A CreateGrant failure AFTER CreateRun (below) would otherwise orphan the
 		// persisted RunPending run + leave its minted run token / eligible grants
-		// un-revoked. Fail the run and run the revoke cascade — mirrors reconcileFinalize
-		// (minus the sandbox teardown: dispatch has not run yet). Conditional on
-		// RunPending, so an abort BEFORE CreateRun (mint / create failure) cleanly no-ops.
-		if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed); applied {
-			s.revokeRunCascade(ctx, runID)
-		}
+		// un-revoked.
+		s.failPendingRun(ctx, runID)
 		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 			RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined, Status: recordStatusFailed, StartedAt: now, FinishedAt: &now,
 			FailureHint: "launch failed: " + reason.Error(),
@@ -498,10 +511,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
-	ghGrantID, sshGrants := s.wireWorkspaceSource(ctx, runID, now, &run, &policy, ws)
+	cloneURL := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return abort(fmt.Errorf("create record run: %w", err))
+	}
+	// Clone grants only AFTER the run row exists — credential_grants.run_id has an
+	// immediate FK to agent_runs(id).
+	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, cloneURL)
+	if gerr != nil {
+		return abort(fmt.Errorf("create record clone grants: %w", gerr))
 	}
 
 	// Record in the built devcontainer image so the task actually runs (its
@@ -584,44 +603,78 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	return created, weakCC, nil
 }
 
+// failPendingRun finalizes a run that was persisted but never dispatched: CAS
+// RunPending→RunFailed and run the revoke cascade, so an aborted launch leaves
+// no orphaned run holding a live minted token / eligible grants. Mirrors
+// reconcileFinalize minus the sandbox teardown (dispatch has not run yet).
+// Conditional on RunPending, so a call from a pre-CreateRun failure (claim /
+// mint) cleanly no-ops.
+func (s *Server) failPendingRun(ctx context.Context, runID uuid.UUID) {
+	if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed); applied {
+		s.revokeRunCascade(ctx, runID)
+	}
+}
+
 // wireWorkspaceSource points run+policy at the workspace source: a repo
-// clones (run.Repo, with best-effort GitHub/SSH read grants); a local dir is
-// bind-mounted at the composer workspace target. Shared by launchVerifyRun
-// and launchRecordRun.
-func (s *Server) wireWorkspaceSource(ctx context.Context, runID uuid.UUID, now time.Time, run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (ghGrantID *uuid.UUID, sshGrants map[string]string) {
+// clones (run.Repo); a local dir is bind-mounted at the composer workspace
+// target. It returns the repo's clone URL ("" for a local dir) to hand to
+// workspaceSourceGrants. Shared by launchVerifyRun and launchRecordRun.
+//
+// ORDERING (load-bearing): this is a PURE run/policy mutation, so it must run
+// BEFORE Store.CreateRun persists the row — whereas the clone grants it used to
+// also create must run AFTER it, since credential_grants.run_id REFERENCES
+// agent_runs(id) with an immediate FK. Doing both halves here forced one of the
+// two orders to be wrong; the grant half is split out for that reason.
+func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURL string) {
 	if ws.Kind == types.WorkspaceKindRepo {
 		run.Repo = ws.Source
-		if u := repoCloneURL(ws.Source); u != "" {
-			if grant := s.maybeGitHubReadGrant(ctx, runID, now, u); grant != nil {
-				ghGrantID = grant
-			}
-			sshGrants = s.maybeSSHKeyGrant(ctx, runID, now, u)
-		}
-	} else {
-		// ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted. Omitting
-		// it here mounted every imported workspace read-only, which made the Record
-		// step's own promise ("so the agent can make changes") impossible to keep:
-		// `pnpm install` cannot write node_modules, a build cannot emit artifacts,
-		// and no source file can be edited — i.e. no contribution, from the very flow
-		// that exists to record one. Honor the operator's explicit per-workspace
-		// opt-in instead, mirroring the composer's ws.ReadWrite; the default is still
-		// read-only, so this widens nothing unless a human ticked the box.
-		ro := !ws.Writable
-		policy.WorkspaceMounts = []types.WorkspaceMount{
-			{Source: ws.Source, Target: composerWorkspaceTarget, ReadOnly: &ro},
-		}
-		run.WorkspacePath = ws.Source
+		return repoCloneURL(ws.Source)
 	}
-	return ghGrantID, sshGrants
+	// ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted. Omitting
+	// it here mounted every imported workspace read-only, which made the Record
+	// step's own promise ("so the agent can make changes") impossible to keep:
+	// `pnpm install` cannot write node_modules, a build cannot emit artifacts,
+	// and no source file can be edited — i.e. no contribution, from the very flow
+	// that exists to record one. Honor the operator's explicit per-workspace
+	// opt-in instead, mirroring the composer's ws.ReadWrite; the default is still
+	// read-only, so this widens nothing unless a human ticked the box.
+	ro := !ws.Writable
+	policy.WorkspaceMounts = []types.WorkspaceMount{
+		{Source: ws.Source, Target: composerWorkspaceTarget, ReadOnly: &ro},
+	}
+	run.WorkspacePath = ws.Source
+	return ""
+}
+
+// workspaceSourceGrants creates the repo clone's read credentials. It MUST be
+// called AFTER Store.CreateRun: credential_grants.run_id REFERENCES
+// agent_runs(id) (non-deferrable), so a grant written before the run row is
+// rejected by the FK. A local dir (cloneURL "") needs no grant.
+func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) (*uuid.UUID, map[string]string, error) {
+	if cloneURL == "" {
+		return nil, nil, nil
+	}
+	ghGrantID, err := s.maybeGitHubReadGrant(ctx, runID, now, cloneURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	sshGrants, err := s.maybeSSHKeyGrant(ctx, runID, now, cloneURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ghGrantID, sshGrants, nil
 }
 
 // maybeGitHubReadGrant creates a read-only github_token grant for a github.com
-// clone URL (nil otherwise / on failure) — extracted from launchScanRun's
-// private-repo clone support so launchVerifyRun can reuse it.
-func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) *uuid.UUID {
+// clone URL (nil for any other host) — extracted from launchScanRun's
+// private-repo clone support so launchVerifyRun can reuse it. A CreateGrant
+// failure is returned, never swallowed: the clone cannot authenticate without
+// the grant, so the launch must fail loudly rather than dispatch a sandbox
+// whose private-repo clone is guaranteed to 403.
+func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) (*uuid.UUID, error) {
 	u, perr := neturl.Parse(cloneURL)
 	if perr != nil || u.Hostname() != "github.com" {
-		return nil
+		return nil, nil
 	}
 	gid := uuid.New()
 	scope, _ := json.Marshal(map[string]any{
@@ -631,9 +684,9 @@ func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now 
 		ID: gid, RunID: runID, CreatedAt: now,
 		Spec: types.GrantSpec{Kind: types.GrantGitHubToken, Scope: scope, TTLSeconds: 600},
 	}); gerr != nil {
-		return nil
+		return nil, fmt.Errorf("create github read grant: %w", gerr)
 	}
-	return &gid
+	return &gid, nil
 }
 
 // maybeSSHKeyGrant synthesizes a run-scoped ssh_key grant for an SSH/scp clone
@@ -644,26 +697,26 @@ func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now 
 // The grant's host is the host git actually dials (so the sandbox ssh_config
 // stanza matches), while key_secret_ref is the CANONICAL ssh-key-<host> secret
 // (so either the github.com or ssh.github.com URL form resolves one stored key).
-func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) map[string]string {
+func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) (map[string]string, error) {
 	host, ok := sshCloneHost(cloneURL)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if _, ok := sshOver443Endpoint(host); !ok {
-		return nil
+		return nil, nil
 	}
 	secretName, ok := canonicalSSHKeySecret(host)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	// Only synthesize a grant when the key is actually present — otherwise the
 	// clone would fail; the onboarding guard (below) rejects that case up front.
 	names, err := s.listUserSecretNames(ctx)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	if !slices.Contains(names, secretName) {
-		return nil
+		return nil, nil
 	}
 	gid := uuid.New()
 	scope, _ := json.Marshal(map[string]any{"host": host, "key_secret_ref": secretName})
@@ -671,9 +724,9 @@ func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time
 		ID: gid, RunID: runID, CreatedAt: now,
 		Spec: types.GrantSpec{Kind: types.GrantSSHKey, Scope: scope, TTLSeconds: 600},
 	}); gerr != nil {
-		return nil
+		return nil, fmt.Errorf("create ssh key grant: %w", gerr)
 	}
-	return map[string]string{host: gid.String()}
+	return map[string]string{host: gid.String()}, nil
 }
 
 // reconcileWorkspaceRun is called when a governed scan/verify run reaches a
@@ -902,6 +955,9 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	if url == "" {
 		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", ws.Source)
 	}
+	// Detach from request cancellation before the durable launch work (same
+	// rationale as launchVerifyRun).
+	ctx = context.WithoutCancel(ctx)
 
 	runID := uuid.New()
 	// Claim the workspace's serial import-step slot BEFORE dispatch (H14): the scan
@@ -916,6 +972,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		return types.AgentRun{}, errImportStepBusy
 	}
 	scanRelease := func(e error) (types.AgentRun, error) {
+		s.failPendingRun(ctx, runID)
 		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
 		return types.AgentRun{}, e
 	}
@@ -943,7 +1000,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		State:            types.RunPending,
 		SPIFFEID:         id.SPIFFEID,
 		RunnerTarget:     s.cfg.RunnerTarget,
-		WorkspaceID:      &wsID, // marks this a scan run + the trusted linkage
+		WorkspaceID:      &wsID,          // marks this a scan run + the trusted linkage
 		AutoStopAfterSec: scanIdleCapSec, // reaper reads the run row (U006); == scanPolicy below
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
@@ -968,9 +1025,11 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	// contents:read (least privilege for a clone). It fails CLOSED when no
 	// GitHubMinter is configured; a PUBLIC repo clones credential-free regardless.
 	// Non-GitHub private hosts would need a git_pat grant (a further follow-up).
-	ghGrantID := s.maybeGitHubReadGrant(ctx, runID, now, url)
 	// SSH clone URL: synthesize the ssh_key grant + surface it as WARDYN_SSH_GRANTS.
-	sshGrants := s.maybeSSHKeyGrant(ctx, runID, now, url)
+	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, url)
+	if gerr != nil {
+		return scanRelease(fmt.Errorf("create scan clone grants: %w", gerr))
+	}
 
 	// Minimal scan policy: allow only the git host(s) the clone needs + a short
 	// auto-stop. No workspace mounts, no subscription — wardyn-scan uploads to the
