@@ -228,6 +228,14 @@ captured session. The workspace *import* flow has its own Verify step with
 different semantics: it executes the operator-approved setup commands in a
 governed sandbox to prove the environment builds.)
 
+**From the CLI:** `wardyn record task <workspace-id> <task-key>` records a single
+workspace-import task (the `task-key` is one of the workspace's derived
+`record_tasks` — `build`/`test`/`lint`/`setup`/`custom`) in an OPEN (allow-all
+egress) sandbox, so you can learn exactly what one build/test step actually uses.
+The session idles for `wardyn attach`; when it ends, the capture lands on the
+workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
+profile (or promote the observed egress from the console's import panel).
+
 ## Level 3 — enable the AI Composer (describe a task, get a proposed run)
 
 The **AI Run Composer** turns a plain-English task into a *proposed* confined run

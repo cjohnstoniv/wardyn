@@ -31,8 +31,10 @@ A pluggable seam in Wardyn has five parts. Four seams implement all of parts
 `-tags docker`) — the rest carry the honest per-row "Seam status" in §3:
 
 1. **An interface** (`identity.Provider`, `secretstore.Store`, `recording.Store`,
-   `runner.Runner`, `audit.Sink`, …) — the contract the control plane talks to.
-   Most carry a `Name()` method so the running impl is self-describing.
+   `runner.Runner`/`substrate.Substrate`, …) — the contract the control plane talks
+   to. Most carry a `Name()` method so the running impl is self-describing. (Some
+   extension points — audit sinks, the LLM gateway forwarder, content detection —
+   are interfaces too but are wired through config, not a registry; see §3.)
 2. **A registry** built on the shared `internal/component.Registry[C]`: a
    name→constructor map with default resolution and duplicate-name detection
    (one tested implementation, reused by every seam).
@@ -72,8 +74,10 @@ These run in the control plane / proxy *around* the seam, not inside it.
 4. Add a row to the matrix below.
 5. For the registry-backed seams (identity, secret store, recording, confinement
    substrate) it now appears in `/healthz.components.<seam>.available`
-   automatically and is selectable via `WARDYN_<SEAM>=<name>` (the substrate
-   selects via `-runner`/`WARDYN_RUNNER`; a build-tag-gated impl like the OCI
+   automatically (`<seam>` ∈ `identity`, `secret_store`, `recording`, `sandbox`)
+   and is selectable via that seam's selector env var — `WARDYN_IDENTITY`,
+   `WARDYN_SECRET_STORE`, and `WARDYN_RECORDING_STORE` respectively (the substrate
+   selects via the `-runner` flag / `WARDYN_RUNNER`; a build-tag-gated impl like the OCI
    substrate registers — and thus appears — only in builds that compile it, so a
    tagless binary honestly advertises `sandbox.available: []` and fails closed
    on `-runner docker`). Seams **without** a registry are wired through their own
@@ -109,7 +113,7 @@ registry + conformance exist today; **planned** = interface lands on the roadmap
 | Egress policy | `egress.Evaluator` | `builtin` (RunPolicySpec) | **OPA/Rego** | `opa` / `cedar` (planned) | `egress/evaluatortest` | shipped (seam); evaluator alternates planned |
 | LLM gateway | `proxy.Forwarder` | `direct` (pinned-IP RoundTrip) | LiteLLM / Portkey / Envoy AI GW behind wardyn-proxy | external gateway (planned) | — | shipped (seam); external gateway planned |
 | Content detection | `contentscan.Detector` | builtin (known-secret / regex / entropy / PII) + sidecar | builtin + **LLM Guard / Presidio** sidecar | `DetectorSidecarURL` (shipped) | — | shipped (detector seam) |
-| Audit sinks | `audit.Sink` | none (Postgres recorder always) | OpenTelemetry → SIEM | `file` / `webhook` / `syslog` (shipped) via `WARDYN_AUDIT_SINKS` | — | shipped |
+| Audit sinks | `audit.Sink` | none (Postgres recorder always) | OpenTelemetry → SIEM | `file` / `webhook` / `syslog` (shipped) via `WARDYN_AUDIT_SINKS` | — | shipped (non-registry: struct-field JSON parse, `internal/audit/sinks/config.go` — not a `/healthz` component) |
 | Composer backends | `composer.Registry` | none (opt-in) | — | `anthropic` / `openai` / `cli` / `fake` via `WARDYN_COMPOSER_CONFIG` | — | shipped |
 | eBPF ground-truth | host sensor ingest | none (honest-degraded `/healthz`) | **Tetragon** (enforcement) | Falco / Tracee (ingest-compatible) | — | shipped (ingest seam) |
 

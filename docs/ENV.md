@@ -32,7 +32,7 @@ log them.
 | `WARDYN_PG_DSN` 🔒 | string | (unset, required) | Postgres DSN (flag `-dsn`) |
 | `WARDYN_PG_MIGRATE_DSN` 🔒 | string | (unset) | optional owner/migrator DSN; splits migrate vs runtime pool (flag `-migrate-dsn`) |
 | `WARDYN_IDENTITY` | string | `embedded` | identity provider seam (flag `-identity`) |
-| `WARDYN_TRUST_DOMAIN` | string | `embedded.DefaultTrustDomain` | SPIFFE trust domain (flag `-trust-domain`) |
+| `WARDYN_TRUST_DOMAIN` | string | `wardyn.local` | SPIFFE trust domain (flag `-trust-domain`) |
 | `WARDYN_SECRET_STORE` | string | `pg` | secret store seam (flag `-secret-store`) |
 | `WARDYN_RECORDING_STORE` | string | `fs` | recording store seam (flag `-recording-store`) |
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory (flag `-recording-dir`) |
