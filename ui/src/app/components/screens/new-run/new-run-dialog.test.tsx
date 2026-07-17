@@ -34,34 +34,47 @@ const setSecretMock = vi.fn();
 
 // Re-export the real HttpError so the orchestrator's status-based error mapping
 // still type-matches.
-vi.mock("../../../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api")>("../../../lib/api");
-  return {
-    HttpError: actual.HttpError,
-    api: {
-      listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
-      compose: (...a: unknown[]) => composeMock(...a),
-      createRun: (...a: unknown[]) => createRunMock(...a),
-      health: (...a: unknown[]) => healthMock(...a),
-      listSecrets: (...a: unknown[]) => listSecretsMock(...a),
-      listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
-      listPolicies: () => Promise.resolve([]),
-      // The setup-hint effect + the checklist's optimistic-flip re-probe both call
-      // this — must exist on every test's mock or the dialog's on-open effect
-      // throws synchronously (undefined is not a function).
-      getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a),
-      scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
-      setSecret: (...a: unknown[]) => setSecretMock(...a),
-      createPolicy: vi.fn(),
-      // Fire-and-forget mode-transition beacon; the dialog calls this on every
-      // mode change, so it must exist even though these tests don't assert on it.
-      telemetry: vi.fn().mockResolvedValue(undefined),
-    },
-  };
-});
+// The dialog + its wizard/form children pull methods from several domain
+// modules; mock each with only the methods that tree calls. HttpError stays the
+// real class (imported from the barrel below — barrel re-exports core's class).
+vi.mock("../../../lib/api/compose", () => ({
+  composer: {
+    listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
+    compose: (...a: unknown[]) => composeMock(...a),
+    // Fire-and-forget mode-transition beacon; the dialog calls this on every
+    // mode change, so it must exist even though these tests don't assert on it.
+    telemetry: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock("../../../lib/api/runs", () => ({
+  runs: { createRun: (...a: unknown[]) => createRunMock(...a) },
+}));
+vi.mock("../../../lib/api/workspaces", () => ({
+  workspaces: {
+    listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
+    scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/health", () => ({
+  health: { health: (...a: unknown[]) => healthMock(...a) },
+}));
+vi.mock("../../../lib/api/secrets", () => ({
+  secrets: {
+    listSecrets: (...a: unknown[]) => listSecretsMock(...a),
+    setSecret: (...a: unknown[]) => setSecretMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/policies", () => ({
+  policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
+}));
+// The setup-hint effect + the checklist's optimistic-flip re-probe both call
+// getSetupStatus — must exist or the dialog's on-open effect throws synchronously.
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
 
 import { NewRunDialog } from "./new-run-dialog";
-import { HttpError } from "../../../lib/api";
+import { HttpError } from "../../../lib/api/core";
 import type { SetupStatus } from "../../../lib/types";
 
 // A fully-ready SetupStatus (composer + llm access both configured) so the

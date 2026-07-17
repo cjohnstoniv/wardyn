@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { ApprovalKind, ApprovalRequest } from "../../lib/types";
-import { api } from "../../lib/api";
+import { approvals as api } from "../../lib/api/approvals";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";

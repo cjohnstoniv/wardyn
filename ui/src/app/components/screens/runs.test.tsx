@@ -16,8 +16,8 @@ import type { AgentRun } from "../../lib/types";
 
 const listRunsMock = vi.fn();
 const killRunMock = vi.fn();
-vi.mock("../../lib/api", () => ({
-  api: {
+vi.mock("../../lib/api/runs", () => ({
+  runs: {
     listRuns: (...a: unknown[]) => listRunsMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
   },

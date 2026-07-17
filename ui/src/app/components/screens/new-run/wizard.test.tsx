@@ -33,24 +33,34 @@ const createPolicyMock = vi.fn();
 const setSecretMock = vi.fn();
 const preflightRunMock = vi.fn();
 
-vi.mock("../../../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api")>("../../../lib/api");
-  return {
-    HttpError: actual.HttpError,
-    api: {
-      health: (...a: unknown[]) => healthMock(...a),
-      listSecrets: (...a: unknown[]) => listSecretsMock(...a),
-      listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
-      listPolicies: () => Promise.resolve([]),
-      profileRun: (...a: unknown[]) => profileRunMock(...a),
-      createRun: (...a: unknown[]) => createRunMock(...a),
-      createPolicy: (...a: unknown[]) => createPolicyMock(...a),
-      setSecret: (...a: unknown[]) => setSecretMock(...a),
-      preflightRun: (...a: unknown[]) => preflightRunMock(...a),
-      scanWorkspace: vi.fn(),
-    },
-  };
-});
+vi.mock("../../../lib/api/health", () => ({
+  health: { health: (...a: unknown[]) => healthMock(...a) },
+}));
+vi.mock("../../../lib/api/secrets", () => ({
+  secrets: {
+    listSecrets: (...a: unknown[]) => listSecretsMock(...a),
+    setSecret: (...a: unknown[]) => setSecretMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/workspaces", () => ({
+  workspaces: {
+    listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
+    scanWorkspace: vi.fn(),
+  },
+}));
+vi.mock("../../../lib/api/policies", () => ({
+  policies: {
+    listPolicies: () => Promise.resolve([]),
+    createPolicy: (...a: unknown[]) => createPolicyMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/runs", () => ({
+  runs: {
+    profileRun: (...a: unknown[]) => profileRunMock(...a),
+    createRun: (...a: unknown[]) => createRunMock(...a),
+    preflightRun: (...a: unknown[]) => preflightRunMock(...a),
+  },
+}));
 
 import { PermissionWizard } from "./wizard";
 import { initialWizardState } from "./wizard-types";

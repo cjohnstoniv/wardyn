@@ -44,7 +44,7 @@ vi.mock("@xterm/addon-fit", () => {
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@fontsource/jetbrains-mono/400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
-vi.mock("../lib/api", () => ({ getToken: () => null }));
+vi.mock("../lib/api/core", () => ({ getToken: () => null }));
 
 // --- Fake WebSocket --------------------------------------------------------
 class FakeWebSocket {

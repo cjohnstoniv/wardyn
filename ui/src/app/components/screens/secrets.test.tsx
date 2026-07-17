@@ -20,12 +20,16 @@ vi.mock("sonner", () => ({
 const listSecretsMock = vi.fn();
 const deleteSecretMock = vi.fn();
 const setSecretMock = vi.fn();
-vi.mock("../../lib/api", () => ({
-  api: {
+vi.mock("../../lib/api/secrets", () => ({
+  secrets: {
     listSecrets: () => listSecretsMock(),
     deleteSecret: (...a: unknown[]) => deleteSecretMock(...a),
     setSecret: (...a: unknown[]) => setSecretMock(...a),
   },
+}));
+// The screen also lists composer backends (advisory); stub it to an empty list.
+vi.mock("../../lib/api/compose", () => ({
+  composer: { listComposerBackends: () => Promise.resolve([]) },
 }));
 
 import { SecretsScreen, AddSecretDialog } from "./secrets";

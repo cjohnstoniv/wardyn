@@ -27,11 +27,10 @@ const getSetupStatusMock = vi.fn();
 
 // The AI-diagnose affordance is composer-gated: it shows only when a composer
 // backend is configured (listComposerBackends returns a non-empty list).
-vi.mock("../../../lib/api", () => ({
-  api: {
+vi.mock("../../../lib/api/workspaces", () => ({
+  workspaces: {
     getWorkspace: (...a: unknown[]) => getWorkspaceMock(...a),
     listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
-    listSecrets: (...a: unknown[]) => listSecretsMock(...a),
     scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
     setSetupCommands: (...a: unknown[]) => setSetupCommandsMock(...a),
     verifyWorkspace: (...a: unknown[]) => verifyWorkspaceMock(...a),
@@ -39,15 +38,24 @@ vi.mock("../../../lib/api", () => ({
     getObservedEgress: (...a: unknown[]) => getObservedEgressMock(...a),
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
     finalizeWorkspace: (...a: unknown[]) => finalizeWorkspaceMock(...a),
-    listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
     suggestVerifyFix: (...a: unknown[]) => suggestVerifyFixMock(...a),
-    getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a),
     // Referenced by the embedded Add* dialogs only when opened; present so a
     // stray effect never throws "undefined is not a function".
     createWorkspace: vi.fn(),
     updateWorkspace: vi.fn(),
-    setSecret: vi.fn(),
   },
+}));
+vi.mock("../../../lib/api/secrets", () => ({
+  secrets: { listSecrets: (...a: unknown[]) => listSecretsMock(...a), setSecret: vi.fn() },
+}));
+vi.mock("../../../lib/api/compose", () => ({
+  composer: { listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a) },
+}));
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+vi.mock("../../../lib/api/runs", () => ({
+  runs: { killRun: vi.fn() },
 }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },

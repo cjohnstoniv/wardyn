@@ -33,7 +33,8 @@ import "@xterm/xterm/css/xterm.css";
 // cell positions, so Claude Code's TUI renders cleanly instead of degrading to
 // "__" the way the OS monospace fallback does.
 import "@fontsource/jetbrains-mono/400.css";
-import { api, getToken } from "../lib/api";
+import { getToken } from "../lib/api/core";
+import { runs } from "../lib/api/runs";
 import { Loader2, TriangleAlert, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "./ui/utils";
 
@@ -184,7 +185,7 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
       if (tokenOnlyMode) {
         // Mint a fresh single-use ticket per (re)connect — the previous one was
         // consumed by the last handshake — then open the WS with ?ticket=.
-        api
+        runs
           .attachTicket(runId)
           .then((ticket) => {
             if (disposed) return;

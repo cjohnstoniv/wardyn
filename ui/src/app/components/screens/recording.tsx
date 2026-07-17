@@ -15,7 +15,8 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import type { AgentRun, Recording } from "../../lib/types";
-import { api } from "../../lib/api";
+import { recordings as api } from "../../lib/api/recordings";
+import { runs as runsApi } from "../../lib/api/runs";
 import { fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -94,7 +95,7 @@ export function RecordingScreen() {
     setCheckedCount(0);
     setCheckFailures(0);
 
-    api
+    runsApi
       .listRuns()
       .then((runs) => {
         if (cancelled) return;

@@ -16,7 +16,11 @@ import { RunsScreen } from "./components/screens/runs";
 // chunk. Import these from the screen module and the split below is undone.
 import { setupDismissed, shouldOpenSetup } from "./components/screens/setup/setup-gate";
 import { WardynMark } from "./components/wardyn/logo";
-import { api, onUnauthorized, probeAuth, setToken } from "./lib/api";
+import { onUnauthorized, probeAuth, setToken } from "./lib/api/core";
+import { health } from "./lib/api/health";
+import { setup as setupApi } from "./lib/api/setup";
+import { approvals as approvalsApi } from "./lib/api/approvals";
+import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
 import type { AgentRun } from "./lib/types";
 
@@ -85,7 +89,7 @@ export default function App() {
   const location = useLocation();
 
   const refreshPending = React.useCallback(() => {
-    api
+    approvalsApi
       .listApprovals()
       .then((a) => setPendingApprovals(a.filter((x) => x.state === "PENDING").length))
       .catch(() => {
@@ -94,7 +98,7 @@ export default function App() {
   }, []);
 
   const refreshAttention = React.useCallback(() => {
-    api
+    runsApi
       .listRuns()
       .then((runs: AgentRun[]) => setAttentionCount(runs.filter((r) => ATTENTION_STATES.has(r.state as string)).length))
       .catch(() => {
@@ -143,7 +147,7 @@ export default function App() {
   React.useEffect(() => {
     if (auth !== "authed") return;
     let active = true;
-    api
+    setupApi
       .getSetupStatus()
       .then((status) => {
         if (active && location.pathname !== "/setup" && shouldOpenSetup(status, setupDismissed())) {
@@ -199,7 +203,7 @@ export default function App() {
                 // left the HttpOnly session cookie alive, so the next auth probe
                 // silently re-signed us back in. logout() is best-effort and always
                 // resolves, so we then drop the local token and return to the gate.
-                await api.logout();
+                await health.logout();
                 setToken(null);
                 setAuth("unauthed");
               }}

@@ -17,7 +17,7 @@ import * as React from "react";
 import { ShieldAlert, Clock, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ApprovalRequest } from "../../lib/types";
-import { api } from "../../lib/api";
+import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Mono } from "./code-block";

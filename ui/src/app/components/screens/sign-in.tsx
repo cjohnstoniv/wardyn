@@ -20,7 +20,8 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
-import { setToken, probeAuth, api } from "../../lib/api";
+import { setToken, probeAuth } from "../../lib/api/core";
+import { health } from "../../lib/api/health";
 
 export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const { theme, toggle } = useTheme();
@@ -34,7 +35,7 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const [trustDomain, setTrustDomain] = React.useState("");
   const [identityProvider, setIdentityProvider] = React.useState("");
   React.useEffect(() => {
-    api.health().then((h) => {
+    health.health().then((h) => {
       if (h.trust_domain) setTrustDomain(h.trust_domain);
       if (h.identity_provider) setIdentityProvider(h.identity_provider);
     });

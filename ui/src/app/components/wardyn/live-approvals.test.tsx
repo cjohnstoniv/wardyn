@@ -11,8 +11,8 @@ import type { ApprovalRequest } from "../../lib/types";
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
 const denyMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
-vi.mock("../../lib/api", () => ({
-  api: {
+vi.mock("../../lib/api/approvals", () => ({
+  approvals: {
     listApprovals: (...a: unknown[]) => listApprovalsMock(...a),
     approve: (...a: unknown[]) => approveMock(...a),
     deny: (...a: unknown[]) => denyMock(...a),

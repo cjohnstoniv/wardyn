@@ -17,7 +17,7 @@
 import * as React from "react";
 import { Info, KeyRound, Loader2, Plus } from "lucide-react";
 import type { SetupStatus } from "../../../lib/types";
-import { api } from "../../../lib/api";
+import { harnessAuth as api } from "../../../lib/api/harness-auth";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { StatusChip } from "../../wardyn/status-chip";

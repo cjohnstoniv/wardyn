@@ -29,7 +29,11 @@ import type {
   Workspace,
   WorkspaceSelection,
 } from "../../../lib/types";
-import { api, HttpError } from "../../../lib/api";
+import { composer as composerApi } from "../../../lib/api/compose";
+import { runs as runsApi } from "../../../lib/api/runs";
+import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { setup as setupApi } from "../../../lib/api/setup";
+import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { deriveReadiness } from "../onboarding/intro";
@@ -76,7 +80,7 @@ export function NewRunDialog({
 
   const loadWorkspaces = React.useCallback(() => {
     setWorkspacesLoading(true);
-    api
+    workspacesApi
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => setWorkspaces([]))
@@ -86,7 +90,7 @@ export function NewRunDialog({
   // compose form state
   const [prompt, setPrompt] = React.useState("");
   // Onboarded-workspace multi-select (mirrors the manual wizard's Basics step).
-  // Empty => ephemeral; api.compose() resolves these against `workspaces`.
+  // Empty => ephemeral; composerApi.compose() resolves these against `workspaces`.
   const [workspaceSelections, setWorkspaceSelections] = React.useState<WorkspaceSelection[]>([]);
   const [attachments, setAttachments] = React.useState<ComposeAttachment[]>([]);
   const [sources, setSources] = React.useState<string[]>([]);
@@ -96,7 +100,7 @@ export function NewRunDialog({
   // Persistent inline error from the last compose attempt (surfaced in the form so
   // a failed compose isn't just a transient toast that looks like "nothing happened").
   const [composeError, setComposeError] = React.useState<string | null>(null);
-  // Live SSE pipeline-stage key from api.compose's onStage callback (see
+  // Live SSE pipeline-stage key from composerApi.compose's onStage callback (see
   // ComposeProgress / compose-stages.ts for the user-facing copy).
   const [stage, setStage] = React.useState<string | undefined>(undefined);
 
@@ -124,7 +128,7 @@ export function NewRunDialog({
   const [wizardInitial, setWizardInitial] = React.useState<WizardState | undefined>(undefined);
 
   // Per-dialog-open correlation id for the client telemetry beacon (mode
-  // transitions only — see api.telemetry). Regenerated each time the dialog opens.
+  // transitions only — see composerApi.telemetry). Regenerated each time the dialog opens.
   const [correlationId, setCorrelationId] = React.useState("");
 
   // Client-owned compose SESSION id (decision 1: no server-side session store) —
@@ -188,7 +192,7 @@ export function NewRunDialog({
     loadWorkspaces();
 
     let alive = true;
-    api
+    composerApi
       .listComposerBackends()
       .then((bs) => {
         if (!alive) return;
@@ -209,7 +213,7 @@ export function NewRunDialog({
     // Best-effort readiness hint for the amber banner above the Describe form —
     // never blocks the chooser, never throws (getSetupStatus already degrades to
     // READY_FALLBACK on any failure, so this simply resolves to "no hint").
-    api
+    setupApi
       .getSetupStatus()
       .then((status) => {
         if (!alive) return;
@@ -224,10 +228,10 @@ export function NewRunDialog({
 
   // Client telemetry beacon: fires once per mode transition (choose → describe →
   // clarify → review → wizard). Best-effort, fire-and-forget — mode + correlation
-  // id ONLY, never prompt/secret content (api.telemetry swallows its own errors).
+  // id ONLY, never prompt/secret content (composerApi.telemetry swallows its own errors).
   React.useEffect(() => {
     if (!open || !correlationId) return;
-    void api.telemetry({ mode, correlation_id: correlationId });
+    void composerApi.telemetry({ mode, correlation_id: correlationId });
   }, [open, mode, correlationId]);
 
   // compose() returns EITHER clarifying questions or a final proposal; route on
@@ -238,7 +242,7 @@ export function NewRunDialog({
     setLaunchError(null);
     setStage(undefined);
     try {
-      const res: ComposeResult = await api.compose(
+      const res: ComposeResult = await composerApi.compose(
         {
           prompt: prompt.trim(),
           workspaceSelections,
@@ -308,7 +312,7 @@ export function NewRunDialog({
     setLaunchError(null);
     setLaunching(true);
     try {
-      const created = await api.createRun({
+      const created = await runsApi.createRun({
         ...result.proposed.run,
         interactive,
         inline_policy: result.proposed.inline_policy,
@@ -345,7 +349,7 @@ export function NewRunDialog({
     if (bySecret.length) {
       setSatisfiedOverrides((prev) => new Set([...prev, ...bySecret]));
     }
-    api
+    setupApi
       .getSetupStatus()
       .then((status) => {
         if (!deriveReadiness(status).llmReady) return;
@@ -373,7 +377,7 @@ export function NewRunDialog({
   // wired below on AddWorkspaceDialog.onSaved — kick it off, then reload the
   // workspace list the re-flip effect (below) watches.
   const fixWorkspace = (workspaceId: string) => {
-    api
+    workspacesApi
       .scanWorkspace(workspaceId)
       .catch(() => {})
       .finally(loadWorkspaces);
@@ -586,7 +590,7 @@ export function NewRunDialog({
           loadWorkspaces();
           // Best-effort scan so the inline path isn't left stuck in pending_scan
           // (matches the Workspaces screen). Refresh once it settles.
-          api.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
+          workspacesApi.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
         }}
       />
 
@@ -601,7 +605,7 @@ export function NewRunDialog({
 }
 
 // Turn a compose() failure into a human description keyed off the HTTP status,
-// matching the endpoint's status semantics (see api.compose / compose.go).
+// matching the endpoint's status semantics (see composerApi.compose / compose.go).
 function composeErrorMessage(e: unknown): string {
   if (e instanceof HttpError) {
     switch (e.status) {

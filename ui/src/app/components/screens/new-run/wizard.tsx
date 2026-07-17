@@ -15,7 +15,11 @@ import type {
   Workspace,
   WorkspaceProfile,
 } from "../../../lib/types";
-import { api } from "../../../lib/api";
+import { policies as policiesApi } from "../../../lib/api/policies";
+import { runs as runsApi } from "../../../lib/api/runs";
+import { health as healthApi } from "../../../lib/api/health";
+import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { getErrorMessage as msg } from "../../../lib/format";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
 import { parseMissingSecret, surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
@@ -96,7 +100,7 @@ export function PermissionWizard({
 
   const loadSecrets = React.useCallback(() => {
     setSecretsLoading(true);
-    api
+    secretsApi
       .listSecrets()
       .then(setSecrets)
       .catch(() => setSecrets([]))
@@ -105,7 +109,7 @@ export function PermissionWizard({
 
   const loadWorkspaces = React.useCallback(() => {
     setWorkspacesLoading(true);
-    api
+    workspacesApi
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => setWorkspaces([]))
@@ -113,14 +117,14 @@ export function PermissionWizard({
   }, []);
 
   // Recorded-profile fast-track: selecting a profile (a workspace recording) loads
-  // its synthesized least-privilege spec (api.profileRun) into steps 2-4. Profiles
+  // its synthesized least-privilege spec (runsApi.profileRun) into steps 2-4. Profiles
   // are tied to the workspace by BEING its recordings — no name/policy matching.
   const [profileLoading, setProfileLoading] = React.useState(false);
   const applyProfile = async (runId: string, key: string) => {
     setProfileLoading(true);
     setError(null);
     try {
-      const p = await api.profileRun(runId);
+      const p = await runsApi.profileRun(runId);
       patch(applyProfileSpecToState(state, p.proposed.inline_policy, workspaces, key));
     } catch (e) {
       setError("Couldn't load that recorded profile: " + msg(e));
@@ -148,7 +152,7 @@ export function PermissionWizard({
     if (initialState) setState(initialState);
     setAvailableClasses(null);
     let alive = true;
-    // M19 fix: api.health() never rejects — it swallows a fetch/parse failure
+    // M19 fix: healthApi.health() never rejects — it swallows a fetch/parse failure
     // into {} (see api.ts) — so the old .catch below was dead code, and an
     // empty/failed probe fell straight into .then() instead. That was then
     // read as a DEFINITIVE "this runner has zero barriers", rendering "No
@@ -160,7 +164,7 @@ export function PermissionWizard({
     // documented CC1-only fallback below.
     let retried = false;
     const probe = () => {
-      api.health().then((h) => {
+      healthApi.health().then((h) => {
         if (!alive) return;
         const classes = (h.confinement_classes ?? []).filter(Boolean);
         if (classes.length === 0 && !retried) {
@@ -244,7 +248,7 @@ export function PermissionWizard({
     setPreflightStatus("loading");
     try {
       const { run, inline_policy } = buildSpec(state, workspaces);
-      setPreflight(await api.preflightRun({ ...run, inline_policy }));
+      setPreflight(await runsApi.preflightRun({ ...run, inline_policy }));
       setPreflightStatus("idle");
     } catch {
       setPreflight(null);
@@ -273,7 +277,7 @@ export function PermissionWizard({
     setLaunching(true);
     try {
       const { run, inline_policy } = buildSpec(state, workspaces);
-      const created = await api.createRun({ ...run, inline_policy });
+      const created = await runsApi.createRun({ ...run, inline_policy });
       if (state.saveAsProfile && state.profileName.trim()) {
         // M14 fix: persist the named policy AFTER the run launches, not before.
         // createPolicy used to run first, so a failed launch (e.g. the
@@ -284,7 +288,7 @@ export function PermissionWizard({
         // save-as-profile failure here (e.g. reusing an existing name) must
         // not undo a run that already launched successfully.
         try {
-          await api.createPolicy(state.profileName.trim(), inline_policy);
+          await policiesApi.createPolicy(state.profileName.trim(), inline_policy);
         } catch {
           /* best-effort — the run already launched */
         }
@@ -374,7 +378,7 @@ export function PermissionWizard({
                 onFixWorkspace={(id) => {
                   // Same scan-and-refresh pattern AddWorkspaceDialog uses, then
                   // re-run preflight so the checklist reflects the new scan status.
-                  api
+                  workspacesApi
                     .scanWorkspace(id)
                     .catch(() => {})
                     .finally(() => {
@@ -450,7 +454,7 @@ export function PermissionWizard({
           // Best-effort scan (matches the Workspaces screen): a local dir reaches
           // "ready" inline, a repo launches its governed scan run — so the inline
           // path isn't left stuck in pending_scan. Refresh once it settles.
-          api.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
+          workspacesApi.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
         }}
       />
     </>

@@ -13,7 +13,8 @@
 // away) exactly like record-pane, so it drops into the ModelStep unchanged.
 import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square } from "lucide-react";
-import { api } from "../../../lib/api";
+import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
+import { runs as runsApi } from "../../../lib/api/runs";
 import { AttachTerminal } from "../../attach-terminal";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -40,7 +41,7 @@ export function HarnessLoginPane({
     setPhase("launching");
     setError("");
     try {
-      const id = await api.harnessLogin(provider);
+      const id = await harnessAuthApi.harnessLogin(provider);
       setRunId(id);
       setPhase("attached");
     } catch (e) {
@@ -55,9 +56,9 @@ export function HarnessLoginPane({
     setPhase("saving");
     setError("");
     try {
-      await api.harnessCredentialPaste(provider, t);
+      await harnessAuthApi.harnessCredentialPaste(provider, t);
       // Best-effort: stop the login sandbox now that we have the token.
-      if (runId) await api.killRun(runId).catch(() => {});
+      if (runId) await runsApi.killRun(runId).catch(() => {});
       setPhase("done");
       onDone();
     } catch (e) {
@@ -67,7 +68,7 @@ export function HarnessLoginPane({
   }, [provider, token, runId, onDone]);
 
   const cancel = React.useCallback(() => {
-    if (runId) api.killRun(runId).catch(() => {});
+    if (runId) runsApi.killRun(runId).catch(() => {});
     onCancel();
   }, [runId, onCancel]);
 

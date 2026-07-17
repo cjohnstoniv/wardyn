@@ -5,7 +5,8 @@
 
 import * as React from "react";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle } from "lucide-react";
-import { api } from "../../lib/api";
+import { secrets as secretsApi } from "../../lib/api/secrets";
+import { composer as composerApi } from "../../lib/api/compose";
 import { getErrorMessage } from "../../lib/format";
 import type { ComposerBackend } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -84,7 +85,7 @@ export function SecretsScreen() {
 
   const load = React.useCallback(() => {
     setStatus("loading");
-    api
+    secretsApi
       .listSecrets()
       .then((n) => {
         setNames(n);
@@ -105,7 +106,7 @@ export function SecretsScreen() {
   React.useEffect(() => {
     let cancelled = false;
     Promise.resolve()
-      .then(() => api.listComposerBackends())
+      .then(() => composerApi.listComposerBackends())
       // ponytail: a request failure folds into the same "no backends" bucket as a
       // genuinely empty list — good enough for this advisory-only section; split
       // out a distinct error state if that ever proves confusing.
@@ -299,7 +300,7 @@ export function SecretsScreen() {
         entity="secret"
         description="Runs that reference this secret by name will no longer be able to resolve it. This cannot be undone."
         onOpenChange={(o) => !o && setToDelete(null)}
-        onDelete={() => api.deleteSecret(toDelete!)}
+        onDelete={() => secretsApi.deleteSecret(toDelete!)}
         onDeleted={() => {
           setToDelete(null);
           load();
@@ -378,7 +379,7 @@ export function AddSecretDialog({
     }
     setSaving(true);
     try {
-      await api.setSecret(n, value);
+      await secretsApi.setSecret(n, value);
       // Clear the value immediately — never retain or echo it.
       setValue("");
       onOpenChange(false);

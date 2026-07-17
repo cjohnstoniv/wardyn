@@ -16,7 +16,7 @@ import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { api } from "../../../lib/api";
+import { setup as api } from "../../../lib/api/setup";
 import { lsGet, lsSet } from "../../../lib/storage";
 import type { SetupStatus } from "../../../lib/types";
 import { HowItWorksStrip, IntroBlurb, deriveReadiness } from "./intro";

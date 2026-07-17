@@ -20,7 +20,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import type { RunPolicy, RunPolicySpec } from "../../lib/types";
-import { api } from "../../lib/api";
+import { policies as api } from "../../lib/api/policies";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";

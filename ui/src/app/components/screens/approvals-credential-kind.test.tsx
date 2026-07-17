@@ -17,10 +17,14 @@ import type { ApprovalRequest } from "../../lib/types";
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 let pending: ApprovalRequest[] = [];
-vi.mock("../../lib/api", () => ({
-  api: {
+vi.mock("../../lib/api/approvals", () => ({
+  approvals: {
     listApprovals: (state: string) => Promise.resolve(state === "PENDING" ? pending : []),
-    // RunContextRow (redesign) fetches the gated run to inline its context.
+  },
+}));
+// RunContextRow (redesign) fetches the gated run to inline its context.
+vi.mock("../../lib/api/runs", () => ({
+  runs: {
     getRun: () =>
       Promise.resolve({
         id: "run_1",

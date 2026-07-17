@@ -14,18 +14,16 @@ const getSetupStatusMock = vi.fn();
 const createRunMock = vi.fn();
 const getRunMock = vi.fn();
 const killRunMock = vi.fn();
-vi.mock("../../../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api")>("../../../lib/api");
-  return {
-    HttpError: actual.HttpError,
-    api: {
-      getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a),
-      createRun: (...a: unknown[]) => createRunMock(...a),
-      getRun: (...a: unknown[]) => getRunMock(...a),
-      killRun: (...a: unknown[]) => killRunMock(...a),
-    },
-  };
-});
+vi.mock("../../../lib/api/runs", () => ({
+  runs: {
+    createRun: (...a: unknown[]) => createRunMock(...a),
+    getRun: (...a: unknown[]) => getRunMock(...a),
+    killRun: (...a: unknown[]) => killRunMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
 
 // AttachTerminal drags in xterm + a live WebSocket; LiveApprovals polls the API.
 // Stub both to inert markers so the card composition is what's under test.

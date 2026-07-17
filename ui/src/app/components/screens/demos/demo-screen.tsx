@@ -14,7 +14,8 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, Play, ShieldAlert, Square, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "../../../lib/api";
+import { runs as api } from "../../../lib/api/runs";
+import { setup as setupApi } from "../../../lib/api/setup";
 import { getErrorMessage } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
@@ -69,7 +70,7 @@ export function DemoScreen() {
   // Mount: readiness probe (gate) + re-attach any still-RUNNING demo from a prior visit.
   React.useEffect(() => {
     let active = true;
-    api
+    setupApi
       .getSetupStatus()
       .then((s) => active && setStatus(s))
       .catch(() => {

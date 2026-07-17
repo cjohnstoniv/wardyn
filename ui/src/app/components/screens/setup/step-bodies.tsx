@@ -34,7 +34,8 @@ import type {
   Workspace,
   WorkspaceProfile,
 } from "../../../lib/types";
-import { api } from "../../../lib/api";
+import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { getErrorMessage } from "../../../lib/format";
 import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
 import { StatusChip } from "../../wardyn/status-chip";
@@ -775,7 +776,7 @@ export function WorkspacesStep({
   const scan = async (w: Workspace) => {
     setScanning((s) => new Set(s).add(w.id));
     try {
-      const { async: isAsync } = await api.scanWorkspace(w.id);
+      const { async: isAsync } = await workspacesApi.scanWorkspace(w.id);
       if (isAsync) {
         toast.info(`Scan started for "${w.name}"`, {
           description: "A governed scan run is analyzing the repo; the status updates when it completes.",
@@ -899,7 +900,7 @@ export function CredentialsStep({
     if (!id) return;
     setSavingAppId(true);
     try {
-      await api.setSecret("github-app-id", id);
+      await secretsApi.setSecret("github-app-id", id);
       onRecheck();
     } catch (e) {
       // Without this catch a failed save is an unhandled rejection: the spinner

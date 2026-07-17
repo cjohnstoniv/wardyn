@@ -16,7 +16,10 @@
 // and every AppShell nav item stays reachable while it's open.
 import * as React from "react";
 import type { ConfinementClass, SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
-import { api } from "../../../lib/api";
+import { health as healthApi } from "../../../lib/api/health";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { setup as setupApi } from "../../../lib/api/setup";
+import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
 import { AddSecretDialog } from "../secrets";
 import { NewRunDialog } from "../new-run/new-run-dialog";
@@ -79,11 +82,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // hands the three corp steps a reload + save pair instead of each keeping its
   // own mount-time GET synced back up via a callback prop.
   const reloadSiteConfig = React.useCallback(() => {
-    return api.getSiteConfig().then(setSiteConfig).catch(() => {});
+    return healthApi.getSiteConfig().then(setSiteConfig).catch(() => {});
   }, []);
 
   const saveSiteConfig = React.useCallback((next: SiteConfig) => {
-    return api.putSiteConfig(next).then(() => setSiteConfig(next));
+    return healthApi.putSiteConfig(next).then(() => setSiteConfig(next));
   }, []);
 
   const recheck = React.useCallback(() => {
@@ -93,7 +96,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // Re-check pull it — a failure leaves the last-known config (or the initial
     // null) in place, never clobbers it. This is the ORCHESTRATOR'S sole GET path.
     reloadSiteConfig();
-    return api
+    return setupApi
       .getSetupStatus()
       .then((s) => {
         setStatus(s);
@@ -105,12 +108,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }, [reloadSiteConfig]);
 
   const loadSecrets = React.useCallback(() => {
-    api.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
+    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
   }, []);
 
   const loadWorkspaces = React.useCallback(() => {
     setWsLoading(true);
-    api
+    workspacesApi
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => setWorkspaces([]))
