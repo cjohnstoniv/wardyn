@@ -31,6 +31,10 @@ jobs:
         run: go vet ./... && go vet -tags docker ./...
       - name: Test (detailed reports + coverage) and enforce the coverage floor
         run: make cover-check
+      # The concurrent kill/dispatch FSM tests (kill_dispatch_race_test.go) are
+      # only meaningful under the race detector; the rest of the tree rides along.
+      - name: Test (race detector)
+        run: make test-race
       - name: Upload Go test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -77,6 +81,26 @@ jobs:
       - name: Install deps
         working-directory: ui
         run: pnpm install --frozen-lockfile
+      # Fail closed on a copyleft license in a SHIPPED (prod) dependency. The
+      # known MPL/EPL hits (lightningcss, elkjs, dompurify) are devDependencies
+      # and are excluded by --prod, so they do not trip this gate.
+      - name: Check UI production dependency licenses (no copyleft)
+        working-directory: ui
+        run: |
+          set -euo pipefail
+          pnpm licenses list --prod --json > /tmp/ui-prod-licenses.json
+          # GPL/AGPL/LGPL/MPL/EPL require source disclosure / relicensing on
+          # distribution. A dual-licensed "X OR Apache-2.0" still fails closed
+          # here — we don't assume the OR resolves in our favor without review.
+          bad=$(jq -r 'keys[]' /tmp/ui-prod-licenses.json \
+            | grep -Ei '(^|[^A-Za-z])(A?GPL|LGPL|MPL|EPL)([-0-9]|$)' || true)
+          if [ -n "$bad" ]; then
+            echo "Copyleft license(s) found in PRODUCTION dependencies:"
+            echo "$bad"
+            jq . /tmp/ui-prod-licenses.json
+            exit 1
+          fi
+          echo "No copyleft licenses in production dependencies."
       - name: Typecheck
         working-directory: ui
         run: pnpm typecheck
