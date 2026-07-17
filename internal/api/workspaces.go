@@ -600,10 +600,20 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 
 	// Mark ready. If a verify already passed, status is already ready; otherwise
 	// finalize confirms a configured (verify-skipped) import as ready.
-	updated, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), id, types.WorkspaceReady,
-		nil, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
+	//
+	// FENCED on the slot the active-run guard above read: that guard only proves
+	// no run was live AT READ TIME, so a verify/record run claiming the slot
+	// between the check and this write would otherwise be silently clobbered by
+	// this finalize (the guard closes the window it can see; the fence closes the
+	// rest of it).
+	updated, applied, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), id, types.WorkspaceReady,
+		nil, ws.ActiveRunID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "finalize: "+err.Error())
+		return
+	}
+	if !applied {
+		writeError(w, http.StatusConflict, "an import step claimed this workspace while finalizing; re-check its state and retry")
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

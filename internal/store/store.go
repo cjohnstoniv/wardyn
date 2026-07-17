@@ -542,14 +542,40 @@ func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, 
 // proven-working markers. Any nil pointer leaves that column unchanged via
 // COALESCE-on-sentinel is avoided by taking explicit values — callers pass the
 // current values for columns they don't mean to change.
+//
+// FENCED (mirrors SetWorkspaceScanResult): the write is conditional on the
+// import-step slot still holding expectedActive, so a caller that decided what
+// to write from a STALE read cannot land it. Every caller here does check-then-
+// act (read the workspace, decide, write), and this was the only unfenced
+// workspace writer — a finalize/update racing a live verify/record run could
+// overwrite the fresher state the concurrent run had just written, which is
+// exactly the class of race the C001 finalize guard closed at one call site
+// only. Pass expectedActive = the active_run_id observed in the read the
+// decision came from (nil means "expected no in-flight run"); applied=false
+// means the slot moved under the caller, which must then re-read rather than
+// retry blindly. Returns ErrNotFound only when the workspace does not exist.
 func (s PG) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
-	status types.WorkspaceStatus, activeRunID *uuid.UUID, verifyResult json.RawMessage,
-	verifiedHash string, verifiedAt *time.Time) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx,
+	status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID,
+	verifyResult json.RawMessage, verifiedHash string, verifiedAt *time.Time) (types.Workspace, bool, error) {
+	// IS NOT DISTINCT FROM (not `=`) so a nil expectedActive correctly matches a
+	// NULL slot — `active_run_id = NULL` is never true in SQL.
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET status=$1, active_run_id=$2, verify_result=$3,
 			verified_profile_hash=$4, verified_at=$5, updated_at=now()
-		 WHERE id=$6 RETURNING `+wsCols,
-		string(status), activeRunID, workspaceProfileParam(verifyResult), verifiedHash, verifiedAt, id))
+		 WHERE id=$6 AND active_run_id IS NOT DISTINCT FROM $7 RETURNING `+wsCols,
+		string(status), activeRunID, workspaceProfileParam(verifyResult), verifiedHash, verifiedAt, id, expectedActive))
+	if errors.Is(err, ErrNotFound) {
+		// Distinguish a guard miss (slot moved) from a missing workspace.
+		cur, gerr := s.GetWorkspace(ctx, id)
+		if gerr != nil {
+			return types.Workspace{}, false, gerr
+		}
+		return cur, false, nil
+	}
+	if err != nil {
+		return types.Workspace{}, false, err
+	}
+	return ws, true, nil
 }
 
 // SetWorkspaceScanResult records a governed scan run's derived profile — a SCOPED,

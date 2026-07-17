@@ -373,8 +373,10 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	// verify_failed, active_run_id cleared) back to `verifying`. active_run_id was
 	// already CAS-claimed to runID above; preserve any prior verify markers. Best
 	// effort: the verify run reports + flips status regardless of this write.
-	_, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifying,
-		&runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
+	// Fenced on the claim made just above: if the slot moved, this run is no
+	// longer the workspace's verify run and must not write its status.
+	_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifying,
+		&runID, &runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
 
 	// Run IN the built devcontainer image (build it now if needed — this is
 	// Stage 5 folded into verify). Fall back to the convention image if no
@@ -764,8 +766,10 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 					"e.g. Docker Desktop + WSL2 requires mirrored networking or a containerized control plane).",
 			}},
 		}
-		_, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifyFailed, nil,
-			mustJSON(vr), ws.VerifiedProfileHash, ws.VerifiedAt)
+		// Fenced on THIS run still owning the import step: a newer verify that
+		// already claimed the slot must not be reverted by this late reconcile.
+		_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifyFailed, nil,
+			&runID, mustJSON(vr), ws.VerifiedProfileHash, ws.VerifiedAt)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.verify",
 			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_result_uploaded"})))
 	case types.WorkspaceScanning:
@@ -774,8 +778,9 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 		// clear the in-flight pointer. The previous full-row UpdateWorkspace replayed
 		// this stale pre-read snapshot over EVERY column, clobbering any
 		// concurrently-persisted async field (profile, record_results, approvals).
-		_, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceError, nil,
-			ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
+		// Same fence as the verify branch: only reconcile the slot this run owns.
+		_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceError, nil,
+			&runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.scan",
 			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_facts_uploaded"})))
 	}

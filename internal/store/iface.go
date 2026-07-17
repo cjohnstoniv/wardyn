@@ -54,7 +54,11 @@ type Store interface {
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
 	ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error)
 	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error)
-	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, verifyResult json.RawMessage, verifiedHash string, verifiedAt *time.Time) (types.Workspace, error)
+	// SetWorkspaceImportState advances the import pipeline. FENCED: the write
+	// applies only while the import-step slot still holds expectedActive (nil =
+	// expected empty); applied=false means it moved and the caller must re-read
+	// instead of retrying blindly.
+	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID, verifyResult json.RawMessage, verifiedHash string, verifiedAt *time.Time) (types.Workspace, bool, error)
 	SetWorkspaceScanResult(ctx context.Context, id uuid.UUID, profile json.RawMessage, runID uuid.UUID) (types.Workspace, bool, error)
 	DeleteWorkspace(ctx context.Context, id uuid.UUID) error
 
