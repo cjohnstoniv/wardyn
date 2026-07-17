@@ -49,6 +49,7 @@ export function Chip({
   pulse,
   mono,
   title,
+  srLabel,
 }: {
   tone?: Tone;
   className?: string;
@@ -57,10 +58,17 @@ export function Chip({
   pulse?: boolean;
   mono?: boolean;
   title?: string;
+  // Accessible NAME for the chip (aria-label). Prefer this over an sr-only text
+  // twin: it announces the reason to AT without adding a duplicate text node
+  // (which double-matches getByText) and without leaking the value into the
+  // DOM text content — so an internal-only string (a confinement wire code)
+  // stays out of accessible content entirely (D4). Use only for AT-safe copy.
+  srLabel?: string;
 }) {
   return (
     <span
       title={title}
+      aria-label={srLabel}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium leading-5 whitespace-nowrap w-fit",
         toneClass[tone],
@@ -170,9 +178,11 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
     >
       <m.Icon className="size-3" />
       {label}
-      {/* AT copy of the native title (tier-illustration.tsx pattern) — `title`
-          isn't reliably announced by screen readers. */}
-      <span className="sr-only">{title}</span>
+      {/* No sr-only twin here: `title` carries the mechanism + internal wire
+          class (CC1/2/3, gVisor/runc/Kata) for a sighted power-user's hover, but
+          that string must NEVER reach accessible content — the confinement class
+          is internal (D4). The visible barrier label ("Fence"/"Wall"/"Vault") is
+          the accessible name; screen-reader users hear it, not the wire code. */}
     </Chip>
   );
 }

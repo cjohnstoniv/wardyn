@@ -469,7 +469,7 @@ function SetupChecklistRow({
         <p className="mt-0.5 text-xs leading-snug text-muted-foreground">Required by {item.required_by}</p>
         {item.detail && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{item.detail}</p>}
         {residencyNote && (
-          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground/70">{residencyNote}</p>
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{residencyNote}</p>
         )}
       </div>
       <StatusChip

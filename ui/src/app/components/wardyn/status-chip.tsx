@@ -36,21 +36,24 @@ export function StatusChip({
   // never "Ready"/"Verified" (v1 is declared-present, not live-verified).
   label?: string;
 }) {
+  // The reason rides in `title` (sighted hover) AND as the chip's accessible
+  // NAME via srLabel/aria-label — so AT announces "<status>: <reason>" without a
+  // duplicate sr-only text node (which double-matched getByText where a caller
+  // also renders the reason visibly, e.g. the confinement wizard). copy stays
+  // AT-safe: callers pass a user-facing reason, never a confinement wire code.
   if (status === "optional") {
+    const visible = label ?? "Optional";
     return (
-      <Chip tone="neutral" title={reason}>
+      <Chip tone="neutral" title={reason} srLabel={reason ? `${visible}: ${reason}` : undefined}>
         <Minus className="size-3" aria-hidden />
-        {label ?? "Optional"}
-        {/* AT copy of the native title (tier-illustration.tsx pattern) — `title`
-            isn't reliably announced by screen readers. */}
-        {reason && <span className="sr-only">{reason}</span>}
+        {visible}
       </Chip>
     );
   }
+  const visible = label ?? STATUS_LABEL[status];
   return (
-    <Chip tone={STATUS_TONE[status]} dot title={reason}>
-      {label ?? STATUS_LABEL[status]}
-      {reason && <span className="sr-only">{reason}</span>}
+    <Chip tone={STATUS_TONE[status]} dot title={reason} srLabel={reason ? `${visible}: ${reason}` : undefined}>
+      {visible}
     </Chip>
   );
 }

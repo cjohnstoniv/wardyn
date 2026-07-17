@@ -161,6 +161,14 @@ export function AppShell({
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
+      {/* Skip-to-content: first focusable element, visually hidden until focused,
+          so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
+      <a
+        href="#main-content"
+        className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        Skip to main content
+      </a>
       <TopBar onSignOut={onSignOut} meta={meta} onNewRun={() => setNewRunOpen(true)} />
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
@@ -217,14 +225,14 @@ export function AppShell({
                 <Fingerprint className="size-3.5 text-muted-foreground" />
                 <span className="font-mono">{meta.trustDomain}</span>
               </div>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground/70">
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
                 All agent identities anchored to this trust domain.
               </p>
             </div>
           </div>
         </aside>
 
-        <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
+        <main id="main-content" tabIndex={-1} className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none">
           {/* Keyed by pathname so navigating away from a screen that threw
               clears the caught error instead of wedging the console. */}
           <ErrorBoundary key={location.pathname} region={location.pathname}>
@@ -286,7 +294,7 @@ function TopBar({
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="font-mono text-xs text-muted-foreground">{meta.principal}</div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
                 {meta.method === "sso" ? "signed in via SSO" : meta.method === "token" ? "admin token" : ""}
               </div>
             </DropdownMenuLabel>

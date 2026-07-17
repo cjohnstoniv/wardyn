@@ -355,7 +355,7 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
           shows real signals only (icon + measured duration); add a genuine
           text preview later if it earns its complexity. */}
       <div className="relative flex h-24 items-end border-b border-border bg-surface-2/60 px-4 py-3">
-        <SquareTerminal className="absolute left-4 top-3.5 size-5 text-muted-foreground/40" />
+        <SquareTerminal className="absolute left-4 top-3.5 size-5 text-border" aria-hidden />
         <span className="pointer-events-none absolute right-3 top-3 inline-flex size-9 items-center justify-center rounded-full border border-primary/40 bg-primary/15 text-primary">
           <Play className="size-4 translate-x-px" />
         </span>

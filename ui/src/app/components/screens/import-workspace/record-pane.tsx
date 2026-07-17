@@ -572,7 +572,7 @@ function RecordReviewCard({
         {alreadyApproved.length > 0 && (
           <ul className="space-y-1 pt-1" aria-label="Already approved">
             {alreadyApproved.map((h) => (
-              <li key={h} className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+              <li key={h} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <Check className="size-3 shrink-0" />
                 <span className="font-mono line-through">{h}</span>
               </li>
