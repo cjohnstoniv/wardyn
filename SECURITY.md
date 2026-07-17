@@ -96,6 +96,37 @@ scanner's ignore-list.
   the symbol-level scan flips from "0 vulnerabilities" to a real finding and
   CI goes red — this entry is not a standing exemption from that check.
 
+## Console auth token storage
+
+The web console (`ui/`) authenticates to the control plane one of two ways, with
+**different at-rest posture**:
+
+- **Admin token (the single-operator local path, shipped today).** `wardynd`
+  prints a full-admin bearer on startup; you paste it into the sign-in screen and
+  it is attached as an `Authorization: Bearer` header on every `/api/v1` request.
+  This token is a full-admin credential held in browser storage, so it carries
+  **XSS-equivalent risk**: any script that runs in the console origin can read it.
+  By default it is kept in **`sessionStorage`** and is gone when the tab/browser
+  closes; ticking **"Remember on this device"** on sign-in persists it to
+  `localStorage` instead (survives restart, larger exposure window). Both stores
+  are same-origin and readable by injected script — the checkbox trades restart
+  convenience for a shorter at-rest window, not for a stronger boundary.
+- **SSO session (the hardened path, `[multi-user — coming soon]`).** The session
+  is carried in an **`HttpOnly` cookie** that page script cannot read, so an
+  injected script cannot exfiltrate it. This is the stronger posture; the
+  admin-token path above is the local/single-operator convenience alternative.
+
+**Mitigations that exist:** the token is never written to `localStorage` unless
+you opt in; the console is served same-origin (no cross-origin token leak); the
+input field uses `type="password"`/`autoComplete="off"`.
+
+**Mitigations that do NOT yet exist (honest gaps):** the UI-serving path
+(`internal/api/ui.go`) sets **no** `Content-Security-Policy`, `X-Frame-Options`,
+or `X-Content-Type-Options` header, so there is no defense-in-depth against an
+XSS or clickjacking sink beyond the token-storage choice itself. Adding those
+headers is the tracked follow-up; until then, treat the admin token as a
+plaintext full-admin credential and prefer the SSO path once it ships.
+
 ## Coordinated disclosure
 
 - We aim to **acknowledge** a report within **3 business days** and to provide an

@@ -16,6 +16,7 @@ import {
   Sun,
 } from "lucide-react";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Chip } from "../wardyn/primitives";
@@ -26,6 +27,9 @@ import { health } from "../../lib/api/health";
 export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const { theme, toggle } = useTheme();
   const [token, setTokenValue] = React.useState("");
+  // Off by default: the token lives in sessionStorage (gone when the browser
+  // closes). Opt in to persist it to localStorage across restarts.
+  const [remember, setRemember] = React.useState(false);
   const [loading, setLoading] = React.useState<"token" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   // Trust boundary shown pre-auth — populated from /healthz when it responds.
@@ -45,8 +49,9 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     if (!token) return;
     setLoading("token");
     setError(null);
-    // Persist the admin token, then verify it against a protected endpoint.
-    setToken(token);
+    // Store the admin token (sessionStorage, or localStorage when "remember" is
+    // checked), then verify it against a protected endpoint.
+    setToken(token, remember);
     const ok = await probeAuth();
     if (ok) {
       onSignIn();
@@ -147,6 +152,17 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
             <p className="text-xs text-muted-foreground">
               Paste the admin token wardynd printed on startup.
             </p>
+            <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={remember}
+                onCheckedChange={(v) => setRemember(v === true)}
+                aria-label="Remember on this device"
+              />
+              Remember on this device
+              <span className="text-muted-foreground">
+                (keeps the token after the browser closes)
+              </span>
+            </label>
             <Button type="submit" className="mt-1 w-full" disabled={!token || loading !== null}>
               {loading === "token" ? (
                 <Loader2 className="size-4 animate-spin" />
