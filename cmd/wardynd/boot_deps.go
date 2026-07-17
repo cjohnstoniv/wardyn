@@ -93,14 +93,21 @@ func connectAndMigrate(bootCtx context.Context, dsn, migrateDSN string) (*pgxpoo
 // approvals, sweeper. Best-effort: a spool that cannot be opened degrades to
 // log-only, never blocking startup. Extracted verbatim from run(); the returned
 // *sinks.Fanout (nil when unconfigured) must be Closed on shutdown.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, error) {
-	var auditRec audit.Recorder = store.Recorder{Pool: pool}
+//
+// It also returns the *api.AuditSpool and the RAW store.Recorder so the API
+// server can start the background drain that replays spooled events back into the
+// store once it recovers (U094). The drain MUST target the raw store recorder —
+// NOT the returned masking/spooling chain — or a replay that hit a still-down
+// store would re-spool (and re-enter the spool lock) instead of retrying later.
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+	storeRec := store.Recorder{Pool: pool}
+	var auditRec audit.Recorder = storeRec
 	fan, ferr := buildAuditFanout(rootCtx, sinksJSON)
 	if ferr != nil {
-		return nil, nil, ferr
+		return nil, nil, nil, nil, ferr
 	}
 	if fan != nil {
-		auditRec = fanoutRecorder{primary: store.Recorder{Pool: pool}, fanout: fan}
+		auditRec = fanoutRecorder{primary: storeRec, fanout: fan}
 		slog.Info("wardynd: audit fanout enabled")
 	}
 	var auditFallback *api.AuditSpool
@@ -117,7 +124,7 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool 
 		}
 	}
 	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
-	return masked, fan, nil
+	return masked, fan, auditFallback, storeRec, nil
 }
 
 // buildRunnerFromFlags resolves the optional sandbox runner: "none" (nil runner,
