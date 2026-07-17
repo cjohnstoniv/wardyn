@@ -4,12 +4,12 @@
 #
 # check-file-size.sh — hold the line on god-files.
 #
-# FAILS when any NON-allowlisted, non-test .go file exceeds THRESHOLD lines, or
-# when an allowlisted legacy file grows materially past its frozen cap
-# (current size at gate introduction + ~8% headroom). The allowlist is the
-# small set of pre-existing 1000+ line files that are cohesive as-is (see
-# ARCHITECTURE.md "Large files") — new entries need the same written
-# justification there, not a silent edit here.
+# FAILS when any NON-allowlisted, non-test .go file (or ui/src/**/*.ts,*.tsx
+# file) exceeds THRESHOLD lines, or when an allowlisted legacy file grows
+# materially past its frozen cap (current size at gate introduction + ~8%
+# headroom). The allowlist is the small set of pre-existing 1000+ line files
+# that are cohesive as-is (see ARCHITECTURE.md "Large files") — new entries
+# need the same written justification there, not a silent edit here.
 #
 # Companion to .golangci.yml (funlen/gocyclo/gocognit gate functions; this
 # gates files). Run via `make lint`.
@@ -26,6 +26,8 @@ declare -A ALLOWLIST=(
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
   ["./internal/store/store.go"]=1090       # 1001 at freeze
+  ["./ui/src/app/components/screens/import-workspace/import-panel.tsx"]=1420 # 1312 at freeze
+  ["./ui/src/app/components/screens/setup/step-bodies.tsx"]=1150 # 1062 at freeze
 )
 
 fail=0
@@ -40,9 +42,10 @@ while IFS= read -r f; do
     fi
     fail=1
   fi
-done < <(find . -name '*.go' ! -name '*_test.go' ! -path './.git/*' ! -path './ui/*')
+done < <(find . \( \( -name '*.go' ! -name '*_test.go' ! -path './.git/*' ! -path './ui/*' \) \
+                 -o \( -path './ui/src/*' \( -name '*.ts' -o -name '*.tsx' \) \) \))
 
 if ((fail)); then
   exit 1
 fi
-echo "check-file-size: OK (no non-test .go file over $THRESHOLD lines outside the frozen allowlist)"
+echo "check-file-size: OK (no non-test .go or ui/src .ts/.tsx file over $THRESHOLD lines outside the frozen allowlist)"

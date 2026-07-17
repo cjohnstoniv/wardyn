@@ -369,3 +369,15 @@ The former top-two god-files were decomposed instead of allowlisted:
 `cmd/wardynd/main.go` boot phases now live in `boot_flags.go` / `boot_deps.go`
 / `boot_serve.go`, and `internal/api/runs_dispatch.go`'s LLM-transport phases
 in `runs_dispatch_llm.go` (both files are now under the threshold).
+
+**Large UI modules.** `scripts/check-file-size.sh` also gates `ui/src/**/*.ts`
+and `*.tsx` files at the same 1000-line threshold, with two pre-existing
+allowlist entries:
+
+- `ui/src/app/components/screens/import-workspace/import-panel.tsx` (~1.31k)
+- `ui/src/app/components/screens/setup/step-bodies.tsx` (~1.06k)
+
+Both are internally sectioned single-screen bodies (one screen, one owner);
+splitting is deferred until a second consumer needs to import a piece of
+either in isolation. The ratchet's job here is the same as on the Go side: it
+prevents *new* 1000+ line UI files, not shrink these two.
