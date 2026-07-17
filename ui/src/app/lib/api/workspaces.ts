@@ -7,13 +7,13 @@
 // finalize). Run-creation pickers offer ONLY these; a run may not reference any
 // other source.
 import type { SetupCommand, Workspace, WorkspaceKind } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 export const workspaces = {
   // GET /api/v1/workspaces — onboarded local dirs + repos (admin-gated). Run-
   // creation pickers offer ONLY these; a run may not reference any other source.
   async listWorkspaces(): Promise<Workspace[]> {
-    const res = await wfetch("/workspaces", { method: "GET" });
+    const res = await wfetch(withLimit("/workspaces"), { method: "GET" });
     return unwrapList<Workspace>(await asJson<unknown>(res));
   },
 

@@ -27,12 +27,13 @@ func policyCmd(client clientFn) *cobra.Command {
 	}
 
 	var listJSON bool
+	var listLimit int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List all policies",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			policies, err := client().ListPolicies(cmd.Context())
+			policies, err := client().ListPolicies(cmd.Context(), listPageOpts(listLimit)...)
 			if err != nil {
 				return err
 			}
@@ -51,6 +52,7 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
+	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 
 	get := &cobra.Command{
 		Use:   "get <policy-id>",

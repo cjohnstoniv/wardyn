@@ -15,7 +15,7 @@ import type {
   ProfileProposal,
   RunPolicySpec,
 } from "../types";
-import { asJson, ccRank, errText, HttpError, str, unwrapList, wfetch } from "./core";
+import { asJson, ccRank, errText, HttpError, str, unwrapList, wfetch, withLimit } from "./core";
 
 // Map a backend credential-grant eligibility record (the GET /runs/{id}/grants
 // shape: { id, run_id, created_at, spec: { kind, scope, ttl_seconds,
@@ -48,7 +48,7 @@ function grantsFromRecords(payload: unknown): CredentialGrant[] {
 export const runs = {
   // GET /api/v1/runs
   async listRuns(): Promise<AgentRun[]> {
-    const res = await wfetch("/runs", { method: "GET" });
+    const res = await wfetch(withLimit("/runs"), { method: "GET" });
     return unwrapList<AgentRun>(await asJson<unknown>(res));
   },
 

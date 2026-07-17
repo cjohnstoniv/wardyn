@@ -5,7 +5,7 @@
 
 // Approval queue: list + approve/deny a pending credential/egress/tool request.
 import type { ApprovalRequest } from "../types";
-import { asJson, unwrapList, wfetch } from "./core";
+import { asJson, unwrapList, wfetch, withLimit } from "./core";
 
 export const approvals = {
   // GET /api/v1/approvals?state=<state>  (PENDING | APPROVED | DENIED | EXPIRED | "")
@@ -13,7 +13,7 @@ export const approvals = {
     state: "PENDING" | "APPROVED" | "DENIED" | "EXPIRED" | "" = "PENDING",
   ): Promise<ApprovalRequest[]> {
     const qs = state ? `?state=${encodeURIComponent(state)}` : "";
-    const res = await wfetch(`/approvals${qs}`, { method: "GET" });
+    const res = await wfetch(withLimit(`/approvals${qs}`), { method: "GET" });
     return unwrapList<ApprovalRequest>(await asJson<unknown>(res));
   },
 
