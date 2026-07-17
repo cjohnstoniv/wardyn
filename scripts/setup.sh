@@ -35,15 +35,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# Fail fast on a native-Windows shell. The default (host) path never reaches
-# up.sh's guard, and every docker/socket assumption below is POSIX — proceeding
-# would fail later with a cryptic error. Mirror up.sh's WSL2 redirect.
-case "$(uname -s 2>/dev/null)" in
-  MINGW*|MSYS*|CYGWIN*)
-    printf 'native Windows shell detected. Install WSL2 + Docker Desktop (enable WSL integration), then run `make setup` INSIDE your WSL distro — not from cmd.exe/PowerShell.\n' >&2
-    exit 1 ;;
-esac
-[ "${OS:-}" = "Windows_NT" ] && { printf 'native Windows detected — run `make setup` inside WSL2, not cmd.exe/PowerShell.\n' >&2; exit 1; }
+# WSL2 must be detected BEFORE any native-Windows guard: some WSL2 shells (e.g.
+# via WSLENV/interop) inherit $OS=Windows_NT from Windows even though this is a
+# real Linux distro — checking that env var first would wrongly hard-exit a
+# working WSL2 box. Same signal order as up.sh's canonical os_kind() (WSL
+# indicators checked first): /proc/version, then $WSL_DISTRO_NAME. Computed
+# once here and reused below — no second, divergent check later in the file.
+IS_WSL=false
+grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=true
+[ -n "${WSL_DISTRO_NAME:-}" ] && IS_WSL=true
+
+# Fail fast on a native-Windows shell (cmd.exe/PowerShell/git-bash) — every
+# docker/socket assumption below is POSIX and would otherwise fail later with a
+# cryptic error. Gated on `! $IS_WSL` so it never fires on a real WSL2 box.
+if ! $IS_WSL; then
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf 'native Windows shell detected. Install WSL2 + Docker Desktop (enable WSL integration), then run `make setup` INSIDE your WSL distro — not from cmd.exe/PowerShell.\n' >&2
+      exit 1 ;;
+  esac
+  [ "${OS:-}" = "Windows_NT" ] && { printf 'native Windows detected — run `make setup` inside WSL2, not cmd.exe/PowerShell.\n' >&2; exit 1; }
+fi
 
 # ── tiny UI helpers ──────────────────────────────────────────────────────────
 if [ -t 1 ]; then B="\033[1m"; G="\033[32m"; Y="\033[33m"; C="\033[36m"; R="\033[0m"; else B=""; G=""; Y=""; C=""; R=""; fi
@@ -90,7 +102,8 @@ runtimes_json() { docker info -f '{{json .Runtimes}}' 2>/dev/null || echo '{}'; 
 
 # ── DETECT ───────────────────────────────────────────────────────────────────
 hd "Detecting your environment"
-IS_WSL=false; grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=true
+# IS_WSL was already computed above (before the native-Windows guard) — reused
+# here, not re-checked, so there is exactly one WSL detection in this file.
 $IS_WSL && info "WSL2 detected (host↔sandbox networking is split — the UI opens in your Windows browser)."
 
 HAVE_DOCKER=false; docker version >/dev/null 2>&1 && HAVE_DOCKER=true
@@ -789,6 +802,15 @@ else
   warn "wardynd did not become healthy — last log lines:"
   tail -n 15 "$LOGFILE" 2>/dev/null | sed 's/^/    /'
   warn "Full log: ${LOGFILE}"
+  # Same non-silent recap as the healthy branch above — wardynd failing to come up
+  # doesn't mean these two earlier warn-and-continue paths are moot; they're still
+  # worth naming here since this is the last thing the operator reads.
+  if [ "${AGENT_IMAGE_WARN:-0}" = "1" ]; then
+    warn "agent image build failed — first runs will fail with 'no such image'; run: make agent-images"
+  fi
+  if [ "${AGE_KEY_WARN:-0}" = "1" ]; then
+    warn "no persistent age key — stored secrets won't survive a restart; run: make setup (or add WARDYN_AGE_KEY=… to ${AGE_ENV})"
+  fi
   if grep -q 'no identity matched any of the recipients' "$LOGFILE" 2>/dev/null; then
     warn ""
     warn "^ Still can't decrypt the secret store even after an automatic reset — something is"
