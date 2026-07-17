@@ -75,9 +75,9 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	if msg := e.envelopeMessage(); msg != "" {
-		return fmt.Sprintf("wardyn: API error %d: %s", e.Status, msg)
+		return fmt.Sprintf("API error %d: %s", e.Status, msg)
 	}
-	return fmt.Sprintf("wardyn: API error %d: %s", e.Status, e.Body)
+	return fmt.Sprintf("API error %d: %s", e.Status, e.Body)
 }
 
 // envelopeMessage extracts the human-readable message from the server's
@@ -394,14 +394,14 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("wardyn: marshal request body: %w", err)
+			return fmt.Errorf("marshal request body: %w", err)
 		}
 		reqBody = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, reqBody)
 	if err != nil {
-		return fmt.Errorf("wardyn: build request: %w", err)
+		return fmt.Errorf("build request: %w", err)
 	}
 
 	if body != nil {
@@ -425,7 +425,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("wardyn: http: %w", err)
+		return fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -445,7 +445,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	// "no body" signal and is not an error here.
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && err != io.EOF {
-			return fmt.Errorf("wardyn: decode response: %w", err)
+			return fmt.Errorf("decode response: %w", err)
 		}
 	}
 	return nil

@@ -359,6 +359,12 @@ func TestAPIError_ErrorString(t *testing.T) {
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("error string does not contain status: %s", err.Error())
 	}
+	// The SDK is a public library and must NOT hardcode the consuming CLI's
+	// name: only cmd/wardyn owns the "wardyn:" prefix. Leaking it here is what
+	// produced the doubled "wardyn: wardyn:" line the review caught.
+	if strings.Contains(err.Error(), "wardyn:") {
+		t.Errorf("SDK error must not carry a 'wardyn:' prefix: %s", err.Error())
+	}
 }
 
 func TestAPIError_ErrorsAs(t *testing.T) {

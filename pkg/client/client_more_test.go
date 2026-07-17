@@ -129,7 +129,7 @@ func TestTypedError_MalformedBodyDegradesGracefully(t *testing.T) {
 	if apiErr.Body != garbage {
 		t.Errorf("got Body %q, want the raw non-JSON body %q", apiErr.Body, garbage)
 	}
-	// Crucially, the error is *APIError, NOT a "wardyn: decode response" error.
+	// Crucially, the error is *APIError, NOT a "decode response" error.
 	if strings.Contains(err.Error(), "decode response") {
 		t.Errorf("malformed error body must not surface as a decode error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestTypedError_EmptyBody(t *testing.T) {
 
 // TestContextCanceled_ReturnsCtxError asserts that an already-canceled context
 // makes the request fail with the context's error (context.Canceled), surfaced
-// wrapped in the SDK's "wardyn: http:" error — NOT a *APIError. A canceled call
+// wrapped in the SDK's "http:" error — NOT a *APIError. A canceled call
 // must never look like a server response.
 func TestContextCanceled_ReturnsCtxError(t *testing.T) {
 	// The server should never actually serve this request; if cancellation

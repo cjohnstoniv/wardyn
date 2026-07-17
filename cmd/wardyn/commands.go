@@ -111,7 +111,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
-	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for `wardyn attach`; use a never-reap policy (auto_stop_after_sec < 0)")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for 'wardyn attach'; use a never-reap policy (auto_stop_after_sec < 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side)")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, no LLM credentials)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
@@ -367,11 +367,19 @@ func auditCmd(client clientFn) *cobra.Command {
 	var runID string
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "audit",
+		Use:   "audit <run-id>",
 		Short: "Show the audit trail for a run",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		// A positional run id matches the sibling commands (run get, approve,
+		// attach, record synthesize). The deprecated --run flag is still accepted
+		// as an alias for backward compat, so at most one arg is allowed.
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Positional id wins; fall back to the deprecated --run flag.
+			if len(args) == 1 {
+				runID = args[0]
+			}
 			if runID == "" {
-				return fmt.Errorf("--run is required")
+				return fmt.Errorf("run id is required (pass it positionally: wardyn audit <run-id>)")
 			}
 			id, err := parseID("run", runID)
 			if err != nil {
@@ -394,7 +402,8 @@ func auditCmd(client clientFn) *cobra.Command {
 			return tw.Flush()
 		},
 	}
-	cmd.Flags().StringVar(&runID, "run", "", "run id")
+	cmd.Flags().StringVar(&runID, "run", "", "run id (DEPRECATED: pass the run id positionally instead)")
+	_ = cmd.Flags().MarkDeprecated("run", "pass the run id positionally: wardyn audit <run-id>")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	return cmd
 }

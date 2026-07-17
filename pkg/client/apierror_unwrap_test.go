@@ -17,21 +17,21 @@ import (
 
 func TestAPIError_UnwrapsErrorField(t *testing.T) {
 	e := &client.APIError{Status: 400, Body: `{"error":"invalid state filter"}`}
-	if got, want := e.Error(), "wardyn: API error 400: invalid state filter"; got != want {
+	if got, want := e.Error(), "API error 400: invalid state filter"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
 func TestAPIError_UnwrapsMessageField(t *testing.T) {
 	e := &client.APIError{Status: 409, Body: `{"message":"already decided"}`}
-	if got, want := e.Error(), "wardyn: API error 409: already decided"; got != want {
+	if got, want := e.Error(), "API error 409: already decided"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
 func TestAPIError_FallsBackToRawBodyForNonEnvelope(t *testing.T) {
 	e := &client.APIError{Status: 502, Body: "upstream boom"}
-	if got, want := e.Error(), "wardyn: API error 502: upstream boom"; got != want {
+	if got, want := e.Error(), "API error 502: upstream boom"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
