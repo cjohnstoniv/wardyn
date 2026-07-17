@@ -123,7 +123,12 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	go func() {
 		defer close(done)
 		_, cpErr := io.Copy(mw, src)
-		// Always close the MaskingWriter to flush the retained tail.
+		// Always close the MaskingWriter to flush the retained tail. mw.Close()
+		// flushes only — it does NOT close pw (secretmask ownership invariant), so
+		// the CloseWithError below is the single authority on how the read side
+		// terminates and cpErr always reaches SaveCast. If mw ever starts closing
+		// its downstream again, io.Pipe's once-only error store would keep the EOF
+		// stamped here and discard cpErr — the 413 cap would go dead.
 		closeErr := mw.Close()
 		if cpErr != nil {
 			_ = pw.CloseWithError(cpErr)

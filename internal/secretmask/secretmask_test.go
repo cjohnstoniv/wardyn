@@ -315,6 +315,39 @@ func TestMaskingWriter_ImplementsWriteCloser(t *testing.T) {
 	var _ io.WriteCloser = secretmask.NewMaskingWriter(io.Discard, secretmask.NewMasker(nil))
 }
 
+// closeSpyWriter is an io.WriteCloser that records whether Close was called.
+type closeSpyWriter struct {
+	bytes.Buffer
+	closed bool
+}
+
+func (c *closeSpyWriter) Close() error { c.closed = true; return nil }
+
+// TestMaskingWriter_CloseDoesNotCloseBorrowedDst pins the ownership invariant:
+// MaskingWriter.Close flushes its retained tail and nothing else. dst is
+// borrowed, so closing it would make the writer a second closer racing the
+// caller's own — which on the recording-upload path silently swallowed every
+// copy error through io.Pipe's once-only error store.
+func TestMaskingWriter_CloseDoesNotCloseBorrowedDst(t *testing.T) {
+	secret := []byte("super-secret-token-value")
+	spy := &closeSpyWriter{}
+	w := secretmask.NewMaskingWriter(spy, secretmask.NewMasker([][]byte{secret}))
+
+	if _, err := w.Write([]byte("prefix ")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if spy.closed {
+		t.Fatal("MaskingWriter.Close closed a borrowed dst; it must only flush the tail")
+	}
+	// The tail must still have been flushed (Close's actual job).
+	if got := spy.String(); got != "prefix " {
+		t.Fatalf("tail not flushed on Close: got %q want %q", got, "prefix ")
+	}
+}
+
 func TestMaskingWriter_NoSecrets_PassThrough(t *testing.T) {
 	m := secretmask.NewMasker(nil)
 	var buf bytes.Buffer

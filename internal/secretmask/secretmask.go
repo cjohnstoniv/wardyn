@@ -226,7 +226,14 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 }
 
 // Close flushes the retained tail (after a final mask pass) to the downstream
-// writer. If the downstream writer implements io.Closer it is also closed.
+// writer.
+//
+// OWNERSHIP: Close does NOT close dst. dst is borrowed, not owned — the caller
+// constructed it and is the only party that knows how it must be terminated.
+// Closing it here would make MaskingWriter a second closer racing the first: the
+// brokered-upload path hands us an *io.PipeWriter whose close carries the copy
+// error, and io.Pipe's error store is once-only, so a Close here would stamp EOF
+// and silently swallow that error (a truncated upload would look like success).
 func (w *MaskingWriter) Close() error {
 	if len(w.tail) > 0 {
 		masked, _ := safeMask(w.m, w.tail)
@@ -234,9 +241,6 @@ func (w *MaskingWriter) Close() error {
 			return err
 		}
 		w.tail = nil
-	}
-	if c, ok := w.dst.(io.Closer); ok {
-		return c.Close()
 	}
 	return nil
 }

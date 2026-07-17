@@ -105,6 +105,63 @@ func TestUploadRecording_SizeLimit(t *testing.T) {
 	}
 }
 
+// TestUploadRecording_SizeLimitWithRegisteredSecret drives the cap through the
+// MASKING PIPE — the branch buildMaskingBody takes whenever the run has any
+// registered secret, i.e. every run that minted a credential. TestUploadRecording_SizeLimit
+// above passes a nil registry and so only pins the pass-through branch.
+//
+// The copy goroutine must be able to stamp the *http.MaxBytesError onto the pipe;
+// if anything else closes the write end first, io.Pipe's once-only error store
+// keeps that first error and SaveCast reads a clean EOF instead — the handler
+// then persists the truncated prefix and audits `recording.upload success`, which
+// is an agent-controlled stop point for the recording audit stream.
+func TestUploadRecording_SizeLimitWithRegisteredSecret(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	reg.Add(runID, []byte("super-secret-token-value")) // forces the pipe branch
+	store := &fakeRecordingStore{}
+	h := newRecordingHarness(t, store, reg)
+
+	oversized := strings.Repeat("A", maxRecordingUploadBytes+1)
+	if code := h.uploadRecording(t, runID, oversized); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-cap upload with a registered secret: code = %d, want 413", code)
+	}
+	// A rejected upload must never be audited as a clean one: a `recording.upload
+	// success` here would mean the agent chose where audit stream #2 stops while
+	// the control plane reported a complete upload.
+	for _, ev := range h.audit.events {
+		if ev.Action == "recording.upload" && ev.Outcome == "success" {
+			t.Fatalf("over-cap upload audited as success: %+v", ev)
+		}
+	}
+}
+
+// TestBuildMaskingBody_CopyErrorReachesReader is the direct, allocation-cheap
+// counterfactual for the same invariant: an error from the SOURCE must surface at
+// the reader verbatim, never as a clean io.EOF.
+func TestBuildMaskingBody_CopyErrorReachesReader(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	reg.Add(runID, []byte("super-secret-token-value"))
+
+	srcErr := errors.New("source blew up mid-read")
+	src := io.MultiReader(strings.NewReader("some output "), errReader{srcErr})
+
+	body, cleanup := buildMaskingBody(src, reg, runID)
+	defer cleanup()
+
+	_, err := io.ReadAll(body)
+	if !errors.Is(err, srcErr) {
+		t.Fatalf("reader observed err = %v, want %v (a swallowed copy error reads as a clean EOF)", err, srcErr)
+	}
+}
+
+// errReader always fails, standing in for a body that errors mid-stream (what
+// http.MaxBytesReader does once the cap is exceeded).
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
 // TestBuildMaskingBody_NoGoroutineLeakOnAbort (Finding 2): when SaveCast aborts
 // the read side (reads only part of the body then errors), the masking pipe's
 // copy goroutine must NOT leak — the handler must close the reader and await the

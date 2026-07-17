@@ -40,7 +40,7 @@ func TestNewSessionRecorder_MasksAndPersists(t *testing.T) {
 		AdminToken:     adminToken,
 	})
 
-	tee, finish := srv.newSessionRecorder(runID, "session-xyz", runner.AttachOptions{Cols: 100, Rows: 30})
+	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "session-xyz", runner.AttachOptions{Cols: 100, Rows: 30})
 	if tee == nil {
 		t.Fatal("tee writer is nil with a RecordingStore configured")
 	}
@@ -107,7 +107,7 @@ func TestNewSessionRecorder_MasksAndPersists(t *testing.T) {
 func TestNewSessionRecorder_NoStoreIsNoop(t *testing.T) {
 	audit := &recRecorder{}
 	srv := New(Config{Audit: audit, AdminToken: adminToken})
-	tee, finish := srv.newSessionRecorder(uuid.New(), "s", runner.AttachOptions{})
+	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: uuid.New()}, "s", runner.AttachOptions{})
 	if tee != nil {
 		t.Error("tee should be nil when no RecordingStore is configured")
 	}
@@ -127,7 +127,7 @@ func TestNewSessionRecorder_EmptySessionNotPersisted(t *testing.T) {
 	srv := New(Config{RecordingStore: store, Audit: audit, AdminToken: adminToken})
 	runID := uuid.New()
 
-	_, finish := srv.newSessionRecorder(runID, "empty", runner.AttachOptions{})
+	_, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "empty", runner.AttachOptions{})
 	finish(context.Background(), types.ActorHuman, "carol")
 
 	if _, err := store.OpenCast(context.Background(), recording.CastKey(runID.String(), "empty")); err == nil {
@@ -157,7 +157,7 @@ func TestNewSessionRecorder_MasksSecretSplitAcrossWrites(t *testing.T) {
 	audit := &recRecorder{}
 	srv := New(Config{RecordingStore: store, MaskRegistry: reg, Audit: audit, AdminToken: adminToken})
 
-	tee, finish := srv.newSessionRecorder(runID, "split", runner.AttachOptions{Cols: 80, Rows: 24})
+	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "split", runner.AttachOptions{Cols: 80, Rows: 24})
 	if tee == nil {
 		t.Fatal("tee writer is nil with a RecordingStore configured")
 	}
@@ -205,7 +205,7 @@ func TestNewSessionRecorder_FlushesRetainedTail(t *testing.T) {
 	reg.Add(runID, []byte(secret))
 
 	srv := New(Config{RecordingStore: store, MaskRegistry: reg, Audit: &recRecorder{}, AdminToken: adminToken})
-	tee, finish := srv.newSessionRecorder(runID, "tail", runner.AttachOptions{Cols: 80, Rows: 24})
+	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "tail", runner.AttachOptions{Cols: 80, Rows: 24})
 
 	// The write ends with the first half of the secret: a strict prefix, so it is
 	// withheld in the tail (it might complete into the full secret next write).
@@ -247,7 +247,7 @@ func TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree(t *testing.T) {
 	audit := &recRecorder{}
 	srv := New(Config{RecordingStore: store, MaskRegistry: reg, Audit: audit, AdminToken: adminToken})
 
-	tee, finish := srv.newSessionRecorder(runID, "race", runner.AttachOptions{Cols: 80, Rows: 24})
+	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "race", runner.AttachOptions{Cols: 80, Rows: 24})
 
 	// Pump goroutine hammers the recording buffer, mirroring the attach Read pump
 	// that keeps writing until sess.Close (which, pre-fix, ran AFTER finish).
@@ -314,4 +314,62 @@ func decodeCastOutput(t *testing.T, cast string) string {
 		out.WriteString(data)
 	}
 	return out.String()
+}
+
+// TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded is the counterfactual
+// for the crown's confirmed managed-harness leak: `claude setup-token` PRINTS a
+// ~1y Anthropic OAuth token to the login run's PTY, so recording that session
+// persisted the live credential verbatim into a replayable asciicast. Masking
+// cannot cover it — wardynd does not know the token until the operator pastes it
+// back, which is after those bytes would already be in the cast (modelled here
+// by an EMPTY registry, which is what the login run really has: it mints
+// nothing). The run must therefore not be recorded at all.
+func TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded(t *testing.T) {
+	store, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	audit := &recRecorder{}
+	srv := New(Config{
+		RecordingStore: store,
+		MaskRegistry:   secretmask.NewRegistry(), // empty, as the login run's really is
+		Audit:          audit,
+		AdminToken:     adminToken,
+	})
+
+	const token = "sk-ant-oat01-LIVE-SETUP-TOKEN-VALUE-abcdef123456"
+	login := types.AgentRun{ID: uuid.New(), Task: harnessLoginTask}
+
+	tee, finish := srv.newSessionRecorder(login, "sess", runner.AttachOptions{Cols: 80, Rows: 24})
+	if tee != nil {
+		// The attach pump would feed PTY output here; anything non-nil means the
+		// token is being captured.
+		_, _ = io.WriteString(tee, "Paste this token: "+token+"\r\n")
+	}
+	finish(context.Background(), types.ActorHuman, "operator@example.com")
+
+	if tee != nil {
+		t.Error("harness-login run got a live cast tee — its terminal prints a live OAuth token and must never be recorded")
+	}
+	// Nothing may be persisted under the session key the recorder would have used.
+	if rc, err := store.OpenCast(context.Background(), recording.CastKey(login.ID.String(), "sess")); err == nil {
+		body, _ := io.ReadAll(rc)
+		rc.Close()
+		if strings.Contains(string(body), token) {
+			t.Errorf("the live setup-token was persisted verbatim into the login run's cast:\n%s", body)
+		}
+		t.Errorf("a cast was persisted for the harness-login run (%d bytes); it must never be recorded", len(body))
+	}
+	for _, ev := range audit.events {
+		if ev.Action == "session.recording" && ev.Outcome == "success" {
+			t.Error("session.recording/success emitted for the harness-login run — nothing should have been recorded")
+		}
+	}
+
+	// Control: a NORMAL interactive run on the same server still records, so the
+	// gate is scoped to the credential-printing run and did not disable recording.
+	normal := types.AgentRun{ID: uuid.New(), Task: "build the thing"}
+	if tee2, _ := srv.newSessionRecorder(normal, "sess", runner.AttachOptions{Cols: 80, Rows: 24}); tee2 == nil {
+		t.Error("a normal run must still be recorded — the gate over-reached")
+	}
 }

@@ -4,13 +4,18 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -115,6 +120,55 @@ func TestManagedOptOut_APIKeyInjectionWins(t *testing.T) {
 	}
 	if hasAnthropicAPIKeyInjection(nil) {
 		t.Fatal("no injections must not count")
+	}
+}
+
+// TestHarnessCredentialPaste_RegistersGlobalMask pins that a pasted setup-token
+// is handed to the mask registry PROCESS-GLOBALLY. Nothing else ever registers
+// it: the login run mints no credential, so its per-run snapshot is empty by
+// construction, and this handler is the only point in wardynd that ever sees the
+// value. Without the AddGlobal the token would pass verbatim through every
+// stream masker in the process.
+func TestHarnessCredentialPaste_RegistersGlobalMask(t *testing.T) {
+	const token = "sk-ant-oat01-live-long-lived-harness-token-value"
+
+	reg := secretmask.NewRegistry()
+	h := newHarness(t)
+	cfg := h.srv.cfg
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = reg
+	h.srv = New(cfg)
+
+	w := do(t, h.srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+		`{"token":"`+token+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("paste: code = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	// The value must now be masked out of ANY run's stream, including runs that
+	// did not exist when it was captured.
+	masked := secretmask.NewMasker(reg.Snapshot(uuid.New())).Mask([]byte("printed " + token + " here"))
+	if bytes.Contains(masked, []byte(token)) {
+		t.Fatalf("pasted setup-token is not globally mask-registered: %q", masked)
+	}
+	if !bytes.Contains(masked, []byte("<secret-hidden>")) {
+		t.Fatalf("expected the placeholder in %q", masked)
+	}
+}
+
+// TestHarnessCredentialPaste_NilMaskRegistry proves the paste path stays nil-safe
+// (masking is optional wiring; it must not become a required dependency).
+func TestHarnessCredentialPaste_NilMaskRegistry(t *testing.T) {
+	h := newHarness(t)
+	cfg := h.srv.cfg
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = nil
+	h.srv = New(cfg)
+
+	w := do(t, h.srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+		`{"token":"sk-ant-oat01-token-with-no-registry-wired"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("paste with nil MaskRegistry: code = %d, want 200", w.Code)
 	}
 }
 
