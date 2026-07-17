@@ -21,12 +21,41 @@
 //     the container exit (otherwise envbuilder execs its default init,
 //     "sleep infinity", and runs forever — the wait-for-exit would hang until
 //     the build timeout).
-//  2. FINALIZE (a trusted host-daemon build: FROM the pushed image + COPY, no
-//     untrusted RUN) layers Wardyn's runner tool binaries (agent-run,
-//     wardyn-verify, wardyn-git-helper, plus anything else in the tools dir)
-//     onto PATH and clears ENTRYPOINT, producing the local image tag the runner
+//  2. FINALIZE (a host-daemon build: FROM the pushed image + COPY, no untrusted
+//     RUN) layers Wardyn's runner tool binaries (agent-run, wardyn-verify,
+//     wardyn-git-helper, plus anything else in the tools dir) onto PATH and
+//     clears ENTRYPOINT, producing the local image tag the runner
 //     exec's/verifies/records into. Without this the built image lacks Wardyn's
 //     binaries and the runner cannot drive it (H5). Build returns this local tag.
+//
+// The same FINALIZE stage is exposed on its own as FinalizeBase — the
+// Bring-Your-Own-Image (BYOI) path, which wraps an operator-named base image with
+// no envbuilder stage at all.
+//
+// # Wrap-only (why FINALIZE can run unsandboxed)
+//
+// FINALIZE runs on the host daemon, outside the untrusted-build sandbox and
+// outside every confinement tier. That is only safe because it is wrap-ONLY: a
+// FROM + COPY adds layers and executes nothing the base image controls. Docker's
+// ONBUILD would break exactly that property — triggers baked into a base fire
+// when it is used as a FROM, so an `ONBUILD RUN curl … | sh` in a hostile or
+// compromised base is host-side, build-time RCE. The daemon offers no flag to
+// suppress triggers and does not report them in the build stream, so Builder
+// preflights the base with ImageInspect and REFUSES to wrap one that declares any
+// (assertWrapSafeBase). The base is also pulled by Builder rather than by the
+// daemon's PullParent, so the wrap builds FROM the exact image the preflight
+// inspected instead of one the daemon re-resolves afterwards.
+//
+// # Base-image trust (BYOI)
+//
+// Wrapping is not vetting. Beyond the ONBUILD refusal, the CONTENT of a BYOI base
+// is trusted-by-the-operator: Wardyn does not scan it, and a base ref may be a
+// mutable tag or a digest-pinned ref (repo@sha256:...). Pinning is honored
+// end-to-end — a pre-pulled digest base matches without a registry round-trip —
+// and is the recommended operator practice, but it is NOT enforced: a tag is
+// resolved at wrap time, so what it points at is the operator's call. What the
+// base's content cannot reach is the host: it only ever executes later, inside the
+// run's confinement tier. See threatmodel/THREAT-MODEL.md §5 (residual 13).
 //
 // # Envbuilder environment variables used
 //

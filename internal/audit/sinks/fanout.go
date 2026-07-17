@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -72,8 +72,10 @@ func (f *Fanout) Emit(ctx context.Context, ev types.AuditEvent) error {
 			}()
 			if err != nil {
 				cs.drops.Add(1)
-				log.Printf("sinks.fanout: child %q error (drops=%d): %v",
-					cs.sink.Name(), cs.drops.Load(), err)
+				slog.ErrorContext(ctx, "sinks.fanout: child sink error",
+					slog.String("child", cs.sink.Name()),
+					slog.Int64("drops", cs.drops.Load()),
+					slog.Any("err", err))
 			}
 			results <- result{name: cs.sink.Name(), err: err}
 		}()
@@ -134,7 +136,9 @@ func (f *Fanout) Close() error {
 	for _, cs := range f.children {
 		if c, ok := cs.sink.(io.Closer); ok {
 			if err := c.Close(); err != nil {
-				log.Printf("sinks.fanout: closing child %q: %v", cs.sink.Name(), err)
+				slog.Error("sinks.fanout: closing child sink failed",
+					slog.String("child", cs.sink.Name()),
+					slog.Any("err", err))
 				if firstErr == nil {
 					firstErr = err
 				}

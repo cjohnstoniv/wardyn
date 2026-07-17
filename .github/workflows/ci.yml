@@ -29,7 +29,11 @@ jobs:
         run: go build -tags docker ./...
       - name: Vet
         run: go vet ./... && go vet -tags docker ./...
-      - name: Test (detailed reports + coverage) and enforce the coverage floor
+      # Runs the suite under BOTH tag sets and enforces the floor on the union of
+      # the two coverage profiles. The tagless build alone cannot compile the
+      # container-hardening driver or internal/envbuild, so a tagless-only floor
+      # scored code that is not what ships.
+      - name: Test both tag sets (detailed reports + coverage) and enforce the union coverage floor
         run: make cover-check
       # The concurrent kill/dispatch FSM tests (kill_dispatch_race_test.go) are
       # only meaningful under the race detector; the rest of the tree rides along.

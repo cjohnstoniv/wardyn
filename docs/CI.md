@@ -113,10 +113,32 @@ Don't hand-author the allowlist for a complex task — record it once:
 
 1. In a trusted environment, run the task under a permissive policy.
 2. `wardyn record synthesize <run-id>` previews the least-privilege policy
-   Wardyn derived from the run's audit trail (observed domains, execs,
-   writes); `wardyn record save <run-id> --name my-ci-task` stores it.
+   Wardyn derived from the run's audit trail; `wardyn record save <run-id>
+   --name my-ci-task` stores it.
 3. Export the stored policy's spec to your repo as the pipeline's
    `WARDYN_CI_POLICY_FILE` (set `first_use_approval` to `always_deny`).
+
+What synthesis does and does not derive:
+
+- The **allowlist** is proxy-observed egress only — the exact hosts the run was
+  actually ALLOWED to reach. Never wildcarded (a recording cannot prove a
+  wildcard is needed); a host that was only denied or only held pending is
+  excluded and reported as a warning, since promoting it would widen past what
+  even the open run was permitted.
+- Observed **execs / connects / sensitive writes** are printed as review
+  warnings, not policy: the policy model has no exec/connect/file allowlist,
+  and `workspace_mounts` are operator-authored and never synthesized.
+- **KNOWN GAP** — that exec/write evidence needs the opt-in eBPF/Tetragon
+  sensor, and the sensor is blind inside CC3/Kata guests. `synthesize` does not
+  say so: a CC3 (or sensor-off) run's proposal reads exactly like a
+  fully-observed one. Read a silent proposal as "nothing was observed", not as
+  "nothing happened".
+- A recording proves only what the run HAPPENED to do, so synthesis fails
+  toward escalation: it forces `allow_all_egress=false` and
+  `first_use_approval=deny_with_review`. Step 3's `always_deny` is you
+  overriding that for an unattended pipeline — tighter, and it means an
+  un-recorded host fails the job instead of raising an approval nobody is
+  watching.
 
 ## Driving an existing control plane instead
 

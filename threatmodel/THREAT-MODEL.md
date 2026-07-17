@@ -150,6 +150,7 @@ the L3 tool gateway planned at v0.5.
 | MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5 — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; userns (`hostUsers:false`) + PSS-restricted + no hostPath are the Kubernetes path **[v0.5 — planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
+| Host-side RCE at image-wrap time from a hostile Bring-Your-Own-Image base (`ONBUILD` triggers) | BYOI (`internal/envbuild` `FinalizeBase`) wraps an operator-named base with the runner tools via a `FROM` + `COPY` on the host daemon — outside the untrusted-build sandbox and outside every confinement tier. A `FROM` fires any `ONBUILD` triggers baked into the base, so a hostile base could run code on the host *before* any confinement exists. Docker exposes no flag to suppress triggers, so the base is preflighted (`ImageInspect`) and the wrap is **refused** if it declares any (`assertWrapSafeBase`), on both the BYOI and devcontainer paths; Wardyn also pulls the base itself rather than via the builder's `PullParent`, so the wrap builds `FROM` the exact image the preflight inspected **[shipped]**. Residual: wrapping is not vetting — base content is unscanned/unattested and digest pinning is honored but NOT enforced (see §5 residual 13). | B1 |
 | Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[v0.5 — planned]** — the token is repo-scoped but NOT branch-scoped; the broker records the `wardyn/<run-id>/*` namespace as advisory metadata only and nothing enforces it on push yet (needs a push-ref-inspecting git-proxy or GitHub rulesets). | B4, B5, ID |
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit, and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
@@ -275,6 +276,43 @@ hiding them would repeat the failure mode we are designed to avoid.
     production. The honest-degradation gate makes this safe-by-default: a host
     without a working sensor reports `ebpf_groundtruth=unavailable` and the stream
     never falsely reads `healthy`. Live validation is the first follow-up.
+
+13. **A Bring-Your-Own-Image base is trusted-by-the-operator, and the wrap that
+    adds Wardyn's tools runs on the HOST.** BYOI (`internal/envbuild`
+    `FinalizeBase`, opt-in via `WARDYN_ENVBUILD`) wraps an operator-named base
+    image with the runner tools via a `FROM` + `COPY` build on the host Docker
+    daemon — outside the untrusted-build sandbox and outside every confinement
+    tier. Wrapping is **not vetting**, and the honest boundaries are:
+
+    - **Wrap-only is enforced, not assumed.** A `FROM` fires any `ONBUILD`
+      triggers baked into the base, which would make a hostile base host-side
+      build-time RCE (`ONBUILD RUN curl … | sh`) — the one way a base's content
+      reaches the host *before* confinement applies. Docker exposes no flag to
+      suppress triggers, so Wardyn preflights the base (`ImageInspect`) and
+      **refuses to wrap** one declaring any (`assertWrapSafeBase`), on both the
+      BYOI and devcontainer paths. Wardyn also pulls the base itself rather than
+      leaving it to the builder's `PullParent`, so the wrap builds `FROM` the
+      exact image the preflight inspected. Residual: this closes the ONBUILD
+      class specifically. The wrap build otherwise runs with the daemon's normal
+      privileges, and a Docker/BuildKit vulnerability reachable from parsing a
+      crafted base image's metadata or layers is not defended against here.
+    - **Digest pinning is honored, NOT enforced.** A base ref may be a mutable
+      tag or a digest-pinned ref (`repo@sha256:…`). A pinned, pre-pulled base is
+      matched without a registry round-trip (works for private/air-gapped
+      images), and pinning is the recommended operator practice — but Wardyn
+      **does not require it**. A mutable tag is resolved at wrap time, so a
+      registry that re-points a tag changes what gets wrapped, and the run's
+      recorded image tag is not by itself proof of image content. Operators who
+      need that property must pass a digest.
+    - **Base CONTENT is not scanned or attested.** No malware/CVE scan, no
+      signature or provenance verification (no cosign/notation/SLSA check) is
+      performed on a BYOI base. A backdoored base is wrapped and launched.
+      What bounds this is structural rather than inspective: the base's code
+      only ever executes *later*, inside the run's confinement tier, under the
+      same egress policy, credential-brokering and audit as any other run — so a
+      hostile base is contained exactly as well as a hostile agent is, and no
+      better. The launch gate is a functional self-test (`agent-run --selftest`),
+      which proves the image is *runnable*, never that it is *trustworthy*.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

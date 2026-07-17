@@ -8,7 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -116,7 +116,7 @@ func (w *WebhookSink) Emit(_ context.Context, ev types.AuditEvent) error {
 	case w.queue <- ev:
 	default:
 		w.drops.Add(1)
-		log.Printf("sinks.webhook: queue overflow, drop counter=%d", w.drops.Load())
+		slog.Warn("sinks.webhook: queue overflow", slog.Int64("drops", w.drops.Load()))
 	}
 	return nil
 }
@@ -210,8 +210,10 @@ func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditE
 		// Encoding failure means none of these events can be delivered; count
 		// them as dropped so the loss is observable via Drops().
 		w.drops.Add(int64(len(batch)))
-		log.Printf("sinks.webhook: encode batch: %v (dropped %d events, drop counter=%d)",
-			err, len(batch), w.drops.Load())
+		slog.Error("sinks.webhook: encode batch failed",
+			slog.Any("err", err),
+			slog.Int("dropped_events", len(batch)),
+			slog.Int64("drops", w.drops.Load()))
 		return
 	}
 	delay := w.baseDelay
@@ -219,8 +221,11 @@ func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditE
 		if err := w.post(ctx, body); err == nil {
 			return
 		} else if attempt < w.cfg.MaxRetries {
-			log.Printf("sinks.webhook: delivery attempt %d/%d failed: %v (retrying in %s)",
-				attempt, w.cfg.MaxRetries, err, delay)
+			slog.Warn("sinks.webhook: delivery attempt failed, retrying",
+				slog.Int("attempt", attempt),
+				slog.Int("max_retries", w.cfg.MaxRetries),
+				slog.Any("err", err),
+				slog.Duration("retry_in", delay))
 			select {
 			case <-ctx.Done():
 				// Shutdown via ctx: abandon the batch. Count the loss.
@@ -237,8 +242,11 @@ func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditE
 			// Retries exhausted: the batch is lost. Count every event so the
 			// never-drop-silently invariant is observable via Drops().
 			w.drops.Add(int64(len(batch)))
-			log.Printf("sinks.webhook: delivery failed after %d attempts: %v (batch size=%d, drop counter=%d)",
-				w.cfg.MaxRetries, err, len(batch), w.drops.Load())
+			slog.Error("sinks.webhook: delivery failed, retries exhausted",
+				slog.Int("attempts", w.cfg.MaxRetries),
+				slog.Any("err", err),
+				slog.Int("batch_size", len(batch)),
+				slog.Int64("drops", w.drops.Load()))
 		}
 	}
 }

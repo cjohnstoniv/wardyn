@@ -138,10 +138,10 @@ func TestIsBlocked(t *testing.T) {
 		// both modes (fail closed, matching the egress proxy) — a NAT64 literal
 		// never legitimately appears on a model-provider egress path, and the
 		// embedded-v4 recheck only enriches the denial reason.
-		{"64:ff9b::a9fe:a9fe", false, true},  // -> 169.254.169.254 metadata
-		{"64:ff9b::a9fe:a9fe", true, true},   // still blocked under allowPrivate
-		{"64:ff9b::0a00:0001", false, true},  // -> 10.0.0.1
-		{"64:ff9b::0808:0808", false, true},  // -> 8.8.8.8, still blocked (wholesale)
+		{"64:ff9b::a9fe:a9fe", false, true},   // -> 169.254.169.254 metadata
+		{"64:ff9b::a9fe:a9fe", true, true},    // still blocked under allowPrivate
+		{"64:ff9b::0a00:0001", false, true},   // -> 10.0.0.1
+		{"64:ff9b::0808:0808", false, true},   // -> 8.8.8.8, still blocked (wholesale)
 		{"64:ff9b:1::a9fe:a9fe", false, true}, // local-use NAT64 prefix (RFC 8215)
 	}
 	for _, tc := range tests {

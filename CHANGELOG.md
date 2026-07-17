@@ -93,9 +93,14 @@ ships — see the threat model's §5.1a claims contract).
   (multi-repo work → fine-grained PAT).
 - **Bring Your Own Image (BYOI).** A run may name an arbitrary base image;
   the control plane wraps it with the runner tools (`internal/envbuild`
-  FinalizeBase, digest-pinned base; opt-in via `WARDYN_ENVBUILD`) and gates
-  launch on an in-sandbox `agent-run --selftest`, fail-closed, with faithful
-  recorded exit codes. The New Run wizard gains a custom-image field; live
+  FinalizeBase; opt-in via `WARDYN_ENVBUILD`) and gates launch on an in-sandbox
+  `agent-run --selftest`, fail-closed, with faithful recorded exit codes. The
+  wrap is wrap-only (`FROM` + `COPY`, no image-controlled code on the host): a
+  base declaring `ONBUILD` triggers is refused, since a `FROM` fires them on the
+  host daemon outside every confinement tier. The base ref may be a tag or a
+  digest (`repo@sha256:…`) — a pinned, pre-pulled base is honored without a
+  registry round-trip — but pinning is NOT enforced; a mutable tag is resolved at
+  wrap time and pinning remains an operator practice. The New Run wizard gains a custom-image field; live
   proof harness: `scripts/run-e2e-byoi.sh` (`make test-e2e-byoi`). Operator
   docs in `deploy/images/README.md`.
 - **Wardyn-managed Claude subscription via container login.** A containerized

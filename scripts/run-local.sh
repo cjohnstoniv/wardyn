@@ -30,8 +30,14 @@ TOKEN="${WARDYN_LOCAL_TOKEN:-wardyn-local-admin}"
 PG_CONTAINER="${WARDYN_LOCAL_PG_CONTAINER:-wardyn-test-pg}"
 DB="wardyn_local"
 DSN="postgres://wardyn:wardyn@localhost:55432/${DB}?sslmode=disable"
-# Fixed age identity so signing/session keys survive restarts (local test only).
-AGE_KEY="${WARDYN_LOCAL_AGE_KEY:-AGE-SECRET-KEY-1CMRQ5GEN2G4NKWXQQ4DKK7GSMJDZXXW69W9QN3ALX8Y49CF6RLYS7Y6KHF}"
+# Age identity for wardynd's secret store. MINTED PER `up` (cmd_up, via
+# `wardynd -gen-age-key` — the same mint scripts/up.sh + scripts/setup.sh use)
+# rather than hard-coded: a committed key is published the moment it is pushed,
+# and wardynd fail-closed refuses publicly-known keys (knownPublicAgeKeys in
+# cmd/wardynd/main.go). A fresh key per boot loses nothing here — cmd_up drops
+# and recreates ${DB}, so no secret outlives the key it was written under.
+# Override to pin your own (e.g. to keep a hand-seeded DB readable).
+AGE_KEY="${WARDYN_LOCAL_AGE_KEY:-}"
 BIN_DIR="${REPO_ROOT}/.local-bin"
 PID_FILE="${BIN_DIR}/wardynd-${PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${PORT}.log"
@@ -80,6 +86,13 @@ cmd_up() {
     go build -tags docker -o "${BIN_DIR}/wardynd" ./cmd/wardynd || die "wardynd build failed"
     go build -o "${BIN_DIR}/wardyn"  ./cmd/wardyn  || die "wardyn build failed"
     ( cd ui && pnpm install --frozen-lockfile >/dev/null 2>&1 && pnpm build >/dev/null 2>&1 ) || die "UI build failed"
+  fi
+
+  # Mint the per-boot age identity (see AGE_KEY above). Must follow the build:
+  # it runs the binary we just built.
+  if [[ -z "${AGE_KEY}" ]]; then
+    AGE_KEY="$("${BIN_DIR}/wardynd" -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1 || true)"
+    [[ -n "${AGE_KEY}" ]] || die "wardynd -gen-age-key produced no key"
   fi
 
   # ── Sandbox runner selection ────────────────────────────────────────────────

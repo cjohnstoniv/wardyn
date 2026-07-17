@@ -31,12 +31,15 @@ wardyn_pick_docker_host
 DSN="${WARDYN_E2E_DSN:-postgres://wardyn:wardyn@localhost:55432/wardyn_e2e?sslmode=disable}"
 TOKEN="${WARDYN_E2E_TOKEN:-wardyn-e2e-token}"
 ADDR="${WARDYN_E2E_ADDR:-:8088}"
-# A FIXED age identity so wardynd's signing/session keys persist across reboots.
-# This protects only ephemeral test-backend secrets (it never guards real data),
-# so it is safe to hard-code for the hermetic e2e gate. Without it, wardynd
-# correctly fails closed on the second boot (it cannot decrypt keys stored under
-# the previous boot's ephemeral key — the boot-key fail-closed HIGH fix).
-AGE_KEY="${WARDYN_E2E_AGE_KEY:-AGE-SECRET-KEY-1CMRQ5GEN2G4NKWXQQ4DKK7GSMJDZXXW69W9QN3ALX8Y49CF6RLYS7Y6KHF}"
+# Age identity for wardynd's secret store. MINTED PER `up` (cmd_up, via
+# `wardynd -gen-age-key` — the same mint scripts/up.sh + scripts/setup.sh use)
+# rather than hard-coded: a committed key is published the moment it is pushed,
+# and wardynd fail-closed refuses publicly-known keys (knownPublicAgeKeys in
+# cmd/wardynd/main.go). A fresh key per boot is safe here precisely because
+# cmd_up also resets the schema, so no ciphertext outlives the key it was
+# written under — the boot-key fail-closed path is never hit.
+# Override to pin your own (e.g. to keep a hand-seeded DB readable).
+AGE_KEY="${WARDYN_E2E_AGE_KEY:-}"
 PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 BASE_URL="http://localhost${ADDR#*:}"
@@ -107,9 +110,15 @@ cmd_up() {
     fi
   fi
   cmd_build
+  # Mint the per-boot age identity (see AGE_KEY above). Must follow cmd_build:
+  # it runs the binary we just built.
+  if [[ -z "${AGE_KEY}" ]]; then
+    AGE_KEY="$("${BIN_DIR}/wardynd" -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1 || true)"
+    [[ -n "${AGE_KEY}" ]] || die "wardynd -gen-age-key produced no key"
+  fi
   cmd_down_quiet
   # Fresh schema each up so seeded fixtures are deterministic (wardynd re-migrates
-  # and re-stores its keys under the pinned AGE_KEY on boot).
+  # and re-stores its keys under this boot's AGE_KEY).
   log "Resetting ${PG_DBNAME} schema for deterministic fixtures"
   psql_e2e -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null 2>&1 || true
   log "Starting wardynd (runner=none) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"

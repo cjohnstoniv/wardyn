@@ -40,8 +40,10 @@ help:
 	@echo "  test-e2e-byoi         - Live BYOI e2e: wrap stock/harness/hostile/nonexistent bases + selftest gate (needs Docker)"
 	@echo "  test-report           - Go unit tests with detailed md/coverage reports"
 	@echo "  test-report-pg        - Postgres-gated suite with reports (needs WARDYN_TEST_PG)"
-	@echo "  test-report-docker    - docker-tagged suite with reports (needs WARDYN_TEST_DOCKER=1)"
-	@echo "  cover-check           - Run test-report and enforce COVER_MIN coverage floor"
+	@echo "  test-report-docker    - -tags docker suite with reports (fakeDocker; no daemon needed,"
+	@echo "                          WARDYN_TEST_DOCKER=1 adds the real-daemon cases)"
+	@echo "  cover-check           - Enforce the COVER_MIN coverage floor over BOTH shipped builds"
+	@echo "                          (tagless + -tags docker, unioned; see scripts/cover-union.sh)"
 	@echo "  compose-build         - Build compose images (wardynd -tags docker + proxy)"
 	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
 	@echo "  compose-down          - Stop docker-compose stack"
@@ -116,21 +118,27 @@ test-report-pg:
 		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
 		./internal/api/... ./test/apie2e/...
 
+# The whole tree under -tags docker, so the container-hardening driver
+# (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
+# them — none of which the tagless build can even compile — are actually tested
+# and measured. No daemon needed: the real-Docker cases self-skip unless
+# WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
 test-report-docker:
-	@echo "Running docker-tagged suite with reports (requires WARDYN_TEST_DOCKER=1)..."
-	./scripts/test-report.sh docker "Wardyn docker integration tests" \
-		-tags docker ./internal/runner/... ./internal/envbuild/... ./cmd/wardyn-runner/...
+	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
+	./scripts/test-report.sh docker "Wardyn Go tests (-tags docker)" -tags docker ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
-# Ratcheted to lock in the deep-review test build-out (total was 47.7% at the
-# start of that effort, 60.3% after). Keep a small margin below the current total
-# so routine churn doesn't flake CI; raise this as coverage climbs.
-COVER_MIN ?= 58
-cover-check: test-report
-	@total=$$(grep -E '^total:' test/reports/go/unit/coverage-func.txt | awk '{print $$NF}' | tr -d '%'); \
-	echo "Total Go coverage: $${total}% (floor $(COVER_MIN)%)"; \
-	awk -v t=$${total} -v m=$(COVER_MIN) 'BEGIN{exit !(t+0 >= m+0)}' || \
-		{ echo "coverage $${total}% below floor $(COVER_MIN)%"; exit 1; }
+# Enforced over the UNION of both shipped builds (tagless + -tags docker), not
+# the tagless subset alone — measuring only the tagless build reported a number
+# for code that is not what ships. Pulling the excluded packages in moved the
+# honest total from 67.1% (tagless-only) to 66.1% (union); the floor sits just
+# under that with a small margin for routine churn. Raise it as coverage climbs.
+# scripts/cover-union.sh documents exactly what is and is not counted.
+COVER_MIN ?= 65
+cover-check: test-report test-report-docker
+	@./scripts/cover-union.sh --self-test
+	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
+		test/reports/go/unit/cover.out test/reports/go/docker/cover.out
 
 test-conformance-docker:
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."

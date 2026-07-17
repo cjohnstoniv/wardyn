@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -763,15 +764,28 @@ func validateConfig(dsn, tlsCert, tlsKey string, tlsTerminated bool) (tlsPosture
 	}, nil
 }
 
-// buildSecretStore constructs the age-encrypted Postgres secret store. The age
-// identity comes from -age-key; if empty one is generated and logged (operators
-// MUST persist it across restarts to keep prior ciphertext readable).
-// knownPublicAgeKey is the demo age identity that earlier Compose files shipped
-// as a baked-in default. It is published in git history, so any secret encrypted
-// under it is effectively public. wardynd refuses to start with it (invariant 5,
-// fail closed): unset WARDYN_AGE_KEY to generate an ephemeral key, or supply your
-// own from `age-keygen`.
-const knownPublicAgeKey = "AGE-SECRET-KEY-1YGHJK4A24GHQGAL2U2ZU7M05080VNWSZ0EU9KRM3DVYKDN0XYSTS3TK3YR"
+// knownPublicAgeKeys are age identities this repository has published — each was
+// once a committed default, so it lives in git history forever and any secret
+// encrypted under one is effectively public. wardynd refuses to start with ANY of
+// them (invariant 5, fail closed): unset WARDYN_AGE_KEY to generate an ephemeral
+// key, or mint your own with `wardynd -gen-age-key`.
+//
+// Add an entry here whenever a key is published, never remove one: a key cannot
+// be un-published, and the denylist is what keeps a stale copy-pasted .env from
+// silently encrypting a real secret store under a key anyone can read.
+var knownPublicAgeKeys = []string{
+	// Baked-in default of earlier Compose files (deploy/compose).
+	"AGE-SECRET-KEY-1YGHJK4A24GHQGAL2U2ZU7M05080VNWSZ0EU9KRM3DVYKDN0XYSTS3TK3YR",
+	// Committed default of scripts/run-local.sh + scripts/e2e-backend.sh. Those
+	// scripts now mint an ephemeral per-boot key via `wardynd -gen-age-key`, so
+	// nothing legitimate uses this one.
+	"AGE-SECRET-KEY-1CMRQ5GEN2G4NKWXQQ4DKK7GSMJDZXXW69W9QN3ALX8Y49CF6RLYS7Y6KHF",
+}
+
+// isKnownPublicAgeKey reports whether ageKey is one of the published identities.
+func isKnownPublicAgeKey(ageKey string) bool {
+	return slices.Contains(knownPublicAgeKeys, strings.TrimSpace(ageKey))
+}
 
 // parseConfinementMap parses WARDYN_CONFINEMENT_MAP — a ";"-separated list of
 // CLASS=runtime (or CLASS=substrate:runtime) pins selecting which substrate
@@ -831,6 +845,9 @@ func genAndPrintAgeKey(w io.Writer) error {
 	return err
 }
 
+// buildSecretStore constructs the age-encrypted Postgres secret store. The age
+// identity comes from -age-key; if empty one is generated and logged (operators
+// MUST persist it across restarts to keep prior ciphertext readable).
 func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore.Store, error) {
 	var id *age.X25519Identity
 	var err error
@@ -846,8 +863,8 @@ func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore
 		// stdout by design) and set WARDYN_AGE_KEY — do not copy it out of this log.
 		log.Printf("wardynd: WARNING generated ephemeral age identity (public %s); secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY", id.Recipient().String())
 	} else {
-		if strings.TrimSpace(ageKey) == knownPublicAgeKey {
-			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is the publicly-known demo key (published in git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or set your own with `age-keygen`")
+		if isKnownPublicAgeKey(ageKey) {
+			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
 		}
 		id, err = age.ParseX25519Identity(ageKey)
 		if err != nil {

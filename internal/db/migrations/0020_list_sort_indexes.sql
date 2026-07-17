@@ -1,0 +1,39 @@
+-- Index the two unbounded list-sorts the console polls every 5s.
+--
+-- store.ListRuns issues `SELECT ... FROM agent_runs ORDER BY created_at DESC`
+-- and store.ListApprovals (empty stateFilter) issues `SELECT ... FROM approvals
+-- ORDER BY requested_at DESC`. Neither is paginated, both tables grow without
+-- bound, and 0001 indexed agent_runs on (state)/(created_by) and approvals on
+-- (run_id) + a partial (state) — never the ORDER BY columns. The console polls
+-- BOTH on a 5s timer from every open browser (ui/src/app/App.tsx refreshBadges
+-- -> refreshAttention/refreshPending), so each poll was a full seq scan plus a
+-- sort of the entire table.
+--
+-- The sort is the real cost, not the scan: past work_mem the sort spills to
+-- temp files, so a poll that should be memory-only starts writing megabytes to
+-- disk on a fixed interval, forever. Measured on Postgres 16 (200k runs /
+-- 300k approvals, correlation=1 as an append-only insert order produces):
+--
+--   ListRuns       121ms, Sort Method: external merge  Disk: 13536kB
+--               ->  41ms, Index Scan, no sort, no temp files
+--   ListApprovals  155ms, Sort Method: external merge  Disk: 28720kB
+--               ->  40ms, Index Scan, no sort, no temp files
+--
+-- Both columns are near-perfectly correlated with physical order (rows are
+-- appended in ascending created_at/requested_at), so the planner picks the
+-- backward index scan on its own — verified with EXPLAIN (ANALYZE), not assumed.
+-- The DESC in the index matches the queries' ORDER BY; a plain ASC btree would
+-- also work (btrees scan both ways) but DESC keeps the declaration honest about
+-- the access pattern. Adding approvals_requested_at_idx does NOT disturb the
+-- ListApprovals(PENDING) path, which still uses the 0001 partial index.
+--
+-- These pay off harder if the list endpoints ever gain a LIMIT: the same
+-- ListRuns query with LIMIT 100 drops to 0.06ms / 5 buffers on this index.
+--
+-- NOTE for anyone auditing audit_events for the same smell:
+-- store.QueryRecentAuditEvents (`... FROM audit_events ORDER BY seq DESC LIMIT
+-- $1`) needs NO index — seq is `BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY
+-- KEY`, so it already resolves to an Index Scan Backward on audit_events_pkey
+-- (13 buffers / 0.3ms over 200k rows). Do not add a redundant (seq) index.
+CREATE INDEX IF NOT EXISTS agent_runs_created_at_idx ON agent_runs (created_at DESC);
+CREATE INDEX IF NOT EXISTS approvals_requested_at_idx ON approvals (requested_at DESC);

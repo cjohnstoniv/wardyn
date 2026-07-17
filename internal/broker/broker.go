@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -694,7 +693,7 @@ func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 			Data:      data,
 		}
 		if err := b.audit.Record(ctx, ev); err != nil {
-			log.Printf("wardyn: AUDIT WRITE FAILED action=%s target=%s outcome=%s: %v", ev.Action, ev.Target, ev.Outcome, err)
+			audit.LogWriteFailure(ctx, ev, err)
 		}
 	}
 	return nil
@@ -730,6 +729,6 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 		Data:      data,
 	}
 	if err := b.audit.Record(ctx, ev); err != nil {
-		log.Printf("wardyn: AUDIT WRITE FAILED action=%s target=%s outcome=%s: %v", ev.Action, ev.Target, ev.Outcome, err)
+		audit.LogWriteFailure(ctx, ev, err)
 	}
 }

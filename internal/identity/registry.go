@@ -29,7 +29,6 @@ var reg = component.NewRegistry[Constructor]("embedded")
 // Register adds an identity-provider implementation; call it from an init().
 func Register(name string, c Constructor) { reg.Register(name, c) }
 
-
 // New constructs the identity provider selected by name (empty => default).
 func New(name string, d Deps) (Provider, error) {
 	ctor, _, err := reg.Resolve(name)

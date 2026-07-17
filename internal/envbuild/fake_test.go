@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/jsonstream"
@@ -38,11 +39,21 @@ type fakeEnvbuilderDocker struct {
 	// all images are absent (triggering a pull).
 	imagesPresent map[string]bool
 
+	// onBuild maps image ref -> ONBUILD triggers baked into that image, as a real
+	// daemon reports them from ImageInspect. Refs absent here inspect clean.
+	onBuild map[string][]string
+
+	// inspected records the refs passed to ImageInspect, in order.
+	inspected []string
+
 	// exitCode is the exit code that ContainerWait returns. 0 = success.
 	exitCode int64
 
 	// Track call counts for assertions.
-	pullCalled   bool
+	pullCalled bool
+	// pulledRefs records every ref passed to ImagePull, so a test can assert which
+	// image was pulled rather than only that some pull happened.
+	pulledRefs   []string
 	createCalled int
 	startCalled  int
 	removed      bool
@@ -50,6 +61,9 @@ type fakeEnvbuilderDocker struct {
 	// Finalize (second-stage ImageBuild) tracking.
 	imageBuildCalled bool
 	lastBuildTags    []string
+	// lastBuildPullParent records ImageBuildOptions.PullParent, i.e. whether the
+	// daemon would re-resolve the FROM base after the ONBUILD preflight.
+	lastBuildPullParent bool
 	// buildErr, when non-empty, makes ImageBuild's response stream report a build
 	// error (simulating e.g. a COPY-source failure).
 	buildErr string
@@ -70,6 +84,18 @@ func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
 	return &fakeEnvbuilderDocker{
 		imagesPresent: map[string]bool{"envbuilder:test": true},
 	}
+}
+
+// pulled reports whether ref was passed to ImagePull.
+func (f *fakeEnvbuilderDocker) pulled(ref string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.pulledRefs {
+		if r == ref {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
@@ -94,6 +120,7 @@ func (f *fakeEnvbuilderDocker) ImageList(_ context.Context, _ client.ImageListOp
 func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {
 	f.mu.Lock()
 	f.pullCalled = true
+	f.pulledRefs = append(f.pulledRefs, ref)
 	if f.imagesPresent == nil {
 		f.imagesPresent = map[string]bool{}
 	}
@@ -102,10 +129,24 @@ func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client
 	return fakePullResponse{io.NopCloser(strings.NewReader(`{"status":"pulled"}`))}, nil
 }
 
+// ImageInspect reports the image config, carrying any ONBUILD triggers the test
+// baked in via onBuild (mirrors a real daemon: triggers surface in Config.OnBuild).
+func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _ ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inspected = append(f.inspected, imageID)
+	cfg := &dockerspec.DockerOCIImageConfig{}
+	cfg.OnBuild = f.onBuild[imageID]
+	return client.ImageInspectResult{
+		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg},
+	}, nil
+}
+
 func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error) {
 	f.mu.Lock()
 	f.imageBuildCalled = true
 	f.lastBuildTags = options.Tags
+	f.lastBuildPullParent = options.PullParent
 	buildErr := f.buildErr
 	f.mu.Unlock()
 	// Drain the context so the caller's tar writer isn't left dangling.

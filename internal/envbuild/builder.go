@@ -91,6 +91,9 @@ type envbuilderDockerAPI interface {
 	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
 	ImageBuild(ctx context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error)
+	// ImageInspect reads a local image's config; the wrap build uses it to read
+	// the base's ONBUILD triggers before using it as a FROM (see assertWrapSafeBase).
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
@@ -311,12 +314,21 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 // base image with Wardyn's runner tools (agent-run, wardyn-rec, wardyn-verify,
 // wardyn-git-helper) and a cleared ENTRYPOINT, producing a runnable image the
 // runner can exec/record/verify. Unlike Build, there is NO untrusted-code build
-// container and NO registry push — just the trusted FROM+COPY finalize stage on
-// the host daemon, so it needs neither a cache repo nor the build sandbox. The
-// base is pulled only if absent (ensureImage), so a private image pre-pulled on
-// the host works with no registry-auth wiring. Fails closed if the tools dir is
-// unconfigured/incomplete or the base is unpullable (the wrap build itself is
-// the BYOI contract preflight).
+// container and NO registry push — just the FROM+COPY finalize stage on the host
+// daemon, so it needs neither a cache repo nor the build sandbox. That stage is
+// host-side and unsandboxed, so it is wrap-ONLY: assertWrapSafeBase refuses a
+// base carrying ONBUILD triggers, which would otherwise execute image-controlled
+// code on the host at wrap time. The base is pulled only if absent (ensureImage),
+// so a private image pre-pulled on the host works with no registry-auth wiring.
+//
+// baseRef may be a mutable tag or a digest-pinned ref (repo@sha256:...); Wardyn
+// does NOT require pinning — resolving what a tag points at is the operator's
+// call, and a tag is resolved at wrap time. Pinning is honored end-to-end (a
+// pre-pulled digest ref matches without a registry round-trip) and is the
+// recommended operator practice, not an enforced invariant.
+//
+// Fails closed if the tools dir is unconfigured/incomplete, the base is
+// unpullable, or the base carries ONBUILD triggers.
 func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string) (string, error) {
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
@@ -672,12 +684,29 @@ func (b *Builder) pushedBaseRef() string {
 
 // finalizeImage runs the second-stage build (H5): FROM the image envbuilder
 // pushed, COPY Wardyn's runner tools onto PATH, and tag the result as the local
-// outputTag the runner will use. It runs on the host daemon with TRUSTED content
-// only (a FROM + COPY, no untrusted RUN), so it does not need the untrusted-code
-// build sandbox. Returns the resolvable local tag on success.
-func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullParent bool) (string, error) {
+// outputTag the runner will use. It runs on the host daemon with only a FROM +
+// COPY and no untrusted RUN — assertWrapSafeBase enforces that "no untrusted
+// RUN" property against ONBUILD-carrying bases — so it does not need the
+// untrusted-code build sandbox. Returns the resolvable local tag on success.
+//
+// pullBase makes the base pulled fresh from the registry before the wrap
+// (devcontainer path: envbuilder just pushed it). BYOI passes false because
+// ensureImage already made the possibly local-only/private base present.
+func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullBase bool) (string, error) {
 	if strings.ContainsAny(baseRef, " \t\r\n\x00") {
 		return "", fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
+	}
+	// Pull here rather than via ImageBuild's PullParent so the ONBUILD preflight
+	// below inspects the SAME image the wrap build will resolve as its FROM: a
+	// daemon-side PullParent happens after the inspect and could swap a mutable
+	// tag underneath it (TOCTOU).
+	if pullBase {
+		if err := dockerutil.PullImage(ctx, b.cli, baseRef, "envbuild"); err != nil {
+			return "", err
+		}
+	}
+	if err := b.assertWrapSafeBase(ctx, baseRef); err != nil {
+		return "", err
 	}
 	tarCtx, err := buildFinalizeContext(baseRef, toolsDir)
 	if err != nil {
@@ -688,9 +717,10 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 		Dockerfile:  "Dockerfile",
 		Remove:      true,
 		ForceRemove: true,
-		// Devcontainer path pulls the freshly pushed registry base; BYOI passes
-		// false since ensureImage already made the (possibly local-only) base present.
-		PullParent: pullParent,
+		// The base is already local and has passed the ONBUILD preflight (pulled
+		// fresh above for the devcontainer path, ensureImage'd for BYOI). Re-pulling
+		// here would build from an image the preflight never saw.
+		PullParent: false,
 	})
 	if err != nil {
 		return "", fmt.Errorf("envbuild: finalize image build (COPY runner tools): %w", err)
@@ -704,6 +734,37 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 		return "", fmt.Errorf("envbuild: finalize image build failed: %w", err)
 	}
 	return outputTag, nil
+}
+
+// assertWrapSafeBase enforces the wrap-only contract: wrapping a base image adds
+// layers, it never EXECUTES base-controlled code on the host.
+//
+// A Docker ONBUILD trigger baked into an image fires when that image is used as a
+// FROM — i.e. inside Wardyn's finalize/wrap build, on the HOST daemon, outside
+// every confinement tier and outside the untrusted-build sandbox that the
+// devcontainer path uses. An `ONBUILD RUN curl … | sh` in a hostile or
+// compromised BYOI base is therefore host-side build-time RCE, and it is what
+// makes "the wrap is trusted because it is only a FROM + COPY" false. The Docker
+// builder has no flag to suppress triggers and does not report them in the build
+// stream, so refusing the base is the only fail-closed move.
+//
+// The direct base is the whole check: ONBUILD fires exactly one level down and a
+// child image does not inherit its parent's triggers, so the image we inspect
+// carries precisely the triggers that would run.
+func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) error {
+	res, err := b.cli.ImageInspect(ctx, baseRef)
+	if err != nil {
+		return fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
+	}
+	if res.Config == nil || len(res.Config.OnBuild) == 0 {
+		return nil
+	}
+	return fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
+		"(first: %q). ONBUILD instructions execute on the HOST Docker daemon during the wrap "+
+		"build — outside every confinement tier — so wrapping such a base would run "+
+		"image-controlled code on the host. Resolve the triggers in an image you build "+
+		"yourself (a Dockerfile with `FROM %s` fires them at YOUR build time) and pass that "+
+		"image instead", baseRef, len(res.Config.OnBuild), res.Config.OnBuild[0], baseRef)
 }
 
 // finalizeDockerfile is the trusted second-stage Dockerfile. It clears
