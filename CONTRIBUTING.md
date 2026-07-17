@@ -70,7 +70,7 @@ All contributors and subagents MUST preserve the six security invariants documen
 
 ## Conformance Gate
 
-Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5 — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). All pull requests must pass CI checks — these **block merge**:
+Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5 — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). All pull requests must pass CI checks. Honesty note: GitHub branch protection is **not yet enabled** on `main` — until the repo owner runs the one-time protection setup (see `RELEASING.md`), the checks below are the review bar CI reports on every PR, not a server-side merge block:
 
 - `go build` and `go vet` — both plain and `-tags docker`
 - Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=65 over the

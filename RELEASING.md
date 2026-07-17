@@ -46,6 +46,35 @@ actual CI run on the commit before step 3.
    as the body. **Mark it a pre-release** — Wardyn is pre-alpha, and the existing
    releases predate this policy (they should be re-flagged; see the release settings).
 
+## One-time repo settings (operator actions, pending)
+
+Two GitHub-side settings are documented here because automation cannot apply
+them (admin-level, outward-facing); until run, `CONTRIBUTING.md`'s check list is
+a review bar, not a server-side merge block:
+
+```sh
+# Re-flag the pre-alpha releases as prereleases
+for t in v0.3.0 v0.2.0 v0.1.0; do gh release edit "$t" --prerelease; done
+
+# Enable branch protection on main, requiring the CI merge-gate jobs
+gh api -X PUT repos/cjohnstoniv/wardyn/branches/main/protection \
+  --input - <<'JSON'
+{
+  "required_status_checks": { "strict": false, "contexts": [
+    "build", "diagrams", "ui", "helm", "compose", "conformance",
+    "envbuild-integration", "test-pg", "govulncheck", "staticcheck",
+    "dco", "gitleaks", "licenses", "license-headers", "sbom-stub"
+  ] },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+JSON
+```
+
+(The contexts list mirrors `.github/workflows/ci.yml`'s job ids at the time of
+writing; re-check before running if the merge gate has changed.)
+
 ## Container images
 
 No wardynd container image is published to any registry yet (see
