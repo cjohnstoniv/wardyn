@@ -232,7 +232,7 @@ func pickRuntime(info system.Info, want string) string {
 			return name
 		}
 	}
-	return "" //nolint: every caller fails closed on empty.
+	return "" // Every caller fails closed on empty.
 }
 
 // capabilitiesForWith maps a probed `docker info` to the driver Capabilities the

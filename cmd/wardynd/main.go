@@ -16,16 +16,13 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
-	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -37,23 +34,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
-	"github.com/cjohnstoniv/wardyn/internal/audit"
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
-	"github.com/cjohnstoniv/wardyn/internal/identity/embedded" // also self-registers "embedded" via init()
-	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
-	"github.com/cjohnstoniv/wardyn/internal/recording"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // Secret names seeded/used at boot.
@@ -86,95 +74,11 @@ func main() {
 }
 
 func run() error {
-	var (
-		dsn            = flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres DSN (required)")
-		migrateDSN     = flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "OPTIONAL Postgres DSN for an owner/migrator role that runs migrations; when set, WARDYN_PG_DSN is used ONLY for the least-privilege runtime app pool (enables audit_events DDL protection). Empty = single-DSN mode (no DDL protection, unchanged behavior).")
-		listen         = flagEnv("listen", "WARDYN_LISTEN", ":8080", "HTTP listen address")
-		tlsCert        = flagEnv("tls-cert", "WARDYN_TLS_CERT", "", "path to the TLS certificate (PEM); enables built-in TLS when set together with -tls-key")
-		tlsKey         = flagEnv("tls-key", "WARDYN_TLS_KEY", "", "path to the TLS private key (PEM); enables built-in TLS when set together with -tls-cert")
-		tlsTerminated  = flagBool("tls-terminated", "WARDYN_TLS_TERMINATED", false, "set when TLS terminates at an upstream reverse proxy; marks session cookies Secure even though wardynd itself serves plain HTTP")
-		adminToken     = flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API")
-		localMode      = flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "LOCAL HOST MODE: bypass public-API auth (no SSO/token) and attribute actions to the local operator. Single-developer localhost use only — refused on a publicly-routable bind. Sidecar/run-token auth is unaffected. Auto-enabled when no auth is configured AND the bind is loopback.")
-		localOperator  = flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default: local:<os-user>)")
-		localTrustFwd  = flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access.")
-		uiDir          = flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)")
-		runnerSel      = flagEnv("runner", "WARDYN_RUNNER", "none", `runner driver: "docker" | "none"`)
-		identitySel    = flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`)
-		secretStoreSel = flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", `secret store (pluggable seam): "pg" (default)`)
-		recordingSel   = flagEnv("recording-store", "WARDYN_RECORDING_STORE", "fs", `recording store (pluggable seam): "fs" (default)`)
-		confinementMap = flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins making CC3 runtime-pluggable, e.g. "CC2=runsc;CC3=kata-qemu" (or "CC3=oci:kata-qemu"); empty = built-in defaults`)
-		trustDomain    = flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain")
-		controlURL     = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars")
-		policyPath     = flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON")
-		composerCfg    = flagEnv("composer-config", "WARDYN_COMPOSER_CONFIG", "", "AI Run Composer registry config: a JSON file path or inline JSON ({default,backends}); empty disables the composer")
-		ageKey         = flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty")
-		proxyImage     = flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)")
-
-		recordingDir = flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", "directory for stored PTY session recordings (asciicast); empty disables replay")
-		auditSinks   = flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout")
-		auditSpool   = flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails (durability so a security event is never lost); empty disables")
-
-		oidcIssuer       = flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL — browser-facing, matches the id_token iss (enables human SSO when set)")
-		oidcInternalIss  = flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls (e.g. http://dex:5556); defaults to the public issuer")
-		oidcClientID     = flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id")
-		oidcClientSecret = flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret")
-		oidcRedirectURL  = flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)")
-		oidcEmailDomains = flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains (empty = any verified email)")
-
-		autoStopInterval = flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (0 disables)")
-
-		approvalExpiryInterval = flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (0 disables)")
-		approvalExpiryAfter    = flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this are transitioned to EXPIRED")
-
-		envbuild     = flagBool("envbuild", "WARDYN_ENVBUILD", false, "enable devcontainer image builds for create-run (requires -tags docker)")
-		envbuildImg  = flagEnv("envbuild-image", "WARDYN_ENVBUILD_IMAGE", "", "envbuilder OCI image override (empty = upstream default)")
-		envbuildRepo = flagEnv("envbuild-cache-repo", "WARDYN_ENVBUILD_CACHE_REPO", "", "optional OCI registry ref for envbuilder layer cache (enables safe daemonless push mode)")
-
-		// agentImages is a JSON object mapping agent names to OCI image refs
-		// (e.g. '{"claude-code":"wardyn/agent-claude-code:local"}'). When set,
-		// named agents use the specified image instead of the ghcr convention.
-		// Must be valid JSON when non-empty; validated at boot (fail closed).
-		agentImagesJSON = flagEnv("agent-images", "WARDYN_AGENT_IMAGES", "", `JSON map of agent-name -> OCI image ref; overrides ghcr convention for named agents (env WARDYN_AGENT_IMAGES)`)
-		agentModel      = flagEnv("agent-anthropic-model", "WARDYN_AGENT_ANTHROPIC_MODEL", "", `optional: pin ANTHROPIC_MODEL inside claude-code sandboxes (e.g. "opus") so the agent doesn't use the account/CLI default (which a promo can push to Fable). Empty = CLI default.`)
-		scanAIAdvisor   = flagBool("scan-ai-advisor", "WARDYN_SCAN_AI_ADVISOR", false, "enable the ADVISORY AI workspace-scan fallback: when the deterministic scanner is unsure (low confidence / unrecognized build system), a resident read-only coding-agent CLI gap-fills EMPTY profile fields and forces needs_review. Advisory-only + fail-open (never overrides a deterministic fact, never fails the scan upload). Requires a resident claude CLI on the host PATH. Off = deterministic-only (default).")
-
-		// Bedrock: an enterprise Anthropic transport (no direct Anthropic egress,
-		// billed via AWS). Both must be set to enable it; the AWS credentials
-		// themselves are NOT flags — they come from the secret store
-		// (aws-access-key-id/aws-secret-access-key/aws-session-token), read at
-		// dispatch time since Bedrock's SigV4 request signing can't be
-		// proxy-injected. See internal/api.Config.BedrockRegion/BedrockModel.
-		bedrockRegion       = flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty = Bedrock disabled.`)
-		bedrockModel        = flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code (a cross-region inference-profile id, e.g. "us.anthropic.claude-sonnet-4-5-...", not a bare foundation-model id). Requires -bedrock-region too.`)
-		bedrockAWSDir       = flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `HOST MODE ONLY: bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself, including auto-refreshing AWS SSO. Avoids pasting static aws-access-key-id/-secret secrets (which expire under SSO). Leave empty for team/compose deployments.`)
-		bedrockAWSProfile   = flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Only used with -bedrock-aws-dir.`)
-		bedrockAWSSSORegion = flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", `optional: AWS SSO region whose oidc.<r>/portal.sso.<r> endpoints the sandbox may reach to exchange an SSO token for role creds. Defaults to -bedrock-region. Only used with -bedrock-aws-dir.`)
-
-		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
-		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
-		proxyURL = flagEnv("proxy-url", "WARDYN_PROXY_URL_OVERRIDE", "", `sandbox WARDYN_PROXY_URL override (default http://wardyn-proxy:3128)`)
-
-		// printGroundtruthToken, when set, mints a host-sensor token
-		// (aud="wardyn-groundtruth") for the eBPF/Tetragon ground-truth ingest
-		// sidecar, prints it to stdout, and exits. This is how compose seeds
-		// WARDYN_GROUNDTRUTH_TOKEN. The token grants ONLY audit-write on
-		// POST /api/v1/internal/groundtruth — it can never mint or approve
-		// (those endpoints verify aud="wardyn-internal"). Fail-closed: minting
-		// requires the identity provider; the token has the provider's standard
-		// 1h TTL (operators re-mint on rotation).
-		printGroundtruthToken = flagBool("print-groundtruth-token", "WARDYN_PRINT_GROUNDTRUTH_TOKEN", false, "mint and print a host-sensor token (aud=wardyn-groundtruth) for wardyn-tetragon-ingest, then exit")
-
-		// genAgeKey, when set, prints a freshly-generated age X25519 identity
-		// (AGE-SECRET-KEY-...) to stdout and exits — BEFORE any DSN/DB work — so
-		// `docker run --rm wardyn/wardynd:local -gen-age-key` can mint a durable
-		// WARDYN_AGE_KEY with no Postgres.
-		genAgeKey = flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)")
-	)
-	flag.Parse()
+	f := parseBootFlags()
 
 	// -gen-age-key: EARLY EXIT before validateConfig / any DB or pool work, so it
 	// needs no DSN. Mirrors the -print-groundtruth-token early-exit pattern.
-	if *genAgeKey {
+	if *f.genAgeKey {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
@@ -182,198 +86,56 @@ func run() error {
 	// Extracted into a pure helper (validateConfig) so the fail-closed rules —
 	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation — are
 	// unit-testable without standing up the whole daemon.
-	posture, err := validateConfig(*dsn, *tlsCert, *tlsKey, *tlsTerminated)
+	posture, err := validateConfig(*f.dsn, *f.tlsCert, *f.tlsKey, *f.tlsTerminated)
 	if err != nil {
 		return err
 	}
-	tlsEnabled := posture.tlsEnabled
-	secureCookies := posture.secureCookies
 
 	// Parse the agent images map at boot so a malformed value fails closed
 	// immediately rather than silently using the convention for all agents.
 	var agentImages map[string]string
-	if *agentImagesJSON != "" {
-		if err := json.Unmarshal([]byte(*agentImagesJSON), &agentImages); err != nil {
+	if *f.agentImagesJSON != "" {
+		if err := json.Unmarshal([]byte(*f.agentImagesJSON), &agentImages); err != nil {
 			return fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
 		}
 		slog.Info("wardynd: agent image overrides", slog.Any("images", agentImages))
 	}
 
-	// LOCAL HOST MODE (single-developer localhost path): bypass public-API auth so
-	// the browser UI works with no SSO/Dex and no token. Auto-enable when no auth
-	// is configured AND the bind is loopback; otherwise honor the explicit flag.
-	// FAIL CLOSED: never serve a no-auth public API on a publicly-routable IP. The
-	// sidecar/run-token path (internalAuth) is unaffected either way.
-	loopbackBind := listenIsLoopback(*listen)
-	effLocalMode := *localMode || (*adminToken == "" && *oidcIssuer == "" && loopbackBind)
-	localOp := strings.TrimSpace(*localOperator)
-	if effLocalMode {
-		if listenIsRoutablePublic(*listen) {
-			return fmt.Errorf("refusing to start: -local-mode bypasses authentication but the listen address %q is a publicly-routable IP; bind to loopback (127.0.0.1) or a private address, or configure auth (WARDYN_ADMIN_TOKEN / OIDC)", *listen)
-		}
-		// -local-trust-forwarder DISABLES the unspoofable loopback-PEER gate (it
-		// trusts a loopback-only host publish so the peer is always the docker
-		// gateway). That holds ONLY on a loopback bind or the compose
-		// 0.0.0.0-in-container topology whose host publishes 127.0.0.1:PORT. On a
-		// SPECIFIC non-loopback interface (private/RFC1918, link-local, or public)
-		// it re-opens UNAUTHENTICATED LAN admin access, so refuse to start. The
-		// unspecified all-interfaces bind is indistinguishable from the safe
-		// compose case from inside the container (wardynd cannot see the host's
-		// docker publish), so it earns a DISTINCT error-level log naming the exact
-		// requirement rather than a refusal.
-		if *localTrustFwd {
-			if listenBindsSpecificRoutable(*listen) {
-				return fmt.Errorf("refusing to start: -local-trust-forwarder disables the loopback-peer gate but the listen address %q binds a specific non-loopback interface — this re-opens UNAUTHENTICATED LAN admin access; use it ONLY when the port is published loopback-only (127.0.0.1:PORT), i.e. bind loopback here or an unspecified address inside a compose container", *listen)
-			}
-			if !loopbackBind {
-				slog.Error("wardynd: -local-trust-forwarder on an unspecified bind DISABLES the loopback-peer gate — the UNAUTHENTICATED public API is exposed to the LAN unless the host publishes 127.0.0.1:PORT ONLY (the Compose default). Verify your docker publish / host firewall.",
-					slog.String("listen", *listen),
-				)
-			}
-		}
-		if localOp == "" {
-			localOp = defaultLocalOperator()
-		}
-		if loopbackBind {
-			slog.Info("wardynd: LOCAL HOST MODE — public-API auth disabled; loopback bind. No SSO/token required.",
-				slog.String("operator", localOp),
-				slog.String("listen", *listen),
-			)
-		} else {
-			slog.Warn("wardynd: LOCAL HOST MODE on a non-loopback bind — the UNAUTHENTICATED public API is reachable beyond localhost; ensure a host firewall or configure auth.",
-				slog.String("listen", *listen),
-				slog.String("operator", localOp),
-			)
-		}
-
-		// Host-mode Bedrock auto-detect: region+model configured but NO credential
-		// source given (no -bedrock-aws-dir, no aws-*/bedrock-api-key secrets) — the
-		// exact "Needs setup" state where the operator already runs Claude on Bedrock
-		// via their host ~/.aws. Default the read-only mount to ~/.aws so the AWS SDK
-		// resolves their creds (SSO auto-refreshes) with nothing to paste. Host-mode
-		// only + fail-safe: only when ~/.aws actually exists, so resolveBedrockAuth
-		// still falls through cleanly otherwise.
-		if *bedrockRegion != "" && *bedrockModel != "" && *bedrockAWSDir == "" {
-			if home, herr := os.UserHomeDir(); herr == nil {
-				awsDir := filepath.Join(home, ".aws")
-				if st, serr := os.Stat(awsDir); serr == nil && st.IsDir() {
-					*bedrockAWSDir = awsDir
-					slog.Info("wardynd: host-mode Bedrock — no credential configured; auto-mounting the host AWS dir read-only (the AWS SDK resolves your host creds, SSO auto-refreshes)",
-						slog.String("aws_dir", awsDir),
-					)
-				}
-			}
-		}
+	// LOCAL HOST MODE posture (fail closed on a routable no-auth bind); see
+	// resolveLocalMode for the full rules + the host-mode Bedrock auto-detect.
+	lm, err := resolveLocalMode(f)
+	if err != nil {
+		return err
 	}
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Connect + migrate (Postgres is the only required dependency).
+	// Connect + migrate (Postgres is the only required dependency). See
+	// connectAndMigrate for the WARDYN_PG_MIGRATE_DSN role-split (DDL protection).
 	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
-	pool, err := db.Connect(bootCtx, *dsn)
+	pool, err := connectAndMigrate(bootCtx, *f.dsn, *f.migrateDSN)
 	if err != nil {
-		return fmt.Errorf("connect db: %w", err)
+		return err
 	}
 	defer pool.Close()
 
-	// N4 (DDL protection via role separation): when WARDYN_PG_MIGRATE_DSN is set,
-	// run migrations through a SEPARATE owner/migrator pool and keep the main app
-	// pool on the least-privilege WARDYN_PG_DSN role — so a compromised app role
-	// cannot DROP/DISABLE the audit_events append-only triggers. When unset,
-	// behavior is EXACTLY as before (single DSN), but we log an honest notice that
-	// audit_events is not DDL-protected without the role split.
-	if mDSN := strings.TrimSpace(*migrateDSN); mDSN != "" {
-		mpool, merr := db.Connect(bootCtx, mDSN)
-		if merr != nil {
-			return fmt.Errorf("connect migrate db: %w", merr)
-		}
-		merr = db.Migrate(bootCtx, mpool)
-		mpool.Close()
-		if merr != nil {
-			return fmt.Errorf("migrate: %w", merr)
-		}
-		// Do NOT assume the split delivered protection: VERIFY the app role
-		// (WARDYN_PG_DSN) is actually a non-owner, non-superuser of audit_events.
-		// An operator who pointed WARDYN_PG_MIGRATE_DSN at the same (or another
-		// owner/superuser) role gets no protection — logging "protected"
-		// unconditionally would be an overclaim (invariant 5).
-		protected, perr := db.AuditDDLProtected(bootCtx, pool)
-		if perr != nil {
-			return fmt.Errorf("verify audit ddl protection: %w", perr)
-		}
-		if protected {
-			slog.InfoContext(bootCtx, "wardynd: migrations applied via WARDYN_PG_MIGRATE_DSN (owner/migrator role); app role is a verified non-owner of audit_events — the append-only guard is DDL-protected")
-		} else {
-			slog.WarnContext(bootCtx, "wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) still owns audit_events or is a superuser — DDL protection is NOT in effect; connect wardynd as a distinct non-owner role that has only INSERT/SELECT on audit_events")
-		}
-	} else {
-		if err := db.Migrate(bootCtx, pool); err != nil {
-			return fmt.Errorf("migrate: %w", err)
-		}
-		slog.InfoContext(bootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
-	}
-
-	// Audit recorder: the Postgres store is the source of truth. When audit
-	// sinks are configured, wrap it in a fanoutRecorder so every persisted event
-	// ALSO fans out to file/webhook/syslog. The store write is authoritative;
-	// fanout failures are logged and never fail the primary record (invariant 6:
-	// audit is append-only and free — and must never gate the write).
-	var auditRec audit.Recorder = store.Recorder{Pool: pool}
-	fan, ferr := buildAuditFanout(rootCtx, *auditSinks)
-	if ferr != nil {
-		return ferr
-	}
-	if fan != nil {
-		auditRec = fanoutRecorder{primary: store.Recorder{Pool: pool}, fanout: fan}
-		slog.Info("wardynd: audit fanout enabled")
-	}
 	// SecretRegistry: process-wide secret masking registry. Minted github_token
 	// values and resolved api_key injection values are registered here so they
 	// can be masked ("<secret-hidden>") from PTY/asciicast captures and audit
 	// event fields before they leave the control-plane process. Constructed early
 	// so the identity provider and broker mask their audit events too.
 	maskReg := secretmask.NewRegistry()
-	// maskedRec is the masked + fanned-out recorder. It wraps auditRec (the
-	// fanoutRecorder when sinks are configured, else the plain store recorder)
-	// so EVERY component that records audit events — the identity provider and
-	// the token broker included — has ev.Data/ev.Target scrubbed of registered
-	// secrets AND fans out to the SIEM sinks.
-	//
-	// SECURITY (audit fanout gap): previously the idp and broker were handed a
-	// masked recorder that wrapped the plain store recorder (no fanout), so
-	// broker credential.* events and identity events were persisted to Postgres
-	// but NEVER reached file/webhook/syslog sinks. Wrapping auditRec here closes
-	// that gap while keeping masking applied. (The masking is byte-verbatim
-	// defense-in-depth — these events carry no raw secret today.)
-	// Durable audit fallback (C1/H9): when the primary Postgres write fails, the
-	// event is spooled to a local append-only JSONL file so it is never silently
-	// lost. Constructed HERE — before the recorder chain — so it can sit BELOW
-	// masking and be shared by EVERY audit writer (API, broker, identity, approvals,
-	// sweeper), not just the API server. Best-effort: a spool that cannot be opened
-	// degrades to log-only, never blocking startup.
-	var auditFallback *api.AuditSpool
-	if strings.TrimSpace(*auditSpool) != "" {
-		af, aerr := api.NewAuditSpool(*auditSpool)
-		if aerr != nil {
-			slog.Warn("wardynd: audit spool unavailable (failed audit writes will be logged only)",
-				slog.String("path", *auditSpool),
-				slog.Any("err", aerr),
-			)
-		} else {
-			auditFallback = af
-			slog.Info("wardynd: audit fallback spool", slog.String("path", *auditSpool))
-		}
+	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
+	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
+	maskedRec, fan, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, pool, maskReg)
+	if err != nil {
+		return err
 	}
-	// Recorder chain: maskingRecorder → spoolingRecorder → auditRec (fanout → store).
-	// Masking is outermost so the spool (and the store, and the SIEM sinks) all
-	// receive the already-masked event — the H9 fix for the spool that previously
-	// wrote the PRE-masking event.
-	maskedRec := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
 
 	// Secret store (pluggable seam; default "pg" = age-encrypted Postgres column).
-	secrets, err := buildSecretStore(pool, *ageKey, *secretStoreSel)
+	secrets, err := buildSecretStore(pool, *f.ageKey, *f.secretStoreSel)
 	if err != nil {
 		return err
 	}
@@ -387,9 +149,9 @@ func run() error {
 	}
 	// Identity provider (pluggable seam; default "embedded"). pgRevocations is the
 	// pg-backed kill-switch denylist, supplied to whichever provider is selected.
-	idp, err := identity.New(*identitySel, identity.Deps{
+	idp, err := identity.New(*f.identitySel, identity.Deps{
 		SigningKey:  signKey,
-		TrustDomain: *trustDomain,
+		TrustDomain: *f.trustDomain,
 		Revocations: &pgRevocations{pool: pool},
 		Audit:       maskedRec,
 	})
@@ -405,7 +167,7 @@ func run() error {
 	// sentinel run id (it is host-scoped, not per-run); the ground-truth auth
 	// middleware ignores the run claims and checks only the audience. Print and
 	// exit so this slots cleanly into a compose token-seeding step.
-	if *printGroundtruthToken {
+	if *f.printGroundtruthToken {
 		mintCtx, mintCancel := context.WithTimeout(rootCtx, 10*time.Second)
 		defer mintCancel()
 		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience)
@@ -415,14 +177,6 @@ func run() error {
 		fmt.Println(ri.Token)
 		return nil
 	}
-
-	// auditRec becomes the masked + fanned-out recorder handed to the API server
-	// and the lifecycle reaper — the SAME recorder the idp and broker already
-	// hold (maskedRec). This guarantees a single audit path: every event is
-	// masked, persisted, and fanned out to the SIEM sinks. The MaskRegistry
-	// field in api.Config additionally gates the recording-upload and
-	// injection-resolve paths.
-	auditRec = maskedRec
 
 	// Token broker: GitHub minter only when the App credentials are present;
 	// otherwise github_token grants fail closed at mint with a clear error.
@@ -435,175 +189,28 @@ func run() error {
 	// approval.decide events now reach file/webhook/syslog sinks, not just Postgres.
 	approvals := &approvalService{pool: pool, rec: maskedRec}
 
-	// Runner (optional). docker | none. The docker driver is compiled in only
-	// under the "docker" build tag (parity rule: the control plane carries zero
-	// target-specific code by default; the driver is a pluggable add-on). Build
-	// wardynd with `-tags docker` to enable it.
-	// Confinement substrate/runtime pins (pluggable CC3): parsed fail-closed so a
-	// typo never silently downgrades isolation. Empty => built-in defaults.
-	confRuntimes, err := parseConfinementMap(*confinementMap)
+	// Runner (optional): docker | none, with fail-closed confinement pins. The
+	// docker driver is compiled in only under the "docker" build tag.
+	run, runnerTarget, err := buildRunnerFromFlags(f)
 	if err != nil {
 		return err
 	}
 
-	var run runner.Runner
-	// M31: reflect the ACTUAL resolved runner. Previously hardcoded to "docker"
-	// before the switch, so /healthz reported the sandbox component Selected=docker
-	// even under -runner none (runs actually stay PENDING) — a truthfulness gap.
-	runnerTarget := "none"
-	switch *runnerSel {
-	case "docker":
-		d, derr := newDockerRunner(*proxyImage, confRuntimes)
-		if derr != nil {
-			return fmt.Errorf("docker runner: %w", derr)
-		}
-		run = d
-		runnerTarget = "docker"
-		slog.Info("wardynd: docker runner enabled", slog.String("proxy_image", *proxyImage))
-	case "none", "":
-		slog.Info("wardynd: no runner selected; runs stay PENDING (headless API-only)")
-	default:
-		return fmt.Errorf("unknown -runner %q (want docker|none)", *runnerSel)
-	}
-
-	defaultPolicy, err := api.LoadPolicySpec(*policyPath)
+	defaultPolicy, err := api.LoadPolicySpec(*f.policyPath)
 	if err != nil {
 		return err
 	}
 
-	if *adminToken == "" && !effLocalMode {
+	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 
-	// Recording store (pluggable seam; default "fs"). The fs store serves replays
-	// and accepts wardyn-rec uploads. Empty -recording-dir => a nil store (replay
-	// disabled), the same as before.
-	recStore, rerr := recording.New(*recordingSel, recording.Deps{Dir: *recordingDir})
-	if rerr != nil {
-		return fmt.Errorf("recording store: %w", rerr)
-	}
-	if recStore != nil {
-		slog.Info("wardynd: recording store",
-			slog.String("store", *recordingSel),
-			slog.String("dir", *recordingDir),
-		)
-	}
-
-	// Human SSO (OIDC), optional. The session-cookie HMAC key is loaded from the
-	// secret store ("wardyn-session-key"), generated and persisted on first boot.
-	var authn *oidc.Authenticator
-	if *oidcIssuer != "" {
-		sessKey, kerr := loadOrCreateSessionKey(bootCtx, secrets)
-		if kerr != nil {
-			return kerr
-		}
-		authn, err = oidc.New(rootCtx, oidc.Config{
-			IssuerURL:           *oidcIssuer,
-			InternalIssuerURL:   *oidcInternalIss,
-			ClientID:            *oidcClientID,
-			ClientSecret:        *oidcClientSecret,
-			RedirectURL:         *oidcRedirectURL,
-			AllowedEmailDomains: splitCSV(*oidcEmailDomains),
-			SecureCookies:       secureCookies,
-		}, sessKey)
-		if err != nil {
-			return fmt.Errorf("oidc: %w", err)
-		}
-		slog.Info("wardynd: OIDC SSO enabled", slog.String("issuer", *oidcIssuer))
-		slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment is coming soon; the UI's 'Sign in with SSO' button is disabled, so use the admin token or the CLI for now")
-	}
-
-	// Devcontainer image builder (optional; docker build tag only). When -envbuild
-	// is set but wardynd was not built with -tags docker, newEnvBuilder returns an
-	// error so the misconfiguration fails closed at boot rather than silently.
-	var imgBuilder api.ImageBuilder
-	if *envbuild {
-		b, berr := newEnvBuilder(*envbuildImg, *envbuildRepo)
-		if berr != nil {
-			return fmt.Errorf("envbuild: %w", berr)
-		}
-		imgBuilder = b
-		slog.Info("wardynd: devcontainer builds enabled")
-	}
-
-	// AI Run Composer (optional): build the backend registry from -composer-config.
-	// Nil when unconfigured, which disables the compose endpoints (fail closed).
-	composerReg, composerReadiness, err := buildComposerRegistry(*composerCfg, secrets)
+	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds, the
+	// AI Run Composer, subscription/managed LLM credential providers, advisory AI
+	// scan fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
+	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, secrets, posture.secureCookies)
 	if err != nil {
-		return fmt.Errorf("composer: %w", err)
-	}
-	// Map the boot-snapshot readiness onto the api wire type for /setup/status.
-	// backends.BackendReadiness and api.ComposerBackendReadiness have identical
-	// fields/types/order, so this is a plain Go struct conversion (tags ignored).
-	var composerBackends []api.ComposerBackendReadiness
-	for _, b := range composerReadiness {
-		composerBackends = append(composerBackends, api.ComposerBackendReadiness(b))
-	}
-	if composerReg != nil && composerReg.Enabled() {
-		names := make([]string, 0)
-		for _, b := range composerReg.List() {
-			names = append(names, b.Name)
-		}
-		slog.Info("wardynd: AI Run Composer enabled",
-			slog.Any("backends", names),
-			slog.String("default", composerReg.Default()),
-		)
-	}
-
-	// Pluggable-component selection advertised on /healthz. "selected" is the
-	// ACTUAL running impl; "recommended_production" is the standard Wardyn
-	// recommends converging to (may differ from the shipped default — the honest
-	// recommended-vs-shipped split, see docs/PLUGGABILITY.md).
-	sourceOf := func(selected, def string) string {
-		if selected == def {
-			return "default"
-		}
-		return "configured"
-	}
-	components := map[string]api.ComponentInfo{
-		"identity":      {Selected: *identitySel, RecommendedProduction: "spire", Source: sourceOf(*identitySel, "embedded")},
-		"secret_store":  {Selected: *secretStoreSel, RecommendedProduction: "openbao", Source: sourceOf(*secretStoreSel, "pg")},
-		"recording":     {Selected: *recordingSel, RecommendedProduction: "fs", Source: sourceOf(*recordingSel, "fs")},
-		"policy_engine": {Selected: "builtin", RecommendedProduction: "opa"},
-		"sandbox":       {Selected: runnerTarget, RecommendedProduction: "kata-cc3", Source: sourceOf(*runnerSel, "none")},
-	}
-
-	// Subscription OAuth token provider: yields the operator's LIVE Anthropic
-	// access token from the resident ~/.claude so subscription runs are
-	// credentialed PROXY-SIDE (the sandbox holds an inert sentinel that never
-	// goes stale) instead of a copy whose refresh token rotates out from under it.
-	// Constructed unconditionally; it only reads/refreshes when a subscription run
-	// resolves its injection. Escape hatch: WARDYN_SUBSCRIPTION_INJECT=off keeps
-	// the legacy resident-copy behavior.
-	subToken, subErr := subscription.New(subscription.Config{})
-	if subErr != nil {
-		slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
-			slog.Any("err", subErr),
-		)
-		subToken = nil
-	}
-	// Default ON: unset (and the compose ${…:-off} passthrough when actually set
-	// to a truthy) injects proxy-side. off/0/false/no disable it; garbage exits 2
-	// via EnvBool rather than silently staying ON. (Previously only the literal
-	// "off" disabled; 0/false/no silently left injection ON — the security gap.)
-	disableSubInject := !cliutil.EnvBool("WARDYN_SUBSCRIPTION_INJECT", true)
-
-	// Managed subscription token: a long-lived `claude setup-token` captured via
-	// the container-login flow and stored age-encrypted. Serves subscription runs
-	// PROXY-SIDE in deployments (compose) whose distroless wardynd has no host
-	// ~/.claude for subToken above. Store-only (no Server dependency, no cycle);
-	// nil when there is no secret store.
-	managedToken := api.NewManagedCredProvider(secrets, "anthropic")
-
-	// Advisory AI scan fallback (opt-in): wired to the fail-open
-	// workspacescan.AdviseProfile with a bounded timeout so a slow/hung CLI can
-	// never stall — let alone fail — the sidecar's scan upload. nil = OFF.
-	var scanAdvisor func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
-	if *scanAIAdvisor {
-		scanAdvisor = func(ctx context.Context, facts workspacescan.ScanFacts, base workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile {
-			return workspacescan.AdviseProfile(ctx, facts, base, workspacescan.AIOptions{Timeout: 60 * time.Second})
-		}
-		slog.Info("wardynd: advisory AI workspace-scan fallback ENABLED (WARDYN_SCAN_AI_ADVISOR); advisory-only + fail-open, needs a resident read-only claude CLI on PATH")
+		return err
 	}
 
 	srv := api.New(api.Config{
@@ -611,159 +218,52 @@ func run() error {
 		Identity:                  idp,
 		Approvals:                 approvals,
 		Broker:                    brk,
-		Audit:                     auditRec,
+		Audit:                     maskedRec,
 		Runner:                    run,
-		AdminToken:                *adminToken,
-		LocalMode:                 effLocalMode,
-		LocalOperator:             localOp,
-		TrustDomain:               *trustDomain,
+		AdminToken:                *f.adminToken,
+		LocalMode:                 lm.enabled,
+		LocalOperator:             lm.operator,
+		TrustDomain:               *f.trustDomain,
 		DefaultPolicy:             defaultPolicy,
 		RunnerTarget:              runnerTarget,
-		UIDir:                     *uiDir,
-		ControlPlaneURL:           *controlURL,
-		RecordingStore:            recStore,
-		OIDC:                      authn,
-		ImageBuilder:              imgBuilder,
+		UIDir:                     *f.uiDir,
+		ControlPlaneURL:           *f.controlURL,
+		RecordingStore:            feats.recStore,
+		OIDC:                      feats.authn,
+		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
-		AgentAnthropicModel:       *agentModel,
-		BedrockRegion:             *bedrockRegion,
-		BedrockModel:              *bedrockModel,
-		BedrockAWSConfigDir:       *bedrockAWSDir,
-		BedrockAWSProfile:         *bedrockAWSProfile,
-		BedrockAWSSSORegion:       *bedrockAWSSSORegion,
-		ProxyURL:                  *proxyURL,
+		AgentAnthropicModel:       *f.agentModel,
+		BedrockRegion:             *f.bedrockRegion,
+		BedrockModel:              *f.bedrockModel,
+		BedrockAWSConfigDir:       *f.bedrockAWSDir,
+		BedrockAWSProfile:         *f.bedrockAWSProfile,
+		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,
+		ProxyURL:                  *f.proxyURL,
 		Secrets:                   secrets,
 		MaskRegistry:              maskReg,
-		SubscriptionToken:         subToken,
-		ManagedToken:              managedToken,
-		DisableSubscriptionInject: disableSubInject,
-		Composer:                  composerReg,
-		Components:                components,
-		ScanAIAdvisor:             scanAdvisor,
+		SubscriptionToken:         feats.subToken,
+		ManagedToken:              feats.managedToken,
+		DisableSubscriptionInject: feats.disableSubInject,
+		Composer:                  feats.composerReg,
+		Components:                componentsInfo(f, runnerTarget),
+		ScanAIAdvisor:             feats.scanAdvisor,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:       strings.TrimSpace(*ageKey) != "",
-		LocalLoopback:       loopbackBind,
-		LocalTrustForwarder: *localTrustFwd,
-		ComposerBackends:    composerBackends,
+		AgeKeyDurable:       strings.TrimSpace(*f.ageKey) != "",
+		LocalLoopback:       lm.loopback,
+		LocalTrustForwarder: *f.localTrustFwd,
+		ComposerBackends:    feats.composerBackends,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
 		BaseCtx: rootCtx,
 	})
 
-	// Lifecycle reaper: stop idle RUNNING sandboxes past their policy threshold.
-	// Disabled when no runner is wired (nothing to stop) or interval <= 0.
-	if run != nil && *autoStopInterval > 0 {
-		reaper := lifecycle.New(
-			lifecycleStore{pool: pool},
-			lifecycleStopper{pool: pool, runner: run, identity: idp, broker: brk},
-			auditRec,
-			lifecycle.Config{Interval: *autoStopInterval},
-		)
-		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
-		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *autoStopInterval))
-	}
+	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
+	// expiry sweeper) + the boot-time reconciliation pass (C3).
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec)
 
-	// Groundtruth token rotator: keep a shared token file fresh so the eBPF/Tetragon
-	// ingest sidecar — which re-reads the file on a 401 — recovers when its ~1h token
-	// expires instead of going permanently blind (U009). Off unless a file path is
-	// configured; the shipped compose stack points wardynd + the ingest at the same
-	// shared-volume file. The static WARDYN_GROUNDTRUTH_TOKEN env path cannot refresh.
-	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
-		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotator(rootCtx, idp, gtFile) })
-		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
-	}
-
-	// Approval expiry sweeper: transition PENDING approvals older than the
-	// cutoff to EXPIRED so the queue does not grow unbounded. approval.ExpireStale
-	// was implemented but never scheduled; this wires it on the same goroutine
-	// pattern as the reaper.
-	if *approvalExpiryInterval > 0 {
-		go goSafe("approval.sweeper", func() {
-			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(rootCtx, approvalStore{pool: pool, rec: maskedRec}, *approvalExpiryInterval, *approvalExpiryAfter)
-		})
-		slog.Info("wardynd: approval expiry sweeper started",
-			slog.Duration("interval", *approvalExpiryInterval),
-			slog.Duration("after", *approvalExpiryAfter),
-		)
-	}
-
-	// Boot-time reconciliation (C3): re-derive the state of any run left
-	// non-terminal by a previous process (crash/restart) so it is not stranded
-	// RUNNING forever with a live sandbox and un-revoked credentials. Best-effort;
-	// a reconciliation error never blocks startup.
-	if run != nil {
-		if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
-			slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
-		}
-	}
-
-	httpSrv := &http.Server{
-		Addr:              *listen,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		// No ReadTimeout/WriteTimeout: long-lived streaming endpoints (the attach
-		// WebSocket and the fleet SSE stream) must not be killed by a whole-request
-		// deadline. IdleTimeout bounds idle keep-alive connections and MaxHeaderBytes
-		// caps header size (slowloris/abuse) without affecting request bodies.
-		IdleTimeout:    120 * time.Second,
-		MaxHeaderBytes: 1 << 20,
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		switch {
-		case tlsEnabled:
-			slog.Info("wardynd: listening with built-in TLS",
-				slog.String("listen", *listen),
-				slog.String("identity", idp.Name()),
-				slog.String("trust_domain", *trustDomain),
-			)
-			if err := httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- err
-			}
-		default:
-			slog.Info("wardynd: listening",
-				slog.String("listen", *listen),
-				slog.String("identity", idp.Name()),
-				slog.String("trust_domain", *trustDomain),
-			)
-			if *tlsTerminated {
-				slog.Info("wardynd: serving plain HTTP behind a TLS-terminating reverse proxy (WARDYN_TLS_TERMINATED=true); cookies marked Secure")
-			} else {
-				slog.Warn("wardynd: serving PLAIN HTTP with no TLS — the control plane MUST be fronted by TLS for any non-localhost deployment (set WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, or WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy)")
-			}
-			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- err
-			}
-		}
-	}()
-
-	select {
-	case <-rootCtx.Done():
-		slog.Info("wardynd: shutdown signal received")
-	case err := <-errCh:
-		return fmt.Errorf("serve: %w", err)
-	}
-
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer shutCancel()
-	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
-	}
-
-	// Drain audit sinks last, after the HTTP server has stopped accepting new
-	// requests (so no further audit events are produced). Close blocks until the
-	// webhook flusher has drained and delivered its final batch and the file/
-	// syslog sinks have been closed; previously sinks were never Closed on
-	// shutdown, so the last batch and the drain goroutine were abandoned.
-	if fan != nil {
-		if cerr := fan.Close(); cerr != nil {
-			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
-		}
-	}
-	return nil
+	// Serve until signal/error, then drain: HTTP first, audit sinks last.
+	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved

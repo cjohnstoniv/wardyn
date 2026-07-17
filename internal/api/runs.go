@@ -5,18 +5,13 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/composer"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -59,64 +54,9 @@ func parseConfinementClass(s string) (types.ConfinementClass, bool) {
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var req createRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	req, reqCC, ok := s.decodeAndValidateCreateRun(w, r)
+	if !ok {
 		return
-	}
-	// Only agent is hard-required. Repo is OPTIONAL: an inline-policy run that
-	// mounts a local host folder (WorkspaceMount target /work) has no git repo to
-	// clone, so requiring a repo would block the local-folder wizard path. The
-	// clone wiring in dispatch is already nil/empty-safe (it surfaces no repo env
-	// when run.Repo is blank), so an empty repo simply runs in the mounted
-	// workspace (or an empty one).
-	if req.Agent == "" {
-		writeError(w, http.StatusBadRequest, "agent is required")
-		return
-	}
-
-	// BYOI validation (fail closed before any store write): a user-supplied image
-	// is mutually exclusive with a devcontainer build, and — unlike DevcontainerRepo,
-	// which degrades to the convention image — an explicitly chosen image with no
-	// ImageBuilder wired is a hard error (never silently swap a chosen image for the
-	// convention one).
-	if req.Image != "" {
-		if req.DevcontainerRepo != "" {
-			writeError(w, http.StatusBadRequest, "image and devcontainer_repo are mutually exclusive")
-			return
-		}
-		if s.cfg.ImageBuilder == nil {
-			writeError(w, http.StatusBadRequest,
-				"a custom sandbox image was requested but this control plane has no image builder wired "+
-					"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)")
-			return
-		}
-	}
-
-	// Validate the requested confinement class up front (fail closed before any
-	// store write). Empty inherits the policy minimum; an unknown non-empty
-	// value is rejected with 400.
-	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
-	if !ccOK {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
-		return
-	}
-
-	// task_mode is a tiny closed enum; reject anything else up front (fail
-	// closed, same shape as confinement_class above).
-	if req.TaskMode != "" && req.TaskMode != "harness" && req.TaskMode != "exec" {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown task_mode %q (want harness or exec)", req.TaskMode))
-		return
-	}
-
-	// Same UUID contract as the compose endpoint's session_id: this field only
-	// exists to correlate audit rows, so reject graffiti before anything is
-	// created rather than capping arbitrary text into run.create's Data.
-	if req.ComposeSessionID != "" {
-		if _, err := uuid.Parse(req.ComposeSessionID); err != nil {
-			writeError(w, http.StatusBadRequest, "compose_session_id must be a UUID")
-			return
-		}
 	}
 
 	// Resolve the policy: inline_policy (validated here), explicit policy_id, or
@@ -141,65 +81,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// active run.
 	workspacePath := primaryWorkspacePath(spec)
 
-	// Resolve the run's confinement class: the request value when set, else the
-	// policy minimum. A requested class must not be WEAKER than the policy
-	// minimum — a run can only request equal-or-stronger confinement, never
-	// erode the policy floor (invariant 5, fail closed). The resolved class is
-	// what the docker driver gates on (run.ConfinementClass).
-	enforced := spec.MinConfinementClass
-	if reqCC != "" {
-		if !confinementGE(reqCC, spec.MinConfinementClass) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
-				"confinement_class %s is weaker than the policy minimum %s",
-				reqCC, spec.MinConfinementClass))
-			return
-		}
-		enforced = reqCC
-	}
-
-	// Deterministic BLAST-RADIUS floor (defense-in-depth — applies to EVERY run,
-	// including the manual wizard and direct API callers, not just composed ones):
-	// a run holding powerful credentials (write-capable, or a third-party/production
-	// api_key) MUST run in the strongest sandbox so a sandbox escape can't carry
-	// those credentials out to your host. Raise the enforced class to CC3; a host
-	// that cannot provide CC3 then fails closed at the capability check below rather
-	// than running the workload under-confined (invariant 5).
-	if composer.RequiredConfinementFloor(spec) == types.CC3 && !confinementGE(enforced, types.CC3) {
-		enforced = types.CC3
-	}
-
-	// Confinement gating: refuse to schedule a run whose confinement class the
-	// runner cannot structurally enforce (invariant 5, fail closed).
-	if s.cfg.Runner != nil {
-		caps, cerr := s.cfg.Runner.Capabilities(ctx)
-		if cerr != nil {
-			writeError(w, http.StatusServiceUnavailable, "runner capabilities unavailable: "+cerr.Error())
-			return
-		}
-		// Membership, not rank (M8): CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
-		// INDEPENDENT runtimes, so a host can advertise a non-contiguous set (e.g. a
-		// Kata-only host advertises [CC1, CC3], no CC2). A rank check —
-		// confinementGE(best, enforced) — would let a CC2 demand pass on that host
-		// because CC3 outranks CC2, then fail at sandbox create with a raw docker
-		// error. Require the exact enforced class to be advertised. enforced=="" means
-		// no class is required (policy floor unset, no request) ⇒ any runner passes.
-		if enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
-				"runner %q cannot enforce confinement_class %s (available: %s)",
-				caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
-			return
-		}
-	}
-
-	// Reject cloud_sts grants up front: the embedded provider hard-requires
-	// SPIRE for them (invariant 5). We check via the identity provider so the
-	// spire provider can later accept them without an API change.
-	if checker, ok := s.cfg.Identity.(grantChecker); ok {
-		if err := checker.CheckGrants(spec.EligibleGrants); err != nil {
-			writeError(w, http.StatusUnprocessableEntity,
-				"policy requires the spire identity provider: "+err.Error())
-			return
-		}
+	// Resolve + gate the confinement class (request vs policy floor, the CC3
+	// blast-radius floor, runner capability membership, cloud_sts grant gating) —
+	// invariant 5, fail closed; see resolveEnforcedConfinement.
+	enforced, ok := s.resolveEnforcedConfinement(ctx, w, spec, reqCC)
+	if !ok {
+		return
 	}
 
 	createdByType, createdBy := actorFromRequest(r)
@@ -257,106 +144,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Persist each eligible grant as an eligibility record (NOT issuance).
-	// Track the first github_token grant id so dispatch can surface it in the
-	// sandbox env as WARDYN_GITHUB_GRANT_ID (non-secret: the grant is an
-	// eligibility record, not a token). The run token never appears in env.
-	// Auto-mintable api_key grants become proxy injection configs: the proxy
-	// resolves their secret VALUES at startup via the internal injection
-	// endpoint (values live only in proxy memory, never in the sandbox).
-	var firstGitHubGrantID *uuid.UUID
-	var injections []runner.InjectionGrant
-	// git_pat grants: host -> grant id, surfaced in the sandbox as
-	// WARDYN_GIT_PAT_GRANTS so the git-credential helper can mint the stored PAT
-	// for a matched non-GitHub host (non-secret: an eligibility record, not the
-	// PAT itself; the value is returned only through the brokered mint path).
-	gitPATGrants := map[string]string{}
-	// gitPATEgress collects the extra hosts a git_pat grant's host needs
-	// reachable beyond the grant's own host (currently just ADO's dev.azure.com
-	// / *.visualstudio.com bundle — see adoEgressDomains).
-	var gitPATEgress []string
-	// ssh_key grants: host -> grant id, surfaced in the sandbox as
-	// WARDYN_SSH_GRANTS so agent-run can mint the resident private key at clone
-	// time (non-secret: an eligibility record, not the key; the key material is
-	// returned only through the brokered mint path and wiped after the clone).
-	// sshEgress collects the SSH-over-443 endpoints these grants need reachable.
-	sshGrants := map[string]string{}
-	var sshEgress []string
-	for _, g := range spec.EligibleGrants {
-		grantID := uuid.New()
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
-			ID:        grantID,
-			RunID:     runID,
-			CreatedAt: now,
-			Spec:      g,
-		}); gerr != nil {
-			// A grant write failure is fatal: the run would be ungovernable.
-			writeError(w, http.StatusInternalServerError, "create grant: "+gerr.Error())
-			return
-		}
-		if g.Kind == types.GrantGitHubToken && firstGitHubGrantID == nil {
-			id := grantID // copy loop var
-			firstGitHubGrantID = &id
-		}
-		if g.Kind == types.GrantGitPAT {
-			if host, _, _, derr := gitPATScopeFields(g.Scope); derr == nil {
-				gitPATGrants[host] = grantID.String()
-				gitPATEgress = append(gitPATEgress, adoEgressDomains(host)...)
-			}
-		}
-		if g.Kind == types.GrantSSHKey {
-			// validatePolicySpec already vetted the host is a supported SSH-over-443
-			// provider, so sshOver443Endpoint is expected to resolve here.
-			if host, _, _, _, derr := sshKeyScopeFields(g.Scope); derr == nil {
-				sshGrants[host] = grantID.String()
-				if ep, ok := sshOver443Endpoint(host); ok {
-					sshEgress = append(sshEgress, ep)
-				}
-			}
-		}
-		// Approval-gated api_key grants are deliberately excluded: an unmet
-		// approval would fail the proxy's startup mint and brick the sandbox's
-		// egress (fail closed, but a footgun as a default).
-		if g.Kind == types.GrantAPIKey && !g.RequiresApproval {
-			if rule, derr := injectionRuleFromScope(g.Scope); derr == nil {
-				injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
-			} else {
-				s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
-					grantID.String(), "failure", mustJSON(map[string]any{
-						"error": "api_key grant scope invalid, injection skipped: " + derr.Error(),
-					})))
-			}
-		}
+	// Persist the eligibility records + derive the non-secret sandbox wiring
+	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
+	// see persistRunGrants. A grant write failure has already answered 500.
+	gw, ok := s.persistRunGrants(ctx, w, runID, now, spec)
+	if !ok {
+		return
 	}
-
-	// codex-cli has no SSH clone lane (no openssh/corkscrew in the image; its
-	// agent-run never reads WARDYN_SSH_GRANTS), so an ssh_key grant would sit
-	// unconsumed and the clone would fail SILENTLY mid-run. Fail loud at create
-	// instead: drop the wiring and tell the operator on the response + audit
-	// log. The persisted grant rows stay — they are eligibility records nothing
-	// will mint, not issued credentials.
-	if req.Agent == "codex-cli" && len(sshGrants) > 0 {
-		hosts := make([]string, 0, len(sshGrants))
-		for h := range sshGrants {
-			hosts = append(hosts, h)
-		}
-		slices.Sort(hosts)
-		warnings = append(warnings, fmt.Sprintf(
-			"codex-cli has no SSH clone lane — dropping ssh_key grant(s) for %s; use an HTTPS/PAT source for this repo, or run it under claude-code",
-			strings.Join(hosts, ", ")))
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.unsupported_agent",
-			req.Agent, "failure", mustJSON(map[string]any{"dropped_hosts": hosts})))
-		sshGrants = map[string]string{}
-		sshEgress = nil
-	}
-	// BYOI images get claude-code's agent-run, whose SSH lane needs openssh +
-	// corkscrew in the BASE image — which Wardyn cannot inspect from the control
-	// plane. Advise softly; the runtime guard in agent-run still fails loud
-	// in-sandbox if the tools are missing.
-	if req.Image != "" && len(sshGrants) > 0 {
-		warnings = append(warnings,
-			"this run clones over SSH: your custom image must carry openssh-client + corkscrew, or the clone is skipped (agent-run warns in the run log)")
-	}
+	// SSH-lane honesty: drop the wiring for agents with no SSH clone lane
+	// (codex-cli) and advise BYOI images about the required tools.
+	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, runID, &gw)...)
 
 	createAuditData := map[string]any{
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
@@ -375,45 +172,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(createAuditData)))
 
-	// Onboarded-workspace profile drives the run (DETERMINISTIC, never the LLM):
-	// union each referenced workspace's detected package registries into the egress
-	// allowlist. The operator onboarded + reviewed these workspaces, so their
-	// filename-keyed registry hosts are trusted to widen the run's allowlist; the
-	// deny-list + confinement floor are unaffected. Image selection from the PRIMARY
-	// workspace follows in the image block below.
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	if added := unionWorkspaceEgress(&spec, wsRefs); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-	}
-
-	// Site-config SCM hosts: the operator's declared enterprise SCM hosts (GHES /
-	// ADO Server — see unionSiteConfigScmHosts) are reachable by every run, since
-	// unlike github.com/dev.azure.com they have no built-in egress bundle.
-	if added := s.unionSiteConfigScmHosts(ctx, &spec); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-	}
-
-	// SSH SCM lane: an ssh_key grant needs its SSH-over-443 endpoint reachable.
-	// Add each PORT-QUALIFIED (":443") endpoint to the allowlist so it reuses the
-	// CONNECT-443 lane (no port-policy change) and matches ONLY :443 — closing the
-	// bare-entry "matches any port" permissiveness for SSH hosts. Deduped against
-	// existing entries.
-	if added := unionAllowedDomains(&spec, sshEgress); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-	}
-
-	// ADO SCM lane: a git_pat grant for an Azure DevOps host needs dev.azure.com
-	// + *.visualstudio.com reachable (see adoEgressDomains) — unlike GitHub,
-	// whose egress is already baked into every example policy, nothing adds
-	// these for ADO today. Mirrors the SSH lane above. Deduped against existing
-	// entries.
-	if added := unionAllowedDomains(&spec, gitPATEgress); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.git_pat.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-	}
+	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
+	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
+	// ADO SCM lanes) — never the LLM; see unionRunEgress. wsRefs feeds the
+	// workspace-image resolution below.
+	wsRefs := s.unionRunEgress(ctx, runID, &spec, gw)
 
 	// CLIENT-DISCONNECT ISOLATION (M26), same rationale as dispatchWithVerify's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
@@ -427,78 +190,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// deadline below instead of the client's connection being the de-facto one.
 	ctx = context.WithoutCancel(ctx)
 
-	// Resolve the sandbox image. Default: the agent convention image. Precedence:
-	// a BYOI wrap (top) > a request-level devcontainer build > the primary onboarded
-	// workspace's profile. A BYOI or DEVCONTAINER-REPO build failure marks the run
-	// FAILED (observable, never a 500); a WORKSPACE image build failure is fail-open
-	// (keeps the convention image), since onboarding is a convenience, not a gate.
-	image := agentImage(req.Agent, s.cfg.AgentImages)
-	switch {
-	case req.Image != "": // validated above: ImageBuilder is non-nil, not XOR'd
-		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
-		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
-		// shell or the harness binary).
-		outTag := "wardyn-byoi/" + runID.String() + ":latest"
-		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag)
-		cancelBuild()
-		if berr != nil {
-			// CAS from PENDING so a run a concurrent kill already moved to KILLED
-			// is not silently clobbered back to FAILED (was: unconditional write).
-			s.failAndRevoke(ctx, runID, types.RunPending)
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-				runID.String(), "failure", mustJSON(map[string]any{
-					"byoi_base": req.Image, "error": berr.Error(),
-				})))
-			created = s.refreshRun(ctx, runID, created)
-			writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-			return
-		}
-		image = built
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), "success", mustJSON(map[string]any{
-				"byoi_base": req.Image, "image": built,
-			})))
-	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
-		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
-		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
-		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag)
-		cancelBuild()
-		if berr != nil {
-			// CAS from PENDING so a run a concurrent kill already moved to KILLED
-			// is not silently clobbered back to FAILED (was: unconditional write).
-			s.failAndRevoke(ctx, runID, types.RunPending)
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-				runID.String(), "failure", mustJSON(map[string]any{
-					"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error(),
-				})))
-			created = s.refreshRun(ctx, runID, created)
-			writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-			return
-		}
-		image = built
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), "success", mustJSON(map[string]any{
-				"devcontainer_repo": req.DevcontainerRepo, "image": built,
-			})))
-	case len(wsRefs) > 0:
-		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
-		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0]); ok {
-			image = built
-		}
-		cancelBuild()
-	}
-
-	// Persist the resolved image for provenance (best-effort: a failed write
-	// must not block dispatch — the audit trail still carries build events).
-	if err := s.cfg.Store.SetRunImage(ctx, runID, image); err != nil {
-		slog.ErrorContext(ctx, "wardynd: persist run image failed",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
+	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
+	// profile > convention image) and persist it for provenance. A failed
+	// BYOI/devcontainer build has already marked the run FAILED and answered 201.
+	image, responded := s.resolveCreateRunImage(ctx, w, req, runID, created, warnings, wsRefs)
+	if responded {
+		return
 	}
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {
-		s.dispatch(ctx, created, id.Token, image, spec, firstGitHubGrantID, gitPATGrants, sshGrants, injections, req.Interactive, req.TaskMode)
+		s.dispatch(ctx, created, id.Token, image, spec, gw.firstGitHubGrantID, gw.gitPATGrants, gw.sshGrants, gw.injections, req.Interactive, req.TaskMode)
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)
 	}

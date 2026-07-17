@@ -27,7 +27,11 @@ jobs:
       # rot uncaught (was a HIGH finding: CI only ever built default tags).
       - name: Build (docker tags)
         run: make build-docker
-      - name: Vet
+      # `make lint` = go vet (both tag sets) + the golangci-lint function-size/
+      # complexity gate (.golangci.yml: funlen/gocyclo/gocognit/lll) + the
+      # file-size gate (scripts/check-file-size.sh). Single-sourced in the
+      # Makefile — the tool version pin lives there (GOLANGCI_LINT_VERSION).
+      - name: Lint (vet + size/complexity gates)
         run: make lint
       # Runs the suite under BOTH tag sets and enforces the floor on the union of
       # the two coverage profiles. The tagless build alone cannot compile the
