@@ -73,11 +73,14 @@ We publish known-uncalled findings here rather than let them sit silently in a
 scanner's ignore-list.
 
 - **GO-2026-5932** — `golang.org/x/crypto/openpgp` is flagged unmaintained and
-  unsafe by design, with **no fix available** (`Fixed in: N/A`). It reaches our
-  build only transitively: `filippo.io/age` (used for our secret-encryption
-  primitives) imports `golang.org/x/crypto/chacha20poly1305`, `hkdf`,
-  `curve25519`, and `scrypt` — sibling packages in the same `golang.org/x/crypto`
-  module — which pulls in the *module* as a build dependency. No Wardyn code
+  unsafe by design, with **no fix available** (`Fixed in: N/A`). The
+  `golang.org/x/crypto` *module* reaches our build via two dependency paths —
+  `filippo.io/age` (used for our secret-encryption primitives) imports
+  `chacha20poly1305`, `hkdf`, `curve25519`, and `scrypt`, and our OpenAI
+  composer backend pulls it in through Azure identity
+  (`internal/composer/backends/openai` → `github.com/Azure/azure-sdk-for-go/sdk/azidentity`
+  → `golang.org/x/crypto/pkcs12`) — all sibling packages of `openpgp` in the same
+  module, which pulls in the *module* as a build dependency. No Wardyn code
   path, and no dependency Wardyn actually calls, imports the `openpgp`
   subpackage itself (`go mod why golang.org/x/crypto/openpgp` confirms: "main
   module does not need package golang.org/x/crypto/openpgp"). `govulncheck`'s

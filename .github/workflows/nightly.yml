@@ -18,8 +18,8 @@ jobs:
   e2e-live:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26.5'
       - name: Docker available
@@ -30,7 +30,7 @@ jobs:
         run: make test-e2e
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: e2e-live-results
           path: test/e2e/RESULTS.md
@@ -44,14 +44,14 @@ jobs:
   task-e2e-live:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26.5'
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 9
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
           cache: pnpm
@@ -64,7 +64,7 @@ jobs:
         run: make test-e2e-live
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: task-e2e-live-results
           path: test/e2e/RESULTS.md
@@ -77,7 +77,7 @@ jobs:
   ci-mode-dogfood:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Docker available
         run: docker --version
       - name: One-shot governed run (BYOA exec mode, sealed policy)
@@ -102,7 +102,7 @@ jobs:
           [ "$code" -eq 3 ] || { echo "expected exit 3, got $code"; exit 1; }
       - name: Upload run artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-mode-dogfood-artifacts
           path: |
@@ -118,8 +118,8 @@ jobs:
   docker-tagged-live:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.26.5'
       - name: Docker available
@@ -130,7 +130,7 @@ jobs:
         run: make test-report-docker
       - name: Upload docker-tagged test reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-tagged-live-reports
           path: test/reports/go/docker/**
