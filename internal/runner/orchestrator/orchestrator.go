@@ -21,9 +21,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// RefStore is the durable ref->substrate mapping seam. Substrates are persisted
+// by NAME (a substrate object is not serialisable); GetRef tolerates missing
+// rows (found=false, nil error) so pre-migration/unknown refs are not errors.
+// store.PG satisfies this interface.
+type RefStore interface {
+	PutRef(ctx context.Context, ref, substrateName string) error
+	GetRef(ctx context.Context, ref string) (substrateName string, found bool, err error)
+	DeleteRef(ctx context.Context, ref string) error
+}
+
 // Orchestrator implements runner.Runner over a set of Substrates.
 type Orchestrator struct {
 	substrates []substrate.Substrate
+
+	// refStore, when non-nil, durably mirrors byRef so lifecycle routing (and
+	// therefore the kill switch) survives a control-plane restart in
+	// multi-substrate deployments. Nil = in-memory only (single-substrate
+	// deployments don't need it: subForRef falls back to the sole substrate).
+	refStore RefStore
 
 	// mu guards byRef. The orchestrator is safe for concurrent use.
 	mu sync.Mutex
@@ -38,6 +54,14 @@ var _ runner.Runner = (*Orchestrator)(nil)
 // a single substrate it is a thin pass-through; with several it routes by class.
 func New(substrates ...substrate.Substrate) *Orchestrator {
 	return &Orchestrator{substrates: substrates, byRef: make(map[string]substrate.Substrate)}
+}
+
+// WithRefStore wires a durable RefStore (chainable, call before serving
+// traffic). Without it the orchestrator behaves exactly as before: in-memory
+// routing plus the sole-substrate fallback.
+func (o *Orchestrator) WithRefStore(rs RefStore) *Orchestrator {
+	o.refStore = rs
+	return o
 }
 
 // Name reports the single substrate's name (so /healthz still shows "docker" for
@@ -103,6 +127,15 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 	o.mu.Lock()
 	o.byRef[sb.Ref] = sub
 	o.mu.Unlock()
+	// Write-through BEFORE the sandbox is handed out: fail closed rather than
+	// return a live sandbox the kill switch could not find after a restart.
+	if o.refStore != nil {
+		if perr := o.refStore.PutRef(ctx, sb.Ref, sub.Name()); perr != nil {
+			o.forget(ctx, sb.Ref, false)
+			_ = sub.KillSandbox(ctx, sb.Ref) // best-effort teardown of the untracked sandbox
+			return runner.Sandbox{}, fmt.Errorf("orchestrator: persist ref %q -> %s: %w", sb.Ref, sub.Name(), perr)
+		}
+	}
 	return sb, nil
 }
 
@@ -135,21 +168,39 @@ func (o *Orchestrator) substrateFor(ctx context.Context, class types.Confinement
 // subForRef resolves the substrate that owns ref. After a control-plane restart
 // the byRef map is empty; with a single substrate we fall back to it (its
 // teardown reconstructs state from the run-id label, so crash recovery is
-// preserved). With several substrates an untracked ref cannot be resolved.
-func (o *Orchestrator) subForRef(ref string) (substrate.Substrate, error) {
+// preserved). With several substrates an untracked ref is rehydrated from the
+// RefStore by substrate name; only when that misses too (no store, no row, or a
+// name no longer wired) does resolution fail.
+func (o *Orchestrator) subForRef(ctx context.Context, ref string) (substrate.Substrate, error) {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	if s, ok := o.byRef[ref]; ok {
+		o.mu.Unlock()
 		return s, nil
 	}
 	if len(o.substrates) == 1 {
-		return o.substrates[0], nil
+		s := o.substrates[0]
+		o.mu.Unlock()
+		return s, nil
+	}
+	o.mu.Unlock()
+	if o.refStore != nil {
+		name, found, err := o.refStore.GetRef(ctx, ref)
+		if err == nil && found {
+			for _, s := range o.substrates {
+				if s.Name() == name {
+					o.mu.Lock()
+					o.byRef[ref] = s
+					o.mu.Unlock()
+					return s, nil
+				}
+			}
+		}
 	}
 	return nil, fmt.Errorf("orchestrator: no substrate tracked for ref %q", ref)
 }
 
 func (o *Orchestrator) Exec(ctx context.Context, ref string, argv []string) (string, error) {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +208,7 @@ func (o *Orchestrator) Exec(ctx context.Context, ref string, argv []string) (str
 }
 
 func (o *Orchestrator) Wait(ctx context.Context, ref string) (int, error) {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return 0, err
 	}
@@ -165,7 +216,7 @@ func (o *Orchestrator) Wait(ctx context.Context, ref string) (int, error) {
 }
 
 func (o *Orchestrator) Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error) {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +224,7 @@ func (o *Orchestrator) Attach(ctx context.Context, ref string, opts runner.Attac
 }
 
 func (o *Orchestrator) Status(ctx context.Context, ref string) (runner.Status, error) {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return runner.Status{}, err
 	}
@@ -181,7 +232,7 @@ func (o *Orchestrator) Status(ctx context.Context, ref string) (runner.Status, e
 }
 
 func (o *Orchestrator) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return runner.Status{}, err
 	}
@@ -189,27 +240,34 @@ func (o *Orchestrator) AgentStatus(ctx context.Context, ref, agentExecID string)
 }
 
 func (o *Orchestrator) StopSandbox(ctx context.Context, ref string) error {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return err
 	}
 	err = s.StopSandbox(ctx, ref)
-	o.forget(ref)
+	o.forget(ctx, ref, err == nil)
 	return err
 }
 
 func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
-	s, err := o.subForRef(ref)
+	s, err := o.subForRef(ctx, ref)
 	if err != nil {
 		return err
 	}
 	err = s.KillSandbox(ctx, ref)
-	o.forget(ref)
+	o.forget(ctx, ref, err == nil)
 	return err
 }
 
-func (o *Orchestrator) forget(ref string) {
+// forget drops the in-memory route and, when the sandbox was actually torn
+// down, best-effort deletes the durable row so the table doesn't grow without
+// bound. A delete error never fails a stop/kill: a stale row is garbage, not a
+// routing hazard, and rehydrating it later is harmless.
+func (o *Orchestrator) forget(ctx context.Context, ref string, tornDown bool) {
 	o.mu.Lock()
 	delete(o.byRef, ref)
 	o.mu.Unlock()
+	if tornDown && o.refStore != nil {
+		_ = o.refStore.DeleteRef(ctx, ref)
+	}
 }

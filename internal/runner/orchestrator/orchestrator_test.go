@@ -160,6 +160,111 @@ func TestOrchestrator_UntrackedRefFallsBackToSoleSubstrate(t *testing.T) {
 	}
 }
 
+// fakeRefStore is an in-memory RefStore; putErr forces PutRef failures so the
+// fail-closed create path is testable.
+type fakeRefStore struct {
+	mu     sync.Mutex
+	m      map[string]string
+	putErr error
+}
+
+func (f *fakeRefStore) PutRef(_ context.Context, ref, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.putErr != nil {
+		return f.putErr
+	}
+	if f.m == nil {
+		f.m = map[string]string{}
+	}
+	f.m[ref] = name
+	return nil
+}
+
+func (f *fakeRefStore) GetRef(_ context.Context, ref string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name, ok := f.m[ref]
+	return name, ok, nil
+}
+
+func (f *fakeRefStore) DeleteRef(_ context.Context, ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.m, ref)
+	return nil
+}
+
+func twoSubstrates() (*fakeSubstrate, *fakeSubstrate) {
+	oci := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1, types.CC2}, refPrefix: "oci-"}
+	vmm := &fakeSubstrate{name: "smolvm", classes: []types.ConfinementClass{types.CC3}, refPrefix: "vmm-"}
+	return oci, vmm
+}
+
+func TestOrchestrator_RefStoreSurvivesRestartMultiSubstrate(t *testing.T) {
+	ctx := context.Background()
+	rs := &fakeRefStore{}
+	oci, vmm := twoSubstrates()
+	sb, err := New(oci, vmm).WithRefStore(rs).CreateSandbox(ctx, specFor(types.CC3))
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if name, ok, _ := rs.GetRef(ctx, sb.Ref); !ok || name != "smolvm" {
+		t.Fatalf("ref must be write-through persisted as smolvm; got %q ok=%v", name, ok)
+	}
+
+	// "Restart": a FRESH orchestrator (byRef empty) over fresh substrates but
+	// the same durable store. StopSandbox must rehydrate the route to #2.
+	// Counterfactual: without the RefStore consultation a 2-substrate fresh
+	// orchestrator returns "no substrate tracked for ref".
+	oci2, vmm2 := twoSubstrates()
+	if err := New(oci2, vmm2).WithRefStore(rs).StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("StopSandbox after restart: %v", err)
+	}
+	if len(vmm2.stops) != 1 || vmm2.stops[0] != sb.Ref || len(oci2.stops) != 0 {
+		t.Fatalf("Stop must rehydrate to vmm; vmm.stops=%v oci.stops=%v", vmm2.stops, oci2.stops)
+	}
+	// Successful teardown must have garbage-collected the durable row.
+	if _, ok, _ := rs.GetRef(ctx, sb.Ref); ok {
+		t.Fatal("successful StopSandbox must DeleteRef")
+	}
+
+	// Same for the kill switch: re-seed the row, restart again, KillSandbox.
+	if err := rs.PutRef(ctx, sb.Ref, "smolvm"); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+	oci3, vmm3 := twoSubstrates()
+	if err := New(oci3, vmm3).WithRefStore(rs).KillSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("KillSandbox after restart: %v", err)
+	}
+	if len(vmm3.kills) != 1 || vmm3.kills[0] != sb.Ref || len(oci3.kills) != 0 {
+		t.Fatalf("Kill must rehydrate to vmm; vmm.kills=%v oci.kills=%v", vmm3.kills, oci3.kills)
+	}
+	if _, ok, _ := rs.GetRef(ctx, sb.Ref); ok {
+		t.Fatal("successful KillSandbox must DeleteRef")
+	}
+}
+
+func TestOrchestrator_CreateFailsClosedWhenRefPersistFails(t *testing.T) {
+	ctx := context.Background()
+	oci, vmm := twoSubstrates()
+	o := New(oci, vmm).WithRefStore(&fakeRefStore{putErr: context.DeadlineExceeded})
+	if _, err := o.CreateSandbox(ctx, specFor(types.CC3)); err == nil {
+		t.Fatal("CreateSandbox must fail closed when the ref cannot be persisted")
+	}
+	// The just-created (untracked) sandbox must be best-effort torn down, and
+	// the failed ref must not linger in byRef.
+	if len(vmm.kills) != 1 {
+		t.Fatalf("untracked sandbox must be killed on persist failure; kills=%v", vmm.kills)
+	}
+	o.mu.Lock()
+	n := len(o.byRef)
+	o.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("byRef must not retain the failed ref; len=%d", n)
+	}
+}
+
 func TestOrchestrator_NameIsSoleSubstrate(t *testing.T) {
 	if got := New(&fakeSubstrate{name: "docker"}).Name(); got != "docker" {
 		t.Fatalf("single-substrate Name = %q, want docker", got)
