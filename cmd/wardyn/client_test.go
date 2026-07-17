@@ -306,10 +306,12 @@ func TestClientDo_BaseURLTrailingSlashTrimmed(t *testing.T) {
 // (`task_mode: "exec"`) even though the CLI's own createRunBody supported both.
 func TestU089_CreateRunRequest_ImageTaskModeRoundTrip(t *testing.T) {
 	req := client.CreateRunRequest{
-		Agent:    "claude-code",
-		Repo:     "org/repo",
-		Image:    "ubuntu:24.04",
-		TaskMode: "exec",
+		Agent:            "claude-code",
+		Repo:             "org/repo",
+		Image:            "ubuntu:24.04",
+		TaskMode:         "exec",
+		DevcontainerRepo: "org/devc",
+		DevcontainerRef:  "main",
 	}
 	b, err := json.Marshal(req)
 	if err != nil {
@@ -324,6 +326,9 @@ func TestU089_CreateRunRequest_ImageTaskModeRoundTrip(t *testing.T) {
 	}
 	if raw["task_mode"] != "exec" {
 		t.Errorf(`wire "task_mode" = %v, want "exec"`, raw["task_mode"])
+	}
+	if raw["devcontainer_repo"] != "org/devc" || raw["devcontainer_ref"] != "main" {
+		t.Errorf(`wire devcontainer_repo/ref = %v/%v, want "org/devc"/"main"`, raw["devcontainer_repo"], raw["devcontainer_ref"])
 	}
 
 	var got client.CreateRunRequest
