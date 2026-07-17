@@ -329,9 +329,14 @@ type Config struct {
 // from the shipped default — the honest recommended-vs-shipped split documented
 // in docs/PLUGGABILITY.md). Source is "default" or "configured".
 type ComponentInfo struct {
-	Selected              string `json:"selected"`
-	RecommendedProduction string `json:"recommended_production,omitempty"`
-	Source                string `json:"source,omitempty"`
+	Selected string `json:"selected"`
+	// Available lists every implementation self-registered in this build's seam
+	// registry (so /healthz truthfully shows what THIS binary can run — e.g. a
+	// tagless build advertises sandbox.available=[]). Empty for seams without a
+	// registry (policy_engine today).
+	Available             []string `json:"available,omitempty"`
+	RecommendedProduction string   `json:"recommended_production,omitempty"`
+	Source                string   `json:"source,omitempty"`
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.

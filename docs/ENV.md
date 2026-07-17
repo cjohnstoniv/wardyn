@@ -36,7 +36,7 @@ log them.
 | `WARDYN_SECRET_STORE` | string | `pg` | secret store seam (flag `-secret-store`) |
 | `WARDYN_RECORDING_STORE` | string | `fs` | recording store seam (flag `-recording-store`) |
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory (flag `-recording-dir`) |
-| `WARDYN_RUNNER` | string | `none` | runner driver: `docker` \| `none` (flag `-runner`) |
+| `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
 | `WARDYN_DEFAULT_POLICY` | string | `examples/policies/default.json` | default RunPolicy spec path (flag `-default-policy`) |
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_AUDIT_SINKS` | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`) |

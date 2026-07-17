@@ -11,8 +11,11 @@ and the blessed-default-vs-alternate matrix per subsystem.
 
 > **Honesty rule (read this first).** The *shipped out-of-box default* and the
 > *recommended production default* are deliberately kept as **two separate
-> columns** below, and `/healthz` always reports the **actual running** impl in
-> `components.<seam>.selected` with `recommended_production` beside it. A row that
+> columns** below, and for every seam `/healthz.components` covers — exactly
+> `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` — it
+> reports the **actual running** impl in `components.<seam>.selected` with
+> `recommended_production` beside it (the other matrix rows surface elsewhere;
+> see §2 step 5). A row that
 > recommends, say, SPIRE does **not** mean the running binary is SPIRE — it means
 > SPIRE is the standard Wardyn recommends converging to, and the seam + a
 > conformance suite are ready to hold an implementation to contract when it
@@ -22,7 +25,10 @@ and the blessed-default-vs-alternate matrix per subsystem.
 
 ## 1. The standard
 
-A pluggable seam in Wardyn has five parts:
+A pluggable seam in Wardyn has five parts. Four seams implement all of parts
+1–4 today — identity, secret store, recording, and the confinement substrate
+(`internal/runner/substrate/registry.go`; its `docker` impl self-registers under
+`-tags docker`) — the rest carry the honest per-row "Seam status" in §3:
 
 1. **An interface** (`identity.Provider`, `secretstore.Store`, `recording.Store`,
    `runner.Runner`, `audit.Sink`, …) — the contract the control plane talks to.
@@ -64,8 +70,19 @@ These run in the control plane / proxy *around* the seam, not inside it.
 2. `Register("<name>", <constructor>)` from your package's `init()`.
 3. Make it pass `<seam>test.RunConformance` (a 3-line `_test.go` calling the suite).
 4. Add a row to the matrix below.
-5. It now appears in `/healthz.components` automatically and is selectable via
-   `WARDYN_<SEAM>=<name>`.
+5. For the registry-backed seams (identity, secret store, recording, confinement
+   substrate) it now appears in `/healthz.components.<seam>.available`
+   automatically and is selectable via `WARDYN_<SEAM>=<name>` (the substrate
+   selects via `-runner`/`WARDYN_RUNNER`; a build-tag-gated impl like the OCI
+   substrate registers — and thus appears — only in builds that compile it, so a
+   tagless binary honestly advertises `sandbox.available: []` and fails closed
+   on `-runner docker`). Seams **without** a registry are wired through their own
+   config knobs and surface elsewhere at runtime, not in `components`: the LLM
+   gateway and content detection are builtin (proxy-side), audit sinks via
+   `WARDYN_AUDIT_SINKS` (boot log), composer backends via
+   `WARDYN_COMPOSER_CONFIG` (`/api/v1/setup/status`), eBPF ground-truth via
+   `/healthz.ebpf_groundtruth`, and per-class substrate runtimes via
+   `/healthz.confinement_substrates`.
 
 For the **policy-evaluator**, **egress-gateway**, and **confinement-substrate**
 seams, also honor the security rules: the evaluator's verdict cannot relax the
@@ -85,7 +102,7 @@ registry + conformance exist today; **planned** = interface lands on the roadmap
 
 | Subsystem | Interface | Shipped out-of-box default | Recommended (prod) | Registered alternates | Conformance | Seam status |
 |---|---|---|---|---|---|---|
-| Sandbox / confinement | `substrate.Substrate` (under the `orchestrator` `runner.Runner`) | `docker`/OCI substrate; CC1 runc / CC2 runsc / CC3 kata\* | **Kata-CC3** (QEMU by default; experimental today, see README Confinement Classes) | OCI runtime pins via `WARDYN_CONFINEMENT_MAP` (kata-qemu, kata-clh, gVisor, sysbox); non-OCI VMM (SmolVM/Firecracker) via a new `Substrate` impl | `test/conformance` (Runner) + orchestrator routing tests | shipped (runtime-pluggable + substrate sub-interface); non-OCI VMM impl planned |
+| Sandbox / confinement | `substrate.Substrate` (under the `orchestrator` `runner.Runner`) | `docker`/OCI substrate; CC1 runc / CC2 runsc / CC3 kata\* | **Kata-CC3** (QEMU by default; experimental today, see README Confinement Classes) | OCI runtime pins via `WARDYN_CONFINEMENT_MAP` (kata-qemu, kata-clh, gVisor, sysbox); non-OCI VMM (SmolVM/Firecracker) via a new `Substrate` impl | `test/conformance` (Runner) + orchestrator routing tests | shipped (registry + `init()` self-registration — the `docker` impl registers under `-tags docker`; runtime-pluggable + substrate sub-interface); non-OCI VMM impl planned |
 | Identity | `identity.Provider` | `embedded` (SPIFFE-shaped JWT-SVID) | **SPIRE** (attestation, short-lived SVIDs) | `spire` (planned) | `identity/identitytest` | shipped |
 | Secret store | `secretstore.Store` | `pg` (age-encrypted Postgres) | **OpenBao** (LF, Vault-compatible) | `openbao` / `vault` / cloud KMS (planned) | `secretstore/secretstoretest` | shipped |
 | Recording | `recording.Store` | `fs` | `fs` (object storage optional) | S3/GCS object store (planned) | `recording/recordingtest` | shipped |
@@ -115,9 +132,12 @@ as "you are running SPIRE." Three mechanisms keep it honest:
 1. **Two never-merged columns.** "Shipped out-of-box" and "Recommended (prod)"
    are separate above; promoted entries are bold and the alternate is marked
    *planned* until built.
-2. **Machine-honest `/healthz`.** `components.<seam>.selected` always reports the
-   *actual* running impl; `recommended_production` sits beside it; `source`
-   distinguishes `default` from `configured`. The gap is visible at runtime, not
+2. **Machine-honest `/healthz`.** For every seam `components` covers (§2 step 5
+   lists the exact set and where the other rows surface),
+   `components.<seam>.selected` reports the *actual* running impl and
+   `components.<seam>.available` what this build's registry actually holds;
+   `recommended_production` sits beside them; `source` distinguishes `default`
+   from `configured`. The gap is visible at runtime, not
    just in prose — the same structural anti-overclaim guarantee as
    `ebpf_groundtruth` (healthy only while real heartbeats arrive) and runner
    `Capabilities` (a class is advertised only when its runtime is registered).
@@ -135,7 +155,7 @@ as "you are running SPIRE." Three mechanisms keep it honest:
 - `internal/identity/{registry.go,revocation.go}` + `identity/embedded/register.go` + `identity/identitytest`.
 - `internal/secretstore/{registry.go,secretstore.go}` + `secretstore/pg/register.go` + `secretstore/secretstoretest`.
 - `internal/recording/registry.go` + `recording/recordingtest`.
-- `internal/runner/substrate/substrate.go` (the `Substrate` sub-interface + `ClassSupport`) + `internal/runner/orchestrator/` (the build-tag-free `runner.Runner` that multiplexes substrates by Confinement Class) + `internal/runner/docker/hardening.go` (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
+- `internal/runner/substrate/{substrate.go,registry.go}` (the `Substrate` sub-interface + `ClassSupport` + the substrate registry) + `internal/runner/docker/register.go` (the OCI substrate's `init()` self-registration, `-tags docker` only) + `internal/runner/orchestrator/` (the build-tag-free `runner.Runner` that multiplexes substrates by Confinement Class, with a durable pg-backed ref→substrate `RefStore` — `internal/store/store_sandbox_ref.go` — so kill-switch routing survives control-plane restarts) + `internal/runner/docker/hardening.go` (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
 - `internal/egress/evaluator.go` (policy evaluator, overridable via `Options.Evaluator` in `internal/egress/proxy/proxy.go`) + `internal/egress/proxy/local_routes.go` (LLM-route forwarding) — the egress seams.
 - `internal/runner/runner.go` (`Capabilities.Resolved`) + `internal/api/server.go` (`/healthz` `confinement_substrates` + `components`).
 - Planned impls (seams ready, alternates not built): the non-OCI VMM `Substrate` (SmolVM/Firecracker), SPIRE identity, OpenBao secrets, OPA/Cedar evaluator, an external LLM gateway.

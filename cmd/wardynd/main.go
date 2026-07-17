@@ -189,9 +189,12 @@ func run() error {
 	// approval.decide events now reach file/webhook/syslog sinks, not just Postgres.
 	approvals := &approvalService{pool: pool, rec: maskedRec}
 
-	// Runner (optional): docker | none, with fail-closed confinement pins. The
-	// docker driver is compiled in only under the "docker" build tag.
-	run, runnerTarget, err := buildRunnerFromFlags(f)
+	// Runner (optional): "none" or a self-registered substrate (the docker
+	// substrate registers itself only under the "docker" build tag), with
+	// fail-closed confinement pins. The pg-backed RefStore makes the
+	// orchestrator's ref->substrate routing (and thus the kill switch) durable
+	// across control-plane restarts.
+	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool))
 	if err != nil {
 		return err
 	}
