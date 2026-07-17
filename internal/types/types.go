@@ -307,6 +307,36 @@ type RunPolicySpec struct {
 	Resources *ResourceLimits `json:"resources,omitempty"`
 }
 
+// Clone returns a deep copy: every slice/pointer field is reallocated, so the
+// copy shares NO backing array with the receiver.
+//
+// A plain `spec := other` is a SHALLOW copy — the struct is duplicated but each
+// slice header still points at the original's backing array. That made the
+// process-global default policy aliasable: a per-run `append` to AllowedDomains
+// wrote into the shared spare capacity, so two concurrent create-runs raced on
+// the same element (one run's egress domain silently replacing another's in the
+// allowlist handed to its proxy), and any in-place mutation leaked into every
+// later run. Callers that derive a per-run/per-request spec from a shared one
+// MUST Clone first.
+func (s RunPolicySpec) Clone() RunPolicySpec {
+	out := s // shallow: copies the scalars; slice/pointer fields fixed up below.
+	out.AllowedDomains = append([]string(nil), s.AllowedDomains...)
+	out.DeniedDomains = append([]string(nil), s.DeniedDomains...)
+	out.AllowedMethods = append([]string(nil), s.AllowedMethods...)
+	out.EligibleGrants = append([]GrantSpec(nil), s.EligibleGrants...)
+	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
+	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
+	if s.LLMInspection != nil {
+		li := *s.LLMInspection
+		out.LLMInspection = &li
+	}
+	if s.Resources != nil {
+		r := *s.Resources
+		out.Resources = &r
+	}
+	return out
+}
+
 // LLMInspectionSpec configures optional outbound LLM prompt inspection for a
 // run. The zero value (or a nil *LLMInspectionSpec on the policy) means OFF.
 //
