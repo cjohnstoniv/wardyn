@@ -38,8 +38,8 @@ type fkGrantStore struct {
 	skipRunInsert bool
 }
 
-func (s *fkGrantStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, vr, vh, va)
+func (s *fkGrantStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive, vr, vh, va)
 }
 func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, runID uuid.UUID, _ *uuid.UUID) (types.Workspace, bool, error) {
 	ws := s.ws

@@ -37,8 +37,8 @@ func (s *verifyStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error)
 // SetWorkspaceImportState resolves the otherwise-ambiguous selector between the
 // embedded nil store.Store interface and importStateFake (both declare this
 // method) by routing to importStateFake's shared implementation explicitly.
-func (s *verifyStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, vr, vh, va)
+func (s *verifyStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive, vr, vh, va)
 }
 
 func newVerifySrv(t *testing.T, fake store.Store) *Server {

@@ -38,8 +38,8 @@ func (s *scanReconcileStore) GetWorkspace(context.Context, uuid.UUID) (types.Wor
 
 // SetWorkspaceImportState disambiguates the embedded nil store.Store vs
 // importStateFake (both declare it) by routing to importStateFake explicitly.
-func (s *scanReconcileStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, vr, vh, va)
+func (s *scanReconcileStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive, vr, vh, va)
 }
 func (s *scanReconcileStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace) (types.Workspace, error) {
 	s.fullRowWrite = true

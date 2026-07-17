@@ -68,9 +68,16 @@ func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request
 	// PROGRESS upload (Done=false): persist the partial result for the live UI but
 	// stay `verifying` and keep the in-flight run pointer — do NOT finalize.
 	if !result.Done {
-		if _, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), wsID, types.WorkspaceVerifying,
-			&claims.RunID, mustJSON(result), ws.VerifiedProfileHash, ws.VerifiedAt); err != nil {
+		// Fenced on the slot this upload's ownership check just read: if another
+		// actor moved active_run_id in between, this progress write is stale.
+		_, applied, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), wsID, types.WorkspaceVerifying,
+			&claims.RunID, &claims.RunID, mustJSON(result), ws.VerifiedProfileHash, ws.VerifiedAt)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "persist verify progress: "+err.Error())
+			return
+		}
+		if !applied {
+			writeError(w, http.StatusConflict, "this run no longer owns the workspace's import step (superseded, killed, or already finalized)")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -89,10 +96,17 @@ func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request
 		now := s.cfg.Now().UTC()
 		verifiedAt = &now
 	}
-	// Clear active_run_id (the verify run is done) and persist the result.
-	if _, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), wsID, status, nil,
-		mustJSON(result), verifiedHash, verifiedAt); err != nil {
+	// Clear active_run_id (the verify run is done) and persist the result, fenced
+	// on this run still owning the slot — a superseding claim must not be
+	// clobbered by a lagging finalize.
+	_, applied, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), wsID, status, nil,
+		&claims.RunID, mustJSON(result), verifiedHash, verifiedAt)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "persist verify result: "+err.Error())
+		return
+	}
+	if !applied {
+		writeError(w, http.StatusConflict, "this run no longer owns the workspace's import step (superseded, killed, or already finalized)")
 		return
 	}
 

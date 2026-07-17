@@ -27,15 +27,35 @@ type importStateFake struct {
 	state *types.Workspace // last SetWorkspaceImportState write (nil = untouched)
 }
 
-func (s *importStateFake) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	ws := s.ws
+// SetWorkspaceImportState models the REAL store's fence: the write applies only
+// while the import-step slot still holds expectedActive (SQL: active_run_id IS
+// NOT DISTINCT FROM $7, so nil matches NULL). A guard miss returns the current
+// row with applied=false and writes NOTHING — tests that assert a stale writer
+// is refused depend on this, so keep it faithful to store.go.
+func (s *importStateFake) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
+	cur := s.ws
+	if s.state != nil {
+		cur = *s.state // reflect any earlier applied write
+	}
+	if !samePtrUUID(cur.ActiveRunID, expectedActive) {
+		return cur, false, nil
+	}
+	ws := cur
 	ws.Status = status
 	ws.ActiveRunID = active
 	ws.VerifyResult = vr
 	ws.VerifiedProfileHash = vh
 	ws.VerifiedAt = va
 	s.state = &ws
-	return ws, nil
+	return ws, true, nil
+}
+
+// samePtrUUID is IS NOT DISTINCT FROM for *uuid.UUID (nil == nil).
+func samePtrUUID(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // recordStore fakes exactly the store surface the record lane touches.
@@ -61,8 +81,8 @@ func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace,
 // SetWorkspaceImportState resolves the otherwise-ambiguous selector between the
 // embedded nil store.Store interface and importStateFake (both declare this
 // method) by routing to importStateFake's shared implementation explicitly.
-func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, error) {
-	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, vr, vh, va)
+func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive, vr, vh, va)
 }
 func (s *recordStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	if s.run.ID == uuid.Nil {
@@ -487,4 +507,3 @@ func TestGetWorkspace_RepairsStaleRecordingOnRead(t *testing.T) {
 		t.Fatalf("stale recording not repaired on read: status=%q", res.Status)
 	}
 }
-
