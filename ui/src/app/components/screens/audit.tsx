@@ -21,7 +21,8 @@ import {
   Plus,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
-import { api } from "../../lib/api";
+import { audit as api } from "../../lib/api/audit";
+import { runs as runsApi } from "../../lib/api/runs";
 import { absoluteTime } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Input } from "../ui/input";
@@ -266,7 +267,7 @@ export function AuditScreen() {
     }
     let active = true;
     setDrillLoading(true);
-    api
+    runsApi
       .getRun(runFilter)
       .then((r) => {
         if (active) {

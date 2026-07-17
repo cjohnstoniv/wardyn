@@ -18,9 +18,13 @@ import type { AuditEvent } from "../../lib/types";
 
 const listAuditMock = vi.fn();
 const getRunMock = vi.fn();
-vi.mock("../../lib/api", () => ({
-  api: {
+vi.mock("../../lib/api/audit", () => ({
+  audit: {
     listAudit: (...a: unknown[]) => listAuditMock(...a),
+  },
+}));
+vi.mock("../../lib/api/runs", () => ({
+  runs: {
     getRun: (...a: unknown[]) => getRunMock(...a),
   },
 }));

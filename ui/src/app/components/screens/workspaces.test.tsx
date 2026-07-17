@@ -16,8 +16,8 @@ import type { Workspace, WorkspaceProfile } from "../../lib/types";
 
 const setApprovedEgressMock = vi.fn();
 const getObservedEgressMock = vi.fn();
-vi.mock("../../lib/api", () => ({
-  api: {
+vi.mock("../../lib/api/workspaces", () => ({
+  workspaces: {
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
     getObservedEgress: (...a: unknown[]) => getObservedEgressMock(...a),
   },

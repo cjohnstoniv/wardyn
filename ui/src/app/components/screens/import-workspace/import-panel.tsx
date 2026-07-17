@@ -30,7 +30,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { SetupCommand, Workspace, WorkspaceProfile } from "../../../lib/types";
-import { api } from "../../../lib/api";
+import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { runs as runsApi } from "../../../lib/api/runs";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { setup as setupApi } from "../../../lib/api/setup";
+import { composer as composerApi } from "../../../lib/api/compose";
 import { usePoll } from "../../../lib/use-poll";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { getErrorMessage as msg } from "../../../lib/format";
@@ -151,7 +155,7 @@ export function ImportWorkspaceDialog({
 
   const loadWs = React.useCallback(async (id: string, jump = false): Promise<Workspace | undefined> => {
     try {
-      const w = await api.getWorkspace(id);
+      const w = await workspacesApi.getWorkspace(id);
       if (!w) {
         setLoadError("Workspace not found.");
         return undefined;
@@ -169,13 +173,13 @@ export function ImportWorkspaceDialog({
   }, []);
 
   const loadSecrets = React.useCallback(() => {
-    api.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
+    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
   }, []);
 
   const loadComposer = React.useCallback(() => {
     // The "Diagnose with AI" affordance shows only when a composer backend is
     // actually configured (an empty list / probe error hides it, no crash).
-    api
+    composerApi
       .listComposerBackends()
       .then((bs) => setComposerEnabled(bs.length > 0))
       .catch(() => setComposerEnabled(false));
@@ -183,7 +187,7 @@ export function ImportWorkspaceDialog({
 
   // M18 fix: Record's model-readiness warning (see llmReady above).
   const loadLlmReadiness = React.useCallback(() => {
-    api
+    setupApi
       .getSetupStatus()
       .then((s) => setLlmReady(hasLlmPath(s)))
       .catch(() => setLlmReady(false));
@@ -218,7 +222,7 @@ export function ImportWorkspaceDialog({
       void loadWs(workspaceId, true);
     } else {
       setStep("source");
-      api.listWorkspaces().then(setExisting).catch(() => setExisting([]));
+      workspacesApi.listWorkspaces().then(setExisting).catch(() => setExisting([]));
     }
   }, [open, workspaceId, loadWs, loadSecrets, loadComposer, loadLlmReadiness]);
 
@@ -252,7 +256,7 @@ export function ImportWorkspaceDialog({
     setScanning(true);
     setScanError(null);
     try {
-      const { async: isAsync } = await api.scanWorkspace(wsId);
+      const { async: isAsync } = await workspacesApi.scanWorkspace(wsId);
       if (isAsync) {
         toast.info("Scanning repo…", {
           description: "A governed scan run is analyzing the repo; the status updates when it completes.",
@@ -282,7 +286,7 @@ export function ImportWorkspaceDialog({
     setVerifyBusy(true);
     setVerifyNotice(null);
     try {
-      const r = await api.verifyWorkspace(wsId);
+      const r = await workspacesApi.verifyWorkspace(wsId);
       if (!r.ok) setVerifyNotice({ status: r.status, detail: r.detail });
       await loadWs(wsId); // pick up building/verifying/verify_failed
     } catch (e) {
@@ -303,7 +307,7 @@ export function ImportWorkspaceDialog({
     setRecordBusyTask((confined ? "verify:" : "") + sessionKeyOf(name));
     setRecordNotice(null);
     try {
-      const r = await api.recordTask(wsId, name, confined);
+      const r = await workspacesApi.recordTask(wsId, name, confined);
       if (!r.ok) setRecordNotice({ status: r.status, detail: r.detail });
       await loadWs(wsId);
     } catch (e) {
@@ -317,7 +321,7 @@ export function ImportWorkspaceDialog({
   // termination and reconcile flips the record status, which the poll picks up.
   const doneRecording = async (runId: string) => {
     try {
-      await api.killRun(runId);
+      await runsApi.killRun(runId);
       if (wsId) await loadWs(wsId);
     } catch (e) {
       toast.error("Failed to stop recording", { description: msg(e) });
@@ -331,7 +335,7 @@ export function ImportWorkspaceDialog({
     if (!wsId || !ws) return;
     const fallback = [...(ws.approved_egress ?? []), ...newEgressHosts(ws, taskKey)];
     try {
-      const updated = await api.promoteRecordEgress(wsId, taskKey, fallback);
+      const updated = await workspacesApi.promoteRecordEgress(wsId, taskKey, fallback);
       setWs(updated);
       toast.success("Approved observed egress");
     } catch (e) {
@@ -342,7 +346,7 @@ export function ImportWorkspaceDialog({
   const approveHost = async (host: string) => {
     if (!wsId) return;
     try {
-      const updated = await api.setApprovedEgress(wsId, [...(ws?.approved_egress ?? []), host]);
+      const updated = await workspacesApi.setApprovedEgress(wsId, [...(ws?.approved_egress ?? []), host]);
       setWs(updated);
       toast.success(`Approved egress to ${host}`);
     } catch (e) {
@@ -365,7 +369,7 @@ export function ImportWorkspaceDialog({
     if (!wsId) return;
     setFinalizing(true);
     try {
-      const { workspace, emitted_files } = await api.finalizeWorkspace(wsId, { emitEnvAsCode: emitCode });
+      const { workspace, emitted_files } = await workspacesApi.finalizeWorkspace(wsId, { emitEnvAsCode: emitCode });
       setWs(workspace);
       if (Object.keys(emitted_files).length) {
         setEmitted(emitted_files); // show the copyable files, then Done closes
@@ -386,7 +390,7 @@ export function ImportWorkspaceDialog({
   // so closing the panel is an implicit "Done" rather than a lost session.
   const killInFlightRecordings = React.useCallback(() => {
     for (const v of Object.values(ws?.record_results ?? {})) {
-      if (v.status === "recording") void api.killRun(v.run_id).catch(() => {});
+      if (v.status === "recording") void runsApi.killRun(v.run_id).catch(() => {});
     }
   }, [ws]);
 
@@ -827,7 +831,7 @@ function SetupCommandsCard({ ws, onSaved }: { ws: Workspace; onSaved: (w: Worksp
       const commands: SetupCommand[] = rows
         .filter((r) => r.include && r.command.trim())
         .map(({ stage, command, source }) => ({ stage, command: command.trim(), source }));
-      onSaved(await api.setSetupCommands(ws.id, commands));
+      onSaved(await workspacesApi.setSetupCommands(ws.id, commands));
       toast.success("Setup commands saved");
     } catch (e) {
       toast.error("Failed to save setup commands", { description: msg(e) });
@@ -930,7 +934,7 @@ function VerifyPane({
   const checkDenied = async () => {
     setObservedLoading(true);
     try {
-      setObserved(await api.getObservedEgress(ws.id));
+      setObserved(await workspacesApi.getObservedEgress(ws.id));
     } catch (e) {
       toast.error("Failed to load denied egress", { description: msg(e) });
     } finally {
@@ -950,7 +954,7 @@ function VerifyPane({
     setAiLoading(true);
     setAiError(null);
     try {
-      setAiSuggestion(await api.suggestVerifyFix(ws.id));
+      setAiSuggestion(await workspacesApi.suggestVerifyFix(ws.id));
     } catch (e) {
       setAiError(msg(e));
     } finally {

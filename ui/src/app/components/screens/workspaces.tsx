@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "../../lib/api";
+import { workspaces as api } from "../../lib/api/workspaces";
 import { getErrorMessage } from "../../lib/format";
 import type { SecretNeed, Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { cn } from "../ui/utils";

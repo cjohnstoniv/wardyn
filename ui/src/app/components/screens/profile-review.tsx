@@ -25,7 +25,8 @@ import {
 import { toast } from "sonner";
 import type { ProfileProposal, RiskItem, RunPolicySpec } from "../../lib/types";
 import { firstUseLabel } from "../../lib/types";
-import { api } from "../../lib/api";
+import { policies as api } from "../../lib/api/policies";
+import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage } from "../../lib/format";
 import {
   Sheet,
@@ -91,7 +92,7 @@ export function ProfileReview({
     if (!runId) return;
     setStatus("loading");
     setProposal(null);
-    api
+    runsApi
       .profileRun(runId)
       .then((p) => {
         setProposal(p);

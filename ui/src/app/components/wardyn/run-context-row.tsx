@@ -7,7 +7,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import type { AgentRun } from "../../lib/types";
-import { api } from "../../lib/api";
+import { runs as api } from "../../lib/api/runs";
 import { AgentBadge, ConfinementChip } from "./primitives";
 
 // The run an approval gates, inlined on the pending card (finding A3): the

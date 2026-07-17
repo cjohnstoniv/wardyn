@@ -36,7 +36,10 @@ import type {
   Recording,
 } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
-import { api, egressFromAudit } from "../../lib/api";
+import { runs as runsApi } from "../../lib/api/runs";
+import { approvals as approvalsApi } from "../../lib/api/approvals";
+import { audit as auditApi, egressFromAudit } from "../../lib/api/audit";
+import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
@@ -109,10 +112,10 @@ export function RunDetailScreen() {
       // Egress is derived from the same audit events we already fetch here — call
       // egressFromAudit(a) instead of api.getEgress (which would re-fetch /audit).
       Promise.all([
-        api.getRun(id),
-        api.getGrants(id),
-        api.listApprovals(""),
-        api.listAudit(id),
+        runsApi.getRun(id),
+        runsApi.getGrants(id),
+        approvalsApi.listApprovals(""),
+        auditApi.listAudit(id),
       ])
         .then(([r, g, allApprovals, a]) => {
           setRun(r ?? null);
@@ -152,7 +155,7 @@ export function RunDetailScreen() {
   React.useEffect(() => {
     if (tab !== "recording" || !id || recState !== "idle") return;
     setRecState("loading");
-    api
+    recordingsApi
       .getRecording(id)
       .then((rec) => {
         setRecording(rec ?? null);
@@ -174,7 +177,7 @@ export function RunDetailScreen() {
 
   const kill = async () => {
     try {
-      await api.killRun(id);
+      await runsApi.killRun(id);
       toast.success(`Kill requested for ${id}`);
     } catch (err) {
       toast.error(`Failed to kill ${id}`, {
@@ -188,8 +191,8 @@ export function RunDetailScreen() {
   const submitDecision = async (reason: string): Promise<boolean> => {
     if (!decide) return false;
     try {
-      if (decide.action === "approve") await api.approve(decide.id, reason);
-      else await api.deny(decide.id, reason);
+      if (decide.action === "approve") await approvalsApi.approve(decide.id, reason);
+      else await approvalsApi.deny(decide.id, reason);
       toast.success(decide.action === "approve" ? "Request approved" : "Request denied");
       setDecide(null);
       load(false);

@@ -22,27 +22,40 @@ const getSiteConfigMock = vi.fn();
 const putSiteConfigMock = vi.fn();
 const scanWorkspaceMock = vi.fn();
 
-vi.mock("../../../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api")>("../../../lib/api");
-  return {
-    HttpError: actual.HttpError,
-    api: {
-      getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a),
-      listSecrets: (...a: unknown[]) => listSecretsMock(...a),
-      setSecret: (...a: unknown[]) => setSecretMock(...a),
-      health: (...a: unknown[]) => healthMock(...a),
-      listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
-      listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
-      listPolicies: () => Promise.resolve([]),
-      getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
-      putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
-      scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
-      createRun: vi.fn(),
-      createPolicy: vi.fn(),
-      telemetry: vi.fn().mockResolvedValue(undefined),
-    },
-  };
-});
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+vi.mock("../../../lib/api/secrets", () => ({
+  secrets: {
+    listSecrets: (...a: unknown[]) => listSecretsMock(...a),
+    setSecret: (...a: unknown[]) => setSecretMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/health", () => ({
+  health: {
+    health: (...a: unknown[]) => healthMock(...a),
+    getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/compose", () => ({
+  composer: {
+    listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
+    telemetry: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock("../../../lib/api/workspaces", () => ({
+  workspaces: {
+    listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
+    scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/policies", () => ({
+  policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
+}));
+vi.mock("../../../lib/api/runs", () => ({
+  runs: { createRun: vi.fn() },
+}));
 
 import {
   HostProxyStep,

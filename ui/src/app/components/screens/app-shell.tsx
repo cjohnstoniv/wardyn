@@ -37,7 +37,8 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ErrorBoundary } from "../wardyn/error-boundary";
-import { api } from "../../lib/api";
+import { health as api } from "../../lib/api/health";
+import { setup as setupApi } from "../../lib/api/setup";
 import type { StatusKind } from "../wardyn/copy";
 import { usePoll } from "../../lib/use-poll";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
@@ -150,7 +151,7 @@ export function AppShell({
 
   const [readiness, setReadiness] = React.useState<StatusKind>("checking");
   const checkReadiness = React.useCallback(() => {
-    api
+    setupApi
       .getSetupStatus()
       .then((s) => {
         // Agree with the funnel's essentials verdict (barrier AND model) —

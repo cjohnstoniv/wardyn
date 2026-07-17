@@ -24,7 +24,7 @@ vi.mock("sonner", () => ({
 // deny() rejects to simulate a 409 / network failure.
 const denyMock = vi.fn();
 const approveMock = vi.fn();
-vi.mock("../../lib/api", () => {
+vi.mock("../../lib/api/approvals", () => {
   const pending: ApprovalRequest = {
     id: "apr_1",
     run_id: "run_1",
@@ -34,24 +34,28 @@ vi.mock("../../lib/api", () => {
     requested_at: new Date().toISOString(),
   };
   return {
-    api: {
+    approvals: {
       listApprovals: (state: string) =>
         Promise.resolve(state === "PENDING" ? [pending] : []),
       deny: (...a: unknown[]) => denyMock(...a),
       approve: (...a: unknown[]) => approveMock(...a),
-      // RunContextRow (redesign) fetches the gated run to inline its context.
-      getRun: () =>
-        Promise.resolve({
-          id: "run_1",
-          agent: "claude-code",
-          repo: "acme/widgets",
-          task: "Fix flaky auth tests",
-          confinement_class: "CC2",
-          state: "RUNNING",
-        }),
     },
   };
 });
+// RunContextRow (redesign) fetches the gated run to inline its context.
+vi.mock("../../lib/api/runs", () => ({
+  runs: {
+    getRun: () =>
+      Promise.resolve({
+        id: "run_1",
+        agent: "claude-code",
+        repo: "acme/widgets",
+        task: "Fix flaky auth tests",
+        confinement_class: "CC2",
+        state: "RUNNING",
+      }),
+  },
+}));
 
 import { ApprovalsScreen } from "./approvals";
 

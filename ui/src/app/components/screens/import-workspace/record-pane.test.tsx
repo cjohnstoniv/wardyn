@@ -19,8 +19,8 @@ vi.mock("../../attach-terminal", () => ({
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<unknown[]> => Promise.resolve([]));
 const approveMock = vi.fn();
 const denyMock = vi.fn();
-vi.mock("../../../lib/api", () => ({
-  api: {
+vi.mock("../../../lib/api/approvals", () => ({
+  approvals: {
     listApprovals: (...a: unknown[]) => listApprovalsMock(...a),
     approve: (...a: unknown[]) => approveMock(...a),
     deny: (...a: unknown[]) => denyMock(...a),

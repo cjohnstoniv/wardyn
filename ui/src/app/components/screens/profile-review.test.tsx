@@ -19,11 +19,11 @@ vi.mock("sonner", () => ({
 
 const profileRunMock = vi.fn();
 const createPolicyMock = vi.fn();
-vi.mock("../../lib/api", () => ({
-  api: {
-    profileRun: (...a: unknown[]) => profileRunMock(...a),
-    createPolicy: (...a: unknown[]) => createPolicyMock(...a),
-  },
+vi.mock("../../lib/api/runs", () => ({
+  runs: { profileRun: (...a: unknown[]) => profileRunMock(...a) },
+}));
+vi.mock("../../lib/api/policies", () => ({
+  policies: { createPolicy: (...a: unknown[]) => createPolicyMock(...a) },
 }));
 
 import { ProfileReview } from "./profile-review";

@@ -12,18 +12,9 @@ import type { SetupStatus } from "../../../lib/types";
 // its module transitively imports the setup funnel (which touches the api). Mock
 // the whole client so the import graph is inert and readiness is deterministic.
 const getSetupStatusMock = vi.fn();
-vi.mock("../../../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api")>("../../../lib/api");
-  return {
-    HttpError: actual.HttpError,
-    api: {
-      getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a),
-      listSecrets: vi.fn().mockResolvedValue([]),
-      listComposerBackends: vi.fn().mockResolvedValue([]),
-      health: vi.fn().mockResolvedValue({}),
-    },
-  };
-});
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
 
 import { OnboardingScreen, onboardingSeen, markOnboardingSeen } from "./onboarding-screen";
 import { baseStatus } from "../setup/test-fixtures";

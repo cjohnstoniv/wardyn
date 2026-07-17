@@ -12,7 +12,8 @@
 import * as React from "react";
 import { HelpCircle, Loader2, Send } from "lucide-react";
 
-import { api, HttpError } from "../../../lib/api";
+import { composer as api } from "../../../lib/api/compose";
+import { HttpError } from "../../../lib/api/core";
 import type { ComposeAssistContext } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";

@@ -35,7 +35,7 @@ import {
 import { toast } from "sonner";
 import type { AgentRun, RunState } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
-import { api } from "../../lib/api";
+import { runs as api } from "../../lib/api/runs";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";

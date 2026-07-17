@@ -24,10 +24,14 @@ import type { AgentRun, Recording } from "../../lib/types";
 
 const listRunsMock = vi.fn();
 const getRecordingMock = vi.fn();
-vi.mock("../../lib/api", () => ({
-  api: {
-    listRuns: () => listRunsMock(),
+vi.mock("../../lib/api/recordings", () => ({
+  recordings: {
     getRecording: (...a: unknown[]) => getRecordingMock(...a),
+  },
+}));
+vi.mock("../../lib/api/runs", () => ({
+  runs: {
+    listRuns: () => listRunsMock(),
   },
 }));
 
