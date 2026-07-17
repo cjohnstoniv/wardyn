@@ -8,6 +8,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **List endpoints paginate.** `runs`/`policies`/`approvals`/`workspaces` and
+  the audit query take explicit `limit`/`offset` params (defaults preserve
+  existing behavior) and disclose truncation via an `X-Wardyn-Truncated`
+  header — the audit endpoint's previously hidden 1000/500 caps are now
+  explicit. New composite DB indexes back the run-scoped audit sort.
+- **SDK route-family coverage.** `pkg/client` gains approvals, workspaces
+  (CRUD + scan/verify), site-config, setup, audit and health methods, honest
+  package-doc coverage claims, and `--limit` on the CLI list commands.
+- **Mobile navigation.** The console works below the `md` breakpoint: a
+  hamburger-triggered drawer with full keyboard/ARIA handling replaces the
+  previously hidden-with-no-fallback sidebar.
+- **`wardyn record task` documented**, and the CLI now prints recovery
+  guidance ("is wardynd running? try --url/WARDYN_URL") when it cannot reach
+  the daemon instead of a bare dial error.
+
 - **CLI: run is now one noun** (bare `create` + `list`/`get`/`kill` subcommands,
   `runs` alias), a central exit-code taxonomy (`0`=ok, `2`=auth, `3`=client 4xx,
   `4`=server 5xx, `5`=network, `124`=wait-timeout), `--json` on all list/mutate
