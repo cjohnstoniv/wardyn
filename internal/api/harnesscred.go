@@ -187,15 +187,16 @@ func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedC
 // credential — it is a blank, egress-pinned box whose only purpose is to host
 // the interactive OAuth. Modeled on launchRecordRun, minus workspace/claim.
 //
-// KNOWN GAP (harnessLoginTask must not be recorded): this run's terminal exists
+// RECORDING GATE (harnessLoginTask is never recorded): this run's terminal exists
 // to PRINT a ~1yr credential, and because the run mints nothing its mask snapshot
-// is empty by construction — liveMaskWriter is a pass-through, so handleAttach's
-// unconditional session recorder persists a replayable asciicast containing the
-// token verbatim. The paste-time AddGlobal in handleHarnessCredentialPaste lands
-// too late for that cast (masking is write-time). The fix belongs at the
-// newSessionRecorder call site in attach.go — gate it on
-// run.Task != harnessLoginTask — and operators who ran the flow on an affected
-// build should purge the login run's .cast from the recording root.
+// is empty by construction — liveMaskWriter is a pass-through, and the paste-time
+// AddGlobal in handleHarnessCredentialPaste lands too late for the cast (masking
+// is write-time). So no masking can protect this session. That gap is CLOSED:
+// newSessionRecorder (attach.go) drops the recorder entirely for a run where
+// runIsUnrecordable(run) is true (run.Task == harnessLoginTask), so no replayable
+// asciicast is ever persisted. The gate lives at that single call site so a future
+// second attach path cannot miss it. (harness.login.started and session.attach
+// still record who attached, when, and why — no provenance is lost.)
 func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin) (types.AgentRun, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")

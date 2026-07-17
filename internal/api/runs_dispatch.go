@@ -251,7 +251,16 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
 	}
-	_ = s.cfg.Store.SetSandboxRef(ctx, run.ID, sb.Ref)
+	if err := s.cfg.Store.SetSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+		// A lost sandbox ref is not fatal to THIS dispatch (the run proceeds), but on a
+		// daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while
+		// the container keeps running untracked. Log + audit the loss so the orphan is
+		// discoverable, rather than discarding the error silently.
+		slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; sandbox may be orphaned/untracked across a daemon restart",
+			slog.String("run_id", run.ID.String()), slog.String("sandbox_ref", sb.Ref), slog.Any("err", err))
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
+	}
 
 	// KILL-RACE GUARD: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
@@ -908,8 +917,13 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// (3) Identity revocation: deny every (current+future) token for the run. A
 	// bounded retry guards against a transient store error leaving the run's
 	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
-	if rerr := retryQuick(cascadeCtx, func() error { return s.cfg.Identity.RevokeRun(cascadeCtx, id) }); rerr != nil {
-		killData["identity_error"] = rerr.Error()
+	// Nil-guarded like revokeRunCascade/healthz: an embedding without an Identity
+	// provider must not panic mid-cascade (after the KILLED CAS + KillSandbox but
+	// before the audit) — the revoke step is simply skipped.
+	if s.cfg.Identity != nil {
+		if rerr := retryQuick(cascadeCtx, func() error { return s.cfg.Identity.RevokeRun(cascadeCtx, id) }); rerr != nil {
+			killData["identity_error"] = rerr.Error()
+		}
 	}
 	// (4) Broker credential revocation (best-effort; audits per minted jti).
 	if s.cfg.Broker != nil {

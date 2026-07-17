@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	neturl "net/url"
 	"slices"
 	"sort"
@@ -612,7 +613,20 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 // Conditional on RunPending, so a call from a pre-CreateRun failure (claim /
 // mint) cleanly no-ops.
 func (s *Server) failPendingRun(ctx context.Context, runID uuid.UUID) {
-	if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed); applied {
+	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed)
+	if err != nil {
+		// "The compensator itself failed" is categorically different from
+		// applied==false (a concurrent transition legitimately won): nobody else
+		// will finalize this run, so it strands PENDING holding a live minted token
+		// and eligible grants until the next boot reconciles it. Log + audit loudly
+		// (mirrors failAndRevoke) rather than swallowing the store error.
+		slog.ErrorContext(ctx, "wardynd: failPendingRun CAS failed, run may be stranded PENDING with an un-revoked token",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
+			runID.String(), "failure", mustJSON(map[string]any{"from": string(types.RunPending), "error": err.Error()})))
+		return
+	}
+	if applied {
 		s.revokeRunCascade(ctx, runID)
 	}
 }

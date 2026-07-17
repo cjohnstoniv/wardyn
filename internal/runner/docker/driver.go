@@ -158,12 +158,15 @@ type pendingAgent struct {
 // ~/.claude) would otherwise resolve under / and fail for a non-writable root.
 const agentImageHome = "/home/agent"
 
-// agentIdleScript is the agent container's main process: it installs the per-run
-// TLS-MITM CA (when delivered) and then idles. This is REQUIRED for INTERACTIVE
-// runs, which never invoke agent-run (the human drives claude in the attach
-// shell) — without it, NODE_EXTRA_CA_CERTS points at a CA file that was never
-// written, so claude cannot trust the proxy's TLS termination of api.anthropic.com
-// (breaking subscription proxy-side injection). It writes the EXACT paths
+// agentIdleScript is the agent container's main (idle) process for NON-interactive
+// runs: it installs the per-run TLS-MITM CA (when delivered) and then idles while
+// agent-run's task Exec does the real work. (Interactive runs use `agent-run
+// --idle` as their main process instead — see CreateSandbox below — which performs
+// this same CA install plus workspace prep; the human then drives claude in the
+// attach shell.) The CA install is REQUIRED either way: without it,
+// NODE_EXTRA_CA_CERTS points at a CA file that was never written, so claude cannot
+// trust the proxy's TLS termination of api.anthropic.com (breaking subscription
+// proxy-side injection). It writes the EXACT paths
 // internal/api pins (/tmp/wardyn — any-uid-writable, so it works regardless of
 // the image's USER/HOME; this Cmd may run as root while agent-run later re-runs
 // as the image user, hence the sticky-bit dir and the ||true rewrites: within

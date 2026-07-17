@@ -57,15 +57,15 @@ func main() {
 
 func run() error {
 	var (
-		exportPath   = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
-		controlURL   = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
-		token        = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
-		blindRuns    = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
-		heartbeatStr = flagEnv("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", "30s", "sensor heartbeat interval")
-		refreshStr   = flagEnv("refresh", "WARDYN_GROUNDTRUTH_REFRESH", "15s", "container->run index refresh interval")
-		statsStr     = flagEnv("stats", "WARDYN_GROUNDTRUTH_STATS", "60s", "how often to log throughput/drop stats")
-		bufferSize   = flagIntEnv("buffer", "WARDYN_GROUNDTRUTH_BUFFER", 4096, "event buffer size before backpressure drops")
-		batchSize    = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
+		exportPath    = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
+		controlURL    = flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "control plane base URL")
+		token         = flagEnv("token", "WARDYN_GROUNDTRUTH_TOKEN", "", "host-sensor bearer token (aud=wardyn-groundtruth); REQUIRED")
+		blindRuns     = flagEnv("blind-runs", "WARDYN_GROUNDTRUTH_BLIND_RUNS", "", "comma-separated run ids the host sensor is blind to (CC3/Kata); one kernel.sensor.blind is emitted per id at boot")
+		heartbeatFlag = cliutil.FlagDuration("heartbeat", "WARDYN_GROUNDTRUTH_HEARTBEAT", 30*time.Second, "sensor heartbeat interval")
+		refreshFlag   = cliutil.FlagDuration("refresh", "WARDYN_GROUNDTRUTH_REFRESH", 15*time.Second, "container->run index refresh interval")
+		statsFlag     = cliutil.FlagDuration("stats", "WARDYN_GROUNDTRUTH_STATS", 60*time.Second, "how often to log throughput/drop stats")
+		bufferSize    = flagIntEnv("buffer", "WARDYN_GROUNDTRUTH_BUFFER", 4096, "event buffer size before backpressure drops")
+		batchSize     = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
 	)
 	flag.Parse()
 
@@ -73,9 +73,13 @@ func run() error {
 		return err
 	}
 
-	heartbeatIval := mustDuration(*heartbeatStr, 30*time.Second)
-	refreshIval := mustDuration(*refreshStr, 15*time.Second)
-	statsIval := mustDuration(*statsStr, 60*time.Second)
+	// Env values were parsed strictly at flag registration (cliutil.FlagDuration:
+	// an unparseable WARDYN_GROUNDTRUTH_{HEARTBEAT,REFRESH,STATS} exits 2, matching
+	// docs/ENV.md's loud-read invariant; unset/empty keeps the default). A -flag
+	// still overrides the env default here.
+	heartbeatIval := *heartbeatFlag
+	refreshIval := *refreshFlag
+	statsIval := *statsFlag
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -388,10 +392,3 @@ var (
 	flagIntEnv = cliutil.FlagIntEnv
 	splitCSV   = cliutil.SplitCSV
 )
-
-func mustDuration(s string, def time.Duration) time.Duration {
-	if d, err := time.ParseDuration(strings.TrimSpace(s)); err == nil {
-		return d
-	}
-	return def
-}

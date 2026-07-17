@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,19 +54,10 @@ type Store interface {
 // PENDING approval when one already exists for the same run+kind+scope hash
 // (deduplication guard).
 func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (types.ApprovalRequest, error) {
-	// Dedup: find any existing PENDING approval for the same run+kind+scope.
+	// Dedup: return any existing PENDING approval for the same run+kind+scope.
 	hash := scopeHash(req.RunID, req.Kind, req.RequestedScope)
-
-	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
-	if err != nil {
-		return types.ApprovalRequest{}, fmt.Errorf("approval: list pending for dedup: %w", err)
-	}
-	for _, existing := range pending {
-		if existing.RunID == req.RunID && existing.Kind == req.Kind {
-			if scopeHash(existing.RunID, existing.Kind, existing.RequestedScope) == hash {
-				return existing, nil
-			}
-		}
+	if existing, found, err := findPendingDup(ctx, st, req, hash); err != nil || found {
+		return existing, err
 	}
 
 	// Normalise fields before persisting.
@@ -81,9 +73,44 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 
 	created, err := st.CreateApproval(ctx, req)
 	if err != nil {
+		// The list-then-create dedup above has a race window: a concurrent raise of
+		// the same run+kind+scope can slip in between our list and our insert. The
+		// partial unique index (migration 0022 for non-credential kinds, 0002 for
+		// credential) rejects the loser, surfacing as store.ErrDuplicatePending.
+		// Tolerate it as a dedup signal — re-read and return the winner's row —
+		// exactly as if the pre-insert scan had seen it.
+		if isDuplicatePending(err) {
+			if existing, found, rerr := findPendingDup(ctx, st, req, hash); rerr != nil || found {
+				return existing, rerr
+			}
+		}
 		return types.ApprovalRequest{}, fmt.Errorf("approval: create: %w", err)
 	}
 	return created, nil
+}
+
+// findPendingDup returns the existing PENDING approval matching req's
+// run+kind+scope hash, if any. Shared by the pre-insert dedup scan and the
+// post-unique-violation re-read.
+func findPendingDup(ctx context.Context, st Store, req types.ApprovalRequest, hash string) (types.ApprovalRequest, bool, error) {
+	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
+	if err != nil {
+		return types.ApprovalRequest{}, false, fmt.Errorf("approval: list pending for dedup: %w", err)
+	}
+	for _, existing := range pending {
+		if existing.RunID == req.RunID && existing.Kind == req.Kind &&
+			scopeHash(existing.RunID, existing.Kind, existing.RequestedScope) == hash {
+			return existing, true, nil
+		}
+	}
+	return types.ApprovalRequest{}, false, nil
+}
+
+// isDuplicatePending detects store.ErrDuplicatePending across the package
+// boundary by message (the store package cannot be imported here without a
+// cycle — same reason isAlreadyDecided matches by string).
+func isDuplicatePending(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate pending approval")
 }
 
 // Decide approves or denies an existing approval request. decidedBy is the
