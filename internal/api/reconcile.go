@@ -5,7 +5,7 @@ package api
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,7 +68,8 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 		reattached++
 	}
 	if reattached > 0 || finalized > 0 {
-		log.Printf("wardynd: boot reconciliation: %d run(s) re-attached, %d finalized", reattached, finalized)
+		slog.InfoContext(ctx, "wardynd: boot reconciliation",
+			slog.Int("reattached", reattached), slog.Int("finalized", finalized))
 	}
 	return nil
 }
@@ -86,7 +87,8 @@ const reconcileMaxProbeErrors = 12
 func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agentExecID string) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("wardynd: PANIC in reconcile watcher for %s (contained): %v", runID, r)
+			slog.ErrorContext(ctx, "wardynd: PANIC in reconcile watcher (contained)",
+				slog.String("run_id", runID.String()), slog.Any("panic", r))
 		}
 	}()
 	tick := time.NewTicker(5 * time.Second)
@@ -128,7 +130,8 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason string) {
 	cur, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		log.Printf("wardynd: reconcile get %s: %v", runID, err)
+		slog.ErrorContext(ctx, "wardynd: reconcile get run failed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
 		return
 	}
 	if isTerminalRunState(cur.State) {
@@ -136,7 +139,8 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	}
 	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, cur.State, to)
 	if err != nil {
-		log.Printf("wardynd: reconcile finalize %s: %v", runID, err)
+		slog.ErrorContext(ctx, "wardynd: reconcile finalize failed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
 		return
 	}
 	if !applied {

@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -88,7 +88,8 @@ func runTokenRenewer(ctx context.Context, ts *tokenSource, base string, client *
 		cancel()
 		if err != nil {
 			// Do not log the token; the error carries status + body only.
-			log.Printf("wardyn-proxy: run token renew failed (retrying in %s): %v", renewRetry, err)
+			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, retrying",
+				slog.Duration("retry_in", renewRetry), slog.Any("err", err))
 		} else {
 			ts.Set(tok)
 			next = renewMaxInterval

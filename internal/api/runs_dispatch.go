@@ -8,7 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -1037,7 +1037,8 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		// applied==false ("a concurrent kill legitimately won") and must not collapse
 		// into it: nobody else will write this run's terminal state, so it strands
 		// non-terminal with un-revoked credentials until the next boot reconciles it.
-		log.Printf("wardynd: failAndRevoke %s: CAS %s->FAILED failed, run may be stranded: %v", runID, from, err)
+		slog.ErrorContext(ctx, "wardynd: failAndRevoke CAS failed, run may be stranded",
+			slog.String("run_id", runID.String()), slog.String("from_state", string(from)), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
 			runID.String(), "failure", mustJSON(map[string]any{"from": string(from), "error": err.Error()})))
 		return

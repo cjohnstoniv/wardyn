@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -492,7 +492,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Persist the resolved image for provenance (best-effort: a failed write
 	// must not block dispatch — the audit trail still carries build events).
 	if err := s.cfg.Store.SetRunImage(ctx, runID, image); err != nil {
-		log.Printf("wardynd: persist run image %s: %v", runID, err)
+		slog.ErrorContext(ctx, "wardynd: persist run image failed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.

@@ -27,16 +27,14 @@ import (
 //
 // ponytail: this repo has no golangci-lint/forbidigo (make lint == go vet), so a
 // small test is the only ratchet available. Add a linter and delete this.
-//
-// NOT yet listed — internal/api and internal/egress/proxy still carry ~11
-// log.Printf sites and are owned by other work in flight; add them here as they
-// migrate.
 var slogOnlyPackages = []string{
 	"cmd/wardynd",
 	"cmd/wardyn-tetragon-ingest",
 	"cmd/wardyn-proxy",
 	"internal/approval",
 	"internal/runner/docker",
+	"internal/api",
+	"internal/egress/proxy",
 }
 
 func TestSlogOnlyPackagesDoNotImportStdlibLog(t *testing.T) {
