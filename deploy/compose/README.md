@@ -223,9 +223,16 @@ degradable**: with it OFF, `wardynd`'s `/healthz` reports
 > real key (`age-keygen`) into the compose env before seeding:
 > `export WARDYN_AGE_KEY=AGE-SECRET-KEY-...` (and keep it set for the stack).
 
+> **Automatic (preferred):** the compose stack wires a wardynd token *rotator* that
+> keeps the shared `groundtruth_token` volume file fresh (`WARDYN_GROUNDTRUTH_TOKEN_FILE`),
+> and the sidecar re-reads it on a 401 — so you can SKIP the manual seeding below and
+> just start the groundtruth profile; ground truth then survives the ~1h token TTL
+> (U009). The static-token path below still works but goes permanently blind after ~1h.
+
 ```bash
 # 1. The stack must already be up with a persistent WARDYN_AGE_KEY (see above).
-# 2. Mint a host-sensor token (aud=wardyn-groundtruth; audit-write-only — it can
+# 2. (OPTIONAL — the rotator above supersedes this.) Mint a static host-sensor token
+#    (aud=wardyn-groundtruth; audit-write-only — it can
 #    never mint credentials or decide approvals). The exec'd wardynd inherits
 #    WARDYN_AGE_KEY from the container env, so it loads the same keys:
 export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
@@ -245,7 +252,13 @@ Honest limits (by design, not hidden):
 - **Host eBPF is blind inside CC3/Kata guests.** For such runs the sidecar emits
   a one-time `kernel.sensor.blind` event so the gap is visible. Set
   `WARDYN_GROUNDTRUTH_BLIND_RUNS=<run-id>,...` to record it at sidecar boot.
-- The token has the identity provider's 1h TTL; re-mint on rotation.
+- The token has the identity provider's ~1h TTL. The compose stack keeps it fresh
+  AUTOMATICALLY: wardynd's rotator re-mints and rewrites the shared `groundtruth_token`
+  file and the sidecar re-reads it on a 401, so ground truth does NOT go blind ~1h in
+  (U009). The manual `WARDYN_GROUNDTRUTH_TOKEN` env is a static fallback that cannot
+  refresh. NOTE: full end-to-end recovery is verified by unit tests (the rotator mints
+  + writes; the sidecar reads + refreshes); the live cross-container recovery under a
+  real Tetragon sensor needs a privileged eBPF host to exercise.
 
 See `tetragon-policies/` for the `TracingPolicy` and `internal/groundtruth` for
 the mapper.

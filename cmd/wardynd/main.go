@@ -637,6 +637,16 @@ func run() error {
 		log.Printf("wardynd: lifecycle reaper started (interval=%s)", *autoStopInterval)
 	}
 
+	// Groundtruth token rotator: keep a shared token file fresh so the eBPF/Tetragon
+	// ingest sidecar — which re-reads the file on a 401 — recovers when its ~1h token
+	// expires instead of going permanently blind (U009). Off unless a file path is
+	// configured; the shipped compose stack points wardynd + the ingest at the same
+	// shared-volume file. The static WARDYN_GROUNDTRUTH_TOKEN env path cannot refresh.
+	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
+		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotator(rootCtx, idp, gtFile) })
+		log.Printf("wardynd: groundtruth token rotator started (file=%s)", gtFile)
+	}
+
 	// Approval expiry sweeper: transition PENDING approvals older than the
 	// cutoff to EXPIRED so the queue does not grow unbounded. approval.ExpireStale
 	// was implemented but never scheduled; this wires it on the same goroutine
