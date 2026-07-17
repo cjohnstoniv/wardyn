@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-campaign gitleaks licenses helm-lint compose-config dco sbom npm-license ci
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-campaign gitleaks licenses helm-lint compose-config dco sbom npm-license ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -13,6 +13,9 @@ GITLEAKS_VERSION     ?= v8.30.1
 GO_LICENSES_VERSION  ?= v1.6.0
 SYFT_VERSION         ?= v1.46.0
 GOLANGCI_LINT_VERSION ?= v2.12.2
+# Throwaway local registry for the real-daemon envbuild smoke test (U064). Pinned
+# by tag like the other daemon images CI pulls (postgres:17, alpine:latest).
+ENVBUILD_REGISTRY_IMAGE ?= registry:2
 
 help:
 	@echo "Wardyn governance control plane"
@@ -36,6 +39,8 @@ help:
 	@echo "  test-docker           - Run all Go tests with -tags docker"
 	@echo "  test-conformance-docker - Run conformance suite on Docker (requires WARDYN_TEST_DOCKER=1)"
 	@echo "  test-conformance-stub - Run the driver-agnostic conformance honesty stub (no cluster required)"
+	@echo "  test-envbuild-integration - Real-daemon envbuild push/pull smoke test (provisions a throwaway"
+	@echo "                          registry + tools dir; needs Docker; runs TestBuild_SmokeDockerd)"
 	@echo "  govulncheck           - Run govulncheck for known vulnerabilities"
 	@echo "  staticcheck           - Run staticcheck static analysis"
 	@echo "  diagrams              - Validate the mermaid diagrams in the public docs (syntax + label-truth)"
@@ -195,6 +200,41 @@ test-conformance-stub:
 	@echo "Running driver-agnostic conformance honesty-stub tests (no cluster required)..."
 	go test -v -timeout 2m ./test/conformance/...
 
+# ── real-daemon envbuild integration (U064) ─────────────────────────────────
+# TestBuild_SmokeDockerd is the ONLY test that drives the real envbuilder
+# push -> finalize-FROM-pushed -> pull cycle (and thus the pushedBaseRef
+# assumption in builder.go) end-to-end against a live daemon. It never ran in
+# CI because it is triple-gated on WARDYN_TEST_DOCKER + a writable registry
+# (WARDYN_TEST_CACHE_REPO) + a runner-tools dir (WARDYN_TEST_TOOLS_DIR), and no
+# job provisioned the latter two. This target provisions all three against the
+# ambient daemon and runs just that package, so the assumption is validated
+# automatically. Bounded to internal/envbuild (single test, 15m cap).
+#
+# Networking: the build container must reach the loopback git daemon + registry
+# the test stands up, which needs host networking (WARDYN_ENVBUILD_BUILD_NETWORK
+# =host — honoured on ubuntu-latest's host-native dockerd). The tools are staged
+# from the same in-repo sources the agent images ship (cmd/* + deploy/images/*),
+# so the finalize COPY has real binaries to layer, not stubs.
+test-envbuild-integration:
+	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
+	@set -eu; \
+	tools_dir="$$(mktemp -d)"; \
+	trap 'docker rm -f wardyn-envbuild-registry >/dev/null 2>&1 || true; rm -rf "$$tools_dir"' EXIT; \
+	echo "==> staging runner tools into $$tools_dir"; \
+	go build -o "$$tools_dir/" ./cmd/wardyn-rec ./cmd/wardyn-verify ./cmd/wardyn-git-helper; \
+	cp deploy/images/claude-code/agent-run "$$tools_dir/agent-run"; \
+	cp deploy/images/common/agent-run-lib.sh "$$tools_dir/agent-run-lib.sh"; \
+	chmod +x "$$tools_dir/agent-run" "$$tools_dir/agent-run-lib.sh"; \
+	echo "==> starting throwaway registry $(ENVBUILD_REGISTRY_IMAGE) on :5000"; \
+	docker rm -f wardyn-envbuild-registry >/dev/null 2>&1 || true; \
+	docker run -d --name wardyn-envbuild-registry -p 5000:5000 $(ENVBUILD_REGISTRY_IMAGE) >/dev/null; \
+	echo "==> running TestBuild_SmokeDockerd against the live daemon"; \
+	WARDYN_TEST_DOCKER=1 \
+	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
+	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
+	WARDYN_ENVBUILD_BUILD_NETWORK=host \
+	go test -tags docker -run TestBuild_SmokeDockerd -timeout 15m -v ./internal/envbuild/
+
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
 # brokered creds, recording). Heavy: stands up the compose stack. Guarded by
 # WARDYN_TEST_DOCKER=1 inside the script. Runs in the nightly workflow.
@@ -239,6 +279,15 @@ staticcheck:
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
 
+# go.mod/go.sum must stay tidy: `go mod tidy` produces no diff. A stray require,
+# or an indirect that a test/code now imports directly (e.g. moby/docker-image-spec
+# used by internal/envbuild/fake_test.go), would otherwise drift uncaught. `-diff`
+# prints the tidy diff and exits nonzero when untidy WITHOUT mutating go.mod/go.sum,
+# so it never clobbers uncommitted edits (unlike a tidy + git checkout dance).
+tidy-check:
+	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
+	go mod tidy -diff
+
 lint:
 	@echo "Running go vet (default + docker tags)..."
 	go vet ./...
@@ -247,6 +296,8 @@ lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."
 	./scripts/check-file-size.sh
+	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
+	./scripts/check-image-pins.sh
 
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
 # Each target below is the authority for one CI gate: ci.yml runs `make <target>`

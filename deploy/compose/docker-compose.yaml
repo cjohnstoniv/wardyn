@@ -19,7 +19,9 @@
 
 services:
   postgres:
-    image: postgres:17
+    # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
+    # so the digest freezes the exact image; bump both together on a version move.
+    image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
     container_name: wardyn-postgres
     # Loopback-only publish so a HOST-MODE wardynd (run outside compose, e.g. to use
     # the resident `claude` CLI composer backend) can reach the same database.
@@ -40,7 +42,8 @@ services:
       - wardyn
 
   dex:
-    image: ghcr.io/dexidp/dex:v2.40.0
+    # Digest-pinned (tag kept for readability); bump both together on a version move.
+    image: ghcr.io/dexidp/dex:v2.40.0@sha256:3e35d5d0f7dbd33fbadc36a71ff58cf4097ab98d73d22f6cb9a6471a32e028af
     container_name: wardyn-dex
     # Opt-in: human SSO is OFF by default (`make setup` / `scripts/up.sh up`
     # starts only postgres+wardynd with WARDYN_LOCAL_MODE=true and an empty
@@ -295,7 +298,8 @@ services:
   # bundles the wardynd binary, so the same image mints it.)
   # ───────────────────────────────────────────────────────────────────────────
   tetragon:
-    image: quay.io/cilium/tetragon:v1.1.2
+    # Digest-pinned (tag kept for readability); bump both together on a version move.
+    image: quay.io/cilium/tetragon:v1.1.2@sha256:fca204b06c8bd5ade16cbe46f52429e11863dc2ce630cc8a2140b74eedbecde7
     container_name: wardyn-tetragon
     profiles: ["groundtruth"]
     # Host eBPF sensor: needs privileged + host PID/cgroup + kernel mounts.
