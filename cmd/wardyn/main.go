@@ -9,12 +9,15 @@ package main
 import (
 	"errors"
 	"fmt"
-	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/spf13/cobra"
 )
+
+// version is surfaced via `wardyn --version`; kept in step with CHANGELOG.md.
+const version = "0.3.0"
 
 // exitError carries a specific process exit code through the cobra error
 // return (run --wait maps run outcomes to codes CI can branch on).
@@ -29,18 +32,35 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
-		var ee *exitError
-		if errors.As(err, &ee) {
-			os.Exit(ee.code)
-		}
-		// An auth/authz failure exits 2 so a script can tell "not authorized" apart
-		// from a 404/409/other API error or a network failure (all were exit 1) (U087).
-		var ae *apiError
-		if errors.As(err, &ae) && (ae.StatusCode == http.StatusUnauthorized || ae.StatusCode == http.StatusForbidden) {
-			os.Exit(2)
-		}
-		os.Exit(1)
+		os.Exit(exitCodeFor(err))
 	}
+}
+
+// exitCodeFor maps an error to a process exit code CI can branch on. A run
+// outcome from --wait (*exitError) wins — it already encodes the agent/lifecycle
+// result. Otherwise a typed API error maps by status class (auth=2, server=4,
+// other 4xx=3), a transport failure (*url.Error) is 5, and anything else is 1.
+func exitCodeFor(err error) int {
+	var ee *exitError
+	if errors.As(err, &ee) {
+		return ee.code
+	}
+	var ae *apiError
+	if errors.As(err, &ae) {
+		switch {
+		case ae.statusCode == 401 || ae.statusCode == 403:
+			return 2
+		case ae.statusCode >= 500:
+			return 4
+		case ae.statusCode >= 400:
+			return 3
+		}
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return 5
+	}
+	return 1
 }
 
 func rootCmd() *cobra.Command {
@@ -51,25 +71,33 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "wardyn",
 		Short:         "Wardyn control-plane CLI",
-		SilenceUsage:  true,
+		Version:       version,
 		SilenceErrors: true,
+		// SilenceUsage is deferred to PersistentPreRun so a structural USAGE
+		// error (unknown flag, unknown command, wrong arg count — all raised
+		// BEFORE pre-run) still prints usage, while an error returned FROM a
+		// RunE (a runtime/API failure) does not.
+		// ponytail: required-flag errors are validated by cobra AFTER pre-run,
+		// so they surface as a concise "required flag(s) X not set" without the
+		// full usage block — acceptable; the message is already actionable.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) { cmd.SilenceUsage = true },
 	}
 	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"),
 		"control plane base URL (env WARDYN_URL)")
-	root.PersistentFlags().StringVar(&token, "token", os.Getenv("WARDYN_ADMIN_TOKEN"),
-		"admin bearer token (env WARDYN_ADMIN_TOKEN)")
+	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN. NOTE: passing
+	// --token puts the secret in argv (visible in `ps`); prefer the env var.
+	root.PersistentFlags().StringVar(&token, "token", cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN")),
+		"admin bearer token (env WARDYN_ADMIN_TOKEN or WARDYN_TOKEN; --token is visible in the process list, prefer the env var)")
 
 	// client() resolves the configured client lazily so flags are parsed first.
 	client := func() *apiClient { return &apiClient{baseURL: serverURL, token: token} }
 
 	root.AddCommand(
 		runCmd(client),
-		runsCmd(client),
 		approvalsCmd(client),
 		approveCmd(client),
 		denyCmd(client),
 		auditCmd(client),
-		killCmd(client),
 		policyCmd(client),
 		secretCmd(client),
 		attachCmd(client),
