@@ -224,7 +224,7 @@ function QuestionRow({
             <PopoverContent align="start" className="w-80 space-y-2 text-xs">
               {q.why && <p className="text-foreground">{q.why}</p>}
               {q.help && <p className="text-muted-foreground">{q.help}</p>}
-              {q.risk && <p className="text-amber-600">{q.risk}</p>}
+              {q.risk && <p className="text-warning">{q.risk}</p>}
               {q.examples && q.examples.length > 0 && (
                 <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
                   {q.examples.map((e, i) => (
