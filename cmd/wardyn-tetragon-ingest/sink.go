@@ -73,23 +73,33 @@ type eventSink struct {
 // yields a new token, so a genuine persistent 401 is counted as a drop rather
 // than retried forever (it does NOT "recover").
 func newEventSink(controlPlaneURL, token string, bufferSize, batchSize int, flushIval time.Duration, client *http.Client) *eventSink {
-	src := func() (string, error) {
-		if path := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); path != "" {
-			b, err := os.ReadFile(path)
-			if err != nil {
-				return "", fmt.Errorf("read %s: %w", path, err)
-			}
-			if v := strings.TrimSpace(string(b)); v != "" {
-				return v, nil
-			}
-			return "", fmt.Errorf("%s is empty", path)
+	src := func() (string, error) { return tokenFromEnv(token) }
+	return newEventSinkWithSource(controlPlaneURL, src, bufferSize, batchSize, flushIval, client)
+}
+
+// tokenFromEnv resolves the host-sensor bearer token from its configured source,
+// file first. It is the SINGLE definition of "where the token comes from": both
+// the sink's refreshable source and run()'s boot guard resolve through it, so the
+// guard can never reject a wiring the sink would happily use (U009). fallback is
+// the static boot/flag token, used only when neither source yields one.
+func tokenFromEnv(fallback string) (string, error) {
+	if path := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", path, err)
 		}
-		if v := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN")); v != "" {
+		if v := strings.TrimSpace(string(b)); v != "" {
 			return v, nil
 		}
-		return token, nil
+		return "", fmt.Errorf("%s is empty", path)
 	}
-	return newEventSinkWithSource(controlPlaneURL, src, bufferSize, batchSize, flushIval, client)
+	if v := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN")); v != "" {
+		return v, nil
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback, nil
+	}
+	return "", fmt.Errorf("no token from WARDYN_GROUNDTRUTH_TOKEN_FILE or WARDYN_GROUNDTRUTH_TOKEN")
 }
 
 // newEventSinkWithSource builds a sink whose bearer token is fetched from src.

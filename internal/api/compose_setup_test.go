@@ -376,6 +376,33 @@ func TestDeriveSetupItems_BackendCC2NeedsSetup(t *testing.T) {
 	}
 }
 
+// TestDeriveSetupItems_BackendNonContiguousClassesMirrorsLaunchGate: the backend
+// row is the designated surrogate for the launch gate (preflight.go deliberately
+// does not duplicate the 422), so it must answer with the gate's MEMBERSHIP rule,
+// never a rank compare. A Kata-only host advertises the non-contiguous set
+// [CC1, CC3] — the docker driver is tested to emit exactly that — on which
+// create-run 422s a CC2 run. A rank compare (bestClass=CC3 >= CC2) called that
+// row "satisfied" and sent the operator into a guaranteed 422.
+func TestDeriveSetupItems_BackendNonContiguousClassesMirrorsLaunchGate(t *testing.T) {
+	srv := newSetupTestServer()
+	srv.cfg.Runner = setupTestRunner{caps: runner.Capabilities{
+		ConfinementClasses: []types.ConfinementClass{types.CC1, types.CC3},
+		Resolved:           map[types.ConfinementClass]string{types.CC3: "oci/kata-runtime"},
+	}}
+	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC2)}
+	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	got, ok := findItem(items, "backend:CC2")
+	if !ok {
+		t.Fatal("no backend:CC2 row for an explicit CC2 run")
+	}
+	if got.Status != "missing" {
+		t.Errorf("CC2 on a [CC1,CC3] host: status = %q, want \"missing\" (create-run 422s here)", got.Status)
+	}
+	if !strings.Contains(got.Detail, "wardyn setup wall") {
+		t.Errorf("detail = %q, want the fixable `wardyn setup wall` guidance", got.Detail)
+	}
+}
+
 // CC3 unavailable: fixable-here (needs setup) vs not-fixable-on-this-host (no
 // /dev/kvm) is a REAL hardware probe (internal/setup, commit 74b4d0a) — mirror
 // its live result rather than assuming this test host's hardware either way.

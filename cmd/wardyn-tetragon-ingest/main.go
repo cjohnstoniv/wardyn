@@ -68,11 +68,8 @@ func run() error {
 	)
 	flag.Parse()
 
-	if strings.TrimSpace(*token) == "" {
-		// Fail closed: an unauthenticated sensor must not start. Without the
-		// token every POST would 401 and the stream would silently produce
-		// nothing while looking alive.
-		return fmt.Errorf("missing host-sensor token: set -token / WARDYN_GROUNDTRUTH_TOKEN (aud=wardyn-groundtruth)")
+	if err := checkBootTokenSource(*token); err != nil {
+		return err
 	}
 
 	heartbeatIval := mustDuration(*heartbeatStr, 30*time.Second)
@@ -138,6 +135,29 @@ func run() error {
 	// Tail the export. Returns on ctx cancellation.
 	tailExport(ctx, *exportPath, mapper, sink)
 	log.Printf("wardyn-tetragon-ingest: shutdown (posted=%d dropped=%d)", sink.postedCount(), sink.droppedCount())
+	return nil
+}
+
+// checkBootTokenSource fails closed when the sensor has NO configured token
+// source: an unauthenticated sensor must not start, because every POST would 401
+// and the stream would produce nothing while looking alive.
+//
+// "Configured" means either source the sink resolves (tokenFromEnv) — the static
+// env/flag token OR WARDYN_GROUNDTRUTH_TOKEN_FILE. A configured file the rotator
+// has not written YET is not a boot failure: compose starts this sidecar as soon
+// as wardynd reports healthy, which can precede the rotator's first write, and
+// the sink re-reads the file on every 401 refresh. Until it appears, batches are
+// dropped and counted — visible blindness, the same contract as an unreachable
+// control plane. Rejecting that wiring at boot would kill the sidecar outright
+// for a condition that heals in seconds.
+func checkBootTokenSource(flagToken string) error {
+	gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE"))
+	if _, err := tokenFromEnv(flagToken); err != nil && gtFile == "" {
+		return fmt.Errorf("missing host-sensor token: set -token / WARDYN_GROUNDTRUTH_TOKEN or WARDYN_GROUNDTRUTH_TOKEN_FILE (aud=wardyn-groundtruth): %w", err)
+	}
+	if gtFile != "" {
+		log.Printf("wardyn-tetragon-ingest: token source = file %s (rotatable)", gtFile)
+	}
 	return nil
 }
 
