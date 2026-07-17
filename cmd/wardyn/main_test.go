@@ -92,9 +92,17 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
 	}
-	// A reached server returning an API error must not get the hint.
+	// A reached server returning a non-auth API error must not get a hint.
 	if hint := dialHint(&sdk.APIError{Status: 500}); hint != "" {
-		t.Errorf("dialHint(APIError) = %q, want empty (server was reached)", hint)
+		t.Errorf("dialHint(APIError 500) = %q, want empty (server was reached)", hint)
+	}
+	// A 401 gets the token hint (compose stack boots with a token set, so a
+	// tokenless first contact reaches the daemon and is refused).
+	if hint := dialHint(&sdk.APIError{Status: 401, Body: `{"error":"missing bearer token"}`}); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
+		t.Errorf("dialHint(APIError 401) = %q, want the --token/WARDYN_ADMIN_TOKEN hint", hint)
+	}
+	if hint := dialHint(fmt.Errorf("list: %w", &sdk.APIError{Status: 401})); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
+		t.Errorf("dialHint(wrapped 401) = %q, want the token hint via errors.As", hint)
 	}
 	// Wrapped transport errors must still resolve through errors.As.
 	if hint := dialHint(fmt.Errorf("poll: %w", err)); !strings.Contains(hint, "is wardynd running?") {

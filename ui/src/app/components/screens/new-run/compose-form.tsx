@@ -9,6 +9,7 @@
 // calls api.compose() and hands the proposal back to the orchestrator for review.
 import * as React from "react";
 import { FileText, Loader2, Sparkles, Upload, X } from "lucide-react";
+import { RUN_MODE } from "../../wardyn/copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Switch } from "../../ui/switch";
@@ -205,12 +206,12 @@ export function ComposeForm({
 
       <Field
         label="Run mode"
-        hint="Interactive comes up idle so you attach and drive it over a terminal; Background runs the task unattended and stops when done. You can still change this on the proposal."
+        hint="Interactive comes up idle so you attach and drive it over a terminal; Autonomous runs the task unattended and stops when done. You can still change this on the proposal."
       >
         <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Run mode">
           {[
-            { v: true, label: "Interactive", desc: "You drive via attach" },
-            { v: false, label: "Background", desc: "Runs the task unattended" },
+            { v: true, label: RUN_MODE.interactive.label, desc: RUN_MODE.interactive.blurb },
+            { v: false, label: RUN_MODE.autonomous.label, desc: RUN_MODE.autonomous.blurb },
           ].map((opt) => {
             const active = interactive === opt.v;
             return (
