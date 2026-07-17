@@ -218,15 +218,32 @@ jobs:
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
 
-  # ── real-daemon envbuild integration (U064) — HELD BACK ───────────────────
-  # The `make test-envbuild-integration` target (Makefile) is ready, but the
-  # required job is NOT wired here yet: TestBuild_SmokeDockerd sets
-  # b.BuildNetwork = "bridge" (internal/envbuild/integration_test.go:64), and
-  # effectiveBuildNetwork() (builder.go) gives that field precedence over the
-  # target's WARDYN_ENVBUILD_BUILD_NETWORK=host. In a bridge netns the build
-  # container cannot reach the test's host-loopback git daemon (git://127.0.0.1),
-  # so the job would fail on every run. Re-add the `envbuild-integration` job
-  # here once that line becomes "host" (or is deleted so the env var wins).
+  # ── real-daemon envbuild integration (U064) ───────────────────────────────
+  # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
+  # a live daemon (validates the pushedBaseRef assumption in builder.go). The
+  # target provisions its own throwaway registry + runner-tools dir. The build
+  # container reaches the test's host-loopback git daemon + published registry
+  # only via HOST networking, and only because ubuntu-latest runs a host-native
+  # dockerd that shares the host network namespace. The test already defaults to
+  # "host"; the env below is set explicitly to document the requirement. This job
+  # requires a host-native dockerd — it cannot pass against a VM-based daemon like
+  # Docker Desktop, where the container cannot reach the host loopback in any mode.
+  envbuild-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.5'
+      - name: Docker smoke check
+        run: docker run --rm hello-world
+      - name: Run envbuild integration test (docker)
+        env:
+          WARDYN_ENVBUILD_TEST_NETWORK: host
+        run: make test-envbuild-integration
+        # No continue-on-error: a real regression in the push/finalize/pull
+        # cycle must block the build.
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +

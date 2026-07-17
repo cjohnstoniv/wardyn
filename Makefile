@@ -211,10 +211,14 @@ test-conformance-stub:
 # automatically. Bounded to internal/envbuild (single test, 15m cap).
 #
 # Networking: the build container must reach the loopback git daemon + registry
-# the test stands up, which needs host networking (WARDYN_ENVBUILD_BUILD_NETWORK
-# =host — honoured on ubuntu-latest's host-native dockerd). The tools are staged
-# from the same in-repo sources the agent images ship (cmd/* + deploy/images/*),
-# so the finalize COPY has real binaries to layer, not stubs.
+# the test stands up on 127.0.0.1. That only works under HOST networking, and
+# only when the daemon shares the host network namespace — a host-native dockerd
+# (ubuntu-latest CI, or a native local dockerd). The test defaults to "host"
+# (override with WARDYN_ENVBUILD_TEST_NETWORK). This target CANNOT pass against a
+# VM-based daemon like Docker Desktop: the build container cannot reach the
+# WSL/host loopback in any network mode. The tools are staged from the same
+# in-repo sources the agent images ship (cmd/* + deploy/images/*), so the
+# finalize COPY has real binaries to layer, not stubs.
 test-envbuild-integration:
 	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
 	@set -eu; \
@@ -232,7 +236,6 @@ test-envbuild-integration:
 	WARDYN_TEST_DOCKER=1 \
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
-	WARDYN_ENVBUILD_BUILD_NETWORK=host \
 	go test -tags docker -run TestBuild_SmokeDockerd -timeout 15m -v ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
