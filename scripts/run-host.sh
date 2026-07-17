@@ -16,12 +16,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# Select the tier-capable docker daemon the same way up.sh/e2e-backend.sh/run-local.sh
-# do: on a dual-daemon box an unset DOCKER_HOST otherwise lands wardynd on the default
-# Docker Desktop socket, silently downgrading confinement to Fence/Wall-only.
+# U023: pick the same daemon setup.sh/up.sh/ci-run.sh prefer — a dedicated
+# tier-capable native dockerd (can register runsc/kata) over Docker Desktop's
+# managed engine (resets custom runtimes on restart, so it's Fence-only).
+# Without this, host mode silently launched sandboxes against whatever socket
+# the plain `docker` CLI default resolved to, regardless of which daemon
+# actually has the higher confinement tiers registered.
 . "$ROOT/scripts/lib/common.sh"
 wardyn_pick_docker_host
-echo "wardynd (host mode): docker daemon = ${DOCKER_HOST:-<default socket>}"
+_runtimes="$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')"
+_classes="CC1 (runc, always)"
+case "${_runtimes}" in *'"runsc"'*) _classes="${_classes}, CC2 (gVisor/runsc)" ;; esac
+case "${_runtimes}" in *'"kata'*)   _classes="${_classes}, CC3 (kata)" ;; esac
+echo "wardynd (host mode): docker daemon=${DOCKER_HOST:-unix:///var/run/docker.sock} — confinement classes available: ${_classes}"
 
 # Pull the pinned age key from the gitignored compose env (so persisted secrets decrypt).
 if [ -z "${WARDYN_AGE_KEY:-}" ] && [ -f deploy/compose/.env ]; then

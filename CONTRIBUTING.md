@@ -61,7 +61,7 @@ All contributions to Wardyn are made under the Apache License 2.0. By contributi
 
 All contributors and subagents MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
 
-1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args.
+1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args, with two named, bounded exceptions: a resident `ssh_key` grant (wiped after clone) and Bedrock access-key mode's `aws-*` env vars (SigV4 signing can't be proxy-injected) — see ARCHITECTURE.md invariant 1.
 2. **Approval mints the credential** — Credential scope is verified atomically in the same transaction.
 3. **L0 structural egress** — Sandbox has no default route; only path out is wardyn-proxy.
 4. **Per-run identity with full attribution** — Every token carries `sub`, `act`, and `sponsor`.
@@ -130,7 +130,7 @@ tests with coverage, build, and a Playwright e2e suite) — a PR that touches
 `ui/` must pass all of them. Locally:
 
 ```bash
-cd ui && pnpm install     # Node 22 + pnpm 9 (package.json pins packageManager)
+cd ui && pnpm install --frozen-lockfile     # Node 22 + pnpm 9 (package.json pins packageManager)
 make ui-typecheck         # tsc --noEmit
 make ui-test              # vitest with coverage
 make ui                   # production build (vite)

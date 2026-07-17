@@ -79,8 +79,8 @@ export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
 AGENT_IMAGE="wardyn/agent-${AGENT}:local"
 if [[ "${WARDYN_CI_SKIP_BUILD:-}" != "1" ]]; then
   log "Building wardynd + wardyn-proxy images"
-  "${COMPOSE[@]}" build wardynd || die "build wardynd"
-  "${COMPOSE[@]}" --profile build-only build proxy-image || die "build proxy image"
+  "${COMPOSE[@]}" build wardynd || die "build wardynd (check disk space/network; retry, or set WARDYN_CI_SKIP_BUILD=1 to reuse existing local images)"
+  "${COMPOSE[@]}" --profile build-only build proxy-image || die "build proxy image (check disk space/network; retry, or set WARDYN_CI_SKIP_BUILD=1 to reuse existing local images)"
   # The agent image is needed even for pure BYOA runs: it is the source of the
   # runner tools the BYOI wrap COPYs into the user image.
   agent_dockerfile="${REPO_ROOT}/deploy/images/${AGENT}/Dockerfile"
@@ -126,7 +126,7 @@ trap cleanup EXIT
 "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
 
 log "Starting postgres + wardynd (WARDYN_ENVBUILD on for the BYOA wrap)"
-"${COMPOSE[@]}" up -d postgres wardynd || die "compose up"
+"${COMPOSE[@]}" up -d postgres wardynd || die "compose up (check 'docker compose -f ${COMPOSE_FILE} logs postgres wardynd' and that ports 8080/5432 are free)"
 log "Waiting for wardynd at ${BASE_URL}"
 wait_healthy "${BASE_URL}" 90 2 || { "${COMPOSE[@]}" logs --tail 50 wardynd; die "wardynd did not become healthy"; }
 
@@ -137,7 +137,7 @@ if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
     name="${pair%%=*}"; value="${pair#*=}"
     [[ -n "${name}" && "${pair}" == *"="* ]] || die "WARDYN_CI_SECRETS entry '${pair}' is not name=value"
     log "Seeding secret ${name}"
-    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name}"
+    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name} (check wardynd is healthy at ${BASE_URL} and WARDYN_ADMIN_TOKEN is correct)"
   done
 fi
 
@@ -166,22 +166,27 @@ fi
 mkdir -p "${OUT_DIR}"
 "${COMPOSE[@]}" cp "${POLICY_FILE}" wardynd:/tmp/wardyn-ci-policy.json >/dev/null || die "copy policy into wardynd"
 
-run_args=(run --agent "${AGENT}" --task "${TASK}" --policy-file /tmp/wardyn-ci-policy.json --wait --timeout "${TIMEOUT}")
+run_args=(run --agent "${AGENT}" --task "${TASK}" --policy-file /tmp/wardyn-ci-policy.json --wait --timeout "${TIMEOUT}" --json)
 [[ -n "${CI_REPO}" ]] && run_args+=(--repo "${CI_REPO}")
 [[ -n "${IMAGE}" ]] && run_args+=(--image "${IMAGE}")
 [[ -n "${TASK_MODE}" ]] && run_args+=(--task-mode "${TASK_MODE}")
 
 log "Launching governed run: wardyn ${run_args[*]}"
+run_json="${OUT_DIR}/run.json"
 run_log="${OUT_DIR}/run.log"
-wardyn "${run_args[@]}" 2>&1 | tee "${run_log}"
-run_code=${PIPESTATUS[0]}
+wardyn "${run_args[@]}" >"${run_json}" 2>"${run_log}"
+run_code=$?
+cat "${run_log}" >&2
 
-run_id="$(sed -n 's/^created run \([0-9a-f-]*\).*/\1/p' "${run_log}" | head -1)"
+# --json's structured stdout survives a --wait run cleanly; the old scrape of a
+# "created run <id>..." text line broke the moment anything else printed first.
+# jq is the happy path; the sed fallback covers CI images without it.
+run_id="$(jq -r '.id' "${run_json}" 2>/dev/null || sed -n 's/.*"id"[^"]*"\([0-9a-f-]\{8,\}\)".*/\1/p' "${run_json}" | head -1)"
 
 # ── collect artifacts ────────────────────────────────────────────────────────
 if [[ -n "${run_id}" ]]; then
   log "Collecting artifacts for run ${run_id} -> ${OUT_DIR}"
-  wardyn runs get "${run_id}" --json >"${OUT_DIR}/run.json" 2>/dev/null || warn "runs get failed"
+  wardyn run get "${run_id}" --json >"${run_json}" 2>/dev/null || warn "run get failed"
   wardyn audit --run "${run_id}" --json >"${OUT_DIR}/audit.json" 2>/dev/null || warn "audit fetch failed"
 else
   warn "no run id parsed from output; skipping artifact collection"
