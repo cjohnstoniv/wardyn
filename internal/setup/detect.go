@@ -28,13 +28,16 @@ type CLIProvider struct {
 	LoginVia  string
 }
 
-// Platform is the wardynd host's OS, whether it is running under WSL, and
-// whether it exposes KVM virtualization (/dev/kvm) — the hardware fact that
-// separates "Vault is incompatible here" from "Vault just needs setup".
+// Platform is the wardynd host's OS, whether it is running under WSL, whether
+// it exposes KVM virtualization (/dev/kvm) — the hardware fact that separates
+// "Vault is incompatible here" from "Vault just needs setup" — and whether
+// wardynd itself is running containerized, which changes what a missing
+// /dev/kvm actually means (mount the device vs. no hardware at all).
 type Platform struct {
-	OS  string
-	WSL bool
-	KVM bool
+	OS            string
+	WSL           bool
+	KVM           bool
+	Containerized bool
 }
 
 // DetectCLIProviders reports the resident coding-agent CLIs (claude, codex):
@@ -103,10 +106,34 @@ func detectProvider(tool, home string, loginPaths []string) CLIProvider {
 	return p
 }
 
-// DetectPlatform reports the host OS (runtime.GOOS), whether it is WSL, and
-// whether /dev/kvm is exposed.
+// DetectPlatform reports the host OS (runtime.GOOS), whether it is WSL,
+// whether /dev/kvm is exposed, and whether wardynd is running containerized.
 func DetectPlatform() Platform {
-	return Platform{OS: runtime.GOOS, WSL: detectWSL(), KVM: detectKVM()}
+	return Platform{OS: runtime.GOOS, WSL: detectWSL(), KVM: detectKVM(), Containerized: detectContainerized()}
+}
+
+// VaultKVMDetail is the operator-facing explanation for the Vault (Kata) tier's
+// availability, given this host's KVM + containerization posture. It exists so
+// the missing-KVM copy never asserts a bare "hardware limit no install can fix"
+// when wardynd is merely containerized without /dev/kvm bind-mounted — the
+// compose topology this repo ships as its primary quick-start, where the real
+// fix is mounting the device, not new hardware.
+func VaultKVMDetail() string {
+	p := DetectPlatform()
+	return vaultKVMDetail(p.KVM, p.Containerized)
+}
+
+// vaultKVMDetail is the pure (KVM, containerized) -> copy mapping behind
+// VaultKVMDetail, split out so both branches are testable without a real
+// /dev/kvm or container.
+func vaultKVMDetail(kvm, containerized bool) string {
+	if kvm {
+		return "no Vault (Kata microVM) runtime registered on this host yet — fixable, run `wardyn setup vault`. See Getting Started."
+	}
+	if containerized {
+		return "Vault needs KVM virtualization and this containerized wardynd can't see /dev/kvm — bind-mount /dev/kvm into the wardynd service (compose), then Re-check. If the host itself has no KVM this stays unavailable. See Getting Started."
+	}
+	return "Vault needs KVM virtualization and this host doesn't expose /dev/kvm — on bare metal/host mode this is usually a hardware/hypervisor limit; if wardynd is containerized, bind-mount /dev/kvm into it. See Getting Started."
 }
 
 // detectWSL reports whether this host is WSL: linux AND /proc/version names
@@ -129,6 +156,38 @@ func detectWSL() bool {
 func detectKVM() bool {
 	_, err := os.Stat("/dev/kvm")
 	return err == nil
+}
+
+// detectContainerized reports whether wardynd is running inside a container.
+// It checks the runtime-dropped marker files (Docker's /.dockerenv, Podman's
+// /run/.containerenv) and, failing those, the cgroup-1 engine hint in
+// /proc/1/cgroup.
+//
+// ponytail: heuristic, not authoritative — on cgroup v2 the init cgroup path is
+// a bare "0::/" with no engine token, so a container that drops neither marker
+// file reads false. The marker-file check covers Docker and Podman (the shipped
+// paths); tighten to a namespace/mountinfo probe only if a runtime slips past.
+func detectContainerized() bool {
+	for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		return containerizedCgroup(string(b))
+	}
+	return false
+}
+
+// containerizedCgroup is the pure /proc/1/cgroup -> containerized predicate
+// (kept separate so it is testable without a real /proc).
+func containerizedCgroup(cgroup string) bool {
+	for _, token := range []string{"docker", "containerd", "kubepods", "libpod"} {
+		if strings.Contains(cgroup, token) {
+			return true
+		}
+	}
+	return false
 }
 
 // isWSLProcVersion is the pure /proc/version -> WSL predicate (kept separate so

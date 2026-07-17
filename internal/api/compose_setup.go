@@ -555,11 +555,10 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 	it.Fix = &SetupFix{Action: "none"}
 	switch final {
 	case types.CC3:
-		if setup.DetectPlatform().KVM {
-			it.Detail = "no Vault (Kata microVM) runtime registered on this host yet — fixable, run `wardyn setup vault`. See Getting Started."
-		} else {
-			it.Detail = "Vault needs KVM virtualization and this host doesn't expose /dev/kvm — a hardware/VM limit no install can fix. See Getting Started."
-		}
+		// Single-source the KVM copy: VaultKVMDetail names the real fix
+		// (bind-mount /dev/kvm) for a containerized wardynd instead of
+		// asserting a bare "hardware limit no install can fix" (U085).
+		it.Detail = setup.VaultKVMDetail()
 	case types.CC2:
 		it.Detail = "no Wall (gVisor) runtime registered on this host yet — fixable, run `wardyn setup wall`. See Getting Started."
 	default:

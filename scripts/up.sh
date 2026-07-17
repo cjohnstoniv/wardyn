@@ -493,12 +493,17 @@ cmd_reset_all() {
   # removes. A project-label filter is NOT safe here: the label is just the
   # directory name ("compose"), which this repo's pre-rename eras (warden-*/
   # writ-*) share, and reset-all must never claim volumes that aren't its own.
-  _ra_volnames=$(compose ${_ra_profiles} config 2>/dev/null | awk -v proj="${_ra_proj}" '
-    /^volumes:/ { inv=1; next }
-    inv && /^[^ ]/ { inv=0 }
-    inv && /^  [A-Za-z0-9_.-]+:/ { cur=$0; sub(/:.*/,"",cur); sub(/^  /,"",cur); names[cur]=proj"_"cur; next }
-    inv && cur != "" && /^    name:/ { v=$0; sub(/^    name: */,"",v); gsub(/"/,"",v); names[cur]=v }
-    END { for (c in names) printf "%s ", names[c] }')
+  # `docker compose config --format json` already RESOLVES each volume's real
+  # docker name (explicit `name:` when set, else <project>_<logical>, and the
+  # bare external name for `external: true`), so read that structured output
+  # instead of hand-parsing the YAML render — the old awk scan assumed a fixed
+  # 2-space block style and silently mis-derived names for any flow-style or
+  # external-volume shape. jq is the shared JSON tool across scripts/ (ci-run.sh,
+  # run-e2e-byoi.sh); if jq or `config` is unavailable the preview lists no
+  # volumes, but the real `down -v` teardown below is unaffected.
+  _ra_volnames=$(compose ${_ra_profiles} config --format json 2>/dev/null \
+    | jq -r --arg proj "${_ra_proj}" '(.volumes // {}) | to_entries[] | .value.name // ($proj + "_" + .key)' 2>/dev/null \
+    | tr '\n' ' ')
   _ra_volumes=""
   for _ra_v in ${_ra_volnames}; do
     docker volume inspect "${_ra_v}" >/dev/null 2>&1 && _ra_volumes="${_ra_volumes}${_ra_v} "

@@ -17,7 +17,7 @@
 # Env:
 #   WARDYN_E2E_DSN    Postgres DSN          (default: dockerized wardyn-test-pg :55432/wardyn_e2e)
 #   WARDYN_E2E_TOKEN  admin bearer token    (default: wardyn-e2e-token)
-#   WARDYN_E2E_ADDR   listen address        (default: :8080)
+#   WARDYN_E2E_ADDR   listen address        (default: :8088)
 #   WARDYN_E2E_PG_CONTAINER  psql container (default: wardyn-test-pg) — used for SQL state seeding
 set -euo pipefail
 
@@ -42,8 +42,11 @@ ADDR="${WARDYN_E2E_ADDR:-:8088}"
 AGE_KEY="${WARDYN_E2E_AGE_KEY:-}"
 PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
-BASE_URL="http://localhost${ADDR#*:}"
-[[ "${ADDR}" == :* ]] && BASE_URL="http://localhost${ADDR}"
+# Derive the URL port by splitting on the LAST colon, so every documented ADDR
+# shape yields a valid URL: ':8088' -> 8088, '0.0.0.0:9000' -> 9000, 'host:80'
+# -> 80. (The old ${ADDR#*:} stripped through the FIRST colon and never inserted
+# the ':' separator for non-':PORT' shapes, e.g. 'http://localhost9000'.)
+BASE_URL="http://localhost:${ADDR##*:}"
 BIN_DIR="${REPO_ROOT}/.e2e-bin"
 # PID/log keyed by listen port so multiple isolated instances (the per-screen e2e
 # fanout: own port + own DB each) never kill or clobber each other.

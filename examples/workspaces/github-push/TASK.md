@@ -66,9 +66,18 @@ the correct fail-closed behavior documented in TRY-IT.md.
 
 ### Real GitHub App path
 
+demo.json's github_token grant is READ-ONLY (`permissions: {contents: read}`) —
+it deliberately ships least-privilege to prove the fail-closed path above. A
+real branch push + PR needs a WRITE-scoped grant, so even with a GitHub App
+configured the mint from demo.json yields a read-only token and the push/PR
+still fail. To exercise the full push+PR outcome, run with a policy whose
+github_token grant requests `contents: write` + `pull_requests: write` —
+`examples/policies/composer-dev.json` ships exactly that shape.
+
 Configure the App as described in TRY-IT.md (wardyn secret set github-app-id,
-wardyn secret set github-app-key), restart wardynd, then approve.  The mint
-succeeds, the push lands in the wardyn/demo-push branch, and the PR is opened.
+wardyn secret set github-app-key), restart wardynd, run with the write-scoped
+policy, then approve.  The mint succeeds, the push lands in the wardyn/demo-push
+branch, and the PR is opened.
 
 ## PASS criteria
 
@@ -79,7 +88,9 @@ Stock demo (no GitHub App configured):
 4. The agent reports a push error (authentication failed or similar).
 5. No GitHub token appears in docker exec env output (verify: docker exec <sandbox> env | grep -i token is empty).
 
-With GitHub App configured:
+With GitHub App configured AND a write-scoped policy (contents:write +
+pull_requests:write, e.g. examples/policies/composer-dev.json — NOT read-only
+demo.json):
 1-2. Same as above.
 3. Audit contains credential.mint success with a short-lived JTI.
 4. Branch wardyn/demo-push appears in the repository.

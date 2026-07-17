@@ -112,7 +112,7 @@ export function EnvironmentStep({
   const kvm =
     status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
   const vaultIncompatibleReason = kvmProbed
-    ? "Vault needs KVM virtualization and this host doesn't expose /dev/kvm — a hardware/VM limit no install can fix. (On WSL2, enable nested virtualization; on a laptop/desktop, enable virtualization in firmware; a containerized wardynd needs /dev/kvm mapped in.)"
+    ? "Vault needs KVM virtualization and this host doesn't expose /dev/kvm. If wardynd is containerized (the compose quick-start), bind-mount /dev/kvm into it and Re-check; on WSL2 enable nested virtualization; on a laptop/desktop enable virtualization in firmware. Only a genuinely KVM-less host stays incompatible."
     : "Vault likely can't run here — WSL/macOS hosts usually can't register a Kata runtime, and this daemon predates the /dev/kvm probe that would say for sure. Upgrade wardynd for a definitive answer.";
 
   const tierState = (cc: ConfinementClass): TierState => {

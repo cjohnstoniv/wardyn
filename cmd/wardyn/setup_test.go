@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/setup"
 )
 
 func TestParseOSFamily(t *testing.T) {
@@ -196,5 +198,22 @@ func TestDockerDesktopNeverExecutes(t *testing.T) {
 		if p := planWall(e); p.action != actUnsupported {
 			t.Errorf("docker desktop wall action=%d, must be actUnsupported so it never restarts the engine", p.action)
 		}
+	}
+}
+
+// U111 pin: detectDocker must source its WSL/KVM facts from the shared
+// internal/setup.DetectPlatform() leaf detector, not a private reimplementation.
+// A consistency check is the honest counterfactual — if the CLI drifts back to
+// its own os.Stat("/dev/kvm") / /proc/version scan, any divergence from the
+// shared detector (which hardens the WSL check with a GOOS guard, etc.) fails
+// here.
+func TestDetectDockerUsesSharedPlatformDetector(t *testing.T) {
+	e := detectDocker()
+	p := setup.DetectPlatform()
+	if e.wsl != p.WSL {
+		t.Errorf("detectDocker().wsl=%v diverged from setup.DetectPlatform().WSL=%v — reuse the shared detector", e.wsl, p.WSL)
+	}
+	if e.kvm != p.KVM {
+		t.Errorf("detectDocker().kvm=%v diverged from setup.DetectPlatform().KVM=%v — reuse the shared detector", e.kvm, p.KVM)
 	}
 }
