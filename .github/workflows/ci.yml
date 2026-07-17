@@ -45,7 +45,10 @@ jobs:
         run: make cover-check
       # The concurrent kill/dispatch FSM tests (kill_dispatch_race_test.go) are
       # only meaningful under the race detector; the rest of the tree rides along.
-      - name: Test (race detector)
+      # `make test-race` runs the sweep under BOTH tag sets — the second pass
+      # (-tags docker) is the only race coverage the concurrency-heavy sandbox
+      # lifecycle (runner/docker, envbuild) gets; it needs no daemon.
+      - name: Test (race detector, both tag sets)
         run: make test-race
       # Covers every Go suite this job produced: unit/, docker/ (the -tags docker
       # suite, via cover-check) and union/ (the coverage floor's merged profile).
@@ -182,39 +185,26 @@ jobs:
       - name: docker compose config (validate)
         run: make compose-config
 
+  # Docker conformance against the live daemon (WARDYN_TEST_DOCKER=1). The
+  # driver-agnostic honesty stub (`make test-conformance-stub` → the untagged
+  # test/conformance/none_test.go) is NOT a separate leg here: that file carries
+  # no build tag, so the build job's `make cover-check` already runs it under
+  # both tag sets and `make test-race` runs it again — a third CI run would be a
+  # pure duplicate. The stub target stays in the Makefile for local use.
   conformance:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [docker, conformance-stub]
-      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
-
-      # ── docker conformance ──────────────────────────────────────────────────
-      - name: Docker smoke check (for docker target)
-        if: matrix.target == 'docker'
+      - name: Docker smoke check
         run: docker run --rm hello-world
-
       - name: Run conformance tests (docker)
-        if: matrix.target == 'docker'
         env:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
-
-      # ── driver-agnostic conformance stub ────────────────────────────────────
-      # There is no Kubernetes runner driver yet (v0.5 — planned). The `none`
-      # honesty stub validates the driver-agnostic contract (honest-empty
-      # capabilities; a driver must never silently downgrade confinement) and
-      # always runs without any cluster dependency.
-      - name: Run conformance tests (stub)
-        if: matrix.target == 'conformance-stub'
-        run: make test-conformance-stub
-        # No continue-on-error: the stub contract tests must always pass.
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
