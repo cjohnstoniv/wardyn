@@ -67,6 +67,32 @@ disclose them — but a *more severe than documented* instance is in scope):
   model that are not yet merged — report *design* concerns via a normal issue,
   not this process.
 
+## Known latent vulnerabilities
+
+We publish known-uncalled findings here rather than let them sit silently in a
+scanner's ignore-list.
+
+- **GO-2026-5932** — `golang.org/x/crypto/openpgp` is flagged unmaintained and
+  unsafe by design, with **no fix available** (`Fixed in: N/A`). It reaches our
+  build only transitively: `filippo.io/age` (used for our secret-encryption
+  primitives) imports `golang.org/x/crypto/chacha20poly1305`, `hkdf`,
+  `curve25519`, and `scrypt` — sibling packages in the same `golang.org/x/crypto`
+  module — which pulls in the *module* as a build dependency. No Wardyn code
+  path, and no dependency Wardyn actually calls, imports the `openpgp`
+  subpackage itself (`go mod why golang.org/x/crypto/openpgp` confirms: "main
+  module does not need package golang.org/x/crypto/openpgp"). `govulncheck`'s
+  symbol-level analysis agrees: "Your code is affected by 0 vulnerabilities" —
+  GO-2026-5932 shows up only in the module-level "modules you require" tally,
+  not the call-graph-verified findings.
+  We accept this as a latent, unreachable finding rather than vendoring or
+  forking `x/crypto` to drop the subpackage: there is no upstream fix to take,
+  and the flagged code is dead weight in our binary, never on an execution
+  path. `govulncheck` runs in CI on every push (`.github/workflows/ci.yml`,
+  job `govulncheck`, both the default and `-tags docker` builds) specifically
+  so that if a future dependency bump ever puts `openpgp` on a *called* path,
+  the symbol-level scan flips from "0 vulnerabilities" to a real finding and
+  CI goes red — this entry is not a standing exemption from that check.
+
 ## Coordinated disclosure
 
 - We aim to **acknowledge** a report within **3 business days** and to provide an

@@ -25,7 +25,7 @@
 #   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local .
 
 # ── Stage 1: Go builder (wardyn-rec + wardyn-scan) ────────────────────────────
-FROM golang:1.26 AS builder
+FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -34,7 +34,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-scan ./cmd/wardyn-scan
 
 # ── Stage 2: oracle runtime ───────────────────────────────────────────────────
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 
 # curl + ca-certificates: the egress-boundary oracle probes the proxy.
 # python3: several task solutions rewrite files via a python heredoc.

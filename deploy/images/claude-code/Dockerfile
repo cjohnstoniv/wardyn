@@ -22,7 +22,7 @@
 #     CONNECT tunnel with resident creds).
 
 # ── Stage 1: Go builder ───────────────────────────────────────────────────────
-FROM golang:1.26 AS builder
+FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
 
 WORKDIR /build
 
@@ -53,7 +53,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-verify ./cmd/wardyn-verify
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
 
 # asciinema (2.2.0-1 in bookworm) is available as an apt package.
 # License hygiene: asciinema is GPL; wardyn-rec only ever *execs* it as a

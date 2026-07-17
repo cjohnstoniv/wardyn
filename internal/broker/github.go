@@ -9,14 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	gh "github.com/google/go-github/v74/github"
+	gh "github.com/google/go-github/v88/github"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
@@ -89,13 +88,17 @@ func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("broker: build github apps transport: %w", err)
 	}
-	c := gh.NewClient(&http.Client{Transport: atr})
+	// go-github v88's NewClient takes functional options and is fallible; the
+	// base URL is now supplied at construction (WithURLs), not by mutating an
+	// exported field after the fact. WithURLs normalizes a missing trailing
+	// slash itself, matching the test seam's srv.URL+"/".
+	opts := []gh.ClientOptionsFunc{gh.WithHTTPClient(&http.Client{Transport: atr})}
 	if m.baseURL != "" {
-		u, perr := url.Parse(m.baseURL)
-		if perr != nil {
-			return nil, fmt.Errorf("broker: parse github base url: %w", perr)
-		}
-		c.BaseURL = u
+		opts = append(opts, gh.WithURLs(&m.baseURL, nil))
+	}
+	c, err := gh.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("broker: build github client: %w", err)
 	}
 	m.appClient = c
 	return c, nil
@@ -157,7 +160,7 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 	}
 	m.mu.Unlock()
 
-	inst, _, err := client.Apps.FindRepositoryInstallation(ctx, owner, repo)
+	inst, _, err := client.Apps.GetRepositoryInstallation(ctx, owner, repo)
 	if err != nil {
 		return 0, fmt.Errorf("broker: find installation for %s/%s: %w", owner, repo, err)
 	}
