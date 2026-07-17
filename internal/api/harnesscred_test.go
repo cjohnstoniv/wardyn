@@ -226,6 +226,227 @@ func TestHarnessCredentialPaste_NilMaskRegistry(t *testing.T) {
 	}
 }
 
+// ── HTTP-router-level tests (through the real mux + humanOrAdminAuth) ─────────
+
+// harnessCredSrv builds a Server with the harness login/credential routes MOUNTED
+// (they mount only when cfg.Secrets != nil) over the given secret store, reusing
+// the harness's embedded identity + audit recorder so audit assertions work.
+func harnessCredSrv(t *testing.T, sec secretstore.Store) (*harness, *Server) {
+	t.Helper()
+	h := newHarness(t)
+	cfg := h.srv.cfg
+	cfg.Secrets = sec
+	srv := New(cfg)
+	h.srv = srv
+	return h, srv
+}
+
+func auditHas(events []types.AuditEvent, action string) bool {
+	for _, e := range events {
+		if e.Action == action {
+			return true
+		}
+	}
+	return false
+}
+
+// failSecrets wraps memSecrets to force Put/Delete failures so the paste/disconnect
+// handlers' store-error → 500 mapping is exercisable through the router.
+type failSecrets struct {
+	*memSecrets
+	putErr, delErr error
+}
+
+func (s failSecrets) Put(ctx context.Context, n string, v []byte) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	return s.memSecrets.Put(ctx, n, v)
+}
+func (s failSecrets) Delete(ctx context.Context, n string) error {
+	if s.delErr != nil {
+		return s.delErr
+	}
+	return s.memSecrets.Delete(ctx, n)
+}
+
+// TestHarnessRoutes_AuthRequired: every harness setup route sits in the
+// humanOrAdminAuth group — an unauthenticated or wrong-token request must 401
+// before any handler logic runs (capability disclosure / shared-credential
+// mutation must never be anonymous).
+func TestHarnessRoutes_AuthRequired(t *testing.T) {
+	_, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}})
+	routes := []struct {
+		method, path string
+	}{
+		{http.MethodPost, "/api/v1/setup/harness-login"},
+		{http.MethodPut, "/api/v1/setup/harness-credential/anthropic"},
+		{http.MethodDelete, "/api/v1/setup/harness-credential/anthropic"},
+	}
+	for _, rt := range routes {
+		if w := do(t, srv, rt.method, rt.path, "", `{}`); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s no token: code = %d, want 401", rt.method, rt.path, w.Code)
+		}
+		if w := do(t, srv, rt.method, rt.path, "wrong-token", `{}`); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s wrong token: code = %d, want 401", rt.method, rt.path, w.Code)
+		}
+	}
+}
+
+// TestHarnessRoutes_MethodDiscipline: the registered paths reject unregistered
+// verbs with 405 (chi's method-not-allowed), never silently accepting them.
+func TestHarnessRoutes_MethodDiscipline(t *testing.T) {
+	_, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}})
+	cases := []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/api/v1/setup/harness-login"},                 // only POST
+		{http.MethodPut, "/api/v1/setup/harness-login"},                 // only POST
+		{http.MethodGet, "/api/v1/setup/harness-credential/anthropic"},  // only PUT/DELETE
+		{http.MethodPost, "/api/v1/setup/harness-credential/anthropic"}, // only PUT/DELETE
+	}
+	for _, c := range cases {
+		if w := do(t, srv, c.method, c.path, adminToken, `{}`); w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s: code = %d, want 405", c.method, c.path, w.Code)
+		}
+	}
+}
+
+// TestHandleHarnessLogin_ErrorMapping covers the router-reachable error paths of
+// the login launcher short of a full sandbox dispatch (which needs a runner +
+// run store; the launch machinery itself is covered by the dispatch/interactive
+// tests). Bad body → 400, unsupported provider → 400, launch failure → 500.
+func TestHandleHarnessLogin_ErrorMapping(t *testing.T) {
+	_, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}})
+	const path = "/api/v1/setup/harness-login"
+
+	// Malformed JSON body → 400.
+	if w := do(t, srv, http.MethodPost, path, adminToken, `{`); w.Code != http.StatusBadRequest {
+		t.Errorf("bad body: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	// A provider with no container-login convention → 400.
+	if w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"openai"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("unknown provider: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	// Valid provider (default anthropic) but no runner configured → the launch
+	// fails and maps to 500 (harness has no Runner).
+	if w := do(t, srv, http.MethodPost, path, adminToken, `{}`); w.Code != http.StatusInternalServerError {
+		t.Errorf("no-runner launch: code = %d, want 500; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleHarnessCredentialPaste_HappyPath: a well-formed setup-token is stored
+// under the RESERVED name, the response reports captured:true, and a
+// harness.credential.captured audit event is written.
+func TestHandleHarnessCredentialPaste_HappyPath(t *testing.T) {
+	const token = "sk-ant-oat01-happy-path-stored-token"
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := harnessCredSrv(t, sec)
+
+	w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+		`{"token":"`+token+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("paste: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if resp["captured"] != true || resp["provider"] != "anthropic" {
+		t.Errorf("resp = %v, want captured:true provider:anthropic", resp)
+	}
+	raw, ok := sec.m[harnessCredSecretName("anthropic")]
+	if !ok {
+		t.Fatal("token blob was not stored under the reserved harness name")
+	}
+	var blob managedCredBlob
+	if err := json.Unmarshal(raw, &blob); err != nil {
+		t.Fatalf("stored blob is not a managedCredBlob: %v", err)
+	}
+	if blob.Token != token {
+		t.Errorf("stored token = %q, want %q", blob.Token, token)
+	}
+	if !auditHas(h.audit.events, "harness.credential.captured") {
+		t.Error("no harness.credential.captured audit event")
+	}
+}
+
+// TestHandleHarnessCredentialPaste_Errors covers the handler's 4xx/5xx mapping:
+// unknown provider, malformed body, wrong token prefix, and a store Put failure.
+func TestHandleHarnessCredentialPaste_Errors(t *testing.T) {
+	// Unknown provider → 400 (checked before the body is read).
+	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
+		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/openai", adminToken,
+			`{"token":"sk-ant-oat01-x"}`); w.Code != http.StatusBadRequest {
+			t.Errorf("unknown provider: code = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+	}
+	// Malformed JSON → 400.
+	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
+		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken, `{`); w.Code != http.StatusBadRequest {
+			t.Errorf("bad body: code = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+	}
+	// A token that fails the format guard (wrong prefix) → 400, and nothing stored.
+	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
+		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+			`{"token":"not-a-setup-token"}`); w.Code != http.StatusBadRequest {
+			t.Errorf("bad prefix: code = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+	}
+	// A store Put failure maps to 500 (not swallowed as success).
+	fail := failSecrets{memSecrets: &memSecrets{m: map[string][]byte{}}, putErr: errors.New("age: no identity matched key")}
+	if _, srv := harnessCredSrv(t, fail); true {
+		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+			`{"token":"sk-ant-oat01-store-will-fail"}`); w.Code != http.StatusInternalServerError {
+			t.Errorf("store Put failure: code = %d, want 500; body=%s", w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestHandleHarnessDisconnect_HappyPath: DELETE removes the stored blob, reports
+// captured:false, and writes a harness.credential.disconnected audit event.
+func TestHandleHarnessDisconnect_HappyPath(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{
+		harnessCredSecretName("anthropic"): []byte(`{"token":"sk-ant-oat01-existing"}`),
+	}}
+	h, srv := harnessCredSrv(t, sec)
+
+	w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/anthropic", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("disconnect: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if resp["captured"] != false || resp["provider"] != "anthropic" {
+		t.Errorf("resp = %v, want captured:false provider:anthropic", resp)
+	}
+	if _, ok := sec.m[harnessCredSecretName("anthropic")]; ok {
+		t.Error("stored blob was not deleted")
+	}
+	if !auditHas(h.audit.events, "harness.credential.disconnected") {
+		t.Error("no harness.credential.disconnected audit event")
+	}
+}
+
+// TestHandleHarnessDisconnect_Errors: unknown provider → 400, store Delete
+// failure → 500.
+func TestHandleHarnessDisconnect_Errors(t *testing.T) {
+	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
+		if w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/openai", adminToken, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("unknown provider: code = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+	}
+	fail := failSecrets{memSecrets: &memSecrets{m: map[string][]byte{}}, delErr: errors.New("pg: connection refused")}
+	if _, srv := harnessCredSrv(t, fail); true {
+		if w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/anthropic", adminToken, ""); w.Code != http.StatusInternalServerError {
+			t.Errorf("store Delete failure: code = %d, want 500; body=%s", w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestAgentHarnessLogin(t *testing.T) {
 	hl, ok := agentHarnessLogin("claude-code")
 	if !ok {
