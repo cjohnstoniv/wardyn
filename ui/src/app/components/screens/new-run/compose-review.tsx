@@ -541,9 +541,21 @@ function ModeToggle({
             type="button"
             role="radio"
             aria-checked={active}
+            tabIndex={active ? 0 : -1}
             title={opt.blurb}
             disabled={disabled}
             onClick={() => onChange(opt.v)}
+            onKeyDown={(e) => {
+              // APG radiogroup: arrows move selection AND focus (roving
+              // tabindex); two options, so any arrow flips to the sibling.
+              if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(e.key)) {
+                e.preventDefault();
+                onChange(!opt.v);
+                const sib =
+                  e.currentTarget.nextElementSibling ?? e.currentTarget.previousElementSibling;
+                (sib as HTMLButtonElement | null)?.focus();
+              }
+            }}
             className={cn(
               "rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-50",
               active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",

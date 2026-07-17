@@ -182,6 +182,22 @@ describe("ComposeForm — file attach enforces the size cap", () => {
     expect(onInteractiveChange).toHaveBeenCalledWith(true);
   });
 
+  it("run-mode radiogroup follows the APG keyboard pattern (roving tabindex + arrows)", async () => {
+    const onInteractiveChange = vi.fn();
+    renderForm({ interactive: false, onInteractiveChange });
+    const autonomous = screen.getByRole("radio", { name: /Autonomous/ });
+    const interactiveBtn = screen.getByRole("radio", { name: /Interactive/ });
+    // Roving tabindex: only the checked option is in the tab order.
+    expect(autonomous).toHaveAttribute("tabindex", "0");
+    expect(interactiveBtn).toHaveAttribute("tabindex", "-1");
+    // Arrow from the checked option selects the sibling (either arrow works in
+    // a two-option group).
+    const user = userEvent.setup();
+    autonomous.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(onInteractiveChange).toHaveBeenCalledWith(true);
+  });
+
   it("offers the per-run Claude-subscription opt-in, OFF by default, and reports toggling", async () => {
     const onUseSubscriptionChange = vi.fn();
     renderForm({ onUseSubscriptionChange });

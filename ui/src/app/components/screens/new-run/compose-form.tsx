@@ -220,7 +220,21 @@ export function ComposeForm({
                 type="button"
                 role="radio"
                 aria-checked={active}
+                tabIndex={active ? 0 : -1}
                 onClick={() => onInteractiveChange(opt.v)}
+                onKeyDown={(e) => {
+                  // APG radiogroup: arrows move selection AND focus (roving
+                  // tabindex). Two options, so any arrow selects the other;
+                  // the sibling button is the only other child of the group.
+                  if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(e.key)) {
+                    e.preventDefault();
+                    onInteractiveChange(!opt.v);
+                    const sib =
+                      e.currentTarget.nextElementSibling ??
+                      e.currentTarget.previousElementSibling;
+                    (sib as HTMLButtonElement | null)?.focus();
+                  }
+                }}
                 className={cn(
                   "flex flex-col items-start gap-0.5 rounded-lg border p-2.5 text-left transition-colors",
                   active
