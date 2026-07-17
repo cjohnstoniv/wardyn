@@ -513,7 +513,8 @@ func TestAuditCmd_BuildsQuery(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
 
 	runID := uuid.New()
-	if err := execCmd(t, "audit", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+	// Positional run id, like the sibling commands (run get, approve, attach).
+	if err := execCmd(t, "audit", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("audit returned error: %v", err)
 	}
 	got := srv.last()
@@ -525,16 +526,30 @@ func TestAuditCmd_BuildsQuery(t *testing.T) {
 	}
 }
 
-// audit requires --run; without it the command fails before any request.
+// The deprecated --run flag still resolves the same run id for existing scripts.
+func TestAuditCmd_DeprecatedRunFlagStillWorks(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+
+	runID := uuid.New()
+	if err := execCmd(t, "audit", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("audit returned error: %v", err)
+	}
+	if got := srv.last().query; got != "run_id="+runID.String() {
+		t.Errorf("query = %q, want run_id=%s", got, runID)
+	}
+}
+
+// audit needs a run id; without one (neither positional nor --run) it fails
+// before any request.
 func TestAuditCmd_RequiresRun(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
 
 	err := execCmd(t, "audit", "--url", srv.URL, "--token", "tok")
 	if err == nil {
-		t.Fatal("expected error when --run missing, got nil")
+		t.Fatal("expected error when run id missing, got nil")
 	}
-	if !strings.Contains(err.Error(), "--run is required") {
-		t.Errorf("error = %q, want --run is required", err)
+	if !strings.Contains(err.Error(), "run id is required") {
+		t.Errorf("error = %q, want run id is required", err)
 	}
 	srv.mu.Lock()
 	n := len(srv.reqs)

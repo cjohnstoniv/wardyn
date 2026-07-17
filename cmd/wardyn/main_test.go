@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -74,5 +75,24 @@ func TestExitCodeFor_ExitErrorWins(t *testing.T) {
 func TestExitCodeFor_UnknownIs1(t *testing.T) {
 	if got := exitCodeFor(errors.New("something else entirely")); got != 1 {
 		t.Errorf("exitCodeFor(plain error) = %d, want 1", got)
+	}
+}
+
+// The CLI owns the "wardyn:" prefix (main() prints `wardyn: <err>`); the SDK
+// must not also prefix its errors, or the composed line doubles up
+// ("wardyn: wardyn: ..."). This pins the single-prefix contract at the seam
+// main() actually uses.
+func TestErrorLine_SinglePrefix(t *testing.T) {
+	for _, err := range []error{
+		&sdk.APIError{Status: 400, Body: `{"error":"bad request"}`},
+		fmt.Errorf("http: %w", errors.New("connection refused")),
+	} {
+		line := fmt.Sprintf("wardyn: %s", err) // exactly what main() prints
+		if strings.Contains(line, "wardyn: wardyn:") {
+			t.Errorf("doubled prefix in %q", line)
+		}
+		if strings.Count(line, "wardyn:") != 1 {
+			t.Errorf("want exactly one 'wardyn:' prefix, got %q", line)
+		}
 	}
 }
