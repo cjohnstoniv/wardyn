@@ -41,7 +41,7 @@ keys fail closed on decrypt error.
 
 | Layer | Before | After |
 |---|---|---|
-| Go coverage (total) | 47.7% | **60.3%** (enforced floor: `make cover-check COVER_MIN=58`, wired into CI) |
+| Go coverage (union of both shipped builds) | 47.7% | **66.1%** (enforced floor: `make cover-check COVER_MIN=65`, wired into CI) |
 | Go unit tests (passing) | 327 | **832** |
 | Go integration | sparse | store/db/secretstore/broker PG, new `test/apie2e` black-box pkg (27 + compose), runner/docker L0 (docker-gated), conformance none-runner |
 | UI vitest | 0 | **84** |
@@ -70,5 +70,5 @@ its grade.
 ## Verification
 
 `go build`/`go vet` (default + `-tags docker`), `go test ./...`, `make cover-check`
-(≥58%), `go-licenses check` (all permissive), UI `pnpm typecheck` + `pnpm test`,
+(≥65%, union of tagless + -tags docker), `go-licenses check` (all permissive), UI `pnpm typecheck` + `pnpm test`,
 and `scripts/run-ui-e2e.sh` (all Playwright specs incl. composer) — all green.

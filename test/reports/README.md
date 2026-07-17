@@ -34,7 +34,8 @@ Only `rollup.md` and this README are committed; everything else under
 make test-report                 # Go unit suite  -> test/reports/go/unit/
 WARDYN_TEST_PG=postgres://...  make test-report-pg
 WARDYN_TEST_DOCKER=1           make test-report-docker
-make cover-check                 # enforce the coverage floor (COVER_MIN, default 58)
+make cover-check                 # enforce the coverage floor (COVER_MIN, default 65) over the
+                                 # UNION of both shipped builds (tagless + -tags docker)
 make ui-test                     # vitest + coverage -> test/reports/ui/
 cd ui && pnpm e2e                # Playwright (seeded backend) -> test/reports/e2e/
 ```

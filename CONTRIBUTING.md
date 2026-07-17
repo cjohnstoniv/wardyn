@@ -73,7 +73,8 @@ All contributors and subagents MUST preserve the six security invariants documen
 Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5 — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). All pull requests must pass CI checks — these **block merge**:
 
 - `go build` and `go vet` — both plain and `-tags docker`
-- Go unit suites with a coverage floor: `make cover-check` (plain),
+- Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=65 over the
+  UNION of both shipped builds — tagless + `-tags docker`),
   `make test-report-docker` (fakeDocker), `make test-report-pg` (real Postgres)
 - Conformance tests: Docker + the driver-agnostic stub (both blocking in CI)
 - UI: `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
