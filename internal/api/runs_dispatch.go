@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -574,11 +575,13 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	applied, uerr := s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunRunning)
 	if uerr != nil || !applied {
 		// Killed/stopped mid-dispatch (or a store error). Free the orphaned
-		// sandbox and bail without resurrecting the run.
-		_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
+		// sandbox and bail without resurrecting the run. The note states only what
+		// was observed: whether the teardown actually happened is stopSandboxOrAudit's
+		// to report, never this event's to assert.
+		s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.dispatch")
 		data := map[string]any{
 			"sandbox_ref": sb.Ref,
-			"note":        "run left STARTING by a concurrent kill/stop during CreateSandbox; sandbox torn down, dispatch aborted",
+			"note":        "run left STARTING by a concurrent kill/stop during CreateSandbox; dispatch aborted",
 		}
 		if uerr != nil {
 			data["error"] = uerr.Error()
@@ -620,7 +623,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 	if run.Task != "" {
 		// BYOI: gate the task exec on a passing selftest (fail closed).
 		if byoi && !s.byoiSelftest(ctx, run, sb.Ref, true /* fail-closed */) {
-			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
+			s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.selftest")
 			s.failAndRevoke(ctx, run.ID, types.RunRunning)
 			return
 		}
@@ -629,7 +632,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error()})))
-			_ = s.cfg.Runner.StopSandbox(ctx, sb.Ref)
+			s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.exec")
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.
 			s.failAndRevoke(ctx, run.ID, types.RunRunning)
@@ -647,7 +650,7 @@ func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, run
 		// outcome. The watcher runs on a DETACHED context (NOT ctx — that is the
 		// request context, cancelled when the create-run handler returns, which
 		// would kill the watcher immediately). See startCompletionWatcher.
-		s.startCompletionWatcher(run.ID, sb.Ref)
+		s.startCompletionWatcher(run.ID, sb.Ref, execID)
 	}
 }
 
@@ -854,7 +857,12 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 //   - TEARDOWN ONLY ON WIN: StopSandbox is called only when the watcher won the
 //     RUNNING->terminal transition, so resources are freed exactly once and a
 //     run someone else killed is left alone.
-func (s *Server) startCompletionWatcher(runID uuid.UUID, ref string) {
+//   - NO SILENT ABANDONMENT: this is the run's only watcher, so a Wait error that
+//     is not the daemon shutting down hands off to reconcileWatch rather than
+//     returning — see the Wait-error branch. agentExecID (the id Exec returned,
+//     "" for exec-less substrates) is what reconcileWatch probes for AGENT, not
+//     merely container, liveness.
+func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string) {
 	if s.cfg.Runner == nil {
 		return
 	}
@@ -873,13 +881,25 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref string) {
 		}()
 		exitCode, werr := s.cfg.Runner.Wait(base, ref)
 		if werr != nil {
-			// Wait failed (ctx cancelled at shutdown, daemon stopping, or the
-			// sandbox was torn down out from under us by a kill). Do not force a
-			// state change: a kill already set the terminal state, and at
-			// shutdown the run is best left as-is for the next boot to observe.
-			// Audit the watcher's exit for forensics.
+			// Audit the watcher's exit for forensics either way.
 			s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{"error": werr.Error()})))
+			if base.Err() != nil {
+				// Shutdown / daemon stopping: leave the run as-is for the next boot's
+				// ReconcileOnBoot to observe. Forcing a state change here would
+				// false-fail a healthy run the restart is about to re-adopt.
+				return
+			}
+			// NOT shutdown. Driver.Wait gives up on the FIRST probe error, so one
+			// docker API blip errors every in-flight Wait while the agents keep
+			// working — and this is the run's ONLY watcher (one per dispatch, never
+			// respawned). A transient probe error is NOT "the run finished": returning
+			// here strands a RUNNING run with a live sandbox and un-revoked
+			// credentials, with no other writer to finalize it. A kill, by contrast,
+			// already set the terminal state, so the handoff below is a no-op for it.
+			// Hand off to the watcher that already tolerates bounded probe errors and
+			// then finalizes + revokes + tears down (reconcile.go).
+			s.reconcileWatch(base, runID, ref, agentExecID)
 			return
 		}
 
@@ -952,6 +972,31 @@ func isTerminalRunState(st types.RunState) bool {
 	}
 }
 
+// stopSandboxOrAudit tears a dispatch-created sandbox down and RECORDS a failed
+// teardown under `action`. Silence is not an option at these sites: each one
+// lands the run terminal immediately afterwards (KILLED by the racing kill, or
+// FAILED via failAndRevoke), and ReconcileOnBoot skips terminal runs
+// (reconcile.go), so a swallowed StopSandbox error abandons a live/routable
+// container — plus its proxy sidecar, which resolved the injected credential
+// VALUES into memory at startup, and RevokeRun only denies FUTURE mints —
+// forever with no record. Mirrors the teardown_error audit reconcileFinalize and
+// the completion watcher already emit. Reports whether the sandbox was observed
+// gone, so a caller may fail closed on a teardown it cannot confirm.
+func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, action string) bool {
+	if s.cfg.Runner == nil || ref == "" {
+		return true
+	}
+	serr := s.cfg.Runner.StopSandbox(ctx, ref)
+	if serr == nil {
+		return true
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+		ref, "failure", mustJSON(map[string]any{
+			"sandbox_ref": ref, "teardown_error": serr.Error(),
+		})))
+	return false
+}
+
 // revokeRunCascade performs the identity + broker revocation half of the
 // kill-switch cascade for a run: it deny-lists the run token
 // (Identity.RevokeRun) and revokes any minted broker credentials
@@ -986,7 +1031,18 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 // (C003). Revoke runs only when THIS transition won, so a concurrent kill that
 // already moved the run is not double-handled.
 func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState) {
-	if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, types.RunFailed); applied {
+	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, types.RunFailed)
+	if err != nil {
+		// "The compensator itself failed" is categorically different from
+		// applied==false ("a concurrent kill legitimately won") and must not collapse
+		// into it: nobody else will write this run's terminal state, so it strands
+		// non-terminal with un-revoked credentials until the next boot reconciles it.
+		log.Printf("wardynd: failAndRevoke %s: CAS %s->FAILED failed, run may be stranded: %v", runID, from, err)
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
+			runID.String(), "failure", mustJSON(map[string]any{"from": string(from), "error": err.Error()})))
+		return
+	}
+	if applied {
 		s.revokeRunCascade(ctx, runID)
 	}
 }

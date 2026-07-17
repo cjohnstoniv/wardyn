@@ -615,20 +615,44 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 
 // writeEnvAsCode writes generated env-as-code files under root. Paths are the
 // fixed, safe outputs of EmitEnvAsCode (.devcontainer/devcontainer.json,
-// AGENTS.md, plus any artifact-redirect config like .npmrc/.cargo/config.toml);
-// each is re-checked to stay under root as defense-in-depth.
-func writeEnvAsCode(root string, files map[string]string) error {
-	cleanRoot := filepath.Clean(root)
+// AGENTS.md, plus any artifact-redirect config like .npmrc/.cargo/config.toml).
+//
+// Every write goes through os.Root, which resolves each path component INSIDE
+// the kernel and refuses to traverse or land on a symlink escaping root. A
+// lexical filepath.Join check cannot do this: the tree we write into is exactly
+// the tree the sandbox agent (and any imported repo — git carries symlinks) can
+// write to, so `<root>/AGENTS.md -> ~/.bashrc` would otherwise be FOLLOWED and
+// truncate an operator file, wardynd running as the operator in host mode. The
+// lexical check stays as a cheap first gate against a `..` in a generated key.
+func writeEnvAsCode(rootPath string, files map[string]string) error {
+	cleanRoot := filepath.Clean(rootPath)
+	root, err := os.OpenRoot(cleanRoot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for rel, content := range files {
 		dst := filepath.Join(cleanRoot, filepath.FromSlash(rel))
 		if !strings.HasPrefix(dst, cleanRoot+string(filepath.Separator)) {
 			return fmt.Errorf("refusing to write outside workspace: %s", rel)
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
+		relPath := filepath.FromSlash(rel)
+		if dir := filepath.Dir(relPath); dir != "." {
+			if err := root.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("refusing to write %s: %w", rel, err)
+			}
 		}
-		if err := os.WriteFile(dst, []byte(content), 0o644); err != nil {
-			return err
+		f, err := root.OpenFile(relPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if err != nil {
+			return fmt.Errorf("refusing to write %s: %w", rel, err)
+		}
+		_, werr := f.WriteString(content)
+		cerr := f.Close()
+		if werr != nil {
+			return werr
+		}
+		if cerr != nil {
+			return cerr
 		}
 	}
 	return nil
