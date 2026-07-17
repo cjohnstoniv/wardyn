@@ -112,9 +112,15 @@ test:
 # Race-detector sweep. The kill/dispatch FSM has dedicated concurrent tests
 # (internal/api/kill_dispatch_race_test.go) that only mean something under -race;
 # the rest of the tree rides along. Required green before restructuring runs.go.
+# BOTH tag sets: the tagless pass alone never compiles the -tags docker runner
+# tree (internal/runner/docker, internal/envbuild) — the concurrency-heavy
+# sandbox lifecycle — so it would get zero race coverage. The docker-tagged pass
+# needs no daemon (the real-Docker cases self-skip unless WARDYN_TEST_DOCKER=1).
 test-race:
-	@echo "Running Go tests under the race detector..."
+	@echo "Running Go tests under the race detector (tagless)..."
 	go test -race ./...
+	@echo "Running Go tests under the race detector (-tags docker)..."
+	go test -race -tags docker ./...
 
 test-docker:
 	@echo "Running Go tests (-tags docker)..."
