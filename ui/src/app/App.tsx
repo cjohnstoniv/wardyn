@@ -11,22 +11,60 @@ import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
-import { RunDetailScreen } from "./components/screens/run-detail";
-import { ApprovalsScreen } from "./components/screens/approvals";
-import { PoliciesScreen } from "./components/screens/policies";
-import { SecretsScreen } from "./components/screens/secrets";
-import { WorkspacesScreen } from "./components/screens/workspaces";
-import { AuditScreen } from "./components/screens/audit";
-import { RecordingScreen } from "./components/screens/recording";
-import { DemoScreen } from "./components/screens/demos/demo-screen";
-import { setupDismissed, shouldOpenSetup } from "./components/screens/setup/setup-screen";
-import { GettingStarted } from "./components/screens/onboarding/onboarding-screen";
+// setup-gate holds only the pure auto-open decision, so the funnel itself (and
+// the xterm stack it reaches through harness-login-pane) stays out of the entry
+// chunk. Import these from the screen module and the split below is undone.
+import { setupDismissed, shouldOpenSetup } from "./components/screens/setup/setup-gate";
 import { WardynMark } from "./components/wardyn/logo";
 import { api, onUnauthorized, probeAuth, setToken } from "./lib/api";
 import { usePoll } from "./lib/use-poll";
 import type { AgentRun } from "./lib/types";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
+
+// Route-level code-splitting. Runs is the landing route (every "/" redirects
+// there) so it stays eager — lazying it would only add a load waterfall to the
+// first paint. Everything else is fetched on navigation, which keeps the heavy
+// terminal deps out of the entry chunk: xterm rides on run-detail/demos/
+// workspaces/setup, asciinema-player on run-detail/recordings. Rollup hoists
+// what several lazy routes share into its own chunk automatically.
+const RunDetailScreen = React.lazy(() =>
+  import("./components/screens/run-detail").then((m) => ({ default: m.RunDetailScreen })),
+);
+const ApprovalsScreen = React.lazy(() =>
+  import("./components/screens/approvals").then((m) => ({ default: m.ApprovalsScreen })),
+);
+const PoliciesScreen = React.lazy(() =>
+  import("./components/screens/policies").then((m) => ({ default: m.PoliciesScreen })),
+);
+const SecretsScreen = React.lazy(() =>
+  import("./components/screens/secrets").then((m) => ({ default: m.SecretsScreen })),
+);
+const WorkspacesScreen = React.lazy(() =>
+  import("./components/screens/workspaces").then((m) => ({ default: m.WorkspacesScreen })),
+);
+const AuditScreen = React.lazy(() => import("./components/screens/audit").then((m) => ({ default: m.AuditScreen })));
+const RecordingScreen = React.lazy(() =>
+  import("./components/screens/recording").then((m) => ({ default: m.RecordingScreen })),
+);
+const DemoScreen = React.lazy(() =>
+  import("./components/screens/demos/demo-screen").then((m) => ({ default: m.DemoScreen })),
+);
+const GettingStarted = React.lazy(() =>
+  import("./components/screens/onboarding/onboarding-screen").then((m) => ({ default: m.GettingStarted })),
+);
+
+// Shown while a lazy route's chunk is in flight. Deliberately the same mark +
+// spinner as the auth probe above, so a slow chunk reads as the console still
+// connecting rather than as a broken screen.
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3" role="status" aria-live="polite">
+      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      <span className="sr-only">Loading…</span>
+    </div>
+  );
+}
 
 // Run states that need an operator's attention — surfaced as the amber count
 // badge on the Runs nav entry. FAILED needs eyes; WAITING_FOR_CONFIRMATION
@@ -170,15 +208,78 @@ export default function App() {
         >
           <Route path="/" element={<Navigate to="/runs" replace />} />
           <Route path="/runs" element={<RunsScreen />} />
-          <Route path="/runs/:id" element={<RunDetailScreen />} />
-          <Route path="/approvals" element={<ApprovalsScreen onChanged={refreshPending} />} />
-          <Route path="/policies" element={<PoliciesScreen />} />
-          <Route path="/secrets" element={<SecretsScreen />} />
-          <Route path="/workspaces" element={<WorkspacesScreen />} />
-          <Route path="/audit" element={<AuditScreen />} />
-          <Route path="/recordings" element={<RecordingScreen />} />
-          <Route path="/demos" element={<DemoScreen />} />
-          <Route path="/setup" element={<GettingStarted onDone={() => navigate("/runs")} />} />
+          <Route
+            path="/runs/:id"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <RunDetailScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/approvals"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <ApprovalsScreen onChanged={refreshPending} />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/policies"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <PoliciesScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/secrets"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <SecretsScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/workspaces"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <WorkspacesScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/audit"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <AuditScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/recordings"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <RecordingScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/demos"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <DemoScreen />
+              </React.Suspense>
+            }
+          />
+          <Route
+            path="/setup"
+            element={
+              <React.Suspense fallback={<RouteFallback />}>
+                <GettingStarted onDone={() => navigate("/runs")} />
+              </React.Suspense>
+            }
+          />
           {/* Fleet is retired — merged into Runs. Keep the old path working. */}
           <Route path="/fleet" element={<Navigate to="/runs" replace />} />
           <Route path="*" element={<Navigate to="/runs" replace />} />

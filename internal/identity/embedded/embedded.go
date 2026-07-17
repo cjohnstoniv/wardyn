@@ -25,7 +25,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -325,7 +324,7 @@ func (p *Provider) audit(ctx context.Context, runID uuid.UUID, actor, action, jt
 		Outcome:   outcome,
 	}
 	if err := p.rec.Record(ctx, ev); err != nil {
-		log.Printf("wardyn: AUDIT WRITE FAILED action=%s target=%s outcome=%s: %v", ev.Action, ev.Target, ev.Outcome, err)
+		audit.LogWriteFailure(ctx, ev, err)
 	}
 }
 

@@ -417,7 +417,7 @@ func TestPG_ConcurrentMint_AutoApprovalGrant_Independent(t *testing.T) {
 // This guards a REAL concurrent double-mint (audit finding "F1", a true
 // positive proven by a two-session PG16 experiment): a contender that BLOCKS on
 // the FOR UPDATE OF g lock mid-tx resumes on its original statement snapshot,
-// reads a stale minted_jti='' from the joined (non-locked, nullable-side)
+// reads a stale empty minted_jti from the joined (non-locked, nullable-side)
 // approval row — EvalPlanQual re-checks only the locked g tuple, never re-fetches
 // the approval — so it PASSES the row.mintedJTI fast-path guard and mints a real
 // token. Only the rows-affected check on the conditional minted_jti UPDATE (which

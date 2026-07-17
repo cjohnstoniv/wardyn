@@ -77,7 +77,6 @@ func (r *Registry[C]) Names() []string {
 	return out
 }
 
-
 // Resolve maps name (empty → default) to its constructor and the resolved name,
 // or a helpful error listing the registered names. Seam New() wrappers call this.
 func (r *Registry[C]) Resolve(name string) (ctor C, resolved string, err error) {

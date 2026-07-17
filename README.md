@@ -63,8 +63,13 @@ Wardyn is the governance layer between a human operator and a running agent:
   minimum class; the plane refuses a run a substrate cannot satisfy.
 
 - **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the plane
-  wraps it with the runner tools (digest-pinned, opt-in via `WARDYN_ENVBUILD`) and
-  gates launch on an in-sandbox self-test, fail-closed. **[shipped]**
+  wraps it with the runner tools (opt-in via `WARDYN_ENVBUILD`) and gates launch on an
+  in-sandbox self-test, fail-closed. The wrap is **wrap-only** — a `FROM` + `COPY` that
+  adds layers and never runs image-controlled code on the host: a base carrying `ONBUILD`
+  triggers is **refused**, because those would execute on the host daemon at wrap time.
+  A tag or a digest-pinned ref (`repo@sha256:…`) both work; pinning is honored end-to-end
+  and recommended, but **not enforced** — Wardyn resolves a mutable tag at wrap time, so
+  what a tag points at stays the operator's call. **[shipped]**
 
 - **Model access without resident keys.** An Anthropic API key or a Claude
   subscription (from the operator's live login) is injected proxy-side, never resident;
@@ -151,8 +156,13 @@ redirection, brokered SCM creds). Full table in [ARCHITECTURE.md](ARCHITECTURE.m
 The primary way to onboard real work: **record** a named interactive session in a
 workspace, then rerun it as a governed profile — the New Run dialog offers recorded
 sessions as fast-track profiles with observed egress preloaded. **Verify** re-runs the
-steps under least privilege in a fresh CONFINED session (a live re-run, not a
-byte-for-byte replay). See [TRY-IT Level 2.5](docs/TRY-IT.md).
+steps in a fresh CONFINED session (a live re-run, not a byte-for-byte replay):
+default-deny egress limited to the workspace's approved set unioned with the baseline
+clone/registry hosts. HONEST RESIDUAL: that baseline is a fixed default, not derived
+from the workspace's own source — a `local_dir` workspace that clones nothing still
+gets the GitHub bundle (incl. `*.githubusercontent.com`), so a confined verify is much
+tighter than the open recording but is not minimal. See
+[TRY-IT Level 2.5](docs/TRY-IT.md).
 
 ### AI Run Composer (optional)
 

@@ -263,7 +263,7 @@ func TestBuild_PullsEnvbuilderImageWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if !f.pullCalled {
+	if !f.pulled("envbuilder:test") {
 		t.Error("expected ImagePull to be called when image is absent")
 	}
 }
@@ -280,7 +280,10 @@ func TestBuild_SkipsPullWhenImagePresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if f.pullCalled {
+	// Scoped to the envbuilder image: the finalize stage separately pulls the
+	// freshly pushed base on purpose (see finalizeImage), which is not this
+	// test's subject.
+	if f.pulled("envbuilder:test") {
 		t.Error("must not pull when image is already present")
 	}
 }

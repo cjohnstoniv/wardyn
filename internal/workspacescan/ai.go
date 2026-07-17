@@ -33,7 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -118,7 +118,8 @@ func AdviseProfile(ctx context.Context, facts ScanFacts, base WorkspaceProfile, 
 	adv, err := runAdvisor(ctx, facts, opts)
 	if err != nil {
 		// Advisory only — a failure is never fatal to onboarding.
-		log.Printf("workspacescan: AI advisory fallback failed open (profile unchanged): %v", err)
+		slog.WarnContext(ctx, "workspacescan: AI advisory fallback failed open (profile unchanged)",
+			slog.Any("err", err))
 		return base
 	}
 	return mergeAdvice(base, adv)

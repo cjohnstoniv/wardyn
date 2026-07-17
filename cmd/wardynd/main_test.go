@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -207,10 +208,55 @@ func TestGenAndPrintAgeKey_ParseableNotPublic(t *testing.T) {
 	if !strings.HasPrefix(out, "AGE-SECRET-KEY-") {
 		t.Fatalf("output %q is not an AGE-SECRET-KEY", out)
 	}
-	if out == knownPublicAgeKey {
-		t.Fatal("generated the publicly-known demo age key")
+	if isKnownPublicAgeKey(out) {
+		t.Fatal("generated a publicly-known age key")
 	}
 	if _, err := age.ParseX25519Identity(out); err != nil {
 		t.Fatalf("generated key is not parseable: %v", err)
+	}
+}
+
+// buildSecretStore MUST refuse EVERY published age identity, not just the first
+// one we happened to find. Each entry in knownPublicAgeKeys was once a committed
+// default (a Compose baked-in, and the scripts/run-local.sh + scripts/e2e-backend.sh
+// default), so booting under one encrypts the secret store with a key anyone can
+// read out of git history. Table-driven over the list so a newly-published key
+// added to knownPublicAgeKeys is covered automatically.
+func TestBuildSecretStore_RefusesEveryKnownPublicAgeKey(t *testing.T) {
+	if len(knownPublicAgeKeys) < 2 {
+		t.Fatalf("expected the published-key denylist to cover both leaked keys; got %d", len(knownPublicAgeKeys))
+	}
+	for _, key := range knownPublicAgeKeys {
+		// Surrounding whitespace (a trailing newline off `cat key.txt`) must not
+		// smuggle a published key past the guard.
+		for _, given := range []string{key, "  " + key + "\n"} {
+			// A nil pool is fine: the guard fails closed BEFORE any pool use.
+			_, err := buildSecretStore(nil, given, "test-store")
+			if err == nil {
+				t.Fatalf("buildSecretStore accepted published key %q", key)
+			}
+			if !strings.Contains(err.Error(), "publicly-known") {
+				t.Fatalf("buildSecretStore(%q) error = %v; want a publicly-known-key refusal", key, err)
+			}
+		}
+	}
+}
+
+// The dev/e2e scripts must not re-introduce a committed age key: a hard-coded one
+// is published the moment it is pushed, and wardynd would then have to denylist it
+// too. Both scripts mint an ephemeral identity per boot via `wardynd -gen-age-key`.
+func TestDevScriptsMintAgeKeyInsteadOfCommittingOne(t *testing.T) {
+	for _, script := range []string{"../../scripts/run-local.sh", "../../scripts/e2e-backend.sh"} {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatalf("read %s: %v", script, err)
+		}
+		body := string(b)
+		if i := strings.Index(body, "AGE-SECRET-KEY-1"); i >= 0 {
+			t.Errorf("%s hard-codes an age secret key at offset %d; mint one with `wardynd -gen-age-key` instead", script, i)
+		}
+		if !strings.Contains(body, "-gen-age-key") {
+			t.Errorf("%s does not mint an age key via `wardynd -gen-age-key`", script)
+		}
 	}
 }

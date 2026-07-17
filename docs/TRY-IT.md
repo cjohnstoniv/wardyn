@@ -200,9 +200,29 @@ interactive session (with model access), then rerun it governed — the New Run
 dialog's Basics step offers the workspace's recorded sessions as **profiles**;
 picking one fast-tracks you to Review with the recording's observed egress
 already loaded into the allowlist. **Verify** launches a fresh CONFINED session
-for a recording you pick — default-deny egress limited to the approved set,
-live approvals surfaced next to the attached terminal — so you re-run the same
-steps under least privilege and prove the profile works before relying on it.
+for a recording you pick — default-deny egress, live approvals surfaced next to
+the attached terminal — so you re-run the same steps under the tightened policy
+and prove the profile works before relying on it. An off-policy host is denied
+in-flight and raised as an approval you can grant, then retry
+(`deny_with_review`; deliberately not a `wait_for_review` hold, so an
+unattended probe fails fast).
+
+The confined session's allowlist is **not** the approved set alone. It is:
+
+    baseline clone/registry hosts ∪ the workspace profile's detected registry
+    hosts (`EgressDomains`) ∪ the operator's `ApprovedEgress`
+
+so it is much tighter than the open recording, but it is **not minimal**:
+
+- **HONEST RESIDUAL** — the baseline is a fixed default keyed on the
+  workspace's clone URL, and a `local_dir` workspace has none. It therefore
+  falls through to the full GitHub bundle (`github.com`, `api.github.com`,
+  `codeload.github.com`, `*.githubusercontent.com` — including that wildcard)
+  even though a local directory clones nothing. Verify proves the steps work
+  under the tightened policy; it does not prove the policy is the smallest one
+  that works. Content-derived `SuggestedEgress` is deliberately excluded — a
+  build that needs a host surfaces as an observed denial you can promote.
+
 (It's a live re-run under the tighter policy, not a byte-for-byte replay of the
 captured session. The workspace *import* flow has its own Verify step with
 different semantics: it executes the operator-approved setup commands in a

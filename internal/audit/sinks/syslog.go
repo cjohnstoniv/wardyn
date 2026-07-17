@@ -15,7 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"log/syslog"
 	"runtime"
 	"sync"
@@ -138,8 +138,10 @@ func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 	case s.queue <- b:
 	default:
 		s.drops.Add(1)
-		log.Printf("sinks.syslog: queue overflow (collector %s %s slow/hung), drop counter=%d",
-			s.Network, s.Addr, s.drops.Load())
+		slog.WarnContext(ctx, "sinks.syslog: queue overflow (collector slow/hung)",
+			slog.String("network", s.Network),
+			slog.String("addr", s.Addr),
+			slog.Int64("drops", s.drops.Load()))
 	}
 	return nil
 }
@@ -187,12 +189,17 @@ func (s *SyslogSink) timedWrite(b []byte) {
 	case err := <-done:
 		if err != nil {
 			s.drops.Add(1)
-			log.Printf("sinks.syslog: write error (drops=%d): %v", s.drops.Load(), err)
+			slog.Error("sinks.syslog: write error",
+				slog.Int64("drops", s.drops.Load()),
+				slog.Any("err", err))
 		}
 	case <-timer.C:
 		s.drops.Add(1)
-		log.Printf("sinks.syslog: write to collector %s %s timed out after %s (drops=%d)",
-			s.Network, s.Addr, syslogWriteTimeout, s.drops.Load())
+		slog.Error("sinks.syslog: write to collector timed out",
+			slog.String("network", s.Network),
+			slog.String("addr", s.Addr),
+			slog.Duration("timeout", syslogWriteTimeout),
+			slog.Int64("drops", s.drops.Load()))
 	}
 }
 

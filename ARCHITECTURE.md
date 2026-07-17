@@ -65,7 +65,18 @@ decisions and session casts back into the append-only audit log.
   confinement (`wardyn-verify`). Endpoints under `/api/v1/workspaces/`.
 - **Record Mode** — run a task open once, then synthesize a least-privilege
   policy from its captured audit trail (`internal/recordmode`,
-  `POST /api/v1/runs/{id}/profile`) and re-run it confined.
+  `POST /api/v1/runs/{id}/profile`) and re-run it confined. The synthesized
+  *allowlist* is derived from PROXY-observed egress only (exact hosts that were
+  actually allowed, never wildcarded, never a denied/pending host); kernel
+  ground-truth (exec / connect / sensitive write) has no policy field and is
+  surfaced as review warnings, never as silent policy. **KNOWN GAP**: that
+  kernel evidence comes from the opt-in eBPF/Tetragon sensor, which is blind
+  inside CC3/Kata guests — and `Synthesize` does not flag its own blindness, so
+  a profile proposal for a CC3 run reads identically to a fully-observed one.
+  The record-results path computes exactly that signal
+  (`RecordTaskResult.kernel_sensor_blind`); the `/profile` proposal does not
+  carry it. Treat a CC3 proposal's silence on execs/writes as "not observed",
+  not "did not happen".
 - **Bring Your Own Image (BYOI)** — a run may name an arbitrary base image;
   the control plane wraps it with the runner tools via `internal/envbuild`
   (opt-in, `WARDYN_ENVBUILD`) and gates launch on an in-sandbox

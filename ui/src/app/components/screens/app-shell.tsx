@@ -40,7 +40,10 @@ import { ErrorBoundary } from "../wardyn/error-boundary";
 import { api } from "../../lib/api";
 import type { StatusKind } from "../wardyn/copy";
 import { usePoll } from "../../lib/use-poll";
-import { NewRunDialog } from "./new-run/new-run-dialog";
+// The run wizard reaches the workspaces + secrets screens and their dialogs, so
+// importing it eagerly pulled all of that into the entry chunk even though the
+// dialog only ever mounts on a "New run" click. Fetched on that click instead.
+const NewRunDialog = React.lazy(() => import("./new-run/new-run-dialog").then((m) => ({ default: m.NewRunDialog })));
 
 // useMeta fetches the real trust boundary (/healthz) + signed-in principal
 // (/api/v1/me) so the shell never shows placeholder identity/tenant values.
@@ -140,6 +143,9 @@ export function AppShell({
   const meta = useMeta();
   const location = useLocation();
   const [newRunOpen, setNewRunOpen] = React.useState(false);
+  // Latches true on the first "New run" click and never resets — see the mount
+  // note at the dialog below.
+  const [newRunMounted, setNewRunMounted] = React.useState(false);
   const navigate = useNavigate();
 
   const [readiness, setReadiness] = React.useState<StatusKind>("checking");
@@ -169,7 +175,14 @@ export function AppShell({
       >
         Skip to main content
       </a>
-      <TopBar onSignOut={onSignOut} meta={meta} onNewRun={() => setNewRunOpen(true)} />
+      <TopBar
+        onSignOut={onSignOut}
+        meta={meta}
+        onNewRun={() => {
+          setNewRunMounted(true);
+          setNewRunOpen(true);
+        }}
+      />
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
           <nav className="space-y-4">
@@ -241,11 +254,14 @@ export function AppShell({
         </main>
       </div>
 
-      <NewRunDialog
-        open={newRunOpen}
-        onOpenChange={setNewRunOpen}
-        onCreated={() => navigate("/runs")}
-      />
+      {/* Mounted from the first open onward — not gated on `newRunOpen` — so the
+          dialog keeps its own close animation and internal state instead of
+          being torn down on every dismiss. */}
+      {newRunMounted && (
+        <React.Suspense fallback={null}>
+          <NewRunDialog open={newRunOpen} onOpenChange={setNewRunOpen} onCreated={() => navigate("/runs")} />
+        </React.Suspense>
+      )}
     </div>
   );
 }
