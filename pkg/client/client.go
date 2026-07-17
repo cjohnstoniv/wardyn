@@ -6,10 +6,10 @@
 // It mirrors the REST API surface of wardynd exactly — same paths, same
 // status codes, same JSON vocabulary (internal/types is the shared source of
 // truth). The SDK adds zero non-stdlib dependencies so it can be embedded in
-// external tooling without dependency friction. (The in-repo `wardyn` CLI keeps
-// its own minimal TRANSPORT in cmd/wardyn/client.go — for CLI-specific error and
-// exit-code mapping — but posts THIS package's CreateRunRequest rather than
-// redeclaring the body, so the two can never drift.)
+// external tooling without dependency friction. The in-repo `wardyn` CLI now
+// uses THIS client directly (there is no second transport); it maps APIError to
+// process exit codes at the command layer and prints APIError.Error(), which
+// unwraps the server's {"error":...} envelope into a human-readable message.
 //
 // Usage:
 //
@@ -74,7 +74,29 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	if msg := e.envelopeMessage(); msg != "" {
+		return fmt.Sprintf("wardyn: API error %d: %s", e.Status, msg)
+	}
 	return fmt.Sprintf("wardyn: API error %d: %s", e.Status, e.Body)
+}
+
+// envelopeMessage extracts the human-readable message from the server's
+// standard {"error":...} (or {"message":...}) JSON envelope, returning "" when
+// Body is not such an envelope so Error() falls back to the raw body. Without
+// it a failed call surfaces raw JSON to the caller (e.g. the CLI) instead of
+// the message — the regression the CLI's old transport avoided by unwrapping.
+func (e *APIError) envelopeMessage() string {
+	var env struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(e.Body), &env) != nil {
+		return ""
+	}
+	if env.Error != "" {
+		return env.Error
+	}
+	return env.Message
 }
 
 // CreateRunRequest is the body for POST /api/v1/runs.
@@ -300,6 +322,60 @@ func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
+// ProfileResult is the decoded POST /api/v1/runs/{id}/profile reply (Recording
+// Mode): the synthesized least-privilege sandbox profile plus the observations
+// it was built from. Only the fields callers render/save are modeled — the full
+// server response (profileResponse) additionally carries a per-item risk
+// breakdown the SDK does not surface.
+type ProfileResult struct {
+	Proposed struct {
+		InlinePolicy RunPolicySpec `json:"inline_policy"`
+	} `json:"proposed"`
+	OverallRisk  string `json:"overall_risk"`
+	Observations struct {
+		Domains []struct {
+			Host    string   `json:"host"`
+			Methods []string `json:"methods"`
+		} `json:"domains"`
+		Anomalies []string `json:"anomalies"`
+	} `json:"observations"`
+	Warnings []string `json:"warnings"`
+}
+
+// SynthesizeProfile runs Recording Mode synthesis for a run: from its already-
+// captured audit / egress / ground-truth events the server proposes a tightened,
+// reusable RunPolicy ("sandbox profile"). ADVISORY and READ-ONLY — it mints
+// nothing and persists no policy (save the proposal via CreatePolicy).
+// POST /api/v1/runs/{id}/profile. Returns 404 when the run does not exist.
+func (c *Client) SynthesizeProfile(ctx context.Context, runID uuid.UUID) (ProfileResult, error) {
+	var out ProfileResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile", nil, &out)
+	return out, err
+}
+
+// RecordTaskResult is the decoded POST /api/v1/workspaces/{id}/record reply: the
+// launched open-egress recording run plus the resolved session key/mode.
+type RecordTaskResult struct {
+	RecordRunID string   `json:"record_run_id"`
+	TaskKey     string   `json:"task_key"`
+	Mode        string   `json:"mode"`
+	Detail      string   `json:"detail"`
+	Warnings    []string `json:"warnings"`
+}
+
+// RecordWorkspaceTask launches a named open (allow-all egress) recording session
+// for a workspace via the import pipeline — the operator attaches, does the real
+// activity, and stops the run to capture what it actually used.
+// POST /api/v1/workspaces/{id}/record with body {"task_key": name}. Returns 202
+// with the launched run; 503 when no runner is wired; 409 while another import
+// step is live.
+func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKey string) (RecordTaskResult, error) {
+	var out RecordTaskResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record",
+		map[string]string{"task_key": taskKey}, &out)
+	return out, err
+}
+
 // do executes one HTTP request against the control plane.
 //
 // body (if non-nil) is JSON-encoded as the request body.
@@ -334,7 +410,6 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	// Omit rather than send a bare "Bearer " for an empty token: a LOCAL HOST
 	// MODE wardynd bypasses public-API auth on a loopback bind (no token
 	// needed), and an auth-gated server still returns a clean 401 either way.
-	// Matches cmd/wardyn/client.go's apiClient.
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

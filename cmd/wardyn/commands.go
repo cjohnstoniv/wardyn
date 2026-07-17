@@ -20,8 +20,19 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// clientFn lazily builds the API client after persistent flags are parsed.
-type clientFn func() *apiClient
+// clientFn lazily builds the SDK client after persistent flags are parsed.
+type clientFn func() *sdk.Client
+
+// parseID parses an id-like positional arg into a UUID, failing fast with a
+// clear client-side message rather than posting a malformed path the server can
+// only answer with an opaque 400/404. `what` names the noun (run/policy/approval).
+func parseID(what, s string) (uuid.UUID, error) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid %s id %q: %w", what, s, err)
+	}
+	return id, nil
+}
 
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // list/get/kill subcommands inspect and stop runs. "runs" stays as an alias so
@@ -71,7 +82,7 @@ func runCmd(client clientFn) *cobra.Command {
 				}
 				body.InlinePolicy = &spec
 			}
-			run, err := client().createRun(cmd.Context(), body)
+			run, err := client().CreateRun(cmd.Context(), body)
 			if err != nil {
 				return err
 			}
@@ -89,7 +100,7 @@ func runCmd(client clientFn) *cobra.Command {
 				}
 			}
 			if wait {
-				return waitForRun(cmd.Context(), client(), run.ID.String(), timeout)
+				return waitForRun(cmd.Context(), client(), run.ID, timeout)
 			}
 			return nil
 		},
@@ -114,7 +125,7 @@ func runCmd(client clientFn) *cobra.Command {
 		Short: "List all runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			runs, err := client().listRuns(cmd.Context())
+			runs, err := client().ListRuns(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -139,7 +150,11 @@ func runCmd(client clientFn) *cobra.Command {
 		Short: "Show one run",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			run, err := client().getRun(cmd.Context(), args[0])
+			id, err := parseID("run", args[0])
+			if err != nil {
+				return err
+			}
+			run, err := client().GetRun(cmd.Context(), id)
 			if err != nil {
 				return err
 			}
@@ -161,7 +176,11 @@ func runCmd(client clientFn) *cobra.Command {
 		Short: "Kill a run (tears down sandbox, revokes identity + credentials)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := client().killRun(cmd.Context(), args[0]); err != nil {
+			id, err := parseID("run", args[0])
+			if err != nil {
+				return err
+			}
+			if _, err := client().KillRun(cmd.Context(), id); err != nil {
 				return err
 			}
 			fmt.Printf("kill requested for run %s\n", args[0])
@@ -189,14 +208,14 @@ func terminalRunState(s types.RunState) bool {
 // waitForRun polls the run until it is terminal and maps the outcome to the
 // CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
 // run.complete audit event (fallback 1), KILLED/STOPPED/ARCHIVED→2, timeout→124.
-func waitForRun(ctx context.Context, c *apiClient, runID string, timeout time.Duration) error {
+func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout time.Duration) error {
 	// Progress goes to stderr so `run --json` keeps stdout to a single object.
 	fmt.Fprintf(os.Stderr, "waiting for run %s (timeout %s)\n", runID, timeout)
 	deadline := time.Now().Add(timeout)
 	consecutiveErrs := 0
 	var lastState types.RunState
 	for {
-		run, err := c.getRun(ctx, runID)
+		run, err := c.GetRun(ctx, runID)
 		if err != nil {
 			// Tolerate transient poll blips (a CI stack mid-restart shouldn't
 			// fail the pipeline); a persistent error still aborts fast.
@@ -242,8 +261,8 @@ func waitForRun(ctx context.Context, c *apiClient, runID string, timeout time.Du
 
 // agentExitCode reads the agent's real exit code from the last run.complete
 // audit event. Best-effort: 0 when the event is missing or unparseable.
-func agentExitCode(ctx context.Context, c *apiClient, runID string) int {
-	events, err := c.audit(ctx, runID)
+func agentExitCode(ctx context.Context, c *sdk.Client, runID uuid.UUID) int {
+	events, err := c.AuditEvents(ctx, runID)
 	if err != nil {
 		return 0
 	}
@@ -275,7 +294,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 		Short: "List approval requests (optionally filtered by --state)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			aps, err := client().listApprovals(cmd.Context(), state)
+			aps, err := client().ListApprovals(cmd.Context(), types.ApprovalState(state))
 			if err != nil {
 				return err
 			}
@@ -305,7 +324,11 @@ func approveCmd(client clientFn) *cobra.Command {
 		Short: "Approve a pending approval request",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ap, err := client().decideApproval(cmd.Context(), args[0], true, reason)
+			id, err := parseID("approval", args[0])
+			if err != nil {
+				return err
+			}
+			ap, err := client().Approve(cmd.Context(), id, reason)
 			if err != nil {
 				return err
 			}
@@ -324,7 +347,11 @@ func denyCmd(client clientFn) *cobra.Command {
 		Short: "Deny a pending approval request",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ap, err := client().decideApproval(cmd.Context(), args[0], false, reason)
+			id, err := parseID("approval", args[0])
+			if err != nil {
+				return err
+			}
+			ap, err := client().Deny(cmd.Context(), id, reason)
 			if err != nil {
 				return err
 			}
@@ -346,7 +373,11 @@ func auditCmd(client clientFn) *cobra.Command {
 			if runID == "" {
 				return fmt.Errorf("--run is required")
 			}
-			events, err := client().audit(cmd.Context(), runID)
+			id, err := parseID("run", runID)
+			if err != nil {
+				return err
+			}
+			events, err := client().AuditEvents(cmd.Context(), id)
 			if err != nil {
 				return err
 			}

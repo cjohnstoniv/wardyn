@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // writeFile is a small test helper shared across the cmd/wardyn tests for
@@ -134,7 +136,7 @@ func TestIsNormalClose(t *testing.T) {
 // --------------------------------------------------------------------------
 // runAttach token guard: an empty token must NOT be a client-side hard
 // refusal (H13) — local host-mode deployments run without a token, matching
-// apiClient.do. The dial is attempted and the server's 401 (if auth is
+// the client transport (pkg/client.Client). The dial is attempted and the server's 401 (if auth is
 // actually required) is the error signal instead.
 // --------------------------------------------------------------------------
 
@@ -142,7 +144,7 @@ func TestRunAttach_NoTokenDialsAnyway(t *testing.T) {
 	// No token => runAttach must still attempt the dial rather than refusing
 	// client-side. Port 0 on loopback refuses the connection, so we assert the
 	// failure is a dial error, not the old hard-refusal message.
-	c := &apiClient{baseURL: "http://127.0.0.1:0"}
+	c := &sdk.Client{BaseURL: "http://127.0.0.1:0"}
 	err := runAttach(context.Background(), c, "run-1")
 	if err == nil {
 		t.Fatal("expected a dial error against the bogus address, got nil")

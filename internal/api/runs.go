@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // imageBuildTimeout bounds a per-run sandbox image build (BYOI wrap, devcontainer,
@@ -27,78 +28,14 @@ import (
 // devcontainer build pulls a base image and runs the repo's full setup.
 const imageBuildTimeout = 30 * time.Minute
 
-// createRunRequest is the POST /api/v1/runs body.
-type createRunRequest struct {
-	Agent    string     `json:"agent"`
-	Repo     string     `json:"repo"`
-	Task     string     `json:"task"`
-	PolicyID *uuid.UUID `json:"policy_id,omitempty"`
-	// DevcontainerRepo, when set AND an ImageBuilder is configured, triggers a
-	// devcontainer build (envbuilder) of that git repo. The resulting local
-	// image becomes the sandbox image for this run instead of the convention
-	// image. Ignored when no ImageBuilder is wired (the request still succeeds
-	// with the convention image so the field degrades gracefully). This is an
-	// api-local request field; the four nouns in internal/types are untouched.
-	DevcontainerRepo string `json:"devcontainer_repo,omitempty"`
-	// DevcontainerRef is the optional git ref (branch/tag/sha) to build.
-	DevcontainerRef string `json:"devcontainer_ref,omitempty"`
-	// Image, when set, is a USER-supplied base image (Bring Your Own Image). It is
-	// mandatorily WRAPPED via the trusted finalize stage (FROM <image> + COPY
-	// wardyn tools + cleared ENTRYPOINT) before use, so recording/git-brokering/
-	// verify never silently degrade and a hostile ENTRYPOINT can't tear the sandbox
-	// down. All sandbox controls (egress, confinement, secret brokering) apply
-	// regardless of image contents — that IS the product. MUTUALLY EXCLUSIVE with
-	// DevcontainerRepo. Unlike DevcontainerRepo (which degrades to the convention
-	// image when no builder is wired), an explicitly chosen Image with no
-	// ImageBuilder is a hard 400 — a chosen image must never be silently swapped.
-	// api-local request field; the four nouns in internal/types are untouched.
-	Image string `json:"image,omitempty"`
-	// ConfinementClass, when set, requests a specific confinement class for the
-	// run (types.CC1/CC2/CC3). Empty means inherit the policy minimum (unset).
-	// An unknown non-empty value fails closed with HTTP 400. The docker driver
-	// gates on run.ConfinementClass; this field threads the request value in.
-	ConfinementClass string `json:"confinement_class,omitempty"`
-	// Interactive requests an INTERACTIVE run: the sandbox is created and set
-	// RUNNING but NO agent task is exec'd (no `claude -p`) and NO completion
-	// watcher is started. The container comes up idle (it holds open) so a human
-	// can `wardyn attach <id>` and drive it. The Task field is ignored for an
-	// interactive run. NOTE: pair this with a policy whose AutoStopAfterSec < 0
-	// (never-reap) or the idle reaper will stop the idle sandbox.
-	//
-	// This is request-controlled (unlike mounts) because it only chooses WHETHER
-	// the auto-task runs — it grants no new capability, host path, or egress; the
-	// attach itself is still admin-gated and confined (invariant 3).
-	Interactive bool `json:"interactive,omitempty"`
-	// TaskMode selects HOW a non-interactive run executes Task: "" / "harness"
-	// (default) runs the agent harness (`claude -p <task>`), "exec" runs Task as
-	// a plain shell command inside the same governed sandbox (no agent, no LLM
-	// credentials — the BYOA/CI lane). Request-controlled for the same reason as
-	// Interactive: it only chooses WHAT agent-run execs, granting no new
-	// capability — clone, brokered creds, egress, recording, and confinement are
-	// identical in both modes. Ignored for interactive runs (nothing is exec'd).
-	// api-local request field; the four nouns in internal/types are untouched.
-	TaskMode string `json:"task_mode,omitempty"`
-	// InlinePolicy, when set, supplies the run's full RunPolicySpec INLINE on the
-	// create request instead of referencing a stored policy_id. It is MUTUALLY
-	// EXCLUSIVE (XOR) with PolicyID — supplying both is a 400; supplying neither
-	// falls back to the configured default (unchanged behavior). An inline policy
-	// is authored by an admin / SSO-gated human operator (the create-run surface
-	// is admin-gated), NOT by the in-sandbox agent. It is validated with the SAME
-	// validatePolicySpec the stored-policy path uses (so runner.ValidateMount
-	// gates any inline mount), plus validateInlineSecretRefs (so any inline
-	// api_key grant references a secret that actually EXISTS and is not reserved).
-	// The resolved spec attaches with a NIL policy id (it is not a stored row).
-	InlinePolicy *types.RunPolicySpec `json:"inline_policy,omitempty"`
-	// ComposeSessionID, when this run was launched from the AI Run Composer,
-	// correlates it back to the compose conversation that produced it (see
-	// composer.ComposeRequest.SessionID) — stamped into the run.create audit
-	// event's Data below so filtering the audit feed on it reconstructs the
-	// whole compose→launch trail (Decision 7: audit-feed-only history, no
-	// separate session store/table). Purely a correlation label: it grants
-	// nothing and is never validated as a UUID — an arbitrary/absent value only
-	// makes the audit label less useful, never wrong or unsafe.
-	ComposeSessionID string `json:"compose_session_id,omitempty"`
-}
+// createRunRequest is the POST /api/v1/runs body. It is a TYPE ALIAS for the
+// public SDK's request DTO — the SDK's declaration IS the server's declaration,
+// so the wire contract is single-sourced and the compiler (not a parity test)
+// enforces that the CLI, the SDK, and this handler all read/write the same
+// fields. Field docs live on pkg/client.CreateRunRequest. The compile-time
+// identity is pinned by TestCreateRunRequest_IsClientDTOAlias
+// (internal/api/dto_alias_test.go); reverting this to a struct breaks that test.
+type createRunRequest = client.CreateRunRequest
 
 // parseConfinementClass validates a create-run request's confinement_class. An
 // empty string is allowed (the caller inherits the policy minimum). A non-empty

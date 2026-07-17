@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // recordCmd is the Recording Mode CLI: synthesize a reusable least-privilege
@@ -28,7 +30,11 @@ func recordCmd(client clientFn) *cobra.Command {
 		Short: "Preview a sandbox profile synthesized from a run's recorded activity",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := client().synthesizeProfile(cmd.Context(), args[0])
+			id, err := parseID("run", args[0])
+			if err != nil {
+				return err
+			}
+			p, err := client().SynthesizeProfile(cmd.Context(), id)
 			if err != nil {
 				return err
 			}
@@ -48,11 +54,15 @@ func recordCmd(client clientFn) *cobra.Command {
 		Short: "Synthesize a sandbox profile from a run and save it as a named policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := client().synthesizeProfile(cmd.Context(), args[0])
+			id, err := parseID("run", args[0])
 			if err != nil {
 				return err
 			}
-			pol, err := client().createPolicy(cmd.Context(), policyBody{Name: name, Spec: p.Proposed.InlinePolicy})
+			p, err := client().SynthesizeProfile(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			pol, err := client().CreatePolicy(cmd.Context(), sdk.PolicyRequest{Name: name, Spec: p.Proposed.InlinePolicy})
 			if err != nil {
 				return err
 			}
@@ -79,7 +89,11 @@ func recordCmd(client clientFn) *cobra.Command {
 			"(Done recording). The capture lands on the workspace when the run terminates.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := client().recordWorkspaceTask(cmd.Context(), args[0], args[1])
+			wsID, err := parseID("workspace", args[0])
+			if err != nil {
+				return err
+			}
+			resp, err := client().RecordWorkspaceTask(cmd.Context(), wsID, args[1])
 			if err != nil {
 				return err
 			}
@@ -104,7 +118,7 @@ func recordCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-func printProfile(p profileResp) {
+func printProfile(p sdk.ProfileResult) {
 	fmt.Printf("Synthesized sandbox profile (overall risk: %s)\n", orDash(p.OverallRisk))
 	spec := p.Proposed.InlinePolicy
 	fmt.Printf("  min confinement: %s   first-use approval: %s   allow-all egress: %v\n",

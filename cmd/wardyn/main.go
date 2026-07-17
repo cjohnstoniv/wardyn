@@ -9,10 +9,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/spf13/cobra"
 )
 
@@ -45,14 +48,14 @@ func exitCodeFor(err error) int {
 	if errors.As(err, &ee) {
 		return ee.code
 	}
-	var ae *apiError
+	var ae *sdk.APIError
 	if errors.As(err, &ae) {
 		switch {
-		case ae.statusCode == 401 || ae.statusCode == 403:
+		case ae.Status == 401 || ae.Status == 403:
 			return 2
-		case ae.statusCode >= 500:
+		case ae.Status >= 500:
 			return 4
-		case ae.statusCode >= 400:
+		case ae.Status >= 400:
 			return 3
 		}
 	}
@@ -89,8 +92,14 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&token, "token", cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN")),
 		"admin bearer token (env WARDYN_ADMIN_TOKEN or WARDYN_TOKEN; --token is visible in the process list, prefer the env var)")
 
-	// client() resolves the configured client lazily so flags are parsed first.
-	client := func() *apiClient { return &apiClient{baseURL: serverURL, token: token} }
+	// client() resolves the configured SDK client lazily so flags are parsed
+	// first. The 30s per-request timeout bounds each poll of `run --wait` (whose
+	// loop can call the API ~900 times over its default 30m deadline) so a hung
+	// server can't wedge a single request forever; the shared client reuses one
+	// connection pool across those polls.
+	client := func() *sdk.Client {
+		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second}}
+	}
 
 	root.AddCommand(
 		runCmd(client),

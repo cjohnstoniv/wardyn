@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // policyCmd manages run policies in the control plane. Policies are gated to
@@ -18,7 +20,7 @@ import (
 // gating is planned, not yet enforced. The server validates every spec before
 // persisting it (a bad spec is rejected with HTTP 400). create/update read the
 // policy body from a JSON file.
-func policyCmd(client func() *apiClient) *cobra.Command {
+func policyCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "policy",
 		Short: "Manage run policies (egress allowlist, confinement floor, eligible grants)",
@@ -30,7 +32,7 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 		Short: "List all policies",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			policies, err := client().listPolicies(cmd.Context())
+			policies, err := client().ListPolicies(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -55,7 +57,11 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 		Short: "Show a policy's full spec as JSON",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := client().getPolicy(cmd.Context(), args[0])
+			id, err := parseID("policy", args[0])
+			if err != nil {
+				return err
+			}
+			p, err := client().GetPolicy(cmd.Context(), id)
 			if err != nil {
 				return err
 			}
@@ -74,7 +80,7 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p, err := client().createPolicy(cmd.Context(), body)
+			p, err := client().CreatePolicy(cmd.Context(), body)
 			if err != nil {
 				return err
 			}
@@ -97,11 +103,15 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 		Short: "Replace a policy's name and spec from a JSON file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("policy", args[0])
+			if err != nil {
+				return err
+			}
 			body, err := readPolicyFile(updateFile, updateName)
 			if err != nil {
 				return err
 			}
-			p, err := client().updatePolicy(cmd.Context(), args[0], body)
+			p, err := client().UpdatePolicy(cmd.Context(), id, body)
 			if err != nil {
 				return err
 			}
@@ -122,7 +132,11 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 		Short: "Delete a policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := client().deletePolicy(cmd.Context(), args[0]); err != nil {
+			id, err := parseID("policy", args[0])
+			if err != nil {
+				return err
+			}
+			if err := client().DeletePolicy(cmd.Context(), id); err != nil {
 				return err
 			}
 			fmt.Printf("policy %s deleted\n", args[0])
@@ -139,7 +153,7 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 // when the top-level "spec" key is absent the whole document is treated as the
 // spec. A non-empty nameOverride always wins over any name in the file. The
 // server validates the spec, so we only do light structural parsing here.
-func readPolicyFile(path, nameOverride string) (policyBody, error) {
+func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 	var raw []byte
 	var err error
 	if path == "-" {
@@ -148,25 +162,25 @@ func readPolicyFile(path, nameOverride string) (policyBody, error) {
 		raw, err = os.ReadFile(path)
 	}
 	if err != nil {
-		return policyBody{}, fmt.Errorf("read policy file: %w", err)
+		return sdk.PolicyRequest{}, fmt.Errorf("read policy file: %w", err)
 	}
 
 	// First try the full body shape.
-	var body policyBody
+	var body sdk.PolicyRequest
 	if jerr := json.Unmarshal(raw, &body); jerr == nil && hasSpec(raw) {
 		// Document carried a "spec" key: trust the parsed body.
 	} else {
 		// Treat the whole document as a bare spec.
-		body = policyBody{}
+		body = sdk.PolicyRequest{}
 		if serr := json.Unmarshal(raw, &body.Spec); serr != nil {
-			return policyBody{}, fmt.Errorf("parse policy JSON: %w", serr)
+			return sdk.PolicyRequest{}, fmt.Errorf("parse policy JSON: %w", serr)
 		}
 	}
 	if nameOverride != "" {
 		body.Name = nameOverride
 	}
 	if body.Name == "" {
-		return policyBody{}, fmt.Errorf("policy name is required (set \"name\" in the file or pass --name)")
+		return sdk.PolicyRequest{}, fmt.Errorf("policy name is required (set \"name\" in the file or pass --name)")
 	}
 	return body, nil
 }
