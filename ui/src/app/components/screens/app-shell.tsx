@@ -12,6 +12,7 @@ import {
   FolderOpen,
   Lock,
   LogOut,
+  Menu,
   Moon,
   Plus,
   Rocket,
@@ -28,6 +29,7 @@ import { useTheme } from "../wardyn/theme-provider";
 import { deriveReadiness } from "./onboarding/intro";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -132,6 +134,120 @@ const navLinkClass = (isActive: boolean) =>
       : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
   );
 
+// Shared nav body — rendered both in the desktop aside and in the mobile Sheet
+// (see MobileNav) so the two never drift. Relies on a flex-col parent for the
+// mt-auto bottom block, which both the aside and SheetContent provide.
+// `onNavigate` lets the mobile drawer close itself when a link is picked.
+function SidebarNav({
+  pendingApprovals,
+  attentionCount,
+  readiness,
+  meta,
+  onNavigate,
+}: {
+  pendingApprovals: number;
+  attentionCount: number;
+  readiness: StatusKind;
+  meta: ShellMeta;
+  onNavigate?: () => void;
+}) {
+  return (
+    <>
+      <nav className="space-y-4">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="space-y-0.5">
+            <SectionLabel className="px-2.5 pb-1">{group.label}</SectionLabel>
+            {group.items.map((item) => {
+              const count =
+                item.badge === "approvals"
+                  ? pendingApprovals
+                  : item.badge === "attention"
+                    ? attentionCount
+                    : 0;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end
+                  onClick={onNavigate}
+                  className={({ isActive }) => navLinkClass(isActive)}
+                >
+                  {({ isActive }) => (
+                    <>
+                      {isActive && (
+                        <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
+                      )}
+                      <item.icon className={cn("size-4", isActive && "text-foreground")} />
+                      <span className="flex-1 text-left">{item.label}</span>
+                      {count > 0 && (
+                        <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-[11px] font-semibold text-warning">
+                          {count}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </NavLink>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+
+      <div className="mt-auto space-y-3">
+        <NavLink to="/setup" onClick={onNavigate} className={({ isActive }) => navLinkClass(isActive)}>
+          {({ isActive }) => (
+            <>
+              {isActive && (
+                <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
+              )}
+              <Rocket className={cn("size-4", isActive && "text-foreground")} />
+              <span className="flex-1 text-left">Getting started</span>
+              <StatusChip status={readiness} />
+            </>
+          )}
+        </NavLink>
+
+        <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Fingerprint className="size-3.5 text-muted-foreground" />
+            <span className="font-mono">{meta.trustDomain}</span>
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            All agent identities anchored to this trust domain.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Below the md breakpoint the desktop aside is hidden; this hamburger + Sheet is
+// the only nav fallback (U121). Sheet is Radix Dialog underneath, so Escape-to-
+// close and focus-return-to-trigger come for free, and the trigger exposes
+// aria-expanded/aria-controls automatically. md:hidden pairs it with the aside's
+// md:flex so exactly one is present at any width.
+export function MobileNav(props: {
+  pendingApprovals: number;
+  attentionCount: number;
+  readiness: StatusKind;
+  meta: ShellMeta;
+}) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open navigation menu">
+          <Menu className="size-5" />
+        </Button>
+      </SheetTrigger>
+      <SheetContent side="left" aria-describedby={undefined} className="w-[248px] bg-sidebar px-3 py-4">
+        <SheetTitle className="sr-only">Navigation</SheetTitle>
+        <SidebarNav {...props} onNavigate={() => setOpen(false)} />
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 export function AppShell({
   pendingApprovals,
   attentionCount,
@@ -179,6 +295,9 @@ export function AppShell({
       <TopBar
         onSignOut={onSignOut}
         meta={meta}
+        pendingApprovals={pendingApprovals}
+        attentionCount={attentionCount}
+        readiness={readiness}
         onNewRun={() => {
           setNewRunMounted(true);
           setNewRunOpen(true);
@@ -186,64 +305,12 @@ export function AppShell({
       />
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
-          <nav className="space-y-4">
-            {NAV_GROUPS.map((group) => (
-              <div key={group.label} className="space-y-0.5">
-                <SectionLabel className="px-2.5 pb-1">{group.label}</SectionLabel>
-                {group.items.map((item) => {
-                  const count =
-                    item.badge === "approvals"
-                      ? pendingApprovals
-                      : item.badge === "attention"
-                        ? attentionCount
-                        : 0;
-                  return (
-                    <NavLink key={item.to} to={item.to} end className={({ isActive }) => navLinkClass(isActive)}>
-                      {({ isActive }) => (
-                        <>
-                          {isActive && (
-                            <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-                          )}
-                          <item.icon className={cn("size-4", isActive && "text-foreground")} />
-                          <span className="flex-1 text-left">{item.label}</span>
-                          {count > 0 && (
-                            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-[11px] font-semibold text-warning">
-                              {count}
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </NavLink>
-                  );
-                })}
-              </div>
-            ))}
-          </nav>
-
-          <div className="mt-auto space-y-3">
-            <NavLink to="/setup" className={({ isActive }) => navLinkClass(isActive)}>
-              {({ isActive }) => (
-                <>
-                  {isActive && (
-                    <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-                  )}
-                  <Rocket className={cn("size-4", isActive && "text-foreground")} />
-                  <span className="flex-1 text-left">Getting started</span>
-                  <StatusChip status={readiness} />
-                </>
-              )}
-            </NavLink>
-
-            <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Fingerprint className="size-3.5 text-muted-foreground" />
-                <span className="font-mono">{meta.trustDomain}</span>
-              </div>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                All agent identities anchored to this trust domain.
-              </p>
-            </div>
-          </div>
+          <SidebarNav
+            pendingApprovals={pendingApprovals}
+            attentionCount={attentionCount}
+            readiness={readiness}
+            meta={meta}
+          />
         </aside>
 
         <main id="main-content" tabIndex={-1} className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none">
@@ -270,15 +337,27 @@ export function AppShell({
 function TopBar({
   onSignOut,
   meta,
+  pendingApprovals,
+  attentionCount,
+  readiness,
   onNewRun,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
+  pendingApprovals: number;
+  attentionCount: number;
+  readiness: StatusKind;
   onNewRun: () => void;
 }) {
   const { theme, toggle } = useTheme();
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
+      <MobileNav
+        pendingApprovals={pendingApprovals}
+        attentionCount={attentionCount}
+        readiness={readiness}
+        meta={meta}
+      />
       <Link to="/runs" className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
         <WardynWordmark />
       </Link>
