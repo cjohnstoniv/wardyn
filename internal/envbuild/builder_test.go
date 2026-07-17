@@ -501,3 +501,48 @@ func assertEnvValue(t *testing.T, env []string, key, want string) {
 		t.Errorf("env %s = %q, want %q", key, got, want)
 	}
 }
+
+// TestRequiredTools_CanonicalUnion pins the U063 reconciliation: requiredTools
+// is the single source of truth and holds the UNION across the build gate, the
+// image --selftest, and ci-run.sh staging. Loosening the slice (dropping a tool)
+// fails here, so the reconciliation cannot be silently reverted.
+func TestRequiredTools_CanonicalUnion(t *testing.T) {
+	want := []string{"agent-run", "agent-run-lib.sh", "wardyn-rec", "wardyn-verify", "wardyn-git-helper"}
+	if len(requiredTools) != len(want) {
+		t.Fatalf("requiredTools = %v, want %v", requiredTools, want)
+	}
+	for i, name := range want {
+		if requiredTools[i] != name {
+			t.Fatalf("requiredTools[%d] = %q, want %q (full: %v)", i, requiredTools[i], name, requiredTools)
+		}
+	}
+}
+
+// TestValidateToolsDir_ConsumesEveryRequiredTool is the drift guard: it proves
+// validateToolsDir gates on the WHOLE requiredTools list, not a hardcoded subset.
+// For each tool it stages a dir holding every OTHER required tool and asserts the
+// preflight fails naming the omitted one. If a future edit made the gate stop
+// consuming requiredTools (e.g. re-listing a few names inline), dropping a member
+// like wardyn-rec would no longer fail — this test catches that regression.
+func TestValidateToolsDir_ConsumesEveryRequiredTool(t *testing.T) {
+	for _, missing := range requiredTools {
+		t.Run("missing_"+missing, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range requiredTools {
+				if name == missing {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatalf("write tool %q: %v", name, err)
+				}
+			}
+			b := newWithClient(newFakeEnvbuilderDocker(), "envbuilder:test", "registry.example.com/wardyn-cache")
+			b.ToolsDir = dir
+			if _, err := b.validateToolsDir(); err == nil {
+				t.Fatalf("validateToolsDir passed with %q missing; gate does not consume the full requiredTools list", missing)
+			} else if !strings.Contains(err.Error(), missing) {
+				t.Errorf("error must name the missing tool %q, got: %v", missing, err)
+			}
+		})
+	}
+}

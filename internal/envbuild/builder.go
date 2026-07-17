@@ -76,12 +76,36 @@ const (
 	envPushedRef = "WARDYN_ENVBUILD_PUSHED_REF"
 )
 
-// requiredTools are the Wardyn runner binaries that MUST be present in a built
-// image for the runner to exec a task, verify, and broker git into it. The
-// finalize stage COPYs them (plus anything else in the tools dir, e.g.
-// agent-run-lib.sh) from the host ToolsDir; a build fails closed if any is
-// missing, because an image without them is unrunnable (H5).
-var requiredTools = []string{"agent-run", "wardyn-verify", "wardyn-git-helper"}
+// requiredTools is the SINGLE canonical declaration of the Wardyn runner tools
+// that MUST be present in a built/wrapped image for the runner to exec a task,
+// record it, verify it, and broker git into it. Every gate in this package
+// (validateToolsDir, and the tests) consumes THIS list rather than re-hardcoding
+// its own subset — a build fails closed if any member is missing, because an
+// image without them is unrunnable (H5). The finalize stage COPYs everything in
+// the tools dir, so extra tools (e.g. wardyn-scan) may ride along; only these
+// are contractually required.
+//
+// The set is the UNION reconciled across the three drifted "required tools"
+// sites the review flagged (U063), so the build gate no longer passes a tools
+// dir that the runtime would then reject:
+//   - the old build gate here required only {agent-run, wardyn-verify,
+//     wardyn-git-helper} — too loose: it never checked wardyn-rec or the sourced
+//     lib, so a build-valid dir could still fail at record/exec time;
+//   - deploy/images/*/agent-run's --selftest requires wardyn-rec (and sources
+//     agent-run-lib.sh under `set -euo pipefail`, making the lib load-bearing);
+//   - scripts/ci-run.sh stages all of these from the agent image.
+//
+// ponytail: the two shell sites (agent-run --selftest, ci-run.sh) are shell and
+// cannot import this Go slice, so they keep their own hardcoded checks — the
+// residual single-source gap. This list is the build-time authority; a future
+// step could emit a shared manifest both the Go gate and the shell selftest read.
+var requiredTools = []string{
+	"agent-run",         // task entrypoint the runner execs
+	"agent-run-lib.sh",  // sourced by agent-run under `set -euo pipefail` (load-bearing)
+	"wardyn-rec",        // session recorder; required by the image --selftest
+	"wardyn-verify",     // confined replay/verify
+	"wardyn-git-helper", // brokered-token git credential helper
+}
 
 // envbuilderDockerAPI is the narrow slice of the Docker client that Builder
 // needs. It mirrors the pattern in internal/runner/docker: the interface is
@@ -123,7 +147,7 @@ type Builder struct {
 	CacheRepo string
 
 	// ToolsDir is the host directory holding Wardyn's runner tool binaries
-	// (agent-run, wardyn-verify, wardyn-git-helper — see requiredTools). After
+	// (the requiredTools set). After
 	// envbuilder pushes the base image, the finalize stage COPYs everything in
 	// this dir onto the image's PATH so the runner can exec/verify/record into
 	// the built image (H5). Empty => WARDYN_ENVBUILD_TOOLS_DIR. A build fails
@@ -314,8 +338,8 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 }
 
 // FinalizeBase is the Bring-Your-Own-Image path: wrap an arbitrary USER-supplied
-// base image with Wardyn's runner tools (agent-run, wardyn-rec, wardyn-verify,
-// wardyn-git-helper) and a cleared ENTRYPOINT, producing a runnable image the
+// base image with Wardyn's runner tools (the requiredTools set) and a cleared
+// ENTRYPOINT, producing a runnable image the
 // runner can exec/record/verify. Unlike Build, there is NO untrusted-code build
 // container and NO registry push — just the FROM+COPY finalize stage on the host
 // daemon, so it needs neither a cache repo nor the build sandbox. That stage is
@@ -672,9 +696,9 @@ func (b *Builder) requireCacheRepo() error {
 
 // validateToolsDir resolves the runner-tools directory (Builder.ToolsDir, else
 // WARDYN_ENVBUILD_TOOLS_DIR) and fails closed unless every required tool is
-// present. This is the build-contract preflight: an image that lacks
-// agent-run / wardyn-verify / wardyn-git-helper cannot be exec'd or verified by
-// the runner, so producing one would hand back a broken tag (H5).
+// present. This is the build-contract preflight: an image that lacks any member
+// of requiredTools cannot be exec'd, recorded, or verified by the runner, so
+// producing one would hand back a broken tag (H5).
 func (b *Builder) validateToolsDir() (string, error) {
 	dir := strings.TrimSpace(b.ToolsDir)
 	if dir == "" {
