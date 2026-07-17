@@ -120,12 +120,13 @@ func runCmd(client clientFn) *cobra.Command {
 	_ = cmd.MarkFlagRequired("agent")
 
 	var listJSON bool
+	var listLimit int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List all runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			runs, err := client().ListRuns(cmd.Context())
+			runs, err := client().ListRuns(cmd.Context(), listPageOpts(listLimit)...)
 			if err != nil {
 				return err
 			}
@@ -143,6 +144,7 @@ func runCmd(client clientFn) *cobra.Command {
 		},
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
+	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 
 	var getJSON bool
 	get := &cobra.Command{
@@ -289,12 +291,13 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	}
 	var state string
 	var asJSON bool
+	var listLimit int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List approval requests (optionally filtered by --state)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			aps, err := client().ListApprovals(cmd.Context(), types.ApprovalState(state))
+			aps, err := client().ListApprovals(cmd.Context(), types.ApprovalState(state), listPageOpts(listLimit)...)
 			if err != nil {
 				return err
 			}
@@ -313,6 +316,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	}
 	list.Flags().StringVar(&state, "state", "", "filter by state (e.g. PENDING)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 	cmd.AddCommand(list)
 	return cmd
 }
@@ -406,6 +410,16 @@ func auditCmd(client clientFn) *cobra.Command {
 	_ = cmd.Flags().MarkDeprecated("run", "pass the run id positionally: wardyn audit <run-id>")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	return cmd
+}
+
+// listPageOpts turns a --limit flag into the SDK's variadic ListOpts: limit<=0
+// sends nothing (the server applies its default page, preserving the prior
+// unparameterised output), a positive limit is passed through.
+func listPageOpts(limit int) []sdk.ListOpts {
+	if limit <= 0 {
+		return nil
+	}
+	return []sdk.ListOpts{{Limit: limit}}
 }
 
 // emitJSON writes v to stdout as indented JSON (the CLI's --json output shape).

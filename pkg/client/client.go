@@ -1,15 +1,41 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package client is the public Go SDK for the Wardyn control plane.
-//
-// It mirrors the REST API surface of wardynd exactly — same paths, same
-// status codes, same JSON vocabulary (internal/types is the shared source of
-// truth). The SDK adds zero non-stdlib dependencies so it can be embedded in
-// external tooling without dependency friction. The in-repo `wardyn` CLI now
-// uses THIS client directly (there is no second transport); it maps APIError to
-// process exit codes at the command layer and prints APIError.Error(), which
+// Package client is the public Go SDK for the Wardyn control plane. It uses
+// internal/types as the shared JSON source of truth and adds zero non-stdlib
+// dependencies so it can be embedded in external tooling without friction. The
+// in-repo `wardyn` CLI uses THIS client directly (there is no second transport);
+// it maps APIError to process exit codes and prints APIError.Error(), which
 // unwraps the server's {"error":...} envelope into a human-readable message.
+//
+// # Coverage
+//
+// The SDK covers these wardynd public route families (the ones external tooling
+// automates); it is a curated subset, NOT a 1:1 mirror of every route:
+//
+//   - runs:        CreateRun, GetRun, ListRuns, ListGrants, KillRun, SynthesizeProfile
+//   - approvals:   ListApprovals, Approve, Deny
+//   - policies:    CreatePolicy, GetPolicy, ListPolicies, UpdatePolicy, DeletePolicy
+//   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
+//     DeleteWorkspace, ScanWorkspace, VerifyWorkspace, RecordWorkspaceTask
+//   - audit:       AuditEvents, RecentAuditEvents
+//   - secrets:     ListSecrets, SetSecret, DeleteSecret
+//   - site-config: GetSiteConfig, PutSiteConfig
+//   - setup:       SetupStatus
+//   - identity:    Me
+//   - health:      Healthz
+//
+// NOT covered (drive these with the CLI or raw HTTP): the AI Run Composer
+// (/runs/compose*), preflight, attach WebSocket / attach-ticket, harness-login
+// device flow, and the agent-facing /internal/* mint & decision endpoints.
+// TestClientCoversRouteFamilies pins that every family listed above has a method.
+//
+// # Pagination
+//
+// The list endpoints and the audit trail accept an optional ListOpts (variadic,
+// so existing zero-arg calls are unchanged) that sends ?limit=&offset=. A page
+// may be truncated (the server sets X-Wardyn-Truncated); re-request with Offset
+// advanced by len(page) to page forward.
 //
 // Usage:
 //
@@ -29,11 +55,44 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// ListOpts carries the server's ?limit=&offset= pagination for the list and
+// audit endpoints. The zero value sends nothing, so the server applies its
+// default page size. Methods take it variadically; pass at most one.
+type ListOpts struct {
+	Limit  int
+	Offset int
+}
+
+// appendTo returns path with ?limit=&offset= merged in (respecting an existing
+// query string). Zero fields are omitted; an empty opts slice leaves path as-is.
+func appendListOpts(path string, opts []ListOpts) string {
+	if len(opts) == 0 {
+		return path
+	}
+	q := url.Values{}
+	if opts[0].Limit > 0 {
+		q.Set("limit", strconv.Itoa(opts[0].Limit))
+	}
+	if opts[0].Offset > 0 {
+		q.Set("offset", strconv.Itoa(opts[0].Offset))
+	}
+	if len(q) == 0 {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + q.Encode()
+}
 
 // Client is the Wardyn SDK client. Construct it with New or by filling the
 // fields directly. BaseURL and Token are required; HTTPClient defaults to
@@ -166,10 +225,10 @@ func (c *Client) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, erro
 	return out, err
 }
 
-// ListRuns returns all runs in reverse creation order.
-func (c *Client) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
+// ListRuns returns runs in reverse creation order. Pass a ListOpts to page.
+func (c *Client) ListRuns(ctx context.Context, opts ...ListOpts) ([]types.AgentRun, error) {
 	var out []types.AgentRun
-	err := c.do(ctx, http.MethodGet, "/api/v1/runs", nil, &out)
+	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs", opts), nil, &out)
 	return out, err
 }
 
@@ -202,13 +261,13 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 // ListApprovals returns approval requests filtered by state.
 // Pass an empty string to return all states.
 // Valid states: "PENDING", "APPROVED", "DENIED", "EXPIRED" (types.ApprovalState).
-func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, opts ...ListOpts) ([]types.ApprovalRequest, error) {
 	path := "/api/v1/approvals"
 	if state != "" {
 		path += "?state=" + url.QueryEscape(string(state))
 	}
 	var out []types.ApprovalRequest
-	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
 	return out, err
 }
 
@@ -247,10 +306,10 @@ type PolicyRequest struct {
 	Spec types.RunPolicySpec `json:"spec"`
 }
 
-// ListPolicies returns all run policies in reverse creation order.
-func (c *Client) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
+// ListPolicies returns run policies in reverse creation order. Pass a ListOpts to page.
+func (c *Client) ListPolicies(ctx context.Context, opts ...ListOpts) ([]types.RunPolicy, error) {
 	var out []types.RunPolicy
-	err := c.do(ctx, http.MethodGet, "/api/v1/policies", nil, &out)
+	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/policies", opts), nil, &out)
 	return out, err
 }
 
@@ -285,12 +344,23 @@ func (c *Client) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/policies/"+id.String(), nil, nil)
 }
 
-// AuditEvents returns the append-only audit trail for the specified run.
-// run_id is required by the server; a zero UUID will be rejected with 400.
-func (c *Client) AuditEvents(ctx context.Context, runID uuid.UUID) ([]types.AuditEvent, error) {
+// AuditEvents returns the append-only audit trail for the specified run in
+// chronological (seq ASC) order. run_id is required by the server; a zero UUID
+// is rejected with 400. Pass a ListOpts to page a long trail: a truncated page
+// (server sets X-Wardyn-Truncated) is walked forward with Offset += len(page),
+// which reaches the terminal run.complete event under ASC order.
+func (c *Client) AuditEvents(ctx context.Context, runID uuid.UUID, opts ...ListOpts) ([]types.AuditEvent, error) {
 	path := "/api/v1/audit?run_id=" + url.QueryEscape(runID.String())
 	var out []types.AuditEvent
-	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
+	return out, err
+}
+
+// RecentAuditEvents returns the newest-first global audit feed (all runs) — the
+// SIEM-style tail the Audit view renders. Pass a ListOpts to page.
+func (c *Client) RecentAuditEvents(ctx context.Context, opts ...ListOpts) ([]types.AuditEvent, error) {
+	var out []types.AuditEvent
+	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/audit", opts), nil, &out)
 	return out, err
 }
 

@@ -5,17 +5,28 @@ Import `github.com/cjohnstoniv/wardyn/pkg/client` (one non-stdlib dependency,
 through `client.*` (e.g. `client.AgentRun`, `client.ApprovalPending`), so you
 never import `internal/types`.
 
-> **Coverage gap (read this first).** `pkg/client` is a partial SDK, not a
-> full API client. It wraps exactly five surfaces: **run** (create/get/list/kill
-> + grants), **approval** (list/approve/deny), **policy** (CRUD), **audit**
-> (events), and **secret** (list/set/delete). It does **not** expose
-> workspaces, compose, site-config, harness (the managed-Claude-subscription
-> credential flow), attach (the interactive terminal WebSocket), preflight, or
-> the internal-groundtruth ingest endpoint. Those surfaces exist only on
-> wardynd's REST API today (see the matching handlers under `internal/api/`)
-> or via the `wardyn` CLI / UI — widening the SDK to cover them is unscheduled
-> work, not a hidden default (same honesty rule as
-> [`docs/PLUGGABILITY.md`](PLUGGABILITY.md)).
+> **Coverage (read this first).** `pkg/client` is a curated SDK over the route
+> families external tooling automates, **not** a 1:1 mirror of every wardynd
+> route. It wraps: **run** (create/get/list/grants/kill/profile), **approval**
+> (list/approve/deny), **policy** (CRUD), **workspace** (CRUD + scan/verify/
+> record), **audit** (per-run + global feed), **secret** (list/set/delete),
+> **site-config** (get/put), **setup** (status), **identity** (`Me`), and
+> **health** (`Healthz`). It does **not** wrap the AI Run Composer
+> (`/runs/compose*`), preflight, attach (the interactive terminal WebSocket) /
+> attach-ticket, the harness-login device flow, or the agent-facing
+> `/internal/*` mint & decision endpoints — drive those with the `wardyn` CLI /
+> UI or raw HTTP. `TestClientCoversRouteFamilies` pins that every family named
+> here has a real method, so this list cannot silently drift from the code (the
+> same honesty rule as [`docs/PLUGGABILITY.md`](PLUGGABILITY.md)).
+>
+> **Pagination.** The list methods and `AuditEvents`/`RecentAuditEvents` take an
+> optional `client.ListOpts{Limit, Offset}` (variadic — existing zero-arg calls
+> are unchanged) that sends `?limit=&offset=`. wardynd defaults to 200 rows
+> (audit keeps its historical 1000/500) and hard-caps at 1000; a truncated page
+> sets the `X-Wardyn-Truncated` response header, and you page forward with
+> `Offset += len(page)`. Because the per-run audit trail stays chronological
+> (ASC), paging forward is how you reach the terminal `run.complete` event on a
+> trail longer than one page.
 
 ```go
 package main
@@ -146,6 +157,9 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
   http://localhost:8080/api/v1/runs/<id>          # .state: COMPLETED | FAILED | ...
 curl -s -H 'Authorization: Bearer demo-admin-token' \
   'http://localhost:8080/api/v1/audit?run_id=<id>' # run.complete -> .data.exit_code
+# The per-run trail is chronological and returns up to 1000 events by default.
+# On a longer trail the response sets `X-Wardyn-Truncated: true`; page forward
+# with &limit=&offset= (offset += page size) to reach the terminal run.complete.
 
 # List pending approvals
 curl -s -H 'Authorization: Bearer demo-admin-token' \

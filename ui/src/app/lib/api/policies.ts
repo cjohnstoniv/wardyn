@@ -5,12 +5,12 @@
 
 // Run policies (admin-gated config): list/create/update/delete.
 import type { RunPolicy, RunPolicySpec } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 export const policies = {
   // GET /api/v1/policies — all run policies (reverse creation order).
   async listPolicies(): Promise<RunPolicy[]> {
-    const res = await wfetch("/policies", { method: "GET" });
+    const res = await wfetch(withLimit("/policies"), { method: "GET" });
     return unwrapList<RunPolicy>(await asJson<unknown>(res));
   },
 

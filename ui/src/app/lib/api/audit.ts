@@ -6,7 +6,7 @@
 // Audit log + the egress projection derived from audit events (the backend has
 // no /egress endpoint — egress decisions are read off audit rows).
 import type { AuditEvent, EgressDecision } from "../types";
-import { asJson, num, str, unwrapList, wfetch } from "./core";
+import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // Project egress.allow / egress.deny / egress.pending audit events into
 // the EgressDecision shape the run-detail screen renders. Exported so callers
@@ -39,7 +39,7 @@ export const audit = {
   // GET /api/v1/audit?run_id=   (run_id optional)
   async listAudit(runId?: string): Promise<AuditEvent[]> {
     const qs = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
-    const res = await wfetch(`/audit${qs}`, { method: "GET" });
+    const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
     return unwrapList<AuditEvent>(await asJson<unknown>(res));
   },
 };

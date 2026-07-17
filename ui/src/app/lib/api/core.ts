@@ -8,7 +8,7 @@
 // the JSON helpers from here, so there is exactly ONE fetch wrapper, one auth
 // token store, and one 401 handler across the whole client. Split out of the
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
-import { lsGet, lsSet } from "../storage";
+import { lsGet, lsSet, ssGet, ssSet } from "../storage";
 
 const BASE = "/api/v1";
 const TOKEN_KEY = "wardyn_admin_token";
@@ -18,12 +18,31 @@ const TOKEN_KEY = "wardyn_admin_token";
 // ------------------------------------------------------------
 let _unauthorized: (() => void) | null = null;
 
+// The admin bearer defaults to sessionStorage (cleared when the tab/browser
+// closes) so a full-admin token is not left at rest across restarts. It lands in
+// localStorage ONLY when the operator opts into "remember on this device". A
+// token stored under an older build (localStorage) keeps working: getToken falls
+// back to localStorage, so this change is transparent to existing sessions.
 export function getToken(): string | null {
-  return lsGet(TOKEN_KEY);
+  return ssGet(TOKEN_KEY) ?? lsGet(TOKEN_KEY);
 }
 
-export function setToken(token: string | null): void {
-  lsSet(TOKEN_KEY, token || null);
+// setToken(token, remember): remember=true persists to localStorage (survives
+// restart); default (false) uses sessionStorage. Either way the OTHER store is
+// cleared so the token lives in exactly one place. token=null clears both.
+export function setToken(token: string | null, remember = false): void {
+  if (!token) {
+    ssSet(TOKEN_KEY, null);
+    lsSet(TOKEN_KEY, null);
+    return;
+  }
+  if (remember) {
+    lsSet(TOKEN_KEY, token);
+    ssSet(TOKEN_KEY, null);
+  } else {
+    ssSet(TOKEN_KEY, token);
+    lsSet(TOKEN_KEY, null);
+  }
 }
 
 export function onUnauthorized(fn: () => void): void {
@@ -113,6 +132,21 @@ export async function errText(res: Response): Promise<string> {
   }
 }
 
+// Explicit page size for the console's list polls. wardynd paginates every list
+// endpoint (default 200, hard max 1000); the console asks for the max so its
+// Fleet / Audit / Workspaces views and the attention-badge poll keep showing the
+// full recent set instead of silently inheriting — and being reshaped by — a
+// change to the server default. If a deployment ever outgrows 1000 rows in one
+// view, move that view onto real ?offset= paging (the server + SDK already
+// support it; the response sets X-Wardyn-Truncated when more rows exist).
+export const LIST_LIMIT = 1000;
+
+// withLimit appends ?limit= (merging with an existing query string) so a poll
+// sends an explicit page size rather than relying on the server default.
+export function withLimit(path: string, limit: number = LIST_LIMIT): string {
+  return `${path}${path.includes("?") ? "&" : "?"}limit=${limit}`;
+}
+
 // Some backends wrap collections as { items: [...] }; tolerate both.
 export function unwrapList<T>(payload: unknown): T[] {
   if (Array.isArray(payload)) return payload as T[];
@@ -125,10 +159,12 @@ export function unwrapList<T>(payload: unknown): T[] {
   return [];
 }
 
-// Probe auth by hitting a protected, cheap endpoint.
+// Probe auth by hitting a protected endpoint. It needs only a yes/no on the
+// response status, so it asks for a single row (?limit=1) rather than pulling
+// the whole runs list just to discard it (U070).
 export async function probeAuth(): Promise<boolean> {
   try {
-    const res = await wfetch("/runs", { method: "GET" });
+    const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
     return res.ok;
   } catch {
     return false;
