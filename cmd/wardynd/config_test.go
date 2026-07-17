@@ -226,9 +226,18 @@ func TestFlagEnv_EmptyEnvValueHonoured(t *testing.T) {
 }
 
 func TestFlagBool_EnvTruthyVariants(t *testing.T) {
-	// Any of 1/true/yes/on (case-insensitive, trimmed) is true; anything else
-	// false. This gates security-relevant toggles (WARDYN_TLS_TERMINATED, the
-	// dangerous docker-sock build), so the truthy set must be exact.
+	// Any of 1/true/yes/on (case-insensitive, trimmed) is true; 0/false/no/off is
+	// false; unset/empty keeps the default. This gates security-relevant toggles
+	// (WARDYN_TLS_TERMINATED, the dangerous docker-sock build), so both sets must
+	// be exact.
+	//
+	// An UNRECOGNIZED value is deliberately absent from this table: it no longer
+	// resolves to a bool at all. It used to silently become `false` — so a typo
+	// (WARDYN_ENVBUILD=treu) quietly turned a feature OFF — and cliutil.FlagBool
+	// now exits 2 naming the variable and the value instead. That contract is
+	// owned and tested where the exit can be stubbed:
+	// internal/cliutil.TestFlagBool_InvalidIsLoud. Re-adding a case here would
+	// os.Exit the whole test binary.
 	tests := []struct {
 		val  string
 		want bool
@@ -243,7 +252,6 @@ func TestFlagBool_EnvTruthyVariants(t *testing.T) {
 		{"no", false},
 		{"off", false},
 		{"", false},
-		{"banana", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.val, func(t *testing.T) {
@@ -299,17 +307,23 @@ func TestFlagDuration_EnvOverridesDefault(t *testing.T) {
 	}
 }
 
-// An UNPARSEABLE env duration keeps the compiled default (fail-safe to default),
-// per the helper's documented contract — a typo must not zero an interval.
-func TestFlagDuration_UnparseableEnvKeepsDefault(t *testing.T) {
+// An UNSET env duration keeps the compiled default, quietly.
+//
+// An UNPARSEABLE one no longer does. This test previously asserted the opposite
+// ("fail-safe to default"), which sounded prudent and was not: silently
+// reinstating the default means an operator who typos an interval gets a
+// DIFFERENT, meaningful setting than they asked for, with nothing said. The
+// helper now exits 2 naming the variable and the value. That contract lives
+// where the exit can be stubbed: internal/cliutil.TestFlagDuration_InvalidIsLoud.
+// Asserting it here would os.Exit the test binary.
+func TestFlagDuration_UnsetKeepsDefault(t *testing.T) {
 	resetFlags(t)
-	t.Setenv("WARDYN_TEST_DUR", "not-a-duration")
 	p := flagDuration("testdur", "WARDYN_TEST_DUR", 90*time.Second, "usage")
 	if err := flag.CommandLine.Parse(nil); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if *p != 90*time.Second {
-		t.Fatalf("unparseable env should keep default 90s, got %v", *p)
+		t.Fatalf("unset env should keep default 90s, got %v", *p)
 	}
 }
 
@@ -349,13 +363,13 @@ func TestListenBindsSpecificRoutable(t *testing.T) {
 		{"169.254.10.1:8080", true},  // link-local
 		{"[2001:db8::1]:8080", true}, // global-unicast v6
 		// safe binds → no refusal
-		{"127.0.0.1:8080", false},   // loopback
-		{"[::1]:8080", false},       // loopback v6
-		{"localhost:8080", false},   // loopback name
-		{":8080", false},            // unspecified — compose case (loud log, not refusal)
-		{"0.0.0.0:8080", false},     // unspecified v4
-		{"[::]:8080", false},        // unspecified v6
-		{"not-an-ip:8080", false},   // unclassifiable hostname — don't refuse
+		{"127.0.0.1:8080", false}, // loopback
+		{"[::1]:8080", false},     // loopback v6
+		{"localhost:8080", false}, // loopback name
+		{":8080", false},          // unspecified — compose case (loud log, not refusal)
+		{"0.0.0.0:8080", false},   // unspecified v4
+		{"[::]:8080", false},      // unspecified v6
+		{"not-an-ip:8080", false}, // unclassifiable hostname — don't refuse
 	}
 	for _, tt := range tests {
 		if got := listenBindsSpecificRoutable(tt.listen); got != tt.want {

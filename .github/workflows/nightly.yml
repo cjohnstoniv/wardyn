@@ -110,11 +110,11 @@ jobs:
             ci-artifacts-negative/
 
   # Real-Docker envbuild/runner smoke test (the "E" / envbuild workstream).
-  # Unlike the PR-time `test-docker-tagged` job (ci.yml), this sets
-  # WARDYN_TEST_DOCKER=1 so the real-Docker-gated cases (internal/runner/docker
-  # network/integration tests, internal/envbuild's integration_test.go) actually
-  # exercise a live daemon instead of skipping. `test-report-docker` was
-  # previously invoked by NO workflow at all — this closes that gap.
+  # The PR-time ci.yml `build` job already runs `make test-report-docker` (via
+  # cover-check) with WARDYN_TEST_DOCKER unset, so its real-Docker-gated cases
+  # skip. This job is the non-duplicate half: it sets WARDYN_TEST_DOCKER=1 so
+  # those cases (internal/runner/docker network/integration tests,
+  # internal/envbuild's integration_test.go) actually exercise a live daemon.
   docker-tagged-live:
     runs-on: ubuntu-latest
     steps:

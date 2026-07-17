@@ -7,7 +7,7 @@ package docker
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/user"
 	"sort"
@@ -399,8 +399,10 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 		return
 	}
 	if !storageDriverSupportsQuota(info) {
-		log.Printf("wardyn/docker: disk cap of %d MiB requested but storage driver %q does not support a per-container size quota (need overlay2 with project quota, or btrfs/zfs); running WITHOUT a disk cap",
-			res.DiskMiB, info.Driver)
+		slog.Warn("wardyn/docker: disk cap requested but the storage driver does not support a per-container size quota (need overlay2 with project quota, or btrfs/zfs); running WITHOUT a disk cap",
+			slog.Int64("disk_mib", res.DiskMiB),
+			slog.String("storage_driver", info.Driver),
+		)
 		return
 	}
 	if hc.StorageOpt == nil {

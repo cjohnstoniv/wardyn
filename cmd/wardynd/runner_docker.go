@@ -6,7 +6,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -35,7 +35,9 @@ import (
 func newDockerRunner(proxyImage string, confRuntimes map[types.ConfinementClass]string) (runner.Runner, error) {
 	recordingMount := os.Getenv("WARDYN_RECORDING_MOUNT")
 	if recordingMount != "" {
-		log.Printf("wardynd: WARNING WARDYN_RECORDING_MOUNT=%q is set — this is the reduced-isolation recording fallback: casts delivered via the shared mount are UNMASKED and have NO cross-run isolation. The masked brokered upload path is preferred whenever available; prefer leaving WARDYN_RECORDING_MOUNT unset for viewer-exposed recordings.", recordingMount)
+		slog.Warn("wardynd: WARDYN_RECORDING_MOUNT is set — this is the reduced-isolation recording fallback: casts delivered via the shared mount are UNMASKED and have NO cross-run isolation. The masked brokered upload path is preferred whenever available; prefer leaving WARDYN_RECORDING_MOUNT unset for viewer-exposed recordings.",
+			slog.String("recording_mount", recordingMount),
+		)
 	}
 	sub, err := docker.New(docker.Config{
 		ProxyImage:          proxyImage,

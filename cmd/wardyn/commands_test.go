@@ -98,10 +98,13 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 		ID: uuid.New(), State: types.RunPending, ConfinementClass: types.CC2,
 	})
 
+	// A real UUID: policy_id is a *uuid.UUID on the server, so anything else
+	// could only ever have produced an opaque "invalid JSON body" 400.
+	policyID := uuid.New()
 	err := execCmd(t, "run",
 		"--url", srv.URL, "--token", "tok",
 		"--repo", "org/name", "--agent", "claude-code",
-		"--task", "do the thing", "--policy", "pol-9",
+		"--task", "do the thing", "--policy", policyID.String(),
 		"--confinement", "CC2", "--interactive")
 	if err != nil {
 		t.Fatalf("run command returned error: %v", err)
@@ -123,8 +126,29 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	if body["repo"] != "org/name" || body["agent"] != "claude-code" || body["task"] != "do the thing" {
 		t.Errorf("run body repo/agent/task wrong: %v", body)
 	}
-	if body["policy_id"] != "pol-9" || body["confinement_class"] != "CC2" || body["interactive"] != true {
+	if body["policy_id"] != policyID.String() || body["confinement_class"] != "CC2" || body["interactive"] != true {
 		t.Errorf("run body policy/confinement/interactive wrong: %v", body)
+	}
+}
+
+// A --policy that isn't a UUID fails with a clear error BEFORE any request,
+// rather than posting a body the server can only reject as "invalid JSON body".
+func TestRunCmd_RejectsMalformedPolicyID(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--policy", "pol-9")
+	if err == nil {
+		t.Fatal("expected error for a non-UUID --policy, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse --policy") {
+		t.Errorf("error = %q, want it to name --policy", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (validation must short-circuit)", n)
 	}
 }
 

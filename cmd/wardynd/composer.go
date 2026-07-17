@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -76,7 +76,7 @@ func buildComposerRegistry(cfgVal string, secrets secretstore.Store) (*composer.
 		return nil, nil, err
 	}
 	for _, w := range warnings {
-		log.Printf("wardynd: WARNING %s", w)
+		slog.Warn("wardynd: composer registry warning", slog.String("warning", w))
 	}
 	return reg, readiness, nil
 }

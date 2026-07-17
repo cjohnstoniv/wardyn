@@ -33,12 +33,22 @@ jobs:
       # the two coverage profiles. The tagless build alone cannot compile the
       # container-hardening driver or internal/envbuild, so a tagless-only floor
       # scored code that is not what ships.
+      #
+      # cover-check == test-report + test-report-docker, so this IS the PR-time
+      # docker-tagged suite (fakeDocker; WARDYN_TEST_DOCKER deliberately unset, so
+      # the real-daemon cases skip cleanly). A separate test-docker-tagged job used
+      # to run `make test-report-docker` a second time on its own runner — same
+      # command, same env, reports already inside the upload below. Removed as a
+      # true duplicate; nightly.yml's docker-tagged-live is the one that is NOT a
+      # duplicate (it sets WARDYN_TEST_DOCKER=1 against a live daemon).
       - name: Test both tag sets (detailed reports + coverage) and enforce the union coverage floor
         run: make cover-check
       # The concurrent kill/dispatch FSM tests (kill_dispatch_race_test.go) are
       # only meaningful under the race detector; the rest of the tree rides along.
       - name: Test (race detector)
         run: make test-race
+      # Covers every Go suite this job produced: unit/, docker/ (the -tags docker
+      # suite, via cover-check) and union/ (the coverage floor's merged profile).
       - name: Upload Go test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -228,28 +238,6 @@ jobs:
         if: matrix.target == 'conformance-stub'
         run: make test-conformance-stub
         # No continue-on-error: the stub contract tests must always pass.
-
-  # ── docker-tagged tests (fakeDocker; no real Docker daemon needed) ────────
-  # Proves confinement/egress invariants using the fake Docker client. This ran
-  # in NO per-PR workflow before (a HIGH finding) — only plain `go build/vet
-  # -tags docker` touched this tree, never the actual docker-tagged tests.
-  # WARDYN_TEST_DOCKER is deliberately left unset: the real-Docker-gated cases
-  # skip cleanly, leaving the fakeDocker-backed tests to run here.
-  test-docker-tagged:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.5'
-      - name: docker-tagged suite with reports (fakeDocker; no real daemon needed)
-        run: make test-report-docker
-      - name: Upload docker-tagged test reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: docker-test-reports
-          path: test/reports/go/docker/**
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +

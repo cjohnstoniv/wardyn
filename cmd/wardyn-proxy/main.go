@@ -11,7 +11,7 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,10 +38,12 @@ func main() {
 		// run's egress policy) as one env var at container create.
 		cfg, err = proxy.LoadConfigBytes([]byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON")))
 	default:
-		log.Fatal("wardyn-proxy: -config or WARDYN_PROXY_CONFIG_JSON is required")
+		slog.Error("wardyn-proxy: -config or WARDYN_PROXY_CONFIG_JSON is required")
+		os.Exit(1)
 	}
 	if err != nil {
-		log.Fatalf("wardyn-proxy: %v", err)
+		slog.Error("wardyn-proxy: load config failed", slog.Any("err", err))
+		os.Exit(1)
 	}
 
 	// Per-proxy kill-switch: WARDYN_LLM_SCAN=off forces THIS proxy process's
@@ -54,7 +56,7 @@ func main() {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))) {
 	case "off", "0", "false", "no", "disable", "disabled", "none":
 		if cfg.Policy.LLMInspection != nil {
-			log.Printf("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
+			slog.Info("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
 			cfg.Policy.LLMInspection = nil
 		}
 	}
@@ -74,7 +76,8 @@ func main() {
 	client := &http.Client{Timeout: 130 * time.Second}
 	srv, err := proxy.NewServer(startupCtx, cfg, client, os.Stdout)
 	if err != nil {
-		log.Fatalf("wardyn-proxy: %v", err)
+		slog.Error("wardyn-proxy: server startup failed", slog.Any("err", err))
+		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -82,23 +85,27 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("wardyn-proxy: listening on %s (run %s)", srv.Addr(), cfg.RunID)
+		slog.Info("wardyn-proxy: listening",
+			slog.String("addr", srv.Addr()),
+			slog.String("run_id", cfg.RunID.String()),
+		)
 		errCh <- srv.ListenAndServe()
 	}()
 
 	select {
 	case err := <-errCh:
 		if err != nil {
-			log.Fatalf("wardyn-proxy: serve error: %v", err)
+			slog.Error("wardyn-proxy: serve error", slog.Any("err", err))
+			os.Exit(1)
 		}
 	case <-ctx.Done():
-		log.Printf("wardyn-proxy: shutdown signal received")
+		slog.Info("wardyn-proxy: shutdown signal received")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("wardyn-proxy: shutdown error: %v", err)
+			slog.Error("wardyn-proxy: shutdown error", slog.Any("err", err))
 			os.Exit(1)
 		}
-		log.Printf("wardyn-proxy: stopped cleanly")
+		slog.Info("wardyn-proxy: stopped cleanly")
 	}
 }

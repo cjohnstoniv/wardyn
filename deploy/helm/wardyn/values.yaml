@@ -6,14 +6,19 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  # No wardynd image is published to a public registry yet (see docs/CI.md). Before
-  # `helm install`, BUILD and PUSH your own image and point this at it — e.g.
+  # NO wardynd image is published to ANY registry — no workflow in this repo
+  # pushes one (see docs/CI.md). BOTH defaults below are placeholders: they
+  # render a valid-looking ref that does not exist, so `helm install` with the
+  # defaults ImagePullBackOffs. BUILD and PUSH your own first, then override both
+  # (README.md "Build and push wardynd" has the exact commands) (U091):
   #   docker build -f deploy/compose/Dockerfile.wardynd -t <registry>/wardynd:<tag> .
-  # and push — otherwise the pod ImagePullBackOffs on the placeholder below (U091).
+  #   docker push <registry>/wardynd:<tag>
+  #   helm install ... --set image.repository=<registry>/wardynd --set image.tag=<tag>
   repository: ghcr.io/cjohnstoniv/wardynd
   pullPolicy: IfNotPresent
-  # Empty => .Chart.AppVersion (the released chart version). Set to your built
-  # image's tag. The old hardcoded "0.0.1" matched no release and no published image.
+  # Empty => .Chart.AppVersion, currently "0.0.1" — which matches no git tag
+  # (releases are v0.1.0/v0.2.0/v0.3.0) and no published image. Set this to the
+  # tag you actually built and pushed.
   tag: ""
   # Names of imagePullSecrets for a private registry (list of {name: ...}).
   pullSecrets: []

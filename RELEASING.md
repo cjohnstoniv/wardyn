@@ -3,7 +3,8 @@
 Wardyn is **pre-alpha** and does **not** follow semantic versioning yet — interfaces
 are not stable, so a minor bump may still carry breaking changes (see the CHANGELOG
 header). Releases are cut **manually** by the maintainer; there is no release workflow
-or `make release` target. This document is that process, written down (U124).
+or `make release` target — **nothing here is automated to push anything**. This
+document is that process, written down (U124).
 
 ## Prerequisites
 
@@ -11,8 +12,25 @@ or `make release` target. This document is that process, written down (U124).
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag: `build` (both tags),
   `vet`, `test` (incl. `test-pg` and `test-docker` where wired), `staticcheck`,
-  `govulncheck` (tagless **and** `-tags docker`), `gitleaks`, `licenses`, `dco`. Run
-  `make test govulncheck staticcheck` locally first.
+  `govulncheck` (tagless **and** `-tags docker`), `gitleaks`, `licenses`, `dco`.
+
+Run that gate list locally first, in one command:
+
+```bash
+make release-check                              # or, to include the Postgres lane:
+WARDYN_TEST_PG=postgres://... make release-check
+```
+
+`release-check` runs the same commands as the CI jobs, at the same pinned tool
+versions, and pushes/tags nothing. It covers `build` (both tags), `vet` (both),
+the Go suites + the union coverage floor, `-race`, `staticcheck`, `govulncheck`
+(both), SPDX headers, `go-licenses` (both), and `gitleaks`; `test-pg` runs only
+when `WARDYN_TEST_PG` is set and prints a loud SKIPPED line when it isn't.
+
+**It is not a CI replica** — `test-conformance-docker` (needs a live daemon), the
+UI jobs (`typecheck`/`vitest`/`build`/Playwright), and `dco` are CI-only. A green
+`release-check` means "no local reason not to tag", not "CI is green". Check the
+actual CI run on the commit before step 3.
 
 ## Steps
 
