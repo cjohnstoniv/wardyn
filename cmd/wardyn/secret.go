@@ -32,7 +32,7 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 				// Read from stdin: piped input or a single prompted line. The
 				// value never appears in argv/process listings this way.
 				if isTerminal(os.Stdin) {
-					fmt.Fprintf(os.Stderr, "value for %q (input hidden is NOT supported; prefer piping): ", args[0])
+					fmt.Fprintf(os.Stderr, "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
 				}
 				var err error
 				v, err = readSecretValue(os.Stdin)
@@ -52,14 +52,19 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 	}
 	set.Flags().StringVar(&value, "value", "", "secret value (prefer stdin to keep it out of shell history)")
 
-	ls := &cobra.Command{
-		Use:   "ls",
-		Short: "List secret names (never values)",
-		Args:  cobra.NoArgs,
+	var asJSON bool
+	list := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List secret names (never values)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			names, err := client().listSecrets(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if asJSON {
+				return emitJSON(names)
 			}
 			for _, n := range names {
 				fmt.Println(n)
@@ -67,11 +72,13 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 			return nil
 		},
 	}
+	list.Flags().BoolVar(&asJSON, "json", false, "emit the names as a JSON array")
 
-	rm := &cobra.Command{
-		Use:   "rm <name>",
-		Short: "Delete a secret",
-		Args:  cobra.ExactArgs(1),
+	del := &cobra.Command{
+		Use:     "delete <name>",
+		Aliases: []string{"rm"},
+		Short:   "Delete a secret",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := client().deleteSecret(cmd.Context(), args[0]); err != nil {
 				return err
@@ -81,7 +88,7 @@ func secretCmd(client func() *apiClient) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(set, ls, rm)
+	cmd.AddCommand(set, list, del)
 	return cmd
 }
 

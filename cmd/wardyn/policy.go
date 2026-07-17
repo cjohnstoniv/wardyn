@@ -24,6 +24,7 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 		Short: "Manage run policies (egress allowlist, confinement floor, eligible grants)",
 	}
 
+	var listJSON bool
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List all policies",
@@ -32,6 +33,9 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 			policies, err := client().listPolicies(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if listJSON {
+				return emitJSON(policies)
 			}
 			tw := newTab()
 			fmt.Fprintln(tw, "ID\tNAME\tMIN_CC\tFIRST_USE\tGRANTS\tUPDATED")
@@ -44,6 +48,7 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
 
 	get := &cobra.Command{
 		Use:   "get <policy-id>",
@@ -54,13 +59,12 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(p)
+			return emitJSON(p)
 		},
 	}
 
 	var createFile, createName string
+	var createJSON bool
 	create := &cobra.Command{
 		Use:   "create -f <file.json>",
 		Short: "Create a policy from a JSON file ({\"name\":..., \"spec\":{...}})",
@@ -74,15 +78,20 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if createJSON {
+				return emitJSON(p)
+			}
 			fmt.Printf("created policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
 		},
 	}
 	create.Flags().StringVarP(&createFile, "file", "f", "", "path to a JSON policy body (use '-' for stdin)")
 	create.Flags().StringVar(&createName, "name", "", "policy name (overrides/supplies the name in the file)")
+	create.Flags().BoolVar(&createJSON, "json", false, "emit the created policy as JSON")
 	_ = create.MarkFlagRequired("file")
 
 	var updateFile, updateName string
+	var updateJSON bool
 	update := &cobra.Command{
 		Use:   "update <policy-id> -f <file.json>",
 		Short: "Replace a policy's name and spec from a JSON file",
@@ -96,12 +105,16 @@ func policyCmd(client func() *apiClient) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if updateJSON {
+				return emitJSON(p)
+			}
 			fmt.Printf("updated policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
 		},
 	}
 	update.Flags().StringVarP(&updateFile, "file", "f", "", "path to a JSON policy body (use '-' for stdin)")
 	update.Flags().StringVar(&updateName, "name", "", "policy name (overrides/supplies the name in the file)")
+	update.Flags().BoolVar(&updateJSON, "json", false, "emit the updated policy as JSON")
 	_ = update.MarkFlagRequired("file")
 
 	del := &cobra.Command{

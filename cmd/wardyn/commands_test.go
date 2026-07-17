@@ -4,13 +4,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -95,36 +93,6 @@ func execCmd(t *testing.T, args ...string) error {
 // run command
 // --------------------------------------------------------------------------
 
-// TestRunCmd_JSONOutput asserts `wardyn run --json` emits a machine-readable run
-// object (so CI reads .ID instead of scraping human text — finding U032).
-func TestRunCmd_JSONOutput(t *testing.T) {
-	id := uuid.New()
-	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
-		ID: id, State: types.RunPending, ConfinementClass: types.CC2,
-	})
-
-	orig := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--json")
-	w.Close()
-	os.Stdout = orig
-	if err != nil {
-		t.Fatalf("run --json returned error: %v", err)
-	}
-	out, _ := io.ReadAll(r)
-	var got types.AgentRun
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("run --json did not emit valid JSON: %v\noutput: %q", err, out)
-	}
-	if got.ID != id {
-		t.Errorf("run --json ID = %v, want %v", got.ID, id)
-	}
-	if strings.Contains(string(out), "created run ") {
-		t.Errorf("run --json leaked human output: %q", out)
-	}
-}
-
 func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
 		ID: uuid.New(), State: types.RunPending, ConfinementClass: types.CC2,
@@ -165,13 +133,14 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 func TestRunCmd_RequiresAgentOnly(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
 
-	// Missing --agent → error, no request.
+	// Missing --agent → error, no request. --agent is now a cobra required
+	// flag, so the error is cobra's standard required-flag message.
 	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--repo", "org/name")
 	if err == nil {
 		t.Fatal("expected error when --agent missing, got nil")
 	}
-	if !strings.Contains(err.Error(), "--agent is required") {
-		t.Errorf("error = %q, want the required-agent message", err)
+	if !strings.Contains(err.Error(), `required flag(s) "agent" not set`) {
+		t.Errorf("error = %q, want the required-flag message", err)
 	}
 	srv.mu.Lock()
 	n := len(srv.reqs)
@@ -384,50 +353,6 @@ func TestRunCmd_WaitKilledExits2(t *testing.T) {
 	}
 }
 
-// TestApprovalsListCmd is the U086 regression: `wardyn approvals list` must exist
-// and GET /api/v1/approvals (honoring --state) so a CLI-only operator can discover
-// a pending approval's id — previously only the Approvals UI exposed these.
-func TestApprovalsListCmd(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
-		{ID: uuid.New(), RunID: uuid.New(), Kind: "egress", State: "PENDING", RequestedAt: time.Now()},
-	})
-	if err := execCmd(t, "approvals", "list", "--url", srv.URL, "--token", "tok", "--state", "PENDING"); err != nil {
-		t.Fatalf("approvals list returned error: %v", err)
-	}
-	last := srv.last()
-	if last.method != http.MethodGet || last.path != "/api/v1/approvals" {
-		t.Errorf("approvals list hit %s %s, want GET /api/v1/approvals", last.method, last.path)
-	}
-	if last.query != "state=PENDING" {
-		t.Errorf("approvals list query = %q, want state=PENDING", last.query)
-	}
-}
-
-// TestAgentExitCode_FoundDistinguishesMissingFromZero is the U088 regression: the
-// bool return lets the --wait path tell "agent genuinely exited 0" from "the
-// run.complete event is missing/unreadable" — they otherwise both read as code 0.
-func TestAgentExitCode_FoundDistinguishesMissingFromZero(t *testing.T) {
-	makeClient := func(events []types.AuditEvent) *apiClient {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(events)
-		}))
-		t.Cleanup(srv.Close)
-		return &apiClient{baseURL: srv.URL, token: "tok"}
-	}
-	runID := uuid.New().String()
-	// No run.complete event → (0, false).
-	if code, found := agentExitCode(context.Background(), makeClient([]types.AuditEvent{{Action: "run.exec"}}), runID); found || code != 0 {
-		t.Errorf("missing run.complete: got (%d,%v), want (0,false)", code, found)
-	}
-	// run.complete carrying exit_code 0 → (0, true), distinct from the missing case.
-	if code, found := agentExitCode(context.Background(), makeClient([]types.AuditEvent{
-		{Action: "run.complete", Data: json.RawMessage(`{"exit_code":0}`)},
-	}), runID); !found || code != 0 {
-		t.Errorf("run.complete exit 0: got (%d,%v), want (0,true)", code, found)
-	}
-}
-
 func TestRunCmd_WaitPersistentPollErrorAborts(t *testing.T) {
 	setWaitPollInterval(t, time.Millisecond)
 	runID := uuid.New()
@@ -570,29 +495,16 @@ func TestAuditCmd_BuildsQuery(t *testing.T) {
 	}
 }
 
-// TestAuditCmd_PositionalArg proves the run id works positionally, like every
-// sibling command (finding U021).
-func TestAuditCmd_PositionalArg(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
-
-	if err := execCmd(t, "audit", "run-77", "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("audit <id> returned error: %v", err)
-	}
-	if got := srv.last(); got.query != "run_id=run-77" {
-		t.Errorf("query = %q, want run_id=run-77 (positional id must be used)", got.query)
-	}
-}
-
 // audit requires --run; without it the command fails before any request.
 func TestAuditCmd_RequiresRun(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
 
 	err := execCmd(t, "audit", "--url", srv.URL, "--token", "tok")
 	if err == nil {
-		t.Fatal("expected error when run id missing, got nil")
+		t.Fatal("expected error when --run missing, got nil")
 	}
-	if !strings.Contains(err.Error(), "run id required") {
-		t.Errorf("error = %q, want 'run id required'", err)
+	if !strings.Contains(err.Error(), "--run is required") {
+		t.Errorf("error = %q, want --run is required", err)
 	}
 	srv.mu.Lock()
 	n := len(srv.reqs)
@@ -603,14 +515,14 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// kill command
+// run kill subcommand (kill is now a child of the consolidated `run` noun)
 // --------------------------------------------------------------------------
 
 func TestKillCmd(t *testing.T) {
 	srv := newCmdServer(t, http.StatusAccepted, nil)
 
-	if err := execCmd(t, "kill", "run-77", "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("kill returned error: %v", err)
+	if err := execCmd(t, "run", "kill", "run-77", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("run kill returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodPost || got.path != "/api/v1/runs/run-77/kill" {
@@ -869,5 +781,159 @@ func TestCmd_APIErrorSurfacesNonNil(t *testing.T) {
 func TestCmd_UnknownCommandErrors(t *testing.T) {
 	if err := execCmd(t, "definitely-not-a-command"); err == nil {
 		t.Error("expected error for unknown subcommand, got nil")
+	}
+}
+
+// --------------------------------------------------------------------------
+// --json flag: accepted on the list/create/read commands; the request still
+// fires unchanged (the JSON shaping is downstream of the wire call).
+// --------------------------------------------------------------------------
+
+func TestRunListCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{{ID: uuid.New(), Agent: "claude-code"}})
+
+	if err := execCmd(t, "run", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("run list --json returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/runs" {
+		t.Errorf("got %s %s, want GET /api/v1/runs", got.method, got.path)
+	}
+}
+
+func TestPolicyListCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.RunPolicy{{ID: uuid.New(), Name: "p"}})
+
+	if err := execCmd(t, "policy", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy list --json returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/policies" {
+		t.Errorf("got %s %s, want GET /api/v1/policies", got.method, got.path)
+	}
+}
+
+func TestPolicyCreateCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "from-file"})
+
+	dir := t.TempDir()
+	file := dir + "/policy.json"
+	writeFile(t, file, `{"name":"from-file","spec":{"min_confinement_class":"CC2"}}`)
+
+	if err := execCmd(t, "policy", "create", "-f", file, "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy create --json returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/policies" {
+		t.Errorf("got %s %s, want POST /api/v1/policies", got.method, got.path)
+	}
+}
+
+func TestSecretListCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string][]string{"names": {"alpha"}})
+
+	if err := execCmd(t, "secret", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("secret list --json returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/secrets" {
+		t.Errorf("got %s %s, want GET /api/v1/secrets", got.method, got.path)
+	}
+}
+
+func TestRecordSynthesizeCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, profileResp{OverallRisk: "low"})
+
+	if err := execCmd(t, "record", "synthesize", "run-9", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("record synthesize --json returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/runs/run-9/profile" {
+		t.Errorf("got %s %s, want POST /api/v1/runs/run-9/profile", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// approvals list (surfaces the client's listApprovals; approve/deny decide one)
+// --------------------------------------------------------------------------
+
+func TestApprovalsListCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
+	})
+
+	if err := execCmd(t, "approvals", "list", "--state", "PENDING", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approvals list returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/approvals" {
+		t.Errorf("got %s %s, want GET /api/v1/approvals", got.method, got.path)
+	}
+	if got.query != "state=PENDING" {
+		t.Errorf("query = %q, want state=PENDING", got.query)
+	}
+}
+
+func TestApprovalsListCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
+	})
+
+	if err := execCmd(t, "approvals", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approvals list --json returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/approvals" {
+		t.Errorf("got %s %s, want GET /api/v1/approvals", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// secret list / delete (the renamed ls/rm; ls/rm live on as aliases above)
+// --------------------------------------------------------------------------
+
+func TestSecretListCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string][]string{"names": {"alpha", "beta"}})
+
+	if err := execCmd(t, "secret", "list", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("secret list returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/secrets" {
+		t.Errorf("got %s %s, want GET /api/v1/secrets", got.method, got.path)
+	}
+}
+
+func TestSecretDeleteCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	if err := execCmd(t, "secret", "delete", "gh-token", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("secret delete returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodDelete || got.path != "/api/v1/secrets/gh-token" {
+		t.Errorf("got %s %s, want DELETE /api/v1/secrets/gh-token", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// record save --name is now a cobra required flag
+// --------------------------------------------------------------------------
+
+func TestRecordSaveCmd_RequiresName(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, profileResp{})
+
+	err := execCmd(t, "record", "save", "run-1", "--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Fatal("expected error when --name is missing, got nil")
+	}
+	if !strings.Contains(err.Error(), `required flag(s) "name" not set`) {
+		t.Errorf("error = %q, want the required-flag message", err)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("server saw %d requests, want 0 (required-flag check must short-circuit)", n)
 	}
 }

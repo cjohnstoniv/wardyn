@@ -22,6 +22,7 @@ func recordCmd(client clientFn) *cobra.Command {
 			"`wardyn record save <run-id> --name <n>` to save it for reuse by future enforced runs.",
 	}
 
+	var synthJSON bool
 	synth := &cobra.Command{
 		Use:   "synthesize <run-id>",
 		Short: "Preview a sandbox profile synthesized from a run's recorded activity",
@@ -31,36 +32,44 @@ func recordCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if synthJSON {
+				return emitJSON(p)
+			}
 			printProfile(p)
 			return nil
 		},
 	}
+	synth.Flags().BoolVar(&synthJSON, "json", false, "emit the synthesized profile as JSON")
 
 	var name string
+	var saveJSON bool
 	save := &cobra.Command{
 		Use:   "save <run-id> --name <policy-name>",
 		Short: "Synthesize a sandbox profile from a run and save it as a named policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if name == "" {
-				return fmt.Errorf("--name is required")
-			}
 			p, err := client().synthesizeProfile(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
-			printProfile(p)
 			pol, err := client().createPolicy(cmd.Context(), policyBody{Name: name, Spec: p.Proposed.InlinePolicy})
 			if err != nil {
 				return err
 			}
+			if saveJSON {
+				return emitJSON(pol)
+			}
+			printProfile(p)
 			fmt.Printf("\nsaved sandbox profile as policy %q (id %s)\n", pol.Name, pol.ID)
 			fmt.Printf("  launch an enforced run with: wardyn run --agent <agent> --policy %s\n", pol.ID)
 			return nil
 		},
 	}
 	save.Flags().StringVar(&name, "name", "", "name for the saved policy (required)")
+	save.Flags().BoolVar(&saveJSON, "json", false, "emit the saved policy as JSON")
+	_ = save.MarkFlagRequired("name")
 
+	var taskJSON bool
 	task := &cobra.Command{
 		Use:   "task <workspace-id> <task-key>",
 		Short: "Record one workspace import task in an OPEN sandbox (learn what it actually uses)",
@@ -74,6 +83,9 @@ func recordCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if taskJSON {
+				return emitJSON(resp)
+			}
 			fmt.Printf("record run %s launched (task %s, mode %s)\n", resp.RecordRunID, resp.TaskKey, resp.Mode)
 			if resp.Detail != "" {
 				fmt.Println("  " + resp.Detail)
@@ -86,6 +98,7 @@ func recordCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
+	task.Flags().BoolVar(&taskJSON, "json", false, "emit the record-run response as JSON")
 
 	cmd.AddCommand(synth, save, task)
 	return cmd

@@ -32,10 +32,7 @@ const testToken = "test-admin-token"
 type capture struct {
 	method string
 	path   string
-	rawURL string
 	query  string
-	auth   string
-	ctype  string
 	body   []byte
 }
 
@@ -47,10 +44,7 @@ func newCapturingServer(t *testing.T, cap *capture, status int, respBody any) (*
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.method = r.Method
 		cap.path = r.URL.Path
-		cap.rawURL = r.URL.String()
 		cap.query = r.URL.RawQuery
-		cap.auth = r.Header.Get("Authorization")
-		cap.ctype = r.Header.Get("Content-Type")
 		cap.body, _ = readAll(r)
 		if respBody != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -105,30 +99,6 @@ func TestClientCreateRun_OmitsEmptyOptionals(t *testing.T) {
 		if _, present := body[k]; present {
 			t.Errorf("body should omit empty %q, got %v", k, body[k])
 		}
-	}
-}
-
-// TestClient_DoReturnsTypedAPIError is the U087 regression: a non-2xx response
-// must surface a *apiError carrying the STATUS CODE + server body, so callers can
-// distinguish auth / not-found / conflict programmatically instead of collapsing
-// every failure into one opaque error that always exits 1.
-func TestClient_DoReturnsTypedAPIError(t *testing.T) {
-	var cap capture
-	_, c := newCapturingServer(t, &cap, http.StatusConflict, map[string]string{"error": "run is already terminal"})
-
-	err := c.killRun(context.Background(), uuid.New().String())
-	if err == nil {
-		t.Fatal("expected an error on a 409 response")
-	}
-	var ae *apiError
-	if !errors.As(err, &ae) {
-		t.Fatalf("error should be *apiError, got %T: %v", err, err)
-	}
-	if ae.StatusCode != http.StatusConflict {
-		t.Errorf("apiError.StatusCode = %d, want 409", ae.StatusCode)
-	}
-	if !strings.Contains(ae.Body, "already terminal") {
-		t.Errorf("apiError.Body should carry the server's actionable message, got %q", ae.Body)
 	}
 }
 
@@ -252,10 +222,59 @@ func TestClientDo_APIErrorSurfaced(t *testing.T) {
 		t.Fatal("expected error on 400 response, got nil")
 	}
 	msg := err.Error()
+	// The prefix (method/path/status) survives, and the server's message is
+	// surfaced — but UNWRAPPED from its JSON envelope.
 	for _, want := range []string{"POST", "/api/v1/runs", "400", "agent and repo are required"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q missing %q", msg, want)
 		}
+	}
+	if strings.Contains(msg, `{"error"`) {
+		t.Errorf("error %q still carries the raw {\"error\":...} envelope; it must be unwrapped", msg)
+	}
+	// It must be a typed *apiError carrying the numeric status for exitCodeFor.
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		t.Fatalf("err = %v, want a typed *apiError", err)
+	}
+	if ae.statusCode != http.StatusBadRequest {
+		t.Errorf("statusCode = %d, want 400", ae.statusCode)
+	}
+}
+
+// apiError.Error() unwraps the server's JSON envelope: it prefers "error",
+// then "message", then falls back to the raw body — always KEEPing the
+// "METHOD path: status: msg" prefix.
+func TestApiError_UnwrapsErrorField(t *testing.T) {
+	e := &apiError{method: "POST", path: "/api/v1/runs", statusCode: 400, status: "400 Bad Request",
+		body: []byte(`{"error":"boom","message":"ignored"}`)}
+	got := e.Error()
+	want := "POST /api/v1/runs: 400 Bad Request: boom"
+	if got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "ignored") {
+		t.Errorf("Error() = %q, must prefer the error field over message", got)
+	}
+}
+
+func TestApiError_UnwrapsMessageField(t *testing.T) {
+	e := &apiError{method: "GET", path: "/api/v1/policies", statusCode: 404, status: "404 Not Found",
+		body: []byte(`{"message":"no such policy"}`)}
+	got := e.Error()
+	want := "GET /api/v1/policies: 404 Not Found: no such policy"
+	if got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestApiError_NonJSONBodyPreserved(t *testing.T) {
+	e := &apiError{method: "PUT", path: "/api/v1/secrets/x", statusCode: 500, status: "500 Internal Server Error",
+		body: []byte("upstream exploded\n")}
+	got := e.Error()
+	want := "PUT /api/v1/secrets/x: 500 Internal Server Error: upstream exploded"
+	if got != want {
+		t.Errorf("Error() = %q, want %q (raw non-JSON body preserved, trimmed)", got, want)
 	}
 }
 

@@ -22,20 +22,33 @@ type apiClient struct {
 	token   string
 }
 
-// apiError is a non-2xx response from the control plane. It carries the status
-// CODE (not just the text) so callers can distinguish auth / not-found / conflict
-// programmatically instead of collapsing every failure to a single exit 1 (U087).
-// Its Error() string is unchanged from the previous inline format.
+// apiError is a typed non-2xx API response. It carries the numeric status so
+// exitCodeFor can map it to a process exit code, and its Error() unwraps the
+// server's {"error"|"message":...} envelope into a bare human message (while
+// KEEPing the "METHOD path: status: msg" prefix).
 type apiError struct {
-	StatusCode int
-	Status     string
-	Method     string
-	Path       string
-	Body       string
+	method     string
+	path       string
+	statusCode int
+	status     string // e.g. "400 Bad Request"
+	body       []byte
 }
 
 func (e *apiError) Error() string {
-	return fmt.Sprintf("%s %s: %s: %s", e.Method, e.Path, e.Status, e.Body)
+	msg := strings.TrimSpace(string(e.body))
+	var env struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(e.body, &env) == nil {
+		switch {
+		case env.Error != "":
+			msg = env.Error
+		case env.Message != "":
+			msg = env.Message
+		}
+	}
+	return fmt.Sprintf("%s %s: %s: %s", e.method, e.path, e.status, msg)
 }
 
 func (c *apiClient) do(ctx context.Context, method, path string, body any, out any) error {
@@ -71,7 +84,7 @@ func (c *apiClient) do(ctx context.Context, method, path string, body any, out a
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return &apiError{StatusCode: resp.StatusCode, Status: resp.Status, Method: method, Path: path, Body: strings.TrimSpace(string(data))}
+		return &apiError{method: method, path: path, statusCode: resp.StatusCode, status: resp.Status, body: data}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -144,8 +157,7 @@ type profileResp struct {
 			Host    string   `json:"host"`
 			Methods []string `json:"methods"`
 		} `json:"domains"`
-		ExecArgv0s []string `json:"exec_argv0s"`
-		Anomalies  []string `json:"anomalies"`
+		Anomalies []string `json:"anomalies"`
 	} `json:"observations"`
 	Warnings []string `json:"warnings"`
 }
