@@ -10,23 +10,28 @@
 // Wardyn's egress confinement before onboarding any repo or key. Pure
 // composition — no backend changes. Gated on barrierReady ONLY (never llmReady,
 // never workspaces): a demo runs the sandbox, not an agent, so no model is needed.
+//
+// Reusable pieces (also consumed by the Getting-Started per-demo wizard steps in
+// setup/demos-step.tsx): the `useDemoRuns` hook (launch/poll/store), the
+// `DemoRunControls` run UI, and `StepList`.
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Loader2, Play, ShieldAlert, Square, TriangleAlert } from "lucide-react";
+import { Loader2, Play, ScrollText, ShieldAlert, Square, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { runs as api } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { getErrorMessage } from "../../../lib/format";
+import { audit, egressFromAudit } from "../../../lib/api/audit";
+import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
-import { isTerminalRunState, type RunState, type SetupStatus } from "../../../lib/types";
+import { isTerminalRunState, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
 import { deriveReadiness } from "../onboarding/intro";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
 import { CopyPill } from "../import-workspace/record-pane";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
-import { DEMOS, type Demo, type DemoStep } from "./demo-catalog";
+import { DEMOS, markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";
 
 // Resume seam: {demoId: runId} of demos the operator started, so a page reload
 // re-attaches to a still-RUNNING sandbox instead of orphaning it.
@@ -52,9 +57,11 @@ function forgetStored(demoId: string): void {
 
 type TrackedRun = { id: string; state: RunState };
 
-export function DemoScreen() {
-  const [status, setStatus] = React.useState<SetupStatus | null>(null);
-  const [loading, setLoading] = React.useState(true);
+// useDemoRuns — owns the live-run map, the reload re-attach, the poll, and
+// start/end for the demo sandboxes. Shared by the /demos grid and the
+// Getting-Started per-demo steps. `onStarted(demoId)` fires when a demo is
+// successfully launched (the wizard step marks itself done + records the launch).
+export function useDemoRuns(onStarted?: (demoId: string) => void) {
   const [runs, setRuns] = React.useState<Record<string, TrackedRun>>({});
   const [starting, setStarting] = React.useState<string | null>(null);
 
@@ -65,19 +72,9 @@ export function DemoScreen() {
     runsRef.current = runs;
   }, [runs]);
 
-  const barrierReady = status ? deriveReadiness(status).barrierReady : false;
-
-  // Mount: readiness probe (gate) + re-attach any still-RUNNING demo from a prior visit.
+  // Mount: re-attach any still-RUNNING demo from a prior visit.
   React.useEffect(() => {
     let active = true;
-    setupApi
-      .getSetupStatus()
-      .then((s) => active && setStatus(s))
-      .catch(() => {
-        /* leave readiness unknown — the gate defaults closed */
-      })
-      .finally(() => active && setLoading(false));
-
     const stored = loadStore();
     Promise.all(
       Object.entries(stored).map(async ([demoId, runId]) => {
@@ -134,26 +131,31 @@ export function DemoScreen() {
   }, []);
   usePoll(refresh, 2000, !anyPending);
 
-  const start = async (demo: Demo) => {
-    setStarting(demo.id);
-    try {
-      const run = await api.createRun({
-        agent: "claude-code",
-        interactive: true,
-        inline_policy: demo.policy,
-      });
-      setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
-      const store = loadStore();
-      store[demo.id] = run.id;
-      saveStore(store);
-    } catch (e) {
-      toast.error("Couldn't start the demo", { description: getErrorMessage(e) });
-    } finally {
-      setStarting(null);
-    }
-  };
+  const start = React.useCallback(
+    async (demo: Demo) => {
+      setStarting(demo.id);
+      try {
+        const run = await api.createRun({
+          agent: "claude-code",
+          interactive: true,
+          inline_policy: demo.policy,
+        });
+        setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
+        const store = loadStore();
+        store[demo.id] = run.id;
+        saveStore(store);
+        markDemoLaunched(demo.id); // durable per-demo "was launched" signal
+        onStarted?.(demo.id);
+      } catch (e) {
+        toast.error("Couldn't start the demo", { description: getErrorMessage(e) });
+      } finally {
+        setStarting(null);
+      }
+    },
+    [onStarted],
+  );
 
-  const end = async (demo: Demo, runId: string) => {
+  const end = React.useCallback(async (demo: Demo, runId: string) => {
     try {
       await api.killRun(runId);
     } catch {
@@ -165,7 +167,31 @@ export function DemoScreen() {
       return n;
     });
     forgetStored(demo.id);
-  };
+  }, []);
+
+  return { runs, starting, start, end };
+}
+
+export function DemoScreen() {
+  const [status, setStatus] = React.useState<SetupStatus | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  // Mount: readiness probe (the barrier gate). The runner owns its own re-attach.
+  React.useEffect(() => {
+    let active = true;
+    setupApi
+      .getSetupStatus()
+      .then((s) => active && setStatus(s))
+      .catch(() => {
+        /* leave readiness unknown — the gate defaults closed */
+      })
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const barrierReady = status ? deriveReadiness(status).barrierReady : false;
 
   return (
     <div className="mx-auto w-full max-w-[900px] px-6 py-8">
@@ -193,20 +219,39 @@ export function DemoScreen() {
         </div>
       )}
 
-      <div className="space-y-4">
-        {DEMOS.map((demo) => (
-          <DemoCard
-            key={demo.id}
-            demo={demo}
-            run={runs[demo.id]}
-            starting={starting === demo.id}
-            barrierReady={barrierReady}
-            loading={loading}
-            onStart={() => start(demo)}
-            onEnd={(runId) => end(demo, runId)}
-          />
-        ))}
-      </div>
+      <DemoRunner barrierReady={barrierReady} loading={loading} />
+    </div>
+  );
+}
+
+// DemoRunner — the /demos grid: renders a DemoCard per demo, driven by the shared
+// hook. `demos` defaults to the full catalog (override to render a subset).
+export function DemoRunner({
+  barrierReady,
+  loading = false,
+  onStarted,
+  demos = DEMOS,
+}: {
+  barrierReady: boolean;
+  loading?: boolean;
+  onStarted?: (demoId: string) => void;
+  demos?: Demo[];
+}) {
+  const { runs, starting, start, end } = useDemoRuns(onStarted);
+  return (
+    <div className="space-y-4">
+      {demos.map((demo) => (
+        <DemoCard
+          key={demo.id}
+          demo={demo}
+          run={runs[demo.id]}
+          starting={starting === demo.id}
+          barrierReady={barrierReady}
+          loading={loading}
+          onStart={() => start(demo)}
+          onEnd={(runId) => end(demo, runId)}
+        />
+      ))}
     </div>
   );
 }
@@ -229,8 +274,6 @@ function DemoCard({
   onEnd: (runId: string) => void;
 }) {
   const running = run?.state === "RUNNING";
-  const failed = run?.state === "FAILED";
-  const pending = !!run && !running && !failed && !isTerminalRunState(run.state);
 
   return (
     <div className="rounded-xl border border-border p-4" data-testid={`demo-card-${demo.id}`}>
@@ -244,70 +287,172 @@ function DemoCard({
       </div>
       <p className="mt-1 text-sm text-muted-foreground">{demo.teaches}</p>
 
-      {demo.caution && (
-        <div
-          className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
-          data-testid="demo-caution"
-        >
-          <ShieldAlert className="mt-0.5 size-4 shrink-0" />
-          <p className="leading-snug">{demo.caution}</p>
-        </div>
-      )}
+      {demo.caution && <DemoCaution text={demo.caution} />}
 
       <StepList steps={demo.steps} />
 
-      {running && run ? (
-        <div className="mt-4 space-y-2">
-          <AttachTerminal runId={run.id} />
-          <LiveApprovals
-            runId={run.id}
-            idleHint="Off-policy egress you trigger surfaces here to approve or deny, live."
-          />
-          <Button size="sm" variant="outline" onClick={() => onEnd(run.id)}>
-            <Square className="size-3.5" /> End demo
-          </Button>
+      <DemoRunControls
+        demo={demo}
+        run={run}
+        starting={starting}
+        barrierReady={barrierReady}
+        loading={loading}
+        onStart={onStart}
+        onEnd={onEnd}
+      />
+    </div>
+  );
+}
+
+// DemoCaution — the honest CC1-open-egress danger note (demo 4).
+export function DemoCaution({ text }: { text: string }) {
+  return (
+    <div
+      className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
+      data-testid="demo-caution"
+    >
+      <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+      <p className="leading-snug">{text}</p>
+    </div>
+  );
+}
+
+// DemoRunControls — the Start / pending / running-terminal / failed block. Shared
+// by the /demos DemoCard and the Getting-Started per-demo step.
+export function DemoRunControls({
+  demo,
+  run,
+  starting,
+  barrierReady,
+  loading,
+  onStart,
+  onEnd,
+}: {
+  demo: Demo;
+  run?: TrackedRun;
+  starting: boolean;
+  barrierReady: boolean;
+  loading: boolean;
+  onStart: () => void;
+  onEnd: (runId: string) => void;
+}) {
+  const running = run?.state === "RUNNING";
+  const failed = run?.state === "FAILED";
+  const pending = !!run && !running && !failed && !isTerminalRunState(run.state);
+
+  if (running && run) {
+    return (
+      <div className="mt-4 space-y-2">
+        <AttachTerminal runId={run.id} />
+        <LiveApprovals
+          runId={run.id}
+          idleHint="Off-policy egress you trigger surfaces here to approve or deny, live."
+        />
+        <DemoAuditPanel runId={run.id} />
+        <Button size="sm" variant="outline" onClick={() => onEnd(run.id)}>
+          <Square className="size-3.5" /> End demo
+        </Button>
+      </div>
+    );
+  }
+  if (pending && run) {
+    return (
+      <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground" data-testid="demo-starting">
+        <Loader2 className="size-4 animate-spin" />
+        Starting the sandbox — first time may pull an image…
+        <Button size="sm" variant="ghost" onClick={() => onEnd(run.id)}>
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 space-y-2">
+      {failed && run && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
+          data-testid="demo-failed"
+        >
+          <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+          <p>
+            The sandbox failed to start.{" "}
+            <Link to={`/runs/${run.id}`} className="font-medium underline underline-offset-2">
+              View run details
+            </Link>
+            .
+          </p>
         </div>
-      ) : pending && run ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground" data-testid="demo-starting">
-          <Loader2 className="size-4 animate-spin" />
-          Starting the sandbox — first time may pull an image…
-          <Button size="sm" variant="ghost" onClick={() => onEnd(run.id)}>
-            Cancel
-          </Button>
-        </div>
+      )}
+      <Button
+        onClick={onStart}
+        disabled={!barrierReady || loading || starting}
+        data-testid={`demo-start-${demo.id}`}
+      >
+        {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+        {failed ? "Start again" : "Start demo"}
+      </Button>
+    </div>
+  );
+}
+
+// DemoAuditPanel — the run's egress decisions, inline and live, so the operator
+// sees a denial land on the record WITHOUT leaving the demo for the Audit screen.
+// Projects egress.allow/deny/pending audit rows via egressFromAudit; polls /audit
+// every 2s while mounted (i.e. while the demo sandbox is running).
+export function DemoAuditPanel({ runId }: { runId: string }) {
+  const [events, setEvents] = React.useState<AuditEvent[]>([]);
+  const refresh = React.useCallback(async () => {
+    const list = await audit.listAudit(runId).catch(() => null);
+    if (list) setEvents(list);
+  }, [runId]);
+  React.useEffect(() => {
+    void refresh();
+  }, [refresh]);
+  usePoll(refresh, 2000, false);
+
+  // Newest first, so a just-triggered denial lands at the top.
+  const decisions = egressFromAudit(events)
+    .slice()
+    .sort((a, b) => b.time.localeCompare(a.time));
+
+  return (
+    <div className="rounded-lg border border-border bg-surface-2/40 p-3" data-testid="demo-audit-panel">
+      <div className="mb-2 flex items-center gap-2">
+        <ScrollText className="size-4 shrink-0 text-primary" />
+        <span className="text-sm font-medium text-foreground">Audit — egress decisions</span>
+        <Chip tone="success" dot pulse className="ml-auto">
+          live
+        </Chip>
+      </div>
+      {decisions.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No egress decisions yet — run a command in the terminal above and each allow/deny lands
+          here, on the record.
+        </p>
       ) : (
-        <div className="mt-4 space-y-2">
-          {failed && run && (
-            <div
-              className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs text-danger"
-              data-testid="demo-failed"
-            >
-              <ShieldAlert className="mt-0.5 size-4 shrink-0" />
-              <p>
-                The sandbox failed to start.{" "}
-                <Link to={`/runs/${run.id}`} className="font-medium underline underline-offset-2">
-                  View run details
-                </Link>
-                .
-              </p>
-            </div>
-          )}
-          <Button
-            onClick={onStart}
-            disabled={!barrierReady || loading || starting}
-            data-testid={`demo-start-${demo.id}`}
-          >
-            {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-            {failed ? "Start again" : "Start demo"}
-          </Button>
-        </div>
+        <ul className="space-y-1" data-testid="demo-audit-rows">
+          {decisions.map((d) => (
+            <li key={d.id} className="flex items-center gap-2 text-xs">
+              <Chip
+                tone={d.decision === "deny" ? "danger" : d.decision === "allow" ? "success" : "warning"}
+                dot
+              >
+                {d.decision}
+              </Chip>
+              <span className="min-w-0 truncate font-mono text-foreground">{d.domain}</span>
+              <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+                {relativeTime(d.time)}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
 // Numbered instructions — a copy pill for the command steps, the explanation for all.
-function StepList({ steps }: { steps: DemoStep[] }) {
+export function StepList({ steps }: { steps: DemoStep[] }) {
   return (
     <ol className="mt-3 space-y-2" data-testid="demo-steps">
       {steps.map((s, i) => (

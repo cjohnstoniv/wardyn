@@ -10,14 +10,27 @@
 // workspaces/credentials cases). No React here by design — data/derivation only.
 import type { SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
 import type { Readiness } from "../onboarding/intro";
+import { DEMOS } from "../demos/demo-catalog";
 
 // ------------------------------------------------------------
 // Steps — ids/labels FROZEN (e2e tests target them). The single source of truth
 // for the step contract; the orchestrator imports these rather than redefining.
 // ------------------------------------------------------------
+// The four hands-on demos are each their own funnel sub-step under "Demos" (so
+// they render as separate items in the rail). Ids mirror the demo catalog so the
+// orchestrator resolves a step's demo by id. FROZEN with the rest of the contract.
+export const DEMO_STEP_IDS = [
+  "sealed-box",
+  "fail-then-approve",
+  "held-at-the-door",
+  "lines-that-cant-be-crossed",
+] as const;
+export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
+
 export type SetupStepId =
   | "environment"
   | "provider"
+  | DemoStepId
   | "host_proxy"
   | "scm_provider"
   | "artifact_repo"
@@ -26,11 +39,16 @@ export type SetupStepId =
   | "review"
   | "launch";
 
+// demo id → title, from the catalog (single source of truth for the demo steps'
+// labels + headings, so they can't drift from what the demo pages show).
+const DEMO_TITLES = Object.fromEntries(DEMOS.map((d) => [d.id, d.title])) as Record<DemoStepId, string>;
+
 // id→label lookup — the rail and the layout footer both need it; export once
 // here instead of each rebuilding the same map (F5).
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
   provider: "Model/Harness Provider",
+  ...DEMO_TITLES,
   host_proxy: "Host Proxy",
   scm_provider: "SCM Provider",
   artifact_repo: "Artifact Redirect",
@@ -43,6 +61,7 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
 export const STEP_HEADING: Record<SetupStepId, string> = {
   environment: "Pick your barrier",
   provider: "Connect a model or agent harness",
+  ...DEMO_TITLES,
   host_proxy: "Corporate host proxy",
   scm_provider: "Source control provider",
   artifact_repo: "Artifact registry redirection",
@@ -64,29 +83,40 @@ export interface PhaseDef {
   collapsible?: boolean;
 }
 
-// Walk order: essentials → your work → corporate network → finish. Most
-// operators reach their actual work (SCM/workspaces) right after the
-// essentials; the niche corporate-network steps sit later and stay collapsed
-// for everyone else. Step ids/labels above remain frozen — only the phase
-// composition (and therefore STEP_ORDER) moved.
+// Walk order: essentials → demos → corporate network → your work → finish.
+// After the essentials (barrier + model), Demos lets a first-timer SEE Wardyn
+// govern a throwaway sandbox before investing in their own repos; the niche
+// corporate-network steps (a quick opt-out for everyone else) come next so a
+// corporate operator wires proxy/mirror BEFORE onboarding workspaces; then their
+// actual work. Step ids/labels above remain frozen — only the phase composition
+// (and therefore STEP_ORDER) moves.
 export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "provider"] },
-  { id: "work", label: "Your work", steps: ["scm_provider", "workspaces", "credentials"] },
+  { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
   {
     id: "corporate",
     label: "Corporate network",
     steps: ["host_proxy", "artifact_repo"],
     collapsible: true,
   },
+  { id: "work", label: "Your work", steps: ["scm_provider", "workspaces", "credentials"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
 ];
 
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
 
+// First step of the phase AFTER the given phase id (or null if it's the last) —
+// powers the "skip this section" control for the collapsible corporate phase.
+export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
+  const i = PHASES.findIndex((p) => p.id === phaseId);
+  return i >= 0 ? (PHASES[i + 1]?.steps[0] ?? null) : null;
+}
+
 // Steps that render an "Optional" chip in the shell (everything outside the two
 // Essentials and two Finish steps). Exported so the layout and its test share
 // one list instead of each hardcoding the same membership.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
+  ...DEMO_STEP_IDS,
   "host_proxy",
   "scm_provider",
   "artifact_repo",
@@ -136,6 +166,12 @@ export function stepBadges(
   siteConfig: SiteConfig | null,
 ): Record<SetupStepId, StepBadge> {
   const readyWorkspaces = workspaces.filter((w) => w.status === "ready").length;
+  // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
+  // "Optional"); the orchestrator upgrades a demo to a green "Done · demo run" once
+  // it's been launched (a per-browser signal that doesn't belong in this pure fn).
+  const demoBadges = Object.fromEntries(
+    DEMO_STEP_IDS.map((id) => [id, { text: "Optional", tone: "neutral" } as StepBadge]),
+  ) as Record<DemoStepId, StepBadge>;
   return {
     environment: r.barrierReady
       ? { text: `Ready · ${r.barrierCount} of 3 barriers`, tone: "success" }
@@ -143,6 +179,7 @@ export function stepBadges(
     provider: r.llmReady
       ? { text: r.llmLabel ? `Ready · ${r.llmLabel}` : "Ready", tone: "success" }
       : { text: "Needs setup", tone: "warning" },
+    ...demoBadges,
     host_proxy: siteConfigBadge(siteConfig, "host_proxy"),
     scm_provider: siteConfigBadge(siteConfig, "scm_provider"),
     artifact_repo: siteConfigBadge(siteConfig, "artifact_repo"),
@@ -188,12 +225,20 @@ export function stepDone(
   workspaces: Workspace[],
   siteConfig: SiteConfig | null,
 ): Record<SetupStepId, boolean> {
+  // Demos: advisory here (all false). The orchestrator ORs in the per-browser
+  // "launched demos" set to earn each demo's checkmark — kept out of this pure fn
+  // so its signature (and every steps.test call site) stays unchanged.
+  const demoDone = Object.fromEntries(DEMO_STEP_IDS.map((id) => [id, false])) as Record<
+    DemoStepId,
+    boolean
+  >;
   return {
     // Environment = "Pick your barrier" — barrier-only, the same signal its badge
     // reads. An unrelated failing check must not blank this dot while the badge
     // stays green (Review owns the whole-checks rollup).
     environment: r.barrierReady,
     provider: r.llmReady,
+    ...demoDone,
     // Corporate baseline: done derives from the SAME SiteConfig predicate as the
     // badge (siteConfigConfigured), so the green "Configured" badge and the rail
     // checkmark can never disagree. Still honest — the value read is the actual

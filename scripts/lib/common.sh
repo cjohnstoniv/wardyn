@@ -59,11 +59,23 @@ license_scope_files() {
 # Provisioners (up.sh pg) and consumers (e2e-backend.sh, run-local.sh) must
 # agree on the daemon, or `docker exec wardyn-test-pg` hits a different store
 # than the one that created the container (real failure on dual-daemon boxes).
+#
+# It also derives WARDYN_DOCKER_SOCK — the host socket the compose wardynd
+# bind-mounts and DRIVES — from the chosen DOCKER_HOST when unset. Without this,
+# a dual-daemon box operates the stack on the native daemon yet mounts the
+# default /var/run/docker.sock into wardynd, so the UI silently collapses to
+# Fence (runsc/kata invisible). This runs even when DOCKER_HOST was pre-set, so
+# `export DOCKER_HOST=...` alone is enough. (scripts/ci-run.sh relied on its own
+# copy of this derivation; now it inherits this one.)
 wardyn_pick_docker_host() {
-  [ -n "${DOCKER_HOST:-}" ] && return 0
-  for _wpd_s in /run/wardyn-docker.sock /var/run/wardyn-docker.sock; do
-    [ -S "${_wpd_s}" ] && { DOCKER_HOST="unix://${_wpd_s}"; export DOCKER_HOST; break; }
-  done
-  unset _wpd_s
+  if [ -z "${DOCKER_HOST:-}" ]; then
+    for _wpd_s in /run/wardyn-docker.sock /var/run/wardyn-docker.sock; do
+      [ -S "${_wpd_s}" ] && { DOCKER_HOST="unix://${_wpd_s}"; export DOCKER_HOST; break; }
+    done
+    unset _wpd_s
+  fi
+  case "${DOCKER_HOST:-}" in
+    unix://*) [ -z "${WARDYN_DOCKER_SOCK:-}" ] && export WARDYN_DOCKER_SOCK="${DOCKER_HOST#unix://}" ;;
+  esac
   return 0
 }

@@ -38,13 +38,20 @@ import {
   ScmProviderStep,
   WorkspacesStep,
 } from "./step-bodies";
-import { stepBadges, stepDone, type SetupStepId } from "./steps";
+import { DEMO_STEP_IDS, stepBadges, stepDone, type SetupStepId } from "./steps";
+import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 
 // The dismiss flag and the auto-open decision live in ./setup-gate so App.tsx
 // can import them without pulling this module's terminal-heavy graph into the
 // entry chunk. Re-exported here: this is still their public home.
 export { dismissSetup, setupDismissed, shouldOpenSetup } from "./setup-gate";
 import { dismissSetup } from "./setup-gate";
+
+// Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.
+// Lazy-load it so that terminal-heavy graph stays out of the setup chunk until
+// the operator opens a demo step (same reasoning as the /demos route). The pure
+// demo catalog + launched-set reader are imported eagerly above (xterm-free).
+const DemoDetail = React.lazy(() => import("./demos-step"));
 
 // ------------------------------------------------------------
 // SetupScreen
@@ -58,6 +65,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // recheckToken to surface a tier's "still not detected" line after a re-probe.
   const [recheckCount, setRecheckCount] = React.useState(0);
   const [fastPathHidden, setFastPathHidden] = React.useState(false);
+  // Per-demo "launched at least once" set (per browser). Seeded from the durable
+  // record markDemoLaunched writes, and grown live via onDemoLaunched so each demo
+  // sub-step earns its checkmark this session too. See the stepDone override.
+  const [launchedDemos, setLaunchedDemos] = React.useState<Set<string>>(
+    () => new Set(loadLaunchedDemos()),
+  );
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [wsLoading, setWsLoading] = React.useState(true);
@@ -193,6 +206,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
 
   const badges = stepBadges(status, readiness, workspaces, siteConfig);
   const done = stepDone(status, readiness, workspaces, siteConfig);
+  // Each demo sub-step earns its checkmark once THAT demo has been launched (a
+  // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
+  for (const id of DEMO_STEP_IDS) {
+    if (launchedDemos.has(id)) {
+      done[id] = true;
+      badges[id] = { text: "Done · demo run", tone: "success" };
+    }
+  }
 
   return (
     <>
@@ -231,6 +252,18 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onRecheck={recheck}
             rechecking={rechecking}
           />
+        )}
+        {DEMOS.some((d) => d.id === stepId) && (
+          <React.Suspense
+            fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}
+          >
+            <DemoDetail
+              demo={DEMOS.find((d) => d.id === stepId)!}
+              barrierReady={readiness.barrierReady}
+              onJump={setStepId}
+              onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}
+            />
+          </React.Suspense>
         )}
         {stepId === "host_proxy" && (
           <HostProxyStep

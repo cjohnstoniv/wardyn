@@ -55,11 +55,9 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 required"
 
 # Same daemon for image builds AND the compose wardynd (dual-daemon boxes):
 # honor DOCKER_HOST / the native-dockerd preference, and point the wardynd
-# container's bind-mounted socket at it.
+# container's bind-mounted socket at it. wardyn_pick_docker_host derives both
+# DOCKER_HOST and WARDYN_DOCKER_SOCK.
 wardyn_pick_docker_host
-if [[ -n "${DOCKER_HOST:-}" && -z "${WARDYN_DOCKER_SOCK:-}" && "${DOCKER_HOST}" == unix://* ]]; then
-  export WARDYN_DOCKER_SOCK="${DOCKER_HOST#unix://}"
-fi
 
 # wardyn runs the shipped CLI inside the wardynd container with the admin token
 # (same shim as scripts/demo.sh — no host Go/binary needed at run time).

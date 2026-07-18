@@ -445,9 +445,9 @@ export function ModelStep({
               see your host&apos;s{" "}
               <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login — which is why it
               reads &quot;not connected&quot; even if you are logged in on the host. The supported fix here is{" "}
-              <span className="font-medium">container login</span>: Wardyn opens a sandbox, you run{" "}
-              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">claude setup-token</code> and paste the
-              result, and it&apos;s injected proxy-side into every run.
+              <span className="font-medium">container login</span>: Wardyn opens a sandbox, runs{" "}
+              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">claude setup-token</code> for you, and
+              captures the token — injected proxy-side into every run.
             </p>
             <div>
               <Button size="sm" onClick={() => setLoginOpen(true)}>
@@ -455,10 +455,11 @@ export function ModelStep({
               </Button>
             </div>
             <p className="text-muted-foreground">
-              Prefer to use your host login directly? Run Wardyn in host mode instead:{" "}
+              Prefer to use your host&apos;s own Claude login? Re-run setup in host mode:{" "}
               <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-xs text-foreground">
-                make setup
-              </code>
+                WARDYN_SETUP_MODE=local make setup
+              </code>{" "}
+              — wardynd then runs on your machine and reads <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> directly (note: host mode&apos;s workspace Verify/Record don&apos;t complete under WSL2 NAT).
             </p>
           </div>
         </div>

@@ -54,7 +54,17 @@ vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { createRun: vi.fn() },
+  // The Demos step's DemoRunner calls getRun (reload re-attach) + killRun (end) in
+  // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
+  runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
+}));
+// The Demos step embeds AttachTerminal (xterm) + LiveApprovals; neither renders in
+// jsdom. Stub them to trivial nodes so the step's body mounts without a real PTY.
+vi.mock("../../attach-terminal", () => ({
+  AttachTerminal: () => null,
+}));
+vi.mock("../../wardyn/live-approvals", () => ({
+  LiveApprovals: () => null,
 }));
 
 import {
@@ -160,13 +170,13 @@ describe("SetupScreen", () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all nine funnel steps and Next/Back move within bounds", async () => {
+  it("walks all thirteen funnel steps and Next/Back move within bounds", async () => {
     render(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is disambiguated as /^back$/i so it doesn't collide with the
-    // "Finish later — Come back anytime…" verb. STEP_ORDER: essentials → your
-    // work (scm/workspaces/credentials) → corporate network → finish.
+    // "Finish later — Come back anytime…" verb. STEP_ORDER: essentials → demos (the
+    // four demo sub-steps) → corporate network → your work → finish.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
@@ -178,26 +188,40 @@ describe("SetupScreen", () => {
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument(); // provider (family group)
 
+    // The four Demos sub-steps — each renders one demo (heading = its title). The
+    // first also proves the lazily-loaded detail body mounts (its setup section).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
+    expect(await screen.findByText(/set up a sandbox like this yourself/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /fail, then approve/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /held at the door/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /lines that can't be crossed/i }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /corporate host proxy/i }),
+    ).toBeInTheDocument(); // host_proxy (corporate network now precedes your work)
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
+    ).toBeInTheDocument(); // artifact_repo
+
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
       await screen.findByRole("heading", { name: /source control provider/i }),
-    ).toBeInTheDocument(); // scm_provider (your work starts right after the essentials)
+    ).toBeInTheDocument(); // scm_provider (your work starts here now)
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText("GitHub App")).toBeInTheDocument(); // credentials
-
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(
-      await screen.findByRole("heading", { name: /corporate host proxy/i }),
-    ).toBeInTheDocument(); // host_proxy
-
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(
-      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
-    ).toBeInTheDocument(); // artifact_repo
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     // review step — the consolidated readiness rollup + the checks that used to
@@ -235,16 +259,15 @@ describe("SetupScreen", () => {
     render(<SetupScreen onDone={() => {}} />);
 
     await screen.findByText("Fence");
-    // Walk the reordered funnel: provider → your work (scm/workspaces/credentials)
-    // → host_proxy. The footer Next label names each stop.
+    // Walk the reordered funnel to host_proxy: provider → the four Demos sub-steps
+    // → host_proxy (corporate network now sits right after Demos, before Your Work).
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> provider
     await screen.findByText("Claude / Anthropic");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> scm_provider
-    await screen.findByRole("heading", { name: /source control provider/i });
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> workspaces
-    await screen.findByText(/somewhere to work/i);
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> credentials
-    await screen.findByText("GitHub App");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> sealed-box
+    await screen.findByRole("heading", { name: /the sealed box/i });
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> fail-then-approve
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> held-at-the-door
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> lines-that-cant-be-crossed
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
     expect(
       await screen.findByRole("heading", { name: /corporate host proxy/i }),
@@ -357,8 +380,8 @@ describe("SetupScreen", () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (step 8 of 9) — checks live there now, not the barrier step
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    // walk to Review (step 12 of 13) — checks live there now, not the barrier step
+    for (let i = 0; i < 11; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -401,7 +424,7 @@ describe("SetupScreen", () => {
     expect(screen.getByText("Vault")).toBeInTheDocument();
     expect(screen.queryByText("Secret store durability")).not.toBeInTheDocument();
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 11; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

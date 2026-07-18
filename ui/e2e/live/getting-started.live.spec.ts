@@ -108,10 +108,11 @@ test.describe("Getting started (live)", () => {
   });
 
   // P4 — the renamed Model/Harness Provider step (detection-driven family
-  // grouping) and the three enterprise steps (Host Proxy, Artifact Redirect, SCM
-  // Provider — the redesigned STEP_ORDER walks Artifact Redirect before SCM
-  // Provider) render in order. Walked live so the new funnel structure is proven
-  // end to end against the real /setup/status + /site-config, not just in jsdom.
+  // grouping), the new Demos step, and the enterprise steps render in order. The
+  // redesigned STEP_ORDER puts Demos right after the essentials, then the
+  // collapsible corporate phase (Host Proxy, Artifact Redirect), then "Your work"
+  // (SCM Provider first). Walked live so the new funnel structure is proven end to
+  // end against the real /setup/status + /site-config, not just in jsdom.
   test("the funnel exposes the provider families and the enterprise steps (live)", async ({
     page,
   }) => {
@@ -139,17 +140,25 @@ test.describe("Getting started (live)", () => {
     await expect(main.getByText("Claude / Anthropic")).toBeVisible();
     await expect(main.getByText("OpenAI / Codex")).toBeVisible();
 
-    // -> SCM Provider -> Workspaces -> Credentials -> Host Proxy: STEP_ORDER
-    // walks "Your work" (SCM Provider, Workspaces, Credentials) right after the
-    // essentials, then the collapsible corporate phase — each new step's
-    // heading in that order.
+    // -> the four Demos sub-steps -> Host Proxy -> Artifact Redirect -> SCM
+    // Provider: STEP_ORDER now walks the four demos right after the essentials,
+    // then the collapsible corporate phase (Host Proxy, Artifact Redirect), then
+    // "Your work" (SCM Provider first) — each new step's heading in that order.
     await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /source control provider/i })).toBeVisible();
+    await expect(main.getByRole("heading", { name: /the sealed box/i })).toBeVisible();
     await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /onboard a workspace/i })).toBeVisible();
+    await expect(main.getByRole("heading", { name: /fail, then approve/i })).toBeVisible();
     await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /repo & cloud credentials/i })).toBeVisible();
+    await expect(main.getByRole("heading", { name: /held at the door/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /lines that can't be crossed/i })).toBeVisible();
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /corporate host proxy/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(
+      main.getByRole("heading", { name: /artifact registry redirection/i }),
+    ).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /source control provider/i })).toBeVisible();
   });
 });

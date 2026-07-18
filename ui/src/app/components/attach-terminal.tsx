@@ -68,6 +68,19 @@ export interface AttachTerminalProps {
   runId: string;
   /** Called when the WebSocket closes (graceful or error) */
   onClose?: () => void;
+  /**
+   * A command auto-typed into the PTY ONCE, shortly after the first successful
+   * attach (e.g. "claude setup-token"). Reconnects do not re-type it. Purely a
+   * convenience — it types exactly what the operator would; it grants no new
+   * capability the interactive terminal didn't already have.
+   */
+  autoRun?: string;
+  /**
+   * Called with each decoded chunk of PTY output as it arrives — lets a parent
+   * watch the stream (e.g. to detect a printed token). The raw bytes still go to
+   * the terminal unchanged; this is an observer, not an interceptor.
+   */
+  onOutput?: (chunk: string) => void;
 }
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -82,7 +95,15 @@ const MAX_RECONNECT_ATTEMPTS = 4;
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
-export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
+export interface AttachTerminalHandle {
+  /** Write text straight to the PTY stdin (e.g. a pasted code + "\r"). */
+  sendText: (text: string) => void;
+}
+
+export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
+  { runId, onClose, autoRun, onOutput },
+  ref,
+) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const termRef = React.useRef<Terminal | null>(null);
   const fitAddonRef = React.useRef<FitAddon | null>(null);
@@ -98,6 +119,27 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
   React.useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  // Same ref pattern for autoRun/onOutput: a fresh closure each parent render
+  // must NOT re-run the connect effect (that would tear down + reconnect the
+  // terminal and re-type the command on every render).
+  const autoRunRef = React.useRef(autoRun);
+  React.useEffect(() => {
+    autoRunRef.current = autoRun;
+  }, [autoRun]);
+  const onOutputRef = React.useRef(onOutput);
+  React.useEffect(() => {
+    onOutputRef.current = onOutput;
+  }, [onOutput]);
+
+  // Imperative "type this into the PTY" — lets a parent bridge a normal input
+  // field to the terminal's stdin (e.g. paste an OAuth code without needing the
+  // terminal's Ctrl+Shift+V). Reads the CURRENT socket so it works post-reconnect.
+  const sendToPty = React.useCallback((text: string) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(text));
+  }, []);
+  React.useImperativeHandle(ref, () => ({ sendText: sendToPty }), [sendToPty]);
 
   // Token-only mode routes the WS handshake through a minted attach ticket
   // (the browser cannot put the bearer on the handshake itself).
@@ -174,9 +216,30 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false; // set in cleanup so a pending backoff never reconnects
 
+    // Streaming decoder for the output observer (a multibyte glyph split across
+    // frames stays correct; our token of interest is ASCII regardless).
+    const outDecoder = new TextDecoder();
+    // autoRun fires once per mounted run, across reconnects.
+    let autoRunSent = false;
+    let autoRunTimer: ReturnType<typeof setTimeout> | null = null;
+
     const send = (payload: ArrayBufferView | string) => {
       const cur = wsRef.current;
       if (cur && cur.readyState === WebSocket.OPEN) cur.send(payload);
+    };
+
+    // Paste plumbing. Sandbox shells don't reliably unwrap xterm's bracketed-paste
+    // markers (\x1b[200~ … \x1b[201~), which then show up as literal ^[[200~
+    // garbage. So we OWN paste and send the clipboard text RAW. A native paste
+    // event (Ctrl+Shift+V / right-click / Cmd+V) and a Ctrl+V keydown can BOTH
+    // fire for one paste, so coalesce within a short window to avoid double-paste.
+    let lastPasteAt = 0;
+    const sendPaste = (text: string | null | undefined) => {
+      if (!text) return;
+      const now = performance.now();
+      if (now - lastPasteAt < 120) return; // one paste, whichever path fired first
+      lastPasteAt = now;
+      send(new TextEncoder().encode(text));
     };
 
     const connect = () => {
@@ -218,11 +281,24 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
         setConnState("open");
         // Fit + send the real size once the PTY is attached.
         requestAnimationFrame(() => refit());
+        // Auto-type the convenience command ONCE, after the shell prompt has had
+        // a moment to render. Guarded so a reconnect never re-types it.
+        if (!autoRunSent && autoRunRef.current) {
+          autoRunSent = true;
+          const cmd = autoRunRef.current;
+          autoRunTimer = setTimeout(() => {
+            send(new TextEncoder().encode(cmd + "\r"));
+          }, 900);
+        }
       };
 
       ws.onmessage = (ev) => {
         if (ev.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(ev.data));
+          const bytes = new Uint8Array(ev.data);
+          term.write(bytes);
+          // Mirror the decoded text to the optional observer (token detection).
+          const cb = onOutputRef.current;
+          if (cb) cb(outDecoder.decode(bytes, { stream: true }));
         }
         // Ignore unexpected text frames (e.g. keepalive pings).
       };
@@ -295,8 +371,28 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
         send(new TextEncoder().encode("\x1b\r"));
         return false; // don't let xterm also send a plain CR
       }
+      // Ctrl+V / Cmd+V (NOT Ctrl+Shift+V): read the clipboard and paste RAW.
+      // Otherwise xterm sends a literal ^V and never pastes. Ctrl+Shift+V /
+      // right-click go through the native paste event below; sendPaste coalesces
+      // so a key + event pair never double-pastes.
+      if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "v" || e.key === "V")) {
+        navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
+        return false;
+      }
       return true;
     });
+
+    // Native paste (Ctrl+Shift+V, right-click, Cmd+V) → send RAW and STOP xterm's
+    // own (bracketed) paste from also firing. Capture phase so this wins over
+    // xterm's textarea listener.
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text");
+      if (text == null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sendPaste(text);
+    };
+    mount.addEventListener("paste", onPaste, true);
 
     // --- Resize wiring ------------------------------------------------------
     // Observe the terminal's own (flex-grown) box so any layout change — panel
@@ -312,8 +408,10 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
       // mark the close as intentional (so the in-flight ws.onclose won't retry).
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (autoRunTimer) clearTimeout(autoRunTimer);
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", onWinResize);
+      mount.removeEventListener("paste", onPaste, true);
       inputDispose.dispose();
       binaryDispose.dispose();
       resizeObserver.disconnect();
@@ -393,4 +491,4 @@ export function AttachTerminal({ runId, onClose }: AttachTerminalProps) {
       />
     </div>
   );
-}
+});
