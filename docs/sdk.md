@@ -105,7 +105,9 @@ _ = client.RunRunning      // also Pending / Completed / Failed / Killed ... (Ru
 
 // Build a policy spec without touching internal/types:
 spec := client.RunPolicySpec{
-    AllowedDomains:      []string{"api.github.com"},
+    // GitHub is reached through the git-broker (a github_token grant below), not
+    // via AllowedDomains — list only non-GitHub hosts the task needs.
+    AllowedDomains:      []string{"proxy.golang.org"},
     MinConfinementClass: client.CC2,
     EligibleGrants: []client.GrantSpec{
         {Kind: client.GrantGitHubToken, RequiresApproval: true},

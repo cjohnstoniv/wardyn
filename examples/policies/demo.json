@@ -1,7 +1,5 @@
 {
   "allowed_domains": [
-    "github.com",
-    "*.githubusercontent.com",
     "proxy.golang.org"
   ],
   "denied_domains": [],

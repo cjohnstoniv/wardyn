@@ -1,8 +1,6 @@
 {
   "allowed_domains": [
     "api.anthropic.com",
-    "github.com",
-    "*.githubusercontent.com",
     "proxy.golang.org",
     "registry.npmjs.org"
   ],

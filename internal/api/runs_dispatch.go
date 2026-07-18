@@ -28,6 +28,7 @@ type dispatchParams struct {
 	Image              string                  // resolved sandbox OCI image (convention or built devcontainer)
 	Policy             types.RunPolicySpec     // egress/resource policy (dispatchRun mutates a local copy)
 	FirstGitHubGrantID *uuid.UUID              // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
+	GitGrants          map[string]uuid.UUID    // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
 	GitPATGrants       map[string]string       // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants          map[string]string       // {host: grant_id} for SSH clone hosts
 	Injections         []runner.InjectionGrant // proxy-side credential injections
@@ -270,6 +271,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			// this keeps an artifact-only run from TLS-terminating a direct CONNECT to
 			// Anthropic/OpenAI it never asked to intercept.
 			MITMLLM: llm.injectSub || llm.injectManaged || mitmForInspect,
+			// Git-broker per-repo allowlist: the proxy's /wardyn/gh/ route serves only
+			// these "<org>/<repo>" keys (each -> its github_token grant), minting the
+			// scoped token proxy-side so it never enters the sandbox.
+			GitGrants: p.GitGrants,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,

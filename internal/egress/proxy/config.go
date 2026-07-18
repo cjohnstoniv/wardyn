@@ -51,6 +51,12 @@ type Config struct {
 	// cannot set it), NEVER a wildcard, and only meaningful with a paired injection
 	// rule that supplies the operator's OWN token. Empty => LLM hosts only.
 	MITMHosts []string `json:"mitm_hosts,omitempty"`
+	// GitGrants is the git-broker per-repo allowlist: canonical "<org>/<repo>" ->
+	// the github_token grant id to mint from, backing the /wardyn/gh/ route so the
+	// sandbox reaches only its granted repos (never all of github.com) and the token
+	// stays proxy-side. Compiled at dispatch from the run's github grants. Empty =>
+	// the git-broker route always 403s (no repo brokered).
+	GitGrants map[string]uuid.UUID `json:"git_grants,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for

@@ -166,6 +166,10 @@ type grantWiring struct {
 	// WARDYN_GITHUB_GRANT_ID (non-secret: the grant is an eligibility record,
 	// not a token). The run token never appears in env.
 	firstGitHubGrantID *uuid.UUID
+	// gitGrants is the git-broker per-repo allowlist: canonical "<org>/<repo>" ->
+	// grant id, from each github_token grant's scope.repos. Delivered proxy-side
+	// only (never the sandbox) so the /wardyn/gh/ route serves exactly these repos.
+	gitGrants map[string]uuid.UUID
 	// injections are the proxy injection configs for auto-mintable api_key
 	// grants: the proxy resolves their secret VALUES at startup via the internal
 	// injection endpoint (values live only in proxy memory, never in the sandbox).
@@ -197,6 +201,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, ru
 	gw := grantWiring{
 		gitPATGrants: map[string]string{},
 		sshGrants:    map[string]string{},
+		gitGrants:    map[string]uuid.UUID{},
 	}
 	for _, g := range spec.EligibleGrants {
 		grantID := uuid.New()
@@ -210,9 +215,17 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, ru
 			writeError(w, http.StatusInternalServerError, "create grant: "+gerr.Error())
 			return gw, false
 		}
-		if g.Kind == types.GrantGitHubToken && gw.firstGitHubGrantID == nil {
-			id := grantID // copy loop var
-			gw.firstGitHubGrantID = &id
+		if g.Kind == types.GrantGitHubToken {
+			if gw.firstGitHubGrantID == nil {
+				id := grantID // copy loop var
+				gw.firstGitHubGrantID = &id
+			}
+			// Populate the git-broker allowlist: each granted repo -> THIS grant.
+			// The proxy serves /wardyn/gh/<org>/<repo> only for these keys and mints
+			// the scoped installation token server-side (never into the sandbox).
+			for _, repo := range githubScopeRepos(g.Scope) {
+				gw.gitGrants[strings.ToLower(repo)] = grantID
+			}
 		}
 		if g.Kind == types.GrantGitPAT {
 			if host, _, _, derr := gitPATScopeFields(g.Scope); derr == nil {
@@ -245,6 +258,30 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, ru
 		}
 	}
 	return gw, true
+}
+
+// augmentGitBrokerGrants maps the run's DECLARED GitHub clone set (legacy run.Repo +
+// WorkspaceRepos) to the run's github grant, so the git-broker serves those repos
+// even when the github_token grant's scope.repos is an empty template (the common
+// case for example policies + direct `--repo`). Entries already keyed from a grant's
+// explicit scope.repos (persistRunGrants) win and are left as-is. No-op without a
+// github grant — an un-granted github repo stays uncovered and is denied (repo is
+// the unit of trust).
+func (gw *grantWiring) augmentGitBrokerGrants(legacyRepo string, wsRepos []types.WorkspaceRepo) {
+	if gw.firstGitHubGrantID == nil {
+		return
+	}
+	add := func(slug string) {
+		if key := gitBrokerKeyFromSlug(slug); key != "" {
+			if _, ok := gw.gitGrants[key]; !ok {
+				gw.gitGrants[key] = *gw.firstGitHubGrantID
+			}
+		}
+	}
+	add(legacyRepo)
+	for _, wr := range wsRepos {
+		add(wr.Repo)
+	}
 }
 
 // applySSHLaneWarnings handles the agents/images whose SSH clone lane is absent

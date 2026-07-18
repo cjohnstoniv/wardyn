@@ -176,6 +176,27 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	return egress.InjectionRule{Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format}, nil
 }
 
+// githubScopeRepos decodes a github_token grant scope {"repos":[...]} and returns
+// the "<org>/<repo>" entries (mirrors the broker's githubScope shape). Best-effort:
+// a malformed scope or a repo that isn't exactly "<org>/<repo>" is skipped, since
+// this feeds the git-broker allowlist where a missing key simply 403s (fail closed).
+func githubScopeRepos(scope json.RawMessage) []string {
+	var sc struct {
+		Repos []string `json:"repos"`
+	}
+	if err := json.Unmarshal(scope, &sc); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(sc.Repos))
+	for _, r := range sc.Repos {
+		r = strings.TrimSpace(r)
+		if parts := strings.Split(r, "/"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // gitPATScopeFields decodes a git_pat grant scope {host, secret_name, username?}.
 // host and secret_name are REQUIRED (fail closed); mirrors the broker's
 // gitPATScope shape. Used by policy validation, inline-secret checks, compose

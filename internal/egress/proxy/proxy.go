@@ -67,6 +67,18 @@ type Proxy struct {
 	blindMu    sync.Mutex
 	blindHosts map[string]struct{}
 
+	// gitGrants is the per-run git-broker allowlist: canonical lowercased
+	// "<org>/<repo>" -> the github_token grant to mint from. It is the unit of
+	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
+	// no repo brokered (the route always 403s). See git_broker.go.
+	gitGrants map[string]uuid.UUID
+	// gitTokens caches minted installation tokens per grant so a single clone
+	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
+	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
+	// own re-mint via gitTokEntry.reMu.
+	gitTokMu  sync.Mutex
+	gitTokens map[uuid.UUID]*gitTokEntry
+
 	// controlPlaneURL is the base URL of wardynd, used ONLY by the local
 	// brokered routes (/wardyn/v1/...) to forward to the internal API.
 	controlPlaneURL string
@@ -121,6 +133,9 @@ type Options struct {
 	// MITMLLM gates TLS-MITM of the built-in LLM hosts on actual intent. See
 	// Proxy.mitmLLM.
 	MITMLLM bool
+	// GitGrants is the git-broker per-repo allowlist ("<org>/<repo>" -> grant id)
+	// backing the /wardyn/gh/ route. See Proxy.gitGrants.
+	GitGrants map[string]uuid.UUID
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -169,6 +184,15 @@ func newProxy(opts Options) *Proxy {
 			mitmHosts[h] = true
 		}
 	}
+	// Canonicalise git-broker allowlist keys to lowercase "<org>/<repo>" so lookups
+	// match regardless of the slug casing git sends (github owner/repo is
+	// case-insensitive).
+	gitGrants := make(map[string]uuid.UUID, len(opts.GitGrants))
+	for k, id := range opts.GitGrants {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
+			gitGrants[k] = id
+		}
+	}
 	p := &Proxy{
 		runID:           opts.RunID,
 		policy:          opts.Policy,
@@ -181,6 +205,8 @@ func newProxy(opts Options) *Proxy {
 		ca:              opts.CA,
 		mitmHosts:       mitmHosts,
 		mitmLLM:         opts.MITMLLM,
+		gitGrants:       gitGrants,
+		gitTokens:       make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL: strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:        opts.RunToken,
 		upstream:        opts.Upstream,
@@ -764,6 +790,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		CA:              ca,
 		MITMHosts:       cfg.MITMHosts,
 		MITMLLM:         cfg.MITMLLM,
+		GitGrants:       cfg.GitGrants,
 		ControlPlaneURL: cfg.ControlPlaneURL,
 		RunToken:        ts,
 		Upstream:        up,

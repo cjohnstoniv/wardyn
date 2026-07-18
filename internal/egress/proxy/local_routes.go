@@ -106,6 +106,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):
 		p.handleLLMOpenAI(w, r)
+	case strings.HasPrefix(path, routeGitBroker):
+		p.handleGitBroker(w, r)
 	default:
 		http.Error(w, "unknown brokered route", http.StatusNotFound)
 	}

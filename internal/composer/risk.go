@@ -60,6 +60,12 @@ var safeBaselineDomains = map[string]bool{
 	// workspacescan/markers.go) can attach — those are all standard registries
 	// an onboarded workspace legitimately unions into a run, so a scan-derived
 	// egress addition never reads as "custom" medium-risk egress.
+	//
+	// NOTE (Option C): GitHub is now reached via the git-broker (routed through
+	// wardyn-proxy, never in a run's allowed_domains), so the github entries below
+	// are effectively dead for scoring — a GitHub clone no longer surfaces as a
+	// proposed egress domain. They are retained as a defensive low-risk baseline in
+	// case a github host ever appears in a proposal.
 	"github.com":                    true,
 	"api.github.com":                true,
 	"codeload.github.com":           true,

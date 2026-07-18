@@ -214,14 +214,15 @@ The confined session's allowlist is **not** the approved set alone. It is:
 
 so it is much tighter than the open recording, but it is **not minimal**:
 
-- **HONEST RESIDUAL** — the baseline is a fixed default keyed on the
-  workspace's clone URL, and a `local_dir` workspace has none. It therefore
-  falls through to the full GitHub bundle (`github.com`, `api.github.com`,
-  `codeload.github.com`, `*.githubusercontent.com` — including that wildcard)
-  even though a local directory clones nothing. Verify proves the steps work
-  under the tightened policy; it does not prove the policy is the smallest one
-  that works. Content-derived `SuggestedEgress` is deliberately excluded — a
-  build that needs a host surfaces as an observed denial you can promote.
+- **HONEST RESIDUAL** — a GitHub clone no longer appears in this allowlist at
+  all: it is routed through the Wardyn git-broker (repo-scoped, token minted
+  proxy-side), so `github.com` and its bundle are **not** in the confined
+  session's egress. The residual is the reverse — the baseline is otherwise the
+  workspace profile's detected registries ∪ `ApprovedEgress`, and Verify proves
+  the steps work under that policy without proving it is the smallest one that
+  works. Content-derived `SuggestedEgress` is deliberately excluded — a build
+  that needs a host (including an un-granted GitHub dependency) surfaces as an
+  observed denial you can promote.
 
 (It's a live re-run under the tighter policy, not a byte-for-byte replay of the
 captured session. The workspace *import* flow has its own Verify step with

@@ -357,6 +357,14 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	for _, h := range scanEgressDomains(repoCloneURL(ws.Source)) {
 		skipHost[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
 	}
+	// The GitHub clone hosts are now git-broker-managed (Option C: routed through
+	// wardyn-proxy, never in a run's egress allowlist). scanEgressDomains no longer
+	// returns them, but they must STILL never be promoted to a permanent
+	// ApprovedEgress entry — that would re-open host-level github egress and defeat
+	// the broker's repo-scoping. Skip them explicitly.
+	for _, h := range gitBrokerManagedHosts {
+		skipHost[h] = struct{}{}
+	}
 
 	// promotable is every host this recording could ever offer up: observed
 	// with at least one ALLOW decision, a valid approve-lane host shape, and
