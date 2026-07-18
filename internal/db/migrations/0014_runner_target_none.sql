@@ -1,4 +1,4 @@
--- The healthz-honesty fix (M31) records runner_target='none' for a control
+-- The healthz-honesty fix records runner_target='none' for a control
 -- plane started with -runner none (headless API-only; runs stay PENDING
 -- forever) instead of the old hardcoded 'docker'. The original CHECK predates
 -- that and rejected the honest value, so EVERY run insert failed under

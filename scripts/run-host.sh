@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# U023: pick the same daemon setup.sh/up.sh/ci-run.sh prefer — a dedicated
+# pick the same daemon setup.sh/up.sh/ci-run.sh prefer — a dedicated
 # tier-capable native dockerd (can register runsc/kata) over Docker Desktop's
 # managed engine (resets custom runtimes on restart, so it's Fence-only).
 # Without this, host mode silently launched sandboxes against whatever socket

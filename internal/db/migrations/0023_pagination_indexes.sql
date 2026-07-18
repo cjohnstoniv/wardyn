@@ -14,8 +14,7 @@
 -- seq ordering was a separate sort of ALL of a busy run's rows before the LIMIT.
 -- The composite (run_id, seq) resolves both: an index range scan on run_id that
 -- is already seq-ordered, so LIMIT/OFFSET pages a run's trail with no sort and no
--- temp files (U071's run-scoped-sort residual; U048's paging past the per-run
--- cap). seq is BIGINT IDENTITY (globally monotonic), so ASC within a run_id is
+-- temp files (the run-scoped audit sort and paging past the per-run cap). seq is BIGINT IDENTITY (globally monotonic), so ASC within a run_id is
 -- exactly insertion order — the chronological trail docs/sdk.md documents.
 CREATE INDEX IF NOT EXISTS audit_events_run_seq_idx ON audit_events (run_id, seq);
 

@@ -247,7 +247,7 @@ degradable**: with it OFF, `wardynd`'s `/healthz` reports
 > keeps the shared `groundtruth_token` volume file fresh (`WARDYN_GROUNDTRUTH_TOKEN_FILE`),
 > and the sidecar re-reads it on a 401 — so you can SKIP the manual seeding below and
 > just start the groundtruth profile; ground truth then survives the ~1h token TTL
-> (U009). The static-token path below still works but goes permanently blind after ~1h.
+>. The static-token path below still works but goes permanently blind after ~1h.
 
 ```bash
 # 1. The stack must already be up with a persistent WARDYN_AGE_KEY (see above).
@@ -275,7 +275,7 @@ Honest limits (by design, not hidden):
 - The token has the identity provider's ~1h TTL. The compose stack keeps it fresh
   AUTOMATICALLY: wardynd's rotator re-mints and rewrites the shared `groundtruth_token`
   file and the sidecar re-reads it on a 401, so ground truth does NOT go blind ~1h in
-  (U009). The manual `WARDYN_GROUNDTRUTH_TOKEN` env is a static fallback that cannot
+ . The manual `WARDYN_GROUNDTRUTH_TOKEN` env is a static fallback that cannot
   refresh. NOTE: full end-to-end recovery is verified by unit tests (the rotator mints
   + writes; the sidecar reads + refreshes); the live cross-container recovery under a
   real Tetragon sensor needs a privileged eBPF host to exercise.

@@ -10,7 +10,7 @@ image:
   # pushes one (see docs/CI.md). BOTH defaults below are placeholders: they
   # render a valid-looking ref that does not exist, so `helm install` with the
   # defaults ImagePullBackOffs. BUILD and PUSH your own first, then override both
-  # (README.md "Build and push wardynd" has the exact commands) (U091):
+  # (README.md "Build and push wardynd" has the exact commands):
   #   docker build -f deploy/compose/Dockerfile.wardynd -t <registry>/wardynd:<tag> .
   #   docker push <registry>/wardynd:<tag>
   #   helm install ... --set image.repository=<registry>/wardynd --set image.tag=<tag>

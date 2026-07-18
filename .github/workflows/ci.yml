@@ -8,7 +8,7 @@ on:
 
 # Least-privilege default: CI only needs to read the repo. The gitleaks job gets
 # its token via the step env; nothing here writes back. Mirrors nightly.yml, which
-# already sets this — closing the ci.yml inconsistency (U092).
+# already sets this — closing the ci.yml inconsistency.
 permissions:
   contents: read
 
@@ -218,7 +218,7 @@ jobs:
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
 
-  # ── real-daemon envbuild integration (U064) ───────────────────────────────
+  # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
   # a live daemon (validates the pushedBaseRef assumption in builder.go). The
   # target provisions its own throwaway registry + runner-tools dir. The build
@@ -290,7 +290,7 @@ jobs:
       # Scans BOTH the tagless build and the ACTUAL shipped build (-tags docker,
       # Dockerfile.wardynd), whose runner/docker + envbuild tree is invisible to
       # a tagless-only scan. This is where the moby-module CVEs lived; the v29
-      # migration cleared them, so this is now green and must stay green (U024).
+      # migration cleared them, so this is now green and must stay green.
       - name: Run govulncheck (tagless + -tags docker)
         run: make govulncheck
 
@@ -304,7 +304,7 @@ jobs:
           go-version: '1.26.5'
       # Lints BOTH tag sets — including the -tags docker tree (the shipped
       # runner/docker + envbuild code), which otherwise never gets a
-      # static-analysis pass in CI (U024/U112).
+      # static-analysis pass in CI.
       - name: Run staticcheck (tagless + -tags docker)
         run: make staticcheck
 
@@ -367,7 +367,7 @@ jobs:
           go-version: '1.26.5'
       # Checks BOTH tag sets. go-licenses has no -tags flag, so the docker-tagged
       # deps (moby/moby/*, containerd/errdefs) are covered by driving the tag via
-      # GOFLAGS on the second pass inside the target (U112).
+      # GOFLAGS on the second pass inside the target.
       - name: Check dependency licenses (tagless + -tags docker)
         run: make licenses
 

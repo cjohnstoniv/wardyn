@@ -4,7 +4,7 @@ Wardyn is **pre-alpha** and does **not** follow semantic versioning yet — inte
 are not stable, so a minor bump may still carry breaking changes (see the CHANGELOG
 header). Releases are cut **manually** by the maintainer; there is no release workflow
 or `make release` target — **nothing here is automated to push anything**. This
-document is that process, written down (U124).
+document is that process, written down.
 
 ## Prerequisites
 
