@@ -155,6 +155,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// (codex-cli) and advise BYOI images about the required tools.
 	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, runID, &gw)...)
 
+	// Git-broker: map the run's declared GitHub clone set to its github grant so the
+	// proxy's /wardyn/gh/ route serves exactly these repos (github.com is dropped
+	// from egress; an un-granted github repo is denied).
+	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
+
 	createAuditData := map[string]any{
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "jti": id.JTI,
@@ -205,6 +210,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Image:              image,
 			Policy:             spec,
 			FirstGitHubGrantID: gw.firstGitHubGrantID,
+			GitGrants:          gw.gitGrants,
 			GitPATGrants:       gw.gitPATGrants,
 			SSHGrants:          gw.sshGrants,
 			Injections:         gw.injections,

@@ -391,6 +391,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		Image:              image,
 		Policy:             policy,
 		FirstGitHubGrantID: ghGrantID,
+		GitGrants:          gitBrokerGrant(cloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		VerifyPlan:         commands,
 	})
@@ -612,6 +613,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		Image:              image,
 		Policy:             policy,
 		FirstGitHubGrantID: ghGrantID,
+		GitGrants:          gitBrokerGrant(cloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		Injections:         injections,
 		Interactive:        interactive,
@@ -1081,6 +1083,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		Image:              image,
 		Policy:             scanPolicy,
 		FirstGitHubGrantID: ghGrantID,
+		GitGrants:          gitBrokerGrant(url, ghGrantID),
 		SSHGrants:          sshGrants,
 	})
 	created = s.refreshRun(ctx, runID, created)
@@ -1088,36 +1091,85 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	return created, nil
 }
 
-// scanEgressDomains returns the egress allowlist a scan run needs to clone
-// cloneURL. GitHub's clone hosts cover the bare-slug + github.com case; a full
-// https URL to another host also gets that host. The proxy still enforces the
-// deny-list underneath.
+// scanEgressDomains returns the egress allowlist a scan/verify run needs to clone
+// cloneURL. A GitHub HTTPS clone is routed through the Wardyn git-broker
+// (url.insteadOf → wardyn-proxy, minted token proxy-side), so github.com is NOT
+// allowlisted here — the broker reaches github.com out-of-band and the sandbox
+// gets repo-scoped access instead of all-of-github.com. A GitHub SSH clone stays
+// on the ssh-over-443 lane (the broker is HTTPS + App-token only); a non-GitHub
+// HTTPS clone still gets its own host. The proxy enforces the deny-list underneath.
 func scanEgressDomains(cloneURL string) []string {
-	doms := []string{"github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com"}
-	// SSH/scp clone URL: add the PORT-QUALIFIED SSH-over-443 endpoint
-	// (ssh.github.com:443) so it matches ONLY :443 — not the bare host, which would
-	// match any port. Mirrors handleCreateRun's sshEgress lane. neturl.Parse cannot
-	// parse scp-form, so this must come first.
+	// SSH/scp clone URL: the broker can't cover ssh, so keep the PORT-QUALIFIED
+	// SSH-over-443 endpoint (ssh.github.com:443) — matches ONLY :443. neturl.Parse
+	// cannot parse scp-form, so this must come first.
 	if host, ok := sshCloneHost(cloneURL); ok {
-		// A git-over-SSH clone needs ONLY the :443 endpoint — the ADO REST bundle
-		// (dev.azure.com / *.visualstudio.com) is the git_pat HTTPS lane, not this
-		// one. Matches handleCreateRun's sshEgress (endpoint only). Least privilege.
 		if ep, ok := sshOver443Endpoint(host); ok {
-			doms = append(doms, ep)
+			return []string{ep}
 		}
-		return doms
+		return nil
 	}
 	if u, err := neturl.Parse(cloneURL); err == nil && u.Hostname() != "" {
 		host := u.Hostname() // strips any :port
 		if !isGitHubCloneHost(host) {
 			// M22: a non-GitHub HTTPS clone (ADO, GitLab, self-hosted git) needs ONLY
-			// its own host — the default GitHub bundle above is an unnecessary
-			// over-grant for a non-GitHub scan. GitHub hosts keep the full bundle
-			// (codeload / LFS / *.githubusercontent.com).
+			// its own host (the broker is github.com-only in v1).
 			return []string{host}
 		}
+		// GitHub HTTPS clone → git-broker; no egress domain needed (the sandbox dials
+		// wardyn-proxy, which is always reachable on-segment, not an egress host).
+		return nil
 	}
-	return doms
+	return nil
+}
+
+// gitBrokerManagedHosts are the GitHub clone/API/content hosts that Option C's
+// git-broker manages: they are routed through wardyn-proxy (never a run's egress
+// allowlist) and must never be promoted into a permanent ApprovedEgress entry (that
+// would re-open host-level github egress and defeat the broker's repo-scoping).
+var gitBrokerManagedHosts = []string{"github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com"}
+
+// gitBrokerKey returns the canonical lowercased "<org>/<repo>" git-broker allowlist
+// key for a GitHub HTTPS clone URL, or "" when cloneURL isn't a bare github repo
+// path (SSH, non-github, or a deeper path). Used to build the per-run GitGrants
+// map for the scan/verify/record clone.
+func gitBrokerKey(cloneURL string) string {
+	u, err := neturl.Parse(cloneURL)
+	if err != nil || u.Hostname() != "github.com" {
+		return ""
+	}
+	p := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+	if parts := strings.Split(p, "/"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return strings.ToLower(p)
+	}
+	return ""
+}
+
+// gitBrokerKeyFromSlug returns the canonical "<org>/<repo>" git-broker key for a
+// run's declared repo slug — a bare "<org>/<repo>" (the github_token clone form) or
+// a full https github URL. SSH/scp forms return "" (they use the ssh-over-443 lane,
+// not the HTTPS-only broker).
+func gitBrokerKeyFromSlug(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if strings.Contains(slug, "@") || strings.HasPrefix(strings.ToLower(slug), "ssh://") {
+		return ""
+	}
+	if strings.Contains(slug, "://") {
+		return gitBrokerKey(slug) // full URL: github https -> key, else ""
+	}
+	return gitBrokerKey(repoCloneURL(slug)) // bare slug -> github https -> key
+}
+
+// gitBrokerGrant builds the single-repo git-broker allowlist for a scan/verify/
+// record clone: {"<org>/<repo>": *ghGrantID}, or nil when there's no github grant
+// or the clone isn't a broker-covered github repo (ssh/non-github/local dir).
+func gitBrokerGrant(cloneURL string, ghGrantID *uuid.UUID) map[string]uuid.UUID {
+	if ghGrantID == nil {
+		return nil
+	}
+	if key := gitBrokerKey(cloneURL); key != "" {
+		return map[string]uuid.UUID{key: *ghGrantID}
+	}
+	return nil
 }
 
 // isGitHubCloneHost reports whether host is a GitHub clone/API host (github.com,

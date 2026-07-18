@@ -146,6 +146,7 @@ if [[ "${1:-}" == "--idle" ]]; then
     provision_git_helper_secret
     workdir="${HOME}/work"
     mkdir -p "$workdir"
+    configure_git_broker_insteadof  # route granted GitHub repos through the git-broker
     dispatch_repo_clones
     resolve_workdir  # prefer the cloned repo dir as the attach landing dir
     # Attach-readiness markers (see attach-bashrc.sh): ~/.bashrc waits for prep-done
@@ -183,7 +184,9 @@ mkdir -p "$workdir"
 
 # Clone the run's repo(s) into the workspace (WARDYN_REPOS preferred, legacy
 # WARDYN_REPO_URL fallback) — see clone_one/dispatch_repo_clones in
-# agent-run-lib.sh.
+# agent-run-lib.sh. Route granted GitHub repos through the git-broker first, so the
+# clone uses the broker URL (github.com is not in this run's egress allowlist).
+configure_git_broker_insteadof
 dispatch_repo_clones
 
 # Prefer a cloned/discovered repo workspace if one exists below ~/work; falls

@@ -6,6 +6,10 @@ package api
 import (
 	"slices"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestRepoFieldSafe locks in the sanitization for the attacker-influenceable
@@ -109,5 +113,53 @@ func TestScanEgressDomains_SSH(t *testing.T) {
 	https := scanEgressDomains("https://example.com/x/y.git")
 	if !slices.Contains(https, "example.com") {
 		t.Errorf("https: missing example.com, got %v", https)
+	}
+
+	// Option C: a GitHub HTTPS clone is routed through the git-broker, so github.com
+	// (and the rest of the bundle) is NOT in the scan/verify egress allowlist.
+	ghHTTPS := scanEgressDomains("https://github.com/octocat/Hello-World.git")
+	for _, banned := range []string{"github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com"} {
+		if slices.Contains(ghHTTPS, banned) {
+			t.Errorf("github https: %q must NOT be allowlisted (broker-managed), got %v", banned, ghHTTPS)
+		}
+	}
+}
+
+// TestGitBrokerWiring locks in the pure logic that maps a run's github grants +
+// declared clone set into the proxy's per-repo git-broker allowlist.
+func TestGitBrokerWiring(t *testing.T) {
+	// githubScopeRepos: only well-formed "<org>/<repo>" survive.
+	got := githubScopeRepos([]byte(`{"repos":["a/b","junk","c/d/e",""]}`))
+	if !slices.Equal(got, []string{"a/b"}) {
+		t.Errorf("githubScopeRepos = %v, want [a/b] (drop malformed/deep entries)", got)
+	}
+
+	// gitBrokerKeyFromSlug: bare slug + https github -> lowercased key; ssh/non-github -> "".
+	for slug, want := range map[string]string{
+		"octocat/Hello-World":              "octocat/hello-world",
+		"https://github.com/Octo/Repo.git": "octo/repo",
+		"git@github.com:o/r.git":           "",
+		"ssh://git@github.com/o/r":         "",
+		"https://gitlab.com/o/r.git":       "",
+		"not-a-slug":                       "",
+	} {
+		if k := gitBrokerKeyFromSlug(slug); k != want {
+			t.Errorf("gitBrokerKeyFromSlug(%q) = %q, want %q", slug, k, want)
+		}
+	}
+
+	// augmentGitBrokerGrants: the declared clone set maps to the github grant, but
+	// only when a grant exists; explicit scope entries are not overwritten.
+	gid := uuid.New()
+	gw := grantWiring{gitGrants: map[string]uuid.UUID{}, firstGitHubGrantID: &gid}
+	gw.augmentGitBrokerGrants("octocat/Hello-World", []types.WorkspaceRepo{{Repo: "org/tool"}})
+	if gw.gitGrants["octocat/hello-world"] != gid || gw.gitGrants["org/tool"] != gid {
+		t.Errorf("augment: clone set not mapped to the grant: %v", gw.gitGrants)
+	}
+	// No github grant -> no augmentation (uncovered github repos stay denied).
+	none := grantWiring{gitGrants: map[string]uuid.UUID{}}
+	none.augmentGitBrokerGrants("octocat/Hello-World", nil)
+	if len(none.gitGrants) != 0 {
+		t.Errorf("augment with no grant should be a no-op, got %v", none.gitGrants)
 	}
 }

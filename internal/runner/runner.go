@@ -117,6 +117,12 @@ type ProxyConfig struct {
 	// is intended for this run (subscription injection or intercept_tls) — as opposed
 	// to a CA minted only for artifact-token injection. See proxy.Config.MITMLLM.
 	MITMLLM bool
+	// GitGrants is the git-broker per-repo allowlist ("<org>/<repo>" -> github_token
+	// grant id) delivered to the proxy sidecar's /wardyn/gh/ route so the sandbox
+	// reaches only its granted repos (never all of github.com) and the token stays
+	// proxy-side. Populated at dispatch from the run's github grants; empty => no
+	// repo brokered. See proxy.Config.GitGrants.
+	GitGrants map[string]uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar chains
 	// egress through (http://[user:pass@]host[:port] — https-to-proxy is rejected
 	// by the sidecar's own config validation, parseUpstreamProxy). Threaded

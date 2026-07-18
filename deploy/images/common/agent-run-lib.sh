@@ -147,6 +147,44 @@ provision_git_helper_secret() {
     export WARDYN_GIT_HELPER_SECRET="$secret"
 }
 
+# ── git-broker insteadOf (Option C: repo-scoped git egress) ──────────────────
+# When the run has a github_token grant, route every GRANTED GitHub repo's git
+# traffic through the Wardyn git-broker (WARDYN_PROXY_URL/wardyn/gh/<org>/<repo>)
+# instead of dialing github.com directly. git rewrites the transport via
+# url.<broker>.insteadOf; the proxy enforces the per-repo allowlist and mints the
+# scoped installation token SERVER-SIDE (it never enters this sandbox). github.com
+# is not in this run's egress allowlist, so an un-brokered github URL is denied —
+# the repo is the unit of trust. No-op when there is no github grant.
+#
+# Only bare "<org>/<repo>" slugs (the github_token clone form) are rewritten. The
+# ssh-form is additionally rewritten ONLY when the run has no ssh_key grants, so an
+# ssh_key-backed repo keeps its own ssh-over-443 lane (the broker is HTTPS-only).
+# MUST be called before dispatch_repo_clones so the clone uses the broker URL.
+configure_git_broker_insteadof() {
+    [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" ]] || return 0
+    local base="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
+    base="${base%/}"
+    local records="${WARDYN_REPOS:-}"
+    if [[ -z "$records" && -n "${WARDYN_REPO_SLUG:-}" ]]; then
+        records=$'\t\t'"${WARDYN_REPO_SLUG}"
+    fi
+    [[ -n "$records" ]] || return 0
+    local have_ssh=0
+    [[ -n "${WARDYN_SSH_GRANTS:-}" && "${WARDYN_SSH_GRANTS}" != "{}" ]] && have_ssh=1
+    local _u _d slug broker
+    while IFS=$'\t' read -r _u _d slug; do
+        slug="${slug%.git}"
+        # bare <org>/<repo> only — skip full URLs, ssh slugs, and deeper paths.
+        [[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || continue
+        broker="${base}/wardyn/gh/${slug}"
+        git config --global url."${broker}".insteadOf "https://github.com/${slug}" || true
+        if [[ "$have_ssh" -eq 0 ]]; then
+            git config --global --add url."${broker}".insteadOf "git@github.com:${slug}" || true
+            git config --global --add url."${broker}".insteadOf "ssh://git@github.com/${slug}" || true
+        fi
+    done <<< "$records"
+}
+
 # Clone the run's repo(s) into the workspace, if requested and not already present.
 # WARDYN_REPOS (multi) supersedes the legacy single WARDYN_REPO_URL: a
 # newline-delimited list of TAB-separated <url>\t<dest>\t<slug> records built by the

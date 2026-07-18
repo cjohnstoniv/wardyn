@@ -79,17 +79,21 @@ unattended baseline — and add exactly what the task needs:
   waits on a human. (`wait_for_review` holds connections for a reviewer;
   `deny_with_review` files approvals nobody will decide.)
 - **Complete `allowed_domains`** — list every host the task legitimately
-  needs (package registries, `github.com`, your model provider). The sealed
-  default (empty list) means the sandbox can reach nothing.
+  needs (package registries, your model provider). The sealed default (empty
+  list) means the sandbox can reach nothing. GitHub is the exception: it is
+  reached through the Wardyn git-broker (see below), not via `allowed_domains`.
 - **No `requires_approval: true` grants** — an approval-gated credential
   never mints without a human. Use `requires_approval: false` grants with
   secrets seeded via `WARDYN_CI_SECRETS`.
 - **Bound the run** — `auto_stop_after_sec` (ci.json: 1 hour) is the reaper
   backstop behind `WARDYN_CI_TIMEOUT`.
 
-Cloning a repo (`WARDYN_CI_REPO`) needs `github.com` (or your SCM host) in
-`allowed_domains`; private repos additionally need a `git_pat` (or
-`github_token`) grant whose secret you seed via `WARDYN_CI_SECRETS`.
+Cloning a **GitHub** repo (`WARDYN_CI_REPO`) does **not** put `github.com` in
+`allowed_domains` — it is routed through the Wardyn git-broker: add a
+`github_token` grant and the run reaches only that repo (via `wardyn-proxy`,
+token minted proxy-side, never in the sandbox). An un-granted GitHub repo is
+denied. A non-GitHub SCM host still needs its own `allowed_domains` entry plus a
+`git_pat`/`ssh_key` grant whose secret you seed via `WARDYN_CI_SECRETS`.
 
 ### Model access for harness mode (running a real agent)
 

@@ -1117,6 +1117,7 @@ func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
 		MITMCAKeyPEM:     pc.MITMCAKeyPEM,
 		MITMHosts:        pc.MITMHosts,
 		MITMLLM:          pc.MITMLLM,
+		GitGrants:        pc.GitGrants,
 		UpstreamProxyURL: pc.UpstreamProxyURL,
 	}
 	cfgJSON, _ := json.Marshal(cfg)
