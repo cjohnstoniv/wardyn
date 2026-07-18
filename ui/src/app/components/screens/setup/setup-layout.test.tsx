@@ -51,6 +51,18 @@ describe("SetupLayout", () => {
     expect(onSelect).toHaveBeenCalledWith("provider");
   });
 
+  it("offers 'Skip corporate network' inside the collapsible corporate phase and jumps to Your Work", async () => {
+    const onSelect = vi.fn();
+    renderLayout({ current: "host_proxy", onSelect });
+    await user.click(screen.getByRole("button", { name: /skip corporate network/i }));
+    expect(onSelect).toHaveBeenCalledWith("scm_provider"); // first step of the next phase (Your Work)
+  });
+
+  it("does not offer a skip control outside a collapsible phase", () => {
+    renderLayout({ current: "environment" });
+    expect(screen.queryByRole("button", { name: /skip corporate network/i })).not.toBeInTheDocument();
+  });
+
   it("last step renders the Launch button disabled when canLaunch is false", () => {
     renderLayout({ current: "launch", canLaunch: false });
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeDisabled();
@@ -85,7 +97,7 @@ describe("SetupLayout", () => {
   });
 });
 
-describe("Optional chip — set-exact across all nine steps", () => {
+describe("Optional chip — set-exact across all ten steps", () => {
   for (const step of STEP_ORDER) {
     it(`${OPTIONAL_STEPS.has(step) ? "shows" : "hides"} the Optional chip on ${step}`, () => {
       renderLayout({ current: step });

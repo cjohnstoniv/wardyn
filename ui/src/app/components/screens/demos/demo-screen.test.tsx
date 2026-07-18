@@ -33,6 +33,12 @@ vi.mock("../../attach-terminal", () => ({
 vi.mock("../../wardyn/live-approvals", () => ({
   LiveApprovals: ({ runId }: { runId: string }) => <div data-testid="live-approvals">{runId}</div>,
 }));
+// The inline audit panel polls /audit; stub it to no decisions (empty projection).
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", () => ({
+  audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
+  egressFromAudit: () => [],
+}));
 
 import { DemoScreen } from "./demo-screen";
 import { DEMOS } from "./demo-catalog";
@@ -54,6 +60,7 @@ describe("DemoScreen", () => {
     createRunMock.mockReset().mockResolvedValue({ id: "demo-run-1", state: "RUNNING" });
     getRunMock.mockReset().mockResolvedValue({ id: "demo-run-1", state: "RUNNING" });
     killRunMock.mockReset().mockResolvedValue(undefined);
+    listAuditMock.mockReset().mockResolvedValue([]);
   });
 
   it("renders all four demo cards", async () => {
@@ -85,12 +92,13 @@ describe("DemoScreen", () => {
     });
   });
 
-  it("an active demo shows the terminal, live approvals, and End demo", async () => {
+  it("an active demo shows the terminal, live approvals, the inline audit panel, and End demo", async () => {
     renderScreen();
     const first = (await screen.findAllByRole("button", { name: /start demo/i }))[0];
     await user.click(first);
     expect(await screen.findByTestId("attach-terminal")).toHaveTextContent("demo-run-1");
     expect(screen.getByTestId("live-approvals")).toBeInTheDocument();
+    expect(screen.getByTestId("demo-audit-panel")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /end demo/i })).toBeInTheDocument();
   });
 });

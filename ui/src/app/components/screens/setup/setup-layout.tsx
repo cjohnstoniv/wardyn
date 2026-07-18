@@ -13,7 +13,15 @@ import { type ReactNode, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, Rocket, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { HostStatusBar } from "./host-status-bar";
-import { OPTIONAL_STEPS, STEP_HEADING, STEP_LABEL, STEP_ORDER, type SetupStepId } from "./steps";
+import {
+  nextPhaseFirstStep,
+  OPTIONAL_STEPS,
+  PHASES,
+  STEP_HEADING,
+  STEP_LABEL,
+  STEP_ORDER,
+  type SetupStepId,
+} from "./steps";
 import { StatusChip } from "../../wardyn/status-chip";
 import { BTN } from "../../wardyn/copy";
 import { HowItWorksStrip, IntroBlurb } from "../onboarding/intro";
@@ -57,6 +65,12 @@ export function SetupLayout({
   const idx = STEP_ORDER.indexOf(current);
   const prev = idx > 0 ? STEP_ORDER[idx - 1] : null;
   const next = idx < STEP_ORDER.length - 1 ? STEP_ORDER[idx + 1] : null;
+  // "Skip this section": when the current step sits inside a collapsible phase
+  // (the corporate-network group), offer a one-click jump PAST the whole phase to
+  // the next phase's first step. Pure navigation — corporate steps are non-gating
+  // and stay reachable in the rail if the operator changes their mind.
+  const skipPhase = PHASES.find((p) => p.collapsible && p.steps.includes(current));
+  const skipTarget = skipPhase ? nextPhaseFirstStep(skipPhase.id) : null;
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
@@ -162,6 +176,11 @@ export function SetupLayout({
               {BTN.finishLaterHint}
             </button>
             <div className="flex gap-2">
+              {skipTarget && (
+                <Button variant="ghost" onClick={() => onSelect(skipTarget)}>
+                  Skip {skipPhase?.label.toLowerCase()}
+                </Button>
+              )}
               <Button variant="outline" disabled={!prev} onClick={() => prev && onSelect(prev)}>
                 <ArrowLeft className="size-4" aria-hidden />
                 Back

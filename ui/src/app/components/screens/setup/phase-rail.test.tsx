@@ -12,6 +12,10 @@ import { STEP_LABEL, type SetupStepId, type StepBadge } from "./steps";
 const BADGES: Record<SetupStepId, StepBadge> = {
   environment: { text: "Ready · 2 of 3 barriers", tone: "success" },
   provider: { text: "Ready", tone: "success" },
+  "sealed-box": { text: "Optional", tone: "neutral" },
+  "fail-then-approve": { text: "Optional", tone: "neutral" },
+  "held-at-the-door": { text: "Optional", tone: "neutral" },
+  "lines-that-cant-be-crossed": { text: "Optional", tone: "neutral" },
   host_proxy: { text: "Optional", tone: "neutral" },
   scm_provider: { text: "Configured", tone: "success" },
   artifact_repo: { text: "Optional", tone: "neutral" },
@@ -24,6 +28,10 @@ const BADGES: Record<SetupStepId, StepBadge> = {
 const DONE: Record<SetupStepId, boolean> = {
   environment: true,
   provider: true,
+  "sealed-box": false,
+  "fail-then-approve": false,
+  "held-at-the-door": false,
+  "lines-that-cant-be-crossed": false,
   host_proxy: false,
   scm_provider: false,
   artifact_repo: false,
@@ -50,8 +58,9 @@ describe("PhaseRail", () => {
     expect(within(btn).getByText("Configured")).toBeInTheDocument();
   });
 
-  it("renders all 9 frozen labels as buttons in the full rail", () => {
-    // current inside the corporate phase so it auto-expands and all 9 show.
+  it("renders all 13 frozen labels as buttons in the full rail", () => {
+    // current inside the corporate phase so it auto-expands and all 13 show
+    // (the 4 Demos sub-steps + the rest).
     const rail = renderRail("host_proxy");
     for (const label of Object.values(STEP_LABEL)) {
       expect(rail.getByRole("button", { name: new RegExp(label, "i") })).toBeInTheDocument();
@@ -81,10 +90,11 @@ describe("PhaseRail", () => {
 
   it('all-optional phases read "all optional", never a counter that cannot fill', () => {
     const rail = renderRail("environment");
-    // "Your work" (scm/workspaces/credentials) and the corporate group are both
-    // made only of optional steps: credentials is done-pinned false (honesty
-    // law), so a 0/3 counter there could structurally never reach 3/3.
-    expect(rail.getAllByText("all optional")).toHaveLength(2);
+    // Three phases are made only of optional steps and so read "all optional":
+    // Demos (single optional step), the corporate group, and "Your work"
+    // (scm/workspaces/credentials — credentials is done-pinned false by the
+    // honesty law, so a 0/3 counter there could structurally never reach 3/3).
+    expect(rail.getAllByText("all optional")).toHaveLength(3);
     expect(rail.queryByText("0/3")).not.toBeInTheDocument();
     expect(rail.getByText("0/2")).toBeInTheDocument(); // Finish still counts
   });

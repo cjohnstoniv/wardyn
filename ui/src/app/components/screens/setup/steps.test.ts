@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import type { SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
 import { deriveReadiness } from "../onboarding/intro";
 import {
+  DEMO_STEP_IDS,
   PHASES,
   STEP_HEADING,
   STEP_LABEL,
@@ -47,6 +48,17 @@ describe("credentials — always Optional, never done (honesty law)", () => {
       tone: "neutral",
     });
     expect(stepDone(status, readiness, [], null).credentials).toBe(false);
+  });
+});
+
+describe("demos — advisory in the pure fns (per-demo checkmark is applied at the orchestrator)", () => {
+  it("each demo step is Optional/false regardless of runs — the launched signal is per-browser, not in status", () => {
+    const status = baseStatus({ has_runs: true });
+    const readiness = deriveReadiness(status);
+    for (const id of DEMO_STEP_IDS) {
+      expect(stepBadges(status, readiness, [], null)[id]).toEqual({ text: "Optional", tone: "neutral" });
+      expect(stepDone(status, readiness, [], null)[id]).toBe(false);
+    }
   });
 });
 
@@ -150,6 +162,11 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
       ["provider", "Model/Harness Provider"],
+      // The four Demos sub-steps — labels come from the demo catalog titles.
+      ["sealed-box", "The sealed box"],
+      ["fail-then-approve", "Fail, then approve"],
+      ["held-at-the-door", "Held at the door"],
+      ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
       ["host_proxy", "Host Proxy"],
       ["scm_provider", "SCM Provider"],
       ["artifact_repo", "Artifact Redirect"],
@@ -161,19 +178,25 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
   });
 
-  it("pins STEP_ORDER to the phase walk (your work before corporate network)", () => {
+  it("pins STEP_ORDER to the phase walk (demos + corporate network before your work)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
       "provider",
+      "sealed-box",
+      "fail-then-approve",
+      "held-at-the-door",
+      "lines-that-cant-be-crossed",
+      "host_proxy",
+      "artifact_repo",
       "scm_provider",
       "workspaces",
       "credentials",
-      "host_proxy",
-      "artifact_repo",
       "review",
       "launch",
     ]);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
+    // The four Demos sub-steps ARE the demos phase, in catalog order.
+    expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
   });
 });
 
