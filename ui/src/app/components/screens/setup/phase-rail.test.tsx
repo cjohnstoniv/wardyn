@@ -52,7 +52,7 @@ function renderRail(current: SetupStepId, onSelect = vi.fn()) {
 }
 
 describe("PhaseRail", () => {
-  it("M21 pattern: a full-rail step button carries both the frozen label and its badge text", () => {
+  it("a full-rail step button carries both the frozen label and its badge text", () => {
     const rail = renderRail("environment");
     const btn = rail.getByRole("button", { name: /scm provider/i });
     expect(within(btn).getByText("Configured")).toBeInTheDocument();

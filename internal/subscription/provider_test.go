@@ -88,7 +88,7 @@ func TestCurrent_DelegatesRefreshWhenNearExpiry(t *testing.T) {
 // TestCurrent_RefreshSurvivesCallerCancel proves the delegated refresh subprocess
 // is detached from the caller's request ctx: a caller that cancels early (as the
 // proxy's short-timeout injection client would) must NOT kill the in-flight
-// `claude` refresh. Regression guard for the timeout-inversion fix (U001).
+// `claude` refresh. Regression guard for the timeout-inversion fix.
 func TestCurrent_RefreshSurvivesCallerCancel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fake-claude is POSIX")

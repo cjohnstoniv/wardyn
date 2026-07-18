@@ -26,7 +26,7 @@ package workspacescan
 //     FILENAME alone implies the language. Multi-language pin files
 //     (.tool-versions, mise.toml/.mise.toml) are presence-only (tool hint,
 //     no language claim): mise.toml is TOML and .tool-versions would need a
-//     small parser; ponytail — add content parsing (a bounded per-line
+//     small parser — add content parsing (a bounded per-line
 //     split, ignoring the path:/ref:/system version-field variants) if a
 //     bare-pin-file-only repo turning up empty Languages becomes a real
 //     complaint.

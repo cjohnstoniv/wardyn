@@ -25,7 +25,7 @@ import (
 // the stdlib log package without importing it. `log/slog` is a distinct path and
 // is unaffected.
 //
-// ponytail: this repo has no golangci-lint/forbidigo (make lint == go vet), so a
+// this repo has no golangci-lint/forbidigo (make lint == go vet), so a
 // small test is the only ratchet available. Add a linter and delete this.
 var slogOnlyPackages = []string{
 	"cmd/wardynd",

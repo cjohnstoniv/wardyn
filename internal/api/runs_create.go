@@ -370,7 +370,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 // image), since onboarding is a convenience, not a gate. The resolved image is
 // persisted for provenance (best-effort: a failed write must not block dispatch
 // — the audit trail still carries build events). Extracted verbatim from
-// handleCreateRun; ctx is already detached from client cancellation (M26).
+// handleCreateRun; ctx is already detached from client cancellation.
 func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWriter, req createRunRequest, runID uuid.UUID, created types.AgentRun, warnings []string, wsRefs []types.Workspace) (string, bool) {
 	image := agentImage(req.Agent, s.cfg.AgentImages)
 

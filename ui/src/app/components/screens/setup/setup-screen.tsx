@@ -74,7 +74,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [wsLoading, setWsLoading] = React.useState(true);
-  // Site config powers the corporate-baseline step badges (M21): the backend's own
+  // Site config powers the corporate-baseline step badges: the backend's own
   // host_proxy/scm/artifact checks stay hardcoded "info" forever, so the rail badge
   // must read the actual SiteConfig fields those steps edit, not the check status.
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);

@@ -76,10 +76,10 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(ratio(token("muted-foreground"), WHITE)).toBeGreaterThanOrEqual(4.5);
   });
 
-  // U302: --muted-foreground clears AA at full strength but NOT diluted — a
+  // --muted-foreground clears AA at full strength but NOT diluted — a
   // `text-muted-foreground/70` at 11px composites to ~2.7:1. Forbid the diluted
   // form on text tokens so a de-emphasis tweak can't silently drop below AA.
-  it("no opacity-diluted muted/foreground text anywhere in src/app (U302)", () => {
+  it("no opacity-diluted muted/foreground text anywhere in src/app", () => {
     const offenders: string[] = [];
     for (const f of walkTsx("src/app")) {
       readFileSync(f, "utf8")
@@ -93,12 +93,12 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(offenders, `diluted muted/foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
   });
 
-  // U121/S3: raw Tailwind palette *text* colors (e.g. text-amber-600 ≈ 3.4:1)
+  // /S3: raw Tailwind palette *text* colors (e.g. text-amber-600 ≈ 3.4:1)
   // bypass the WCAG-verified semantic tokens proven above. Forbid them so a
   // revert of the compose-Q&A risk text (text-warning) back to text-amber-600 —
   // or any new palette-color status text — fails here instead of shipping
   // sub-AA text. (Palette border-/bg- utilities are unaffected; only text- is.)
-  it("no raw palette text colors in src/app — use text-warning/success/danger (U121)", () => {
+  it("no raw palette text colors in src/app — use text-warning/success/danger", () => {
     const rawText = /\btext-(amber|red|green|yellow|orange|emerald|rose|lime|teal|cyan|blue|indigo|violet|purple|pink)-[0-9]{2,3}\b/;
     const offenders: string[] = [];
     for (const f of walkTsx("src/app")) {

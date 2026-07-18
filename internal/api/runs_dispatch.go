@@ -99,7 +99,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	taskMode := p.TaskMode
 	verifyPlan := p.VerifyPlan
 
-	// Client-disconnect isolation (M26): dispatch is invoked synchronously from the
+	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
 	// also fail the compensating StopSandbox below on the same dead ctx and orphan a
 	// live sandbox. Detach from cancellation (values preserved) so the whole
@@ -226,7 +226,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	injections = append(injections, artifactPlan.injections...)
 
 	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
-	// LLM transport is OPAQUE (M24) — see enforceInspectableLLM.
+	// LLM transport is OPAQUE — see enforceInspectableLLM.
 	if !s.enforceInspectableLLM(ctx, run, &policy, llm) {
 		return
 	}
@@ -397,7 +397,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		}
 		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
 		// (ExecInspect) across a wardynd restart: an idle-container exec run whose
-		// agent already exited must finalize + revoke, not strand RUNNING (U008/U039).
+		// agent already exited must finalize + revoke, not strand RUNNING.
 		// Best-effort like SetSandboxRef; "" for exec-less substrates (container==agent).
 		_ = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, execID)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
@@ -508,7 +508,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 		// Exclude the proxy itself and loopback from proxy traversal.
 		"NO_PROXY": "wardyn-proxy,localhost,127.0.0.1,::1",
 		// Toolchain-fidelity env (PLATFORM-wide, every image — not just the fat
-		// campaign image). These were live-found in the cross-language campaign:
+		// full toolchain image). These were found across the cross-language toolchains:
 		//   GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles+EXECS
 		//     its test binaries in $TMPDIR → "permission denied". Point it at the
 		//     agent's exec-allowed HOME. (Plain env survives a shell; only PATH is

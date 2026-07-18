@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// TestEventSink_ReadsAndRefreshesTokenFromFile is the U009 recovery-path regression:
+// TestEventSink_ReadsAndRefreshesTokenFromFile is the recovery-path regression:
 // the file-backed token source (WARDYN_GROUNDTRUTH_TOKEN_FILE) is the ONLY wiring that
 // survives the ~1h token TTL, and its disk-reading branch had zero test coverage. The
 // sink must seed its token from the file AND, on refresh (the 401 path), re-read the
@@ -32,7 +32,7 @@ func TestEventSink_ReadsAndRefreshesTokenFromFile(t *testing.T) {
 	})
 
 	if got := sink.currentToken(); got != "file-token-1" {
-		t.Fatalf("sink must seed its token from the file, not the static env (U009); got %q", got)
+		t.Fatalf("sink must seed its token from the file, not the static env; got %q", got)
 	}
 
 	// The rotator rewrites the file with a fresh token; the 401 refresh re-reads it.
@@ -45,7 +45,7 @@ func TestEventSink_ReadsAndRefreshesTokenFromFile(t *testing.T) {
 }
 
 // TestBootTokenGuard_AcceptsRotatorTokenFileWithEmptyEnvToken pins the two halves
-// of U009 together: the boot guard must accept the wiring the compose stack and
+// of together: the boot guard must accept the wiring the compose stack and
 // README ship as the DEFAULT — rotator-written token file, WARDYN_GROUNDTRUTH_TOKEN
 // deliberately empty. A guard that only consults the env token exits 1 at boot, so
 // the ground-truth stream is dead at t=0 rather than merely blind after the ~1h TTL.

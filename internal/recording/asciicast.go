@@ -38,7 +38,7 @@ type CastWriter struct {
 	// fully arrived by the end of the last Write (a rune split across two PTY
 	// reads). It is prepended to the next Write so the rune is emitted whole
 	// instead of as two invalid fragments.
-	// ponytail: there is no Flush/Close, so bytes still in pending when the
+	// there is no Flush/Close, so bytes still in pending when the
 	// session ends (no further Write) are dropped rather than emitted --
 	// silent loss of a few trailing bytes is preferable to the mojibake this
 	// fixes, and a genuine end-of-stream mid-rune split is rare. Add a Flush

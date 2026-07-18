@@ -219,7 +219,7 @@ describe("api.compose() + api.listComposerBackends()", () => {
     await expect(api.listComposerBackends()).resolves.toEqual([]);
   });
 
-  // U097: a non-404 failure must surface the control plane's `{"error":"…"}`
+  // a non-404 failure must surface the control plane's `{"error":"…"}`
   // message, not a hardcoded "failed to list composer backends" string that
   // discards the server's actionable reason.
   it("listComposerBackends surfaces the server error message on a 500", async () => {

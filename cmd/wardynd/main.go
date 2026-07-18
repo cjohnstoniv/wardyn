@@ -222,7 +222,7 @@ func run() error {
 		Approvals: approvals,
 		Broker:    brk,
 		Audit:     maskedRec,
-		// U094: hand the raw spool + raw store recorder to the server so it starts
+		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
 		AuditSpool:                auditSpool,

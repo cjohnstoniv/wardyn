@@ -241,7 +241,7 @@ describe("NewRunDialog", () => {
     // create-run rejects because an api_key grant references a not-yet-stored secret.
     createRunMock.mockRejectedValueOnce(
       new Error(
-        'invalid inline_policy: api_key grant references unknown secret "dazz-pg-credentials" (set it first via the secrets API)',
+        'invalid inline_policy: api_key grant references unknown secret "acme-pg-credentials" (set it first via the secrets API)',
       ),
     );
     const onOpenChange = vi.fn();
@@ -249,7 +249,7 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
-    await user.type(screen.getByLabelText(/describe your task/i), "load the dazz db");
+    await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
 
@@ -266,7 +266,7 @@ describe("NewRunDialog", () => {
 
     // The helper names the missing secret and opens the Add-secret dialog in place.
     await user.click(
-      screen.getByRole("button", { name: /add the .*dazz-pg-credentials.* secret/i }),
+      screen.getByRole("button", { name: /add the .*acme-pg-credentials.* secret/i }),
     );
     expect(await screen.findByText(/^add secret$/i)).toBeInTheDocument();
   });
@@ -528,12 +528,12 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
         overall_risk: "low",
         setup_items: [
           {
-            id: "secret:dazz-pg-credentials",
+            id: "secret:acme-pg-credentials",
             kind: "secret",
-            label: "dazz-pg-credentials",
+            label: "acme-pg-credentials",
             required_by: "the api_key grant",
             status: "missing",
-            fix: { action: "add_secret", secret_name: "dazz-pg-credentials" },
+            fix: { action: "add_secret", secret_name: "acme-pg-credentials" },
           },
         ],
       }),
@@ -543,11 +543,11 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
-    await user.type(screen.getByLabelText(/describe your task/i), "load the dazz db");
+    await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
 
-    const row = screen.getByTestId("setup-item-secret:dazz-pg-credentials");
+    const row = screen.getByTestId("setup-item-secret:acme-pg-credentials");
     expect(within(row).getByText("Needs setup")).toBeInTheDocument();
 
     await user.click(within(row).getByRole("button", { name: /add secret/i }));
@@ -556,7 +556,7 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     await screen.findByRole("heading", { name: /^add secret$/i });
     // The name field is already prefilled with Fix.SecretName — only the value
     // needs typing.
-    expect(screen.getByLabelText(/^name$/i)).toHaveValue("dazz-pg-credentials");
+    expect(screen.getByLabelText(/^name$/i)).toHaveValue("acme-pg-credentials");
     await user.type(screen.getByLabelText(/^value$/i), "sekrit");
     await user.click(screen.getByRole("button", { name: /^save secret$/i }));
 

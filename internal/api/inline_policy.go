@@ -75,7 +75,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	// Stored/default path: resolve, then validate secret references the SAME way
-	// the inline branch does (ponytail: one call, no duplicated logic — H1).
+	// the inline branch does (one call, no duplicated logic — H1).
 	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

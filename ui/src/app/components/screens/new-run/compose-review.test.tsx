@@ -266,12 +266,12 @@ describe("ComposeReview — high-risk acknowledgment gate (D8)", () => {
 // non-blocking. Each row is label+detail | StatusChip | fix action.
 describe("ComposeReview — setup checklist", () => {
   const secretItem: SetupItem = {
-    id: "secret:dazz-pg-credentials",
+    id: "secret:acme-pg-credentials",
     kind: "secret",
-    label: "dazz-pg-credentials",
+    label: "acme-pg-credentials",
     required_by: "the api_key grant",
     status: "missing",
-    fix: { action: "add_secret", secret_name: "dazz-pg-credentials" },
+    fix: { action: "add_secret", secret_name: "acme-pg-credentials" },
   };
   const workspaceItem: SetupItem = {
     id: "workspace:ws-1",
@@ -308,7 +308,7 @@ describe("ComposeReview — setup checklist", () => {
     expect(screen.getByText("Setup checklist")).toBeInTheDocument();
 
     const secretRow = screen.getByTestId(`setup-item-${secretItem.id}`);
-    expect(within(secretRow).getByText("dazz-pg-credentials")).toBeInTheDocument();
+    expect(within(secretRow).getByText("acme-pg-credentials")).toBeInTheDocument();
     expect(within(secretRow).getByText(/required by the api_key grant/i)).toBeInTheDocument();
     expect(within(secretRow).getByText("Needs setup")).toBeInTheDocument();
 
@@ -334,7 +334,7 @@ describe("ComposeReview — setup checklist", () => {
     const { onAddSecret } = renderReview(baseResult(), { setupItems: [secretItem] });
     const row = screen.getByTestId(`setup-item-${secretItem.id}`);
     await userEvent.setup().click(within(row).getByRole("button", { name: /add secret/i }));
-    expect(onAddSecret).toHaveBeenCalledWith("dazz-pg-credentials");
+    expect(onAddSecret).toHaveBeenCalledWith("acme-pg-credentials");
   });
 
   it("a missing workspace item's fix calls onFixWorkspace with Fix.WorkspaceID", async () => {

@@ -44,7 +44,7 @@ func TestWriteTokenFileAtomic_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestRotator_SeedsFileImmediately is the U009 producer regression: the shipped
+// TestRotator_SeedsFileImmediately is the producer regression: the shipped
 // deployment had no process keeping the token file fresh, so the ingest went blind
 // ~1h in. The rotator must mint + write a token to the shared file at once (so the
 // ingest has one on first read) and then keep it fresh. Cancel after the seed.
@@ -68,7 +68,7 @@ func TestRotator_SeedsFileImmediately(t *testing.T) {
 
 	b, err := os.ReadFile(path)
 	if err != nil || strings.TrimSpace(string(b)) != "seed-token" {
-		t.Fatalf("rotator must seed the token file immediately (U009); got %q err=%v", string(b), err)
+		t.Fatalf("rotator must seed the token file immediately; got %q err=%v", string(b), err)
 	}
 	if m.calls == 0 {
 		t.Error("rotator must mint at least once")

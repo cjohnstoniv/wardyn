@@ -104,7 +104,7 @@ beforeEach(() => {
   // Composer OFF by default so the deterministic-flow tests above don't render the
   // AI affordance; the AI-diagnosis suite below opts in per test.
   listComposerBackendsMock.mockResolvedValue([]);
-  // M18: no LLM path by default (see setupStatus()); the M18 suite below opts a
+  // no LLM path by default (see setupStatus()); the suite below opts a
   // provider in to prove the warning is driven by /setup/status, not composer.
   getSetupStatusMock.mockResolvedValue(setupStatus());
 });
@@ -335,7 +335,7 @@ describe("ImportWorkspaceDialog — finalize", () => {
 });
 
 describe("ImportWorkspaceDialog — Record step nav (Configure → Record → Verify)", () => {
-  it("steps Configure → Record, then Continue to Verify with zero recordings falls back to the automated Verify pane (U035)", async () => {
+  it("steps Configure → Record, then Continue to Verify with zero recordings falls back to the automated Verify pane", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
     render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -354,11 +354,11 @@ describe("ImportWorkspaceDialog — Record step nav (Configure → Record → Ve
     expect(screen.queryByTestId("verify-no-recordings")).not.toBeInTheDocument();
   });
 
-  // U035 regression: "Skip recording" used to strand the operator at RecordPane's
+  // regression: "Skip recording" used to strand the operator at RecordPane's
   // confined dead end (no recordings to replay), contradicting STEP_BLURB.record's
   // "Verify still proves it either way" — the automated verifyWorkspace path must
   // be reachable instead.
-  it("Skip recording lands on the automated Verify pane, not a dead end (U035)", async () => {
+  it("Skip recording lands on the automated Verify pane, not a dead end", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
     verifyWorkspaceMock.mockResolvedValue({ ok: true });
     render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
@@ -464,11 +464,11 @@ describe("ImportWorkspaceDialog — agentic verify diagnosis (AI)", () => {
   });
 });
 
-// M17: the Verify pane's one-click "approve a denied host" fix used to PUT
+// the Verify pane's one-click "approve a denied host" fix used to PUT
 // straight to setApprovedEgress — skipping the same untrusted-content confirm
 // the Workspaces screen enforces for the identical action (the host name came
 // from a run's observed/denied egress, not something the operator typed).
-describe("ImportWorkspaceDialog — egress approvals confirm before applying (M17)", () => {
+describe("ImportWorkspaceDialog — egress approvals confirm before applying", () => {
   it("does not call setApprovedEgress until the confirm dialog is accepted", async () => {
     getWorkspaceMock.mockResolvedValue(failedWs());
     getObservedEgressMock.mockResolvedValue({ denied: ["evil.example.com"], runs_examined: 3 });
@@ -502,10 +502,10 @@ describe("ImportWorkspaceDialog — egress approvals confirm before applying (M1
   });
 });
 
-// M18: Record's "no model configured" warning must be composer-INDEPENDENT —
+// Record's "no model configured" warning must be composer-INDEPENDENT —
 // wiring it to composer detection fired the warning even with a connected
 // subscription or API key. It reflects GET /setup/status (hasLlmPath) instead.
-describe("ImportWorkspaceDialog — Record model-readiness reflects /setup/status, not composer (M18)", () => {
+describe("ImportWorkspaceDialog — Record model-readiness reflects /setup/status, not composer", () => {
   it("shows the connected note when a provider is logged in, even with no composer backend", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
     getSetupStatusMock.mockResolvedValue(

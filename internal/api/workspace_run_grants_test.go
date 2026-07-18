@@ -193,7 +193,7 @@ func (b *ctxImageBuilder) FinalizeBase(context.Context, string, string) (string,
 	return "", nil
 }
 
-// TestLaunchVerifyRun_ImageBuildSurvivesClientDisconnect pins M26 one layer
+// TestLaunchVerifyRun_ImageBuildSurvivesClientDisconnect pins one layer
 // higher than dispatch: the launcher's own pre-dispatch work — mint, CreateRun,
 // status flip and the multi-minute devcontainer BUILD — must not run on the
 // cancellable HTTP request context. resolveWorkspaceImage fails OPEN by

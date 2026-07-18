@@ -137,7 +137,7 @@ type Config struct {
 	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
 	// AuditDrainRecorder, New starts a background loop that replays spooled events
 	// back into the durable store once it recovers and empties the file, so the
-	// queryable audit trail heals automatically (U094). Nil disables the drain.
+	// queryable audit trail heals automatically. Nil disables the drain.
 	AuditSpool *AuditSpool
 	// AuditDrainRecorder is the RAW durable recorder (store.Recorder — NOT the
 	// spooling chain) the spool drain replays into. It must bypass the spool to
@@ -371,7 +371,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg}
 	s.router = s.routes()
-	// U094: drain the durable audit-fallback spool back into the store once it
+	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible
 	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives
 	// individual requests and stops on shutdown. No-op unless both are wired.

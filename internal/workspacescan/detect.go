@@ -215,7 +215,7 @@ var weakKinds = map[string]struct{}{"ci": {}, "code": {}, "generic": {}}
 // this mirrors internal/contentscan/patterns.go's secretRules catalog (kept
 // local rather than reshaping that package's Span/Finding streaming API). Only
 // the rule NAME and location are ever recorded, never the matched bytes.
-// ponytail: 10 anchored formats cover the accidental-commit cases; entropy
+// 10 anchored formats cover the accidental-commit cases; entropy
 // scanning is deliberately omitted (too many false positives on a file tree),
 // and ADO PATs have no raw-value rule (opaque base64, no distinctive prefix —
 // a regex would be low-precision; they're caught in credential-URL form).

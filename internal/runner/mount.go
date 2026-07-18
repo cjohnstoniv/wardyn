@@ -59,7 +59,7 @@ var deniedSourcePrefixes = []string{
 	"/run",
 	"/var/run",
 	"/var/lib/docker",
-	"/var/lib/containerd", // containerd state — root-equivalent, same as /var/lib/docker (M13)
+	"/var/lib/containerd", // containerd state — root-equivalent, same as /var/lib/docker
 	"/etc",
 	"/boot",
 	"/root", // uid-0's home on a standard Linux host
@@ -108,7 +108,7 @@ func ValidateMount(m Mount) error {
 		// Any error other than "does not exist" is fail-closed.
 		return fmt.Errorf("mount source %q could not be resolved: %w", src, err)
 	}
-	// ponytail: os.IsNotExist falls through to lexical-only on purpose. When
+	// os.IsNotExist falls through to lexical-only on purpose. When
 	// wardynd talks to a REMOTE/VM dockerd it cannot see the daemon's
 	// filesystem, so a source that legitimately exists only on the daemon host
 	// is unresolvable here; the deny-list is advisory for a remote daemon (a
@@ -160,7 +160,7 @@ func deniedSource(src string) error {
 	// it lets the sandbox drive the daemon (launch privileged containers → escape).
 	// Denied by BASENAME so a socket at a non-standard path (outside the denied
 	// /run, /var/run prefixes) is caught too — docker, containerd, podman, cri-o
-	// (M13: previously only docker.sock was named).
+	// (previously only docker.sock was named).
 	switch path.Base(src) {
 	case "docker.sock", "containerd.sock", "podman.sock", "crio.sock":
 		return fmt.Errorf("mount source %q references a container-runtime socket; denied", src)

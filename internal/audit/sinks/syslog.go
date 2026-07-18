@@ -34,7 +34,7 @@ import (
 // Emit only does a non-blocking channel send, so it can never be parked by a
 // hung collector — nor by a wedged local syslog daemon or a full /dev/log
 // datagram peer buffer (a unixgram send blocks when the receiver's buffer is
-// full). See HIGH finding "Bound the remote syslog sink…" and U095 (the same
+// full). See HIGH finding "Bound the remote syslog sink…" and (the same
 // bug class on the local socket, originally left synchronous on the false
 // assumption that a /dev/log write is always a fast syscall).
 const (

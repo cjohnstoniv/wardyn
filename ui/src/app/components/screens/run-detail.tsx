@@ -138,7 +138,7 @@ export function RunDetailScreen() {
   React.useEffect(() => {
     setRun(undefined);
     setStatus("loading");
-    // M15 fix: reset recording state on run-id change too, or the Recording
+    // fix: reset recording state on run-id change too, or the Recording
     // tab kept showing the PREVIOUS run's cast (labelled as this run) until
     // something else happened to touch recState — the lazy-load effect below
     // only fetches when recState === "idle", so a stale "ready"/"error" from

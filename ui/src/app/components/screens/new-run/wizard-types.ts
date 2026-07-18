@@ -404,7 +404,7 @@ export function buildSpec(
   }
   // Subscription claude needs api.anthropic.com reachable for the OAuth tunnel.
   if (isSubscription) requiredHosts.push("api.anthropic.com");
-  // ponytail: any repo-kind selection unions the GitHub clone hosts — the
+  // any repo-kind selection unions the GitHub clone hosts — the
   // overwhelmingly common case. A repo onboarded from a non-GitHub host still
   // works (its clone egress comes from the workspace's own scanned profile
   // server-side, or from the operator's custom allowed_domains / git_pat host
@@ -494,7 +494,7 @@ function dedupe(xs: string[]): string[] {
 // single operator-chosen source (not onboarding-aware) but, per the run-create
 // mount-restriction gate, it must already reference an onboarded source to have
 // been proposable at all — so matching by source is a reliable inverse.
-// ponytail: an omitted/empty `workspaces` (a call site that hasn't loaded the
+// an omitted/empty `workspaces` (a call site that hasn't loaded the
 // list yet) degrades to no workspace prefilled — a known, documented gap, not a
 // crash — the operator just re-picks it in the Basics step.
 export function wizardStateFromProposal(

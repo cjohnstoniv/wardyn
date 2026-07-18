@@ -8,7 +8,7 @@ import { runs } from "./runs";
 
 // grantsFromRecords projects the GET /runs/{id}/grants ELIGIBILITY records into
 // the CredentialGrant rows the run-detail screen renders. It had zero coverage
-// (U073) and its only consumer screen has no test. Reached here through its
+// and its only consumer screen has no test. Reached here through its
 // export path, runs.getGrants, with a stubbed fetch.
 describe("runs.getGrants — grant-record projection", () => {
   let fetchMock: ReturnType<typeof vi.fn>;

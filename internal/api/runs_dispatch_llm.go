@@ -347,7 +347,7 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 }
 
 // enforceInspectableLLM fails CLOSED at schedule time when inspection is
-// REQUIRED but the resolved LLM transport is OPAQUE (M24). Opaque transports:
+// REQUIRED but the resolved LLM transport is OPAQUE. Opaque transports:
 // (a) a subscription/OAuth transport that is NOT being MITM'd (injectSub /
 // intercept_tls auto-enable MITM, making it inspectable); (b) SigV4 Bedrock via
 // ~/.aws or resident keys — uninspectable by construction (we cannot re-sign a

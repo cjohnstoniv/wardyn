@@ -134,7 +134,7 @@ func TestIsBlocked(t *testing.T) {
 		{"169.254.169.254", true, true},
 		{"fe80::1", true, true},
 		{"8.8.8.8", true, false},
-		// NAT64-smuggled targets (U050): NAT64 literals are blocked WHOLESALE in
+		// NAT64-smuggled targets: NAT64 literals are blocked WHOLESALE in
 		// both modes (fail closed, matching the egress proxy) — a NAT64 literal
 		// never legitimately appears on a model-provider egress path, and the
 		// embedded-v4 recheck only enriches the denial reason.

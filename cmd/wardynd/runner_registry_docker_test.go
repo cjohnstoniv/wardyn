@@ -34,7 +34,7 @@ func TestSubstrateRegistry_DockerResolvesUnderDockerTag(t *testing.T) {
 }
 
 // The boot path end to end: -runner docker resolves via the registry, wraps in
-// the orchestrator, and advertises the ACTUAL substrate name (M31).
+// the orchestrator, and advertises the ACTUAL substrate name.
 func TestBuildRunnerFromFlags_DockerEnabled(t *testing.T) {
 	r, target, err := buildRunnerFromFlags(rrFlags("docker"), nil)
 	if err != nil {

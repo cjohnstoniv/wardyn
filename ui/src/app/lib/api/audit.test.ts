@@ -9,7 +9,7 @@ import type { AuditEvent } from "../types";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
 // has no /egress endpoint, so a projection bug here silently blanks or mislabels
-// the security-relevant egress decisions. It had zero coverage (U073). Its sole
+// the security-relevant egress decisions. It had zero coverage. Its sole
 // consumer (run-detail.tsx) has no test, so this is the projection's only pin.
 function ev(partial: Partial<AuditEvent>): AuditEvent {
   return {

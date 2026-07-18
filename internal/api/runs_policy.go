@@ -21,7 +21,7 @@ import (
 // unparameterised caller (every existing SDK/CLI/UI list call) gets; maxListLimit
 // hard-caps a client-supplied ?limit so a long-lived daemon's /runs, the Fleet
 // view, and the compose healthcheck can never pull down an unbounded payload
-// (U049/U070). A ?limit of 0 or above the max clamps to the max — never to
+//. A ?limit of 0 or above the max clamps to the max — never to
 // "unbounded", which only internal store callers get.
 const (
 	defaultListLimit = 200

@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// This file is the CONCURRENT companion to revoke_order_test.go (U017): those
+// This file is the CONCURRENT companion to revoke_order_test.go: those
 // tests pin the C002/C003 semantics for a CAS whose outcome is already decided;
 // these actually race a kill against a dispatch forward-transition on one run
 // under `go test -race`, asserting exactly one writer wins the state cell and
@@ -211,7 +211,7 @@ func TestKillRun_FailAndRevokeRace_SingleRevocation(t *testing.T) {
 	}
 }
 
-// ─── real-dispatch-seam kill race (X079/X093) ────────────────────────────────
+// ─── real-dispatch-seam kill race ────────────────────────────────
 //
 // The two tests above race a kill against a raw state-cell CAS — they prove the
 // CAS arbitration but not the DISPATCH SEAM: CreateSandbox provisions a real
@@ -224,7 +224,7 @@ func TestKillRun_FailAndRevokeRace_SingleRevocation(t *testing.T) {
 // ref and its KillSandbox teardown fires.
 
 // raceDispatchStore is a race-safe Store with the full surface s.dispatch drives
-// AND a real sandbox-ref cell (the gap X093 names: dispatchTestStore's
+// AND a real sandbox-ref cell (the gap names: dispatchTestStore's
 // SetSandboxRef is a no-op, so its GetRun always returns an empty ref and kill's
 // KillSandbox is dead code). refSet/killGate are the optional coordination for
 // the deterministic interleave test — nil in the genuine-race test.
@@ -313,7 +313,7 @@ var _ runner.Runner = (*teardownCountRunner)(nil)
 // dispatch that wins RUNNING leaves no detached goroutine to leak — the
 // kill-vs-dispatch teardown seam under test (CreateSandbox/SetSandboxRef/RUNNING
 // CAS/teardown) is identical with or without a task.
-// ponytail: Task="" avoids the watcher goroutine; the teardown seam is task-independent.
+// Task="" avoids the watcher goroutine; the teardown seam is task-independent.
 func dispatchRun(runID uuid.UUID) types.AgentRun {
 	return types.AgentRun{
 		ID: runID, Agent: "claude-code", CreatedBy: "t@example.com",
@@ -329,7 +329,7 @@ func runDispatch(srv *Server, run types.AgentRun) {
 }
 
 // TestKillRun_DispatchSandboxInFlight_TeardownOrdering is the DETERMINISTIC
-// counterfactual for the seam X093 says goes untested: a kill lands while a
+// counterfactual for the seam says goes untested: a kill lands while a
 // dispatch has a real sandbox in flight (created + ref persisted, STARTING, not
 // yet RUNNING). It pins the exact teardown ORDERING — kill wins the KILLED CAS,
 // tears the sandbox down via KillSandbox, and revokes; dispatch's now-losing

@@ -201,7 +201,7 @@ func TestDockerDesktopNeverExecutes(t *testing.T) {
 	}
 }
 
-// U111 pin: detectDocker must source its WSL/KVM facts from the shared
+// pin: detectDocker must source its WSL/KVM facts from the shared
 // internal/setup.DetectPlatform() leaf detector, not a private reimplementation.
 // A consistency check is the honest counterfactual — if the CLI drifts back to
 // its own os.Stat("/dev/kvm") / /proc/version scan, any divergence from the

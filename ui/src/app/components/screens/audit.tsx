@@ -53,7 +53,7 @@ import { cn } from "../ui/utils";
 // first N (truncated)" indicator. Keep this in sync with the server's page cap.
 const AUDIT_PAGE_CAP = 500;
 
-// M20 fix: a run_id-filtered query hits a DIFFERENT, higher server cap
+// fix: a run_id-filtered query hits a DIFFERENT, higher server cap
 // (QueryAuditEvents's default limit=1000, vs QueryRecentAuditEvents's 500 for
 // the unfiltered/global view) — a long-running/chatty run's OWN trail can still
 // truncate at this cap. Keep in sync with the server's per-run page cap.
@@ -386,7 +386,7 @@ export function AuditScreen() {
         />
       )}
 
-      {/* MEDIUM/M20 fix: when the window is capped, say so explicitly — otherwise
+      {/* MEDIUM/fix: when the window is capped, say so explicitly — otherwise
           the operator may believe they're seeing the full log when they're not.
           Filtering by a specific run pulls that run's complete trail server-side
           (a HIGHER cap, RUN_AUDIT_PAGE_CAP, than the global page), but a long-

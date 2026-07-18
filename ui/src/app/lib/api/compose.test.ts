@@ -11,7 +11,7 @@ import { HttpError } from "./core";
 // passed) hand-parses `data: <json>\n\n` frames off a ReadableStream. The
 // existing composer tests pass no onStage, so the whole streaming path — frame
 // buffering, stage dispatch, terminal result/error frames — was unexercised
-// (U073). These drive it over a stubbed reader, including a frame split across
+//. These drive it over a stubbed reader, including a frame split across
 // two chunks (the buffering edge the \n\n scan exists for).
 describe("composer.compose() — SSE streaming path", () => {
   let fetchMock: ReturnType<typeof vi.fn>;

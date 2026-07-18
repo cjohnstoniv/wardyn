@@ -133,7 +133,7 @@ func appendLine(t *testing.T, path, line string) {
 }
 
 // TestTailExport_ReassemblesLineSplitAcrossEOF is the red-first regression for
-// U030/U031: a Tetragon JSON line whose bytes straddle an EOF read boundary (the
+// a Tetragon JSON line whose bytes straddle an EOF read boundary (the
 // writer flushes it in two syscalls) must be REASSEMBLED, not split into two
 // undecodable fragments that both drop. Pre-fix, ReadBytes returns the first
 // half with io.EOF, that half is processed (JSON parse fails -> dropped), and the

@@ -142,7 +142,7 @@ func runStep(dir string, c workspacescan.SetupCommand) workspacescan.VerifyStepR
 	defer cancel()
 	// Operator-approved command; run via a NON-login shell (`-c`, not `-lc`).
 	// A login shell sources /etc/profile which RESETS PATH to the system default,
-	// dropping the image's `ENV PATH` — the campaign's go/rust-not-found failure.
+	// dropping the image's `ENV PATH` — the fat image's go/rust-not-found failure.
 	// `-c` is the docker-native behavior (what `docker exec`/devcontainer features
 	// expect): the image's ENV PATH + our sandboxEnv (GOTMPDIR, MAVEN_OPTS, …) are
 	// inherited intact. CI=true keeps interactive tools non-blocking; the sandbox

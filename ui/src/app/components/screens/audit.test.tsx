@@ -111,10 +111,10 @@ describe("AuditScreen", () => {
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
-  // M20: a run_id-filtered query hits a HIGHER server cap (1000, vs 500 for the
+  // a run_id-filtered query hits a HIGHER server cap (1000, vs 500 for the
   // unfiltered view) — but a long/chatty run's own trail can still hit it. This
   // used to be suppressed unconditionally whenever a run filter was active.
-  it("M20: shows the truncation indicator for a run-filtered view capped at 1000", async () => {
+  it("shows the truncation indicator for a run-filtered view capped at 1000", async () => {
     listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
     const many = Array.from({ length: 1000 }, (_, i) =>
       ev({ id: `r${i}`, run_id: "run_111", action: `act.${i}` }),
@@ -130,7 +130,7 @@ describe("AuditScreen", () => {
     expect(screen.getByText(/first 1000 events for this run/i)).toBeInTheDocument();
   });
 
-  it("M20: does not show the truncation indicator for a run-filtered view below 1000", async () => {
+  it("does not show the truncation indicator for a run-filtered view below 1000", async () => {
     listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
     listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
     renderScreen();

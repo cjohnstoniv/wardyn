@@ -53,7 +53,7 @@ const (
 	RunPending  RunState = "PENDING"
 	RunStarting RunState = "STARTING"
 	RunRunning  RunState = "RUNNING"
-	// RunWaiting is a RESERVED, not-yet-produced state (U067): no backend path
+	// RunWaiting is a RESERVED, not-yet-produced state: no backend path
 	// transitions a run into WAITING_FOR_CONFIRMATION today. It is the planned
 	// human-in-the-loop gate — a run that pauses for an operator to confirm a
 	// risky action mid-flight — and is deliberately kept wired end to end (UI
@@ -133,7 +133,7 @@ type AgentRun struct {
 	// reconciler can observe AGENT liveness via ExecInspect across a wardynd
 	// restart: for an idle-container run the container is `sleep infinity`, so
 	// container liveness != agent liveness, and the exec id otherwise lived only in
-	// the driver's in-memory map — lost on restart, stranding the run (U008/U039).
+	// the driver's in-memory map — lost on restart, stranding the run.
 	AgentExecID string `json:"agent_exec_id,omitempty"`
 }
 

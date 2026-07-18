@@ -160,7 +160,7 @@ describe("RecordingScreen", () => {
     await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
   });
 
-  it("gives a KILLED run the same enforcement badge (RunStatusBadge) runs.tsx/run-detail.tsx use — U120", async () => {
+  it("gives a KILLED run the same enforcement badge (RunStatusBadge) runs.tsx/run-detail.tsx use", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "escape attempt", state: "KILLED" })]);
     getRecordingMock.mockResolvedValue(rec("run_1"));
     renderScreen();

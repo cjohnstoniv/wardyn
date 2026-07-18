@@ -69,7 +69,7 @@ func TestDetectCLIProviders_EnumeratesClaudeAndCodex(t *testing.T) {
 }
 
 // vaultKVMDetail must give materially different, honest advice per posture. The
-// regression this pins (U085): when KVM is absent but wardynd is containerized,
+// regression this pins: when KVM is absent but wardynd is containerized,
 // the copy must NOT assert a bare "hardware limit no install can fix" and must
 // point at bind-mounting /dev/kvm — the compose topology's real remedy.
 func TestVaultKVMDetail(t *testing.T) {

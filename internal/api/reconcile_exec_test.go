@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// execExitRunner models the exact U008/U039 shape: the sandbox CONTAINER is still
+// execExitRunner models the exact shape: the sandbox CONTAINER is still
 // up (an idle `sleep infinity`, so container-level Status reports RUNNING), but the
 // AGENT exec has already exited. AgentStatus — given the exec id persisted at Exec
 // — reports the agent's real exit; the old container-Status boot reconciler never
@@ -75,11 +75,11 @@ func execRun(t *testing.T, agentExecID string) types.AgentRun {
 		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunRunning,
 		RunnerTarget: "docker",
 		SandboxRef:   "sleep-infinity-" + runID.String(),
-		AgentExecID:  agentExecID, // the value persisted at Exec time (U008)
+		AgentExecID:  agentExecID, // the value persisted at Exec time
 	}
 }
 
-// TestReconcileOnBoot_ExecRunFinalizesFromAgentExit is the U008/U039 regression:
+// TestReconcileOnBoot_ExecRunFinalizesFromAgentExit is the regression:
 // after a restart, a RUNNING exec-based run whose agent has exited (but whose idle
 // sandbox container is still up) MUST finalize + revoke + tear down, not strand.
 // The reconciler now observes AgentStatus (the persisted exec id) instead of
@@ -101,7 +101,7 @@ func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 	}
 
 	if !fake.transitioned || fake.toState != types.RunCompleted {
-		t.Fatalf("an exec run whose agent exited 0 must finalize COMPLETED via AgentStatus (U008/U039); transitioned=%v to=%q — container Status alone reports RUNNING forever", fake.transitioned, fake.toState)
+		t.Fatalf("an exec run whose agent exited 0 must finalize COMPLETED via AgentStatus; transitioned=%v to=%q — container Status alone reports RUNNING forever", fake.transitioned, fake.toState)
 	}
 	if len(fr.stopped) == 0 {
 		t.Error("finalize must tear the still-up idle sandbox down")
@@ -113,7 +113,7 @@ func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 		}
 	}
 	if !revoked {
-		t.Errorf("finalize must run the credential revoke cascade for %s (the C3 property U039 says was defeated); broker.revoked=%v", run.ID, h.broker.revoked)
+		t.Errorf("finalize must run the credential revoke cascade for %s (the C3 property says was defeated); broker.revoked=%v", run.ID, h.broker.revoked)
 	}
 }
 

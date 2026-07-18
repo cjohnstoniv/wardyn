@@ -292,7 +292,7 @@ func healthzEbpf(t *testing.T, h *harness) map[string]any {
 	return gt
 }
 
-// TestHealthzEbpfIdleWhenNoEventsObserved is the red-first regression for U010:
+// TestHealthzEbpfIdleWhenNoEventsObserved is the red-first regression for 
 // a FRESH heartbeat proves the sidecar process is alive and reaching the control
 // plane, but if it has mapped zero kernel events (Tetragon dead / wrong export
 // path / no TracingPolicy) the stream is BLIND. /healthz must report "idle", not
@@ -336,7 +336,7 @@ func (notFoundStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) 
 }
 
 // TestGroundtruthUnknownRunIDDowngradesNotRejectsBatch is the RED-FIRST
-// regression for U033: a batch with ONE event whose run_id is
+// regression for a batch with ONE event whose run_id is
 // present-but-unknown (e.g. an orphaned container after a DB reset/re-point)
 // must NOT 400 the whole batch — the sensor treats a 4xx as a non-retryable
 // whole-batch drop, so every co-batched event would be permanently lost. The

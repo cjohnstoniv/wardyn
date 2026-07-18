@@ -80,10 +80,8 @@ Wardyn is the governance layer between a human operator and a running agent:
 
 ## Architecture at a glance
 
-<!-- Designed in the "Wardyn Architecture Diagrams" Figma file; the code-true,
-     CI-label-checked mermaid version of this and the other diagrams lives in
-     ARCHITECTURE.md and threatmodel/THREAT-MODEL.md. Regenerate from Figma if
-     the component set changes. -->
+<!-- The code-true, CI-label-checked mermaid version of this and the other
+     diagrams lives in ARCHITECTURE.md and threatmodel/THREAT-MODEL.md. -->
 ![Wardyn system overview: a trusted control plane (wardynd + Postgres) launches each coding agent into an untrusted, gatewayless per-run sandbox whose only path off-host is the wardyn-proxy egress sidecar](docs/img/architecture.png)
 
 A trusted control plane (`wardynd` + Postgres) launches each agent into an

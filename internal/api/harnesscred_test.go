@@ -36,7 +36,7 @@ func (getErrStore) Delete(context.Context, string) error          { return nil }
 func (getErrStore) List(context.Context) ([]string, error)        { return nil, nil }
 func (s getErrStore) Get(context.Context, string) ([]byte, error) { return s.val, s.getErr }
 
-// TestReadManagedBlob_DistinguishesStoreErrors pins U078: only ErrNotFound is
+// TestReadManagedBlob_DistinguishesStoreErrors pins only ErrNotFound is
 // "not connected" (found=false, err=nil). Any OTHER store error (decrypt failure
 // after key rotation, backend down) MUST propagate rather than masquerade as
 // "no credential connected". Reverting to a blanket `if err != nil { return

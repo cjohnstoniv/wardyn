@@ -52,7 +52,7 @@ function AccessRow({
   detail?: React.ReactNode;
   // Small proxy-injected/resident-at-run-time indicator (see PROXY_INJECTED_CHIP
   // / BEDROCK_RESIDENT_CHIP below) — optional, only set for the Claude/Anthropic
-  // auth-mode rows the safest-path campaign covers.
+  // auth-mode rows the safest-path guidance covers.
   residency?: React.ReactNode;
   action?: React.ReactNode;
 }) {
@@ -73,7 +73,7 @@ function hasSecret(present: string[], re: RegExp): boolean {
   return present.some((n) => re.test(n));
 }
 
-// Auth-mode residency framing (best-practice-safest-path campaign): where the
+// Auth-mode residency framing (best-practice safest-path guidance): where the
 // live secret lives at run time differs materially across these options, so
 // each one wears a small indicator instead of leaving it unstated.
 // Proxy-injected = the live secret never leaves the proxy — the sandbox holds

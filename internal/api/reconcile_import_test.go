@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── U012 + U015: scan-reconcile scoped write ────────────────────────────────
+// ─── + scan-reconcile scoped write ────────────────────────────────
 
 // scanReconcileStore serves a stuck `scanning` workspace + its scan run, records
 // whether the reconcile used the scoped SetWorkspaceImportState (state) or the
@@ -46,7 +46,7 @@ func (s *scanReconcileStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws 
 	return ws, nil
 }
 
-// TestReconcileWorkspaceRun_StuckScanUsesScopedWrite is the U012/U015 regression:
+// TestReconcileWorkspaceRun_StuckScanUsesScopedWrite is the regression:
 // the scan-error reconcile branch must use the scoped SetWorkspaceImportState
 // (status + cleared active_run_id only), NOT the full-row UpdateWorkspace that
 // replayed a stale snapshot over every column. It also honors the same
@@ -92,7 +92,7 @@ func TestReconcileWorkspaceRun_StuckScanUsesScopedWrite(t *testing.T) {
 	}
 }
 
-// ─── U011: capture must not truncate at 1000 events ──────────────────────────
+// ─── capture must not truncate at 1000 events ──────────────────────────
 
 // auditLimitRecordStore wraps recordStore to capture the LIMIT reconcileRecordRun
 // passes to QueryAuditEvents. The real store silently caps a 0/negative limit at
@@ -107,7 +107,7 @@ func (s *auditLimitRecordStore) QueryAuditEvents(ctx context.Context, runID uuid
 	return s.recordStore.QueryAuditEvents(ctx, runID, limit)
 }
 
-// TestReconcileRecordRun_CaptureUsesHighAuditLimit is the U011 regression: a
+// TestReconcileRecordRun_CaptureUsesHighAuditLimit is the regression: a
 // recording with >1000 audit events must be captured with an explicit high bound,
 // not the silent 1000 default that would truncate the later egress out of the
 // derived observations. (The fake returns every event regardless of the limit;
@@ -140,7 +140,7 @@ func TestReconcileRecordRun_CaptureUsesHighAuditLimit(t *testing.T) {
 	}
 }
 
-// ─── U213: launch abort finalizes + revokes the persisted run ────────────────
+// ─── launch abort finalizes + revokes the persisted run ────────────────
 
 // recordAbortStore drives launchRecordRun to the CreateGrant-failure abort path
 // (after CreateRun) and records the run finalize + slot release the abort must do.
@@ -179,7 +179,7 @@ func (s *recordAbortStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUI
 	return true, nil
 }
 
-// TestLaunchRecordRun_CreateGrantFailureFinalizesRun is the U213 regression: when
+// TestLaunchRecordRun_CreateGrantFailureFinalizesRun is the regression: when
 // CreateGrant fails AFTER CreateRun, the persisted RunPending run must be
 // finalized RunFailed and the revoke cascade must run (broker revocation of the
 // minted run) — not left orphaned with un-revoked grants. The abort happens
@@ -216,9 +216,9 @@ func TestLaunchRecordRun_CreateGrantFailureFinalizesRun(t *testing.T) {
 	}
 }
 
-// ─── U007: verify/scan settle when the run goes terminal during dispatch ──────
+// ─── verify/scan settle when the run goes terminal during dispatch ──────
 
-// TestSettleTerminalLaunch_StuckVerifyRunSettles is the U007 regression for the
+// TestSettleTerminalLaunch_StuckVerifyRunSettles is the regression for the
 // synchronous path: a verify run CAS'd to terminal FAILED during dispatch (before
 // Exec, so no completion watcher and no reconcile hook ever fires) must settle its
 // workspace out of `verifying` — record already self-healed here, verify/scan did
@@ -240,7 +240,7 @@ func TestSettleTerminalLaunch_StuckVerifyRunSettles(t *testing.T) {
 	s.settleTerminalLaunch(context.Background(), runID, fake.run)
 
 	if fake.state == nil || fake.state.Status != types.WorkspaceVerifyFailed {
-		t.Fatalf("a dispatch-time terminal verify run must settle the workspace to verify_failed (U007); got %+v", fake.state)
+		t.Fatalf("a dispatch-time terminal verify run must settle the workspace to verify_failed; got %+v", fake.state)
 	}
 	if fake.state.ActiveRunID != nil {
 		t.Error("settle must clear active_run_id")
@@ -268,7 +268,7 @@ func TestSettleTerminalLaunch_NonTerminalRunNoOp(t *testing.T) {
 	}
 }
 
-// TestRepairStaleWorkspaceRuns_HealsStuckVerify is the U007 regression for the
+// TestRepairStaleWorkspaceRuns_HealsStuckVerify is the regression for the
 // crash-window catch-all: if wardynd died between the terminal CAS and the
 // synchronous settle, the next status read must heal a workspace stuck `verifying`
 // behind a terminal run — the same repair-on-read record already had.
@@ -286,6 +286,6 @@ func TestRepairStaleWorkspaceRuns_HealsStuckVerify(t *testing.T) {
 	s.repairStaleWorkspaceRuns(context.Background(), fake.ws)
 
 	if fake.state == nil || fake.state.Status != types.WorkspaceVerifyFailed {
-		t.Fatalf("repair-on-read must heal a workspace stuck `verifying` behind a terminal run (U007); got %+v", fake.state)
+		t.Fatalf("repair-on-read must heal a workspace stuck `verifying` behind a terminal run; got %+v", fake.state)
 	}
 }

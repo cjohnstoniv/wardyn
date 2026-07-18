@@ -30,7 +30,7 @@ updates:
       - /deploy/compose
       - /deploy/images/claude-code
       - /deploy/images/codex-cli
-      - /deploy/images/campaign
+      - /deploy/images/full
       - /deploy/images/oracle
     schedule:
       interval: weekly

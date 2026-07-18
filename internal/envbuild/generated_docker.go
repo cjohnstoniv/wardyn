@@ -29,7 +29,7 @@ const (
 	// Bounds on the caller-supplied generated context, mirroring builder.go's
 	// input hardening. GenerateDevcontainer emits a single small file; these
 	// caps just keep a hostile/oversized map from staging a huge context.
-	// ponytail: fixed caps; raise if a legitimate generated context ever needs
+	// fixed caps; raise if a legitimate generated context ever needs
 	// more than a handful of small files.
 	maxGeneratedFiles     = 64
 	maxGeneratedFileBytes = 1 << 20 // 1 MiB per file

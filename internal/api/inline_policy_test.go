@@ -232,7 +232,7 @@ func TestValidatePolicySpec_RejectsReservedApiKeySecret(t *testing.T) {
 	}
 }
 
-// TestPolicy_RejectsBedrockResidentSecretAtSinks asserts U029: the three RESIDENT
+// TestPolicy_RejectsBedrockResidentSecretAtSinks asserts the three RESIDENT
 // AWS SigV4 credential names read directly by resolveBedrockAuth (aws-access-key-id
 // / aws-secret-access-key / aws-session-token) are sink-reserved — an
 // api_key/git_pat/ssh_key grant naming one is rejected at policy-write time — so a

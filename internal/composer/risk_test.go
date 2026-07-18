@@ -151,7 +151,7 @@ func TestGrade_GitPATAndSSHKeyAreHigh_ButNeverFloorConfinement(t *testing.T) {
 	// Anti-brick invariant: the HIGH display grade must NOT imply a CC3 floor.
 	// RequiredConfinementFloor is enforced fail-closed at compose AND run.create,
 	// and an unconditional floor here would block every SCM clone on KVM-less
-	// hosts (see the ponytail note on grantIsWriteCapable).
+	// hosts (see the note on grantIsWriteCapable).
 	if floor := RequiredConfinementFloor(spec); floor != "" {
 		t.Fatalf("git_pat/ssh_key must not floor confinement, got %q", floor)
 	}

@@ -63,7 +63,7 @@ export function RecordPane({
   notice: { status: number; detail?: string } | null;
   // The session key currently being kicked (disables its button).
   busyTask: string | null;
-  // M18 fix: whether the operator has ANY working model/LLM path (subscription
+  // fix: whether the operator has ANY working model/LLM path (subscription
   // login, a stored provider key, or a real composer backend) — a session runs
   // the agent, so without one the agent's model calls would be denied. Drives
   // the warning. This is derived from GET /setup/status (hasLlmPath), NOT

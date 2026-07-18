@@ -254,7 +254,7 @@ func grantIsWriteCapable(g types.GrantSpec) bool {
 	case types.GrantCloudSTS:
 		return true
 	default:
-		// ponytail: git_pat/ssh_key grade High in gradeGrant but are deliberately
+		// git_pat/ssh_key grade High in gradeGrant but are deliberately
 		// NOT write-capable here — their scope carries no read/write flag, and an
 		// unconditional CC3 floor (RequiredConfinementFloor) would block every SCM
 		// clone on KVM-less hosts. Add a `readonly` bool to those scopes and floor

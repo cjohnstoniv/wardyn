@@ -89,7 +89,7 @@ func bearerToken(r *http.Request) (string, bool) {
 // "localhost", with an optional :port) blocks the rebinding class. Anything else
 // (public name, LAN IP, empty Host) is rejected.
 //
-// Direct blind CSRF is ALSO closed (M10): on a mutating method the local-mode gate
+// Direct blind CSRF is ALSO closed: on a mutating method the local-mode gate
 // rejects a PRESENT non-loopback Origin header (see the handler below), so a
 // malicious page's no-cors POST straight at http://127.0.0.1:<port> — which carries
 // the attacker's Origin — is refused even though its Host is 127.0.0.1. CLI/API
@@ -204,7 +204,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, "local mode: request Host is not loopback (DNS-rebinding guard)")
 				return
 			}
-			// Blind-CSRF guard (M10): a malicious page can fire a no-cors
+			// Blind-CSRF guard: a malicious page can fire a no-cors
 			// state-changing POST straight at http://127.0.0.1:<port>. It arrives with
 			// Host: 127.0.0.1 (passing the loopback gate above) yet carries the
 			// attacker's Origin. CLI/API clients send NO Origin; the embedded UI is

@@ -355,7 +355,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		// `verifying`). The verify binary self-bounds the actual work.
 		AutoStopAfterSec: 3600,
 	}
-	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
+	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	cloneURL := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -369,7 +369,7 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	}
 
 	// Flip to `verifying` BEFORE dispatch — mirror launchScanRun's pre-dispatch
-	// status write (U013). The old post-launch flip in handleVerifyWorkspace could
+	// status write. The old post-launch flip in handleVerifyWorkspace could
 	// REGRESS a fast verify whose result upload already landed (status ready /
 	// verify_failed, active_run_id cleared) back to `verifying`. active_run_id was
 	// already CAS-claimed to runID above; preserve any prior verify markers. Best
@@ -521,7 +521,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if interactive {
 		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
 	}
-	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
+	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	cloneURL := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -823,7 +823,7 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 // path CAS's the run to FAILED before Exec runs, so the completion watcher (which
 // starts only after a successful Exec) never fires and no reconcile hook would
 // otherwise settle the workspace. Without this, verify/scan strand in
-// `verifying`/`scanning` forever and a record capture is never taken (U007).
+// `verifying`/`scanning` forever and a record capture is never taken.
 // Both reconcilers are idempotent + self-scoping — reconcileRecordRun no-ops for a
 // non-record run, reconcileWorkspaceRun no-ops unless the workspace still points at
 // this run in verifying/scanning — so calling both is safe for any launch kind.
@@ -1038,7 +1038,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		SPIFFEID:         id.SPIFFEID,
 		RunnerTarget:     s.cfg.RunnerTarget,
 		WorkspaceID:      &wsID,          // marks this a scan run + the trusted linkage
-		AutoStopAfterSec: scanIdleCapSec, // reaper reads the run row (U006); == scanPolicy below
+		AutoStopAfterSec: scanIdleCapSec, // reaper reads the run row; == scanPolicy below
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -1111,7 +1111,7 @@ func scanEgressDomains(cloneURL string) []string {
 	if u, err := neturl.Parse(cloneURL); err == nil && u.Hostname() != "" {
 		host := u.Hostname() // strips any :port
 		if !isGitHubCloneHost(host) {
-			// M22: a non-GitHub HTTPS clone (ADO, GitLab, self-hosted git) needs ONLY
+			// a non-GitHub HTTPS clone (ADO, GitLab, self-hosted git) needs ONLY
 			// its own host (the broker is github.com-only in v1).
 			return []string{host}
 		}

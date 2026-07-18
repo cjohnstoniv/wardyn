@@ -14,7 +14,7 @@
 -- RequestApproval's unmarshal/remarshal scope normalization closely enough to
 -- serve as a backstop; the app-level dedup remains the primary path and this
 -- index is the last-writer-loses safety net under concurrency.
--- ponytail: JSONB btree equality is the backstop; if scope canonicalization
+-- JSONB btree equality is the backstop; if scope canonicalization
 -- ever needs to be byte-exact with the Go hash, add a stored scope_hash column.
 CREATE UNIQUE INDEX IF NOT EXISTS approvals_pending_noncred_uniq
     ON approvals (run_id, kind, requested_scope)

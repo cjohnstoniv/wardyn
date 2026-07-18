@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-campaign gitleaks licenses helm-lint compose-config dco sbom npm-license ci
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -88,7 +88,7 @@ agent-images: agent-images-core
 	docker build -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
 
-# The campaign image: the core claude-code agent PLUS real language toolchains
+# The full toolchain image: the core claude-code agent PLUS real language toolchains
 # (Go, Python, Rust, JDK/Maven, pnpm). Workspace import's Record/Verify runs the
 # repo's OWN setup commands (go build, pnpm install, …), which the toolchain-less
 # core image cannot do — it dies at "command not found" (exit 127). Kept out of
@@ -97,11 +97,11 @@ agent-images: agent-images-core
 # It had no make target at all, so nothing ever rebuilt it: boxes were left running
 # a stale :demo tag whose Go (1.23.5) predated this repo's own go.mod (1.26) and
 # which shipped no pnpm. Build it explicitly, then point runs at it with:
-#   WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-campaign:local"}'
-agent-image-campaign: agent-images-core
+#   WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-full:local"}'
+agent-image-full: agent-images-core
 	@echo "Building the fat toolchain image (Go/Python/Rust/JDK/pnpm)..."
-	docker build -f deploy/images/campaign/Dockerfile -t wardyn/agent-campaign:local .
-	@echo "Campaign image built: wardyn/agent-campaign:local"
+	docker build -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
+	@echo "Full toolchain image built: wardyn/agent-full:local"
 
 build:
 	@echo "Building Go binaries..."
@@ -371,7 +371,7 @@ npm-license:
 	./scripts/check-ui-licenses.sh
 
 # ── daemon-free merge gate ───────────────────────────────────────────────────
-# ponytail: green `make ci` != CI is green. This runs the merge-gating checks
+# green `make ci` != CI is green. This runs the merge-gating checks
 # that need NO Docker daemon and NO live service — it deliberately EXCLUDES
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI

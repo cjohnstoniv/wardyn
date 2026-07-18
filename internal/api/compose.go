@@ -313,7 +313,7 @@ func composerBackendKnown(reg *composer.Registry, name string) bool {
 // emit(EvStage) progress calls and a per-pipeline correlation id on the audit
 // events.
 //
-// ponytail: closure over the ResponseWriter (SSE) or a discard (buffer); no
+// closure over the ResponseWriter (SSE) or a discard (buffer); no
 // channel/goroutine — the pipeline is synchronous, so emit runs inline.
 //nolint:funlen,gocyclo // Deliberate: the compose pipeline's stage order (compose → risk → reconcile → ceiling-clamp → review) IS the security contract; each stage already lives in its own helper and this function is the one place the sequencing can be audited top-to-bottom.
 func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, principalType types.ActorType, principal string, emit func(composer.ComposeEvent)) (any, *composeError) {

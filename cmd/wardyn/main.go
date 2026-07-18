@@ -46,7 +46,7 @@ func main() {
 // failure reaching the daemon (a *url.Error — the same class exitCodeFor maps to
 // 5: connection refused, timeout, no-such-host), else "". A typed API error means
 // we did reach wardynd, so it gets no hint.
-// ponytail: keys on the whole *url.Error transport class, not just ECONNREFUSED —
+// keys on the whole *url.Error transport class, not just ECONNREFUSED —
 // any failure to reach the daemon deserves the same "is wardynd running?" nudge.
 func dialHint(err error) string {
 	var ue *url.Error
@@ -104,7 +104,7 @@ func rootCmd() *cobra.Command {
 		// error (unknown flag, unknown command, wrong arg count — all raised
 		// BEFORE pre-run) still prints usage, while an error returned FROM a
 		// RunE (a runtime/API failure) does not.
-		// ponytail: required-flag errors are validated by cobra AFTER pre-run,
+		// required-flag errors are validated by cobra AFTER pre-run,
 		// so they surface as a concise "required flag(s) X not set" without the
 		// full usage block — acceptable; the message is already actionable.
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) { cmd.SilenceUsage = true },

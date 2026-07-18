@@ -16,7 +16,7 @@ import {
 } from "../ui/alert-dialog";
 import { Mono } from "./code-block";
 
-// Shared untrusted-content confirm (M17) for approving egress hosts. Every
+// Shared untrusted-content confirm for approving egress hosts. Every
 // entry point that promotes a suggested/observed/detected host into a
 // workspace's approved_egress — the Workspaces screen and the import
 // Scan/Configure/Verify panes — must ask this same question before the PUT,

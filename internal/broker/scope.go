@@ -83,7 +83,7 @@ func ttlFor(spec types.GrantSpec) time.Duration {
 // (dev.azure.com and *.visualstudio.com) uses "pat" and everything else (GitLab
 // and other PAT hosts) uses "oauth2".
 //
-// ponytail: this two-row table covers the ADO/GitLab conventions Wardyn brokers
+// this two-row table covers the ADO/GitLab conventions Wardyn brokers
 // today; extend it if another host needs a different username convention.
 func gitPATUsername(host, override string) string {
 	if override != "" {

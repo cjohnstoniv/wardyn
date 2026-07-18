@@ -152,7 +152,7 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 	if e.token != "" && time.Now().Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
 		return e.token, nil
 	}
-	// ponytail: one token per grant for the run. Auto-mintable grants re-mint past
+	// one token per grant for the run. Auto-mintable grants re-mint past
 	// TTL fine; approval-gated grants are single-use, so a run outliving the ~1h
 	// installation-token TTL fails here on re-mint — a pre-existing ceiling.
 	tok, expMs, err := p.mintGitToken(ctx, grantID)

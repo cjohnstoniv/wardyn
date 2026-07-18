@@ -558,7 +558,7 @@ func reservedBrokerSecret(name string) bool {
 // github_token. Fails closed on missing host/secret_name, a reserved secret
 // name (defense-in-depth at the sink), or an unresolvable secret.
 //
-// ponytail: ExpiresAt is only an emission/freshness window (ttlFor) — the PAT
+// ExpiresAt is only an emission/freshness window (ttlFor) — the PAT
 // itself is a long-lived, operator-managed secret that Wardyn CANNOT expire or
 // down-scope; per-use revocation/scoping would need the host's token API
 // (ADO/GitLab), out of scope. This is the honesty ceiling for this grant kind.

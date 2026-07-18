@@ -7,12 +7,12 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { StatusChip } from "./status-chip";
 
-// U116: the `reason` used to ride ONLY in the native `title` attr — invisible to
+// the `reason` used to ride ONLY in the native `title` attr — invisible to
 // screen readers and unreachable without a mouse hover. It now rides in the
 // chip's accessible NAME (aria-label) — announced to AT, but NOT a duplicate DOM
 // text node (which double-matched getByText where a caller also renders the
 // reason visibly, e.g. the confinement wizard).
-describe("StatusChip AT-accessible reason (U116)", () => {
+describe("StatusChip AT-accessible reason", () => {
   it("announces the reason to assistive tech via aria-label, not just the title attr", () => {
     render(<StatusChip status="unavailable" reason="No KVM device on this host" />);
     // The reason rides in the chip's aria-label (announced by SRs)…

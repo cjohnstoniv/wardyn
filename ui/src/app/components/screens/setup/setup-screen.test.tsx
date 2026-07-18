@@ -280,12 +280,12 @@ describe("SetupScreen", () => {
     expect(screen.getByText("credential")).toBeInTheDocument(); // top-level has_credentials prompt
   });
 
-  // M21: the corporate-baseline step badges used to gate on check.status ===
+  // the corporate-baseline step badges used to gate on check.status ===
   // "ok", but the backend hardcodes host_proxy/scm_provider/artifact_repo to
   // "info" forever — so the badge could never read "Configured" even once the
   // operator had actually wired up the matching SiteConfig field. The badge
   // must derive readiness from SiteConfig itself instead.
-  it("M21: shows Configured for host proxy / SCM / artifact steps once their SiteConfig field is set", async () => {
+  it("shows Configured for host proxy / SCM / artifact steps once their SiteConfig field is set", async () => {
     getSiteConfigMock.mockReset().mockResolvedValue({
       upstream_proxy_secret_ref: "corp-proxy",
       scm_hosts: ["git.corp.example.com"],

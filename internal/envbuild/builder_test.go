@@ -502,7 +502,7 @@ func assertEnvValue(t *testing.T, env []string, key, want string) {
 	}
 }
 
-// TestRequiredTools_CanonicalUnion pins the U063 reconciliation: requiredTools
+// TestRequiredTools_CanonicalUnion pins the reconciliation: requiredTools
 // is the single source of truth and holds the UNION across the build gate, the
 // image --selftest, and ci-run.sh staging. Loosening the slice (dropping a tool)
 // fails here, so the reconciliation cannot be silently reverted.

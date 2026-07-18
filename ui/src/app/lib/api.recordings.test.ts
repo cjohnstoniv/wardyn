@@ -24,7 +24,7 @@ describe("api.getRecording()", () => {
     await expect(api.getRecording("run_1")).resolves.toBeUndefined();
   });
 
-  // U097: a non-404 failure must surface the control plane's `{"error":"…"}`
+  // a non-404 failure must surface the control plane's `{"error":"…"}`
   // message, not a hardcoded "failed to load recording" string that discards
   // the server's actionable reason.
   it("surfaces the server error message on a 500", async () => {

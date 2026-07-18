@@ -16,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ALLOWLIST_DOCKERFILE="./deploy/images/campaign/Dockerfile"  # FROM wardyn/agent-claude-code:local (local retag)
+ALLOWLIST_DOCKERFILE="./deploy/images/full/Dockerfile"  # FROM wardyn/agent-claude-code:local (local retag)
 fail=0
 
 # ── Dockerfile FROMs ────────────────────────────────────────────────────────
