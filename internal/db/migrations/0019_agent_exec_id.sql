@@ -1,4 +1,4 @@
--- Persist the agent's docker exec id on the run row (U008/U039).
+-- Persist the agent's docker exec id on the run row.
 --
 -- For the default exec-based path (CC1 runc / CC2 gVisor / CC3 kata on docker)
 -- the sandbox container's PID 1 is an idle `sleep infinity` and the agent runs

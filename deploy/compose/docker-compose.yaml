@@ -82,7 +82,7 @@ services:
     # (demo only; see the DAEMON-TRUST note above).
     user: root
     environment:
-      # Groundtruth token rotator target (U009): wardynd mints + rewrites a fresh
+      # Groundtruth token rotator target: wardynd mints + rewrites a fresh
       # host-sensor token here (a shared volume) so the tetragon-ingest sidecar
       # recovers when its ~1h token expires instead of going blind. Off when unset.
       WARDYN_GROUNDTRUTH_TOKEN_FILE: "/var/run/wardyn-gt/token"
@@ -217,7 +217,7 @@ services:
       # caps the whole control plane at CC1.
       - ${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       # Shared groundtruth-token file: wardynd's rotator WRITES a fresh host-sensor
-      # token here; the wardyn-tetragon-ingest sidecar reads it read-only (U009).
+      # token here; the wardyn-tetragon-ingest sidecar reads it read-only.
       - groundtruth_token:/var/run/wardyn-gt
       # Workspaces root — READ-ONLY, mounted at the SAME path inside the container so
       # host paths resolve identically on both sides. A `local_dir` workspace is
@@ -332,7 +332,7 @@ services:
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Host-sensor token (aud=wardyn-groundtruth). PREFERRED: the shared file below,
       # which wardynd's rotator keeps fresh so this sidecar RECOVERS when the ~1h token
-      # expires instead of going permanently blind (U009). WARDYN_GROUNDTRUTH_TOKEN is
+      # expires instead of going permanently blind. WARDYN_GROUNDTRUTH_TOKEN is
       # a static fallback that CANNOT refresh — leave it empty when the file is wired.
       WARDYN_GROUNDTRUTH_TOKEN_FILE: "/var/run/wardyn-gt/token"
       WARDYN_GROUNDTRUTH_TOKEN: "${WARDYN_GROUNDTRUTH_TOKEN:-}"
@@ -343,7 +343,7 @@ services:
     volumes:
       # Read the Tetragon JSON export.
       - tetragon_export:/var/log/tetragon:ro
-      # The host-sensor token wardynd's rotator keeps fresh (U009); read-only here.
+      # The host-sensor token wardynd's rotator keeps fresh; read-only here.
       - groundtruth_token:/var/run/wardyn-gt:ro
       # Read the host docker socket to list wardyn-managed containers for
       # correlation. Daemon-trust tradeoff applies (see the top-of-file note);
@@ -395,7 +395,7 @@ services:
 volumes:
   postgres_data:
   # Shared host-sensor token file: wardynd's rotator writes it, the tetragon-ingest
-  # sidecar reads it, so the ground-truth stream survives the ~1h token TTL (U009).
+  # sidecar reads it, so the ground-truth stream survives the ~1h token TTL.
   groundtruth_token:
   recordings:
     # Explicit name so the docker runner can mount the SAME volume into agent
