@@ -6,7 +6,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-07-18
+
 ### Added
+
+- **Repo-scoped git egress (the git-broker).** GitHub repositories are cloned and
+  pushed through the `wardyn-proxy` (`/wardyn/gh/<org>/<repo>`) instead of the
+  sandbox reaching `github.com` directly. The proxy enforces a per-repo allowlist
+  and mints the scoped GitHub App installation token server-side, so the token never
+  enters the sandbox and a run can reach only its granted repositories.
+  Consequently `github.com` is no longer placed in a run's egress allowlist, and an
+  un-granted GitHub repository is denied — the repository, not the host, is the unit
+  of trust. Clone and push are both brokered.
+- **Getting Started demos.** The setup funnel now includes four hands-on
+  egress-boundary demos (as sidebar sub-steps, before you onboard your own
+  repositories), each showing its policy, the equivalent New-Run setup steps, and an
+  inline audit panel so you can watch the boundary hold in real time.
+- **Container login for a Claude subscription.** The Model/Harness Provider step can
+  launch a login sandbox, run `claude setup-token`, open the OAuth URL, and capture
+  the returned token automatically — no manual copy/paste. The credential is stored
+  proxy-side and injected into runs on the wire; the sandbox never holds it.
 
 - **List endpoints paginate.** `runs`/`policies`/`approvals`/`workspaces` and
   the audit query take explicit `limit`/`offset` params (defaults preserve
@@ -41,6 +60,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Host setup detects the right Docker daemon.** On a host with more than one
+  Docker daemon, `make setup` now derives `WARDYN_DOCKER_SOCK` from `DOCKER_HOST`,
+  so a tier-capable daemon's confinement classes (Wall/Vault) appear without a
+  manual export — previously the stack could silently come up Fence-only.
 - Bad `WARDYN_*` environment values (e.g. `WARDYN_ENVBUILD=treu`) now fail loud
   (exit 2, naming the variable and value) instead of silently falling back to
   the default.
