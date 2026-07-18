@@ -310,6 +310,26 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 // what they recognize instead of the whole thing wholesale): every requested
 // host must be a member of the recording's promotable set or the request is
 // rejected outright; omitted keeps promoting the full promotable set.
+// promoteSkipHosts is the set of hosts a recording must never offer for promotion
+// into a workspace's permanent ApprovedEgress: the LLM model-provider host(s)
+// (HARNESS plumbing modelProviderEgress unions into EVERY session), the baseline
+// clone hosts (scanEgressDomains, wired into every scan/verify for free), and the
+// GitHub clone hosts (git-broker-managed — routed through wardyn-proxy, never in a
+// run's egress allowlist; promoting one would re-open host-level github egress and
+// defeat the broker's repo-scoping). None is a workspace-specific need.
+func (s *Server) promoteSkipHosts(ws types.Workspace) map[string]struct{} {
+	skip := map[string]struct{}{}
+	add := func(hosts []string) {
+		for _, h := range hosts {
+			skip[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
+		}
+	}
+	add(modelProviderEgress(s.cfg.DefaultPolicy))
+	add(scanEgressDomains(repoCloneURL(ws.Source)))
+	add(gitBrokerManagedHosts)
+	return skip
+}
+
 func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -344,27 +364,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// a direct allowlist entry would let future confined sandboxes reach the
 	// API surface beyond the proxy's brokered routes.
 	selfHost := controlPlaneHost(s.cfg.ControlPlaneURL)
-	// The LLM model-provider host(s) (api.anthropic.com, …) are HARNESS
-	// plumbing modelProviderEgress already unions into EVERY session, and the
-	// baseline clone hosts (scanEgressDomains) are wired into every scan/verify
-	// for free — neither is a workspace-specific need, and a promotion here is
-	// a PERMANENT per-workspace ApprovedEgress entry. Skip both, exactly like
-	// selfHost above.
-	skipHost := map[string]struct{}{}
-	for _, h := range modelProviderEgress(s.cfg.DefaultPolicy) {
-		skipHost[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
-	}
-	for _, h := range scanEgressDomains(repoCloneURL(ws.Source)) {
-		skipHost[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
-	}
-	// The GitHub clone hosts are now git-broker-managed (Option C: routed through
-	// wardyn-proxy, never in a run's egress allowlist). scanEgressDomains no longer
-	// returns them, but they must STILL never be promoted to a permanent
-	// ApprovedEgress entry — that would re-open host-level github egress and defeat
-	// the broker's repo-scoping. Skip them explicitly.
-	for _, h := range gitBrokerManagedHosts {
-		skipHost[h] = struct{}{}
-	}
+	skipHost := s.promoteSkipHosts(ws)
 
 	// promotable is every host this recording could ever offer up: observed
 	// with at least one ALLOW decision, a valid approve-lane host shape, and
