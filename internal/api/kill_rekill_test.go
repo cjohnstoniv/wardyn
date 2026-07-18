@@ -41,7 +41,7 @@ func (s *killRekillStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, from,
 	return from == s.run.State, nil
 }
 
-// TestKillRun_RekillKilledRerunsCascade is the U040 regression: an already-KILLED
+// TestKillRun_RekillKilledRerunsCascade is the regression: an already-KILLED
 // run (its first kill's teardown may have failed and advised a retry) must be
 // re-killable — the handler re-runs the idempotent KillSandbox + broker revoke
 // instead of 409'ing and orphaning the sandbox/credentials forever.

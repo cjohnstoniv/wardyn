@@ -44,7 +44,7 @@ type Platform struct {
 // whether each is on PATH (Installed) and an advisory login signal (LoggedIn +
 // the LoginVia path that produced it).
 //
-// ponytail: LoggedIn is advisory — a stale/expired session whose credential
+// LoggedIn is advisory — a stale/expired session whose credential
 // file still exists reads as logged-in. The honest upgrade is shelling out to
 // `claude whoami` (or the codex equivalent) and parsing it; the first-run check
 // deliberately avoids the subprocess.
@@ -163,7 +163,7 @@ func detectKVM() bool {
 // /run/.containerenv) and, failing those, the cgroup-1 engine hint in
 // /proc/1/cgroup.
 //
-// ponytail: heuristic, not authoritative — on cgroup v2 the init cgroup path is
+// heuristic, not authoritative — on cgroup v2 the init cgroup path is
 // a bare "0::/" with no engine token, so a container that drops neither marker
 // file reads false. The marker-file check covers Docker and Podman (the shipped
 // paths); tighten to a namespace/mountinfo probe only if a runtime slips past.

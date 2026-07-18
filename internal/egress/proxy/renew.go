@@ -75,7 +75,7 @@ const (
 // (loudly, in the log) with the old token until the sidecar is torn down. That
 // keeps the authority decision on the trusted side and this loop dumb.
 //
-// ponytail: renews once immediately at startup rather than decoding the token's
+// renews once immediately at startup rather than decoding the token's
 // exp to schedule the first tick. It costs one extra mint per run and, in
 // exchange, needs no JWT parsing here and proves the renew path works at startup
 // instead of failing an hour in. Decode exp only if that mint ever shows up as a

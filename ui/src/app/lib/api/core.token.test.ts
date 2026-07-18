@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { getToken, setToken } from "./core";
 
-// Pins the admin-token storage posture (U098): the full-admin bearer defaults to
+// Pins the admin-token storage posture: the full-admin bearer defaults to
 // sessionStorage (gone on browser close) and only reaches localStorage on an
 // explicit opt-in. These pins FAIL if setToken reverts to unconditional
 // localStorage persistence.

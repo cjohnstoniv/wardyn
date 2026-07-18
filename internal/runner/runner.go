@@ -227,7 +227,7 @@ type Runner interface {
 	// (the docker idle-container + `docker exec` path); it is "" for exec-less /
 	// main-process substrates (krun), where the container IS the agent. Persist it
 	// so the crash reconciler can observe agent liveness across a wardynd restart
-	// via AgentStatus (U008/U039).
+	// via AgentStatus.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process started by Exec for this sandbox ref
 	// has exited, returning its exit code. It is ONLY valid after a successful

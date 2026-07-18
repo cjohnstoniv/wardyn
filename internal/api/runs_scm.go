@@ -42,7 +42,7 @@ func gitEmailLocal(principal string) string {
 // bytes so a slug can never smuggle a newline, NUL, or argument break into the
 // sandbox env or the clone command. Fail closed: anything unexpected means the
 // repo env is simply not surfaced and the agent runs in an empty workspace.
-// ponytail: stricter than the old hand-rolled scan — unicode.IsSpace also
+// stricter than the old hand-rolled scan — unicode.IsSpace also
 // rejects Unicode space separators (U+2000-200A, U+3000, ...) the old fixed
 // list let through; approved as a hardening, not a regression, for this
 // trust-boundary check.

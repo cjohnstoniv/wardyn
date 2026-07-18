@@ -157,7 +157,7 @@ func TestDetect_DepthCap(t *testing.T) {
 	}
 }
 
-// TestDetect_DoesNotDescendGitInternals pins U076: the walk must SkipDir the
+// TestDetect_DoesNotDescendGitInternals pins the walk must SkipDir the
 // .git subtree, not re-descend objects/refs/logs on every scan. A sentinel
 // .gitmodules is buried deep in .git/objects — the only way its remote reaches
 // the result set is if the walk (wrongly) descends into .git internals.

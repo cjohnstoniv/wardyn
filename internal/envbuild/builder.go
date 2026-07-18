@@ -86,7 +86,7 @@ const (
 // are contractually required.
 //
 // The set is the UNION reconciled across the three drifted "required tools"
-// sites the review flagged (U063), so the build gate no longer passes a tools
+// sites the review flagged, so the build gate no longer passes a tools
 // dir that the runtime would then reject:
 //   - the old build gate here required only {agent-run, wardyn-verify,
 //     wardyn-git-helper} — too loose: it never checked wardyn-rec or the sourced
@@ -95,7 +95,7 @@ const (
 //     agent-run-lib.sh under `set -euo pipefail`, making the lib load-bearing);
 //   - scripts/ci-run.sh stages all of these from the agent image.
 //
-// ponytail: the two shell sites (agent-run --selftest, ci-run.sh) are shell and
+// the two shell sites (agent-run --selftest, ci-run.sh) are shell and
 // cannot import this Go slice, so they keep their own hardcoded checks — the
 // residual single-source gap. This list is the build-time authority; a future
 // step could emit a shared manifest both the Go gate and the shell selftest read.
@@ -726,7 +726,7 @@ func (b *Builder) validateToolsDir() (string, error) {
 // pushedBaseRef is the registry reference the finalize stage uses as its FROM
 // base: the image envbuilder pushed via ENVBUILDER_PUSH_IMAGE.
 //
-// ponytail: ASSUMPTION — envbuilder's push is resolvable at the plain CacheRepo
+// ASSUMPTION — envbuilder's push is resolvable at the plain CacheRepo
 // ref (resolving to :latest when CacheRepo carries no tag). envbuilder actually
 // tags the push with a content-addressed cache key (<CacheRepo>@sha256:<digest>)
 // that is not knowable host-side before the build, so this is the residual: if
@@ -855,7 +855,7 @@ func buildFinalizeContext(baseRef, toolsDir string) (io.Reader, error) {
 	}
 	for _, e := range entries {
 		if e.IsDir() {
-			continue // ponytail: flat tools dir; nested dirs aren't part of the contract
+			continue // flat tools dir; nested dirs aren't part of the contract
 		}
 		data, err := os.ReadFile(filepath.Join(toolsDir, e.Name()))
 		if err != nil {

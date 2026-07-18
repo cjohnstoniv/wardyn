@@ -163,7 +163,7 @@ type WorkspaceProfile struct {
 	// into a run's allowlist (that privilege is EgressDomains-only, which
 	// stays filename-keyed) — an operator promotes hosts into the
 	// workspace's operator-owned ApprovedEgress list instead.
-	// ponytail: these advisory fields ride in ProfileHash, so a workspace's
+	// these advisory fields ride in ProfileHash, so a workspace's
 	// first rescan after this change forces one no-op image rebuild. Ceiling:
 	// harmless one-time churn; upgrade path — hash only the image-affecting
 	// subset (Languages/HasDevcontainer/HasDockerfile) if it ever bites.

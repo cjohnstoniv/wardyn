@@ -148,7 +148,7 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 // SetRunAgentExecID scoped-writes ONLY the agent_exec_id column. Called once
 // right after the driver execs the agent (the exec id exists only after Exec, so
 // this is a scoped update, not a CreateRun column value). The crash reconciler
-// reads it to observe agent liveness across a restart (U008/U039).
+// reads it to observe agent liveness across a restart.
 func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET agent_exec_id=$1, updated_at=now() WHERE id=$2`,

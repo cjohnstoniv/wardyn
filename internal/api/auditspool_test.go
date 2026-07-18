@@ -64,7 +64,7 @@ func newTestEvent(action string) types.AuditEvent {
 	}
 }
 
-// TestAuditSpoolDrainReplaysAfterHeal is the U094 counterfactual: without a drain
+// TestAuditSpoolDrainReplaysAfterHeal is the counterfactual: without a drain
 // the spool is a write-only sink and never empties. Spool N events while the store
 // is down (drain lands nothing, file intact), heal the store, and assert all N
 // events reach the recorder and the spool empties.

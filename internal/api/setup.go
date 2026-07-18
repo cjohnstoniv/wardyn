@@ -478,7 +478,7 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 
 // agentImageCheck reports the resolved claude-code agent image so an operator
 // sees, before a run ever fails, whether it is the Node-only convention image
-// or a provisioned override — the readiness surface for the campaign's
+// or a provisioned override — the readiness surface for the multi-toolchain image's
 // BLOCKER-1 (a non-JS workspace exit-127s on the shipped default, silently).
 // wardynd has no docker CLI (the compose build is distroless static) and no
 // wired image-inspect capability on the Runner interface, so this is a NAME
@@ -493,7 +493,7 @@ func agentImageCheck(images map[string]string) SetupCheck {
 			ID: "agent_image", Label: "Agent image toolchains", Status: "warn",
 			Detail: "The configured claude-code agent image (" + ref + ") is the Node-only convention image — " +
 				"a non-JS workspace (Go/Rust/Java/Python) will fail verify/record with exit 127 (toolchain not found).",
-			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (e.g. build deploy/images/campaign, or your " +
+			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (e.g. build deploy/images/full (the fat toolchain image), or your " +
 				"own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a per-run base image " +
 				"in the New Run wizard's \"Custom sandbox image (advanced)\" field — Wardyn wraps it with the runner tools.",
 		}
@@ -631,7 +631,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 	// LLM access provenance: the detail of the WINNING signal (resident CLI login,
 	// a REAL non-fake composer backend, or an api-key-ish secret), "" when none.
-	// ponytail: the secret-name scan is a loose substring signal; the exact truth
+	// the secret-name scan is a loose substring signal; the exact truth
 	// (a working model call) is only known at run time — this just decides whether
 	// to warn the operator up front. See llmProvenance for the honesty guard.
 	llmDetail := llmProvenance(providers, comp.Backends, secretNames, claudeDetail)
@@ -855,7 +855,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// has_runs: cheap existence check via the store.
-	// ponytail: reuses ListRuns (fine for a first-run wizard); a dedicated
+	// reuses ListRuns (fine for a first-run wizard); a dedicated
 	// COUNT(*)/EXISTS is the upgrade if run volume ever makes this scan matter.
 	hasRuns := false
 	if s.cfg.Store != nil {
@@ -904,7 +904,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 //     shows loose habits: gh CLI login, credential.helper store/cache,
 //     ~/.git-credentials, ~/.netrc)
 //
-// ponytail: a secret-NAME prefix scan, not a grant-usage check (grants are
+// a secret-NAME prefix scan, not a grant-usage check (grants are
 // per-run, not standing config) — the <host-slug> convention (dots→hyphens,
 // e.g. git-pat-github-com) is the contract the ScmProviderStep UI follows.
 func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPosture) SetupCheck {

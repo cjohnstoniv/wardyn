@@ -126,7 +126,7 @@ func TestDeriveVerifyResult_AttachesFailureHintFromFirstFailingStep(t *testing.T
 	}
 }
 
-// TestDeriveVerifyResult_MasksSecretShapedCommand is the M30 self-check: the
+// TestDeriveVerifyResult_MasksSecretShapedCommand is the self-check: the
 // step Command field must be masked exactly like the log fields — an
 // uploaded command echoing a secret-shaped token must not survive verbatim.
 func TestDeriveVerifyResult_MasksSecretShapedCommand(t *testing.T) {

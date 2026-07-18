@@ -225,7 +225,7 @@ func TestMapProcessExec_LoaderInArgv(t *testing.T) {
 	}
 }
 
-// TestMapProcessExec_CgroupIDQuotedString locks down FINDING U041: Tetragon's
+// TestMapProcessExec_CgroupIDQuotedString locks down FINDING Tetragon's
 // protojson export renders proto uint64 fields (cgroup_id) as JSON STRINGS,
 // e.g. "cgroup_id":"987654", never a bare number. Before CgroupID's tag
 // carried ,string, json.Unmarshal returned an UnmarshalTypeError on that one

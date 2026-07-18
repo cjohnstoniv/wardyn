@@ -198,7 +198,7 @@ func runCmd(client clientFn) *cobra.Command {
 var waitPollInterval = 2 * time.Second
 
 // terminalRunState mirrors internal/api.isTerminalRunState.
-// ponytail: 5 constants, not worth exporting the server's helper for.
+// 5 constants, not worth exporting the server's helper for.
 func terminalRunState(s types.RunState) bool {
 	switch s {
 	case types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived:

@@ -76,7 +76,7 @@ const RecordingMountTarget = "/wardyn/recordings"
 // defaultCastDir is where wardyn-rec writes session recordings inside the
 // agent container. recorderBinary is wardyn-rec's path inside the agent
 // image (resolved on PATH). stopTimeout is the graceful StopSandbox timeout.
-// Nobody in the repo overrides any of these (ponytail P3-RNR-2); re-add a
+// Nobody in the repo overrides any of these (P3-RNR-2); re-add a
 // Config knob if that changes.
 const (
 	defaultCastDir = "/var/log/wardyn"
@@ -886,7 +886,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 // exec-based ref (agentExecID != "") it inspects that exec: Running => alive
 // (RUNNING); exited => terminal with the real exit code, EVEN while the idle
 // sandbox container is still up — the case container Status cannot detect after a
-// restart dropped the in-memory exec map (U008/U039). A vanished exec (its
+// restart dropped the in-memory exec map. A vanished exec (its
 // container already gone) reads as stopped => the reconciler finalizes + tears
 // down. When agentExecID is "" (exec-less/main-process, or Exec never ran) the
 // container IS the agent, so fall back to Status.

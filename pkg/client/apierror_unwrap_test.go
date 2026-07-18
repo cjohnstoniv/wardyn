@@ -13,7 +13,7 @@ import (
 // used to provide. Group C deleted that transport in favour of this SDK; the
 // unwrap moved into APIError.Error(). Reverting Error() to print the raw body
 // fails these (the message would carry the literal JSON `{`), which is exactly
-// the user-visible regression Fable's review caught.
+// a user-visible regression in error unwrapping.
 
 func TestAPIError_UnwrapsErrorField(t *testing.T) {
 	e := &client.APIError{Status: 400, Body: `{"error":"invalid state filter"}`}

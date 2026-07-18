@@ -6,7 +6,7 @@
 // Pure data layer for the Getting Started funnel. Holds the frozen step
 // ids/labels (e2e tests target them), the phase grouping the rail renders, and
 // the honest per-step badge/done derivation the orchestrator reads. Two
-// badge-semantics deltas from the Figma Make design are folded in (see the
+// badge-semantics deltas from the design spec are folded in (see the
 // workspaces/credentials cases). No React here by design — data/derivation only.
 import type { SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
 import type { Readiness } from "../onboarding/intro";
@@ -137,7 +137,7 @@ export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" 
 // a standing ssh-key-* secret, info otherwise — scmProviderCheck in
 // internal/api/setup.go) but still never gates readiness. The badge derives
 // readiness client-side from the actual SiteConfig field each step's own body
-// edits (M21) — the honest default stays a neutral "Optional" nudge until that
+// edits — the honest default stays a neutral "Optional" nudge until that
 // field is genuinely set; the graded check row carries the safety framing.
 export function siteConfigConfigured(
   cfg: SiteConfig | null,

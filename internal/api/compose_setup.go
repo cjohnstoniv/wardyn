@@ -20,7 +20,7 @@ import (
 // composeLLMAccess pattern (compose.go:121-127) to every setup requirement a
 // proposal implies: secrets, onboarded workspaces, repo credentials, egress.
 //
-// ponytail: NOT SetupCheck (setup.go:72) — that type's Fix is free-text prose for
+// NOT SetupCheck (setup.go:72) — that type's Fix is free-text prose for
 // a human to read; SetupItem's Fix is a structured action a UI button can drive
 // directly (add_secret/scan_workspace), so it needs its own shape rather than
 // reusing SetupCheck's.
@@ -49,7 +49,7 @@ type SetupItem struct {
 // button, because the only fix is the OPERATOR widening their own ceiling
 // (e.g. a dropped egress domain).
 //
-// ponytail: v1 verifies PRESENCE only (Decision 3: declared-present, never
+// v1 verifies PRESENCE only (Decision 3: declared-present, never
 // "verified" in the UI copy) — a stored secret, an onboarded+scanned workspace,
 // a surviving grant. Live credential verification (does the key actually
 // authenticate?) is a FUTURE seam at the egress proxy (broker-verified calls),
@@ -557,7 +557,7 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 	case types.CC3:
 		// Single-source the KVM copy: VaultKVMDetail names the real fix
 		// (bind-mount /dev/kvm) for a containerized wardynd instead of
-		// asserting a bare "hardware limit no install can fix" (U085).
+		// asserting a bare "hardware limit no install can fix".
 		it.Detail = setup.VaultKVMDetail()
 	case types.CC2:
 		it.Detail = "no Wall (gVisor) runtime registered on this host yet — fixable, run `wardyn setup wall`. See Getting Started."

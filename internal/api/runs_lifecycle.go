@@ -3,7 +3,7 @@
 
 // Terminal run lifecycle: the completion watcher, the shared finalize tail
 // (finalizeRunTail — the ONE terminal sequence both the live watcher and the
-// boot reconciler route through, U145), the revoke cascade, failAndRevoke, and
+// boot reconciler route through, ), the revoke cascade, failAndRevoke, and
 // the kill handler. Split from runs_dispatch.go along the dispatch-vs-terminal
 // seam: runs_dispatch.go gets a run STARTED; this file is everything that ends
 // one.
@@ -259,7 +259,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 // IDEMPOTENCY / TERMINAL GUARD: a run in a NON-KILLED terminal state
 // (COMPLETED/FAILED/STOPPED/ARCHIVED) is NOT re-killed — blindly writing KILLED
 // would corrupt that recorded outcome — so we 409 without touching state, the
-// runner, or the cascade. An already-KILLED run is the EXCEPTION (U040): its
+// runner, or the cascade. An already-KILLED run is the EXCEPTION: its
 // first kill may have failed a teardown/revoke step (the honest fail-loud path
 // marks KILLED but reports the failure and advises a retry), so a re-kill must
 // re-run the idempotent KillSandbox + revoke cascade to actually free the
@@ -282,7 +282,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// TERMINAL GUARD: do not clobber a NON-KILLED already-ended run. A KILLED run
 	// is exempt — re-killing re-runs the idempotent teardown/revoke cascade so a
 	// first kill whose teardown failed can still free the sandbox + credentials
-	// (U040). COMPLETED/FAILED/STOPPED/ARCHIVED still 409 (writing KILLED would
+	//. COMPLETED/FAILED/STOPPED/ARCHIVED still 409 (writing KILLED would
 	// corrupt the recorded outcome).
 	if isTerminalRunState(run.State) && run.State != types.RunKilled {
 		writeError(w, http.StatusConflict,
@@ -305,7 +305,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// first; only then tear down + revoke what is now unambiguously ours. Conditional
 	// from the (non-terminal) state we read, so a completion watcher winning
 	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
-	// CASes KILLED->KILLED (applied), re-running the idempotent teardown (U040).
+	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
 	applied, serr := s.cfg.Store.UpdateRunStateIf(cascadeCtx, id, run.State, types.RunKilled)
 	if serr != nil {
 		writeError(w, http.StatusInternalServerError, "update run state: "+serr.Error())

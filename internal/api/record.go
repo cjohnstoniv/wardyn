@@ -154,7 +154,7 @@ func recordSessionKey(name string) string {
 // dispatch-time failure racing a wardynd crash before settleTerminalLaunch ran.
 // Two strand shapes: (a) a task entry still `recording` whose run has terminated,
 // and (b) a workspace stuck `verifying`/`scanning` whose active run has terminated
-// (U007 — record already self-healed on read; verify/scan did not). Cheap +
+// (— record already self-healed on read; verify/scan did not). Cheap +
 // race-free: the reconcilers are CAS-guarded and no-op unless a strand is real.
 // Returns the (possibly refreshed) row.
 func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspace) types.Workspace {

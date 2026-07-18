@@ -245,7 +245,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		FirstUseApproval: types.FirstUseDenyWithReview,
 		AutoStopAfterSec: int(harnessLoginIdleCap.Seconds()),
 	}
-	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row (U006)
+	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, fmt.Errorf("create harness login run: %w", err)

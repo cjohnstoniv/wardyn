@@ -26,7 +26,7 @@ type gtMinter interface {
 // 401, so with a live producer it recovers when its ~1h-TTL token expires instead of
 // going permanently blind — the static WARDYN_GROUNDTRUTH_TOKEN env deployment could
 // NOT refresh (a process env is fixed after exec), which is why the shipped stack went
-// blind ~1h into any run (U009). A file on a shared volume is the only refreshable
+// blind ~1h into any run. A file on a shared volume is the only refreshable
 // wiring. Seeds immediately, then re-mints at ~half the remaining TTL (clamped
 // [1m,30m]) so a missed tick never leaves an expired token. Best-effort per tick.
 func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {

@@ -240,7 +240,7 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     expect(await screen.findByRole("button", { name: /launch run/i })).toBeInTheDocument();
   });
 
-  it("M14: saves the named profile AFTER createRun succeeds, not before", async () => {
+  it("saves the named profile AFTER createRun succeeds, not before", async () => {
     createRunMock.mockResolvedValue(createdRun);
     createPolicyMock.mockResolvedValue({ id: "pol-1" });
     render(
@@ -265,7 +265,7 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     );
   });
 
-  it("M14: a failed createRun never creates the named policy, so a retry can't collide on the name", async () => {
+  it("a failed createRun never creates the named policy, so a retry can't collide on the name", async () => {
     createRunMock.mockRejectedValueOnce(new Error("some launch failure")).mockResolvedValueOnce(createdRun);
     render(
       <PermissionWizard
@@ -324,7 +324,7 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     expect(await screen.findByTestId("setup-item-backend:CC2")).toBeInTheDocument();
   });
 
-  it("M19: an empty first health probe retries instead of rendering a definitive unavailable barrier", async () => {
+  it("an empty first health probe retries instead of rendering a definitive unavailable barrier", async () => {
     // api.health() never rejects for real (see api.ts) — a failed/blip probe
     // resolves {} (no confinement_classes), exactly like this first call.
     healthMock
@@ -346,7 +346,7 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     );
   });
 
-  it("M19: falls back to the CC1-only floor only once the probe stays empty after a retry", async () => {
+  it("falls back to the CC1-only floor only once the probe stays empty after a retry", async () => {
     healthMock.mockResolvedValue({}); // every call comes back empty
     render(
       <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,

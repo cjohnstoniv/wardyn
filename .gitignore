@@ -51,7 +51,7 @@ docker-compose.override.yml
 .playwright-mcp/
 /*.png
 
-# maintainer's local, non-OSS scratch (personal WSL-migration config, keys, scripts)
+# local, non-published scratch (configs, keys, scratch scripts)
 /local/
 
 # Generated test-report artifacts (regenerable per run). Committed durable
@@ -78,16 +78,19 @@ ui/playwright-report/
 # design-sync (claude.ai/design system sync) — staged scripts, build output, machine state
 .ds-sync/
 ds-bundle/
-.design-sync/.cache/
-.design-sync/learnings/
-.design-sync/node_modules
-
-# maintainer-local audit artifacts — never ship
-/PONYTAIL_PASS*_AUDIT.md
-/.ponytail-*
-/REPO_AUDIT_*.md
+/.design-sync/
 
 # Claude Code local config (contributors bring their own)
 .claude/*
 # Skills ship with the repo (Claude Code picks them up per-project).
 !.claude/skills/
+
+# local, non-published design & review notes (kept out of the repo)
+/docs/reviews/
+/docs/design/
+/test/e2e/campaign/
+/test/e2e/RESULTS.md
+
+# local audit / scratch notes (never published)
+/*_AUDIT.md
+/.audit-*

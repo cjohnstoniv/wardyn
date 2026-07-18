@@ -183,7 +183,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// workspace-image resolution below.
 	wsRefs := s.unionRunEgress(ctx, runID, &spec, gw)
 
-	// CLIENT-DISCONNECT ISOLATION (M26), same rationale as dispatchWithVerify's own
+	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchWithVerify's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
 	// run row exists and MUST be driven to a terminal state or dispatched. An image
 	// build is a multi-minute docker pull+build that honours cancellation, so a

@@ -585,7 +585,7 @@ func classifyAnthropicLLM(method, rest string) int {
 		return scanOpaque
 	case r == "complete" || strings.HasSuffix(r, "/complete"):
 		// Legacy text-completions endpoint: carries the prompt in a shape we don't
-		// parse yet — mark uninspected (M25) rather than forwarding the brokered
+		// parse yet — mark uninspected rather than forwarding the brokered
 		// credential silently unscanned via the scanNone default.
 		return scanOpaque
 	default:
@@ -609,7 +609,7 @@ func classifyOpenAILLM(method, rest string) int {
 		return scanOpaque
 	case r == "completions" || strings.HasSuffix(r, "/completions"):
 		// Legacy (non-chat) completions: prompt shape we don't parse yet — mark
-		// uninspected (M25), not silently allowed via scanNone. Checked AFTER
+		// uninspected, not silently allowed via scanNone. Checked AFTER
 		// chat/completions above so that route still scans as Messages.
 		return scanOpaque
 	default:

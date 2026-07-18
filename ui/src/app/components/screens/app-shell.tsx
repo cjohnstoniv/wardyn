@@ -222,7 +222,7 @@ function SidebarNav({
 }
 
 // Below the md breakpoint the desktop aside is hidden; this hamburger + Sheet is
-// the only nav fallback (U121). Sheet is Radix Dialog underneath, so Escape-to-
+// the only nav fallback. Sheet is Radix Dialog underneath, so Escape-to-
 // close and focus-return-to-trigger come for free, and the trigger exposes
 // aria-expanded/aria-controls automatically. md:hidden pairs it with the aside's
 // md:flex so exactly one is present at any width.

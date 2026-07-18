@@ -74,7 +74,7 @@ var ErrInputTooLarge = errors.New("composer: input exceeds size limits")
 // cap + marker so every free-text audit field (prompt, transcript, the
 // serialized proposal) is capped identically.
 //
-// ponytail: a plain byte-slice cut can split a multi-byte UTF-8 rune at the
+// a plain byte-slice cut can split a multi-byte UTF-8 rune at the
 // boundary; encoding/json replaces the resulting partial rune with U+FFFD
 // rather than erroring, so the marshaled audit event stays valid JSON — a
 // cosmetic ceiling only (a rune-boundary-aware cut would be a few more lines,

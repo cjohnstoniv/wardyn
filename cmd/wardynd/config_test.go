@@ -339,7 +339,7 @@ func TestFlagDuration_FlagOverridesEnv(t *testing.T) {
 	}
 }
 
-// ─── -local-trust-forwarder bind cross-check (U027) ──
+// ─── -local-trust-forwarder bind cross-check ──
 
 // TestListenBindsSpecificRoutable pins the fail-closed gate for
 // -local-trust-forwarder: because that flag DISABLES the loopback-peer check,

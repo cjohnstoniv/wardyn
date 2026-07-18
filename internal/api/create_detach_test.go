@@ -21,7 +21,7 @@ import (
 )
 
 // This file pins the CLIENT-DISCONNECT ISOLATION invariant on handleCreateRun's
-// image-build block — the same one dispatchWithVerify (M26) and handleKillRun
+// image-build block — the same one dispatchWithVerify and handleKillRun
 // (C4) already detach for, and which the build block that runs BEFORE dispatch's
 // detach point never got. A build is a multi-minute docker pull+build that
 // honours cancellation, so a client Ctrl-C / closed tab / LB read timeout aborts

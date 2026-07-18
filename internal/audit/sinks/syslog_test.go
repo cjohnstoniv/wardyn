@@ -210,7 +210,7 @@ type wedgedWriter struct{ release chan struct{} }
 func (w *wedgedWriter) Info(string) error { <-w.release; return nil }
 func (w *wedgedWriter) Close() error      { return nil }
 
-// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon is the U095
+// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon is the 
 // regression: the LOCAL-socket path (Network=="") must not block Emit when the
 // syslog daemon wedges. Emit is reached synchronously from request handlers via
 // Fanout.Emit, so a blocked local write stalls the API request path (and the

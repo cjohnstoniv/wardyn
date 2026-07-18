@@ -405,7 +405,7 @@ func TestAgentImageCheck(t *testing.T) {
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:local"}); chk.Status != "warn" {
 		t.Errorf("compose demo convention image: status=%q, want warn", chk.Status)
 	}
-	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-campaign:local"}); chk.Status != "info" {
+	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-full:local"}); chk.Status != "info" {
 		t.Errorf("operator override image: status=%q, want info (not a red)", chk.Status)
 	}
 	for _, chk := range []SetupCheck{agentImageCheck(nil), agentImageCheck(map[string]string{"claude-code": "custom:tag"})} {

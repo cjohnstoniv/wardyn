@@ -1,4 +1,4 @@
-# wardyn/agent-campaign: the convention claude-code agent image + the campaign's
+# wardyn/agent-full: the convention claude-code agent image + the full
 # real language toolchains (Go, Python, Rust, JDK21/Maven; Node/npm already in
 # the base). Sidesteps envbuild entirely: record/verify AND contributor runs all
 # resolve to ONE image that carries BOTH the wardyn binaries (agent-run,
@@ -96,7 +96,7 @@ RUN printf '%s\n' \
       'export CARGO_HOME=/opt/rust' \
       'export RUSTUP_HOME=/opt/rust' \
       'export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64' \
-      > /etc/profile.d/campaign-toolchains.sh
+      > /etc/profile.d/toolchains.sh
 
 # Sanity: every toolchain resolves under BOTH a plain and a LOGIN shell (the
 # latter is how wardyn-verify invokes setup commands).

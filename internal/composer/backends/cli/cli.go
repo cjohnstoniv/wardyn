@@ -68,7 +68,7 @@ const composerMaxTurns = "6"
 // are no mcp__* tools to call. (codex needs no equivalent: `--sandbox read-only` fully
 // sandboxes it, blocking both writes and the network.)
 //
-// ponytail: enumerated built-in denylist; a NEW built-in tool must be added here.
+// enumerated built-in denylist; a NEW built-in tool must be added here.
 // The unbounded operator-MCP class is instead closed structurally by --strict-mcp-config.
 const composerDisallowedTools = "Read,Glob,Grep,Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,TodoWrite,Skill,SlashCommand,ToolSearch"
 

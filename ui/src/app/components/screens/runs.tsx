@@ -774,7 +774,7 @@ function RunActions({
   onOpen: (id: string) => void;
   onKill: (id: string) => void;
 }) {
-  // M16 fix: the board's Kill action fired with no confirmation, unlike the
+  // fix: the board's Kill action fired with no confirmation, unlike the
   // identical action on Run Detail (AlertDialog-gated) — one misclick here
   // killed a run with zero chance to back out. The dialog is rendered as a
   // SIBLING of DropdownMenuContent (not nested inside it), controlled by its

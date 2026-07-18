@@ -17,7 +17,7 @@ import (
 // SIEM-style feed (newest first across all runs) that the Audit view renders;
 // with ?run_id= it returns that run's chronological trail.
 //
-// ponytail: compose-session history (Decision 7) is v1 audit-feed-only — the UI
+// compose-session history (Decision 7) is v1 audit-feed-only — the UI
 // filters THIS response on `data.session_id`/`data.compose_session_id`
 // client-side; there is no server-side query param for it. If that ever gets
 // slow, the upgrade path is a store method (e.g. QueryAuditEventsBySession)

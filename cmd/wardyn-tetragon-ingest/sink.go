@@ -80,7 +80,7 @@ func newEventSink(controlPlaneURL, token string, bufferSize, batchSize int, flus
 // tokenFromEnv resolves the host-sensor bearer token from its configured source,
 // file first. It is the SINGLE definition of "where the token comes from": both
 // the sink's refreshable source and run()'s boot guard resolve through it, so the
-// guard can never reject a wiring the sink would happily use (U009). fallback is
+// guard can never reject a wiring the sink would happily use. fallback is
 // the static boot/flag token, used only when neither source yields one.
 func tokenFromEnv(fallback string) (string, error) {
 	if path := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); path != "" {

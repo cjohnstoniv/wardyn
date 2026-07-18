@@ -5,7 +5,7 @@ package client_test
 
 // coverage_test.go pins the SDK's DOCUMENTED route-family coverage (the package
 // doc's "# Coverage" list) to real methods, so the doc can never again overclaim
-// what the SDK exposes (U047: the old doc said it "mirrors the REST API surface
+// what the SDK exposes (the old doc said it "mirrors the REST API surface
 // exactly" while covering ~5 of ~15 families). Each family below names one
 // representative method; removing or renaming it fails this test, forcing the
 // doc and the method set to stay in lockstep.
@@ -38,7 +38,7 @@ func TestClientCoversRouteFamilies(t *testing.T) {
 		if _, ok := ct.MethodByName(method); !ok {
 			t.Errorf("route family %q: *client.Client has no method %s — the package "+
 				"doc claims this family is covered; add the method or drop the claim so "+
-				"the doc stays honest (U047)", family, method)
+				"the doc stays honest", family, method)
 		}
 	}
 }

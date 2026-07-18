@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestValidatePolicySpec_GrantScopeShapes pins U081: github_token and cloud_sts
+// TestValidatePolicySpec_GrantScopeShapes pins github_token and cloud_sts
 // grant scopes are now validated at policy-write time (they previously received
 // ONLY the kind-membership + non-negative-TTL check, unlike api_key/git_pat/
 // ssh_key). Reverting the new branches makes every "want error" case accepted

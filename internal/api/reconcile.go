@@ -22,7 +22,7 @@ import (
 // this call. AgentStatus observes the AGENT (via the persisted agent_exec_id), not
 // just the container, so an idle-container exec run whose agent already exited is
 // finalized instead of stranded: the previous process's in-memory exec map is gone,
-// but the exec id survives on the run row (U008/U039).
+// but the exec id survives on the run row.
 func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if s.cfg.Runner == nil {
 		return nil

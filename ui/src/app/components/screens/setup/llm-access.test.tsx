@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Smoke test for the auth-mode residency framing (best-practice-safest-path
-// campaign): the proxy-injected vs resident-at-run-time indicators added to
+// Smoke test for the auth-mode residency framing (best-practice safest-path
+// guidance): the proxy-injected vs resident-at-run-time indicators added to
 // ModelStep's rows. Mirrors step-bodies.test.tsx's ModelStep render shape.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";

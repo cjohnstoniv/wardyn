@@ -96,7 +96,7 @@ func connectAndMigrate(bootCtx context.Context, dsn, migrateDSN string) (*pgxpoo
 //
 // It also returns the *api.AuditSpool and the RAW store.Recorder so the API
 // server can start the background drain that replays spooled events back into the
-// store once it recovers (U094). The drain MUST target the raw store recorder —
+// store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
 func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
@@ -137,7 +137,7 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath string, pool 
 // edit here. Confinement substrate/runtime pins (pluggable CC3) are parsed
 // fail-closed so a typo never silently downgrades isolation. Returns the
 // orchestrator-wrapped runner (nil for "none") and the resolved runner target
-// advertised on /healthz — M31: reflect the ACTUAL resolved substrate, not a
+// advertised on /healthz — reflect the ACTUAL resolved substrate, not a
 // hardcoded "docker".
 //
 // refs is the durable ref->substrate RefStore (store.PG in production) wired

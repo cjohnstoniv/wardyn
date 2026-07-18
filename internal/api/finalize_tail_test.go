@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// U145 counterfactual: the live completion watcher (startCompletionWatcher) and
+// counterfactual: the live completion watcher (startCompletionWatcher) and
 // the boot reconciler (reconcileFinalize) are the two run-finalize paths that
 // used to inline the SAME terminal sequence and had to be hand-kept in sync.
 // They now both route through finalizeRunTail, so this test drives each path and

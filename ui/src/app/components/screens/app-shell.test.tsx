@@ -10,7 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { MobileNav } from "./app-shell";
 
-// U121: below md the desktop aside is hidden, so this Sheet-based hamburger is
+// below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
 // items, or loses its aria-expanded/Escape wiring.
 function renderMobileNav() {
@@ -26,7 +26,7 @@ function renderMobileNav() {
   );
 }
 
-describe("MobileNav (U121 below-md nav fallback)", () => {
+describe("MobileNav (below-md nav fallback)", () => {
   it("starts collapsed: trigger present, aria-expanded=false, no nav links rendered", () => {
     renderMobileNav();
     const trigger = screen.getByRole("button", { name: /open navigation menu/i });

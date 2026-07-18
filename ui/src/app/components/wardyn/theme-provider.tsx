@@ -19,7 +19,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = React.useState<Theme>(() => {
     // lsGet is try/catch-wrapped (private-mode browsers throw on localStorage);
     // ThemeProvider renders ABOVE the app's only ErrorBoundary, so a raw throw
-    // here white-screens the whole console (U119).
+    // here white-screens the whole console.
     const saved = lsGet("wardyn-theme") as Theme | null;
     return saved ?? "dark"; // dark-first security console
   });

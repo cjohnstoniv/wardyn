@@ -31,7 +31,7 @@ import (
 //     Disabled when no runner is wired (nothing to stop) or interval <= 0.
 //   - Groundtruth token rotator: keep a shared token file fresh so the
 //     eBPF/Tetragon ingest sidecar — which re-reads the file on a 401 — recovers
-//     when its ~1h token expires instead of going permanently blind (U009). Off
+//     when its ~1h token expires instead of going permanently blind. Off
 //     unless WARDYN_GROUNDTRUTH_TOKEN_FILE is configured.
 //   - Approval expiry sweeper: transition PENDING approvals older than the
 //     cutoff to EXPIRED so the queue does not grow unbounded.

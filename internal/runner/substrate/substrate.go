@@ -58,7 +58,7 @@ type Substrate interface {
 	CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error)
 	// Exec launches the agent process inside the sandbox ref, returning the
 	// substrate-specific agent exec id ("" for exec-less/main-process substrates)
-	// so the control plane can persist it for restart-safe liveness (U008/U039).
+	// so the control plane can persist it for restart-safe liveness.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process for ref exits and returns its code.
 	Wait(ctx context.Context, ref string) (int, error)

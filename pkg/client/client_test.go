@@ -361,7 +361,7 @@ func TestAPIError_ErrorString(t *testing.T) {
 	}
 	// The SDK is a public library and must NOT hardcode the consuming CLI's
 	// name: only cmd/wardyn owns the "wardyn:" prefix. Leaking it here is what
-	// produced the doubled "wardyn: wardyn:" line the review caught.
+	// produced the doubled "wardyn: wardyn:" prefix regression.
 	if strings.Contains(err.Error(), "wardyn:") {
 		t.Errorf("SDK error must not carry a 'wardyn:' prefix: %s", err.Error())
 	}

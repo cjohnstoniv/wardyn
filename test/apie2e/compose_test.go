@@ -229,7 +229,7 @@ func getBackends(t *testing.T, baseURL string) (int, []byte) {
 	return doAdmin(t, http.MethodGet, baseURL+"/api/v1/composer/backends", nil)
 }
 
-// doAdmin is doRaw with the admin token (ponytail P3-SDK-4).
+// doAdmin is doRaw with the admin token (P3-SDK-4).
 func doAdmin(t *testing.T, method, url string, body []byte) (int, []byte) {
 	t.Helper()
 	status, raw := doRaw(t, method, url, adminToken, body)

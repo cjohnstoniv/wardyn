@@ -249,7 +249,7 @@ describe("NewRunDialog", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
-    await user.type(screen.getByLabelText(/describe your task/i), "load the acme db");
+    await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
 
@@ -543,7 +543,7 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
-    await user.type(screen.getByLabelText(/describe your task/i), "load the acme db");
+    await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
     await screen.findByText(/proposed setup/i);
 

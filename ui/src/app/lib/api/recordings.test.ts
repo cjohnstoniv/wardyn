@@ -9,7 +9,7 @@ import { recordings } from "./recordings";
 // parseRecording turns an UNTRUSTED asciicast document (fetched as text from the
 // recording store) into the terminal-player shape. It must be robust to garbage:
 // a single malformed line, a wrong event op, a truncated frame — none may throw
-// or corrupt the render. It had zero coverage (U073). Reached here through its
+// or corrupt the render. It had zero coverage. Reached here through its
 // only export path, recordings.getRecording, with a stubbed fetch.
 describe("recordings.getRecording — asciicast v2 parsing", () => {
   let fetchMock: ReturnType<typeof vi.fn>;

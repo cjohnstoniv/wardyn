@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
 
-// M16 fix: the board's "Kill run" action used to fire api.killRun immediately
+// fix: the board's "Kill run" action used to fire api.killRun immediately
 // from the dropdown — no confirmation — unlike the identical action on Run
 // Detail, which is AlertDialog-gated. These tests pin that the board now asks
 // first.
@@ -57,7 +57,7 @@ beforeEach(() => {
   killRunMock.mockResolvedValue(undefined);
 });
 
-describe("RunsScreen board — Kill run confirms before killing (M16)", () => {
+describe("RunsScreen board — Kill run confirms before killing", () => {
   it("does not call api.killRun until the confirm dialog is accepted", async () => {
     renderScreen();
     const user = userEvent.setup({ pointerEventsCheck: 0 });

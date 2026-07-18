@@ -107,7 +107,7 @@ export function SecretsScreen() {
     let cancelled = false;
     Promise.resolve()
       .then(() => composerApi.listComposerBackends())
-      // ponytail: a request failure folds into the same "no backends" bucket as a
+      // a request failure folds into the same "no backends" bucket as a
       // genuinely empty list — good enough for this advisory-only section; split
       // out a distinct error state if that ever proves confusing.
       .catch(() => [] as ComposerBackend[])

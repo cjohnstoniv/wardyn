@@ -386,7 +386,7 @@ export function NewRunDialog({
   // Workspace checklist items re-flip from the workspace list the dialog already
   // loads (decision 9) — once a scan lands the workspace at "ready", satisfy any
   // still-open workspace item that named it via Fix.WorkspaceID.
-  // ponytail: the `i.id.slice(...)` fallback leans on compose_setup.go's stable
+  // the `i.id.slice(...)` fallback leans on compose_setup.go's stable
   // "<kind>:<key>" id contract instead of threading a workspace id separately
   // through every item — fine while that contract holds; if a future kind's key
   // ever isn't the workspace id, give workspace items their own explicit field.

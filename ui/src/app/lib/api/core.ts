@@ -161,7 +161,7 @@ export function unwrapList<T>(payload: unknown): T[] {
 
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the
 // response status, so it asks for a single row (?limit=1) rather than pulling
-// the whole runs list just to discard it (U070).
+// the whole runs list just to discard it.
 export async function probeAuth(): Promise<boolean> {
   try {
     const res = await wfetch(withLimit("/runs", 1), { method: "GET" });

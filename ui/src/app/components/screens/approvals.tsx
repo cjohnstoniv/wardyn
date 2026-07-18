@@ -103,7 +103,7 @@ type CredentialKind = "git_pat" | "github_token" | "api_key" | "ssh_key" | "gene
 //    fallback — otherwise every api_key approval renders the git_pat banner,
 //    which claims the agent's process can read the key (the opposite of
 //    api_key's proxy-side injection design).
-// ponytail: a MINIMAL api_key scope ({host,secret_name} only, header/format
+// a MINIMAL api_key scope ({host,secret_name} only, header/format
 // omitted since the broker defaults them) is indistinguishable from a minimal
 // git_pat scope ({host,secret_name}, username omitted) by keys alone — genuine
 // wire-format ambiguity, not fixable client-side. We bias the fallback toward

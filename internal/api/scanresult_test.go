@@ -215,7 +215,7 @@ func TestUploadScanResult_AIAdditions(t *testing.T) {
 	}
 }
 
-// U214: a scan upload whose run no longer owns the workspace's import-step slot
+// a scan upload whose run no longer owns the workspace's import-step slot
 // (active_run_id points at a DIFFERENT run) is fenced with 409 and writes nothing —
 // a superseded / lagging scan can never clobber a fresher profile. Mirrors the
 // verify lane's superseded-run fence.
@@ -237,7 +237,7 @@ func TestUploadScanResult_SupersededRunFenced(t *testing.T) {
 	}
 }
 
-// U212: a successful scan upload RELEASES the import-step slot (clears
+// a successful scan upload RELEASES the import-step slot (clears
 // active_run_id) so the scan-run reconcile self-heal correctly no-ops once the
 // profile has landed — otherwise the slot leaks and reconcile can later mark a
 // successfully-scanned workspace `error`.

@@ -215,7 +215,7 @@ func TestSecretsAPI_ListExcludesReserved(t *testing.T) {
 	}
 }
 
-// TestInternalInjection_RefusesBedrockResidentSecret asserts U029 at the SINK: even
+// TestInternalInjection_RefusesBedrockResidentSecret asserts at the SINK: even
 // if a grant is authored (bypassing the write-time policy guard) naming a resident
 // AWS SigV4 credential, handleInternalInjection refuses to resolve it into an
 // injectable header value — the same defense-in-depth the signing/session keys get.
@@ -241,7 +241,7 @@ func TestInternalInjection_RefusesBedrockResidentSecret(t *testing.T) {
 	}
 }
 
-// TestSecretsAPI_ReservesOAuthSentinels asserts U215: the two Anthropic OAuth
+// TestSecretsAPI_ReservesOAuthSentinels asserts the two Anthropic OAuth
 // injection sentinels are reserved from the GENERIC secrets API — Put and Delete
 // are 403 and List never surfaces them — because storing a value under a name that
 // resolves live at the injection sink would be silently shadowed. They remain valid

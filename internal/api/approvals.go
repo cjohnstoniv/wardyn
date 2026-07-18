@@ -21,7 +21,7 @@ type decisionRequest struct {
 // handleListApprovals returns approvals filtered by ?state= (empty = all),
 // paginated by ?limit=&offset= (see parseListPage).
 //
-// ponytail: the store's ListApprovalsPage applies LIMIT/OFFSET at the DB, but the
+// the store's ListApprovalsPage applies LIMIT/OFFSET at the DB, but the
 // approvals list here routes through the cfg.Approvals lister (an interface owned
 // by the approval package, not a store.Pager), so this endpoint bounds the
 // PAYLOAD in Go via servePage's fetch-all fallback rather than the query. The

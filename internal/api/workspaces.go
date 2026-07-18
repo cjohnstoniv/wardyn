@@ -235,7 +235,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// ponytail: this GET→mutate→UPDATE can race an async repo-scan upload and
+	// this GET→mutate→UPDATE can race an async repo-scan upload and
 	// write back a stale profile; identity edits are rare and the remedy is a
 	// re-scan — add an optimistic updated_at guard if it ever bites for real.
 	// A repo's Ref change is content-changing too: the profile and approvals
@@ -507,7 +507,7 @@ func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// launchVerifyRun flips the workspace to `verifying` + claims the in-flight run
-	// pointer BEFORE it dispatches (U013) — like the scan/record lanes — so a fast
+	// pointer BEFORE it dispatches — like the scan/record lanes — so a fast
 	// verify whose result upload lands immediately isn't regressed by a status write
 	// that arrives after it. No post-launch state write here.
 	actorType, actor := actorFromRequest(r)

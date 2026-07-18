@@ -266,7 +266,7 @@ func (r spoolingRecorder) Record(ctx context.Context, ev types.AuditEvent) error
 // It previously LEFT JOINed run_policies on policy_id and read the policy JSONB —
 // but inline/default/scan/verify/record/harness-login runs have no stored
 // policy_id, so the join was NULL and COALESCE'd to 0 (never auto-stop),
-// silently exempting every such run from idle reaping (U006).
+// silently exempting every such run from idle reaping.
 type lifecycleStore struct {
 	pool *pgxpool.Pool
 }

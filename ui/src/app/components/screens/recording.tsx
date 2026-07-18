@@ -66,7 +66,7 @@ function formatDuration(totalSeconds: number): string {
 
 // Only show search/facets once there's enough of a library to make them
 // useful — a filter bar over two cards is just noise.
-// ponytail: fixed threshold; make it configurable if it ever matters.
+// fixed threshold; make it configurable if it ever matters.
 const MIN_CARDS_FOR_FILTERS = 4;
 
 export function RecordingScreen() {
@@ -101,7 +101,7 @@ export function RecordingScreen() {
         if (cancelled) return;
         setStatus("ready");
         setTotalRuns(runs.length);
-        // ponytail: fires one getRecording() per run with no concurrency cap
+        // fires one getRecording() per run with no concurrency cap
         // or pagination — fine for a single-operator console's run list; add
         // a queue/limit if that list ever grows into the thousands.
         runs.forEach((run) => {
@@ -350,7 +350,7 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
       }}
       className="flex cursor-pointer flex-col overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-border-strong"
     >
-      {/* ponytail: skipped a fake per-card terminal-output preview (the design
+      {/* skipped a fake per-card terminal-output preview (the design
           mock used static demo lines) — rendering real captured ANSI output
           safely at thumbnail size needs its own escaping/parsing pass. This
           shows real signals only (icon + measured duration); add a genuine

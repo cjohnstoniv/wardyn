@@ -106,7 +106,7 @@ export function ImportWorkspaceDialog({
   // affordance on the Verify step (detected the same way new-run-dialog does: an
   // empty backend list means the composer is off / suggest-fix would 404).
   const [composerEnabled, setComposerEnabled] = React.useState(false);
-  // M18 fix: Record's "no model configured" warning must be composer-INDEPENDENT —
+  // fix: Record's "no model configured" warning must be composer-INDEPENDENT —
   // driving it off composerEnabled fired the warning even with a connected
   // subscription or a stored provider key (a run can have model access with no
   // composer backend). Derive it from GET /setup/status via hasLlmPath instead —
@@ -131,7 +131,7 @@ export function ImportWorkspaceDialog({
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   // Suggested "save as is" policy name (workspace + recording) for the profile drawer.
   const [profileName, setProfileName] = React.useState<string | undefined>(undefined);
-  // M17 fix: the Record/Verify panes' one-click (approveHost) and bulk
+  // fix: the Record/Verify panes' one-click (approveHost) and bulk
   // (promoteEgress) egress approvals used to PUT straight to the API — skipping
   // the same untrusted-content confirm the Workspaces screen enforces for the
   // identical action (the host names come from a workspace's own files or a
@@ -185,7 +185,7 @@ export function ImportWorkspaceDialog({
       .catch(() => setComposerEnabled(false));
   }, []);
 
-  // M18 fix: Record's model-readiness warning (see llmReady above).
+  // fix: Record's model-readiness warning (see llmReady above).
   const loadLlmReadiness = React.useCallback(() => {
     setupApi
       .getSetupStatus()
@@ -354,7 +354,7 @@ export function ImportWorkspaceDialog({
     }
   };
 
-  // M17 fix: gate both the single-host and bulk approve actions behind the
+  // fix: gate both the single-host and bulk approve actions behind the
   // same untrusted-content confirm the Workspaces screen already enforces
   // (ConfirmEgressDialog below) — these wrappers are what Record/Verify get as
   // onApproveHost/onPromoteEgress; the raw approveHost/promoteEgress above only
@@ -479,7 +479,7 @@ export function ImportWorkspaceDialog({
                 limited to the approved set); off-policy hosts are blocked live. The
                 older automated setup-command verify (VerifyPane) is still shown when
                 an auto-verify is in flight or has a result — driven via the API.
-                U035 fix: it's ALSO the fallback when Record was skipped (zero open
+                fix: it's ALSO the fallback when Record was skipped (zero open
                 recordings to replay) — otherwise "Skip recording" stranded the
                 operator at RecordPane's confined dead-end, contradicting
                 STEP_BLURB.record's "Verify still proves it either way". */}
@@ -585,7 +585,7 @@ export function ImportWorkspaceDialog({
         onClose={() => setProfileRunId(null)}
       />
 
-      {/* M17: the same untrusted-content confirm Workspaces enforces, gating
+      {/* the same untrusted-content confirm Workspaces enforces, gating
           Record/Verify's one-click (requestApproveHost) and bulk
           (requestPromoteEgress) egress approvals above. */}
       <ConfirmEgressDialog

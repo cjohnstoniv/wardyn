@@ -11,7 +11,7 @@ import { asFirstUseMode, firstUseRaisesApproval, firstUseLabel } from "./policy"
 // on. It must accept the legacy boolean form, the enum form, AND coerce anything
 // unrecognized to the SAFE default (always_deny) — never silently escalate an
 // unlisted domain to "allowed" or drop it into a review mode it did not ask for.
-// These functions had zero coverage (U073); a regression that made the default
+// These functions had zero coverage; a regression that made the default
 // permissive would be invisible.
 describe("asFirstUseMode — fail-closed normalization", () => {
   it("maps the legacy boolean form", () => {

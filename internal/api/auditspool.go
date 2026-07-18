@@ -71,7 +71,7 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 // against concurrent Append (a failed write during a drain blocks briefly instead
 // of racing the truncate); the bounded batch keeps that hold short.
 //
-// ponytail: at-least-once. A crash between rec.Record succeeding and the on-disk
+// at-least-once. A crash between rec.Record succeeding and the on-disk
 // trim can re-replay a duplicate on the next Drain; give InsertAuditEvent an
 // `ON CONFLICT (id) DO NOTHING` and that becomes exactly-once.
 func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (int, error) {

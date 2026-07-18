@@ -44,10 +44,10 @@ describe("toYaml", () => {
   });
 });
 
-// U117: the copy button was opacity-0 + group-hover:opacity-100 only, so a
+// the copy button was opacity-0 + group-hover:opacity-100 only, so a
 // keyboard user tabbing to it landed on a visually-invisible control (WCAG 2.4.7).
 // focus-visible:opacity-100 reveals it on keyboard focus.
-describe("copy button keyboard-focus reveal (U117)", () => {
+describe("copy button keyboard-focus reveal", () => {
   it("JsonBlock's copy button reveals on focus-visible, not just hover", () => {
     render(<JsonBlock value={{ a: 1 }} />);
     expect(screen.getByRole("button", { name: /copy/i }).className).toMatch(/focus-visible:opacity-100/);

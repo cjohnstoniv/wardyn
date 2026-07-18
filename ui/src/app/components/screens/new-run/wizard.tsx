@@ -152,7 +152,7 @@ export function PermissionWizard({
     if (initialState) setState(initialState);
     setAvailableClasses(null);
     let alive = true;
-    // M19 fix: healthApi.health() never rejects — it swallows a fetch/parse failure
+    // fix: healthApi.health() never rejects — it swallows a fetch/parse failure
     // into {} (see api.ts) — so the old .catch below was dead code, and an
     // empty/failed probe fell straight into .then() instead. That was then
     // read as a DEFINITIVE "this runner has zero barriers", rendering "No
@@ -279,7 +279,7 @@ export function PermissionWizard({
       const { run, inline_policy } = buildSpec(state, workspaces);
       const created = await runsApi.createRun({ ...run, inline_policy });
       if (state.saveAsProfile && state.profileName.trim()) {
-        // M14 fix: persist the named policy AFTER the run launches, not before.
+        // fix: persist the named policy AFTER the run launches, not before.
         // createPolicy used to run first, so a failed launch (e.g. the
         // one-click missing-secret fix retrying) had already created the named
         // policy — the retry's createPolicy call then hit the policies-name
