@@ -69,6 +69,11 @@ type fakeDocker struct {
 
 	containers map[string]*createdContainer // id (== name) -> record
 
+	// startedNames records every ContainerStart in order, and SURVIVES rollback
+	// (unlike containers, which a rollback removes). Lets a test prove a container
+	// was never started, not merely started-then-reaped.
+	startedNames []string
+
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
 	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
@@ -201,6 +206,7 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.state = &container.State{Status: "running", Running: true}
+	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
 }
 

@@ -272,6 +272,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 // CreateSandbox provisions the per-run network, the wardyn-proxy sidecar, and
 // the agent container with L0 confinement. Order matters for fail-closed
 // teardown: anything created before an error is rolled back.
+//
 //nolint:funlen // Deliberate: a single linear container-assembly sequence (network → proxy sidecar → hardening → mounts → sandbox container) whose teardown-on-failure compensations must stay in one scope to be verifiably complete; low branching (passes gocyclo/gocognit), just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
@@ -552,16 +553,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true})
 	})
 
-	if _, err := d.cli.ContainerStart(ctx, agentResp.ID, client.ContainerStartOptions{}); err != nil {
-		return fail(fmt.Errorf("docker: start agent: %w", err))
-	}
-
 	// Fail closed if the daemon DISCARDED a resource limit we requested (a cgroup
 	// controller missing / not delegated) — an untrusted sandbox must not run
-	// effectively uncapped. Authoritative post-create signal (the create-response
+	// effectively uncapped. Authoritative post-CREATE signal (the create-response
 	// discard warning), correct on both Moby and Podman; opt out on a trusted host
 	// with WARDYN_ALLOW_UNENFORCEABLE_CAPS=1. rollback tears down the agent + proxy
 	// + per-run network on failure.
+	//
+	// Gated BEFORE ContainerStart, not after: the warning is already in the create
+	// response, so starting first would run the untrusted workload uncapped for the
+	// lifetime of the check and only then kill it. "Refuses to launch" has to mean
+	// never launched, not launched-and-reaped.
 	if capErr := verifyCapsEnforced(agentResp.Warnings); capErr != nil {
 		if d.cfg.AllowUnenforceableCaps {
 			slog.Warn("wardynd: the daemon discarded a resource limit — proceeding because WARDYN_ALLOW_UNENFORCEABLE_CAPS=1; the sandbox may run without CPU/memory/pids limits",
@@ -569,6 +571,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		} else {
 			return fail(capErr)
 		}
+	}
+
+	if _, err := d.cli.ContainerStart(ctx, agentResp.ID, client.ContainerStartOptions{}); err != nil {
+		return fail(fmt.Errorf("docker: start agent: %w", err))
 	}
 
 	// Recording requires two agent-writable directories that do NOT exist

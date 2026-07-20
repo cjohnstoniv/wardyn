@@ -44,6 +44,17 @@ func TestCreateSandbox_FailsClosedOnUnenforceableCaps(t *testing.T) {
 	if _, ok := f.networks[internalNetName(testSpec().RunID)]; ok {
 		t.Errorf("fail-closed must roll back the per-run network")
 	}
+	// The agent must NEVER have been started. The discard warning arrives in the
+	// CREATE response, so the gate belongs before ContainerStart — starting first
+	// and reaping after would run an untrusted workload uncapped for the duration
+	// of the check. startedNames survives rollback, so this distinguishes
+	// "never launched" from "launched, then torn down".
+	agentName := agentContainerName(testSpec().RunID)
+	for _, n := range f.startedNames {
+		if n == agentName {
+			t.Errorf("agent container was STARTED before the cap check; an unenforceable-caps host must never launch the sandbox (started: %v)", f.startedNames)
+		}
+	}
 
 	// Opt-out: WARDYN_ALLOW_UNENFORCEABLE_CAPS on a trusted host lets it proceed.
 	f2 := newFakeDocker()
