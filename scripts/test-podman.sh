@@ -55,12 +55,28 @@ else
   diverge "Runtimes map empty/absent — CC2/CC3 gating (classToRuntime) can't see runsc/kata; expect CC1-only. Podman manages runtimes via containers.conf, not this map."
 fi
 
-# 3. Resource-cap enforceability (Phase-4 fail-closed probe reads these).
-_caps="$(D info --format '{{.MemoryLimit}}/{{.PidsLimit}}/{{.CPUCfsQuota}}' 2>/dev/null || echo '?/?/?')"
-case "${_caps}" in
-  true/true/true) pass "resource caps enforceable (${_caps})" ;;
-  *) diverge "resource caps NOT all enforceable (${_caps}) — a governed run will fail closed (WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 to override). Rootless cgroup v2 delegation may be needed." ;;
-esac
+# 3. Resource-cap enforceability — test ACTUAL enforcement, not `docker info`.
+# Podman's Docker-compat `docker info` under-reports CpuCfsQuota (=false) even when
+# the CPU quota actually binds, so the info booleans are NOT authoritative on
+# Podman. Create a capped container and read its real cgroup v2 files: memory.max
+# / pids.max / cpu.max reflect what the kernel enforces.
+_info_caps="$(D info --format '{{.MemoryLimit}}/{{.PidsLimit}}/{{.CPUCfsQuota}}' 2>/dev/null || echo '?/?/?')"
+_real="$(D run --rm --memory 256m --pids-limit 64 --cpus 1 alpine:3.20 sh -c \
+  'printf "%s|%s|%s" "$(cat /sys/fs/cgroup/memory.max 2>/dev/null)" "$(cat /sys/fs/cgroup/pids.max 2>/dev/null)" "$(cat /sys/fs/cgroup/cpu.max 2>/dev/null)"' 2>/dev/null || echo '?|?|?')"
+_mem="${_real%%|*}"; _rest="${_real#*|}"; _pids="${_rest%%|*}"; _cpu="${_rest##*|}"
+_cap_ok=1
+[ "${_mem}" = "268435456" ] || _cap_ok=0
+[ "${_pids}" = "64" ] || _cap_ok=0
+case "${_cpu}" in "100000 100000") : ;; *) _cap_ok=0 ;; esac
+if [ "${_cap_ok}" = 1 ]; then
+  pass "resource caps ACTUALLY enforce (memory.max=${_mem}, pids.max=${_pids}, cpu.max='${_cpu}') — despite docker info reporting ${_info_caps}"
+  case "${_info_caps}" in
+    true/true/true) : ;;
+    *) warn "docker info under-reports caps as ${_info_caps} (Podman quirk). Wardyn's Phase-4 pre-flight probe reads docker info, so it will FALSE-POSITIVE fail-closed here — set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 (caps still enforce, verified above)." ;;
+  esac
+else
+  diverge "resource caps do NOT all actually bind (memory.max=${_mem} want 268435456, pids.max=${_pids} want 64, cpu.max='${_cpu}' want '100000 100000') — an untrusted sandbox could run uncapped. Enable rootless cgroup v2 delegation for the missing controller."
+fi
 
 # 4. Internal:true bridge — the L0 no-default-route guarantee. Create one, assert
 # a container on it has NO route off-host, then clean up.

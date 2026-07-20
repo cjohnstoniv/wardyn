@@ -581,12 +581,21 @@ hardened runc floor — not Wall/Vault. Pick and pin **one** rootless UID model
 socket owner, or userns-remap) for the wardynd container; the driver itself is
 UID-agnostic (`client.FromEnv`, no hardcoded socket). **Rootless Podman** speaks
 the Docker Engine API via the same `FromEnv` client but is a *separate* proof from
-rootless Docker (the Docker-compat REST API is a partial emulation): the
-highest-risk divergences to verify before relying on it are `docker info`'s
-`Runtimes` map (CC2/CC3 gating), `Internal:true` bridge semantics (the L0
-no-default-route guarantee), storage-driver quota parsing, `SecurityOptions`
-formatting, and `host.docker.internal` resolution — run `make test-e2e` twice, once
-per daemon, and document any divergence rather than assuming Docker-API parity.
+rootless Docker (the Docker-compat REST API is a partial emulation). **Probed on
+rootless Podman 4.9.3** (`scripts/test-podman.sh`, cgroup v2): the runner-critical
+primitives hold — `--internal` bridge networks are supported and **do** block
+off-host egress (the L0 no-default-route guarantee), the `Runtimes` map is
+populated (CC-gating can read it), `host.docker.internal:host-gateway` resolves,
+the `overlay` storage driver is recognized, and CPU/memory/pids caps **actually
+enforce** (verified by reading a capped container's cgroup v2 `cpu.max`/
+`memory.max`/`pids.max`). **One documented divergence:** Podman's compat
+`docker info` under-reports `CpuCfsQuota` as `false` even though the quota binds,
+so Wardyn's Phase-4 pre-flight cap probe (which trusts `docker info`) FALSE-
+POSITIVES fail-closed on Podman — set `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` there
+(caps still enforce, verified). A robust fix (verify caps post-create from the
+container's own cgroup rather than pre-flight `docker info`) is a tracked follow-up.
+Re-run the probe (and `make test-e2e` for the full governed-run proof) on your own
+Podman version before relying on it — this box's WSL2 Podman is not a CI fleet.
 
 ---
 
