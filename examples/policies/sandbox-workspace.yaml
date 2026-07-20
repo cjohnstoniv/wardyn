@@ -1,0 +1,34 @@
+# sandbox-workspace.yaml — let a governed agent work on REAL code on your machine.
+#
+#   wardyn run --agent claude-code \
+#     --task 'Add a /healthz endpoint returning {"status":"ok"} and a unit test; run the tests' \
+#     --policy-file examples/policies/sandbox-workspace.yaml --wait
+#
+# Everything else stays sealed: the agent sees ONLY the directory you mount below
+# (not the rest of your machine), reaches only the listed hosts, and holds no
+# credential — the Claude subscription is injected proxy-side.
+
+# The ONE directory this run may see. Edit `source` to your project.
+# - source MUST be an absolute, cleaned host path (a deny-list rejects /, /etc,
+#   /proc, docker.sock dirs, … and symlinks are resolved and re-checked).
+# - target MUST be under /home/agent, /work, or /workspace.
+# - read_only defaults to TRUE; set it false so the agent's edits PERSIST to your
+#   real files. Mounts are operator-authored — an agent can never choose one.
+workspace_mounts:
+  - source: /home/you/projects/my-service
+    target: /home/agent/work
+    read_only: false
+
+# Anthropic for the model (the managed subscription is injected proxy-side, so no
+# api_key grant here); npm only if the task installs anything.
+allowed_domains:
+  - api.anthropic.com
+  - "*.anthropic.com"
+  - registry.npmjs.org
+
+# Unknown host -> raise an approval and deny now; approve + retry to allow.
+first_use_approval: deny_with_review
+
+min_confinement_class: CC1
+
+auto_stop_after_sec: 1800
