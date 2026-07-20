@@ -240,7 +240,7 @@ export function RunsScreen() {
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Runs"
-        description="Every agent run, live — each confined behind its own barrier."
+        description="Every run, live — each confined behind its own barrier."
         actions={
           <div className="inline-flex gap-1 rounded-lg border border-border bg-surface-2/60 p-1">
             <DensityButton active={mode === "board"} onClick={() => setMode("board")} Icon={LayoutGrid}>

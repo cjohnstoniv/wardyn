@@ -41,7 +41,7 @@ describe("OnboardingScreen (welcome hero)", () => {
 
   it("is ONE glanceable intro (hero + 5-node strip), not a 7-page tour", async () => {
     render(<OnboardingScreen onGetStarted={() => {}} />);
-    expect(screen.getByText("Let agents work. Keep your keys.")).toBeInTheDocument();
+    expect(screen.getByText("Run anything. Keep your keys.")).toBeInTheDocument();
     // the single how-it-works strip
     expect(screen.getByText("Behind a barrier")).toBeInTheDocument();
     expect(screen.getByText("Everything recorded")).toBeInTheDocument();

@@ -133,7 +133,7 @@ export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void })
         <Shield className="size-6" aria-hidden />
       </span>
       <h1 className="mt-5 text-[2rem] font-semibold leading-tight tracking-tight text-foreground">
-        Let agents work. Keep your keys.
+        Run anything. Keep your keys.
       </h1>
       <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted-foreground">
         <IntroBlurb />

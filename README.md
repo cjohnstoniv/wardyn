@@ -5,10 +5,12 @@
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod)
 [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
 
-**The open-source governance control plane for coding agents —
+**The open-source governed-sandbox control plane for any workload —
 identity, controls, and audit are the product; the sandbox is a pluggable
-commodity.** Wardyn governs workload run-identity and tokens: a *wardyn*
-authorizes one specific, scoped action — which is exactly what the broker mints.
+commodity.** Wardyn governs run-identity and tokens for anything you launch —
+a script, a build, a plain command, or a coding agent (its flagship use): a
+*wardyn* authorizes one specific, scoped action — which is exactly what the
+broker mints.
 
 > **Name & trademark.** "Wardyn" is a working name — a formal trademark
 > clearance (USPTO full-text + GitHub org / domain / package handles) is still
@@ -22,10 +24,14 @@ authorizes one specific, scoped action — which is exactly what the broker mint
 
 ## What Wardyn Is
 
-Coding agents (Claude Code, Codex CLI, and successors) inherit the full developer
-credential they launch under — a prompt-injected agent, a poisoned dependency, or a
-compromised MCP server inherits the same repos, cloud access, and blast radius.
-Wardyn is the governance layer between a human operator and a running agent:
+Anything you run under your own credentials — a script, a build, a CI job, a
+coding agent — inherits your full blast radius. A prompt-injected agent, a
+poisoned dependency, or a compromised MCP server inherits the same repos,
+cloud access, and reach as whatever launched it. Wardyn is the governance
+layer between a human operator and anything running on their behalf; a run
+doesn't have to be an agent at all, but coding agents (Claude Code, Codex
+CLI, and successors) are the flagship use, so most of what follows is framed
+around them:
 
 - **Per-run identity.** Every run gets a SPIFFE ID
   (`spiffe://<trust-domain>/agent-run/<id>`) distinct from the human; the human's
@@ -82,12 +88,13 @@ Wardyn is the governance layer between a human operator and a running agent:
 
 <!-- The code-true, CI-label-checked mermaid version of this and the other
      diagrams lives in ARCHITECTURE.md and threatmodel/THREAT-MODEL.md. -->
-![Wardyn system overview: a trusted control plane (wardynd + Postgres) launches each coding agent into an untrusted, gatewayless per-run sandbox whose only path off-host is the wardyn-proxy egress sidecar](docs/img/architecture.png)
+![Wardyn system overview: a trusted control plane (wardynd + Postgres) launches each run — coding agent, script, or build — into an untrusted, gatewayless per-run sandbox whose only path off-host is the wardyn-proxy egress sidecar](docs/img/architecture.png)
 
-A trusted control plane (`wardynd` + Postgres) launches each agent into an
-untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy`
-sidecar; credentials are injected at the proxy, and every decision and PTY
-session streams back into the append-only audit log.
+A trusted control plane (`wardynd` + Postgres) launches each run — a coding
+agent, a script, a build, whatever the workload is — into an untrusted,
+gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar;
+credentials are injected at the proxy, and every decision and PTY session
+streams back into the append-only audit log.
 
 ---
 

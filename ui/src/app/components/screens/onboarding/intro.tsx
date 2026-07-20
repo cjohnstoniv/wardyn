@@ -20,11 +20,12 @@ import { cn } from "../../ui/utils";
 import type { SetupStatus } from "../../../lib/types";
 
 // The single honest one-liner shown under the Welcome hero and in the funnel
-// shell's intro panel.
+// shell's intro panel. Platform-first: coding agents are the flagship use, not
+// the definition — a run can be a script, a build, a tool, or a plain command.
 export function IntroBlurb() {
   return (
     <>
-      Wardyn runs your coding agents behind a barrier, with{" "}
+      Wardyn runs any workload — coding agents, scripts, builds, tools — behind a barrier, with{" "}
       <strong className="font-semibold text-foreground">
         no resident credentials by default and no privileged host access
       </strong>

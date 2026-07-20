@@ -63,11 +63,38 @@ describe("DemoScreen", () => {
     listAuditMock.mockReset().mockResolvedValue([]);
   });
 
-  it("renders all four demo cards", async () => {
+  it("renders the four keyless demo cards, and hides the harness demo without a model", async () => {
     renderScreen();
-    for (const d of DEMOS) {
+    for (const d of DEMOS.filter((d) => !d.needsModel)) {
       expect(await screen.findByText(d.title)).toBeInTheDocument();
     }
+    const harness = DEMOS.find((d) => d.needsModel)!;
+    expect(screen.queryByText(harness.title)).not.toBeInTheDocument();
+  });
+
+  it("shows the harness demo card, with Start enabled, once a model is connected", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+    );
+    renderScreen();
+    const harness = DEMOS.find((d) => d.needsModel)!;
+    expect(await screen.findByText(harness.title)).toBeInTheDocument();
+    expect(screen.getByTestId(`demo-start-${harness.id}`)).toBeEnabled();
+  });
+
+  it("Start on the harness demo posts an interactive run (the operator drives the agent)", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+    );
+    renderScreen();
+    const harness = DEMOS.find((d) => d.needsModel)!;
+    const start = await screen.findByTestId(`demo-start-${harness.id}`);
+    await user.click(start);
+    expect(createRunMock).toHaveBeenCalledWith({
+      agent: "claude-code",
+      interactive: true,
+      inline_policy: harness.policy,
+    });
   });
 
   it("gates Start on barrierReady — disabled + hint on a runner-less host", async () => {

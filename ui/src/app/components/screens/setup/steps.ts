@@ -40,8 +40,13 @@ export type SetupStepId =
   | "launch";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
-// labels + headings, so they can't drift from what the demo pages show).
-const DEMO_TITLES = Object.fromEntries(DEMOS.map((d) => [d.id, d.title])) as Record<DemoStepId, string>;
+// labels + headings, so they can't drift from what the demo pages show). Scoped
+// to the FROZEN four funnel demo steps — the catalog also carries the harness
+// demo (agent-in-the-box, /demos-only, gated on a connected model), which is NOT
+// a Getting-started step and must never enter STEP_LABEL/STEP_HEADING/STEP_ORDER.
+const DEMO_TITLES = Object.fromEntries(
+  DEMOS.filter((d) => (DEMO_STEP_IDS as readonly string[]).includes(d.id)).map((d) => [d.id, d.title]),
+) as Record<DemoStepId, string>;
 
 // id→label lookup — the rail and the layout footer both need it; export once
 // here instead of each rebuilding the same map (F5).

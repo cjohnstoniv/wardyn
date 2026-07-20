@@ -8,8 +8,10 @@
 // POST /api/v1/runs (interactive + inline_policy), embeds the same AttachTerminal
 // + LiveApprovals the import Record step uses, and lets a brand-new user PROVE
 // Wardyn's egress confinement before onboarding any repo or key. Pure
-// composition — no backend changes. Gated on barrierReady ONLY (never llmReady,
-// never workspaces): a demo runs the sandbox, not an agent, so no model is needed.
+// composition — no backend changes. The keyless demos are gated on barrierReady
+// ONLY (never llmReady, never workspaces) — they run the sandbox, not an agent,
+// so no model is needed. The one needsModel demo is additionally hidden until
+// llmReady (and its Start stays gated even if a caller renders it anyway).
 //
 // Reusable pieces (also consumed by the Getting-Started per-demo wizard steps in
 // setup/demos-step.tsx): the `useDemoRuns` hook (launch/poll/store), the
@@ -135,6 +137,10 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
     async (demo: Demo) => {
       setStarting(demo.id);
       try {
+        // Every demo comes up idle for the operator to drive in the attached
+        // terminal — keyless demos run plain curl; the harness demo runs `claude`
+        // (its policy grants Anthropic egress, and the connected model is injected
+        // proxy-side). Same interactive shape, so "watch it live" is always honest.
         const run = await api.createRun({
           agent: "claude-code",
           interactive: true,
@@ -191,15 +197,21 @@ export function DemoScreen() {
     };
   }, []);
 
-  const barrierReady = status ? deriveReadiness(status).barrierReady : false;
+  const readiness = status ? deriveReadiness(status) : null;
+  const barrierReady = readiness?.barrierReady ?? false;
+  const llmReady = readiness?.llmReady ?? false;
+  // Keyless demos always show; the harness demo only once a model is connected.
+  const visibleDemos = DEMOS.filter((d) => !d.needsModel || llmReady);
 
   return (
     <div className="mx-auto w-full max-w-[900px] px-6 py-8">
       <header className="mb-6">
         <h1>Demo sandboxes</h1>
         <p className="mt-1 text-muted-foreground">
-          Prove Wardyn's egress confinement hands-on — a throwaway sandbox with no repo, key, or
-          workspace. Start one, paste the commands into the terminal, and watch the policy hold.
+          Prove Wardyn's confinement hands-on — a throwaway sandbox with no repo or workspace. Start
+          one, run the commands in the attached terminal, and watch the policy hold. The keyless
+          demos need no model; the agent demo (shown once you connect one) runs a real Claude Code
+          agent under the same policy, its model injected proxy-side.
         </p>
       </header>
 
@@ -219,7 +231,7 @@ export function DemoScreen() {
         </div>
       )}
 
-      <DemoRunner barrierReady={barrierReady} loading={loading} />
+      <DemoRunner barrierReady={barrierReady} llmReady={llmReady} loading={loading} demos={visibleDemos} />
     </div>
   );
 }
@@ -228,11 +240,16 @@ export function DemoScreen() {
 // hook. `demos` defaults to the full catalog (override to render a subset).
 export function DemoRunner({
   barrierReady,
+  llmReady = true,
   loading = false,
   onStarted,
   demos = DEMOS,
 }: {
   barrierReady: boolean;
+  /** Optional — callers that only ever pass keyless demos (e.g. the
+   *  Getting-Started per-demo step) can omit it; it's a no-op for them since
+   *  the Start gate below only consults it when demo.needsModel is set. */
+  llmReady?: boolean;
   loading?: boolean;
   onStarted?: (demoId: string) => void;
   demos?: Demo[];
@@ -247,6 +264,7 @@ export function DemoRunner({
           run={runs[demo.id]}
           starting={starting === demo.id}
           barrierReady={barrierReady}
+          llmReady={llmReady}
           loading={loading}
           onStart={() => start(demo)}
           onEnd={(runId) => end(demo, runId)}
@@ -261,6 +279,7 @@ function DemoCard({
   run,
   starting,
   barrierReady,
+  llmReady,
   loading,
   onStart,
   onEnd,
@@ -269,6 +288,7 @@ function DemoCard({
   run?: TrackedRun;
   starting: boolean;
   barrierReady: boolean;
+  llmReady: boolean;
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
@@ -296,6 +316,7 @@ function DemoCard({
         run={run}
         starting={starting}
         barrierReady={barrierReady}
+        llmReady={llmReady}
         loading={loading}
         onStart={onStart}
         onEnd={onEnd}
@@ -324,6 +345,7 @@ export function DemoRunControls({
   run,
   starting,
   barrierReady,
+  llmReady = true,
   loading,
   onStart,
   onEnd,
@@ -332,6 +354,9 @@ export function DemoRunControls({
   run?: TrackedRun;
   starting: boolean;
   barrierReady: boolean;
+  /** Optional (defaults true) — irrelevant unless demo.needsModel is set; see
+   *  DemoRunner's llmReady prop. */
+  llmReady?: boolean;
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
@@ -385,7 +410,7 @@ export function DemoRunControls({
       )}
       <Button
         onClick={onStart}
-        disabled={!barrierReady || loading || starting}
+        disabled={!barrierReady || (demo.needsModel && !llmReady) || loading || starting}
         data-testid={`demo-start-${demo.id}`}
       >
         {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}

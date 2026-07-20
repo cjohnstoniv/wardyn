@@ -87,18 +87,18 @@ export const CAPABILITY = {
   // injected proxy-side (it never enters the sandbox), so never pair this line
   // with mint/TTL claims there. cloud_sts can't be minted at all (needs SPIRE).
   brokerLine:
-    "The agent works through a short-lived, scoped credential — your stored key stays in Wardyn.",
+    "The run works through a short-lived, scoped credential — your stored key stays in Wardyn.",
   // Honest exception: a git PAT grant is injected into git INSIDE the sandbox as
-  // the credential, so the agent's process can read it. Screens rendering a
+  // the credential, so whatever's running there can read it. Screens rendering a
   // git_pat grant must use THIS line, not brokerLine.
   gitPatLine:
-    "A git access token is handed to git inside the sandbox — the agent's process can read it.",
+    "A git access token is handed to git inside the sandbox — the process running there can read it.",
   // Honest exception (same shape as gitPatLine): an ssh_key grant writes a
   // RESIDENT private key file for the sandbox's git-over-SSH client to read —
   // git's SSH transport has no credential-helper seam, so the key can't be
   // proxy-injected or brokered like github_token.
   sshKeyLine:
-    "A private SSH key is written to disk in the sandbox — the agent's process can read it.",
+    "A private SSH key is written to disk in the sandbox — the process running there can read it.",
 } as const;
 
 // Risk grades (D8) — deterministic, computed by Wardyn's rules (not the model).

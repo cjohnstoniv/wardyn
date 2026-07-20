@@ -80,7 +80,7 @@ export function SetupLayout({
       <header className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1>Getting started</h1>
-          <p className="mt-1 text-muted-foreground">Let agents work while you keep your keys.</p>
+          <p className="mt-1 text-muted-foreground">Governed sandboxes for anything you run — keep your keys.</p>
         </div>
         <Button variant="ghost" size="sm" onClick={() => setShowIntro((s) => !s)}>
           <Eye className="size-4" aria-hidden />

@@ -9,6 +9,15 @@
 // existing POST /api/v1/runs (interactive + inline_policy); the operator drives
 // plain curl in the attached terminal and watches the policy hold. All four are
 // CC1 / auto-stop 900s / no grants / no mounts / no repos by construction.
+//
+// A fifth, harness-aware demo (needsModel:true) rounds out the set: same CC1 /
+// no-grants / no-mounts / no-repos confinement and the same interactive idle
+// sandbox, but egress is scoped to Anthropic's API and the operator runs a REAL
+// Claude Code agent (`claude`) in the attached terminal — authenticating through
+// the connected model, injected proxy-side. Wardyn governs any workload — a
+// coding agent is the flagship case, not the only one — so this demo is gated on
+// a connected model (demo-screen.tsx) and shown alongside, never instead of, the
+// keyless four (which stay entirely LLM-free).
 import type { RunPolicySpec } from "../../../lib/types";
 import { lsGet, lsSet } from "../../../lib/storage";
 
@@ -54,6 +63,11 @@ export interface Demo {
   steps: DemoStep[];
   /** How you'd set up a sandbox like this yourself (New Run wizard steps). */
   setupUi: string[];
+  /** True only for the harness demo — needs a connected model; demo-screen.tsx
+   *  hides the card entirely (and gates Start) until llmReady. Like every demo it
+   *  comes up idle for the operator to drive — here they run the agent CLI in the
+   *  attached terminal (which is what makes "watch it live" honest). */
+  needsModel?: boolean;
 }
 
 // policyToYaml renders a demo's inline_policy as a compact YAML block — the same
@@ -206,6 +220,36 @@ export const DEMOS: Demo[] = [
       "Under Access → Egress, toggle 'Allow all egress' ON.",
       "The cloud-metadata + private-range blocks are not user-configurable — they always apply.",
       "Launch interactive, reach a public host, then try 169.254.169.254 and a 192.168.x.x address.",
+    ],
+  },
+  {
+    id: "agent-in-the-box",
+    title: "The agent in the box",
+    teaches: "The flagship path: run a real coding agent in the terminal, bound by the exact same policy primitives as the demos above.",
+    overview:
+      "Every demo above proved the policy holds against a human at a terminal. This one hands you the same terminal to run a real Claude Code agent: it reaches Anthropic's API to think, and nothing else — the same default-deny-plus-allowlist confinement, now doing the job Wardyn actually exists for. It uses the model you connected in setup, injected proxy-side (never resident in the sandbox). A run doesn't have to be an agent at all — Wardyn governs any sandboxed workload — but this is the flagship case, so it gets its own demo.",
+    policy: {
+      allowed_domains: ["api.anthropic.com", "*.anthropic.com"],
+      first_use_approval: "always_deny",
+      ...SHARED,
+    },
+    needsModel: true,
+    steps: [
+      {
+        cmd: "claude -p 'Write HELLO.md summarizing, in a few sentences, what a governed sandbox is and why restricting egress matters'",
+        text: "Attach the terminal and run a one-shot agent task — watch Claude Code work live inside the sandbox, authenticating through your connected model (injected proxy-side).",
+      },
+      {
+        cmd: "curl -sSI https://example.com",
+        text: "The same policy still holds against the agent's box: any host off the allowlist is refused. The agent can reach api.anthropic.com to think and nothing else.",
+      },
+      { text: "Open the Audit panel below the terminal — every egress decision (allowed to Anthropic, denied elsewhere) is on the record, attributed to the run." },
+    ],
+    setupUi: [
+      "First connect a model (Getting started → Model/Harness Provider) — this demo only appears once one is connected.",
+      "New Run → pick the Fence (CC1) barrier.",
+      "Under Access → Egress, allow only api.anthropic.com and *.anthropic.com.",
+      "Launch interactive, attach the terminal, and run `claude` yourself.",
     ],
   },
 ];
