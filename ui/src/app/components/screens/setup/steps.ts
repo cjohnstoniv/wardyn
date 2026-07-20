@@ -116,6 +116,10 @@ export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
 // Essentials and two Finish steps). Exported so the layout and its test share
 // one list instead of each hardcoding the same membership.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
+  // A model/harness provider is OPTIONAL — it's only needed for the AI Composer
+  // or a managed agent harness. A run works with no model (you drive it, or bring
+  // your own container), so the barrier (Environment) is the sole hard requirement.
+  "provider",
   ...DEMO_STEP_IDS,
   "host_proxy",
   "scm_provider",
@@ -178,7 +182,7 @@ export function stepBadges(
       : { text: "Needs setup", tone: "warning" },
     provider: r.llmReady
       ? { text: r.llmLabel ? `Ready · ${r.llmLabel}` : "Ready", tone: "success" }
-      : { text: "Needs setup", tone: "warning" },
+      : { text: "Optional", tone: "neutral" },
     ...demoBadges,
     host_proxy: siteConfigBadge(siteConfig, "host_proxy"),
     scm_provider: siteConfigBadge(siteConfig, "scm_provider"),
@@ -202,20 +206,20 @@ export function stepBadges(
     credentials: { text: "Optional", tone: "neutral" },
     // Review rolls up every check. It's "warning" only when a real blocker exists
     // (a failing check), else a neutral/green summary — the readiness verdict, not
-    // a per-topic nag (those live on their own steps now).
-    // "Essentials" = a barrier AND a connected model — the same pair canLaunch
-    // and the fast-path banner gate on. Backend `ready` alone is barrier-only
-    // (setup.go), so it must never claim launch-readiness by itself.
+    // a per-topic nag (those live on their own steps now). The one hard requirement
+    // is the BARRIER (backend `ready`); a model is optional, so it never blocks the
+    // "ready" verdict here (the fast-path banner still needs one — it advertises a
+    // one-click run — but that's a nudge, not a gate).
     review: status.checks.some((c) => c.status === "fail")
       ? { text: "Needs attention", tone: "warning" }
-      : r.ready && r.llmReady
-        ? { text: "All essentials ready", tone: "success" }
-        : { text: "Review what's left", tone: "neutral" },
+      : r.ready
+        ? { text: "Ready to launch", tone: "success" }
+        : { text: "Set up the barrier first", tone: "neutral" },
     launch: status.has_runs
       ? { text: "First run launched", tone: "success" }
-      : r.ready && r.llmReady
+      : r.ready
         ? { text: "Ready to launch", tone: "success" }
-        : { text: "Set up the essentials first", tone: "neutral" },
+        : { text: "Set up the barrier first", tone: "neutral" },
   };
 }
 
@@ -254,7 +258,9 @@ export function stepDone(
     // advisory-only — a git PAT/GitHub App never earns it a checkmark, so it can
     // never visually imply it's required or that it gates readiness.
     credentials: false,
-    review: r.ready && r.llmReady && !status.checks.some((c) => c.status === "fail"),
+    // Barrier is the only hard requirement; a model is optional (skippable), so
+    // Review is done once the barrier is up and no check is failing.
+    review: r.ready && !status.checks.some((c) => c.status === "fail"),
     launch: status.has_runs,
   };
 }

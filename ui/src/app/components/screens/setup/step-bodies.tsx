@@ -1045,10 +1045,11 @@ export function LaunchStep({
           </p>
         ) : (
           !llmReady && (
-            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-xs leading-snug text-warning">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              No model connected yet — an interactive run still works (you drive it over an attached
-              terminal); connect a model for autonomous task runs.
+            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs leading-snug text-muted-foreground">
+              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              No model connected — that's fine. Run a plain governed command (bring your own
+              container), or drive an interactive run yourself over an attached terminal. A model is
+              only needed to run an agent under Wardyn's harness or for the AI Composer.
             </p>
           )
         )}

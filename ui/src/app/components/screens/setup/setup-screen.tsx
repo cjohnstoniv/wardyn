@@ -38,14 +38,14 @@ import {
   ScmProviderStep,
   WorkspacesStep,
 } from "./step-bodies";
-import { DEMO_STEP_IDS, stepBadges, stepDone, type SetupStepId } from "./steps";
+import { DEMO_STEP_IDS, STEP_ORDER, stepBadges, stepDone, type SetupStepId } from "./steps";
 import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 
 // The dismiss flag and the auto-open decision live in ./setup-gate so App.tsx
 // can import them without pulling this module's terminal-heavy graph into the
 // entry chunk. Re-exported here: this is still their public home.
 export { dismissSetup, setupDismissed, shouldOpenSetup } from "./setup-gate";
-import { dismissSetup } from "./setup-gate";
+import { dismissSetup, markModelSkipped, modelSkipped } from "./setup-gate";
 
 // Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.
 // Lazy-load it so that terminal-heavy graph stays out of the setup chunk until
@@ -71,6 +71,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [launchedDemos, setLaunchedDemos] = React.useState<Set<string>>(
     () => new Set(loadLaunchedDemos()),
   );
+  // The operator explicitly skipped the (optional) model/harness step — earns it a
+  // checkmark without a connected model. Per-browser (setup-gate); a real model
+  // supersedes it.
+  const [skippedModel, setSkippedModel] = React.useState(modelSkipped());
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [wsLoading, setWsLoading] = React.useState(true);
@@ -214,6 +218,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       badges[id] = { text: "Done · demo run", tone: "success" };
     }
   }
+  // An explicitly-skipped (optional) model step earns its checkmark — a deliberate
+  // "no model" decision reads as done, not as an unfinished "Optional". A real
+  // connected model (llmReady) always wins and shows its own "Ready" badge.
+  if (!readiness.llmReady && skippedModel) {
+    done.provider = true;
+    badges.provider = { text: "Skipped", tone: "neutral" };
+  }
 
   return (
     <>
@@ -247,10 +258,19 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           <ModelStep
             status={status}
             readiness={readiness}
+            skipped={skippedModel}
             onAddSecret={openAddSecret}
             onSetup={setGuide}
             onRecheck={recheck}
             rechecking={rechecking}
+            onSkip={() => {
+              markModelSkipped();
+              setSkippedModel(true);
+              // Advance past the (now-decided) optional step.
+              const i = STEP_ORDER.indexOf("provider");
+              const nextStep = STEP_ORDER[i + 1];
+              if (nextStep) setStepId(nextStep);
+            }}
           />
         )}
         {DEMOS.some((d) => d.id === stepId) && (

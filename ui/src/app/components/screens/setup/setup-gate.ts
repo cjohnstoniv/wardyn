@@ -27,6 +27,22 @@ export function dismissSetup(): void {
   lsSet(DISMISS_KEY, "1");
 }
 
+// Model-skip flag — the operator explicitly chose to set up NO model/harness
+// provider (they'll bring their own container, or drive an interactive run). It
+// earns the provider step its checkmark without a connected model, so a skipped
+// provider reads as a deliberate decision rather than an unfinished "Optional".
+// Per-browser (like the dismiss + onboarding-seen flags); a real connected model
+// makes it moot. Cleared automatically once llmReady, so reconnecting supersedes.
+const MODEL_SKIPPED_KEY = "wardyn-model-skipped";
+
+export function modelSkipped(): boolean {
+  return lsGet(MODEL_SKIPPED_KEY) === "1";
+}
+
+export function markModelSkipped(): void {
+  lsSet(MODEL_SKIPPED_KEY, "1");
+}
+
 // Pure decision helper (unit-testable, and used verbatim by App.tsx): guide the
 // operator into "Getting started" on a fresh, local, single-operator console.
 // `ready` means runs *can* launch on this host — NOT that the operator has been

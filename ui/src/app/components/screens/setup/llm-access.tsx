@@ -149,17 +149,24 @@ function ProviderFamily({
 export function ModelStep({
   status,
   readiness,
+  skipped,
   onAddSecret,
   onSetup,
   onRecheck,
   rechecking,
+  onSkip,
 }: {
   status: SetupStatus;
   readiness: Readiness;
+  // The operator explicitly skipped this optional step (setup-screen state).
+  skipped?: boolean;
   onAddSecret: (name: string) => void;
   onSetup: (g: SetupGuide) => void;
   onRecheck: () => void;
   rechecking: boolean;
+  // Mark the (optional) model step decided-as-skipped and advance. Absent in
+  // contexts that don't offer skipping (e.g. a standalone render).
+  onSkip?: () => void;
 }) {
   // Guidance for the most common first-run snag: a personal machine running the
   // sealed (compose/team) control plane, which can't see the host's Claude login —
@@ -433,8 +440,25 @@ export function ModelStep({
       <p className="text-sm leading-relaxed text-muted-foreground">
         {readiness.llmReady
           ? `One connected path is enough — you're already covered by ${readiness.llmLabel || "a connected model"}.`
-          : "Wardyn needs a way for the agent to talk to an LLM — a stored API key the proxy injects, or a resident CLI subscription."}
+          : "Optional. A model/harness is only needed to run an agent under Wardyn's own harness, or to enable the AI Run Composer. Skip it if you'll bring your own container/agent, or drive an interactive run yourself. Connect one below with a stored API key (proxy-injected), a Claude subscription, or Bedrock."}
       </p>
+
+      {/* Explicit skip for the optional step — a deliberate "no model" decision,
+          not an unfinished gap. A real connected model supersedes it. */}
+      {!readiness.llmReady && onSkip && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {skipped
+              ? "Model skipped — runs will bring their own agent/container (or you drive them). Connect a provider below anytime to change that."
+              : "Don't need a model here? Skip — you can bring your own container/agent or connect one later."}
+          </p>
+          {!skipped && (
+            <Button size="sm" variant="outline" onClick={onSkip}>
+              Skip — run without a model
+            </Button>
+          )}
+        </div>
+      )}
 
       {suggestHostMode && !managedCred && (
         <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/40 p-3">

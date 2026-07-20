@@ -212,26 +212,42 @@ describe("workspaces badge — honest partial counts", () => {
   });
 });
 
-describe("review/launch essentials gate — barrier alone never claims launch-readiness", () => {
-  it("barrier-only host: review 'Review what's left', launch 'Set up the essentials first'", () => {
-    // backend ready=true is barrier-only (setup.go); no model connected.
+describe("review/launch gate — the BARRIER is the only hard requirement; a model is optional", () => {
+  it("barrier-only host (no model): review + launch already claim launch-readiness", () => {
+    // backend ready=true is barrier-only (setup.go); no model connected — and that
+    // is enough: a plain governed run / interactive run needs no model.
     const status = baseStatus({ ready: true });
     const r = deriveReadiness(status);
     const badges = stepBadges(status, r, [], null);
-    expect(badges.review).toEqual({ text: "Review what's left", tone: "neutral" });
-    expect(badges.launch).toEqual({ text: "Set up the essentials first", tone: "neutral" });
+    expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
+    expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
+    expect(stepDone(status, r, [], null).review).toBe(true);
+  });
+
+  it("no barrier: review/launch nudge to set up the barrier first (the one requirement)", () => {
+    const status = baseStatus({ ready: false, runner: { driver: "none", confinement_classes: [] } });
+    const r = deriveReadiness(status);
+    const badges = stepBadges(status, r, [], null);
+    expect(badges.review).toEqual({ text: "Set up the barrier first", tone: "neutral" });
+    expect(badges.launch).toEqual({ text: "Set up the barrier first", tone: "neutral" });
     expect(stepDone(status, r, [], null).review).toBe(false);
   });
 
-  it("barrier + connected model: the success texts + review done", () => {
+  it("a connected model is a bonus, not a gate: same success texts as barrier-only", () => {
     const status = baseStatus({
       ready: true,
       providers: [{ tool: "claude", installed: true, logged_in: true }],
     });
     const r = deriveReadiness(status);
     const badges = stepBadges(status, r, [], null);
-    expect(badges.review).toEqual({ text: "All essentials ready", tone: "success" });
+    expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
     expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
     expect(stepDone(status, r, [], null).review).toBe(true);
+  });
+
+  it("provider step is Optional (neutral), never a 'Needs setup' warning, when no model", () => {
+    const status = baseStatus({ ready: true });
+    const r = deriveReadiness(status);
+    expect(stepBadges(status, r, [], null).provider).toEqual({ text: "Optional", tone: "neutral" });
   });
 });

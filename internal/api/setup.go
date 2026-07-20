@@ -718,10 +718,15 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			Detail: llmDetail,
 		})
 	} else {
+		// INFO, not a warning: a model/harness provider is OPTIONAL. It's only
+		// needed to run an agent under Wardyn's own harness or to enable the AI Run
+		// Composer — a plain governed run (bring-your-own-container / task_mode=exec,
+		// or an interactive run you drive) needs no model. So "no model" is a
+		// deliberate, non-blocking state, never a gap the operator must clear.
 		checks = append(checks, SetupCheck{
-			ID: "llm_provider", Label: "LLM access", Status: "warn",
-			Detail: "No coding-agent CLI (claude/codex) login and no LLM API key detected; runs will have no model access.",
-			Fix:    "Log in to the Claude or Codex CLI on the host, or add an LLM API key secret (and reference it from a composer backend).",
+			ID: "llm_provider", Label: "LLM access", Status: "info",
+			Detail: "No model/harness provider configured (optional): needed only for agent-harness runs or the AI Run Composer. Bring-your-own-container and interactive runs work without one.",
+			Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Getting Started → Model), or bind creds to a workspace/container.",
 		})
 	}
 

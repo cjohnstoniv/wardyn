@@ -295,21 +295,21 @@ describe("step-bodies.tsx — smoke", () => {
     );
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeDisabled();
     expect(screen.getByText(/a sandbox barrier is required first/i)).toBeInTheDocument();
-    expect(screen.queryByText(/no model connected yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no model connected/i)).not.toBeInTheDocument();
 
     // Barrier up, no model → ENABLED + the amber "no model connected" notice.
     rerender(
       <LaunchStep status={baseStatus()} onLaunch={vi.fn()} onOpenRuns={vi.fn()} canLaunch llmReady={false} />,
     );
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeEnabled();
-    expect(screen.getByText(/no model connected yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no model connected/i)).toBeInTheDocument();
 
     // Barrier up + model connected → ENABLED, no notice.
     rerender(
       <LaunchStep status={baseStatus()} onLaunch={vi.fn()} onOpenRuns={vi.fn()} canLaunch llmReady />,
     );
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeEnabled();
-    expect(screen.queryByText(/no model connected yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no model connected/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/a sandbox barrier is required first/i)).not.toBeInTheDocument();
   });
 
@@ -338,7 +338,7 @@ describe("step-bodies.tsx — smoke", () => {
     );
   });
 
-  it("ModelStep renders 'Refresh detection' and never the composer section", () => {
+  it("ModelStep renders 'Refresh detection' and never the composer-BACKENDS config UI", () => {
     const status = baseStatus();
     render(
       <ModelStep
@@ -351,6 +351,10 @@ describe("step-bodies.tsx — smoke", () => {
       />,
     );
     expect(screen.getByText("Refresh detection")).toBeInTheDocument();
-    expect(screen.queryByText(/composer/i)).not.toBeInTheDocument();
+    // The composer-backends CONFIG UI was dropped by owner decision (LLM access
+    // only). Referencing the AI Run Composer in prose as a REASON to connect a
+    // model is fine; what must never appear is the backend-config surface.
+    expect(screen.queryByText(/composer backend/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /composer/i })).not.toBeInTheDocument();
   });
 });
