@@ -67,12 +67,15 @@ describe("PhaseRail", () => {
     }
   });
 
-  it("corporate group is collapsed by default but auto-expands when current is inside it", () => {
-    const collapsed = renderRail("environment");
-    expect(collapsed.queryByRole("button", { name: /host proxy/i })).not.toBeInTheDocument();
-
-    const expanded = renderRail("host_proxy");
-    expect(expanded.getByRole("button", { name: /host proxy/i })).toBeInTheDocument();
+  // The corporate-network steps used to be their own collapsible group. They now
+  // live inside Essentials (before the model step) because they're prerequisites —
+  // connecting a model and running the demos both need egress. So they are always
+  // visible, never behind an expander.
+  it("shows the corporate-network steps inline in Essentials, with no expander to open", () => {
+    const rail = renderRail("environment");
+    expect(rail.getByRole("button", { name: /host proxy/i })).toBeInTheDocument();
+    expect(rail.getByRole("button", { name: /artifact redirect/i })).toBeInTheDocument();
+    expect(rail.queryByRole("button", { name: /^corporate network$/i })).not.toBeInTheDocument();
   });
 
   it("clicking a step button calls onSelect with its id", async () => {
@@ -83,18 +86,21 @@ describe("PhaseRail", () => {
     expect(onSelect).toHaveBeenCalledWith("scm_provider");
   });
 
-  it('renders "2/2" for the essentials phase counter once both its steps are done', () => {
+  it('counts the essentials phase honestly now that it carries the corporate steps', () => {
     const rail = renderRail("environment");
-    expect(rail.getByText("2/2")).toBeInTheDocument();
+    // Essentials = environment + host_proxy + artifact_repo + provider. The
+    // fixture has environment + provider done, the two corporate steps not.
+    expect(rail.getByText("2/4")).toBeInTheDocument();
   });
 
   it('all-optional phases read "all optional", never a counter that cannot fill', () => {
     const rail = renderRail("environment");
-    // Three phases are made only of optional steps and so read "all optional":
-    // Demos (single optional step), the corporate group, and "Your work"
-    // (scm/workspaces/credentials — credentials is done-pinned false by the
-    // honesty law, so a 0/3 counter there could structurally never reach 3/3).
-    expect(rail.getAllByText("all optional")).toHaveLength(3);
+    // Two phases are made only of optional steps and so read "all optional":
+    // Demos, and "Your work" (scm/credentials/workspaces — credentials is
+    // done-pinned false by the honesty law, so a 0/3 counter there could
+    // structurally never reach 3/3). Essentials no longer qualifies: it contains
+    // the one hard requirement (environment).
+    expect(rail.getAllByText("all optional")).toHaveLength(2);
     expect(rail.queryByText("0/3")).not.toBeInTheDocument();
     expect(rail.getByText("0/2")).toBeInTheDocument(); // Finish still counts
   });

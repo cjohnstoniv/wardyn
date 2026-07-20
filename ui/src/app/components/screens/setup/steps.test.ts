@@ -178,19 +178,25 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
   });
 
-  it("pins STEP_ORDER to the phase walk (demos + corporate network before your work)", () => {
+  // Prerequisite ordering, twice over:
+  //  · the corporate-network steps sit INSIDE Essentials, BEFORE the model step —
+  //    connecting a model needs egress, and the demos need it too, so meeting them
+  //    later turns an unconfigured proxy into an apparent Wardyn failure.
+  //  · within Your work, credentials precede workspaces — onboarding a private
+  //    repo needs the git credential to clone.
+  it("pins STEP_ORDER to the phase walk (prerequisites first: proxy before model, credentials before workspaces)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
+      "host_proxy",
+      "artifact_repo",
       "provider",
       "sealed-box",
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
-      "host_proxy",
-      "artifact_repo",
       "scm_provider",
-      "workspaces",
       "credentials",
+      "workspaces",
       "review",
       "launch",
     ]);

@@ -88,23 +88,32 @@ export interface PhaseDef {
   collapsible?: boolean;
 }
 
-// Walk order: essentials → demos → corporate network → your work → finish.
-// After the essentials (barrier + model), Demos lets a first-timer SEE Wardyn
-// govern a throwaway sandbox before investing in their own repos; the niche
-// corporate-network steps (a quick opt-out for everyone else) come next so a
-// corporate operator wires proxy/mirror BEFORE onboarding workspaces; then their
-// actual work. Step ids/labels above remain frozen — only the phase composition
-// (and therefore STEP_ORDER) moves.
+// Walk order: essentials → demos → your work → finish.
+//
+// The two corporate-network steps live INSIDE Essentials, before the model step,
+// rather than in their own collapsible section. Reason: they are prerequisites for
+// the things that follow, not a niche detour. Connecting a model/harness needs
+// egress (you cannot reach Anthropic/OpenAI/AWS through an unconfigured corporate
+// proxy), and every demo launches a real sandbox that must reach the network — so
+// an operator behind a proxy who meets those later would read an environmental
+// failure as "Wardyn is broken". Both stay in OPTIONAL_STEPS, so everyone else
+// clicks straight past them exactly like the (optional) model step.
+// Step ids/labels above remain frozen — only the phase composition (and therefore
+// STEP_ORDER) moves.
 export const PHASES: PhaseDef[] = [
-  { id: "essentials", label: "Essentials", steps: ["environment", "provider"] },
-  { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
   {
-    id: "corporate",
-    label: "Corporate network",
-    steps: ["host_proxy", "artifact_repo"],
-    collapsible: true,
+    id: "essentials",
+    label: "Essentials",
+    steps: ["environment", "host_proxy", "artifact_repo", "provider"],
   },
-  { id: "work", label: "Your work", steps: ["scm_provider", "workspaces", "credentials"] },
+  { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
+  // Within Your work, SCM provider + credentials precede Workspaces for the same
+  // prerequisite reason: onboarding a PRIVATE repo needs the git credential to
+  // clone, so meeting Credentials after Workspaces means hitting an auth failure
+  // that reads as a Wardyn bug. Credentials stays here (not in Essentials) because
+  // nothing earlier needs it — the model step uses model credentials, and the
+  // demos are deliberately keyless.
+  { id: "work", label: "Your work", steps: ["scm_provider", "credentials", "workspaces"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
 ];
 

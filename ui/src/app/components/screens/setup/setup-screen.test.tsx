@@ -185,8 +185,21 @@ describe("SetupScreen", () => {
     expect(screen.queryByText("gVisor runtime")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^back$/i })).toBeDisabled();
 
+    // The corporate-network steps sit inside Essentials, BEFORE the model step:
+    // connecting a model needs egress, and so do the demos, so an unconfigured
+    // proxy met later would read as a Wardyn failure.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument(); // provider (family group)
+    expect(
+      await screen.findByRole("heading", { name: /corporate host proxy/i }),
+    ).toBeInTheDocument(); // host_proxy
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
+    ).toBeInTheDocument(); // artifact_repo
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByText("Choose your agent harness")).toBeInTheDocument(); // provider (harness-first)
 
     // The four Demos sub-steps — each renders one demo (heading = its title). The
     // first also proves the lazily-loaded detail body mounts (its setup section).
@@ -204,24 +217,17 @@ describe("SetupScreen", () => {
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
-      await screen.findByRole("heading", { name: /corporate host proxy/i }),
-    ).toBeInTheDocument(); // host_proxy (corporate network now precedes your work)
-
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(
-      await screen.findByRole("heading", { name: /artifact registry redirection/i }),
-    ).toBeInTheDocument(); // artifact_repo
-
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(
       await screen.findByRole("heading", { name: /source control provider/i }),
     ).toBeInTheDocument(); // scm_provider (your work starts here now)
 
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces
-
+    // credentials precedes workspaces: onboarding a PRIVATE repo needs the git
+    // credential to clone, so meeting it afterwards would be an auth failure that
+    // reads as a Wardyn bug.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText("GitHub App")).toBeInTheDocument(); // credentials
+
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     // review step — the consolidated readiness rollup + the checks that used to
@@ -259,15 +265,8 @@ describe("SetupScreen", () => {
     render(<SetupScreen onDone={() => {}} />);
 
     await screen.findByText("Fence");
-    // Walk the reordered funnel to host_proxy: provider → the four Demos sub-steps
-    // → host_proxy (corporate network now sits right after Demos, before Your Work).
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> provider
-    await screen.findByText("Claude / Anthropic");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> sealed-box
-    await screen.findByRole("heading", { name: /the sealed box/i });
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> fail-then-approve
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> held-at-the-door
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> lines-that-cant-be-crossed
+    // host_proxy is now the SECOND step (inside Essentials, right after the
+    // barrier) — one Next away, not on the far side of the demos.
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
     expect(
       await screen.findByRole("heading", { name: /corporate host proxy/i }),
@@ -299,7 +298,6 @@ describe("SetupScreen", () => {
     // the collapsible "Corporate network" phase, collapsed by default — expand it so
     // their buttons (with their badges) render in the nav.
     const nav = screen.getByRole("navigation", { name: /setup steps/i });
-    await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
     // Every check the backend reports for these three ids stays "info" (never
     // "ok") — the rail badge must not depend on that to say "Configured".
     const hostProxyBtn = await within(nav).findByRole("button", { name: /host proxy/i });
@@ -318,7 +316,6 @@ describe("SetupScreen", () => {
     // Scope to the full-rail nav (both rail variants render in jsdom) and expand the
     // collapsed "Corporate network" phase so Host Proxy / Artifact Redirect render.
     const nav = screen.getByRole("navigation", { name: /setup steps/i });
-    await user.click(within(nav).getByRole("button", { name: /corporate network/i }));
     const hostProxyBtn = await within(nav).findByRole("button", { name: /host proxy/i });
     const scmBtn = within(nav).getByRole("button", { name: /scm provider/i });
     const artifactBtn = within(nav).getByRole("button", { name: /artifact redirect/i });
@@ -342,44 +339,33 @@ describe("SetupScreen", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it("the fast path appears only when the host reports ready, and its launch opens the run dialog", async () => {
+  // The fast-path banner was REMOVED (it duplicated the Launch step and talked
+  // over the step being configured). Launching early still works — from the
+  // Launch step — so that behavior keeps its coverage here.
+  it("no fast-path banner renders even when ready with a model connected", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
     );
     render(<SetupScreen onDone={() => {}} />);
-    // Banner renders only when genuinely ready AND a model is connected.
-    expect(await screen.findByText(/you're ready — launch your first run now/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^launch your first run$/i }));
-    // The banner's launch now OPENS NewRunDialog (not a jump to the launch step).
+    await screen.findByText("Fence"); // render settled
+    expect(screen.queryByText(/you're ready — launch your first run now/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /keep setting up/i })).not.toBeInTheDocument();
+  });
+
+  it("the Launch step's CTA opens the run dialog", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+    );
+    render(<SetupScreen onDone={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: /^Launch —/ }));
+    await user.click(
+      (await screen.findAllByRole("button", { name: /^launch your first run$/i }))[0],
+    );
     // The composer is off in this build, so the dialog opens straight into the
     // manual wizard — assert on its dialog description.
     expect(
       await screen.findByText(/compose the agent's permission envelope/i),
     ).toBeInTheDocument();
-  });
-
-  it("the fast path is HIDDEN when a barrier is up but no model is connected (honesty)", async () => {
-    // ready (a barrier is present) but NO real LLM path: only a fake composer
-    // backend, no CLI login, no key. The "you're ready — launch, a model is
-    // connected" banner must NOT render (that fallback would fabricate a model).
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({
-        ready: true,
-        providers: [{ tool: "claude", installed: true, logged_in: false }],
-        composer: {
-          enabled: true,
-          default: "dev",
-          backends: [
-            { name: "dev", provider: "fake", model: "demo", wire: "fake", enabled: true, needs_key: false, key_resolved: true },
-          ],
-        },
-        secrets: { present: [], github_app: false },
-      }),
-    );
-    render(<SetupScreen onDone={() => {}} />);
-    await screen.findByText("Fence"); // render settled
-    expect(screen.queryByText(/you're ready — launch your first run now/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/a model is connected/i)).not.toBeInTheDocument();
   });
 
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
@@ -439,12 +425,15 @@ describe("SetupScreen", () => {
   it("provider step's Add-key button opens AddSecretDialog", async () => {
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
-    // Unconfigured Anthropic collapses into the family's "Add Anthropic API key"
-    // set-up affordance; clicking it opens the AddSecretDialog.
-    await screen.findByText("Claude / Anthropic");
-    await user.click(screen.getByRole("button", { name: /add anthropic api key/i }));
+    // Claude Code is the default harness; unconfigured Anthropic shows an "Add
+    // Anthropic API key" set-up affordance; clicking it opens the AddSecretDialog.
+    await screen.findByText("Choose your agent harness");
+    await user.click(screen.getByRole("button", { name: /set up anthropic api key/i }));
     expect(await screen.findByText(/^add secret$/i)).toBeInTheDocument();
   });
 
@@ -458,12 +447,16 @@ describe("SetupScreen", () => {
     );
     const { unmount } = render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
-    // The banner now offers container login as the first-class fix (attach works
-    // via a minted ticket; the old "coming-soon team feature" copy is gone). The
-    // banner's button is the exact-named one; the family option adds a suffix.
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
+    // Claude Code is the default harness; on a sealed compose box with nothing
+    // connected it offers container login as the reachable fix (the sealed hint +
+    // the credential-named "Set up Claude subscription" option, which opens it).
+    await screen.findByText("Choose your agent harness");
     expect(
-      await screen.findByRole("button", { name: /^connect via container login$/i }),
+      await screen.findByRole("button", { name: /set up claude subscription/i }),
     ).toBeInTheDocument();
     unmount();
 
@@ -476,43 +469,74 @@ describe("SetupScreen", () => {
     );
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
-    await screen.findByText("Claude / Anthropic");
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
+    await screen.findByText("Choose your agent harness");
     expect(screen.queryByText("coming-soon team feature")).not.toBeInTheDocument();
   });
 
-  // Model/Harness Provider — detection-driven family grouping (owner ask) --------
+  // Model/Harness Provider — harness-first "choose, then connect" flow -----------
 
-  it("groups model providers into Claude/Anthropic and OpenAI/Codex families, showing detected rows + set-up affordances", async () => {
+  it("lets the operator choose a harness, revealing only that harness's connection methods", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
     );
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
-    // Both families render as groups.
-    expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument();
-    expect(screen.getByText("OpenAI / Codex")).toBeInTheDocument();
-    // Detected (present secret) -> a full configured row for that family.
+    // Level 1: the three harness cards.
+    expect(await screen.findByText("Choose your agent harness")).toBeInTheDocument();
+    expect(screen.getByText("Claude Code")).toBeInTheDocument();
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("No model / bring your own")).toBeInTheDocument();
+
+    // Claude Code is the default selection (anthropic-api-key present -> connected):
+    // its Anthropic API key row and the Bedrock set-up show; Codex methods do NOT.
     expect(screen.getByText("Anthropic API key")).toBeInTheDocument();
-    // Undetected in the SAME family stays a compact set-up option, not a full row.
     expect(screen.getByRole("button", { name: /set up aws bedrock/i })).toBeInTheDocument();
-    // The OpenAI/Codex family (nothing detected) leads with its set-up options.
-    expect(screen.getByRole("button", { name: /add openai api key/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /set up openai api key/i })).not.toBeInTheDocument();
+
+    // Pick Codex -> its methods appear; Claude's Bedrock set-up goes away.
+    await user.click(screen.getByText("Codex"));
+    expect(screen.getByRole("button", { name: /set up openai api key/i })).toBeInTheDocument();
+    expect(screen.getByText(/there's no container login/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /set up aws bedrock/i })).not.toBeInTheDocument();
+
+    // Pick No model -> the skip explanation.
+    await user.click(screen.getByText("No model / bring your own"));
+    expect(screen.getByText(/nothing to connect here/i)).toBeInTheDocument();
   });
 
   // Bedrock (Phase 1B) ---------------------------------------------------------
 
-  it("provider step offers AWS Bedrock as a Set-up option when unconfigured, opening AddSecretDialog prefilled", async () => {
+  it("provider step offers AWS Bedrock as a Set-up option when unconfigured, opening AddSecretDialog prefilled with the recommended bearer key", async () => {
     render(<SetupScreen onDone={() => {}} />); // baseStatus() carries no `bedrock` field at all
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
-    // Unconfigured Bedrock collapses into a contextual set-up button (not a full row).
+    // Unconfigured Bedrock collapses into a contextual set-up button; it REVEALS
+    // the three credential modes (bearer / host ~/.aws SSO / static keys) rather
+    // than presuming one and opening its secret dialog.
     await user.click(await screen.findByRole("button", { name: /set up aws bedrock/i }));
+    expect(await screen.findByText("Bearer token")).toBeInTheDocument();
+    expect(screen.getByText("AWS SSO (containerized login)")).toBeInTheDocument();
+    expect(screen.getByText("Host ~/.aws profile")).toBeInTheDocument();
+    expect(screen.getByText("Access keys")).toBeInTheDocument();
+    expect(screen.queryByText(/^add secret$/i)).not.toBeInTheDocument();
+
+    // Choosing the recommended bearer mode is what opens the prefilled dialog.
+    await user.click(screen.getByRole("button", { name: /^add key$/i }));
     expect(await screen.findByText(/^add secret$/i)).toBeInTheDocument();
-    expect(screen.getByDisplayValue("aws-access-key-id")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("bedrock-api-key")).toBeInTheDocument();
   });
 
   it("provider step marks AWS Bedrock ready once region/model/creds are all present, echoing them", async () => {
@@ -534,9 +558,12 @@ describe("SetupScreen", () => {
     );
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
-    expect(await screen.findByText("AWS Bedrock (Claude Code)")).toBeInTheDocument();
+    expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
     expect(screen.getByText(/Bedrock is configured \(region us-east-1/i)).toBeInTheDocument();
     expect(screen.getByText(/us-east-1 · us\.anthropic\.claude-sonnet-4-5-20250929-v1:0/)).toBeInTheDocument();
   });
@@ -563,7 +590,10 @@ describe("SetupScreen", () => {
     );
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // → provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
     expect(await screen.findByText(/NOT staged for sandbox use/)).toBeInTheDocument();
     expect(screen.getByText(/make stage-claude/)).toBeInTheDocument();
@@ -587,9 +617,12 @@ describe("SetupScreen", () => {
     );
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // → provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
-    expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument();
+    expect(await screen.findByText("Choose your agent harness")).toBeInTheDocument();
     expect(screen.queryByText(/staged for sandbox use/)).not.toBeInTheDocument();
   });
 
@@ -659,18 +692,24 @@ describe("SetupScreen", () => {
     );
     render(<SetupScreen onDone={() => {}} />);
     await screen.findByRole("heading", { name: /pick your barrier/i });
-    await user.click(screen.getByRole("button", { name: /^next:/i })); // → provider
+    // Essentials now walks environment -> host_proxy -> artifact_repo -> provider.
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: /^next:/i }));
+    }
 
-    // The provider families still render, and the LLM auth line surfaces verbatim.
-    expect(await screen.findByText("Claude / Anthropic")).toBeInTheDocument();
+    // The provider step renders (Claude default harness) and the LLM auth line
+    // surfaces verbatim on the subscription row.
+    expect(await screen.findByText("Choose your agent harness")).toBeInTheDocument();
     expect(
       screen.getByText("Claude Code CLI w/ Claude subscription — token valid"),
     ).toBeInTheDocument();
-    // But the composer-backends section is gone — no transport/auth provenance and
-    // no "composer" copy anywhere on the step.
-    expect(screen.queryByText(/composer/i)).not.toBeInTheDocument();
+    // The explainer references AI Composer (when a model is REQUIRED), but the
+    // composer-BACKENDS section stays gone — no per-backend transport/auth
+    // provenance rows regardless of the configured backend.
+    expect(screen.getByText("for AI Composer")).toBeInTheDocument();
     expect(screen.queryByText("· api")).not.toBeInTheDocument();
     expect(screen.queryByText("· apikey")).not.toBeInTheDocument();
+    expect(screen.queryByText(/AI Run Composer backends/i)).not.toBeInTheDocument();
   });
 
   // E3 — default barrier tier selection ---------------------------------------
@@ -740,17 +779,4 @@ describe("SetupScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides the fast-path banner when a model is connected but the backend is NOT ready", async () => {
-    // Honesty: fastPath requires readiness.ready AND llmReady — a connected
-    // model alone (e.g. runner missing) must not fabricate the banner.
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({
-        ready: false,
-        providers: [{ tool: "claude", installed: true, logged_in: true }],
-      }),
-    );
-    render(<SetupScreen onDone={() => {}} />);
-    await screen.findByRole("heading", { name: /pick your barrier/i });
-    expect(screen.queryByText(/You're ready — launch your first run now/i)).not.toBeInTheDocument();
-  });
 });

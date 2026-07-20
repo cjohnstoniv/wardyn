@@ -81,6 +81,15 @@ export interface AttachTerminalProps {
    * the terminal unchanged; this is an observer, not an interceptor.
    */
   onOutput?: (chunk: string) => void;
+  /**
+   * Override the COLUMN count reported to the PTY (the resize message), decoupled
+   * from the visual xterm width. The terminal still fits its container for display
+   * (long lines soft-wrap), but the program sees this width — used by the login
+   * flow to force a wide PTY so `claude setup-token` prints the OAuth URL/token on
+   * single lines instead of hard-wrapping them mid-string. Omit for a normal
+   * interactive terminal (PTY width follows the visible size).
+   */
+  ptyCols?: number;
 }
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -101,7 +110,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput },
+  { runId, onClose, autoRun, onOutput, ptyCols },
   ref,
 ) {
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -131,6 +140,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   React.useEffect(() => {
     onOutputRef.current = onOutput;
   }, [onOutput]);
+  // Forced PTY width (login flow) — kept in a ref so refit (deps []) reads the
+  // current value without re-running the connect effect.
+  const ptyColsRef = React.useRef(ptyCols);
+  React.useEffect(() => {
+    ptyColsRef.current = ptyCols;
+  }, [ptyCols]);
 
   // Imperative "type this into the PTY" — lets a parent bridge a normal input
   // field to the terminal's stdin (e.g. paste an OAuth code without needing the
@@ -158,7 +173,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       return;
     }
     if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      // ptyCols (when set) widens what the PROGRAM sees without changing the visual
+      // fit — the login flow forces this so claude setup-token doesn't wrap the URL.
+      const cols = ptyColsRef.current && ptyColsRef.current > term.cols ? ptyColsRef.current : term.cols;
+      ws.send(JSON.stringify({ type: "resize", cols, rows: term.rows }));
     }
   }, []);
 

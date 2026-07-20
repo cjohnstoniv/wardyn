@@ -21,7 +21,6 @@ function renderLayout(overrides: Partial<ComponentProps<typeof SetupLayout>> = {
     onFinish: vi.fn(),
     onLaunch: vi.fn(),
     canLaunch: true,
-    fastPath: false,
     children: <div>step body</div>,
     ...overrides,
   };
@@ -43,24 +42,23 @@ describe("SetupLayout", () => {
     expect(screen.queryByText("Optional")).not.toBeInTheDocument();
   });
 
-  it("footer renders 'Next: Model/Harness Provider' on the environment step and calls onSelect(\"provider\")", async () => {
+  // Host Proxy now directly follows Environment: the corporate-network steps moved
+  // into Essentials ahead of the model step, because connecting a model needs egress.
+  it("footer renders 'Next: Host Proxy' on the environment step and calls onSelect(\"host_proxy\")", async () => {
     const onSelect = vi.fn();
     renderLayout({ current: "environment", onSelect });
-    const nextBtn = screen.getByRole("button", { name: /^next: model\/harness provider$/i });
+    const nextBtn = screen.getByRole("button", { name: /^next: host proxy$/i });
     await user.click(nextBtn);
-    expect(onSelect).toHaveBeenCalledWith("provider");
+    expect(onSelect).toHaveBeenCalledWith("host_proxy");
   });
 
-  it("offers 'Skip corporate network' inside the collapsible corporate phase and jumps to Your Work", async () => {
-    const onSelect = vi.fn();
-    renderLayout({ current: "host_proxy", onSelect });
-    await user.click(screen.getByRole("button", { name: /skip corporate network/i }));
-    expect(onSelect).toHaveBeenCalledWith("scm_provider"); // first step of the next phase (Your Work)
-  });
-
-  it("does not offer a skip control outside a collapsible phase", () => {
-    renderLayout({ current: "environment" });
+  // No phase is collapsible any more (the corporate group was the only one), so the
+  // phase-level skip control never renders — the corporate steps are simply optional
+  // steps you click past, exactly like the model step.
+  it("offers no phase-level skip control now that no phase is collapsible", () => {
+    renderLayout({ current: "host_proxy" });
     expect(screen.queryByRole("button", { name: /skip corporate network/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^skip .* network$/i })).not.toBeInTheDocument();
   });
 
   it("last step renders the Launch button disabled when canLaunch is false", () => {
@@ -73,27 +71,14 @@ describe("SetupLayout", () => {
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeEnabled();
   });
 
-  it("fast-path banner is absent when fastPath is false", () => {
-    renderLayout({ fastPath: false });
+  // The fast-path banner ("You're ready — launch your first run now" + Keep
+  // setting up) was REMOVED: it duplicated the Launch step's own affordance and
+  // shouted over the step the operator was actually working on. Launching early
+  // is still available from the rail's Launch step at any time.
+  it("renders no fast-path banner even when fully ready", () => {
+    renderLayout({ current: "workspaces", canLaunch: true });
     expect(screen.queryByText(/you're ready — launch your first run now/i)).not.toBeInTheDocument();
-  });
-
-  it("fast-path banner renders only when fastPath is true, with the connected model label", () => {
-    // connectedModelLabel carries the full deriveReadiness().llmLabel fragment.
-    renderLayout({ fastPath: true, connectedModelLabel: "Claude connected" });
-    expect(screen.getByText(/you're ready — launch your first run now/i)).toBeInTheDocument();
-    expect(screen.getByText(/a barrier is up and claude connected/i)).toBeInTheDocument();
-  });
-
-  it("'Keep setting up' dismisses the banner without jumping back to Environment", async () => {
-    const onSelect = vi.fn();
-    const onKeepSettingUp = vi.fn();
-    renderLayout({ current: "workspaces", fastPath: true, onSelect, onKeepSettingUp });
-    await user.click(screen.getByRole("button", { name: /keep setting up/i }));
-    expect(onKeepSettingUp).toHaveBeenCalled();
-    // The operator stays where they were configuring — no forced step change.
-    expect(onSelect).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading", { name: /onboard a workspace/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /keep setting up/i })).not.toBeInTheDocument();
   });
 });
 

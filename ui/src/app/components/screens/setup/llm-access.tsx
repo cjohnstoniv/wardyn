@@ -15,7 +15,7 @@
 // was dropped from setup by owner decision; this module is LLM access only. Has
 // NO composer-backends section by design — owner decision: zero composer UI here.)
 import * as React from "react";
-import { Info, KeyRound, Loader2, Plus } from "lucide-react";
+import { KeyRound, Loader2, Lock, Plus } from "lucide-react";
 import type { SetupStatus } from "../../../lib/types";
 import { harnessAuth as api } from "../../../lib/api/harness-auth";
 import { Button } from "../../ui/button";
@@ -25,7 +25,15 @@ import type { StatusKind } from "../../wardyn/copy";
 import { BTN } from "../../wardyn/copy";
 import { PROVIDER_GUIDES, type SetupGuide } from "./setup-guide";
 import { HarnessLoginPane } from "./harness-login-pane";
+import { OptionCard } from "../new-run/step-shell";
 import type { Readiness } from "../onboarding/intro";
+
+// The three harnesses a run can use: Claude Code (Anthropic), Codex (OpenAI), or
+// none (bring-your-own container / interactive / plain command). Selecting one
+// reveals only that harness's real connection methods — instead of a flat list of
+// every provider's every credential type. "none" is a first-class choice, not an
+// absence: it maps to the explicit skip.
+type Harness = "claude" | "codex" | "none";
 
 type RowState = "ready" | "todo";
 type Provider = SetupStatus["providers"][number];
@@ -96,55 +104,20 @@ const PROXY_INJECTED_DEFAULT_CHIP = (
 );
 const BEDROCK_RESIDENT_CHIP = (
   <Chip tone="warning" className="uppercase tracking-wide">
-    resident (static/SSO)
+    resident
+  </Chip>
+);
+// Bedrock's bearer transport IS proxy-injected (unlike its SSO/static-key modes),
+// so its sub-row wears the green chip.
+const BEDROCK_BEARER_CHIP = (
+  <Chip tone="success" className="uppercase tracking-wide">
+    proxy-injected
   </Chip>
 );
 
-// SetupOption is one not-yet-configured way to connect a provider family — shown
-// as a compact "add" button rather than a full row, so the family surfaces only
-// what's DETECTED prominently while keeping every setup path one click away.
+// SetupOption is one not-yet-configured way to connect the chosen harness — a
+// compact "Set up:" button under the method list (container login, add key, …).
 type SetupOption = { key: string; label: string; onClick: () => void; icon?: React.ReactNode };
-
-// ProviderFamily groups one model-provider family (Claude/Anthropic or OpenAI/
-// Codex): it renders the DETECTED mechanisms as full rows and collapses the rest
-// into a contextual set-up affordance, instead of a flat list of every credential
-// type. Detection is unchanged (SetupStatus) — this is purely how the wizard
-// organizes the options (owner ask). A family with nothing detected leads with
-// "Set up:"; a connected family offers "Add another way:".
-function ProviderFamily({
-  title,
-  connected,
-  rows,
-  options,
-}: {
-  title: string;
-  connected: boolean;
-  rows: React.ReactNode[];
-  options: SetupOption[];
-}) {
-  const shown = rows.filter(Boolean);
-  return (
-    <section className="rounded-xl border border-border bg-card/40 p-3.5">
-      <div className="mb-2.5 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-        <Chip tone={connected ? "success" : "neutral"} className="uppercase tracking-wide">
-          {connected ? "Connected" : "Not configured"}
-        </Chip>
-      </div>
-      {shown.length > 0 && <ul className="space-y-2.5">{shown}</ul>}
-      {options.length > 0 && (
-        <div className={`flex flex-wrap items-center gap-1.5 ${shown.length > 0 ? "mt-2.5" : ""}`}>
-          <span className="text-xs text-muted-foreground">{shown.length > 0 ? "Add another way:" : "Set up:"}</span>
-          {options.map((o) => (
-            <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
-              {o.icon ?? <Plus className="size-3.5" />} {o.label}
-            </Button>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
 
 export function ModelStep({
   status,
@@ -168,18 +141,10 @@ export function ModelStep({
   // contexts that don't offer skipping (e.g. a standalone render).
   onSkip?: () => void;
 }) {
-  // Guidance for the most common first-run snag: a personal machine running the
-  // sealed (compose/team) control plane, which can't see the host's Claude login —
-  // so this step reads "not connected" even when the operator IS logged in. Only
-  // shown when the model is genuinely undetected AND we're blind-in-compose on a
-  // local box (host_like === false + local auth); host mode never sees it.
-  const suggestHostMode =
-    !readiness.llmReady && status.deployment?.host_like === false && status.auth.mode === "local";
-  // The same deployment fact as suggestHostMode, but WITHOUT the !llmReady gate: a
-  // sealed (compose/team) wardynd can never see a host ~/.claude login, whether or
-  // not the model is connected yet. Offering "Install / Log in to Claude CLI" here
-  // dangles a path that can NEVER satisfy this step — claudeSubDetected is wired to
-  // wardynd's own view, which is blind to the host by construction.
+  // A sealed (compose/team) wardynd can never see a host ~/.claude login: offering
+  // "Install / Log in to Claude CLI" here would dangle a path that can NEVER satisfy
+  // this step (claudeSubDetected reads wardynd's own view, blind to the host by
+  // construction). Container login is offered instead under the Claude harness.
   const sealedControlPlane = status.deployment?.host_like === false;
 
   const present = status.secrets.present;
@@ -224,6 +189,13 @@ export function ModelStep({
   const managedCheck = status.checks.find((c) => c.id === "harness_credential");
   // Inline container-login flow toggle (self-contained pane; never routes away).
   const [loginOpen, setLoginOpen] = React.useState(false);
+  // Bedrock has THREE credential modes, so "Set up AWS Bedrock" must reveal the
+  // chooser — jumping straight into one mode's secret dialog is the same
+  // presumes-one-method funnel this redesign removes.
+  const [bedrockOpen, setBedrockOpen] = React.useState(false);
+  // Containerized AWS SSO login (second container-login provider).
+  const [awsLoginOpen, setAwsLoginOpen] = React.useState(false);
+  const awsSSOCred = status.harness?.find((h) => h.provider === "aws" && h.captured);
   const [disconnecting, setDisconnecting] = React.useState(false);
   const disconnectManaged = async () => {
     setDisconnecting(true);
@@ -317,40 +289,123 @@ export function ModelStep({
   const anthropicConnected = anthropic || claudeSubDetected || bedrockReady || !!managedCred;
   const openaiConnected = openai || codexDetected;
 
+  // Harness-first: the operator picks a harness, then sees only its methods. Start
+  // on whichever family is already connected (so a return visit lands on what they
+  // set up), else default to Claude Code. "none" is chosen explicitly via its card.
+  const [harness, setHarness] = React.useState<Harness>(
+    anthropicConnected ? "claude" : openaiConnected ? "codex" : "claude",
+  );
+
+  // Bedrock exposes its THREE credential modes explicitly, each with its own
+  // residency chip, ordered by the precedence resolveBedrockAuth enforces
+  // (internal/api/runs_bedrock.go): bearer API key > ~/.aws SSO mount > static
+  // access/secret (+ optional session token). Region/model are wardynd boot-time
+  // config (no write API), shown as a status line, not an addable field.
   const bedrockRow = (
     <React.Fragment key="bedrock">
-      <AccessRow
-        status={rowStatus(bedrockReady ? "ready" : "todo", rechecking)}
-        label="AWS Bedrock (Claude Code)"
-        residency={BEDROCK_RESIDENT_CHIP}
-        detail={
-          <>
-            {bedrockDetail}
-            {(bedrock.region || bedrock.model) && (
-              <span className="mt-0.5 block font-mono">
-                {bedrock.region || "region unset"} · {bedrock.model || "model unset"}
-              </span>
-            )}
-            {bedrockConfigured && !bedrockReady && (!bedrock.region || !bedrock.model) && (
-              // Region/model have no write API (boot-time config) — say how to set
-              // them on the host instead of leaving a dead "needs-creds" end.
-              <span className="mt-0.5 block">
-                Region/model are wardynd boot-time config: set WARDYN_BEDROCK_REGION /
-                WARDYN_BEDROCK_MODEL (or -bedrock-region / -bedrock-model), restart wardynd, then
-                Re-check.
-              </span>
-            )}
-          </>
-        }
-        action={
-          // Buttons ordered by the precedence resolveBedrockAuth actually enforces
-          // (internal/api/runs_bedrock.go): bearer API key > ~/.aws mount > static
-          // access/secret (+ optional session token). The backend already reads all
-          // of these names; the UI just never offered the bearer or session token.
+      <li className="space-y-2.5 rounded-xl border border-border bg-card p-3.5">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-[200px] flex-1">
+            <div className="text-sm font-semibold text-foreground">AWS Bedrock</div>
+            <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{bedrockDetail}</p>
+          </div>
+          <StatusChip status={rowStatus(bedrockReady ? "ready" : "todo", rechecking)} />
+        </div>
+
+        {/* Region + model: boot-time config, shown (not editable) with the exact
+            env to set when unset — never a dead "needs-creds" end. */}
+        <div className="rounded-lg border border-border bg-surface-2/40 px-3 py-2 text-xs">
+          <span className="font-mono text-foreground">
+            {bedrock.region || "region unset"} · {bedrock.model || "model unset"}
+          </span>
+          {(!bedrock.region || !bedrock.model) && (
+            <p className="mt-1 leading-relaxed text-muted-foreground">
+              Region + model are wardynd boot-time config: set WARDYN_BEDROCK_REGION /
+              WARDYN_BEDROCK_MODEL (or -bedrock-region / -bedrock-model), restart wardynd, then
+              Re-check.
+            </p>
+          )}
+        </div>
+
+        {/* Mode 1 — bearer (proxy-injected, preferred). */}
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-surface-2/40 p-2.5">
+          <div className="min-w-[180px] flex-1">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              Bearer token {BEDROCK_BEARER_CHIP}
+              <Chip tone="primary">Recommended</Chip>
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              An Amazon Bedrock API key, injected at the proxy — never stored in the sandbox.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => onAddSecret("bedrock-api-key")}>
+            <KeyRound className="size-3.5" /> {bedrock.bearer_present ? "Edit" : "Add key"}
+          </Button>
+        </div>
+
+        {/* Mode 2 — AWS SSO via a CONTAINERIZED login: no host ~/.aws, works on a
+            sealed compose control plane. Wardyn captures the SSO session; later
+            Bedrock runs exchange it for short-lived role credentials. The session
+            itself is resident in the sandbox for now (amber) — narrower than
+            mounting the whole ~/.aws, and Phase B proxy-injects it instead. */}
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-surface-2/40 p-2.5">
+          <div className="min-w-[180px] flex-1">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              AWS SSO (containerized login) {BEDROCK_RESIDENT_CHIP}
+              {awsSSOCred && !awsSSOCred.expired && <Chip tone="success">Connected</Chip>}
+              {awsSSOCred?.expired && <Chip tone="warning">Expired</Chip>}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              {awsSSOCred
+                ? awsSSOCred.expired
+                  ? `Session expired ${awsSSOCred.expires_at ?? ""}. Re-run the login to refresh it.`
+                  : `Session connected, expires ${awsSSOCred.expires_at ?? "—"}. Bedrock runs exchange it for short-lived role credentials.`
+                : "Log in once in a sandbox (device code — approve in any browser). No host ~/.aws mount and no static keys."}
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setAwsLoginOpen(true)}>
+            <KeyRound className="size-3.5" /> {awsSSOCred ? "Re-login" : "Log in"}
+          </Button>
+        </div>
+        {awsLoginOpen && (
+          <HarnessLoginPane
+            provider="aws"
+            onDone={() => {
+              setAwsLoginOpen(false);
+              onRecheck();
+            }}
+            onCancel={() => setAwsLoginOpen(false)}
+          />
+        )}
+
+        {/* Mode 3 — host ~/.aws mount (boot config, not an addable secret). */}
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-surface-2/40 p-2.5">
+          <div className="min-w-[180px] flex-1">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              Host ~/.aws profile {BEDROCK_RESIDENT_CHIP}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Mount the operator&apos;s existing ~/.aws read-only (exposes every profile in it). Set
+              WARDYN_BEDROCK_AWS_DIR (+ WARDYN_BEDROCK_AWS_PROFILE) on wardynd, restart, then Re-check.
+            </p>
+          </div>
+          <Chip tone={bedrock.aws_mount ? "success" : "neutral"} className="uppercase tracking-wide">
+            {bedrock.aws_mount ? "mounted" : "not mounted"}
+          </Chip>
+        </div>
+
+        {/* Mode 3 — static access keys (resident). */}
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-surface-2/40 p-2.5">
+          <div className="min-w-[180px] flex-1">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              Access keys {BEDROCK_RESIDENT_CHIP}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Static access key + secret (+ optional session token for SSO/STS); signed in-process,
+              so they live in the sandbox.
+            </p>
+          </div>
           <div className="flex flex-wrap gap-1.5">
-            <Button size="sm" variant="outline" onClick={() => onAddSecret("bedrock-api-key")}>
-              <KeyRound className="size-3.5" /> Bedrock API key
-            </Button>
             <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-access-key-id")}>
               <KeyRound className="size-3.5" /> Access key
             </Button>
@@ -361,14 +416,8 @@ export function ModelStep({
               <KeyRound className="size-3.5" /> Session token
             </Button>
           </div>
-        }
-      />
-      <p className="pl-1 text-xs leading-relaxed text-muted-foreground">
-        The Bedrock API key (bearer) is preferred — the proxy injects it and it never becomes
-        resident. Static access/secret keys DO become resident in sandboxes that use Bedrock; for
-        SSO/STS temporary credentials add a session token too (it expires with your SSO session).
-        An SSO ~/.aws mount auto-rotates and is safer than pasted keys.
-      </p>
+        </div>
+      </li>
     </React.Fragment>
   );
 
@@ -447,149 +496,265 @@ export function ModelStep({
     </React.Fragment>
   );
 
+  // Claude-family connect affordances not yet satisfied (container login, add key,
+  // etc.), shown as a "Set up:" chip row under the method list. Same gating as
+  // before: the resident-CLI route is hidden on a sealed control plane and once a
+  // managed token exists; container login only when nothing is connected yet.
+  // Options are named for the CREDENTIAL they set up (not the mechanism), so the
+  // three real Claude paths read as a parallel choice: subscription / API key /
+  // Bedrock. The mechanism (container login vs a host CLI login) is explained
+  // inside the flow each one opens, not in the button label.
+  const claudeOptions = [
+    !claudeSubDetected &&
+      !managedCred && {
+        key: "sub",
+        label: "Set up Claude subscription",
+        icon: <KeyRound className="size-3.5" />,
+        onClick: () => setLoginOpen(true),
+      },
+    !anthropic && {
+      key: "akey",
+      label: "Set up Anthropic API key",
+      icon: <KeyRound className="size-3.5" />,
+      onClick: () => onAddSecret("anthropic-api-key"),
+    },
+    // Bedrock is its own connect path — it must stay reachable even when every
+    // other Claude option is satisfied (a logged-in CLI + an Anthropic key), and
+    // it OPENS THE MODE CHOOSER rather than one mode's secret dialog.
+    !bedrockConfigured &&
+      !bedrockOpen && {
+        key: "bedrock",
+        label: "Set up AWS Bedrock",
+        icon: <KeyRound className="size-3.5" />,
+        onClick: () => setBedrockOpen(true),
+      },
+  ].filter(Boolean) as SetupOption[];
+
+  const codexOptions = [
+    !openai && {
+      key: "okey",
+      label: "Set up OpenAI API key",
+      icon: <KeyRound className="size-3.5" />,
+      onClick: () => onAddSecret("openai-api-key"),
+    },
+    // Codex has no container-login path (agentHarnessLogin implements claude-code
+    // only), so on a sealed wardynd a resident Codex login can neither be detected
+    // nor captured — the API key is the only reachable route.
+    !codexDetected &&
+      !sealedControlPlane && {
+        key: "codex",
+        label: codexInstalled ? "Log in to Codex CLI" : "Install Codex CLI",
+        onClick: () => onSetup(PROVIDER_GUIDES.codex),
+      },
+  ].filter(Boolean) as SetupOption[];
+
   return (
     <div className="space-y-5">
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        {readiness.llmReady
-          ? `One connected path is enough — you're already covered by ${readiness.llmLabel || "a connected model"}.`
-          : "Optional. A model/harness is only needed to run an agent under Wardyn's own harness, or to enable the AI Run Composer. Skip it if you'll bring your own container/agent, or drive an interactive run yourself. Connect one below with a stored API key (proxy-injected), a Claude subscription, or Bedrock."}
-      </p>
+      {/* ── What this is, and whether you need it ─────────────────────────── */}
+      <div className="space-y-3">
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          A harness is the coding agent Wardyn runs inside the sandbox — Claude Code (Anthropic) or
+          Codex (OpenAI) — and the model is what it thinks with.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-border bg-card p-3.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip tone="success" className="uppercase tracking-wide">
+                Required
+              </Chip>
+              <span className="text-sm font-semibold text-foreground">for AI Composer</span>
+              <Chip tone="primary" title="This feature is in beta — expect rough edges.">
+                Beta
+              </Chip>
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              Describe a task in plain English and Wardyn&apos;s composer proposes and launches a
+              governed sandbox for it. This mode needs a connected model.
+            </p>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-3.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip tone="neutral" className="uppercase tracking-wide">
+                Optional
+              </Chip>
+              <span className="text-sm font-semibold text-foreground">everywhere else</span>
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              Connect a model for a ready-to-go base sandbox with an agent already wired up — or skip
+              it and bring your own container/agent, drive an interactive run, or run a plain command.
+              You can connect anytime later.
+            </p>
+          </div>
+        </div>
+        <p className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+          <Lock className="mt-0.5 size-3.5 shrink-0" />
+          However you connect, your key is injected per run at the proxy and is never stored in the
+          sandbox (the few exceptions are labeled &quot;resident&quot;).
+        </p>
+      </div>
 
-      {/* Explicit skip for the optional step — a deliberate "no model" decision,
-          not an unfinished gap. A real connected model supersedes it. */}
-      {!readiness.llmReady && onSkip && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {skipped
-              ? "Model skipped — runs will bring their own agent/container (or you drive them). Connect a provider below anytime to change that."
-              : "Don't need a model here? Skip — you can bring your own container/agent or connect one later."}
-          </p>
-          {!skipped && (
-            <Button size="sm" variant="outline" onClick={onSkip}>
-              Skip — run without a model
-            </Button>
+      {/* ── Level 1: choose your harness ──────────────────────────────────── */}
+      <div className="space-y-2.5">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Choose your agent harness
+        </div>
+        <div className="grid gap-2.5 sm:grid-cols-3">
+          <OptionCard
+            selected={harness === "claude"}
+            onClick={() => setHarness("claude")}
+            title={
+              <span className="flex items-center justify-between gap-2">
+                Claude Code
+                <Chip tone={anthropicConnected ? "success" : "neutral"} className="uppercase tracking-wide">
+                  {anthropicConnected ? "Connected" : "Not configured"}
+                </Chip>
+              </span>
+            }
+            hint="Anthropic (Claude)"
+          />
+          <OptionCard
+            selected={harness === "codex"}
+            onClick={() => setHarness("codex")}
+            title={
+              <span className="flex items-center justify-between gap-2">
+                Codex
+                <Chip tone={openaiConnected ? "success" : "neutral"} className="uppercase tracking-wide">
+                  {openaiConnected ? "Connected" : "Not configured"}
+                </Chip>
+              </span>
+            }
+            hint="OpenAI"
+          />
+          <OptionCard
+            selected={harness === "none"}
+            onClick={() => setHarness("none")}
+            title="No model / bring your own"
+            hint="Run without a model — your own container, an interactive run, or a plain command"
+          />
+        </div>
+      </div>
+
+      {/* ── Level 2: connect the chosen harness ───────────────────────────── */}
+      {harness === "claude" && (
+        <div className="space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Connect Claude Code
+          </div>
+          {sealedControlPlane && !claudeSubDetected && !managedCred && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              wardynd runs sealed in a container and can&apos;t see your host&apos;s{" "}
+              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login, so{" "}
+              <span className="font-medium">Set up Claude subscription</span> opens a one-time login in
+              a sandbox (no local install) and injects the token proxy-side. Prefer your host login?
+              Re-run setup in host mode (
+              <code className="rounded bg-background/70 px-1 py-0.5 font-mono text-xs text-foreground">
+                WARDYN_SETUP_MODE=local make setup
+              </code>
+              ).
+            </p>
+          )}
+          <ul className="space-y-2.5">
+            {[
+              claudeSubDetected && subRow,
+              managedCred && managedRow,
+              anthropic && anthropicKeyRow,
+              (bedrockConfigured || bedrockOpen) && bedrockRow,
+            ].filter(Boolean)}
+          </ul>
+          {claudeOptions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {claudeOptions.map((o) => (
+                <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
+                  {o.icon ?? <Plus className="size-3.5" />} {o.label}
+                </Button>
+              ))}
+            </div>
+          )}
+          {/* Host mode only: wardynd CAN see a resident ~/.claude, so offer that
+              route as a secondary alternative to the sandbox login above. On a
+              sealed control plane it could never satisfy this step, so it's hidden. */}
+          {!sealedControlPlane && !claudeSubDetected && !managedCred && (
+            <p className="text-xs text-muted-foreground">
+              Already logged in with the Claude CLI on this host?{" "}
+              <Button
+                size="sm"
+                variant="link"
+                className="h-auto p-0 text-xs"
+                onClick={() => onSetup(PROVIDER_GUIDES.claude)}
+              >
+                {claudeInstalled ? "Use that login instead" : "Install the Claude CLI"}
+              </Button>
+            </p>
+          )}
+          {loginOpen && (
+            <HarnessLoginPane
+              provider="anthropic"
+              onDone={() => {
+                setLoginOpen(false);
+                onRecheck();
+              }}
+              onCancel={() => setLoginOpen(false)}
+            />
           )}
         </div>
       )}
 
-      {suggestHostMode && !managedCred && (
-        <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-primary" />
-          <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed">
-            <p className="text-foreground">
-              You&apos;re on the containerized control plane, so wardynd runs sealed in a container that can&apos;t
-              see your host&apos;s{" "}
-              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> login — which is why it
-              reads &quot;not connected&quot; even if you are logged in on the host. The supported fix here is{" "}
-              <span className="font-medium">container login</span>: Wardyn opens a sandbox, runs{" "}
-              <code className="rounded bg-background/70 px-1 py-0.5 text-xs">claude setup-token</code> for you, and
-              captures the token — injected proxy-side into every run.
-            </p>
-            <div>
-              <Button size="sm" onClick={() => setLoginOpen(true)}>
-                <KeyRound className="size-3.5" /> Connect via container login
-              </Button>
+      {harness === "codex" && (
+        <div className="space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Connect Codex
+          </div>
+          <ul className="space-y-2.5">
+            {[openai && openaiKeyRow, codexDetected && codexRow].filter(Boolean)}
+          </ul>
+          {codexOptions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {codexOptions.map((o) => (
+                <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
+                  {o.icon ?? <Plus className="size-3.5" />} {o.label}
+                </Button>
+              ))}
             </div>
-            <p className="text-muted-foreground">
-              Prefer to use your host&apos;s own Claude login? Re-run setup in host mode:{" "}
-              <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-xs text-foreground">
-                WARDYN_SETUP_MODE=local make setup
-              </code>{" "}
-              — wardynd then runs on your machine and reads <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.claude</code> directly (note: host mode&apos;s workspace Verify/Record don&apos;t complete under WSL2 NAT).
+          )}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Codex connects with an API key — there&apos;s no container login.
+          </p>
+        </div>
+      )}
+
+      {harness === "none" && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-border bg-card p-3.5">
+          <Lock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1 space-y-2 text-xs leading-relaxed text-muted-foreground">
+            <p>
+              You&apos;ll bring your own container or agent, drive an interactive run, or run a plain
+              command — nothing to connect here.
             </p>
+            {onSkip && !skipped && !readiness.llmReady && (
+              <Button size="sm" variant="outline" onClick={onSkip}>
+                Skip — run without a model
+              </Button>
+            )}
+            {skipped && (
+              <p className="text-muted-foreground">
+                Model skipped — pick Claude Code or Codex above anytime to connect one.
+              </p>
+            )}
           </div>
         </div>
       )}
 
-      <div className="space-y-4">
-        <ProviderFamily
-          title="Claude / Anthropic"
-          connected={anthropicConnected}
-          rows={[
-            claudeSubDetected && subRow,
-            managedCred && managedRow,
-            anthropic && anthropicKeyRow,
-            bedrockConfigured && bedrockRow,
-          ]}
-          options={[
-            // The resident-CLI route. Hidden in two cases, for two different reasons:
-            //   · managedCred — the container login ALREADY connected this same Claude
-            //     subscription; a second route to the identical credential reads as a
-            //     missing setup step next to a CONNECTED badge.
-            //   · sealedControlPlane — wardynd is containerized and cannot see a host
-            //     login at all, so this option could never flip the step to connected.
-            //     (Host mode is offered instead, in the suggestHostMode banner above.)
-            !claudeSubDetected &&
-              !managedCred &&
-              !sealedControlPlane && {
-                key: "sub",
-                label: claudeInstalled ? "Log in to Claude CLI" : "Install Claude CLI",
-                onClick: () => onSetup(PROVIDER_GUIDES.claude),
-              },
-            // Container login: works with no local Claude install — the compose-mode
-            // path. Shown when there is no resident login and no managed token yet.
-            !claudeSubDetected &&
-              !managedCred && {
-                key: "container-login",
-                label: "Connect via container login (no local install)",
-                icon: <KeyRound className="size-3.5" />,
-                onClick: () => setLoginOpen(true),
-              },
-            !anthropic && {
-              key: "akey",
-              label: "Add Anthropic API key",
-              icon: <KeyRound className="size-3.5" />,
-              onClick: () => onAddSecret("anthropic-api-key"),
-            },
-            !bedrockConfigured && {
-              key: "bedrock",
-              // Lead with the preferred, never-resident bearer path (the full row
-              // above exposes the static-key and session-token alternatives).
-              label: "Set up AWS Bedrock (API key)",
-              icon: <KeyRound className="size-3.5" />,
-              onClick: () => onAddSecret("bedrock-api-key"),
-            },
-          ].filter(Boolean) as SetupOption[]}
-        />
-        {loginOpen && (
-          <HarnessLoginPane
-            provider="anthropic"
-            onDone={() => {
-              setLoginOpen(false);
-              onRecheck();
-            }}
-            onCancel={() => setLoginOpen(false)}
-          />
-        )}
-        <ProviderFamily
-          title="OpenAI / Codex"
-          connected={openaiConnected}
-          rows={[openai && openaiKeyRow, codexDetected && codexRow]}
-          options={[
-            !openai && {
-              key: "okey",
-              label: "Add OpenAI API key",
-              icon: <KeyRound className="size-3.5" />,
-              onClick: () => onAddSecret("openai-api-key"),
-            },
-            // Same sealed-control-plane rule as the Claude CLI option above, and
-            // stricter: Codex has no container-login path at all (agentHarnessLogin
-            // implements claude-code only), so on a sealed wardynd a resident Codex
-            // login can never be detected AND cannot be captured — the API key is the
-            // only reachable route. Offering the CLI here is a dead end.
-            !codexDetected &&
-              !sealedControlPlane && {
-                key: "codex",
-                label: codexInstalled ? "Log in to Codex CLI" : "Install Codex CLI",
-                onClick: () => onSetup(PROVIDER_GUIDES.codex),
-              },
-          ].filter(Boolean) as SetupOption[]}
-        />
-        <div className="flex justify-end">
-          <Button size="sm" variant="link" onClick={onRecheck} disabled={rechecking}>
-            {rechecking ? "Refreshing…" : "Refresh detection"}
+      <div className="flex items-center justify-between gap-3">
+        {onSkip && !skipped && harness !== "none" && !readiness.llmReady ? (
+          <Button size="sm" variant="link" onClick={onSkip} className="px-0 text-muted-foreground">
+            Skip — run without a model
           </Button>
-        </div>
+        ) : (
+          <span />
+        )}
+        <Button size="sm" variant="link" onClick={onRecheck} disabled={rechecking}>
+          {rechecking ? "Refreshing…" : "Refresh detection"}
+        </Button>
       </div>
     </div>
   );

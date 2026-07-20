@@ -35,9 +35,6 @@ export function SetupLayout({
   onFinish,
   onLaunch,
   canLaunch,
-  fastPath,
-  connectedModelLabel,
-  onKeepSettingUp,
   children,
 }: {
   current: SetupStepId;
@@ -52,15 +49,6 @@ export function SetupLayout({
   onFinish: () => void;
   onLaunch: () => void;
   canLaunch: boolean;
-  fastPath: boolean;
-  /**
-   * Full readiness fragment from deriveReadiness().llmLabel, e.g. "Claude
-   * connected" / "Anthropic key added" — rendered as-is in the banner sentence.
-   */
-  connectedModelLabel?: string;
-  /** Called alongside the environment jump when "Keep setting up" is clicked —
-   * lets the orchestrator dismiss the banner (live-screen fastPathHidden behavior). */
-  onKeepSettingUp?: () => void;
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -105,39 +93,6 @@ export function SetupLayout({
             </button>
           </div>
           <HowItWorksStrip />
-        </section>
-      )}
-
-      {/* Fast-path banner — only when the orchestrator says we're genuinely ready
-          AND a model is connected. */}
-      {fastPath && (
-        <section className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 p-4">
-          <div className="flex items-start gap-3">
-            <Rocket className="mt-0.5 size-5 text-primary" aria-hidden />
-            <div>
-              <div className="text-sm text-foreground">You're ready — launch your first run now.</div>
-              <div className="text-sm text-muted-foreground">
-                A barrier is up and {connectedModelLabel ?? "a model is connected"}. That's enough
-                for a first run — you can harden anytime.
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={onLaunch} disabled={!canLaunch}>
-              Launch your first run
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                // Just dismiss the nudge — the operator said "keep setting up",
-                // so keep them on the step they were configuring, don't jump
-                // them back to Environment.
-                onKeepSettingUp?.();
-              }}
-            >
-              Keep setting up
-            </Button>
-          </div>
         </section>
       )}
 

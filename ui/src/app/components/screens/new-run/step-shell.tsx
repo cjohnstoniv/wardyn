@@ -126,6 +126,7 @@ export function OptionCard({
       type="button"
       disabled={disabled}
       onClick={onClick}
+      aria-pressed={selected}
       className={cn(
         "rounded-lg border p-2.5 text-left transition-colors",
         selected ? "border-primary bg-primary/10" : "border-border hover:border-border-strong",

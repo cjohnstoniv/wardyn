@@ -23,8 +23,80 @@ import { Input } from "../../ui/input";
 
 type Phase = "launching" | "attached" | "saving" | "done" | "error";
 
-// The command Wardyn types into the login sandbox for the operator.
-const SETUP_TOKEN_CMD = "claude setup-token";
+// Per-provider login conventions. Adding a provider is a new row here (mirrors
+// the server-side agentHarnessLogin table), not a forked component.
+//
+// The two flows differ in HOW the credential comes back:
+//   · anthropic — `claude setup-token` PRINTS the token, so we scrape it off the
+//     PTY and PUT it (capture: "scrape").
+//   · aws — `aws sso login` writes its token to ~/.aws/sso/cache/*.json and
+//     prints only a short-lived device code + verification URL. The in-sandbox
+//     `wardyn-aws-sso` helper uploads the file through the brokered internal
+//     endpoint, so the pane never sees (and must never scrape) a credential —
+//     it just watches for the helper's success marker (capture: "helper").
+type CaptureMode = "scrape" | "helper";
+type LoginFlow = {
+  cmd: string;
+  title: string;
+  blurb: React.ReactNode;
+  capture: CaptureMode;
+  // Marker the in-sandbox helper prints on success (capture: "helper" only).
+  doneMarker?: string;
+};
+
+const LOGIN_FLOWS: Record<string, LoginFlow> = {
+  anthropic: {
+    cmd: "claude setup-token",
+    title: "Connect a Claude subscription via container login",
+    capture: "scrape",
+    blurb: (
+      <>
+        Wardyn opened a sandbox and is running{" "}
+        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code> for you. It opens the
+        Claude login page in a new tab — approve it, then paste the code it gives you into the{" "}
+        <span className="font-medium">field below</span> (not the terminal) and hit Send. Wardyn captures the printed
+        token automatically and connects your subscription; the token is injected proxy-side into every run and the
+        sandbox never holds a live credential.
+      </>
+    ),
+  },
+  aws: {
+    // Chained so the helper uploads the moment the login succeeds — the operator
+    // never has to run a second command.
+    cmd: "aws sso login --no-browser --use-device-code && wardyn-aws-sso",
+    title: "Connect an AWS SSO session via container login",
+    capture: "helper",
+    doneMarker: "wardyn: aws sso credential captured",
+    blurb: (
+      <>
+        Wardyn opened a sandbox and is running{" "}
+        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">aws sso login</code> for you. It prints a
+        verification URL and a short user code — open the link in any browser, enter the code, and approve. Wardyn then
+        captures the SSO session automatically so later Bedrock runs can exchange it for short-lived role credentials —
+        with no host <code className="rounded bg-background/70 px-1 py-0.5 font-mono">~/.aws</code> mount and no static
+        keys.
+      </>
+    ),
+  },
+};
+
+function loginFlow(provider: string): LoginFlow {
+  return LOGIN_FLOWS[provider] ?? LOGIN_FLOWS.anthropic;
+}
+
+// Force the login PTY wide so `claude setup-token` never hard-wraps the OAuth URL
+// (~200 chars) or the token across lines — a narrow PTY wrap mid-URL dropped
+// response_type=code and produced "Invalid OAuth Request" on the opened tab. The
+// visual xterm still fits its pane (long lines soft-wrap for display, stay
+// copyable); only the width claude sees is widened, so the byte stream the
+// extractors read has each value on one line.
+const LOGIN_PTY_COLS = 512;
+
+// The login PTY is forced WIDE (LOGIN_PTY_COLS below) so `claude setup-token`
+// prints the OAuth URL and the sk-ant-oat token each on a SINGLE line — the earlier
+// "Invalid OAuth Request" bug was a narrow PTY hard-wrapping the URL mid-string
+// (dropping response_type=code). With no wrap in the byte stream, these two
+// single-line extractors are correct and need no reassembly.
 
 // extractSetupToken pulls a COMPLETE `claude setup-token` token out of a chunk of
 // terminal output. Shape: `sk-ant-oat<2 digits>-<long url-safe body>`. We only
@@ -41,10 +113,10 @@ export function extractSetupToken(s: string): string | null {
 }
 
 // extractAuthUrl pulls the `claude setup-token` OAuth authorization URL out of a
-// chunk of terminal output so we can open it in a new tab. Restricted to the
-// known Claude/Anthropic auth hosts (never api.anthropic.com — that's the token
-// exchange, not a user-facing page). Same trailing-boundary rule as the token so
-// a still-streaming URL isn't opened truncated. Exported for tests.
+// chunk of terminal output so we can open it in a new tab. Restricted to the known
+// Claude/Anthropic auth hosts (never api.anthropic.com — that's the token exchange,
+// not a user-facing page). Same trailing-boundary rule as the token so a
+// still-streaming URL isn't opened truncated. Exported for tests.
 export function extractAuthUrl(s: string): string | null {
   const re = /https:\/\/(?:claude\.ai|claude\.com|console\.anthropic\.com|platform\.claude\.com)\/[^\s'"<>]+/gi;
   let m: RegExpExecArray | null;
@@ -52,6 +124,27 @@ export function extractAuthUrl(s: string): string | null {
     if (m.index + m[0].length < s.length) return m[0].replace(/[.,)]+$/, "");
   }
   return null;
+}
+
+// extractDeviceVerificationUrl pulls the AWS SSO device-authorization verification
+// URL out of `aws sso login --no-browser --use-device-code` output. Restricted to
+// the IAM Identity Center device endpoint + the org access portal; the CLI prints
+// both a bare URL and (usually) a `verificationUriComplete` with ?user_code=…,
+// and we prefer the complete one since it pre-fills the code. Same
+// trailing-boundary rule as the others so a still-streaming URL isn't opened
+// truncated. Exported for tests.
+export function extractDeviceVerificationUrl(s: string): string | null {
+  const re = /https:\/\/(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)\/[^\s'"<>]*/gi;
+  let best: string | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index + m[0].length >= s.length) continue; // still streaming
+    const url = m[0].replace(/[.,)]+$/, "");
+    // Prefer the pre-filled variant so the operator doesn't retype the code.
+    if (url.includes("user_code=")) return url;
+    best = url;
+  }
+  return best;
 }
 
 export function HarnessLoginPane({
@@ -73,6 +166,7 @@ export function HarnessLoginPane({
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
 
+  const flow = loginFlow(provider);
   const termRef = React.useRef<AttachTerminalHandle>(null);
 
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
@@ -135,7 +229,7 @@ export function HarnessLoginPane({
     (chunk: string) => {
       outBufRef.current = (outBufRef.current + chunk).slice(-16384);
       if (!openedUrlRef.current) {
-        const url = extractAuthUrl(outBufRef.current);
+        const url = flow.capture === "helper" ? extractDeviceVerificationUrl(outBufRef.current) : extractAuthUrl(outBufRef.current);
         if (url) {
           openedUrlRef.current = true;
           setAuthUrl(url);
@@ -149,6 +243,19 @@ export function HarnessLoginPane({
         }
       }
       if (savedRef.current) return;
+      // Helper-capture providers (AWS SSO): the credential is uploaded by the
+      // in-sandbox helper through the brokered endpoint — it is NEVER printed, so
+      // there is nothing to scrape. Watch only for the helper's success marker.
+      if (flow.capture === "helper") {
+        if (flow.doneMarker && outBufRef.current.includes(flow.doneMarker)) {
+          savedRef.current = true;
+          setAutoCaptured(true);
+          setPhase("done");
+          if (runId) void runsApi.killRun(runId).catch(() => {});
+          onDone();
+        }
+        return;
+      }
       const tok = extractSetupToken(outBufRef.current);
       if (tok) {
         setToken(tok);
@@ -156,7 +263,7 @@ export function HarnessLoginPane({
         void saveToken(tok);
       }
     },
-    [saveToken],
+    [saveToken, flow, runId, onDone],
   );
 
   // Bridge the pasted login code into the terminal's stdin, so the operator uses
@@ -177,16 +284,9 @@ export function HarnessLoginPane({
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">
       <div className="flex items-center gap-2">
         <KeyRound className="size-4 shrink-0 text-primary" />
-        <span className="text-sm font-medium text-foreground">Connect a Claude subscription via container login</span>
+        <span className="text-sm font-medium text-foreground">{flow.title}</span>
       </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Wardyn opened a sandbox and is running{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code> for you. It opens the
-        Claude login page in a new tab — approve it, then paste the code it gives you into the{" "}
-        <span className="font-medium">field below</span> (not the terminal) and hit Send. Wardyn captures the printed
-        token automatically and connects your subscription; the token is injected proxy-side into every run and the
-        sandbox never holds a live credential.
-      </p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb}</p>
 
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
@@ -222,15 +322,37 @@ export function HarnessLoginPane({
               className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20"
               data-testid="auth-url-link"
             >
-              <ExternalLink className="size-3.5" /> Open the Claude login page ↗
+              <ExternalLink className="size-3.5" />{" "}
+              {flow.capture === "helper" ? "Open the AWS verification page ↗" : "Open the Claude login page ↗"}
             </a>
           )}
-          <AttachTerminal ref={termRef} runId={runId} autoRun={SETUP_TOKEN_CMD} onOutput={handleOutput} />
+          <AttachTerminal
+            ref={termRef}
+            runId={runId}
+            autoRun={flow.cmd}
+            onOutput={handleOutput}
+            ptyCols={LOGIN_PTY_COLS}
+          />
           {autoCaptured ? (
             <p className="flex items-center gap-2 text-xs text-success" data-testid="auto-capture-note">
               {phase === "saving" ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
-              Token detected — connecting your subscription…
+              {flow.capture === "helper"
+                ? "SSO session captured — connecting…"
+                : "Token detected — connecting your subscription…"}
             </p>
+          ) : flow.capture === "helper" ? (
+            /* Device-code flow: the code is entered on the AWS verification PAGE,
+               not in the terminal, and the credential is uploaded by the in-sandbox
+               helper — so there is no code field and nothing to paste here. */
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="flex-1 text-xs leading-relaxed text-muted-foreground">
+                Open the verification link above, enter the user code shown in the terminal, and approve. Wardyn
+                captures the session automatically when the login completes.
+              </p>
+              <Button size="sm" variant="outline" onClick={cancel}>
+                <Square className="size-3.5" /> Cancel
+              </Button>
+            </div>
           ) : (
             <div className="space-y-2">
               {/* Primary interaction: paste the login-page code; we type it into

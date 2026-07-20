@@ -64,7 +64,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // Bumped whenever a host re-check COMPLETES — EnvironmentStep reads it as
   // recheckToken to surface a tier's "still not detected" line after a re-probe.
   const [recheckCount, setRecheckCount] = React.useState(0);
-  const [fastPathHidden, setFastPathHidden] = React.useState(false);
   // Per-demo "launched at least once" set (per browser). Seeded from the durable
   // record markDemoLaunched writes, and grown live via onDemoLaunched so each demo
   // sub-step earns its checkmark this session too. See the stepDone override.
@@ -238,12 +237,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         onFinish={finish}
         onLaunch={() => setNewRunOpen(true)}
         // A barrier is enough to launch (an interactive run works with no model —
-        // the operator drives it over an attached terminal). The fast-path banner,
-        // below, still needs a connected model — it advertises a one-click run.
+        // the operator drives it over an attached terminal).
         canLaunch={readiness.ready}
-        fastPath={readiness.ready && readiness.llmReady && !fastPathHidden}
-        onKeepSettingUp={() => setFastPathHidden(true)}
-        connectedModelLabel={readiness.llmLabel}
       >
         {stepId === "environment" && (
           <EnvironmentStep

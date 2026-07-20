@@ -61,4 +61,13 @@ describe("extractAuthUrl", () => {
     expect(extractAuthUrl("POST https://api.anthropic.com/v1/oauth/token \n")).toBeNull();
     expect(extractAuthUrl("see https://example.com/docs \n")).toBeNull();
   });
+
+  it("captures a full ~200-char OAuth URL on one line (login PTY is forced wide so it never wraps)", () => {
+    // The login flow forces LOGIN_PTY_COLS so claude prints this on a single line;
+    // response_type=code (dropped by the old narrow-PTY wrap bug) survives intact.
+    const url =
+      "https://claude.ai/oauth/authorize?response_type=code&client_id=abcdef0123456789&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=Zm9vYmFyYmF6cXV4&code_challenge_method=S256&state=deadbeefcafef00d";
+    expect(extractAuthUrl(`Visit:\r\n${url}\r\nPaste the code here:\r\n`)).toBe(url);
+    expect(new URL(extractAuthUrl(`\r\n${url}\r\n`)!).searchParams.get("response_type")).toBe("code");
+  });
 });
