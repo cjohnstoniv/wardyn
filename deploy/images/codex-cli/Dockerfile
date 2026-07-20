@@ -77,16 +77,31 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 
-# Install Codex CLI globally.
-# Package name: @openai/codex  (installs the `codex` binary).
+# Install the Codex CLI. DEFAULT: npm (@openai/codex, installs the `codex`
+# binary). Behind a corp proxy where public npm is blocked, set CODEX_INSTALL=native
+# to install a HOST-STAGED native `codex` binary instead (stage it at
+# deploy/images/codex-cli/codex-bin — e.g. via scripts/stage-agent-binary.sh with
+# a WARDYN_CODEX_BIN_URL you control). Unlike claude-code, codex has no
+# Wardyn-verified public download contract, so the native path is staged-only:
+# the build fails loudly if native is selected without a staged binary rather than
+# guessing a URL. See deploy/images/README.md "Native-binary agent installs".
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
-RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
- && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
- && npm install -g @openai/codex
+ARG CODEX_INSTALL=npm
+COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
+RUN set -eu; \
+    if [ "$CODEX_INSTALL" = "native" ]; then \
+        [ -f /codex-stage/codex-bin ] || { echo "CODEX_INSTALL=native but deploy/images/codex-cli/codex-bin is not staged — stage it first (see deploy/images/README.md)" >&2; exit 1; }; \
+        install -m 0755 /codex-stage/codex-bin /usr/local/bin/codex; \
+        echo "installed host-staged native codex"; \
+    else \
+        if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
+        if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
+        if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
+        npm install -g @openai/codex; \
+    fi
 
 # The node:22-bookworm-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory so the sandbox contract

@@ -110,16 +110,52 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 
-# Install Claude Code CLI globally.
-# Package name: @anthropic-ai/claude-code  (installs the `claude` binary).
+# Install the Claude Code CLI. DEFAULT: npm (@anthropic-ai/claude-code, installs
+# the `claude` binary). Behind a corp proxy where public npm is blocked, set
+# CLAUDE_INSTALL=native to install the native `claude` binary instead — from a
+# host-staged file if present (fully offline / strict allowlist mirror; stage it
+# with scripts/stage-agent-binary.sh), else downloaded checksum-verified from the
+# official downloads.claude.ai surface (the ONLY host that path needs reachable
+# through the corp proxy). See deploy/images/README.md "Native-binary agent installs".
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
-RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
- && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
- && npm install -g @anthropic-ai/claude-code
+ARG CLAUDE_INSTALL=npm
+ARG CLAUDE_CODE_VERSION=stable
+ARG TARGETARCH
+# Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
+# COPY succeed when the corp-bin glob matches nothing (the npm default path).
+COPY deploy/images/README.md deploy/images/claude-code/claude-bin* /claude-stage/
+RUN set -eu; \
+    if [ "$CLAUDE_INSTALL" = "native" ]; then \
+        if [ -f /claude-stage/claude-bin ]; then \
+            install -m 0755 /claude-stage/claude-bin /usr/local/bin/claude; \
+            echo "installed host-staged native claude"; \
+        else \
+            case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+                amd64) plat=linux-x64;; \
+                arm64) plat=linux-arm64;; \
+                *) echo "unsupported arch '${TARGETARCH:-unknown}' for native claude" >&2; exit 1;; \
+            esac; \
+            base="https://downloads.claude.ai/claude-code-releases"; \
+            ver="$CLAUDE_CODE_VERSION"; \
+            case "$ver" in stable|latest) ver="$(curl -fsSL "$base/$ver")";; esac; \
+            curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
+            sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
+            [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
+            curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
+            echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
+            chmod 0755 /usr/local/bin/claude; \
+            rm -f /tmp/claude-manifest.json; \
+            echo "installed native claude $ver ($plat), checksum-verified"; \
+        fi; \
+    else \
+        if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
+        if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
+        if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
+        npm install -g @anthropic-ai/claude-code; \
+    fi
 
 # The node:22-bookworm-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory to /home/agent so the

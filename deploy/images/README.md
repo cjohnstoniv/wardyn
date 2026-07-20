@@ -290,4 +290,43 @@ prebuilt stage: `docker build --build-arg UI_STAGE=ui-prebuilt` (or
 `WARDYN_UI_STAGE=ui-prebuilt` for the compose build). `make doctor` warns before a
 build starts if a TLS-MITM proxy looks present but no corp CA is staged.
 
+## Native-binary agent installs (opt-in; when public npm is blocked)
+
+The agent CLIs install via `npm install -g` by **default**. Behind a corporate
+proxy that 403s public npm and where onboarding the package into the internal
+mirror is heavy, install the **native binary** instead — no npm, no registry
+onboarding. Opt-in per agent; the npm default is unchanged for OSS builds.
+
+**claude-code** (`CLAUDE_INSTALL=native`): installs the native `claude` binary,
+checksum-verified against the release manifest, from the official
+`https://downloads.claude.ai/claude-code-releases` surface — the **only** host this
+path contacts (allowlist it in the proxy; the corp CA above covers its TLS):
+
+```
+make agent-images-core CLAUDE_INSTALL=native                      # stable channel
+make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215   # pinned
+```
+
+For a fully **offline / strict-allowlist** mirror that can't reach
+`downloads.claude.ai` from the build either, stage the binary on a host that can,
+then build offline (the Dockerfile prefers a staged binary over downloading):
+
+```
+scripts/stage-agent-binary.sh claude-code            # downloads + checksum-verifies to deploy/images/claude-code/claude-bin (gitignored)
+make agent-images-core CLAUDE_INSTALL=native
+```
+
+**codex-cli** (`CODEX_INSTALL=native`): **staged-only** — codex has no
+Wardyn-verified public download contract, so the native path consumes a host-staged
+binary and fails loudly if it's absent (rather than guessing a URL):
+
+```
+WARDYN_CODEX_BIN_URL=<a native codex binary you trust> WARDYN_CODEX_BIN_SHA256=<sha256> \
+  scripts/stage-agent-binary.sh codex-cli
+make agent-images-core CODEX_INSTALL=native
+```
+
+Both staged binaries (`deploy/images/{claude-code/claude-bin,codex-cli/codex-bin}`)
+are gitignored — never commit them.
+
 [cred-proto]: https://git-scm.com/docs/gitcredentials#_custom_helpers

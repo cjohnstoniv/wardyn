@@ -30,6 +30,14 @@ NPM_REGISTRY ?=
 HTTP_PROXY   ?=
 HTTPS_PROXY  ?=
 NO_PROXY     ?=
+# Native-binary agent installs (opt-in; npm stays the default). Behind a proxy
+# where public npm is blocked, install the native CLI instead:
+#   make agent-images-core CLAUDE_INSTALL=native            # checksum-verified download
+#   make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215
+#   scripts/stage-agent-binary.sh codex-cli && make agent-images-core CODEX_INSTALL=native
+CLAUDE_INSTALL      ?=
+CODEX_INSTALL       ?=
+CLAUDE_CODE_VERSION ?=
 # Emit "--build-arg NAME=VALUE" only when VALUE is non-empty, so an unset knob
 # never overrides a Dockerfile default with an empty string.
 _build_arg = $(if $(2),--build-arg $(1)="$(2)",)
@@ -37,7 +45,10 @@ DOCKER_BUILD_ARGS = \
 	$(call _build_arg,NPM_REGISTRY,$(NPM_REGISTRY)) \
 	$(call _build_arg,HTTP_PROXY,$(HTTP_PROXY)) \
 	$(call _build_arg,HTTPS_PROXY,$(HTTPS_PROXY)) \
-	$(call _build_arg,NO_PROXY,$(NO_PROXY))
+	$(call _build_arg,NO_PROXY,$(NO_PROXY)) \
+	$(call _build_arg,CLAUDE_INSTALL,$(CLAUDE_INSTALL)) \
+	$(call _build_arg,CODEX_INSTALL,$(CODEX_INSTALL)) \
+	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION))
 
 help:
 	@echo "Wardyn governance control plane"

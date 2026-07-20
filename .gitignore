@@ -22,6 +22,11 @@ package-lock.json
 # Host-staged corp CA bundle for corporate-build image support (see deploy/images/README.md) — never commit
 deploy/images/corp-ca.pem
 
+# Host-staged native agent binaries (opt-in CLAUDE_INSTALL/CODEX_INSTALL=native for
+# corp networks where public npm is blocked; scripts/stage-agent-binary.sh) — never commit
+deploy/images/claude-code/claude-bin
+deploy/images/codex-cli/codex-bin
+
 # Environment
 .env
 .env.local
