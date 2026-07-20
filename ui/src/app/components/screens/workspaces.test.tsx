@@ -34,7 +34,9 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { AddWorkspaceDialog, WorkspaceLLMCredDialog, WorkspaceNeedsPanel } from "./workspaces";
+import { AddWorkspaceDialog } from "./workspaces";
+import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
+import { WorkspaceNeedsPanel } from "./workspace-needs-panel";
 
 function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace {
   return {
