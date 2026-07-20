@@ -6,6 +6,7 @@
 import * as React from "react";
 import {
   AlertTriangle,
+  Box,
   Check,
   FolderGit2,
   FolderOpen,
@@ -21,8 +22,16 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { workspaces as api } from "../../lib/api/workspaces";
+import { secrets as secretsApi } from "../../lib/api/secrets";
 import { getErrorMessage } from "../../lib/format";
-import type { SecretNeed, Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
+import type {
+  SecretNeed,
+  Workspace,
+  WorkspaceKind,
+  WorkspaceLLMCred,
+  WorkspaceLLMCredMode,
+  WorkspaceProfile,
+} from "../../lib/types";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -82,6 +91,41 @@ export const STATUS_LABEL: Record<Workspace["status"], string> = {
   error: "Error",
 };
 
+// Icon + label for the three onboardable kinds. "container" has no host mount
+// (source is an image ref), so it gets its own icon rather than reusing the
+// local-dir folder.
+const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: string }> = {
+  local_dir: { Icon: FolderOpen, label: "local dir" },
+  repo: { Icon: FolderGit2, label: "repo" },
+  container: { Icon: Box, label: "container" },
+};
+
+// Human label for the current model/harness binding (list/detail display).
+// "" (or absent) => no binding; the run falls back to the global provider
+// config, matching the backend's Mode="" semantics.
+function llmCredLabel(cred?: WorkspaceLLMCred): string {
+  switch (cred?.mode) {
+    case "managed":
+      return "Managed subscription";
+    case "api_key":
+      return cred.api_key_secret ? `API key: ${cred.api_key_secret}` : "API key";
+    case "bedrock": {
+      const bits = [cred.bedrock?.region, cred.bedrock?.model].filter(Boolean);
+      return bits.length ? `Bedrock: ${bits.join("/")}` : "Bedrock";
+    }
+    default:
+      return "None";
+  }
+}
+// success = injected proxy-side (managed/api_key), warning = resident at run
+// time (bedrock's static/SSO creds) — mirrors the setup screen's residency
+// framing (llm-access.tsx PROXY_INJECTED_CHIP / BEDROCK_RESIDENT_CHIP).
+function llmCredTone(mode: WorkspaceLLMCredMode | undefined): "neutral" | "success" | "warning" {
+  if (mode === "managed" || mode === "api_key") return "success";
+  if (mode === "bedrock") return "warning";
+  return "neutral";
+}
+
 export function WorkspacesScreen() {
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -89,6 +133,7 @@ export function WorkspacesScreen() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<Workspace | null>(null);
   const [profileTarget, setProfileTarget] = React.useState<Workspace | null>(null);
+  const [credTarget, setCredTarget] = React.useState<Workspace | null>(null);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
   // Rows with a scan in flight — scoped to workspace id so multiple scans (or a
   // scan alongside other list activity) never fight over one flag.
@@ -176,7 +221,7 @@ export function WorkspacesScreen() {
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {status === "loading" ? (
-          <TableSkeleton rows={5} cols={4} />
+          <TableSkeleton rows={5} cols={5} />
         ) : status === "error" ? (
           <ErrorState onRetry={load} />
         ) : workspaces.length === 0 ? (
@@ -208,68 +253,74 @@ export function WorkspacesScreen() {
                 <TableHead>Kind</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Model access</TableHead>
                 <TableHead className="w-[44px]" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((w) => (
-                <TableRow key={w.id}>
-                  <TableCell>
-                    <span className="inline-flex items-center gap-2">
-                      {w.kind === "repo" ? (
-                        <FolderGit2 className="size-3.5 text-cyan" />
+              {filtered.map((w) => {
+                const kindMeta = KIND_META[w.kind] ?? KIND_META.local_dir;
+                return (
+                  <TableRow key={w.id}>
+                    <TableCell>
+                      <span className="inline-flex items-center gap-2">
+                        <kindMeta.Icon className="size-3.5 text-cyan" />
+                        <span className="text-foreground">{w.name}</span>
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <Chip tone="neutral">{kindMeta.label}</Chip>
+                    </TableCell>
+                    <TableCell>
+                      <Mono className="text-foreground" title={w.source}>
+                        {w.source}
+                      </Mono>
+                      {w.ref && <span className="ml-1.5 text-xs text-muted-foreground">@{w.ref}</span>}
+                    </TableCell>
+                    <TableCell>
+                      {scanning.has(w.id) ? (
+                        <Chip tone="neutral" dot>
+                          <Loader2 className="size-3 animate-spin" /> Scanning…
+                        </Chip>
                       ) : (
-                        <FolderOpen className="size-3.5 text-cyan" />
+                        <Chip tone={STATUS_TONE[w.status]} dot>
+                          {STATUS_LABEL[w.status]}
+                        </Chip>
                       )}
-                      <span className="text-foreground">{w.name}</span>
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <Chip tone="neutral">{w.kind === "repo" ? "repo" : "local dir"}</Chip>
-                  </TableCell>
-                  <TableCell>
-                    <Mono className="text-foreground" title={w.source}>
-                      {w.source}
-                    </Mono>
-                    {w.ref && <span className="ml-1.5 text-xs text-muted-foreground">@{w.ref}</span>}
-                  </TableCell>
-                  <TableCell>
-                    {scanning.has(w.id) ? (
-                      <Chip tone="neutral" dot>
-                        <Loader2 className="size-3 animate-spin" /> Scanning…
-                      </Chip>
-                    ) : (
-                      <Chip tone={STATUS_TONE[w.status]} dot>
-                        {STATUS_LABEL[w.status]}
-                      </Chip>
-                    )}
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="size-8" aria-label="Workspace actions">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => triggerScan(w)} disabled={scanning.has(w.id)}>
-                          <ScanSearch className="size-4" /> Scan now
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setEditTarget(w)}>Edit</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setProfileTarget(w)} disabled={!w.profile}>
-                          View profile
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => setToDelete(w)}
-                          className="text-danger focus:text-danger"
-                        >
-                          <Trash2 className="size-4" /> Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell>
+                      <Chip tone={llmCredTone(w.llm_cred?.mode)}>{llmCredLabel(w.llm_cred)}</Chip>
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="size-8" aria-label="Workspace actions">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => triggerScan(w)} disabled={scanning.has(w.id)}>
+                            <ScanSearch className="size-4" /> Scan now
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setEditTarget(w)}>Edit</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setCredTarget(w)}>
+                            <KeyRound className="size-4" /> Model access
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setProfileTarget(w)} disabled={!w.profile}>
+                            View profile
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setToDelete(w)}
+                            className="text-danger focus:text-danger"
+                          >
+                            <Trash2 className="size-4" /> Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -285,6 +336,15 @@ export function WorkspacesScreen() {
           load();
         }}
         initial={editTarget ?? undefined}
+      />
+
+      <WorkspaceLLMCredDialog
+        workspace={credTarget}
+        onOpenChange={(o) => !o && setCredTarget(null)}
+        onSaved={(w) => {
+          setCredTarget(null);
+          setWorkspaces((list) => list.map((x) => (x.id === w.id ? w : x)));
+        }}
       />
 
       <Dialog open={!!profileTarget} onOpenChange={(o) => !o && setProfileTarget(null)}>
@@ -744,6 +804,161 @@ function SecretNeedRow({
   );
 }
 
+const CRED_MODES: { value: WorkspaceLLMCredMode | "none"; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "managed", label: "Managed (Wardyn subscription)" },
+  { value: "api_key", label: "API key" },
+  { value: "bedrock", label: "Bedrock" },
+];
+
+// The mode picker + conditional fields (secret name / bedrock region-model-
+// profile) shared by the onboarding form (create) and WorkspaceLLMCredDialog
+// (edit an existing workspace/container). Uncontrolled data lives in the
+// caller — this just renders `value` and reports edits via `onChange`.
+function LLMCredFields({
+  value,
+  onChange,
+}: {
+  value: WorkspaceLLMCred;
+  onChange: (next: WorkspaceLLMCred) => void;
+}) {
+  const secretListId = React.useId();
+  const [secretNames, setSecretNames] = React.useState<string[] | null>(null);
+  React.useEffect(() => {
+    if (value.mode !== "api_key" || secretNames !== null) return;
+    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
+  }, [value.mode, secretNames]);
+
+  return (
+    <div className="space-y-2.5 rounded-lg border border-border p-3">
+      <Label>Model / harness for this environment</Label>
+      <RadioGroup
+        value={value.mode || "none"}
+        onValueChange={(v) => onChange({ mode: v === "none" ? "" : (v as WorkspaceLLMCredMode) })}
+        className="flex flex-wrap gap-x-4 gap-y-1.5"
+      >
+        {CRED_MODES.map((m) => (
+          <label key={m.value} className="flex items-center gap-1.5 text-xs">
+            <RadioGroupItem value={m.value} id={`cred-mode-${m.value}`} />
+            <Label htmlFor={`cred-mode-${m.value}`} className="cursor-pointer font-normal">
+              {m.label}
+            </Label>
+          </label>
+        ))}
+      </RadioGroup>
+
+      {value.mode === "api_key" && (
+        <>
+          <Input
+            list={secretListId}
+            placeholder="anthropic-api-key"
+            value={value.api_key_secret ?? ""}
+            onChange={(e) => onChange({ ...value, api_key_secret: e.target.value })}
+            className="font-mono"
+            autoComplete="off"
+          />
+          <datalist id={secretListId}>
+            {(secretNames ?? []).map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+        </>
+      )}
+
+      {value.mode === "bedrock" && (
+        <div className="grid grid-cols-3 gap-2">
+          <Input
+            placeholder="Region"
+            value={value.bedrock?.region ?? ""}
+            onChange={(e) => onChange({ ...value, bedrock: { ...value.bedrock, region: e.target.value } })}
+            className="font-mono"
+            autoComplete="off"
+          />
+          <Input
+            placeholder="Model"
+            value={value.bedrock?.model ?? ""}
+            onChange={(e) => onChange({ ...value, bedrock: { ...value.bedrock, model: e.target.value } })}
+            className="font-mono"
+            autoComplete="off"
+          />
+          <Input
+            placeholder="AWS profile"
+            value={value.bedrock?.aws_profile ?? ""}
+            onChange={(e) => onChange({ ...value, bedrock: { ...value.bedrock, aws_profile: e.target.value } })}
+            className="font-mono"
+            autoComplete="off"
+          />
+        </div>
+      )}
+
+      <p className="text-[11px] leading-snug text-muted-foreground">
+        A run that picks this workspace/container inherits this model access — injected proxy-side at
+        launch, never resident.
+      </p>
+    </div>
+  );
+}
+
+// Standalone editor for an EXISTING workspace's model/harness binding — the
+// onboarding form's llm_cred is create-only (the server ignores it on a
+// generic PUT /workspaces/{id}), so changing it post-create goes through
+// api.setWorkspaceLLMCred instead. `workspace` null => closed. Exported for
+// the same reason AddWorkspaceDialog is (direct test coverage / reuse).
+export function WorkspaceLLMCredDialog({
+  workspace,
+  onOpenChange,
+  onSaved,
+}: {
+  workspace: Workspace | null;
+  onOpenChange: (o: boolean) => void;
+  onSaved: (w: Workspace) => void;
+}) {
+  const [cred, setCred] = React.useState<WorkspaceLLMCred>({ mode: "" });
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    if (workspace) setCred(workspace.llm_cred ?? { mode: "" });
+  }, [workspace]);
+
+  const save = async () => {
+    if (!workspace) return;
+    setSaving(true);
+    try {
+      const updated = await api.setWorkspaceLLMCred(workspace.id, cred);
+      onSaved(updated);
+      toast.success(`Model access updated for "${workspace.name}"`);
+    } catch (e) {
+      toast.error("Failed to update model access", { description: getErrorMessage(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={!!workspace} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Model access — {workspace?.name}</DialogTitle>
+          <DialogDescription>
+            A run that picks this workspace/container inherits this model access, injected proxy-side —
+            never resident in the sandbox.
+          </DialogDescription>
+        </DialogHeader>
+        <LLMCredFields value={cred} onChange={setCred} />
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving && <Loader2 className="size-4 animate-spin" />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // Add/Edit dialog for a single onboarded workspace. `initial` set => edit mode
 // (PUT), otherwise create (POST). Exported so the New Run wizard can offer
 // "Add workspace" inline without leaving the flow (mirrors AddSecretDialog).
@@ -765,6 +980,10 @@ export function AddWorkspaceDialog({
   const [ref, setRef] = React.useState("");
   const [defaultTarget, setDefaultTarget] = React.useState("");
   const [writable, setWritable] = React.useState(false);
+  // Model/harness binding — create-only (the server ignores llm_cred on a
+  // generic PUT); editing an existing workspace's binding goes through the
+  // list's "Model access" action (WorkspaceLLMCredDialog) instead.
+  const [llmCred, setLlmCred] = React.useState<WorkspaceLLMCred>({ mode: "" });
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
@@ -776,6 +995,7 @@ export function AddWorkspaceDialog({
     setRef(initial?.ref ?? "");
     setDefaultTarget(initial?.default_target ?? "");
     setWritable(initial?.writable ?? false);
+    setLlmCred({ mode: "" });
     setError(null);
     setSaving(false);
   }, [open, initial]);
@@ -789,7 +1009,9 @@ export function AddWorkspaceDialog({
       return;
     }
     if (!s) {
-      setError(kind === "repo" ? "Repo is required." : "Directory path is required.");
+      setError(
+        kind === "repo" ? "Repo is required." : kind === "container" ? "Image ref is required." : "Directory path is required.",
+      );
       return;
     }
     if (kind === "local_dir" && !s.startsWith("/")) {
@@ -803,8 +1025,9 @@ export function AddWorkspaceDialog({
         kind,
         source: s,
         ref: kind === "repo" && ref.trim() ? ref.trim() : undefined,
-        default_target: defaultTarget.trim() || undefined,
+        default_target: kind !== "container" && defaultTarget.trim() ? defaultTarget.trim() : undefined,
         writable: writable || undefined,
+        llm_cred: !isEdit && llmCred.mode ? llmCred : undefined,
       };
       const saved = isEdit ? await api.updateWorkspace(initial!.id, input) : await api.createWorkspace(input);
       onOpenChange(false);
@@ -855,14 +1078,28 @@ export function AddWorkspaceDialog({
                   Repo
                 </Label>
               </label>
+              <label className="flex items-center gap-2.5 rounded-lg border border-border p-2.5">
+                <RadioGroupItem value="container" id="ws-kind-container" disabled={isEdit} />
+                <Label htmlFor="ws-kind-container" className="cursor-pointer font-normal">
+                  Container image
+                </Label>
+              </label>
             </RadioGroup>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="ws-source">{kind === "repo" ? "Repo" : "Directory path"}</Label>
+            <Label htmlFor="ws-source">
+              {kind === "repo" ? "Repo" : kind === "container" ? "Image ref" : "Directory path"}
+            </Label>
             <Input
               id="ws-source"
-              placeholder={kind === "repo" ? "acme/payments-service" : "/home/me/projects/payments"}
+              placeholder={
+                kind === "repo"
+                  ? "acme/payments-service"
+                  : kind === "container"
+                    ? "ubuntu:24.04"
+                    : "/home/me/projects/payments"
+              }
               value={source}
               onChange={(e) => setSource(e.target.value)}
               className="font-mono"
@@ -874,6 +1111,12 @@ export function AddWorkspaceDialog({
                 <code className="font-mono">git-pat-&lt;host&gt;</code> (HTTPS) or{" "}
                 <code className="font-mono">ssh-key-&lt;host&gt;</code> (SSH) secret, added under
                 Secrets. Onboarding succeeds without one, but the clone will fail later.
+              </p>
+            )}
+            {kind === "container" && (
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                A tag or digest — pulled as the sandbox's base image. No host mount: nothing here needs
+                a path.
               </p>
             )}
           </div>
@@ -892,20 +1135,22 @@ export function AddWorkspaceDialog({
             </div>
           )}
 
-          <div className="space-y-2">
-            <Label htmlFor="ws-target">Default target (optional)</Label>
-            <Input
-              id="ws-target"
-              placeholder={kind === "repo" ? "~/work/payments-service" : "/home/agent/work"}
-              value={defaultTarget}
-              onChange={(e) => setDefaultTarget(e.target.value)}
-              className="font-mono"
-              autoComplete="off"
-            />
-            <p className="text-[11px] leading-snug text-muted-foreground">
-              Where this attaches in the sandbox by default. A run may override it per attachment.
-            </p>
-          </div>
+          {kind !== "container" && (
+            <div className="space-y-2">
+              <Label htmlFor="ws-target">Default target (optional)</Label>
+              <Input
+                id="ws-target"
+                placeholder={kind === "repo" ? "~/work/payments-service" : "/home/agent/work"}
+                value={defaultTarget}
+                onChange={(e) => setDefaultTarget(e.target.value)}
+                className="font-mono"
+                autoComplete="off"
+              />
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Where this attaches in the sandbox by default. A run may override it per attachment.
+              </p>
+            </div>
+          )}
 
           {/* Read-only is the safe default (WorkspaceMount.ReadOnly). Without this
               opt-in an imported workspace can never be written, so Record/Verify
@@ -941,6 +1186,11 @@ export function AddWorkspaceDialog({
               )}
             </div>
           )}
+
+          {/* Create-only: editing an existing workspace's binding uses the list's
+              "Model access" action instead (the server ignores llm_cred on a
+              generic PUT — see WorkspaceLLMCredDialog above). */}
+          {!isEdit && <LLMCredFields value={llmCred} onChange={setLlmCred} />}
 
           {error && (
             <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger">

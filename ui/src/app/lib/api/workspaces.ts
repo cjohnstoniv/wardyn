@@ -6,7 +6,7 @@
 // Onboarded workspaces + the guided Import flow (scan/build/verify/record/
 // finalize). Run-creation pickers offer ONLY these; a run may not reference any
 // other source.
-import type { SetupCommand, Workspace, WorkspaceKind } from "../types";
+import type { SetupCommand, Workspace, WorkspaceKind, WorkspaceLLMCred } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 export const workspaces = {
@@ -17,8 +17,11 @@ export const workspaces = {
     return unwrapList<Workspace>(await asJson<unknown>(res));
   },
 
-  // POST /api/v1/workspaces  { name, kind, source, ref?, default_target? } ->
+  // POST /api/v1/workspaces  { name, kind, source, ref?, default_target?, llm_cred? } ->
   // 201 created workspace (status starts "pending_scan" until scanned).
+  // llm_cred is the ONLY way to set a model/harness binding at create time —
+  // editing an existing workspace's binding goes through setWorkspaceLLMCred
+  // instead (updateWorkspace below ignores it, mirroring the server).
   async createWorkspace(input: {
     name: string;
     kind: WorkspaceKind;
@@ -26,6 +29,7 @@ export const workspaces = {
     ref?: string;
     default_target?: string;
     writable?: boolean;
+    llm_cred?: WorkspaceLLMCred;
   }): Promise<Workspace> {
     const res = await wfetch("/workspaces", { method: "POST", body: JSON.stringify(input) });
     return asJson<Workspace>(res);
@@ -90,6 +94,20 @@ export const workspaces = {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/setup-commands`, {
       method: "PUT",
       body: JSON.stringify({ commands }),
+    });
+    return asJson<Workspace>(res);
+  },
+
+  // PUT /api/v1/workspaces/{id}/llm-cred  body = the WorkspaceLLMCred -> updated
+  // Workspace. Sets/clears the operator-owned model/harness credential binding
+  // for an EXISTING workspace/container (mode:"" clears it). A run that later
+  // picks this workspace/container inherits it, injected proxy-side at
+  // dispatch — never resident. The one way to change the binding post-create;
+  // updateWorkspace's generic PUT does not touch it.
+  async setWorkspaceLLMCred(id: string, cred: WorkspaceLLMCred): Promise<Workspace> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/llm-cred`, {
+      method: "PUT",
+      body: JSON.stringify(cred),
     });
     return asJson<Workspace>(res);
   },

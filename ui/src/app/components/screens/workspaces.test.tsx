@@ -16,17 +16,25 @@ import type { Workspace, WorkspaceProfile } from "../../lib/types";
 
 const setApprovedEgressMock = vi.fn();
 const getObservedEgressMock = vi.fn();
+const createWorkspaceMock = vi.fn();
+const setWorkspaceLLMCredMock = vi.fn();
 vi.mock("../../lib/api/workspaces", () => ({
   workspaces: {
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
     getObservedEgress: (...a: unknown[]) => getObservedEgressMock(...a),
+    createWorkspace: (...a: unknown[]) => createWorkspaceMock(...a),
+    setWorkspaceLLMCred: (...a: unknown[]) => setWorkspaceLLMCredMock(...a),
   },
+}));
+const listSecretsMock = vi.fn();
+vi.mock("../../lib/api/secrets", () => ({
+  secrets: { listSecrets: (...a: unknown[]) => listSecretsMock(...a) },
 }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { WorkspaceNeedsPanel } from "./workspaces";
+import { AddWorkspaceDialog, WorkspaceLLMCredDialog, WorkspaceNeedsPanel } from "./workspaces";
 
 function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace {
   return {
@@ -246,5 +254,105 @@ describe("WorkspaceNeedsPanel — observed-but-denied egress", () => {
 
     expect(await screen.findByText(/no denied egress observed/i)).toBeInTheDocument();
     expect(setApprovedEgressMock).not.toHaveBeenCalled();
+  });
+});
+
+// AddWorkspaceDialog — onboarding a "container" kind (image ref, no host mount)
+// and binding a model/harness credential at create time.
+describe("AddWorkspaceDialog — container kind + model/harness binding", () => {
+  beforeEach(() => {
+    createWorkspaceMock.mockReset();
+    listSecretsMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("onboards a container by image ref, with no writable/default-target fields", async () => {
+    createWorkspaceMock.mockResolvedValue(ws({}, { kind: "container", source: "ubuntu:24.04" }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const onSaved = vi.fn();
+
+    render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={onSaved} />);
+
+    await user.click(screen.getByRole("radio", { name: /container image/i }));
+    // Source field relabels to "Image ref" and drops local_dir's absolute-path rule.
+    expect(screen.getByText("Image ref")).toBeInTheDocument();
+    // A container has no host mount — the writable opt-in (local_dir only) is gone.
+    expect(screen.queryByLabelText(/let agents write to this directory/i)).toBeNull();
+    expect(screen.queryByLabelText(/default target/i)).toBeNull();
+
+    await user.type(screen.getByLabelText("Name"), "sandbox-env");
+    await user.type(screen.getByPlaceholderText("ubuntu:24.04"), "ubuntu:24.04");
+    await user.click(screen.getByRole("button", { name: "Add workspace" }));
+
+    await waitFor(() =>
+      expect(createWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "container", source: "ubuntu:24.04", default_target: undefined, writable: undefined }),
+      ),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  it("includes an api_key model/harness binding in the create payload when selected", async () => {
+    createWorkspaceMock.mockResolvedValue(ws({}));
+    listSecretsMock.mockResolvedValue(["acme-anthropic-key"]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Name"), "payments");
+    await user.type(screen.getByPlaceholderText("/home/me/projects/payments"), "/srv/payments");
+    await user.click(screen.getByRole("radio", { name: "API key" }));
+    await user.type(screen.getByPlaceholderText("anthropic-api-key"), "acme-anthropic-key");
+    await user.click(screen.getByRole("button", { name: "Add workspace" }));
+
+    await waitFor(() =>
+      expect(createWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({ llm_cred: { mode: "api_key", api_key_secret: "acme-anthropic-key" } }),
+      ),
+    );
+  });
+
+  it("omits llm_cred entirely when the binding is left at None", async () => {
+    createWorkspaceMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    await user.type(screen.getByLabelText("Name"), "payments");
+    await user.type(screen.getByPlaceholderText("/home/me/projects/payments"), "/srv/payments");
+    await user.click(screen.getByRole("button", { name: "Add workspace" }));
+
+    await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());
+    expect(createWorkspaceMock.mock.calls[0][0].llm_cred).toBeUndefined();
+  });
+});
+
+// WorkspaceLLMCredDialog — the standalone editor for an EXISTING workspace's
+// binding (the onboarding form's llm_cred is create-only; this is the only
+// path that can change it afterward — PUT /workspaces/{id}/llm-cred).
+describe("WorkspaceLLMCredDialog", () => {
+  beforeEach(() => {
+    setWorkspaceLLMCredMock.mockReset();
+    listSecretsMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("saves the selected mode via setWorkspaceLLMCred and reports the updated workspace", async () => {
+    const workspace = ws({}, { id: "ws-9", name: "payments", llm_cred: { mode: "" } });
+    const updated = { ...workspace, llm_cred: { mode: "managed" as const } };
+    setWorkspaceLLMCredMock.mockResolvedValue(updated);
+    const onSaved = vi.fn();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={onSaved} />);
+
+    await user.click(screen.getByRole("radio", { name: /managed/i }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-9", { mode: "managed" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(updated));
+  });
+
+  it("preloads the workspace's existing binding", () => {
+    const workspace = ws({}, { llm_cred: { mode: "bedrock", bedrock: { region: "us-east-1" } } });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    expect(screen.getByPlaceholderText("Region")).toHaveValue("us-east-1");
   });
 });

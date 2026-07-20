@@ -30,6 +30,12 @@ export function resolveComposeWorkspace(
 ): ComposeWorkspace | undefined {
   const w = workspaces.find((x) => x.id === sel.workspaceId);
   if (!w) return undefined;
+  // A container has no scannable content and no host mount — the advisory
+  // composer analyzes workspace CONTENT to propose a policy, so it has nothing to
+  // work from. Skip it (the caller falls back to ephemeral) rather than send its
+  // image ref as a bogus local mount path (which would fail the onboarded-mount
+  // gate at launch). Build container runs directly in the New Run wizard.
+  if (w.kind === "container") return undefined;
   return w.kind === "repo"
     ? { kind: "git", repo: w.source }
     : { kind: "local", path: w.source, read_write: !sel.readOnly };

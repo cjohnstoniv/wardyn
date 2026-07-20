@@ -6,6 +6,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Container as an execution environment.** A workspace can now be a container
+  image (a new `container` kind) alongside a local directory or repository, and any
+  workspace/container can carry an operator-owned model/harness credential binding
+  (managed, API key, or Bedrock — names/refs only, never secret values). A run
+  inherits the model access of the workspace/container it picks; the binding is
+  folded into the run policy at create and injected proxy-side, so the sandbox never
+  holds the credential. Onboard and edit bindings from the Workspaces screen
+  (`PUT /workspaces/{id}/llm-cred`).
+- **Run type in the New Run wizard.** The Basics step offers "Agent run" vs
+  "Governed command" (a plain shell command, `task_mode=exec`, no agent/model), and
+  bring-your-own base image is promoted out of the Advanced section into a
+  first-class field. Picking a container attaches it as the run's base image.
+- **Harness-aware demo.** When a model/harness provider is connected, the Getting
+  Started demos include an interactive Claude Code demo alongside the keyless
+  egress-boundary demos.
+
+### Changed
+
+- **First-run setup is a mandatory gate.** The welcome screen is a single
+  "Get started" call to action into Getting Started — the "try a demo sandbox" and
+  "skip for now" escapes are gone, and no navigation appears until setup is finished.
+  Returning operators (existing runs) and team/SSO deployments are never gated.
+- **The model/harness provider is optional.** Only the sandbox barrier is required;
+  the provider step is an explicit, skippable choice (the AI Composer and agent runs
+  need it, plain governed commands and bring-your-own containers do not).
+- **Platform-first framing.** Wardyn is presented as a governed-sandbox platform for
+  any workload — scripts, builds, tools, and coding agents — with AI agents as the
+  flagship use rather than the definition (welcome, setup, runs, and glossary copy).
+
 ## [0.3.1] — 2026-07-18
 
 ### Added

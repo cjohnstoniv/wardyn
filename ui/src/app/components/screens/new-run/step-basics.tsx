@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step 1 — Basics: agent, onboarded-workspace multi-select, run mode
-// (interactive | batch), and an optional task.
+// Step 1 — Basics: run type (agent vs governed command), agent (agent runs
+// only), sandbox image, onboarded-workspace multi-select, run mode
+// (interactive | batch), and the task/command.
 import { Textarea } from "../../ui/textarea";
 import { Input } from "../../ui/input";
 import {
@@ -20,7 +21,13 @@ import { Field } from "./step-shell";
 import { Loader2 } from "lucide-react";
 import { WorkspacePicker } from "./workspace-picker";
 import type { Workspace } from "../../../lib/types";
-import { workspaceProfileOptions, type RunMode, type WizardAgent, type WizardState } from "./wizard-types";
+import {
+  workspaceProfileOptions,
+  type RunMode,
+  type RunType,
+  type WizardAgent,
+  type WizardState,
+} from "./wizard-types";
 
 export function StepBasics({
   state,
@@ -54,21 +61,67 @@ export function StepBasics({
 
   return (
     <div className="space-y-5">
-      <Field label="Agent" hint="Claude Code and Codex CLI are the built-in agents; a custom image (below) can carry your own harness.">
-        <Select value={state.agent} onValueChange={(v) => patch({ agent: v as WizardAgent })}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="claude-code">Claude Code</SelectItem>
-            <SelectItem value="codex-cli">Codex CLI</SelectItem>
-          </SelectContent>
-        </Select>
+      <Field
+        label="Run type"
+        hint="A governed command runs `task` as a plain shell command in the sandbox — no agent, no model. An agent run drives a coding agent under Wardyn's harness and needs a model."
+      >
+        <RadioGroup
+          value={state.runType}
+          onValueChange={(v) => patch({ runType: v as RunType })}
+          className="grid grid-cols-2 gap-2"
+          data-testid="basics-run-type"
+        >
+          <label className="flex items-start gap-2 rounded-lg border border-border p-2.5">
+            <RadioGroupItem value="agent" id="runtype-agent" className="mt-0.5" />
+            <div className="min-w-0">
+              <Label htmlFor="runtype-agent" className="cursor-pointer">
+                Agent run
+              </Label>
+              <p className="text-[11px] leading-snug text-muted-foreground">Coding agent under the harness</p>
+            </div>
+          </label>
+          <label className="flex items-start gap-2 rounded-lg border border-border p-2.5">
+            <RadioGroupItem value="command" id="runtype-command" className="mt-0.5" />
+            <div className="min-w-0">
+              <Label htmlFor="runtype-command" className="cursor-pointer">
+                Governed command
+              </Label>
+              <p className="text-[11px] leading-snug text-muted-foreground">Plain shell command, no agent</p>
+            </div>
+          </label>
+        </RadioGroup>
+      </Field>
+
+      {state.runType === "agent" && (
+        <Field label="Agent" hint="Claude Code and Codex CLI are the built-in agents; a custom image (below) can carry your own harness.">
+          <Select value={state.agent} onValueChange={(v) => patch({ agent: v as WizardAgent })}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="claude-code">Claude Code</SelectItem>
+              <SelectItem value="codex-cli">Codex CLI</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+
+      <Field
+        label="Sandbox image"
+        hint="Bring your own base image, or leave blank for the built-in agent image. Wardyn layers its runner tools onto it and clears its entrypoint before use, and runs a self-test before the task. Egress policy, confinement, and secret brokering apply regardless of image contents. Your image needs a shell (and, for an agent run, the agent's CLI). Pre-pull private images on the host; pin a @sha256: digest to avoid tag drift."
+      >
+        <Input
+          placeholder="e.g. myco/dev:latest or ghcr.io/org/image@sha256:…"
+          value={state.image}
+          onChange={(e) => patch({ image: e.target.value })}
+          className="font-mono"
+          aria-label="Sandbox image"
+        />
       </Field>
 
       <Field
         label="Workspaces"
-        hint="Only onboarded local directories and repos can be attached — a raw host path is never accepted. The first one selected is the primary (drives the run's base image); the rest are attached alongside it. Optional — leave empty for an ephemeral scratch run."
+        hint="Only onboarded directories, repos, and container images can be attached — a raw host path is never accepted. A container attaches as the run's base image (and its bound model access); directories/repos mount alongside. The first selected is the primary. Optional — leave empty for an ephemeral scratch run."
       >
         <WorkspacePicker
           selections={state.workspaces}
@@ -172,7 +225,7 @@ export function StepBasics({
       <Field
         label={
           <span>
-            Task{" "}
+            {state.runType === "command" ? "Command" : "Task"}{" "}
             {state.mode === "interactive" && (
               <span className="font-normal text-muted-foreground">(optional)</span>
             )}
@@ -182,41 +235,24 @@ export function StepBasics({
         hint={
           state.mode === "interactive"
             ? "Interactive runs come up idle so you can attach and drive them."
-            : "Autonomous runs need a task — the agent runs it unattended."
+            : state.runType === "command"
+              ? "Autonomous runs need a command — it runs unattended as a plain shell command in the sandbox."
+              : "Autonomous runs need a task — the agent runs it unattended."
         }
       >
         <Textarea
           id="task"
-          placeholder="Describe what the agent should accomplish…"
+          placeholder={
+            state.runType === "command"
+              ? "e.g. npm run build && npm test"
+              : "Describe what the agent should accomplish…"
+          }
           value={state.task}
           onChange={(e) => patch({ task: e.target.value })}
           rows={3}
+          className={state.runType === "command" ? "font-mono" : undefined}
         />
       </Field>
-
-      {/* Advanced: bring your own base image. Collapsed by default (native
-          <details> — no lib) so the common path is unchanged. */}
-      <details className="rounded-lg border border-dashed border-border p-3" open={!!state.image}>
-        <summary className="cursor-pointer text-sm font-medium text-foreground">
-          Custom sandbox image (advanced)
-        </summary>
-        <div className="mt-3 space-y-2">
-          <Input
-            placeholder="e.g. myco/dev:latest or ghcr.io/org/image@sha256:…"
-            value={state.image}
-            onChange={(e) => patch({ image: e.target.value })}
-            className="font-mono"
-            aria-label="Custom sandbox image"
-          />
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            Wardyn layers its runner tools onto this base and clears its entrypoint before use, and runs a
-            self-test before the task. Egress policy, confinement, and secret brokering apply regardless of
-            image contents. Your image needs a shell (and, for a task run, the agent&apos;s CLI). Pre-pull
-            private images on the host; pin a <span className="font-mono">@sha256:</span> digest to avoid tag
-            drift. Leave blank to use the built-in agent image.
-          </p>
-        </div>
-      </details>
     </div>
   );
 }

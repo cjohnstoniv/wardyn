@@ -10,7 +10,9 @@
 // validateWorkspaceSources, the un-bypassable server-side gate this UI mirrors.
 import type { ProfileObservations } from "./profile";
 
-export type WorkspaceKind = "local_dir" | "repo";
+// "container" is a bring-your-own base IMAGE onboarded as a named execution
+// environment: `source` is an image ref (e.g. "ubuntu:24.04"), no host mount.
+export type WorkspaceKind = "local_dir" | "repo" | "container";
 // Widened for the guided Import flow (scan → build → verify → ready). The
 // original three (pending_scan/ready/error) still mean what they did; the new
 // transient/failure states drive the import panel's rail + polling.
@@ -150,6 +152,32 @@ export interface RecordResult {
   caveats?: string[];
 }
 
+// WorkspaceLLMCredMode selects how a run that picks this workspace/container is
+// credentialed for model/harness access. "" (none) => this workspace binds no
+// model; the run falls back to the global provider config.
+export type WorkspaceLLMCredMode = "" | "managed" | "api_key" | "bedrock";
+
+// A workspace/container's Bedrock model selection (non-secret; the AWS
+// credentials themselves come from the store / mounted ~/.aws, unchanged).
+export interface WorkspaceBedrockRef {
+  region?: string;
+  model?: string;
+  aws_profile?: string;
+}
+
+// The OPERATOR-owned model/harness credential BINDING on a workspace/
+// container: a run that picks this workspace inherits this model access
+// (injected proxy-side at dispatch — never resident). Refs/names only, never
+// secret values — mirrors ApprovedEgress's operator-owned discipline. Set via
+// createWorkspace's `llm_cred` (on create) or api.setWorkspaceLLMCred (edit).
+export interface WorkspaceLLMCred {
+  mode: WorkspaceLLMCredMode;
+  // Store secret name for mode="api_key". Injected proxy-side; never resident.
+  api_key_secret?: string;
+  // Per-workspace Bedrock selection for mode="bedrock".
+  bedrock?: WorkspaceBedrockRef;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -175,6 +203,11 @@ export interface Workspace {
   // auto-derived. Managed via api.setApprovedEgress (full-replacement PUT).
   approved_egress?: string[];
   image_ref?: string;
+  // Operator-owned model/harness credential binding — see WorkspaceLLMCred.
+  // Absent/mode="" => no binding; a picking run falls back to the global
+  // provider config. Settable via createWorkspace (create) or
+  // api.setWorkspaceLLMCred (standalone edit) — NOT via updateWorkspace.
+  llm_cred?: WorkspaceLLMCred;
   status: WorkspaceStatus;
   // Operator-approved setup commands (from api.setSetupCommands) — the exact list a
   // verify run executes. Distinct from profile.setup_commands (the scanner's proposal).

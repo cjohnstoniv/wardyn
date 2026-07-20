@@ -62,6 +62,12 @@ export type RunMode = "interactive" | "batch";
 export type GitHubPermission = "read" | "read+write";
 export type Lifecycle = "never" | "auto";
 
+// What kind of run this is. "agent" runs a coding agent under Wardyn's harness
+// (needs a model/harness — the Agent picker applies). "command" runs the task
+// text as a plain shell command in the governed sandbox (task_mode=exec on the
+// wire) — no agent, no model, the Agent picker is hidden/irrelevant.
+export type RunType = "agent" | "command";
+
 // How the run authenticates to Anthropic (claude-code only). API key is the
 // zero-resident, secure default; subscription mounts the host OAuth creds into
 // the sandbox (reduced isolation); Bedrock is a fast-follow (disabled for now).
@@ -100,6 +106,8 @@ export const PRESET_DOMAINS: string[] = [
 
 export interface WizardState {
   // --- Step 1: basics ---
+  // "agent" (default) vs "command" (task_mode=exec, no agent/model involved).
+  runType: RunType;
   agent: WizardAgent;
   // Onboarded workspaces attached to this run — ONLY sources onboarded via
   // /workspaces may be selected (the picker fetches listWorkspaces() and offers
@@ -156,7 +164,7 @@ export interface WizardState {
   saveAsProfile: boolean;
   profileName: string;
 
-  // --- Basics (advanced): Bring Your Own Image ---
+  // --- Step 1: basics — Bring Your Own Image ---
   // A user-supplied base image ref. When set, the backend wraps it with the
   // runner tools before use (see CreateRunInput.image). "" = the convention image.
   image: string;
@@ -164,6 +172,7 @@ export interface WizardState {
 
 export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
   return {
+    runType: "agent",
     agent: "claude-code",
     workspaces: [],
     mode: "interactive",
@@ -274,6 +283,12 @@ export function buildSpec(
   if (state.image.trim()) {
     run.image = state.image.trim();
   }
+  // Governed command: task_mode=exec runs `task` as a plain shell command, no
+  // agent/model involved. Omitted for "agent" so the wire default ("harness")
+  // stays backward-compatible.
+  if (state.runType === "command") {
+    run.task_mode = "exec";
+  }
 
   // --- onboarded workspace selections -> workspace_mounts[] / workspace_repos[]
   // ---
@@ -287,7 +302,15 @@ export function buildSpec(
     const w = resolveWorkspace(sel, workspaces);
     if (!w) return; // stale selection — defensively skip rather than dangle
     const target = sel.target?.trim() || w.default_target?.trim() || undefined;
-    if (w.kind === "repo") {
+    if (w.kind === "container") {
+      // A container workspace is the run's base IMAGE, not a mount. The backend
+      // resolves it back to this onboarded workspace by image ref
+      // (GetWorkspaceBySource) to inherit its bound model/harness creds —
+      // emitting it as a workspace_mount would fail the onboarded-mount gate (an
+      // image ref is not an onboarded local_dir source). An explicit BYO image
+      // (the Sandbox image field) still wins if the operator set one.
+      if (!run.image) run.image = w.source;
+    } else if (w.kind === "repo") {
       hasRepoSelection = true;
       const entry: WorkspaceRepo = { repo: w.source };
       if (target) entry.target = target;
@@ -304,8 +327,10 @@ export function buildSpec(
       });
     }
     if (i === 0) {
-      // Synthetic repo label so the run row reads meaningfully either way.
-      run.repo = w.kind === "repo" ? w.source : `local:${basename(w.source)}`;
+      // Synthetic repo label so the run row reads meaningfully. A container has
+      // no repo/mount source — it rides run.image — so it carries no label.
+      run.repo =
+        w.kind === "repo" ? w.source : w.kind === "container" ? "" : `local:${basename(w.source)}`;
     }
   });
 

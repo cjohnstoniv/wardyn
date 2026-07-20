@@ -186,3 +186,18 @@ describe("buildSpec — git_pat grant", () => {
     expect((missingSecret.inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
   });
 });
+
+// Governed command run type: task_mode=exec on the wire, no agent/model
+// involved. Default ("agent") must stay backward-compatible (task_mode omitted).
+describe("buildSpec — runType (agent run vs governed command)", () => {
+  it("defaults to an agent run and omits task_mode", () => {
+    const { run } = buildSpec(initialWizardState());
+    expect(run.task_mode).toBeUndefined();
+  });
+
+  it("emits task_mode: exec for a governed command", () => {
+    const { run } = buildSpec({ ...initialWizardState(), runType: "command", task: "npm test" });
+    expect(run.task_mode).toBe("exec");
+    expect(run.task).toBe("npm test");
+  });
+});

@@ -9,7 +9,7 @@
 // (mirrors DomainPillList), and a disclosed per-item config card (mirrors
 // StepAccess's AuthOption) — rather than inventing new interaction patterns.
 import * as React from "react";
-import { ChevronsUpDown, FolderGit2, FolderOpen, Plus, X } from "lucide-react";
+import { Box, ChevronsUpDown, FolderGit2, FolderOpen, Plus, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -75,6 +75,8 @@ export function WorkspacePicker({
                 <div className="flex items-center gap-2.5">
                   {w?.kind === "repo" ? (
                     <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
+                  ) : w?.kind === "container" ? (
+                    <Box className="size-4 shrink-0 text-muted-foreground" />
                   ) : (
                     <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
                   )}
@@ -101,40 +103,49 @@ export function WorkspacePicker({
                     <X className="size-4" />
                   </button>
                 </div>
-                <div className="mt-2.5 flex items-end gap-3 border-t border-border pl-[26px] pt-2.5">
-                  <div className="flex-1 space-y-1">
-                    <Label
-                      htmlFor={`ws-target-${sel.workspaceId}`}
-                      className="text-[11px] font-normal text-muted-foreground"
-                    >
-                      Target override (optional)
-                    </Label>
-                    <Input
-                      id={`ws-target-${sel.workspaceId}`}
-                      placeholder={
-                        w?.default_target || (w?.kind === "repo" ? "~/work/<repo>" : "/home/agent/work")
-                      }
-                      value={sel.target ?? ""}
-                      onChange={(e) => patch(sel.workspaceId, { target: e.target.value })}
-                      className="font-mono text-xs"
-                    />
-                  </div>
-                  {w?.kind !== "repo" && (
-                    <div className="flex items-center gap-2 pb-1.5">
-                      <Switch
-                        id={`ws-ro-${sel.workspaceId}`}
-                        checked={!!sel.readOnly}
-                        onCheckedChange={(c) => patch(sel.workspaceId, { readOnly: c })}
-                      />
+                {w?.kind === "container" ? (
+                  // A container isn't mounted — it's the run's base image, so a
+                  // mount target / read-only toggle don't apply. The run inherits
+                  // this environment's bound model/harness access.
+                  <p className="mt-2.5 border-t border-border pl-[26px] pt-2.5 text-[11px] text-muted-foreground">
+                    Runs as this environment&apos;s sandbox image — the run inherits its model access.
+                  </p>
+                ) : (
+                  <div className="mt-2.5 flex items-end gap-3 border-t border-border pl-[26px] pt-2.5">
+                    <div className="flex-1 space-y-1">
                       <Label
-                        htmlFor={`ws-ro-${sel.workspaceId}`}
+                        htmlFor={`ws-target-${sel.workspaceId}`}
                         className="text-[11px] font-normal text-muted-foreground"
                       >
-                        Read-only
+                        Target override (optional)
                       </Label>
+                      <Input
+                        id={`ws-target-${sel.workspaceId}`}
+                        placeholder={
+                          w?.default_target || (w?.kind === "repo" ? "~/work/<repo>" : "/home/agent/work")
+                        }
+                        value={sel.target ?? ""}
+                        onChange={(e) => patch(sel.workspaceId, { target: e.target.value })}
+                        className="font-mono text-xs"
+                      />
                     </div>
-                  )}
-                </div>
+                    {w?.kind === "local_dir" && (
+                      <div className="flex items-center gap-2 pb-1.5">
+                        <Switch
+                          id={`ws-ro-${sel.workspaceId}`}
+                          checked={!!sel.readOnly}
+                          onCheckedChange={(c) => patch(sel.workspaceId, { readOnly: c })}
+                        />
+                        <Label
+                          htmlFor={`ws-ro-${sel.workspaceId}`}
+                          className="text-[11px] font-normal text-muted-foreground"
+                        >
+                          Read-only
+                        </Label>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

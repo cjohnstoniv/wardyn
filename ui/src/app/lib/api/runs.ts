@@ -111,6 +111,9 @@ export const runs = {
     if (input.interactive) body.interactive = true;
     if (input.inline_policy) body.inline_policy = input.inline_policy;
     if (input.compose_session_id) body.compose_session_id = input.compose_session_id;
+    // BYOI + governed-command pass-through — previously dropped on the floor here.
+    if (input.image) body.image = input.image;
+    if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
     const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
   },
@@ -140,6 +143,9 @@ export const runs = {
     if (cc) body.confinement_class = cc;
     if (input.interactive) body.interactive = true;
     if (input.inline_policy) body.inline_policy = input.inline_policy;
+    // Mirror createRun's body exactly, so preflight's verdict matches the real launch.
+    if (input.image) body.image = input.image;
+    if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body) });
     return asJson<PreflightResult>(res);
   },

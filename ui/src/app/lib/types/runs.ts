@@ -91,6 +91,11 @@ export interface CreateRunInput {
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.
   // Mutually exclusive with a devcontainer build. Omitted → the convention image.
   image?: string;
+  // task_mode selects how a non-interactive run executes `task`: "" / "harness"
+  // (default) runs the agent harness; "exec" runs `task` as a plain shell
+  // command in the same governed sandbox — no agent, no LLM credentials.
+  // Ignored for an interactive run. Omitted → "harness" (backward-compatible).
+  task_mode?: "harness" | "exec";
 }
 
 // POST /api/v1/runs response: the created run's fields PLUS an optional advisory

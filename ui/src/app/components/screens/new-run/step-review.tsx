@@ -210,7 +210,8 @@ export function StepReview({
                       )}
                       <Mono className="text-foreground">
                         {w?.name ?? sel.workspaceId} ({w?.source ?? "unresolved"})
-                        {w?.kind !== "repo" && ` — ${sel.readOnly ? "ro" : "rw"}`}
+                        {w?.kind === "local_dir" && ` — ${sel.readOnly ? "ro" : "rw"}`}
+                        {w?.kind === "container" && " — image"}
                       </Mono>
                       {/* Surface scan status so a still-pending / errored workspace isn't
                           attached silently at the final gate. */}
