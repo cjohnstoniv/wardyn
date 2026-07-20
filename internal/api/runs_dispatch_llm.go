@@ -142,43 +142,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
 	} else if t.bedrockReady {
-		for k, v := range t.bedrock.env {
-			sandboxEnv[k] = v
-		}
-		// Resident SigV4 creds must stay out of PTY/recording streams and any
-		// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
-		// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
-		// neither has anything secret to mask here.
-		if s.cfg.MaskRegistry != nil && !t.bedrock.bearer && !t.bedrock.awsMount {
-			s.cfg.MaskRegistry.Add(run.ID, []byte(t.bedrock.env["AWS_ACCESS_KEY_ID"]))
-			s.cfg.MaskRegistry.Add(run.ID, []byte(t.bedrock.env["AWS_SECRET_ACCESS_KEY"]))
-			if tok := t.bedrock.env["AWS_SESSION_TOKEN"]; tok != "" {
-				s.cfg.MaskRegistry.Add(run.ID, []byte(tok))
-			}
-		}
-		for _, h := range t.bedrock.egressHosts {
-			if !domainAllowedExact(policy.AllowedDomains, h) {
-				policy.AllowedDomains = append(policy.AllowedDomains, h)
-			}
-		}
-		detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
-		mode := "resident"
-		switch {
-		case t.bedrock.bearer:
-			detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
-			mode = "bearer"
-		case t.bedrock.ssoInject:
-			detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident for now — Phase B injects it proxy-side on portal.sso instead"
-			mode = "sso-inject"
-		case t.bedrock.awsMount:
-			detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
-			mode = "aws-dir-mount"
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"region": s.cfg.BedrockRegion, "model": s.cfg.BedrockModel, "hosts": t.bedrock.egressHosts,
-				"mode": mode, "detail": detail,
-			})))
+		s.applyBedrockTransport(ctx, run, t.bedrock, policy, sandboxEnv)
 	} else {
 		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
 	}
@@ -201,6 +165,52 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	}
 
 	return t
+}
+
+// applyBedrockTransport wires a READY Bedrock posture onto the run: it copies
+// the resolved Bedrock env into the sandbox env, registers any resident SigV4
+// credentials with the mask registry, appends the Bedrock egress hosts to the
+// policy allow-list, and audits which of the four modes (bearer / sso-inject /
+// aws-dir-mount / resident) credentials the run. Extracted verbatim from
+// resolveLLMTransport's t.bedrockReady branch.
+func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) {
+	for k, v := range b.env {
+		sandboxEnv[k] = v
+	}
+	// Resident SigV4 creds must stay out of PTY/recording streams and any
+	// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
+	// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
+	// neither has anything secret to mask here.
+	if s.cfg.MaskRegistry != nil && !b.bearer && !b.awsMount {
+		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_ACCESS_KEY_ID"]))
+		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_SECRET_ACCESS_KEY"]))
+		if tok := b.env["AWS_SESSION_TOKEN"]; tok != "" {
+			s.cfg.MaskRegistry.Add(run.ID, []byte(tok))
+		}
+	}
+	for _, h := range b.egressHosts {
+		if !domainAllowedExact(policy.AllowedDomains, h) {
+			policy.AllowedDomains = append(policy.AllowedDomains, h)
+		}
+	}
+	detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
+	mode := "resident"
+	switch {
+	case b.bearer:
+		detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
+		mode = "bearer"
+	case b.ssoInject:
+		detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident for now — Phase B injects it proxy-side on portal.sso instead"
+		mode = "sso-inject"
+	case b.awsMount:
+		detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
+		mode = "aws-dir-mount"
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
+		run.ID.String(), "success", mustJSON(map[string]any{
+			"region": s.cfg.BedrockRegion, "model": s.cfg.BedrockModel, "hosts": b.egressHosts,
+			"mode": mode, "detail": detail,
+		})))
 }
 
 // provisionDispatchMITMCA provisions the per-run TLS-MITM CA when any consumer

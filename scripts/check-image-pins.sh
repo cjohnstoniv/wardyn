@@ -26,6 +26,15 @@ while IFS= read -r df; do
   mapfile -t aliases < <(grep -iE '^FROM .+ [Aa][Ss] ' "$df" | sed -E 's/.* [Aa][Ss] +([^ ]+).*/\1/')
   while IFS= read -r line; do
     ref=$(echo "$line" | awk '{print $2}')
+    # `FROM ${VAR}` is BuildKit's global-ARG stage selector (e.g. UI_STAGE picks
+    # ui-build vs ui-prebuilt). Resolve it against the Dockerfile's own
+    # `ARG VAR=default` so the alias check below sees the stage name. Only the
+    # default is knowable here; if it resolves to a registry image rather than a
+    # stage alias, the digest requirement below still applies.
+    if [[ "$ref" =~ ^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$ ]]; then
+      argdef=$(grep -iE "^ARG ${BASH_REMATCH[1]}=" "$df" | head -1 | sed -E 's/^[^=]*=//' || true)
+      [[ -n "$argdef" ]] && ref="$argdef"
+    fi
     skip=0
     for a in "${aliases[@]:-}"; do
       if [[ -n "$a" && "$ref" == "$a" ]]; then skip=1; break; fi

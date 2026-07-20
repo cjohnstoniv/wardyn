@@ -148,6 +148,15 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
+	cmd.AddCommand(list, get, create, update, del, policyRenderCmd())
+	return cmd
+}
+
+// policyRenderCmd converts a JSON or YAML policy (full body or bare spec) to
+// canonical JSON. Purely local — it never talks to the control plane; its job is
+// to surface a bad spec at authoring time instead of at launch, so it decodes
+// strictly (DisallowUnknownFields), mirroring the server's validator.
+func policyRenderCmd() *cobra.Command {
 	var renderFile string
 	render := &cobra.Command{
 		Use:   "render -f <file>",
@@ -197,9 +206,7 @@ func policyCmd(client clientFn) *cobra.Command {
 	}
 	render.Flags().StringVarP(&renderFile, "file", "f", "", "path to a JSON or YAML policy or spec (use '-' for stdin)")
 	_ = render.MarkFlagRequired("file")
-
-	cmd.AddCommand(list, get, create, update, del, render)
-	return cmd
+	return render
 }
 
 // readPolicyFile parses a JSON policy body from path ("-" means stdin). The file

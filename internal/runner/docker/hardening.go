@@ -187,7 +187,11 @@ func verifyCapsEnforced(createWarnings []string) error {
 	if len(discarded) == 0 {
 		return nil
 	}
-	return fmt.Errorf("the Docker daemon discarded a requested resource limit — an untrusted sandbox would run without it: %s. On cgroup v2, delegate the controllers to the runtime user (systemd unit: Delegate=yes; rootless Docker: enable cgroup v2 delegation per the rootless docs). Set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 to override on a TRUSTED host: %w",
+	// Wrapped as adjacent string literals purely to keep the SOURCE line under the
+	// lll cap — the concatenated message is byte-identical to the reader.
+	return fmt.Errorf("the Docker daemon discarded a requested resource limit — an untrusted sandbox would run without it: %s. "+
+		"On cgroup v2, delegate the controllers to the runtime user (systemd unit: Delegate=yes; rootless Docker: enable cgroup v2 delegation per the rootless docs). "+
+		"Set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 to override on a TRUSTED host: %w",
 		strings.Join(discarded, "; "), errCapsUnenforceable)
 }
 

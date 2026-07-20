@@ -461,53 +461,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	if d.cfg.RecordingMount != "" {
-		// Cast delivery: wardyn-rec writes the finished recording to this
-		// shared mount (-out-dir), where the control plane's FSStore reads it.
-		mtype := mount.TypeVolume
-		if strings.HasPrefix(d.cfg.RecordingMount, "/") {
-			mtype = mount.TypeBind
-			// A host-path RecordingMount is a real host bind: subject its SOURCE to
-			// the same deny-list as workspace binds and FAIL CLOSED (a source that
-			// is/traverses /, /proc, docker.sock, ... must never be bound in). Only
-			// binds are validated — a named volume is Docker-managed, not a host path
-			// (mirrors how the workspace-bind loop treats host paths).
-			if err := runner.ValidateMount(runner.Mount{Source: d.cfg.RecordingMount, Target: recordingSourceProbeTarget}); err != nil {
-				return fail(fmt.Errorf("docker: denied recording mount %q -> %q: %w", d.cfg.RecordingMount, RecordingMountTarget, err))
-			}
-		}
-		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{
-			Type:   mtype,
-			Source: d.cfg.RecordingMount,
-			Target: RecordingMountTarget,
-		})
+	agentMounts, err := d.agentMounts(spec.Mounts)
+	if err != nil {
+		return fail(err)
 	}
-
-	// Operator/policy-controlled host bind mounts (e.g. a host repo at ~/work).
-	// SECURITY MODEL (documented here and in runner.SandboxSpec.Mounts):
-	//   - These come ONLY from a policy's RunPolicySpec.WorkspaceMounts, copied
-	//     into spec.Mounts by internal/api dispatch. The create-run HTTP request
-	//     has no mounts field, so a prompt-injected agent / malicious requester
-	//     can NEVER choose a host mount (invariants 1 & 3).
-	//   - DENY-LIST DEFENSE-IN-DEPTH: even though the values came from policy
-	//     (already validated at policy-write time), we re-run runner.ValidateMount
-	//     here and FAIL CLOSED — any denied Source (/, /proc, /sys, /dev, /run,
-	//     /var/run, /var/lib/docker, any docker.sock, /etc, /boot, /root, or a
-	//     non-absolute/non-cleaned path) or a Target outside the allowed
-	//     in-container prefixes errors the whole CreateSandbox (rollback runs).
-	//   - DEFAULT READ-ONLY: a mount is read-only unless the policy explicitly set
-	//     ReadOnly=false, so a workspace bind cannot grant host write by default.
-	for _, m := range spec.Mounts {
-		if err := runner.ValidateMount(m); err != nil {
-			return fail(fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err))
-		}
-		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   m.Source,
-			Target:   m.Target,
-			ReadOnly: m.ReadOnly, // default false in Go == RW only when policy opted in via ReadOnly=false
-		})
-	}
+	agentHost.Mounts = append(agentHost.Mounts, agentMounts...)
 
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
@@ -595,6 +553,63 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Driver:        driverName,
 		EnforcedClass: enforced,
 	}, nil
+}
+
+// agentMounts assembles every mount attached to the agent container: the
+// recording-cast delivery mount (driver config) followed by the operator/policy
+// workspace mounts (specMounts), in that order. Any denied source/target FAILS
+// CLOSED with an error, which aborts CreateSandbox and runs its rollback.
+//
+// SECURITY MODEL (documented here and in runner.SandboxSpec.Mounts):
+//   - Workspace mounts come ONLY from a policy's RunPolicySpec.WorkspaceMounts,
+//     copied into spec.Mounts by internal/api dispatch. The create-run HTTP
+//     request has no mounts field, so a prompt-injected agent / malicious
+//     requester can NEVER choose a host mount (invariants 1 & 3).
+//   - DENY-LIST DEFENSE-IN-DEPTH: even though the values came from policy
+//     (already validated at policy-write time), we re-run runner.ValidateMount
+//     here and FAIL CLOSED — any denied Source (/, /proc, /sys, /dev, /run,
+//     /var/run, /var/lib/docker, any docker.sock, /etc, /boot, /root, or a
+//     non-absolute/non-cleaned path) or a Target outside the allowed
+//     in-container prefixes errors the whole CreateSandbox (rollback runs).
+//   - DEFAULT READ-ONLY: a mount is read-only unless the policy explicitly set
+//     ReadOnly=false, so a workspace bind cannot grant host write by default.
+func (d *Driver) agentMounts(specMounts []runner.Mount) ([]mount.Mount, error) {
+	var mounts []mount.Mount
+	if d.cfg.RecordingMount != "" {
+		// Cast delivery: wardyn-rec writes the finished recording to this
+		// shared mount (-out-dir), where the control plane's FSStore reads it.
+		mtype := mount.TypeVolume
+		if strings.HasPrefix(d.cfg.RecordingMount, "/") {
+			mtype = mount.TypeBind
+			// A host-path RecordingMount is a real host bind: subject its SOURCE to
+			// the same deny-list as workspace binds and FAIL CLOSED (a source that
+			// is/traverses /, /proc, docker.sock, ... must never be bound in). Only
+			// binds are validated — a named volume is Docker-managed, not a host path
+			// (mirrors how the workspace-bind loop treats host paths).
+			if err := runner.ValidateMount(runner.Mount{Source: d.cfg.RecordingMount, Target: recordingSourceProbeTarget}); err != nil {
+				return nil, fmt.Errorf("docker: denied recording mount %q -> %q: %w", d.cfg.RecordingMount, RecordingMountTarget, err)
+			}
+		}
+		mounts = append(mounts, mount.Mount{
+			Type:   mtype,
+			Source: d.cfg.RecordingMount,
+			Target: RecordingMountTarget,
+		})
+	}
+
+	// Operator/policy-controlled host bind mounts (e.g. a host repo at ~/work).
+	for _, m := range specMounts {
+		if err := runner.ValidateMount(m); err != nil {
+			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
+		}
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   m.Source,
+			Target:   m.Target,
+			ReadOnly: m.ReadOnly, // default false in Go == RW only when policy opted in via ReadOnly=false
+		})
+	}
+	return mounts, nil
 }
 
 // recordingChmodDirs returns the directories prepareRecordingDirs makes agent-
