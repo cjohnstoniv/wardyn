@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -274,13 +276,53 @@ func (s *Server) applyWorkspaceCreds(ctx context.Context, spec *types.RunPolicyS
 			}
 		}
 	case types.WorkspaceLLMCredBedrock:
-		// Bedrock is resolved from operator config at dispatch (resolveBedrockAuth);
-		// the binding drops any competing api-key grant so Bedrock is the path taken.
-		// A per-workspace region/model override is a dispatch-threading follow-up
-		// (today the globally-configured Bedrock is used).
+		// Bedrock credentials are resolved at dispatch (resolveBedrockAuth); the
+		// binding drops any competing api-key grant so Bedrock is the path taken.
+		// A per-workspace REGION overrides the global one there, so allow its
+		// regional data+control-plane hosts here — dispatch adds them too, but the
+		// egress belongs on the run's policy from create (the composer/preview and
+		// any policy echo read this spec, not the dispatch-local copy).
 		removeAPIKeyGrantForHost(spec, p.host)
+		if b := c.Bedrock; b != nil && b.Region != "" && !spec.AllowAllEgress {
+			unionAllowedDomains(spec, []string{bedrockRuntimeHost(b.Region), bedrockControlHost(b.Region)})
+		}
 	}
 	return c.Mode
+}
+
+// applyPrimaryWorkspaceCreds resolves the run's PRIMARY workspace/container and
+// folds its cred binding into the spec (applyWorkspaceCreds), auditing the mode
+// applied. The primary is the first referenced local_dir/repo workspace, or —
+// for a bring-your-own-container run — the onboarded CONTAINER workspace whose
+// image this run launches. A workspace that binds nothing leaves the run on the
+// global provider config (or a plain governed command).
+//
+// Returns the workspace's Bedrock selection when (and only when) a BEDROCK
+// binding was applied, for dispatch to resolve region/model against
+// (dispatchParams.BedrockRef); nil means "use the global Bedrock config".
+func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) *types.WorkspaceBedrockRef {
+	var primary *types.Workspace
+	switch {
+	case len(wsRefs) > 0:
+		primary = &wsRefs[0]
+	case req.Image != "" && s.cfg.Store != nil:
+		if cw, err := s.cfg.Store.GetWorkspaceBySource(ctx, types.WorkspaceKindContainer, req.Image); err == nil {
+			primary = &cw
+		}
+	}
+	if primary == nil {
+		return nil
+	}
+	mode := s.applyWorkspaceCreds(ctx, spec, primary, req.Agent)
+	if mode == "" {
+		return nil
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
+		runID.String(), "success", mustJSON(map[string]any{"mode": string(mode)})))
+	if mode == types.WorkspaceLLMCredBedrock {
+		return primary.LLMCred.Bedrock
+	}
+	return nil
 }
 
 // secretPresent reports whether a secret name exists in the store (best-effort;

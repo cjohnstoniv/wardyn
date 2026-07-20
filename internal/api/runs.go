@@ -144,6 +144,19 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fold the PRIMARY workspace/container's operator-owned model/harness cred
+	// binding into the spec — a run inherits the model access of the workspace/
+	// container it picks. This MUST run BEFORE persistRunGrants: that call
+	// SNAPSHOTS spec.EligibleGrants into the persisted grants + proxy injections,
+	// so a binding applied after it never reaches the run (an api_key binding was
+	// silently dropped — billing the operator's managed subscription instead of
+	// the workspace's key — and a managed/bedrock binding could not displace a
+	// competing api-key grant). wsRefs (the referenced onboarded workspaces) is
+	// derived from the spec's mounts/repos, which nothing below mutates, so it is
+	// equally valid here and is reused by the egress union + image resolution.
+	wsRefs := s.referencedWorkspaces(ctx, spec)
+	bedrockRef := s.applyPrimaryWorkspaceCreds(ctx, runID, &spec, req, wsRefs)
+
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
@@ -179,31 +192,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
-	// ADO SCM lanes) — never the LLM; see unionRunEgress. wsRefs feeds the
-	// workspace-image resolution below.
-	wsRefs := s.unionRunEgress(ctx, runID, &spec, gw)
-
-	// Fold the PRIMARY workspace/container's operator-owned model/harness cred
-	// binding into the run (the credential analogue of unionRunEgress) — a run
-	// inherits the model access of the workspace/container it picks. The primary is
-	// the first referenced local_dir/repo workspace, or — for a bring-your-own-
-	// container run — the onboarded CONTAINER workspace whose image this run
-	// launches. A workspace that binds nothing leaves the run on the global
-	// provider config (or a plain governed command).
-	var credPrimary *types.Workspace
-	if len(wsRefs) > 0 {
-		credPrimary = &wsRefs[0]
-	} else if req.Image != "" && s.cfg.Store != nil {
-		if cw, err := s.cfg.Store.GetWorkspaceBySource(ctx, types.WorkspaceKindContainer, req.Image); err == nil {
-			credPrimary = &cw
-		}
-	}
-	if credPrimary != nil {
-		if mode := s.applyWorkspaceCreds(ctx, &spec, credPrimary, req.Agent); mode != "" {
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
-				runID.String(), "success", mustJSON(map[string]any{"mode": string(mode)})))
-		}
-	}
+	// ADO SCM lanes) — never the LLM; see unionRunEgress.
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs)
 
 	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchWithVerify's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
@@ -238,6 +228,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Injections:         gw.injections,
 			Interactive:        req.Interactive,
 			TaskMode:           req.TaskMode,
+			BedrockRef:         bedrockRef,
 		})
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)

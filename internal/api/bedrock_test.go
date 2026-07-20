@@ -15,7 +15,7 @@ import (
 // agent or subscription state.
 func TestResolveBedrockAuth_NotConfigured(t *testing.T) {
 	s := &Server{cfg: Config{Secrets: &memSecrets{m: map[string][]byte{}}}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
 	if ba.ready || ba.env != nil || ba.egressHosts != nil {
 		t.Fatalf("unconfigured Bedrock: got ready=%v env=%v hosts=%v, want false/nil/nil", ba.ready, ba.env, ba.egressHosts)
 	}
@@ -30,7 +30,7 @@ func TestResolveBedrockAuth_MissingCreds(t *testing.T) {
 		BedrockModel:  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets:       &memSecrets{m: map[string][]byte{}}, // no aws-* secrets stored
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
 	if ba.ready {
 		t.Fatal("ready = true with no AWS credential secrets stored; want false (degrade, don't break the run)")
 	}
@@ -41,7 +41,7 @@ func TestResolveBedrockAuth_MissingCreds(t *testing.T) {
 // subscription must win even when Bedrock is fully configured.
 func TestResolveBedrockAuth_SubscriptionPreempts(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", true /* subscriptionActive */, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", true /* subscriptionActive */, true /* modelRun */, nil)
 	if ba.ready {
 		t.Fatal("ready = true with subscription active; want false (subscription pre-empts Bedrock)")
 	}
@@ -51,7 +51,7 @@ func TestResolveBedrockAuth_SubscriptionPreempts(t *testing.T) {
 // (mirrors the existing AgentAnthropicModel gate); a Codex run never gets it.
 func TestResolveBedrockAuth_NonClaudeAgent(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "codex-cli", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "codex-cli", false, true /* modelRun */, nil)
 	if ba.ready {
 		t.Fatal("ready = true for codex-cli; want false (Bedrock wiring is Claude-only)")
 	}
@@ -63,7 +63,7 @@ func TestResolveBedrockAuth_NonClaudeAgent(t *testing.T) {
 // control-plane — omitting the latter 403s an inference-profile model id).
 func TestResolveBedrockAuth_Ready(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
 	if !ba.ready {
 		t.Fatal("ready = false for a fully-configured Bedrock server; want true")
 	}
@@ -105,7 +105,7 @@ func TestResolveBedrockAuth_Ready(t *testing.T) {
 func TestResolveBedrockAuth_BearerPreferred(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
 	s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
 	if !ba.ready || !ba.bearer {
 		t.Fatalf("ready=%v bearer=%v, want both true (bearer secret present)", ba.ready, ba.bearer)
 	}
@@ -127,7 +127,7 @@ func TestResolveBedrockAuth_BearerPreferred(t *testing.T) {
 // won't sign a Bedrock request. Same fixture as the golden path, modelRun flips.
 func TestResolveBedrockAuth_SkipsNonModelRun(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, false /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, false /* modelRun */, nil)
 	if ba.ready || ba.env != nil || ba.egressHosts != nil {
 		t.Fatalf("verify/scan run (modelRun=false): got ready=%v env=%v hosts=%v, want false/nil/nil (no resident AWS creds)", ba.ready, ba.env, ba.egressHosts)
 	}
@@ -138,7 +138,7 @@ func TestResolveBedrockAuth_SkipsNonModelRun(t *testing.T) {
 func TestResolveBedrockAuth_OptionalSessionToken(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
 	s.cfg.Secrets.(*memSecrets).m[bedrockSessionTokenSecret] = []byte("FQoGZXIvYXdzEtemp-session-token")
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
 	if !ba.ready {
 		t.Fatal("ready = false; want true")
 	}
@@ -160,7 +160,7 @@ func TestResolveBedrockAuth_AWSDirMount(t *testing.T) {
 		BedrockAWSProfile:   "bedrock-sso",
 		Secrets:             &memSecrets{m: map[string][]byte{}}, // NO static keys stored
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
 	if !ba.ready || !ba.awsMount {
 		t.Fatalf("ready=%v awsMount=%v, want both true", ba.ready, ba.awsMount)
 	}
@@ -200,7 +200,7 @@ func TestResolveBedrockAuth_AWSDirMountMissingFailsSafe(t *testing.T) {
 		BedrockAWSConfigDir: "/nonexistent/path/dot-aws",
 		Secrets:             &memSecrets{m: map[string][]byte{}},
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
 	if ba.ready || ba.awsMount {
 		t.Fatalf("ready=%v awsMount=%v for a nonexistent mount dir; want both false (fail safe)", ba.ready, ba.awsMount)
 	}
@@ -216,7 +216,7 @@ func TestResolveBedrockAuth_BearerBeatsMount(t *testing.T) {
 		BedrockAWSConfigDir: dir,
 		Secrets:             &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("bearer-xyz")}},
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
 	if !ba.bearer || ba.awsMount {
 		t.Fatalf("bearer=%v awsMount=%v, want bearer preferred over the mount", ba.bearer, ba.awsMount)
 	}
@@ -233,7 +233,7 @@ func TestResolveBedrockAuth_AWSSSORegionOverride(t *testing.T) {
 		BedrockAWSSSORegion: "us-east-1",
 		Secrets:             &memSecrets{m: map[string][]byte{}},
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
 	hosts := strings.Join(ba.egressHosts, ",")
 	if !strings.Contains(hosts, "portal.sso.us-east-1.amazonaws.com") {
 		t.Errorf("SSO egress %v should use the SSO region us-east-1", ba.egressHosts)

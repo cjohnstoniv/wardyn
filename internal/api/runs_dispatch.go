@@ -24,18 +24,19 @@ import (
 // ran, wiring the wrong credential family onto every host. Named fields make
 // each call site self-documenting; the zero value is the "none" case per field.
 type dispatchParams struct {
-	RunToken           string                  // proxy-verifiable run token (never a usable in-sandbox secret)
-	Image              string                  // resolved sandbox OCI image (convention or built devcontainer)
-	Policy             types.RunPolicySpec     // egress/resource policy (dispatchRun mutates a local copy)
-	FirstGitHubGrantID *uuid.UUID              // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
-	GitGrants          map[string]uuid.UUID    // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
-	GitPATGrants       map[string]string       // {host: grant_id} for non-GitHub PAT hosts
-	SSHGrants          map[string]string       // {host: grant_id} for SSH clone hosts
-	Injections         []runner.InjectionGrant // proxy-side credential injections
-	Interactive        bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
-	TaskMode           string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
-	VerifyPlan         json.RawMessage         // non-nil ⇒ VERIFY run (execs wardyn-verify with these commands)
-	ExtraEnv           map[string]string       // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
+	RunToken           string                     // proxy-verifiable run token (never a usable in-sandbox secret)
+	Image              string                     // resolved sandbox OCI image (convention or built devcontainer)
+	Policy             types.RunPolicySpec        // egress/resource policy (dispatchRun mutates a local copy)
+	FirstGitHubGrantID *uuid.UUID                 // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
+	GitGrants          map[string]uuid.UUID       // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
+	GitPATGrants       map[string]string          // {host: grant_id} for non-GitHub PAT hosts
+	SSHGrants          map[string]string          // {host: grant_id} for SSH clone hosts
+	Injections         []runner.InjectionGrant    // proxy-side credential injections
+	Interactive        bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
+	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
+	VerifyPlan         json.RawMessage            // non-nil ⇒ VERIFY run (execs wardyn-verify with these commands)
+	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
+	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -173,7 +174,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, verifyPlan, interactive, proxyURL)
+	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, verifyPlan, interactive, proxyURL, p.BedrockRef)
 
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,

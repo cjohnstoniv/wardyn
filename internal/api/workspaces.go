@@ -60,11 +60,31 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 		return ""
 	}
 	switch c.Mode {
-	case types.WorkspaceLLMCredNone, types.WorkspaceLLMCredManaged, types.WorkspaceLLMCredBedrock:
+	case types.WorkspaceLLMCredNone, types.WorkspaceLLMCredManaged:
 		return ""
 	case types.WorkspaceLLMCredAPIKey:
 		if strings.TrimSpace(c.APIKeySecret) == "" {
 			return "llm_cred.api_key_secret is required for mode=api_key"
+		}
+		// Same reserved-name guard the credential SINKS enforce (sinkReservedSecret:
+		// policy.go / inline_policy.go / injection.go): a binding must not name a
+		// platform-internal or managed-credential secret — the sink refuses to
+		// resolve it, so a run would fail the proxy closed at startup, and it must
+		// never be a route to inject wardyn's own signing key / OAuth tokens.
+		if sinkReservedSecret(strings.TrimSpace(c.APIKeySecret)) {
+			return "llm_cred.api_key_secret must not name a reserved platform-internal secret"
+		}
+		return ""
+	case types.WorkspaceLLMCredBedrock:
+		// The per-workspace Bedrock selection overrides the server's global
+		// region/model at dispatch (resolveBedrockAuth). Omit the whole block to
+		// inherit the global config; set it and you must set BOTH — a half override
+		// (this workspace's region against the global model id, or vice versa) is
+		// the misconfiguration that 403s at invoke time, since an inference-profile
+		// model id is region-scoped. Fail closed at write, mirroring the api_key
+		// arm above rather than silently half-applying at dispatch.
+		if b := c.Bedrock; b != nil && (strings.TrimSpace(b.Region) == "") != (strings.TrimSpace(b.Model) == "") {
+			return "llm_cred.bedrock needs BOTH region and model (or neither — omit them to inherit the server's global Bedrock configuration)"
 		}
 		return ""
 	default:

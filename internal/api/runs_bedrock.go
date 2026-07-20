@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // mavenProxyOpts builds the MAVEN_OPTS JVM proxy sysprops that route Maven
@@ -92,9 +94,11 @@ func resolveUpstreamProxyURL(ctx context.Context, secretRef string, getSecret fu
 // mount) is a documented alternative for a future pass; this wires the
 // secret-env lane only.
 //
-// Region/model are OPERATOR BOOT-TIME config (BedrockRegion/BedrockModel,
+// Region/model default to OPERATOR BOOT-TIME config (BedrockRegion/BedrockModel,
 // mirroring AgentAnthropicModel — no live admin write path, same as the
-// WARDYN_DEFAULT_POLICY precedent); the AWS credentials are read directly
+// WARDYN_DEFAULT_POLICY precedent) and are overridden per-run by the picked
+// workspace/container's Bedrock binding (types.WorkspaceBedrockRef); the AWS
+// credentials themselves stay global and are read directly
 // from the secret store at dispatch time — a new kind of secret consumption
 // for this codebase (every other consumer is proxy-injection-at-mint-time),
 // necessary because SigV4 can't be injected after the fact.
@@ -127,6 +131,10 @@ type bedrockAuth struct {
 	// resident-key path; bearer still wins over it.
 	awsMount       bool
 	awsMountSource string
+	// region/model are the EFFECTIVE selection this run resolved (a workspace
+	// binding's override, else the global operator config) — audited by
+	// applyBedrockTransport so the record names what the run actually used.
+	region, model string
 	// ssoInject selects the captured-AWS-SSO-credential delivery path (a
 	// container-login `aws sso login` — see awsSSOBlob in harnesscred.go): a
 	// minimal synthetic ~/.aws is materialized in the sandbox from an env var
@@ -258,13 +266,24 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 // mount and Bedrock are mutually exclusive Anthropic transports. modelRun=false
 // (a verify or scan run that makes no model call) also returns ready=false, so
 // the resident AWS creds never land in a sandbox that won't sign a Bedrock request.
-func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun bool) bedrockAuth {
+//
+// ws is the picked workspace/container's Bedrock selection (nil for a run that
+// binds none): its region/model WIN over the global config, which remains the
+// fallback for whatever the workspace leaves unset. The workspace never carries
+// credentials — those stay operator-global (secrets / ~/.aws / captured SSO).
+func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun bool, ws *types.WorkspaceBedrockRef) bedrockAuth {
+	region, model, profile := s.cfg.BedrockRegion, s.cfg.BedrockModel, s.cfg.BedrockAWSProfile
+	if ws != nil {
+		region = cmp.Or(strings.TrimSpace(ws.Region), region)
+		model = cmp.Or(strings.TrimSpace(ws.Model), model)
+		profile = cmp.Or(strings.TrimSpace(ws.AWSProfile), profile)
+	}
 	if !modelRun || subscriptionActive || runAgent != "claude-code" ||
-		s.cfg.BedrockRegion == "" || s.cfg.BedrockModel == "" || s.cfg.Secrets == nil {
+		region == "" || model == "" || s.cfg.Secrets == nil {
 		return bedrockAuth{}
 	}
-	runtimeHost := bedrockRuntimeHost(s.cfg.BedrockRegion)
-	hosts := []string{runtimeHost, bedrockControlHost(s.cfg.BedrockRegion)}
+	runtimeHost := bedrockRuntimeHost(region)
+	hosts := []string{runtimeHost, bedrockControlHost(region)}
 	// Common Bedrock env: the on-switch, region, and model id. AWS_REGION is what
 	// claude-code reads; AWS_DEFAULT_REGION is the broader AWS-SDK fallback. The
 	// model id is a cross-region INFERENCE-PROFILE id (e.g.
@@ -274,10 +293,16 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	base := func() map[string]string {
 		return map[string]string{
 			"CLAUDE_CODE_USE_BEDROCK": "1",
-			"AWS_REGION":              s.cfg.BedrockRegion,
-			"AWS_DEFAULT_REGION":      s.cfg.BedrockRegion,
-			"ANTHROPIC_MODEL":         s.cfg.BedrockModel,
+			"AWS_REGION":              region,
+			"AWS_DEFAULT_REGION":      region,
+			"ANTHROPIC_MODEL":         model,
 		}
+	}
+	// ready return shared by every credential mode below: stamps the EFFECTIVE
+	// region/model so the audit names what this run used, not the global config.
+	ready := func(b bedrockAuth) bedrockAuth {
+		b.ready, b.region, b.model = true, region, model
+		return b
 	}
 
 	// PREFERRED: bearer-token mode. A Bedrock API key is a STATIC Authorization
@@ -289,7 +314,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
 		// overwrites the Authorization header with the real token on the wire.
 		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
-		return bedrockAuth{env: env, egressHosts: hosts, ready: true, bearer: true, runtimeHost: runtimeHost}
+		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true, runtimeHost: runtimeHost})
 	}
 
 	// CAPTURED AWS SSO CREDENTIAL: a container-login `aws sso login` captured an
@@ -375,7 +400,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.AccessToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.RefreshToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
-			return bedrockAuth{env: env, egressHosts: hosts, ready: true, ssoInject: true}
+			return ready(bedrockAuth{env: env, egressHosts: hosts, ssoInject: true})
 		}
 	}
 
@@ -395,13 +420,17 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// resolves from the mounted config + SSO cache.
 			env["AWS_CONFIG_FILE"] = sandboxAWSDir + "/config"
 			env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
-			if s.cfg.BedrockAWSProfile != "" {
-				env["AWS_PROFILE"] = s.cfg.BedrockAWSProfile
+			if profile != "" {
+				env["AWS_PROFILE"] = profile
 			}
-			ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
+			// The SSO region falls back to the EFFECTIVE Bedrock region (a workspace
+			// override included) — falling back to the global one would allow the
+			// wrong regional oidc/portal.sso endpoints and 403 the credential
+			// exchange for a workspace that moved the run to another region.
+			ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, region)
 			hosts = append(hosts, ssoEgressHosts(ssoRegion)...)
-			return bedrockAuth{env: env, egressHosts: hosts, ready: true,
-				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir}
+			return ready(bedrockAuth{env: env, egressHosts: hosts,
+				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir})
 		}
 	}
 
@@ -419,5 +448,5 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	if tok, terr := s.cfg.Secrets.Get(ctx, bedrockSessionTokenSecret); terr == nil && len(tok) > 0 {
 		env["AWS_SESSION_TOKEN"] = string(tok)
 	}
-	return bedrockAuth{env: env, egressHosts: hosts, ready: true}
+	return ready(bedrockAuth{env: env, egressHosts: hosts})
 }

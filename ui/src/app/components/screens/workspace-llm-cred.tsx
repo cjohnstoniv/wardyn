@@ -135,15 +135,12 @@ export function LLMCredFields({
             autoComplete="off"
           />
         </div>
-        {/* Honest expectation: binding Bedrock here selects it as this environment's
-            model path (dropping a competing API-key grant), but runs currently use
-            the server's GLOBAL Bedrock region/model (WARDYN_BEDROCK_REGION/MODEL).
-            Per-environment region/model/profile override is not yet applied at
-            dispatch — the credential values come from the secret store / ~/.aws mount. */}
+        {/* Region/model/profile now override the server's global Bedrock config
+            per run (resolveBedrockAuth); the CREDENTIALS remain operator-global. */}
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Selects Bedrock for this environment. Region/model/profile are stored but
-          not yet applied per-run — today runs use the server's global Bedrock
-          configuration; the AWS credentials come from the secret store or ~/.aws mount.
+          Selects Bedrock for this environment. Region and model override the server's
+          global Bedrock configuration for runs that pick it (set both, or neither);
+          the AWS credentials come from the secret store or ~/.aws mount.
         </p>
         </>
       )}

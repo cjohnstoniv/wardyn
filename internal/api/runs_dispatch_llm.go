@@ -49,7 +49,7 @@ type llmTransport struct {
 // the managed fallback); the grant-authoring phases mutate it later. Extracted
 // verbatim from dispatchWithVerify — see the inline comments for the full
 // precedence rationale: host-staged mount > managed > Bedrock > api-key.
-func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, verifyPlan json.RawMessage, interactive bool, proxyURL string) llmTransport {
+func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, verifyPlan json.RawMessage, interactive bool, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
 	var t llmTransport
 
 	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
@@ -84,7 +84,9 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// regardless, but there's no reason to place them in a sandbox that never signs a
 	// Bedrock request). Mirrors the WARDYN_VERIFY_ONLY / WARDYN_SCAN_ONLY discriminator.
 	modelRun := len(verifyPlan) == 0 && !(run.WorkspaceID != nil && !interactive)
-	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun)
+	// bedrockRef is the picked workspace/container's per-run region/model
+	// override (nil => the global operator config).
+	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
 	t.bedrockReady = t.bedrock.ready
 	// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
 	// (never-resident); consumed by the CA / injection / MITM-host wiring
@@ -208,7 +210,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
 		run.ID.String(), "success", mustJSON(map[string]any{
-			"region": s.cfg.BedrockRegion, "model": s.cfg.BedrockModel, "hosts": b.egressHosts,
+			"region": b.region, "model": b.model, "hosts": b.egressHosts,
 			"mode": mode, "detail": detail,
 		})))
 }

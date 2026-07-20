@@ -338,10 +338,10 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 //     dev.azure.com + *.visualstudio.com reachable (see adoEgressDomains) —
 //     nothing else adds these for ADO. Mirrors the SSH lane.
 //
-// Returns the referenced workspaces (the image-resolution phase reuses them).
-// Extracted verbatim from handleCreateRun.
-func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring) []types.Workspace {
-	wsRefs := s.referencedWorkspaces(ctx, *spec)
+// wsRefs is the run's referenced onboarded workspaces, resolved by the caller
+// (it also feeds the workspace cred binding + image resolution) — this used to
+// resolve them itself. Extracted verbatim from handleCreateRun.
+func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace) {
 	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
@@ -358,7 +358,6 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.git_pat.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 	}
-	return wsRefs
 }
 
 // resolveCreateRunImage resolves the sandbox image. Default: the agent
