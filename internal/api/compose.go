@@ -315,6 +315,7 @@ func composerBackendKnown(reg *composer.Registry, name string) bool {
 //
 // closure over the ResponseWriter (SSE) or a discard (buffer); no
 // channel/goroutine — the pipeline is synchronous, so emit runs inline.
+//
 //nolint:funlen,gocyclo // Deliberate: the compose pipeline's stage order (compose → risk → reconcile → ceiling-clamp → review) IS the security contract; each stage already lives in its own helper and this function is the one place the sequencing can be audited top-to-bottom.
 func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, principalType types.ActorType, principal string, emit func(composer.ComposeEvent)) (any, *composeError) {
 	// Correlation id stamped at pipeline start and echoed on every advisory audit
@@ -447,6 +448,17 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// only, no api-key grant); dispatch injects it proxy-side.
 	managedSub := req.UseSubscription && prop.Run.Agent == "claude-code" &&
 		!subscribed && s.managedInjectReady(prop.Run.Agent)
+	// MOUNT GATING and the MODEL-ACCESS VERDICT are different questions, and
+	// conflating them produced a false blocker. managedSub stays opt-in-gated above
+	// because it also gates applyLLMCredMount (the MOUNT path). But a managed
+	// subscription needs NO mount and NO per-run opt-in: dispatch's
+	// resolveLLMTransport injects it proxy-side for ANY eligible claude-code run
+	// (precedence: host mount > managed > bedrock > api-key). Gating the verdict on
+	// the opt-in made the Review checklist announce "no model access — this run will
+	// do nothing" for a run dispatch would happily credential (observed with a
+	// connected setup-token and the wizard toggle off).
+	managedForVerdict := managedSub ||
+		(prop.Run.Agent == "claude-code" && !subscribed && s.managedInjectReady(prop.Run.Agent))
 	ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "clamp"})
 	// Raise the operator ceiling's confinement floor to include the per-run compose
@@ -501,7 +513,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// among benign clamp notices. reconcileLLMAccess still mutates the spec (drops
 	// orphaned grants) as a side effect.
 	var llmAccess *composeLLMAccess
-	if note, provisioned := reconcileLLMAccess(&clamped, prop.Run.Agent, presentSecrets, s.subscriptionInjectEnabled(), managedSub); note != "" {
+	if note, provisioned := reconcileLLMAccess(&clamped, prop.Run.Agent, presentSecrets, s.subscriptionInjectEnabled(), managedForVerdict); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
 	}
 	wsWarns, code, werr := applyWorkspaces(&run, &clamped, req.Workspaces)

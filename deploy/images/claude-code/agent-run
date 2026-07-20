@@ -81,7 +81,17 @@ source /usr/local/bin/agent-run-lib.sh
 #   apikey       : default (proxy inject gateway)
 # Pure detection (no env mutation, safe for selftest):
 detect_anthropic_mode() {
-    if [[ -f "${HOME}/.claude/.credentials.json" \
+    # Look in CLAUDE_CONFIG_DIR first: the MANAGED subscription (compose, no host
+    # ~/.claude) materializes its inert sentinel there, not under ~/.claude —
+    # dispatch points CLAUDE_CONFIG_DIR at a writable dir precisely because the
+    # resident path may mount ~/.claude read-only. Checking only ~/.claude made a
+    # managed run fall through to "apikey", which keeps ANTHROPIC_BASE_URL on the
+    # x-api-key inject gateway while the proxy injects an OAuth Bearer — the
+    # mismatch surfaced as "401 Invalid bearer token".
+    local _cfg="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+    if [[ -f "${_cfg}/.credentials.json" \
+       || -f "${_cfg}/credentials.json" \
+       || -f "${HOME}/.claude/.credentials.json" \
        || -f "${HOME}/.claude/credentials.json" ]]; then
         echo "subscription"
     elif [[ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ]]; then

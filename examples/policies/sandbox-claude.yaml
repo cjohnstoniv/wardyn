@@ -35,7 +35,11 @@ eligible_grants:
   # read-only, auto-mint so the clone doesn't wait on a human.
   - kind: github_token
     scope:
-      repos: []
+      # MUST list at least one repo — the git-broker mints a REPO-SCOPED
+      # installation token and refuses an empty list ("github token requires at
+      # least one repo"). Add exactly the repos this run may touch.
+      repos:
+        - octocat/Hello-World
       permissions:
         contents: read
     ttl_seconds: 3600
