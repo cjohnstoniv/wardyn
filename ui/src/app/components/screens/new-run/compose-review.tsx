@@ -142,6 +142,9 @@ export function ComposeReview({
             <Sparkles className="size-3 text-primary" aria-hidden="true" />
             AI Run Composer
           </span>
+          <Chip tone="primary" title="The AI Run Composer is in beta — expect rough edges.">
+            Beta
+          </Chip>
           <StepDots />
           <span className="text-[11.5px] text-muted-foreground">
             Describe · Clarify · <span className="text-foreground">Review</span>

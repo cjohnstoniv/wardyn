@@ -36,6 +36,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
+import { Chip } from "../../wardyn/primitives";
 import { deriveReadiness } from "../onboarding/intro";
 import { Button } from "../../ui/button";
 import {
@@ -466,9 +467,12 @@ export function NewRunDialog({
                 title={
                   <span className="flex items-center gap-2">
                     <Sparkles className="size-4 text-primary" /> Describe your task
+                    <Chip tone="primary" title="This feature is in beta — expect rough edges.">
+                      Beta
+                    </Chip>
                   </span>
                 }
-                hint="Write what you want done in plain language. Wardyn proposes a confined run setup for you to review."
+                hint="Write what you want done in plain language. Wardyn proposes a confined run setup for you to review. This feature is in beta."
               />
               <OptionCard
                 selected={false}
