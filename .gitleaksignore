@@ -11,34 +11,14 @@
 #
 # Format: commit:file:rule-id:start-line
 
-# Test/dev fixtures: intentionally realistic-shaped FAKE tokens (AWS's own
-# AKIAIOSFODNN7EXAMPLE placeholder, sequential-character PATs, "abc"-body
-# SSH/RSA key bodies) that exercise the secret-masking and credential-mint
-# code paths. None of these are live credentials.
-ce1203da2c954784276d8f0e0292f2833796cd92:internal/workspacescan/verify_test.go:curl-auth-header:134
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/workspacescan/verify_test.go:private-key:130
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/workspacescan/verify_test.go:github-pat:20
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/workspacescan/verify_test.go:github-pat:35
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/broker/gitpat_test.go:gitlab-pat:125
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:internal/broker/sshkey_test.go:private-key:35
-# NOT fake fixtures — a REAL age key. This one was the committed default of
-# scripts/run-local.sh + scripts/e2e-backend.sh, so it was a working key, not a
-# realistic-shaped placeholder like the entries above. It has been removed from
-# the working tree (both scripts now mint an ephemeral key per boot via
-# `wardynd -gen-age-key`) and added to knownPublicAgeKeys, so wardynd fail-closed
-# refuses to boot under it. It cannot be un-published — it lives in git history
-# forever — so these two entries suppress only those historical commits.
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:scripts/e2e-backend.sh:age-secret-key:36
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:scripts/run-local.sh:age-secret-key:31
-
-# knownPublicAgeKeys (cmd/wardynd/main.go): the age identities this repo has
-# PUBLISHED — one an earlier Compose baked-in default, one the dev-script default
-# above. They are listed in the source precisely so wardynd can fail-closed REFUSE
-# TO BOOT under either (a runtime invariant, not just a comment), which is why
-# gitleaks sees them here. Suppressed because listing a published key in a denylist
-# is the fix, not the leak: the exposure happened when each was first committed,
-# and no secret encrypted under one is protected by hiding it from this scan.
-# Add an entry whenever a key joins the denylist; never remove one.
-ac5ad566e84fc64c952c49ca1cb9c30f1ec5d207:cmd/wardynd/main.go:age-secret-key:707
-2af9b3340198954c13085c2253efb7af76336109:cmd/wardynd/main.go:age-secret-key:778
-2af9b3340198954c13085c2253efb7af76336109:cmd/wardynd/main.go:age-secret-key:782
+031d17296fc7501707776c2ddd18309f3f0bc607:cmd/wardynd/main.go:age-secret-key:707
+031d17296fc7501707776c2ddd18309f3f0bc607:internal/broker/gitpat_test.go:gitlab-pat:125
+031d17296fc7501707776c2ddd18309f3f0bc607:internal/broker/sshkey_test.go:private-key:35
+031d17296fc7501707776c2ddd18309f3f0bc607:internal/workspacescan/verify_test.go:github-pat:20
+031d17296fc7501707776c2ddd18309f3f0bc607:internal/workspacescan/verify_test.go:github-pat:35
+031d17296fc7501707776c2ddd18309f3f0bc607:internal/workspacescan/verify_test.go:private-key:130
+031d17296fc7501707776c2ddd18309f3f0bc607:scripts/e2e-backend.sh:age-secret-key:36
+031d17296fc7501707776c2ddd18309f3f0bc607:scripts/run-local.sh:age-secret-key:31
+988490e36861e86bd68389f5048f82bb76ec3e22:internal/workspacescan/verify_test.go:curl-auth-header:134
+a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:778
+a0a0de045f9c0fd5fde6aa2d523656c68e843bbb:cmd/wardynd/main.go:age-secret-key:782
