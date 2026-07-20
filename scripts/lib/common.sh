@@ -67,6 +67,16 @@ license_scope_files() {
 # Fence (runsc/kata invisible). This runs even when DOCKER_HOST was pre-set, so
 # `export DOCKER_HOST=...` alone is enough. (scripts/ci-run.sh relied on its own
 # copy of this derivation; now it inherits this one.)
+#
+# Rancher Desktop: its daemon runs INSIDE a VM and its host-side context endpoint
+# is ~/.rd/docker.sock, which the daemon CANNOT bind-mount ("operation not
+# supported") — the working mount is /var/run/docker.sock INSIDE the VM. So both
+# when DOCKER_HOST points at that host socket AND when it is unset (we peek at the
+# active docker context to detect Rancher), WARDYN_DOCKER_SOCK is forced to the
+# in-VM path. We deliberately do NOT rewrite DOCKER_HOST from the context — the
+# CLI already resolves it — so Docker Desktop / native hosts are unaffected (unset
+# DOCKER_HOST => WARDYN_DOCKER_SOCK left unset => compose's /var/run/docker.sock
+# default, unchanged).
 wardyn_pick_docker_host() {
   if [ -z "${DOCKER_HOST:-}" ]; then
     for _wpd_s in /run/wardyn-docker.sock /var/run/wardyn-docker.sock; do
@@ -74,8 +84,29 @@ wardyn_pick_docker_host() {
     done
     unset _wpd_s
   fi
-  case "${DOCKER_HOST:-}" in
-    unix://*) [ -z "${WARDYN_DOCKER_SOCK:-}" ] && export WARDYN_DOCKER_SOCK="${DOCKER_HOST#unix://}" ;;
-  esac
+  if [ -z "${WARDYN_DOCKER_SOCK:-}" ]; then
+    _wpd_sock=""
+    case "${DOCKER_HOST:-}" in
+      unix://*) _wpd_sock="${DOCKER_HOST#unix://}" ;;
+      "")
+        # DOCKER_HOST unset: the CLI resolves the daemon via the active context.
+        # Peek at it ONLY to detect an engine whose host socket is not
+        # bind-mountable; otherwise leave WARDYN_DOCKER_SOCK unset (compose default).
+        if command -v docker >/dev/null 2>&1; then
+          _wpd_ep="$(docker context inspect -f '{{ .Endpoints.docker.Host }}' 2>/dev/null || true)"
+          case "${_wpd_ep}" in
+            *".rd/docker.sock") _wpd_sock="/var/run/docker.sock" ;;  # Rancher Desktop (in-VM path)
+          esac
+          unset _wpd_ep
+        fi
+        ;;
+    esac
+    # Rancher Desktop remap for an explicit DOCKER_HOST=unix://…/.rd/docker.sock.
+    case "${_wpd_sock}" in
+      *".rd/docker.sock") _wpd_sock="/var/run/docker.sock" ;;
+    esac
+    [ -n "${_wpd_sock}" ] && export WARDYN_DOCKER_SOCK="${_wpd_sock}"
+    unset _wpd_sock
+  fi
   return 0
 }

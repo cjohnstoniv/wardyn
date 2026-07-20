@@ -343,19 +343,31 @@ export function ModelStep({
           </>
         }
         action={
+          // Buttons ordered by the precedence resolveBedrockAuth actually enforces
+          // (internal/api/runs_bedrock.go): bearer API key > ~/.aws mount > static
+          // access/secret (+ optional session token). The backend already reads all
+          // of these names; the UI just never offered the bearer or session token.
           <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => onAddSecret("bedrock-api-key")}>
+              <KeyRound className="size-3.5" /> Bedrock API key
+            </Button>
             <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-access-key-id")}>
               <KeyRound className="size-3.5" /> Access key
             </Button>
             <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-secret-access-key")}>
               <KeyRound className="size-3.5" /> Secret key
             </Button>
+            <Button size="sm" variant="outline" onClick={() => onAddSecret("aws-session-token")}>
+              <KeyRound className="size-3.5" /> Session token
+            </Button>
           </div>
         }
       />
       <p className="pl-1 text-xs leading-relaxed text-muted-foreground">
-        Static AWS keys become resident in sandboxes that use Bedrock; SSO via ~/.aws mount
-        auto-rotates and is safer.
+        The Bedrock API key (bearer) is preferred — the proxy injects it and it never becomes
+        resident. Static access/secret keys DO become resident in sandboxes that use Bedrock; for
+        SSO/STS temporary credentials add a session token too (it expires with your SSO session).
+        An SSO ~/.aws mount auto-rotates and is safer than pasted keys.
       </p>
     </React.Fragment>
   );
@@ -531,9 +543,11 @@ export function ModelStep({
             },
             !bedrockConfigured && {
               key: "bedrock",
-              label: "Set up AWS Bedrock",
+              // Lead with the preferred, never-resident bearer path (the full row
+              // above exposes the static-key and session-token alternatives).
+              label: "Set up AWS Bedrock (API key)",
               icon: <KeyRound className="size-3.5" />,
-              onClick: () => onAddSecret("aws-access-key-id"),
+              onClick: () => onAddSecret("bedrock-api-key"),
             },
           ].filter(Boolean) as SetupOption[]}
         />

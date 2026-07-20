@@ -226,12 +226,15 @@ type Config struct {
 	// the HOST-MODE alternative to pasting static aws-access-key-id/-secret
 	// secrets (which expire under SSO and must be re-pasted): with the mount,
 	// `aws sso login` on the host is enough and nothing is stored in Wardyn.
-	// It is OFF by default and only set by the host-mode installer (run-host.sh
-	// / setup.sh) — a team/compose deployment never sets it, so a shared service
-	// never mounts an operator's ambient cloud credentials (invariant 1). It is
-	// the deliberate host-mode residency tradeoff already accepted for the
-	// ~/.claude subscription mount. Empty = disabled. Takes precedence over the
-	// resident static-key path but not over a bedrock-api-key bearer.
+	// It is OFF by default. Host-mode setup.sh auto-detects ~/.aws; the compose
+	// stack supports it too via the WARDYN_BEDROCK_AWS_DIR bind (same
+	// host==container path, :ro — see deploy/compose/docker-compose.yaml), an
+	// opt-in the operator sets explicitly. Because it mounts the operator's
+	// ambient cloud credentials into runs, it is a single-user / self-hosted
+	// choice, not for a shared multi-tenant service (invariant 1) — the deliberate
+	// residency tradeoff already accepted for the ~/.claude subscription mount.
+	// Empty = disabled. Takes precedence over the resident static-key path but not
+	// over a bedrock-api-key bearer.
 	BedrockAWSConfigDir string
 	// BedrockAWSProfile, when set, is passed as AWS_PROFILE into the sandbox so
 	// the SDK selects a named profile from the mounted config (common with SSO:

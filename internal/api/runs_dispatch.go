@@ -435,11 +435,13 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 // time (validatePolicySpec); the docker driver re-validates it
 // defense-in-depth at sandbox-create time. runner.ValidateMount is unchanged.
 //
-// Host-mode Bedrock ~/.aws mount (operator config, not agent-chosen; same trust
-// and the same driver deny-list re-validation as the WorkspaceMounts above).
-// READ-ONLY: the sandbox reads the SSO cache / config but can never write to the
-// operator's host AWS state. Only set on the host-mode path (resolveBedrockAuth
-// gated it on BedrockAWSConfigDir existing); never present for a team deployment.
+// Bedrock ~/.aws mount (operator config, not agent-chosen; same trust and the
+// same driver deny-list re-validation as the WorkspaceMounts above). READ-ONLY:
+// the sandbox reads the SSO cache / config but can never write to the operator's
+// host AWS state. Present whenever BedrockAWSConfigDir is set and the dir exists
+// (resolveBedrockAuth) — host mode auto-detects it, the compose stack opts in via
+// the WARDYN_BEDROCK_AWS_DIR bind; it is env-driven with no host/compose branch.
+// A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchWithVerify.
 func buildRunMounts(policy types.RunPolicySpec, llm llmTransport) []runner.Mount {
 	var mounts []runner.Mount

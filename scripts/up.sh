@@ -246,6 +246,59 @@ cmd_doctor() {
     report warn "claude CLI not on PATH — host-mode composer unavailable (optional; the compose path's Describe-mode uses the no-key fake backend by default)."
   fi
 
+  # ── corporate-network preflight ───────────────────────────────────────────
+  # Turn the two classic 3-minute-build / silent-bring-up failures into a warning
+  # BEFORE anything is built: (1) a TLS-MITM proxy present but no corp CA staged,
+  # (2) the chosen docker socket not actually bind-mountable by the daemon.
+  # Signal on an explicit forward proxy only — a low-false-positive predictor of a
+  # build-breaking TLS-MITM. (Custom CAs in the trust store are too noisy: mkcert
+  # and other local-dev CAs live there too.) A transparent MITM with no proxy env
+  # won't trip this, but the build's own x509 error then points here.
+  _corp_signal=0
+  for _pv in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy; do
+    eval "_pval=\${${_pv}:-}"; [ -n "${_pval}" ] && _corp_signal=1
+  done
+  if [ "${_corp_signal}" = 1 ]; then
+    if [ -f "${REPO_ROOT}/deploy/images/corp-ca.pem" ]; then
+      report ok "forward proxy set and deploy/images/corp-ca.pem is staged — image builds will trust your corp CA."
+    else
+      report warn "a forward proxy is set (HTTP(S)_PROXY) but deploy/images/corp-ca.pem is NOT staged. If a build fails with 'x509: certificate signed by unknown authority', copy your corp root CA to deploy/images/corp-ca.pem (gitignored) and rebuild — see deploy/images/README.md."
+    fi
+  fi
+  unset _corp_signal _pv _pval
+
+  # The compose wardynd bind-mounts WARDYN_DOCKER_SOCK to drive the daemon. Assert
+  # it is actually bind-mountable (not merely that the CLI can reach the daemon):
+  # on Rancher Desktop the host ~/.rd/docker.sock is NOT mountable while the in-VM
+  # /var/run/docker.sock is. wardyn_pick_docker_host (sourced at top) resolves it.
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    wardyn_pick_docker_host 2>/dev/null || true
+    _sock="${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}"
+    if [ -S "${_sock}" ]; then
+      report ok "docker socket ${_sock} present on host (bind-mountable)."
+    elif docker run --rm -v "${_sock}:/probe.sock" alpine:3.20 test -S /probe.sock >/dev/null 2>&1; then
+      report ok "docker socket ${_sock} is bind-mountable by the daemon (in-VM path, e.g. Rancher Desktop)."
+    else
+      report warn "chosen docker socket ${_sock} is neither present on the host nor bind-mountable by the daemon — the compose wardynd can't create sandboxes. On Rancher Desktop set WARDYN_DOCKER_SOCK=/var/run/docker.sock (the in-VM path); otherwise check the path and permissions."
+    fi
+    unset _sock
+  fi
+
+  # Bedrock model-auth preflight (host vs container): which credential source is
+  # usable here. Region/model come from env or deploy/compose/.env; the actual
+  # secrets (bedrock-api-key / static keys) live in the store and are reported by
+  # `wardyn setup status` after boot. This is a pre-boot heads-up only.
+  _br_region="${WARDYN_BEDROCK_REGION:-$(env_get "${ENV_FILE}" WARDYN_BEDROCK_REGION 2>/dev/null || true)}"
+  _br_dir="${WARDYN_BEDROCK_AWS_DIR:-$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR 2>/dev/null || true)}"
+  if [ -n "${_br_region}" ]; then
+    if [ -n "${_br_dir}" ] && [ -d "${_br_dir}" ]; then
+      report ok "Bedrock configured with an ~/.aws mount (${_br_dir}) — SSO/temp creds auto-rotate; grant uid 1000 read (setfacl -R -m u:1000:rX '${_br_dir}') if runs can't auth."
+    else
+      report ok "Bedrock region set (${_br_region}). Prefer a bedrock-api-key bearer (never resident) or an ~/.aws mount for SSO; add credentials in the UI or via 'wardyn secret set' — 'wardyn setup status' shows which path is live after boot."
+    fi
+  fi
+  unset _br_region _br_dir
+
   if [ "${DOCTOR_BLOCKED}" -eq 1 ]; then
     printf '\n' >&2
     printf '\033[1;31m[error]\033[0m %s\n' "doctor found blocking issue(s) above — fix them, then re-run \`make doctor\`." >&2
@@ -318,6 +371,44 @@ cmd_up() {
     done
     unset _ai_json _ai_img
   fi
+
+  # Bedrock auto-wire (container path): persist operator-provided Bedrock config
+  # into .env so the compose wardynd reads it at boot — closing the gap where the
+  # container path (unlike host-mode setup.sh) required hand-editing .env. Triggers
+  # only on an EXPLICIT Bedrock signal (CLAUDE_CODE_USE_BEDROCK, or region+model in
+  # env); never guesses from a bare ~/.aws (many machines have one for unrelated AWS
+  # work). Idempotent: never overwrites a key already in .env. Credentials are NOT
+  # imported here — they're added in the UI after launch (the wizard now surfaces
+  # the bearer/session-token/static-key options) or via 'wardyn secret set'.
+  _br_on=0
+  case "${CLAUDE_CODE_USE_BEDROCK:-}" in 1|true|TRUE|yes) _br_on=1 ;; esac
+  [ -n "${WARDYN_BEDROCK_REGION:-}" ] && [ -n "${WARDYN_BEDROCK_MODEL:-}" ] && _br_on=1
+  if [ "${_br_on}" = 1 ]; then
+    _br_region="${WARDYN_BEDROCK_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-}}}"
+    if [ -n "${_br_region}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_REGION)" ]; then
+      env_set "${ENV_FILE}" WARDYN_BEDROCK_REGION "${_br_region}"
+      log "Bedrock: wired region ${_br_region} into ${ENV_FILE}."
+    fi
+    if [ -n "${WARDYN_BEDROCK_MODEL:-}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_MODEL)" ]; then
+      env_set "${ENV_FILE}" WARDYN_BEDROCK_MODEL "${WARDYN_BEDROCK_MODEL}"
+    fi
+    [ -n "${WARDYN_BEDROCK_AWS_PROFILE:-}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_PROFILE)" ] \
+      && env_set "${ENV_FILE}" WARDYN_BEDROCK_AWS_PROFILE "${WARDYN_BEDROCK_AWS_PROFILE}"
+    # SSO/temp-cred safe path: bind the operator's ~/.aws read-only (nothing stored,
+    # SSO auto-rotates). Only when it exists and no dir was preset.
+    if [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR)" ]; then
+      if [ -n "${WARDYN_BEDROCK_AWS_DIR:-}" ]; then
+        env_set "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR "${WARDYN_BEDROCK_AWS_DIR}"
+      elif [ -d "${HOME}/.aws" ]; then
+        env_set "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR "${HOME}/.aws"
+        log "Bedrock: wired ~/.aws read-only mount (SSO auto-rotates; nothing stored)."
+        [ "$(id -u)" = "1000" ] || warn "Bedrock ~/.aws mount: host uid $(id -u) != sandbox agent uid 1000. If a run can't read your 0600 AWS files, grant the sandbox uid: setfacl -R -m u:1000:rX \"${HOME}/.aws\"."
+      fi
+    fi
+    log "Bedrock: add the API key (preferred, never resident), a session token, or static keys in the UI after launch."
+    chmod 600 "${ENV_FILE}" 2>/dev/null || true
+  fi
+  unset _br_on _br_region
 
   log "Starting postgres + wardynd (local mode, no SSO — see \`docker compose --profile sso up\` for Dex)"
   compose up -d postgres wardynd

@@ -151,6 +151,7 @@ type dockerEnv struct {
 	selinux    bool   // SELinux enforcing
 	kvm        bool   // /dev/kvm present
 	colima     bool   // colima on PATH (macOS)
+	rancherDsk bool   // rdctl on PATH (Rancher Desktop — a VM you control, like Colima)
 	dockerHost string // DOCKER_HOST
 }
 
@@ -170,6 +171,11 @@ func detectDocker() dockerEnv {
 	e.selinux = readFileTrim("/sys/fs/selinux/enforce") == "1"
 	if _, err := exec.LookPath("colima"); err == nil {
 		e.colima = true
+	}
+	// Rancher Desktop ships `rdctl`; its VM (like Colima's) is one you control, so
+	// gVisor can be installed and PERSISTED inside it — no second VM engine needed.
+	if _, err := exec.LookPath("rdctl"); err == nil {
+		e.rancherDsk = true
 	}
 	if strings.HasPrefix(e.dockerHost, "unix:///run/user/") {
 		e.rootless = true
@@ -318,6 +324,16 @@ func planWallDesktop(e dockerEnv) plan {
 }
 
 func planWallMac(e dockerEnv) plan {
+	// Rancher Desktop is also a VM-you-control running the moby/dockerd engine, so
+	// installing a second VM engine (Colima) just for gVisor is wasteful. Install
+	// runsc INSIDE the Rancher VM via `rdctl shell`, the same steps modulo the
+	// shell entrypoint.
+	if e.rancherDsk {
+		why := "macOS runs Docker inside a Linux VM. Rancher Desktop's VM is one you control (rdctl), so " +
+			"install runsc inside it and register the runsc runtime — no second VM engine (Colima) needed."
+		return plan{action: actPrint, title: "Enable the Wall tier (gVisor) on macOS (Rancher Desktop)",
+			why: why, script: rancherWallScript()}
+	}
 	why := "macOS runs Docker inside a Linux VM. Docker Desktop's VM can't persist a custom runtime, so use " +
 		"Colima (a VM you control): install runsc inside it and register the runsc runtime."
 	if !e.colima {
@@ -501,6 +517,31 @@ colima ssh -- sudo sh -euc '
   runsc install
   systemctl restart docker || service docker restart'
 # To survive colima stop/start, bake step 2 into ` + "`colima start --edit`" + ` as a provision: block.`
+}
+
+// rancherWallScript installs gVisor INSIDE the Rancher Desktop VM (moby/dockerd
+// engine) via `rdctl shell` — the Colima steps modulo the shell entrypoint. The
+// runsc binaries are checksum-not-verified here for parity with colimaWallScript
+// (both pull from the official gVisor release bucket over TLS); the important
+// difference is PERSISTENCE: Rancher regenerates the VM's daemon.json on app
+// restart and would silently drop runsc, so the durable path is provisioning.
+func rancherWallScript() string {
+	return `set -euo pipefail
+# Requires Rancher Desktop with the dockerd (moby) engine and rdctl on PATH.
+# 1. Install gVisor inside the Rancher VM and register the runsc runtime:
+rdctl shell sudo sh -euc '
+  A=$(uname -m)
+  U=https://storage.googleapis.com/gvisor/releases/release/latest/$A
+  wget -qO /usr/local/bin/runsc $U/runsc
+  wget -qO /usr/local/bin/containerd-shim-runsc-v1 $U/containerd-shim-runsc-v1
+  chmod 0755 /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1
+  runsc install
+  rc-service docker restart || service docker restart || systemctl restart docker'
+# 2. PERSIST across app restarts: Rancher Desktop regenerates the VM's
+#    /etc/docker/daemon.json on restart and would DROP the runsc runtime. Make it
+#    durable via Rancher provisioning — drop a script under ~/.rd/provisioning/
+#    (or bake it into override.yaml) that re-runs the runsc install on boot.
+# 3. Verify the runtime survived a restart:  wardyn setup status`
 }
 
 // kataScript installs Kata + verifies KVM, then PRINTS the daemon.json runtime

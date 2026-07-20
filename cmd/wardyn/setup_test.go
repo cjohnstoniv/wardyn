@@ -65,6 +65,7 @@ func TestPlanWall(t *testing.T) {
 		{"no-docker", dockerEnv{goos: "linux"}, actUnsupported, "Docker isn't installed"},
 		{"windows-host", dockerEnv{goos: "windows"}, actUnsupported, "WSL2"},
 		{"macos", dockerEnv{goos: "darwin"}, actPrint, "Colima"},
+		{"macos-rancher", dockerEnv{goos: "darwin", rancherDsk: true}, actPrint, "Rancher"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -119,6 +120,18 @@ func TestColimaWallScript_MatchesGvisorBinaryArchToken(t *testing.T) {
 	}
 	if !strings.Contains(binary, `ARCH="$(uname -m)"`) {
 		t.Fatalf("sibling gvisorBinaryScript's arch expression changed — update this test to match: %s", binary)
+	}
+	// The Rancher Desktop variant pulls from the same gVisor bucket and must use
+	// the same uname -m token (not the amd64/arm64 remap that 404s).
+	rancher := rancherWallScript()
+	if strings.Contains(rancher, "arm64") || strings.Contains(rancher, "amd64") {
+		t.Errorf("rancherWallScript must not remap uname -m to amd64/arm64: %s", rancher)
+	}
+	if !strings.Contains(rancher, "A=$(uname -m)") {
+		t.Errorf("rancherWallScript must use uname -m directly: %s", rancher)
+	}
+	if !strings.Contains(rancher, "rdctl shell") {
+		t.Errorf("rancherWallScript must install via rdctl shell (Rancher VM), got: %s", rancher)
 	}
 }
 

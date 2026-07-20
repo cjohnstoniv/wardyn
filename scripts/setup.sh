@@ -89,11 +89,13 @@ ask_yn() {
 # ── daemon selection: prefer a tier-capable native dockerd if one is present ──
 # A dedicated native dockerd (own data-root) can register runsc/kata; Docker Desktop's
 # managed engine resets custom runtimes on restart, so it's Fence-only. Honor an
-# explicit DOCKER_HOST (any scheme, UNMANGLED) or the active docker context; else
-# pick the wardyn socket if it exists — via the shared picker up.sh/e2e-backend.sh/
-# run-local.sh/ci-run.sh already use. (The old hand-rolled pick_daemon re-wrapped a
-# tcp://ssh:// DOCKER_HOST as unix://tcp://… and hardcoded /var/run/docker.sock,
-# bypassing docker-context resolution.)
+# explicit DOCKER_HOST (any scheme, UNMANGLED); else pick the wardyn socket if it
+# exists — via the shared picker up.sh/e2e-backend.sh/run-local.sh/ci-run.sh already
+# use. The picker also peeks at the active docker context to special-case Rancher
+# Desktop, whose host ~/.rd/docker.sock is not bind-mountable (remaps the compose
+# bind to the in-VM /var/run/docker.sock). (The old hand-rolled pick_daemon
+# re-wrapped a tcp://ssh:// DOCKER_HOST as unix://tcp://… and hardcoded
+# /var/run/docker.sock, bypassing docker-context resolution.)
 . "$ROOT/scripts/lib/common.sh"
 wardyn_pick_docker_host
 DSOCK="${DOCKER_HOST:-unix:///var/run/docker.sock}"; DSOCK="${DSOCK#unix://}"
