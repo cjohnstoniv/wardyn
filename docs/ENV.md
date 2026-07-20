@@ -160,6 +160,13 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
 | `WARDYN_VERIFY_ONLY` | bool | (unset) | verify-only run flag |
+| `WARDYN_COMPOSE_ONLY` | bool | (unset) | compose-only run flag: run claude in plan mode for a run proposal |
+| `WARDYN_COMPOSE_SYSTEM_B64` | base64 | (unset) | compose run: system prompt (base64) |
+| `WARDYN_COMPOSE_PROMPT_B64` | base64 | (unset) | compose run: user prompt (base64) |
+| `WARDYN_COMPOSE_SCHEMA_B64` | base64 | (unset) | compose run: proposal JSON schema (base64) |
+| `WARDYN_COMPOSE_DISALLOWED_TOOLS` | string | (unset) | compose run: claude --disallowedTools list |
+| `WARDYN_COMPOSE_MAX_TURNS` | string | (unset) | compose run: claude --max-turns cap |
+| `WARDYN_COMPOSE_MODEL` | string | (unset) | compose run: optional claude model override |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 

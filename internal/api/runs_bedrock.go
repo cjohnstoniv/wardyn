@@ -202,8 +202,10 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// sandbox and let the AWS SDK resolve credentials itself — including AWS SSO /
 	// IAM Identity Center sessions it refreshes on demand, so a short-lived login
 	// never goes stale and nothing is stored in Wardyn. No resident static keys.
-	// Opt-in + host-mode-only (BedrockAWSConfigDir is set only by run-host.sh /
-	// setup.sh); fail SAFE to the next path if the dir doesn't exist on this host.
+	// Opt-in via WARDYN_BEDROCK_AWS_DIR (host mode OR compose — in compose the same
+	// path is bind-mounted host==container so the daemon-side sandbox mount resolves;
+	// see deploy/compose/docker-compose.yaml). Fail SAFE to the next path if the dir
+	// doesn't exist on this host.
 	if s.cfg.BedrockAWSConfigDir != "" {
 		if st, err := os.Stat(s.cfg.BedrockAWSConfigDir); err == nil && st.IsDir() {
 			env := base()

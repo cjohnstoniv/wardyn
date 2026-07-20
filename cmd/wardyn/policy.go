@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -19,7 +21,7 @@ import (
 // authenticated humans (SSO session or admin token) — dedicated admin-role
 // gating is planned, not yet enforced. The server validates every spec before
 // persisting it (a bad spec is rejected with HTTP 400). create/update read the
-// policy body from a JSON file.
+// policy body from a JSON or YAML file; `render` converts either to canonical JSON.
 func policyCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "policy",
@@ -93,7 +95,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	create.Flags().StringVarP(&createFile, "file", "f", "", "path to a JSON policy body (use '-' for stdin)")
+	create.Flags().StringVarP(&createFile, "file", "f", "", "path to a JSON or YAML policy body (use '-' for stdin)")
 	create.Flags().StringVar(&createName, "name", "", "policy name (overrides/supplies the name in the file)")
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the created policy as JSON")
 	_ = create.MarkFlagRequired("file")
@@ -124,7 +126,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	update.Flags().StringVarP(&updateFile, "file", "f", "", "path to a JSON policy body (use '-' for stdin)")
+	update.Flags().StringVarP(&updateFile, "file", "f", "", "path to a JSON or YAML policy body (use '-' for stdin)")
 	update.Flags().StringVar(&updateName, "name", "", "policy name (overrides/supplies the name in the file)")
 	update.Flags().BoolVar(&updateJSON, "json", false, "emit the updated policy as JSON")
 	_ = update.MarkFlagRequired("file")
@@ -146,7 +148,57 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(list, get, create, update, del)
+	var renderFile string
+	render := &cobra.Command{
+		Use:   "render -f <file>",
+		Short: "Convert a JSON or YAML policy spec to canonical JSON (strict: a misspelled field fails here, not at launch)",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			var raw []byte
+			var err error
+			if renderFile == "-" {
+				raw, err = io.ReadAll(os.Stdin)
+			} else {
+				raw, err = os.ReadFile(renderFile)
+			}
+			if err != nil {
+				return fmt.Errorf("read policy file: %w", err)
+			}
+			jsonBytes, err := policyToJSON(raw)
+			if err != nil {
+				return err
+			}
+			// Accept a bare spec or a {"spec":{...}} body; isolate the spec.
+			specBytes := jsonBytes
+			if hasSpec(jsonBytes) {
+				var body struct {
+					Spec json.RawMessage `json:"spec"`
+				}
+				if err := json.Unmarshal(jsonBytes, &body); err != nil {
+					return fmt.Errorf("parse policy body: %w", err)
+				}
+				specBytes = body.Spec
+			}
+			// Strict decode so an unknown/misspelled field is caught locally,
+			// mirroring the server's DisallowUnknownFields validator.
+			dec := json.NewDecoder(bytes.NewReader(specBytes))
+			dec.DisallowUnknownFields()
+			var spec types.RunPolicySpec
+			if err := dec.Decode(&spec); err != nil {
+				return fmt.Errorf("invalid RunPolicySpec: %w", err)
+			}
+			out, err := json.MarshalIndent(spec, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(out))
+			return nil
+		},
+	}
+	render.Flags().StringVarP(&renderFile, "file", "f", "", "path to a JSON or YAML policy or spec (use '-' for stdin)")
+	_ = render.MarkFlagRequired("file")
+
+	cmd.AddCommand(list, get, create, update, del, render)
 	return cmd
 }
 
@@ -165,6 +217,11 @@ func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 	}
 	if err != nil {
 		return sdk.PolicyRequest{}, fmt.Errorf("read policy file: %w", err)
+	}
+	// Accept JSON or YAML: normalize to canonical JSON so the shape probe and the
+	// unmarshals below (and the server's strict validator) all see one format.
+	if raw, err = policyToJSON(raw); err != nil {
+		return sdk.PolicyRequest{}, fmt.Errorf("parse policy file: %w", err)
 	}
 
 	// First try the full body shape.

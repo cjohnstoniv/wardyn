@@ -21,7 +21,7 @@ help:
 	@echo "Wardyn governance control plane"
 	@echo ""
 	@echo "Targets:"
-	@echo "  setup                 - One-command Wardyn: asks host vs containerized (Enter = host), prompts for each"
+	@echo "  setup                 - One-command Wardyn: containerized by default (Enter = containerized), host is advanced,"
 	@echo "                          credential, builds, up, opens browser. Headless defaults to host; scripts pick"
 	@echo "                          with WARDYN_SETUP_MODE=local|container. Team (multi-user) is coming soon."
 	@echo "                          (non-interactive opt-ins: WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1,"

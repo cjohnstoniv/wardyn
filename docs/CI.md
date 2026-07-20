@@ -43,6 +43,7 @@ scripts/ci-run.sh
 | `WARDYN_CI_REPO` | `org/name` cloned into the workspace (needs egress + creds, see below) | unset (ephemeral scratch) |
 | `WARDYN_CI_POLICY_FILE` | `RunPolicySpec` JSON | `examples/policies/ci.json` |
 | `WARDYN_CI_SECRETS` | `name=value[,name=value...]` seeded into the secret store pre-run | unset |
+| `WARDYN_SUBSCRIPTION_TOKEN` | a `claude setup-token` connected pre-run (harness mode; proxy-injected, never resident) | unset |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | `1` = leave the stack up for debugging | unset |
@@ -70,6 +71,11 @@ the authoritative outcome — check it when the process's own exit status alone
 doesn't say why a run didn't complete.
 
 ## Writing a CI policy
+
+`--policy-file` accepts **JSON or YAML** (same schema); YAML also lets you keep
+inline comments. `wardyn policy render -f <file>` converts either to canonical
+JSON and rejects a misspelled field, so you can validate a policy in the pipeline
+before launching.
 
 Start from [`examples/policies/ci.json`](../examples/policies/ci.json) — the
 unattended baseline — and add exactly what the task needs:
@@ -108,8 +114,12 @@ Two paths work from zero prior state:
   stack and seed a `bedrock-api-key` bearer secret (never-resident,
   proxy-injected).
 
-Claude **subscription** modes need an operator's one-time interactive login
-and are not suitable for a fresh CI machine.
+- **Claude subscription** (managed setup-token): capture a token once with `claude
+  setup-token` (interactive, one-time) and store it as a CI secret; the pipeline
+  seeds it headlessly with **`WARDYN_SUBSCRIPTION_TOKEN`** (`ci-run.sh` connects it
+  via `wardyn subscription connect --token-stdin` — value on stdin, never argv). The
+  token is long-lived (~1yr), age-encrypted at rest, injected proxy-side, never
+  resident. This is the CI-friendly subscription path — no per-run interactive login.
 
 ### Least-privilege, derived not guessed
 

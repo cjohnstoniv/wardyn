@@ -356,6 +356,9 @@ type Server struct {
 	// attachTix holds outstanding single-use WS attach tickets (see
 	// attach_ticket.go). Zero value is ready to use.
 	attachTix attachTickets
+	// composeResults holds in-flight compose-run proposal uploads keyed by run id
+	// (see composeresult.go). Zero value is ready to use.
+	composeResults composeResultStore
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -371,6 +374,19 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{cfg: cfg}
 	s.router = s.routes()
+	// Late-bind the sandbox composer backend's run launcher. The composer registry
+	// (and its backends) are built at boot BEFORE the Server exists, but the
+	// sandbox backend runs its claude wire INSIDE a governed run this Server
+	// launches — so it needs the Server's RunClaudeCompose. Wire it now that s
+	// exists (mirrors how a func on cfg is set at construction). No-op unless a
+	// sandbox backend is configured.
+	if cfg.Composer != nil {
+		for _, c := range cfg.Composer.Composers() {
+			if sink, ok := c.(composeRunnerSink); ok {
+				sink.SetRunClaude(s.RunClaudeCompose)
+			}
+		}
+	}
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible
 	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives
@@ -613,6 +629,13 @@ func (s *Server) routes() chi.Router {
 			// run token). Cross-run uploads are rejected (token run id must match
 			// the path run id).
 			r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
+
+			// Compose-result upload: PUT /api/v1/internal/compose-results/{runID}
+			// The in-sandbox claude compose wire PUTs its raw proposal JSON from a
+			// governed compose run (via the proxy's brokered compose-result route,
+			// which injects the run token) for the waiting RunClaudeCompose to read.
+			// Same cross-run guard as scan (token run id must match the path run id).
+			r.Put("/internal/compose-results/{runID}", s.handleUploadComposeResult)
 
 			// Verify-result upload: PUT /api/v1/internal/verify-results/{runID}
 			// wardyn-verify PUTs the VerifyResult (per-step exit codes + bounded

@@ -76,6 +76,11 @@ func runCmd(client clientFn) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("read --policy-file: %w", err)
 				}
+				// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
+				// same json-tagged spec the server validates.
+				if data, err = policyToJSON(data); err != nil {
+					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+				}
 				var spec types.RunPolicySpec
 				if err := json.Unmarshal(data, &spec); err != nil {
 					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
@@ -109,7 +114,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
-	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
+	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for 'wardyn attach'; use a never-reap policy (auto_stop_after_sec < 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side)")

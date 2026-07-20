@@ -50,21 +50,65 @@ import (
 // config). kataScript refuses to install below it — see setup.go's package doc.
 const kataMinVersion = "3.31.0"
 
-func setupCmd() *cobra.Command {
+func setupCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Set up host components for the stronger confinement tiers (Wall / Vault)",
-		Long: "Enable Wardyn's stronger confinement tiers on this host. These commands detect your\n" +
-			"OS and Docker setup and either install the runtime, print the exact one-time command,\n" +
-			"or explain honestly why a tier isn't reachable here (and what to do instead).\n\n" +
+		Short: "Set up Wardyn: model access, credentials, and the stronger confinement tiers (Wall / Vault)",
+		Long: "Set up Wardyn. `setup status` shows this host's readiness (the same checks the\n" +
+			"Getting-started UI renders) with the exact next command beside each unmet item. The\n" +
+			"tier commands (wall/vault) detect your OS and Docker setup and either install the\n" +
+			"runtime or print the exact one-time command.\n\n" +
 			"They run with YOUR privileges (sudo as needed) — the Wardyn daemon never installs\n" +
-			"anything. After running one, Re-check in the Getting-started UI: wardynd re-probes\n" +
-			"`docker info` and the tier flips to available.",
+			"anything. After running one, re-check: wardynd re-probes `docker info` and the tier\n" +
+			"flips to available.",
 	}
 	cmd.AddCommand(
+		setupStatusCmd(client),
 		setupTierCmd("wall"),
 		setupTierCmd("vault"),
 	)
+	return cmd
+}
+
+// setupStatusCmd prints the terminal-parity readiness checklist — the same
+// GET /api/v1/setup/status data the UI Getting-started renders — with the exact
+// next command beside each unmet check, so the CLI route needs no separate model
+// picker.
+func setupStatusCmd(client clientFn) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show this host's setup readiness (model access, secrets, tiers) with next-step commands",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c := client()
+			if asJSON {
+				raw, err := c.SetupStatus(cmd.Context())
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(raw))
+				return nil
+			}
+			st, err := fetchSetupStatus(cmd.Context(), c)
+			if err != nil {
+				return err
+			}
+			ready := "not ready"
+			if st.Ready {
+				ready = "ready"
+			}
+			fmt.Printf("Wardyn setup: %s\n", ready)
+			for _, ck := range st.Checks {
+				fmt.Printf("  [%-4s] %s: %s\n", ck.Status, ck.Label, ck.Detail)
+				if ck.Fix != "" {
+					fmt.Printf("          → %s\n", ck.Fix)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the raw setup-status JSON")
 	return cmd
 }
 

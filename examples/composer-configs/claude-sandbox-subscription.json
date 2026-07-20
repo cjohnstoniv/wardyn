@@ -1,0 +1,11 @@
+{
+  "default": "claude-sandbox",
+  "backends": [
+    {
+      "name": "claude-sandbox",
+      "wire": "sandbox",
+      "model": "opus",
+      "enabled": true
+    }
+  ]
+}

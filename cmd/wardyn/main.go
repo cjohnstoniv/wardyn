@@ -135,7 +135,8 @@ func rootCmd() *cobra.Command {
 		secretCmd(client),
 		attachCmd(client),
 		recordCmd(client),
-		setupCmd(),
+		subscriptionCmd(client),
+		setupCmd(client),
 	)
 	return root
 }

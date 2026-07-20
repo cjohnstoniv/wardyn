@@ -31,12 +31,13 @@ import (
 const (
 	localRoutePrefix = "/wardyn/"
 
-	routeMint          = "/wardyn/v1/credentials/mint"
-	routeApprovals     = "/wardyn/v1/approvals/"
-	routeRecordings    = "/wardyn/v1/recordings/"
-	routeScanResults   = "/wardyn/v1/scan-results/"
-	routeVerifyResults = "/wardyn/v1/verify-results/"
-	routeLLM           = "/wardyn/llm/"
+	routeMint           = "/wardyn/v1/credentials/mint"
+	routeApprovals      = "/wardyn/v1/approvals/"
+	routeRecordings     = "/wardyn/v1/recordings/"
+	routeScanResults    = "/wardyn/v1/scan-results/"
+	routeVerifyResults  = "/wardyn/v1/verify-results/"
+	routeComposeResults = "/wardyn/v1/compose-results/"
+	routeLLM            = "/wardyn/llm/"
 
 	// llmAnthropicPrefix selects the Anthropic LLM passthrough. The remainder
 	// after this prefix is appended to the Anthropic API base.
@@ -50,12 +51,13 @@ const (
 	maxBlindHosts = 64
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
-	ruleSourceMint          = "brokered:mint"
-	ruleSourceApprovals     = "brokered:approvals"
-	ruleSourceRecordings    = "brokered:recording"
-	ruleSourceScanResults   = "brokered:scan-result"
-	ruleSourceVerifyResults = "brokered:verify-result"
-	ruleSourceLLM           = "brokered:llm"
+	ruleSourceMint           = "brokered:mint"
+	ruleSourceApprovals      = "brokered:approvals"
+	ruleSourceRecordings     = "brokered:recording"
+	ruleSourceScanResults    = "brokered:scan-result"
+	ruleSourceVerifyResults  = "brokered:verify-result"
+	ruleSourceComposeResults = "brokered:compose-result"
+	ruleSourceLLM            = "brokered:llm"
 	// ruleSourceLLMBlocked marks an LLM request refused by content inspection;
 	// ruleSourceLLMBlind marks an opaque CONNECT to an LLM host that inspection
 	// could not see into (honest coverage signal).
@@ -102,6 +104,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerScanResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeVerifyResults):
 		p.handleBrokerVerifyResult(w, r)
+	case r.Method == http.MethodPut && strings.HasPrefix(path, routeComposeResults):
+		p.handleBrokerComposeResult(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):
@@ -229,6 +233,17 @@ func (p *Proxy) handleBrokerScanResult(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleBrokerVerifyResult(w http.ResponseWriter, r *http.Request) {
 	p.forwardBrokeredUpload(w, r, routeVerifyResults, "/api/v1/internal/verify-results/",
 		ruleSourceVerifyResults, "read verify result body", maxScanResultBody)
+}
+
+// handleBrokerComposeResult forwards PUT /wardyn/v1/compose-results/{runID} to the
+// control plane's internal compose-result endpoint with the run token injected —
+// the exact sibling of handleBrokerScanResult. It carries the AI Run Composer's
+// in-sandbox claude proposal JSON back to the waiting RunClaudeCompose. Cross-run
+// uploads are rejected control-plane-side (token run id must match the path run
+// id); the sandbox-supplied Authorization is stripped, the run token injected.
+func (p *Proxy) handleBrokerComposeResult(w http.ResponseWriter, r *http.Request) {
+	p.forwardBrokeredUpload(w, r, routeComposeResults, "/api/v1/internal/compose-results/",
+		ruleSourceComposeResults, "read compose result body", maxScanResultBody)
 }
 
 // forwardToControlPlane builds and sends a request to the control plane,

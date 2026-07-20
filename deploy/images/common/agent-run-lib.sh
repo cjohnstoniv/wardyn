@@ -262,3 +262,54 @@ maybe_exec_task_mode() {
         exec /bin/sh -lc "$1"
     fi
 }
+
+# maybe_exec_compose_mode — governed COMPOSE run (AI Run Composer sandbox
+# backend): when WARDYN_COMPOSE_ONLY=1, run the REAL claude in PLAN mode with all
+# built-in tools disabled and structured JSON output — the EXACT least-privilege
+# arg set the host `cli` composer wire uses (runClaude) — capture its stdout, PUT
+# it to the brokered compose-results route (the proxy injects the run token, the
+# SAME mechanism wardyn-scan uses to deliver scan-results), and exit. No agent
+# harness and no model action against the host: plan mode + the full
+# --disallowedTools denylist + --strict-mcp-config. claude is used purely as a
+# schema-forced JSON generator; the control plane Grade+Clamps the proposal.
+#
+# The system prompt, user message, and JSON schema arrive base64-encoded in env
+# (so multi-line / shell-special content survives untouched); the tool denylist,
+# turn cap, and optional model are plain fixed strings. The managed subscription
+# token is NEVER here — it is injected proxy-side (invariant 1); the sandbox holds
+# only the inert sentinel materialize_managed_claude_config wrote. No-op unless
+# WARDYN_COMPOSE_ONLY=1; NEVER returns when it is set.
+maybe_exec_compose_mode() {
+    [[ "${WARDYN_COMPOSE_ONLY:-}" == "1" ]] || return 0
+    local sys user schema out url args
+    sys="$(printf '%s' "${WARDYN_COMPOSE_SYSTEM_B64:-}" | base64 -d)"
+    user="$(printf '%s' "${WARDYN_COMPOSE_PROMPT_B64:-}" | base64 -d)"
+    schema="$(printf '%s' "${WARDYN_COMPOSE_SCHEMA_B64:-}" | base64 -d)"
+    args=(
+        -p "$user"
+        --output-format json
+        --json-schema "$schema"
+        --append-system-prompt "$sys"
+        --permission-mode plan
+        --strict-mcp-config
+        --disallowedTools "${WARDYN_COMPOSE_DISALLOWED_TOOLS:-}"
+        --max-turns "${WARDYN_COMPOSE_MAX_TURNS:-6}"
+    )
+    [[ -n "${WARDYN_COMPOSE_MODEL:-}" ]] && args+=( --model "$WARDYN_COMPOSE_MODEL" )
+    echo "agent-run: compose-only mode — running claude in plan mode for a run proposal" >&2
+    # Capture stdout (the JSON wrapper). A nonzero claude exit / is_error wrapper is
+    # STILL delivered: the waiting composer fails closed on it (ExtractProposalJSON),
+    # which is a clearer signal than an empty upload, so never abort before the PUT.
+    out="$(claude "${args[@]}" 2>/dev/null || true)"
+    url="${WARDYN_PROXY_URL%/}/wardyn/v1/compose-results/${WARDYN_RUN_ID}"
+    # PUT directly to the proxy's brokered local route (--noproxy '*' so curl dials
+    # the proxy with an origin-form path it serves locally + injects the run token,
+    # exactly as mint_ssh_key does). No Authorization header — the proxy strips any.
+    if printf '%s' "$out" | curl -fsS --noproxy '*' -X PUT \
+        -H 'Content-Type: application/json' --data-binary @- "$url" >/dev/null; then
+        echo "agent-run: compose proposal uploaded" >&2
+    else
+        echo "agent-run: WARNING compose proposal upload failed (the composer will report no proposal)" >&2
+    fi
+    exit 0
+}

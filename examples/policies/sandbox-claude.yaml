@@ -1,0 +1,44 @@
+# sandbox-claude.yaml — a real Claude Code run on your MANAGED subscription.
+#
+#   wardyn run --agent claude-code --repo octocat/Hello-World \
+#     --task "Read the repo and write SUMMARY.md describing it" \
+#     --policy-file examples/policies/sandbox-claude.yaml
+#
+# Prereq: connect the managed subscription once (never-resident, stored
+# age-encrypted): POST /api/v1/setup/harness-login -> attach -> `claude
+# setup-token` -> PUT /api/v1/setup/harness-credential/anthropic. See docs/TRY-IT.md.
+#
+# Why NO api_key grant below: dispatch picks the model path by precedence
+# (host ~/.claude mount > managed setup-token > Bedrock > api-key). Leaving out the
+# api_key grant lets the run fall through to the managed subscription, injected
+# proxy-side — the sandbox only ever holds an inert sentinel (verify:
+# `docker exec wardyn-agent-<id> env | grep -i key`), and audit logs
+# `run.llm.subscription_inject`.
+
+# Anthropic egress is what a subscription run needs. Both forms are accepted by the
+# reachability check; the managed token is injected only to api.anthropic.com.
+allowed_domains:
+  - api.anthropic.com
+  - "*.anthropic.com"
+  - proxy.golang.org      # go module fetches, if the agent builds
+  - registry.npmjs.org    # npm installs, if the agent builds
+
+# Unknown host -> raise an approval and deny now; approve + retry to allow. (Not
+# always_deny here so you can widen egress live while you watch the run.)
+first_use_approval: deny_with_review
+
+min_confinement_class: CC1
+
+eligible_grants:
+  # Cloning a GitHub repo routes through the Wardyn git-broker (repo-scoped, token
+  # minted proxy-side, never in the sandbox) — github.com is NOT in allowed_domains.
+  # read-only, auto-mint so the clone doesn't wait on a human.
+  - kind: github_token
+    scope:
+      repos: []
+      permissions:
+        contents: read
+    ttl_seconds: 3600
+    requires_approval: false
+
+auto_stop_after_sec: 0   # 0 = platform default reaper

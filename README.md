@@ -222,21 +222,41 @@ bare install has no embedded UI or sandbox runner) — run it via `make setup` o
 ```sh
 git clone https://github.com/cjohnstoniv/wardyn
 cd wardyn
-make setup   # one installer: detects your host, sets up host mode, launches + opens the UI
+make setup   # brings up the containerized control plane + opens the UI
 ```
 
-`make setup` (== `scripts/setup.sh`) runs **host mode** — the default: sandbox agents
-run on this machine with your Claude login (staged and injected proxy-side, so no
-long-lived secret is resident), builds `bin/wardynd` + the UI, starts Postgres on
-loopback, launches `wardynd` in the background (PID/log in `~/.wardyn/`), opens the UI,
-and prints commands for any missing confinement barrier. Stop with `make stop-host`.
+`make setup` (== `scripts/setup.sh`) runs **containerized mode** — the default: `wardynd`
+runs in a compose container (sandbox→control-plane callbacks route in-network, so workspace
+**Verify/Record** work even on Docker Desktop + WSL2 NAT), starts Postgres, opens the UI,
+and prints commands for any missing confinement barrier. Stop with `make compose-down`.
 
-**Containerized mode** (`WARDYN_SETUP_MODE=container`) runs `wardynd` in a compose
-container instead — the fix for workspace **Verify/Record** on Docker Desktop + WSL2
-NAT; add an API key or Bedrock for model access. **Team mode** (multi-user SSO/RBAC) is **coming soon**.
+Give it a model — pick any, all first-class at the CLI (or in the UI):
+
+```sh
+claude setup-token | wardyn subscription connect   # Claude subscription (never resident)
+echo "$KEY"        | wardyn secret set anthropic-api-key   # API key
+# or Bedrock: set WARDYN_BEDROCK_REGION/MODEL (+ WARDYN_BEDROCK_AWS_DIR for ~/.aws SSO)
+wardyn setup status   # what's configured, with the exact next command per unmet check
+```
+
+**Host mode** (`WARDYN_SETUP_MODE=local`) is an advanced escape hatch — `wardynd` runs as
+you, using your resident Claude login directly (note: its workspace Verify/Record callbacks
+don't route under Docker Desktop + WSL2 NAT). **Team mode** (multi-user SSO/RBAC) is **coming soon**.
 
 Prove the egress boundary hands-on first? The UI's **/demos** screen launches
 interactive sandboxes with no repo and no keys — see [TRY-IT Level 0.5](docs/TRY-IT.md).
+
+**Prefer one file and one command?** Write your sandbox rules as a small **YAML**
+(or JSON) policy and hand it to a single `wardyn run` — interactive or unattended:
+
+```sh
+wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+  --task 'echo hello from a governed sandbox' \
+  --policy-file examples/policies/sandbox.yaml --wait
+```
+
+The commented [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml) is
+a sealed floor you can edit at a glance; `wardyn policy render -f <file>` checks it.
 
 **In a pipeline instead of on a desktop?** [`docs/CI.md`](docs/CI.md) — one script
 brings up a fresh control plane on any CI runner (GitHub Actions, Azure DevOps),

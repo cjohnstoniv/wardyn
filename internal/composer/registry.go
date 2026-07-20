@@ -174,3 +174,15 @@ func (r *Registry) Assist(ctx context.Context, backend string, req ComposeReques
 func (r *Registry) List() []BackendInfo { return r.info }
 func (r *Registry) Default() string     { return r.def }
 func (r *Registry) Enabled() bool       { return len(r.backends) > 0 }
+
+// Composers returns the configured Composer implementations. It exists so the
+// Server can LATE-BIND a callback onto any backend that needs one after
+// construction (the sandbox backend's run launcher) — the registry is built at
+// boot before the Server exists. Order is unspecified.
+func (r *Registry) Composers() []Composer {
+	out := make([]Composer, 0, len(r.backends))
+	for _, c := range r.backends {
+		out = append(out, c)
+	}
+	return out
+}

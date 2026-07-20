@@ -486,6 +486,13 @@ ANTHROPIC_MODE=""
 apply_anthropic_mode
 echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 
+# Governed COMPOSE run (AI Run Composer sandbox backend): run claude in plan mode
+# with structured JSON output, PUT the proposal to the brokered compose-results
+# route, and exit. Placed AFTER the anthropic auth wiring so claude authenticates
+# exactly like a normal (managed-subscription) run. No-op unless WARDYN_COMPOSE_ONLY=1
+# (see maybe_exec_compose_mode in agent-run-lib.sh); never returns when it is set.
+maybe_exec_compose_mode
+
 # Run Claude Code in non-interactive single-task (print) mode.
 # Flags per public CLI conventions as of claude-code v2.x:
 #   -p "<prompt>"                   non-interactive prompt mode (no REPL)

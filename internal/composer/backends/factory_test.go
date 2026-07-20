@@ -33,6 +33,54 @@ func TestNewFromSpec_UnknownWire(t *testing.T) {
 	}
 }
 
+// The sandbox wire: enabled by default (not cli), presents as provider
+// "subscription", needs no API key, and — until the Server late-binds its run
+// launcher (SetRunClaude) — fails Propose closed with a clear error rather than a
+// nil-deref.
+func TestSandboxBackend_WireProviderAndFailClosed(t *testing.T) {
+	spec := BackendSpec{Name: "claude-sandbox", Wire: "sandbox", Model: "opus"}
+	if spec.needsAPIKey() {
+		t.Errorf("sandbox backend must not need an API key")
+	}
+	if !spec.enabledDefault() {
+		t.Errorf("sandbox backend must be enabled by default")
+	}
+	if spec.provider() != "subscription" {
+		t.Errorf("sandbox provider() = %q, want subscription", spec.provider())
+	}
+	c, err := NewFromSpec(spec, "")
+	if err != nil {
+		t.Fatalf("build sandbox backend: %v", err)
+	}
+	// No SetRunClaude call → the launcher is unwired → Propose fails closed.
+	_, perr := c.Propose(context.Background(), composer.ComposeRequest{
+		Prompt:    "add a readme",
+		Workspace: composer.Workspace{Kind: composer.WorkspaceEphemeral},
+	})
+	if perr == nil || !strings.Contains(perr.Error(), "launcher") {
+		t.Errorf("unwired sandbox Propose should fail closed mentioning the launcher, got %v", perr)
+	}
+}
+
+// A sandbox backend lands in the built registry (enabled by default) and resolves
+// no API key.
+func TestBuildRegistry_SandboxEnabledNoKey(t *testing.T) {
+	var resolved []string
+	reg, _, err := BuildRegistry(RegistryConfig{
+		Default:  "sb",
+		Backends: []BackendSpec{{Name: "sb", Wire: "sandbox", Model: "opus"}},
+	}, func(spec BackendSpec) (string, error) { resolved = append(resolved, spec.Name); return "", nil })
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !reg.Enabled() || len(reg.List()) != 1 || reg.List()[0].Provider != "subscription" {
+		t.Errorf("sandbox backend not enabled/subscription in registry: %+v", reg.List())
+	}
+	if len(resolved) != 0 {
+		t.Errorf("sandbox backend must resolve no API key, resolved %v", resolved)
+	}
+}
+
 func TestBuildRegistry_ResolvesKeysAndDefaults(t *testing.T) {
 	var resolved []string
 	resolveKey := func(spec BackendSpec) (string, error) {

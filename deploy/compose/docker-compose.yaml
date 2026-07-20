@@ -205,8 +205,19 @@ services:
       #     (+ optional `aws-session-token`) — these are RESIDENT in the sandbox env
       #     (SigV4 signs in-process; see threatmodel). Region/model change needs a
       #     wardynd restart (creds are live-addable).
-      # WARDYN_BEDROCK_REGION: "${WARDYN_BEDROCK_REGION:-}"
-      # WARDYN_BEDROCK_MODEL: "${WARDYN_BEDROCK_MODEL:-}"
+      #   - or WARDYN_BEDROCK_AWS_DIR below: bind your host ~/.aws read-only and let the
+      #     AWS SDK resolve creds itself (RESIDENT in the sandbox at /home/agent/.aws).
+      #     SSO/IAM-Identity-Center only auto-refreshes for `sso-session` profiles whose
+      #     CACHED token is still valid at run start — the read-only mount can't write
+      #     back a rotated token, and legacy `sso_start_url` profiles need a periodic
+      #     host `aws sso login`. NOTE: this exposes the ENTIRE host ~/.aws (all
+      #     profiles + cached tokens) to the untrusted sandbox (uid 1000 — you may need
+      #     `setfacl -R -m u:1000:rX ~/.aws`). Point it at ~/.aws only.
+      WARDYN_BEDROCK_REGION: "${WARDYN_BEDROCK_REGION:-}"
+      WARDYN_BEDROCK_MODEL: "${WARDYN_BEDROCK_MODEL:-}"
+      WARDYN_BEDROCK_AWS_DIR: "${WARDYN_BEDROCK_AWS_DIR:-}"
+      WARDYN_BEDROCK_AWS_PROFILE: "${WARDYN_BEDROCK_AWS_PROFILE:-}"
+      WARDYN_BEDROCK_AWS_SSO_REGION: "${WARDYN_BEDROCK_AWS_SSO_REGION:-}"
     volumes:
       # Daemon trust: see the loud note at the top of this file.
       # WARDYN_DOCKER_SOCK selects WHICH daemon wardynd drives. It matters on hosts
@@ -240,6 +251,13 @@ services:
       # until an operator opts in by naming a root, rather than silently exposing
       # anything.
       - ${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:ro
+      # Bedrock ~/.aws (WARDYN_BEDROCK_AWS_DIR) — READ-ONLY, mounted at the SAME path
+      # inside the container so the host path resolves identically on both sides: the
+      # sandbox bind Source is resolved by the HOST dockerd (DooD siblings), and
+      # wardynd's own os.Stat needs the path present in its container. Default is a
+      # harmless empty path (Bedrock ~/.aws stays off until an operator sets the var).
+      # See the WARDYN_BEDROCK_AWS_DIR note in this service's environment above.
+      - ${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:ro
       - recordings:/data/recordings
       - audit:/data/audit
     ports:

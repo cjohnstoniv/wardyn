@@ -72,6 +72,16 @@ const composerMaxTurns = "6"
 // The unbounded operator-MCP class is instead closed structurally by --strict-mcp-config.
 const composerDisallowedTools = "Read,Glob,Grep,Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,TodoWrite,Skill,SlashCommand,ToolSearch"
 
+// ComposerDisallowedTools / ComposerMaxTurns re-export the claude least-privilege
+// arg values so the SANDBOX composer backend — which runs this SAME claude wire
+// INSIDE a governed run instead of on the host — reuses the EXACT denylist +
+// turn cap. One source of truth: a new built-in tool added to
+// composerDisallowedTools tightens both wires at once.
+const (
+	ComposerDisallowedTools = composerDisallowedTools
+	ComposerMaxTurns        = composerMaxTurns
+)
+
 // Config configures the CLI composer backend.
 type Config struct {
 	// Tool selects the resident CLI: "claude" (Claude Code) or "codex".
@@ -341,7 +351,19 @@ func (c *cliComposer) runClaude(ctx context.Context, schema map[string]any, syst
 	if err != nil {
 		return nil, err // transport/process failure — returned immediately (not retried)
 	}
+	return ExtractProposalJSON(out)
+}
 
+// ExtractProposalJSON pulls the schema-valid proposal object out of the claude
+// `-p --output-format json` wrapper (its ".structured_output" field) — the bytes
+// composer.ParseProposal/ProposeWithRetry parse. It is exported so the SANDBOX
+// composer backend, which runs this SAME claude wire inside a governed run and
+// receives claude's raw stdout back over the brokered upload, parses the wrapper
+// IDENTICALLY (no reinvented JSON handling). Semantics match runClaude's old
+// inline parse: a non-wrapper response returns the raw bytes (ParseProposal then
+// fails closed / the loop retries); a wrapper is_error is a real backend error
+// returned immediately; a wrapper with no object returns the empty bytes.
+func ExtractProposalJSON(out []byte) ([]byte, error) {
 	var wrapper struct {
 		StructuredOutput json.RawMessage `json:"structured_output"`
 		IsError          bool            `json:"is_error"`

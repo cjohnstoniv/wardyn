@@ -8,24 +8,26 @@ agent run** (bring an Anthropic API key).
 
 ## Level 0 — fastest start: the UI + Getting-started (no keys, no login)
 
-The recommended first step. One command detects your host, sets up **host mode**
-(sandbox agents on this machine with your Claude login), launches with no SSO
-and no token, and opens the **Getting-started page** in your browser the moment
-the UI is live:
+The recommended first step. One command brings up the **containerized** control
+plane (`wardynd` in a compose container), launches with no SSO and no token, and
+opens the **Getting-started page** in your browser the moment the UI is live:
 
 ```sh
-make setup    # host-mode installer → launch → open http://localhost:8080
-              # wardynd runs in the background: log/PID in ~/.wardyn/, stop with `make stop-host`
+make setup    # containerized control plane → launch → open http://localhost:8080
+              # stop with `make compose-down` (keeps data) / start over with `make reset`
 ```
 
-> `make setup` asks which of the two supported single-user setups you want
-> (Enter = host): **host mode** (above) or **containerized** (the compose
-> stack; `wardynd` runs in a container so workspace Verify/Record work on
-> Docker Desktop + WSL2 NAT, and model access comes from an API key/Bedrock
-> instead of your host login). Headless runs default to host; scripts pick
-> with `WARDYN_SETUP_MODE=local|container`. **Team mode** — that same compose
-> control plane as a shared *multi-user* service (SSO logins, per-user
-> identity/RBAC) — is **coming soon**.
+> Containerized is the default because `wardynd` runs in a container on the
+> `wardyn-internal` network, so sandbox→control-plane callbacks route in-network —
+> the fix for workspace Verify/Record on Docker Desktop + WSL2 NAT. Set up model
+> access at the CLI: **`claude setup-token | wardyn subscription connect`** (Claude
+> subscription — never resident, injected proxy-side), an **API key** (`wardyn
+> secret set anthropic-api-key`), or **Bedrock**; `wardyn setup status` shows what's
+> configured with the exact next command per unmet check. Headless/CI seeds a
+> subscription with `WARDYN_SUBSCRIPTION_TOKEN`. **Host mode**
+> (`WARDYN_SETUP_MODE=local`) is an advanced escape hatch — `wardynd` runs as you
+> using your resident Claude login, but its Verify/Record callbacks don't route
+> under Docker Desktop + WSL2 NAT. **Team mode** (multi-user SSO/RBAC) is **coming soon**.
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
@@ -82,21 +84,29 @@ repo, an API key, or any model access — only the sandbox barrier itself:
    cloud-metadata (`169.254.169.254`) and private-IP probes stay denied
    unconditionally — no policy can grant them.
 
-**Headless?** The CLI runs the same sandboxes — no repo required:
+**Headless?** Write your sandbox rules as one small file and hand it to one
+command — the CLI runs the same sandboxes, no repo required. A policy file is
+**JSON or YAML**; the shipped [`examples/policies/sandbox.yaml`](../examples/policies/sandbox.yaml)
+is a commented, sealed floor (empty allowlist, `always_deny`, `CC1`):
 
 ```sh
-cat > demo3.json <<'EOF'
-{"allowed_domains":[],"first_use_approval":"wait_for_review","min_confinement_class":"CC1","auto_stop_after_sec":900}
-EOF
-wardyn run --agent claude-code --interactive --policy-file demo3.json
-wardyn attach <id>    # attach the terminal; approve live from the Approvals UI or `wardyn approve`
+# Interactive: come up idle, attach a terminal, drive it yourself.
+wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml
+wardyn attach <id>     # curl an unlisted host -> instant 403; check `wardyn audit <id>`
+
+# Background / unattended: run a plain command in YOUR image under the same
+# governance; --wait blocks to the outcome and exits with the task's code.
+wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+  --task 'echo hello from a governed sandbox' \
+  --policy-file examples/policies/sandbox.yaml --wait
 ```
 
-Fully unattended (CI, batch) is the same command minus the human: `wardyn run
---wait` blocks to the run's outcome and exits with the task's exit code, and
-`--image <ref> --task-mode exec` runs a plain command in **your** container
-under the same governance. [`docs/CI.md`](CI.md) has the pipeline story
-(GitHub Actions / Azure DevOps, one-shot `scripts/ci-run.sh`).
+`wardyn policy render -f examples/policies/sandbox.yaml` prints the canonical JSON
+(and rejects a misspelled field) if you want to check a policy before launching.
+[`docs/CI.md`](CI.md) has the full pipeline story (GitHub Actions / Azure DevOps,
+one-shot `scripts/ci-run.sh`). To give the sandbox a real Claude, connect a
+managed subscription (Level 2, below) and swap in
+[`examples/policies/sandbox-claude.yaml`](../examples/policies/sandbox-claude.yaml).
 
 ## Level 1 — governance demo (no keys)
 
@@ -175,12 +185,19 @@ Bedrock access-key path (see below):
 
 - **API key** (Level 2 above) — `wardyn secret set anthropic-api-key`. The proxy
   injects `x-api-key` at startup; **never resident**.
-- **Subscription (OAuth)** — mount your host `~/.claude` into the run (New Run →
-  Access → Subscription). The proxy injects your **live** OAuth token as
-  `Authorization: Bearer`; the sandbox holds only an inert sentinel. Host mode
-  stages this during `make setup`; if you skipped the prompt (or ran headless),
-  `make stage-claude` stages it later and restarts wardynd. On compose,
-  stage creds with `WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`.
+- **Subscription (managed, container-native)** — `claude setup-token | wardyn
+  subscription connect` (headless: `printf '%s' "$TOKEN" | wardyn subscription
+  connect --token-stdin`, or set `WARDYN_SUBSCRIPTION_TOKEN` before `make setup`).
+  The token is captured once, stored **age-encrypted**, and injected proxy-side as
+  `Authorization: Bearer` into every eligible run — the sandbox holds only an inert
+  sentinel (`docker exec … env | grep -i key` is empty). `wardyn subscription
+  status` shows it; `wardyn subscription disconnect` removes it.
+  > **Security note (honest):** a `claude setup-token` is **long-lived (~1 year)**
+  > and does **not** auto-rotate — it sits age-encrypted at rest in the secret
+  > store, masked from all streams, host-pinned to `api.anthropic.com`, and never
+  > enters the sandbox. Protect `deploy/compose/.env` and the postgres volume, and
+  > revoke the token in the Anthropic console if a host is compromised. (Host mode's
+  > resident path instead injects a short-lived, auto-rotating token.)
 - **AWS Bedrock** — operator-configured (not a per-run choice). Set
   `WARDYN_BEDROCK_REGION` + `WARDYN_BEDROCK_MODEL` (a cross-region *inference-profile*
   id, not a bare model id) and add credentials to the secret store:

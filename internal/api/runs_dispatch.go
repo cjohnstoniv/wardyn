@@ -35,6 +35,7 @@ type dispatchParams struct {
 	Interactive        bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode           string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	VerifyPlan         json.RawMessage         // non-nil ⇒ VERIFY run (execs wardyn-verify with these commands)
+	ComposeEnv         map[string]string       // non-nil ⇒ COMPOSE run: WARDYN_COMPOSE_* env (discriminator + base64 prompt/schema) for the in-sandbox claude compose wire
 }
 
 // dispatchWithVerify is the positional entry point retained for the harness-login
@@ -149,6 +150,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	sandboxEnv := buildBaseSandboxEnv(run, proxyURL)
 	applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, taskMode, firstGitHubGrantID, gitPATGrants, sshGrants)
 	applyRepoCloneEnv(sandboxEnv, run, policy)
+	// Compose-only mode (AI Run Composer sandbox backend): the WARDYN_COMPOSE_*
+	// env (discriminator + base64 prompt/schema) rides here — the same "only a
+	// discriminator + non-secret payload changes; clone/grants/EGRESS/recording/
+	// LLM-injection are identical" contract as scan/verify/exec. resolveLLMTransport
+	// below sees an ordinary (no-WorkspaceID) claude-code run and injects the
+	// managed subscription token proxy-side from the launcher's policy.
+	for k, v := range p.ComposeEnv {
+		sandboxEnv[k] = v
+	}
 
 	// Artifact Repository Redirection (operator-wide site-config): for each
 	// configured ecosystem, SUBSTITUTE the corp mirror host for the language's

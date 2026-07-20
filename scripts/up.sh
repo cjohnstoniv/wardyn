@@ -343,6 +343,21 @@ cmd_up() {
   done
   log "wardynd is healthy"
 
+  # Headless model-access seed: a Claude subscription token supplied via env is
+  # connected through the IN-CONTAINER CLI (loopback → local-mode no-auth, so a
+  # host→bridge non-loopback peer never hits the auth gate). Piped on stdin so it
+  # never lands in argv/ps, deploy/compose/.env, or the wardynd container env — it
+  # lives ONLY in the age-encrypted store. Interactive setup uses
+  # `wardyn subscription connect` after launch (or `wardyn setup status`).
+  if [ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]; then
+    log "Connecting the Wardyn-managed Claude subscription from WARDYN_SUBSCRIPTION_TOKEN…"
+    if printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | compose exec -T wardynd /usr/local/bin/wardyn subscription connect --token-stdin; then
+      log "Managed Claude subscription connected (injected proxy-side; never resident in the sandbox)."
+    else
+      warn "subscription connect failed — check the token (from 'claude setup-token', starts with sk-ant-oat)."
+    fi
+  fi
+
   # Can THIS shell reach the published UI port? In WSL2 NAT mode it usually
   # cannot (only the Windows browser can) — an honest note, not a failure.
   if ! curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; then
@@ -379,8 +394,21 @@ cmd_up() {
     *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
   esac
 
-  open_url "${_url}"
-  log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
+  # Route hand-off. CI/headless (no browser or no TTY): no browser, NO demos —
+  # just the launch command. Interactive (UI/CLI): open Getting-started + point at
+  # the keyless demo and a one-command governed run.
+  if [ "${WARDYN_UP_NO_BROWSER:-0}" = "1" ] || [ ! -t 1 ]; then
+    log "Wardyn is up (headless): ${_url}"
+    log "  Ready — launch a governed run:"
+    log "    wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
+  else
+    open_url "${_url}"
+    log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
+    log "  Prove the sandbox boundary from the CLI (keyless):"
+    log "    wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
+    log "  Give it a real Claude:  wardyn subscription connect   (then run with sandbox-claude.yaml)"
+    log "  Or click the /demos screen in the UI."
+  fi
 
   # The per-run sandbox proxy + agent images are NOT needed to reach the UI or the
   # Getting-started page — only to LAUNCH a run. Build them AFTER the browser is

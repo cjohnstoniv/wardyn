@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer/backends/anthropic"
 	"github.com/cjohnstoniv/wardyn/internal/composer/backends/cli"
 	"github.com/cjohnstoniv/wardyn/internal/composer/backends/openai"
+	"github.com/cjohnstoniv/wardyn/internal/composer/backends/sandbox"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -37,7 +38,7 @@ type BackendSpec struct {
 	APIKeySecret string `json:"api_key_secret,omitempty"` // secret-store name (HTTP key backends)
 
 	BinPath        string `json:"bin_path,omitempty"`        // cli
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"` // cli
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"` // cli / sandbox
 
 	MaxAttempts int   `json:"max_attempts,omitempty"`
 	Enabled     *bool `json:"enabled,omitempty"` // default true; cli default false (subscription ToS)
@@ -87,9 +88,10 @@ func (s BackendSpec) normalizedTransport() string {
 	}
 }
 
-// provider is the display provider for the UI picker.
+// provider is the display provider for the UI picker. Both subscription-backed
+// wires (host cli, container-mode sandbox) present as "subscription".
 func (s BackendSpec) provider() string {
-	if s.Wire == "cli" {
+	if s.Wire == "cli" || s.Wire == "sandbox" {
 		return "subscription"
 	}
 	return s.Wire
@@ -115,6 +117,11 @@ func NewFromSpec(spec BackendSpec, apiKey string) (composer.Composer, error) {
 			Tool: spec.Transport, Model: spec.Model, BinPath: spec.BinPath,
 			Timeout: timeout, MaxAttempts: spec.MaxAttempts,
 		})
+	case "sandbox":
+		// Container-mode subscription composer: runs the real claude inside a
+		// governed run (managed token injected proxy-side). Its run launcher is
+		// late-bound by the Server after construction (SetRunClaude).
+		return sandbox.New(sandbox.Config{Model: spec.Model}), nil
 	case "fake":
 		return newFake(spec.Model, spec.Transport), nil
 	default:

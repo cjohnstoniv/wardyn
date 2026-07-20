@@ -105,6 +105,42 @@ func (c *Client) SetupStatus(ctx context.Context) (json.RawMessage, error) {
 	return out, err
 }
 
+// harnessLoginRequest / harnessLoginResponse mirror the server wire shape for
+// POST /api/v1/setup/harness-login (internal/api/harnesscred.go).
+type harnessLoginRequest struct {
+	Provider string `json:"provider"`
+}
+type harnessLoginResponse struct {
+	RunID string `json:"run_id"`
+}
+type harnessCredRequest struct {
+	Token string `json:"token"`
+}
+
+// HarnessLogin launches a governed container-login sandbox for a provider (e.g.
+// "anthropic") where the operator runs the CLI's `setup-token` device flow, and
+// returns the run id to attach to. POST /api/v1/setup/harness-login.
+func (c *Client) HarnessLogin(ctx context.Context, provider string) (string, error) {
+	var out harnessLoginResponse
+	if err := c.do(ctx, http.MethodPost, "/api/v1/setup/harness-login", harnessLoginRequest{Provider: provider}, &out); err != nil {
+		return "", err
+	}
+	return out.RunID, nil
+}
+
+// ConnectManagedSubscription stores a captured provider setup-token so the proxy
+// injects it into every eligible run (never resident in the sandbox). The value
+// is write-only. PUT /api/v1/setup/harness-credential/{provider}.
+func (c *Client) ConnectManagedSubscription(ctx context.Context, provider, token string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/setup/harness-credential/"+provider, harnessCredRequest{Token: token}, nil)
+}
+
+// DisconnectManagedSubscription removes a provider's stored managed subscription
+// token. DELETE /api/v1/setup/harness-credential/{provider}.
+func (c *Client) DisconnectManagedSubscription(ctx context.Context, provider string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/setup/harness-credential/"+provider, nil, nil)
+}
+
 // Me returns the caller's resolved identity/attribution as raw JSON. GET
 // /api/v1/me.
 func (c *Client) Me(ctx context.Context) (json.RawMessage, error) {

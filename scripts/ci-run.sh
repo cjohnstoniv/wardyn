@@ -139,6 +139,14 @@ if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
   done
 fi
 
+# Managed Claude subscription (harness mode): a `claude setup-token` supplied via
+# WARDYN_SUBSCRIPTION_TOKEN is connected proxy-side (never resident) — the reserved
+# secret name needs the dedicated command, not `secret set`. Value via stdin, never argv.
+if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
+  log "Connecting the Wardyn-managed Claude subscription"
+  printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | wardyn subscription connect --token-stdin || die "subscription connect (token from 'claude setup-token', starts with sk-ant-oat)"
+fi
+
 # ── preflight (best-effort; a dry-run of launch resolution, mints nothing) ───
 if command -v jq >/dev/null 2>&1 && curl -sf "${BASE_URL}/healthz" >/dev/null 2>&1; then
   preflight_body="$(jq -n \

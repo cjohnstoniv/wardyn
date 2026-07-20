@@ -3,6 +3,22 @@
 `RunPolicySpec` JSON has no comment field (`LoadPolicySpec` uses
 `DisallowUnknownFields`), so notes on the shipped policies live here instead.
 
+**JSON or YAML.** `wardyn run --policy-file` and `wardyn policy create/update -f`
+accept either — YAML is decoded to the same schema, so it also lets you keep
+inline comments the JSON files can't have (see `sandbox.yaml` below).
+`wardyn policy render -f <file>` converts either to canonical JSON and fails on a
+misspelled field, so you can sanity-check a policy before you launch.
+
+## sandbox.yaml / sandbox-claude.yaml
+
+The keyless quick-start pair. `sandbox.yaml` is a sealed floor (empty allowlist,
+`always_deny`, `CC1`) you pass straight to `wardyn run --policy-file` to prove the
+egress boundary with a plain `--task-mode exec` command — no keys, no repo.
+`sandbox-claude.yaml` is the "give it a real Claude" step: Anthropic egress and a
+read-only git-broker grant, and deliberately **no** `api_key` grant so dispatch
+falls through to the managed Claude subscription (injected proxy-side; the sandbox
+holds only an inert sentinel). Both are commented.
+
 ## default.json
 
 The out-of-the-box policy (`WARDYN_DEFAULT_POLICY`, also the composer's clamp

@@ -187,41 +187,42 @@ if [ "${#missing_barriers[@]}" -gt 0 ]; then
   say "  (Skip for now — you can add them later and re-run this command.)"
 fi
 
-# ── DECIDE: two supported single-user modes — host (default) and containerized
-# (delegates to scripts/up.sh up). ONE front door: with a TTY and no explicit
-# WARDYN_SETUP_MODE we ask which (Enter = host; the WSL2 hint recommends
-# containerized where host mode's Verify/Record callbacks are known-broken).
-# Headless stays promptless and defaults to host — same behavior as before.
-# TEAM (that compose control plane as a shared MULTI-USER service: SSO logins,
-# per-user identity/RBAC) is a COMING-SOON feature; an explicit request gets a
-# clear notice and exits.
+# ── DECIDE: containerized is the DEFAULT (and recommended) mode — the compose
+# stack, where sandbox→control-plane callbacks route in-network (the fix for the
+# Docker Desktop + WSL2 NAT workspace-Verify/Record breakage) and model access is
+# set up at the CLI (`wardyn subscription connect`, api-key, Bedrock). HOST mode
+# (wardynd runs as you; uses your resident Claude login directly) is an advanced
+# escape hatch. ONE front door: with a TTY and no explicit WARDYN_SETUP_MODE we
+# ask (Enter = containerized); headless defaults to containerized too. TEAM (that
+# compose control plane as a shared MULTI-USER service: SSO/RBAC) is COMING SOON.
 if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
   hd "Where should the control plane run?"
-  say "    1) host          — wardynd runs as you; uses your Claude login directly (default)"
-  say "    2) containerized — the compose stack; add an API key/Bedrock for model access"
+  say "    1) containerized — the compose stack (default, recommended)"
+  say "    2) host          — advanced: wardynd runs as you, using your resident Claude login"
   if $IS_WSL && $IS_DESKTOP; then
-    info "WSL2 + Docker Desktop (NAT) detected: pick 2 —"
+    info "WSL2 + Docker Desktop (NAT) detected: keep 1 —"
     info "host mode's workspace Verify/Record callbacks don't route there."
   fi
   while :; do
     printf "  Choice [1/2] (Enter = 1): "
     read -r _mode || _mode=""
     case "${_mode}" in
-      ""|1|host)          WARDYN_SETUP_MODE=local; break;;
-      2|container*)       WARDYN_SETUP_MODE=container; break;;
+      ""|1|container*)    WARDYN_SETUP_MODE=container; break;;
+      2|host|local)       WARDYN_SETUP_MODE=local; break;;
       *)                  warn "Please answer 1 or 2.";;
     esac
   done
 fi
-case "${WARDYN_SETUP_MODE:-local}" in
-  local) ;;
+case "${WARDYN_SETUP_MODE:-container}" in
   container)
     hd "Containerized mode — delegating to scripts/up.sh up"
     info "wardynd runs in a container on wardyn-internal: sandbox→control-plane callbacks route"
-    info "in-network (the Docker Desktop + WSL2 NAT workspace-Verify/Record fix). The container"
-    info "can't see your host Claude login — add an API key in the UI (or Bedrock) for model access."
+    info "in-network (the Docker Desktop + WSL2 NAT workspace-Verify/Record fix). Set up model"
+    info "access with 'wardyn subscription connect' (Claude subscription), an api-key secret, or"
+    info "Bedrock — interactively after launch or headless via WARDYN_SUBSCRIPTION_TOKEN."
     exec ./scripts/up.sh up
     ;;
+  local) ;;
   team)
     hd "Team mode is coming soon"
     warn "Team mode — this compose control plane as a shared MULTI-USER service (SSO logins,"

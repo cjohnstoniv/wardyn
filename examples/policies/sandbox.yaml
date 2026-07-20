@@ -1,0 +1,25 @@
+# sandbox.yaml — a sealed, keyless sandbox policy you can read at a glance.
+#
+# Pass it straight to the CLI:
+#   wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml
+#   wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+#     --task 'echo hello from a governed sandbox' --policy-file examples/policies/sandbox.yaml --wait
+#
+# YAML is accepted anywhere a JSON RunPolicySpec is (--policy-file, policy create -f).
+# `wardyn policy render -f examples/policies/sandbox.yaml` prints the canonical JSON.
+
+# Egress allowlist. Empty = the sandbox can reach NOTHING (default-deny at the
+# TLS-MITM proxy). Add exact hosts ("registry.npmjs.org") or "*." wildcards.
+allowed_domains: []
+
+# How an off-allowlist host is handled. always_deny = hard 403, no human, nothing
+# hangs — the right choice for unattended/CI. (deny_with_review raises an approval
+# and denies now; wait_for_review holds the connection open for a live decision.)
+first_use_approval: always_deny
+
+# Refuse to launch below this confinement tier. CC1 = hardened runc (runs anywhere
+# Docker runs); CC2 = gVisor; CC3 = Kata microVM.
+min_confinement_class: CC1
+
+# Reaper backstop: stop an idle sandbox after this many seconds (900 = 15 min).
+auto_stop_after_sec: 900
