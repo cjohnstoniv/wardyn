@@ -10,11 +10,45 @@
 # runner talks to the API server with scoped RBAC and no socket is shared.
 # Never expose this compose stack to untrusted networks or multi-tenant use.
 
-# Stage 1: build the React admin UI (Runs / Approvals / Audit / Replay).
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui
+# UI_STAGE selects which stage feeds the runtime image's /srv/ui: ui-build (default,
+# builds from source with pnpm) or ui-prebuilt (consumes a host-built ui/dist for
+# corp mirrors that can't fetch pnpm). MUST be declared before the first FROM so
+# the `FROM ${UI_STAGE}` selector below can resolve it (BuildKit global ARG rule).
+ARG UI_STAGE=ui-build
+
+# Stage 1a: build the React admin UI FROM SOURCE (Runs / Approvals / Audit / Replay).
+# This is the default UI stage (UI_STAGE=ui-build). Behind a corporate allowlist
+# mirror that hasn't onboarded pnpm (every pnpm tarball 404s), select the
+# ui-prebuilt stage below instead and pass a host-built ui/dist in the context.
+FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui-build
 WORKDIR /ui
-# Pin pnpm to the lockfile's generator. Copy manifests first for layer caching.
-RUN npm install -g pnpm@9
+
+# Corporate build support (no-ops on an OSS build): install the optional corp CA
+# into the system + node trust so `pnpm install` can verify registry TLS through a
+# corp MITM proxy. The README.md companion makes the COPY succeed when the
+# corp-ca.pem* glob matches nothing.
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+RUN if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates; \
+    fi
+ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
+
+# Optional alternate npm registry / proxy for the pnpm install (build-only ARGs,
+# NOT ENV — this is a build stage, nothing carries to runtime). A transparent-cache
+# corp mirror that proxies npmjs resolves pnpm through these; an allowlist mirror
+# lacking pnpm needs the ui-prebuilt stage instead (corepack does not help — it
+# fetches pnpm from the same registry path that 404s).
+ARG NPM_REGISTRY=
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+# Pin pnpm to the lockfile's generator (ui/package.json packageManager).
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
+ && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
+ && npm install -g pnpm@9.15.4
 COPY ui/package.json ui/pnpm-lock.yaml ./
 # puppeteer (a test-only devDependency) postinstalls a full Chrome download,
 # which is dead weight for `pnpm build` and FAILS on bookworm-slim (no unzip).
@@ -26,10 +60,41 @@ COPY ui/ ./
 # no base-URL config is needed — wardynd serves it on the same port.
 RUN pnpm build
 
+# Stage 1b: consume a HOST-BUILT ui/dist (UI_STAGE=ui-prebuilt). For corp mirrors
+# that can't fetch pnpm at all: run `make ui` (or `pnpm -C ui build`) on the host,
+# then `docker build --build-arg UI_STAGE=ui-prebuilt` — no pnpm/npm needed here.
+# ui/dist is un-ignored in .dockerignore ONLY so this COPY can see it; the build
+# fails loudly (empty COPY) if you selected this stage without building the UI
+# first, rather than shipping a stale bundle silently.
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS ui-prebuilt
+WORKDIR /ui
+COPY ui/dist ./dist
+RUN test -f ./dist/index.html || { echo "UI_STAGE=ui-prebuilt but ui/dist/index.html is absent — run 'make ui' on the host first"; exit 1; }
+
+# Select which UI stage feeds the runtime image (UI_STAGE declared at file top).
+FROM ${UI_STAGE} AS ui
+
 # Stage 2: build the Go binaries.
 FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 WORKDIR /build
+
+# Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the
+# pinned-toolchain self-upgrade fetch (blocked behind a TLS-MITM proxy); the
+# optional corp CA (host-staged deploy/images/corp-ca.pem, gitignored) is added to
+# the system trust so `go mod download` can verify the module proxy through
+# corporate MITM. The README.md companion makes the COPY succeed when the
+# corp-ca.pem* glob matches nothing. Base is Alpine, so the CA tooling comes from
+# the `ca-certificates` apk package (mirrors deploy/compose/Dockerfile.proxy).
+ENV GOTOOLCHAIN=local
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+RUN apk add --no-cache ca-certificates && \
+    if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates; \
+    fi
+
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -40,6 +105,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -tags docker -o /out/wardynd ./cmd/wardynd
  && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
+
+# Carry the builder's CA bundle (standard roots + any staged corp CA) into the
+# distroless runtime: wardynd makes its OWN outbound TLS calls (e.g. a configured
+# composer backend) that traverse the corp MITM proxy — it is not behind the
+# per-run wardyn-proxy sidecar. distroless has no shell to run update-ca-certificates,
+# so we copy the already-updated bundle. No-op superset when no corp CA is staged.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 COPY --from=builder /out/wardynd /wardynd
 COPY --from=builder /out/wardyn /usr/local/bin/wardyn

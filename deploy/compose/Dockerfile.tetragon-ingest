@@ -12,6 +12,22 @@
 FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 WORKDIR /build
+
+# Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the
+# pinned-toolchain self-upgrade fetch (blocked behind a TLS-MITM proxy); the
+# optional corp CA (host-staged deploy/images/corp-ca.pem, gitignored) is added to
+# the system trust so `go mod download` can verify the module proxy through
+# corporate MITM. The README.md companion makes the COPY succeed when the
+# corp-ca.pem* glob matches nothing (mirrors deploy/compose/Dockerfile.proxy).
+ENV GOTOOLCHAIN=local
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+RUN apk add --no-cache ca-certificates && \
+    if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates; \
+    fi
+
 COPY go.mod go.sum ./
 RUN go mod download
 

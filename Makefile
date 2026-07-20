@@ -17,6 +17,28 @@ GOLANGCI_LINT_VERSION ?= v2.12.2
 # by tag like the other daemon images CI pulls (postgres:17, alpine:latest).
 ENVBUILD_REGISTRY_IMAGE ?= registry:2
 
+# ── corporate-build pass-through ─────────────────────────────────────────────
+# Behind a TLS-MITM proxy / internal package mirror, every image build needs an
+# alternate npm registry and/or an HTTP(S) proxy. The Dockerfiles already declare
+# these as build ARGs; wire them from make so `make agent-images` reaches them
+# instead of forcing a hand-run `docker build`. Empty by default (OSS builds pass
+# nothing). HTTP_PROXY/HTTPS_PROXY inherit from the environment if already exported.
+#   make agent-images NPM_REGISTRY=https://mirror.corp/api/npm/npm-remote \
+#                     HTTPS_PROXY=http://proxy.corp:8080
+# Stage the corp CA at deploy/images/corp-ca.pem (gitignored) for TLS trust.
+NPM_REGISTRY ?=
+HTTP_PROXY   ?=
+HTTPS_PROXY  ?=
+NO_PROXY     ?=
+# Emit "--build-arg NAME=VALUE" only when VALUE is non-empty, so an unset knob
+# never overrides a Dockerfile default with an empty string.
+_build_arg = $(if $(2),--build-arg $(1)="$(2)",)
+DOCKER_BUILD_ARGS = \
+	$(call _build_arg,NPM_REGISTRY,$(NPM_REGISTRY)) \
+	$(call _build_arg,HTTP_PROXY,$(HTTP_PROXY)) \
+	$(call _build_arg,HTTPS_PROXY,$(HTTPS_PROXY)) \
+	$(call _build_arg,NO_PROXY,$(NO_PROXY))
+
 help:
 	@echo "Wardyn governance control plane"
 	@echo ""
@@ -80,12 +102,12 @@ help:
 # core and the e2e scripts build oracle themselves.
 agent-images-core:
 	@echo "Building agent images (build context: repo root)..."
-	docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
-	docker build -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:local   .
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:local   .
 	@echo "Agent images built: wardyn/agent-claude-code:local  wardyn/agent-codex-cli:local"
 
 agent-images: agent-images-core
-	docker build -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
 
 # The full toolchain image: the core claude-code agent PLUS real language toolchains
@@ -100,7 +122,7 @@ agent-images: agent-images-core
 #   WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-full:local"}'
 agent-image-full: agent-images-core
 	@echo "Building the fat toolchain image (Go/Python/Rust/JDK/pnpm)..."
-	docker build -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
 	@echo "Full toolchain image built: wardyn/agent-full:local"
 
 build:

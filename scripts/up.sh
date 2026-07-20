@@ -418,9 +418,31 @@ cmd_up() {
     log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images (build later: make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image)"
   else
     log "Finishing the run components so your first run is ready (sandbox proxy + agent images)…"
+    # The proxy sidecar is the SOLE egress path for every run — if it can't build,
+    # no run can work, so it stays fatal under set -e.
     compose --profile build-only build proxy-image
-    make -C "${REPO_ROOT}" agent-images-core
-    log "Run components ready — you can launch your first run."
+    # Agent images are PER-AGENT: one blocked image (e.g. a corp mirror missing an
+    # agent's package) must not abort the stack or the other agents. Build each
+    # independently, continue on error, and summarize — mirroring the host-mode
+    # loop in scripts/setup.sh. The control plane is already up and healthy above,
+    # so a failed agent image is a warning, not a teardown. Building via compose so
+    # the corp-build args (NPM_REGISTRY/HTTP(S)_PROXY) wired into these stanzas apply.
+    _agent_img_warn=0
+    for _svc in agent-claude-code agent-codex-cli; do
+      log "Building ${_svc}…"
+      if compose --profile build-only build "${_svc}"; then
+        log "  built ${_svc}"
+      else
+        warn "build failed for ${_svc} — runs naming this agent fail until you rebuild it (docker compose -f ${COMPOSE_FILE} --profile build-only build ${_svc}). Other agents are unaffected."
+        _agent_img_warn=1
+      fi
+    done
+    if [ "${_agent_img_warn}" = 1 ]; then
+      warn "one or more agent images did not build (see above). The stack is UP; fix the image and rerun its build before launching that agent."
+    else
+      log "Run components ready — you can launch your first run."
+    fi
+    unset _agent_img_warn _svc
   fi
 
   log "  Tear down: make compose-down   (or: scripts/up.sh down)"

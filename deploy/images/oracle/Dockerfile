@@ -27,6 +27,21 @@
 # ── Stage 1: Go builder (wardyn-rec + wardyn-scan) ────────────────────────────
 FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
 WORKDIR /build
+
+# Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the
+# pinned-toolchain self-upgrade fetch (blocked behind a TLS-MITM proxy); the
+# optional corp CA (host-staged deploy/images/corp-ca.pem, gitignored) is added to
+# the system trust so `go mod download` can verify the module proxy through
+# corporate MITM. The README.md companion makes the COPY succeed when the
+# corp-ca.pem* glob matches nothing (mirrors deploy/images/claude-code/Dockerfile).
+ENV GOTOOLCHAIN=local
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+RUN if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates; \
+    fi
+
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
