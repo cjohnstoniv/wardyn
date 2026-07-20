@@ -8,16 +8,18 @@
 # (interactively) or set the matching opt-in env var (non-interactively).
 #
 # Deployment: ONE front door, two supported single-user setups. Interactively
-# it asks which (Enter = host); headless it defaults to host, and
-# WARDYN_SETUP_MODE picks explicitly for scripts.
-#  - HOST mode (default): sandbox agents run on YOUR machine with YOUR Claude
-#    login — wardynd runs as you, sees ~/.claude directly (no re-login), and
-#    proxy-injects your live token (never a stale copy). Best for personal use.
-#  - CONTAINERIZED mode: the compose stack — wardynd runs in a container on
-#    wardyn-internal, so sandbox→control-plane callbacks route in-network. This
-#    is the fix for Docker Desktop + WSL2 NAT (workspace Verify/Record), at the
-#    cost of host-login visibility (use an API key / Bedrock for model access).
-#    Delegates to scripts/up.sh up.
+# it asks which (Enter = containerized); headless it defaults to containerized,
+# and WARDYN_SETUP_MODE picks explicitly for scripts.
+#  - CONTAINERIZED mode (default, recommended): the compose stack — wardynd runs
+#    in a container on wardyn-internal, so sandbox→control-plane callbacks route
+#    in-network. This is the fix for Docker Desktop + WSL2 NAT (workspace
+#    Verify/Record). Model access is set up at the CLI after launch (`wardyn
+#    subscription connect`, an API-key secret, or Bedrock). Delegates to
+#    scripts/up.sh up.
+#  - HOST mode (advanced escape hatch): sandbox agents run on YOUR machine with
+#    YOUR Claude login — wardynd runs as you, sees ~/.claude directly (no
+#    re-login), and proxy-injects your live token (never a stale copy). Skips the
+#    container; not recommended on Docker Desktop + WSL2 (Verify/Record won't route).
 #
 # TEAM mode (that same compose control plane as a shared MULTI-USER service —
 # SSO logins, per-user identity/RBAC) is a COMING-SOON feature;
@@ -27,7 +29,7 @@
 # this script NEVER runs sudo silently. It detects what's present and prints the exact
 # commands for anything missing, so you stay in control of privileged changes.
 #
-# Usage:  ./scripts/setup.sh                 (asks host vs containerized; headless = host)
+# Usage:  ./scripts/setup.sh                 (asks containerized vs host; headless = containerized)
 #         WARDYN_SETUP_MODE=local ...        (host mode, no prompt)
 #         WARDYN_SETUP_MODE=container ...    (containerized single-user stack, no prompt)
 #         WARDYN_SETUP_MODE=team ...         (errors: team mode is coming soon)

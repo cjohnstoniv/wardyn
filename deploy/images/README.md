@@ -137,14 +137,24 @@ it and injects it only when forwarding internal API calls.
 | `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
 | `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in) |
 | `full/`         | `wardyn/agent-full:local`    | `claude` (inherited) |
+| `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
 `claude-code/` and `codex-cli/` are the two user-facing agent harnesses
 (`make agent-images-core`). `make agent-images` additionally builds `oracle/`
 — NOT a real coding agent: it runs a task's scripted, known-good solution so
 the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its
-grader scores correctly. `full/` is a separate, fat opt-in image (`make
-agent-image-full`) built `FROM wardyn/agent-claude-code:local` plus real
-Go/Python/Rust/JDK+Maven/pnpm toolchains, for workspaces whose import
+grader scores correctly — and `aws-sso/`, also not a coding agent: its only
+job is to host an interactive `aws sso login --no-browser --use-device-code`
+session (device-code flow) so an operator can `wardyn attach` in and
+authenticate an AWS SSO profile from inside a governed sandbox. It carries AWS
+CLI **v2** — there is no apt package for v2, so the Dockerfile downloads the
+official per-version zip installer and GPG-verifies it against AWS's published
+public key (baked into the image, same convention as the baked GitHub/Azure
+DevOps SSH host keys in `claude-code/`); `AWS_CLI_INSTALL=staged` swaps in a
+host-staged installer zip for offline/strict-allowlist builds, mirroring
+`claude-code`'s `CLAUDE_INSTALL=native` pattern. `full/` is a separate, fat
+opt-in image (`make agent-image-full`) built `FROM wardyn/agent-claude-code:local`
+plus real Go/Python/Rust/JDK+Maven/pnpm toolchains, for workspaces whose import
 Record/Verify setup commands need an actual toolchain rather than the
 toolchain-less core image (which dies "command not found").
 

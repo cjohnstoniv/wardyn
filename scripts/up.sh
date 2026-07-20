@@ -345,6 +345,14 @@ cmd_up() {
   fi
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
+  # Persist the daemon choice wardyn_pick_docker_host derived. It is otherwise
+  # env-only, so a bare `docker compose up -d wardynd` (outside this script)
+  # falls back to compose's /var/run/docker.sock default and SILENTLY collapses
+  # confinement to Fence on a dual-daemon box — runsc/kata live on the other
+  # daemon and simply go invisible. Writing it to .env makes every later compose
+  # invocation, from any shell, drive the same daemon.
+  [ -n "${WARDYN_DOCKER_SOCK:-}" ] && env_set "${ENV_FILE}" WARDYN_DOCKER_SOCK "${WARDYN_DOCKER_SOCK}"
+
   env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
   # LocalMode no-auth requires a loopback request PEER; in compose the peer is the
   # docker gateway (port is published loopback-only, so LAN peers can't reach it).
@@ -765,7 +773,7 @@ cmd_reset_all() {
   fi
 
   log "Clean. Verify: scripts/up.sh reset-all --dry-run   (every line should read [absent])"
-  log "Next: make setup (host mode)  or  make compose-up (containerized)"
+  log "Next: make setup (asks; Enter = containerized)  or  make compose-up (containerized, no prompt)"
 }
 
 cmd_pg() {

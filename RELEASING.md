@@ -46,17 +46,18 @@ actual CI run on the commit before step 3.
    as the body. **Mark it a pre-release** — Wardyn is pre-alpha, and the existing
    releases predate this policy (they should be re-flagged; see the release settings).
 
-## One-time repo settings (operator actions, pending)
+## Repo settings (GitHub-side)
 
-Two GitHub-side settings are documented here because automation cannot apply
-them (admin-level, outward-facing); until run, `CONTRIBUTING.md`'s check list is
-a review bar, not a server-side merge block:
+**Branch protection on `main` is enabled.** A push is gated on the CI merge-gate
+status checks and normally requires a pull request. `enforce_admins` is **off**, so
+the maintainer cutting a release pushes the tag commit to `main` directly (step 4)
+while contributors go through PRs — this is why `CONTRIBUTING.md`'s check list is a
+real server-side merge block for contributors, and the maintainer's release push
+bypasses the PR requirement. The protection was applied with the command below
+(kept for reference / re-applying; the contexts list mirrors
+`.github/workflows/ci.yml`'s job ids — re-check if the merge gate changes):
 
 ```sh
-# Re-flag the pre-alpha releases as prereleases
-for t in v0.3.0 v0.2.0 v0.1.0; do gh release edit "$t" --prerelease; done
-
-# Enable branch protection on main, requiring the CI merge-gate jobs
 gh api -X PUT repos/cjohnstoniv/wardyn/branches/main/protection \
   --input - <<'JSON'
 {
@@ -72,8 +73,12 @@ gh api -X PUT repos/cjohnstoniv/wardyn/branches/main/protection \
 JSON
 ```
 
-(The contexts list mirrors `.github/workflows/ci.yml`'s job ids at the time of
-writing; re-check before running if the merge gate has changed.)
+**Still pending (operator action):** the pre-alpha releases *before* v0.3.1 are not
+yet flagged as prereleases (v0.3.1 was created with `--prerelease`). Re-flag the rest:
+
+```sh
+for t in v0.3.0 v0.2.0 v0.1.0; do gh release edit "$t" --prerelease; done
+```
 
 ## Container images
 
