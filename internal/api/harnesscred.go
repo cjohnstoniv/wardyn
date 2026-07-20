@@ -59,21 +59,28 @@ const (
 // documented v2 seam (needs ~/.codex/auth.json capture + a chatgpt.com sink).
 type harnessLogin struct {
 	provider    string   // canonical provider id, e.g. "anthropic"
+	agent       string   // agent (and thus image) the login sandbox runs
 	secretName  string   // reserved store name holding the captured token blob
-	sentinel    string   // injection sentinel (types.ManagedOAuthSecret)
+	sentinel    string   // injection sentinel (types.ManagedOAuthSecret); "" = no injection
 	injectHost  string   // the ONLY host the sentinel may inject to
-	tokenPrefix string   // accepted setup-token prefix (format guard, not auth)
+	tokenPrefix string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
 	egress      []string // hosts the interactive login flow must reach
 	hint        string   // the command the operator runs in the terminal
+	// captureViaHelper: the credential is written to a FILE in the sandbox and
+	// uploaded by an in-sandbox helper (wardyn-aws-sso), not printed to the PTY
+	// and scraped. Also means the run is safe to record: the terminal only ever
+	// shows a short-lived device code + verification URL, never a live secret.
+	captureViaHelper bool
 }
 
 // agentHarnessLogin returns the login convention for an agent, if it supports
-// container login in v1.
+// container login.
 func agentHarnessLogin(agent string) (harnessLogin, bool) {
 	switch agent {
 	case "claude-code":
 		return harnessLogin{
 			provider:    "anthropic",
+			agent:       "claude-code",
 			secretName:  harnessCredSecretName("anthropic"),
 			sentinel:    types.ManagedOAuthSecret,
 			injectHost:  subscriptionInjectionHost, // api.anthropic.com
@@ -85,6 +92,36 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 			egress: []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
 			hint:   "claude setup-token",
 		}, true
+	case awsSSOAgent:
+		return harnessLogin{
+			provider:   awsSSOProvider,
+			agent:      awsSSOAgent,
+			secretName: harnessCredSecretName(awsSSOProvider),
+			// Phase A delivers the captured token as a minimal synthetic ~/.aws in
+			// the sandbox, so there is nothing to inject yet. Phase B fills
+			// sentinel/injectHost in to proxy-inject x-amz-sso_bearer_token on
+			// portal.sso.<region> (that call is authtype:none, so a MITM can set the
+			// header without AWS signing keys) and the token stops being resident.
+			sentinel:   "",
+			injectHost: "",
+			// No AWS analogue to `sk-ant-oat`: the SSO cache is structured JSON, so
+			// capture validates its SHAPE instead of a prefix.
+			tokenPrefix: "",
+			// `aws sso login --no-browser --use-device-code` (RFC 8628): oidc.* does
+			// RegisterClient/StartDeviceAuthorization/CreateToken, device.sso.* serves
+			// the verification page, portal.sso.* answers GetRoleCredentials +
+			// list-accounts/roles, and *.awsapps.com is the org access portal.
+			// Region isn't known statically here, hence the wildcards; anything else
+			// the flow dials surfaces as a deny_with_review rather than a silent deny.
+			egress: []string{
+				"oidc.*.amazonaws.com",
+				"portal.sso.*.amazonaws.com",
+				"device.sso.*.amazonaws.com",
+				"*.awsapps.com",
+			},
+			hint:             "aws sso login --no-browser --use-device-code",
+			captureViaHelper: true,
+		}, true
 	default:
 		return harnessLogin{}, false
 	}
@@ -92,9 +129,8 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 
 // harnessLoginByProvider finds the login convention by provider id.
 func harnessLoginByProvider(provider string) (harnessLogin, bool) {
-	// v1 has a single provider; a linear scan is fine and stays correct as rows
-	// are added.
-	for _, agent := range []string{"claude-code"} {
+	// A linear scan over the known rows; stays correct as rows are added.
+	for _, agent := range []string{"claude-code", awsSSOAgent} {
 		if hl, ok := agentHarnessLogin(agent); ok && hl.provider == provider {
 			return hl, true
 		}
@@ -156,6 +192,64 @@ type managedCredBlob struct {
 	SourceRunID string    `json:"source_run_id,omitempty"`
 }
 
+// ─── AWS IAM Identity Center (SSO) container login ──────────────────────────
+// A second container-login provider, for Bedrock. Unlike the Anthropic row it
+// captures a STRUCTURED credential written to a file by `aws sso login`, not a
+// single opaque token printed to the PTY — so managedCredBlob doesn't fit and
+// the capture path is an in-sandbox helper upload (see cmd/wardyn-aws-sso),
+// mirroring wardyn-scan/wardyn-verify rather than terminal scraping.
+const (
+	awsSSOProvider = "aws"     // canonical provider id (secret: wardyn-harness-aws-oauth)
+	awsSSOAgent    = "aws-sso" // agent + image the login sandbox runs
+)
+
+// awsSSOBlob is the stored AWS SSO credential: the contents of the CLI's cache
+// file (~/.aws/sso/cache/<sha1>.json) plus the account/role the derived role
+// credentials should be minted for, plus provenance.
+//
+// Residency note: AccessToken is what a later Bedrock run's SDK exchanges (via
+// portal.sso GetRoleCredentials) for SHORT-LIVED role credentials. The role
+// credentials are always resident in the sandbox — Bedrock signs SigV4
+// in-process, so they can never be proxy-injected (see runs_bedrock.go). What
+// Phase B changes is that this AccessToken/RefreshToken pair stops being
+// resident too.
+type awsSSOBlob struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	// StartURL + Region identify the SSO session; both are required to rebuild a
+	// usable ~/.aws/config and to derive the cache filename (sha1 of the session
+	// name / start URL).
+	StartURL string `json:"start_url"`
+	Region   string `json:"region"`
+	// AccountID + RoleName are the GetRoleCredentials parameters — captured at
+	// login time (aws sso list-accounts / list-account-roles) so later runs need
+	// no further interaction.
+	AccountID string `json:"account_id,omitempty"`
+	RoleName  string `json:"role_name,omitempty"`
+	// ExpiresAt is the SSO access token's real, machine-readable expiry. Unlike
+	// the Anthropic setup-token (which exposes none, forcing the age heuristic in
+	// harnessTokenAging), this lets readiness report TRUE expiry.
+	ExpiresAt             time.Time `json:"expires_at"`
+	RegistrationExpiresAt time.Time `json:"registration_expires_at,omitempty"`
+	CapturedAt            time.Time `json:"captured_at"`
+	SourceRunID           string    `json:"source_run_id,omitempty"`
+}
+
+// valid reports whether a captured blob is structurally usable. This replaces
+// the Anthropic prefix guard (there is no fixed AWS token prefix); like that
+// guard it is a SHAPE check, not authentication — real validation happens on
+// first use against portal.sso.
+func (b awsSSOBlob) valid() bool {
+	return b.AccessToken != "" && b.StartURL != "" && b.Region != "" && !b.ExpiresAt.IsZero()
+}
+
+// expired reports whether the SSO access token has lapsed. A blob with a refresh
+// token can still be renewed (sso-session profiles); one without must be
+// re-captured by re-running the login.
+func (b awsSSOBlob) expired(now time.Time) bool { return !now.Before(b.ExpiresAt) }
+
 // harnessTokenAging: setup-token tokens live ~1 year and their exact expiry is
 // not machine-readable from the token, so readiness warns purely on AGE past
 // this threshold (a conservative "likely expiring soon; reconnect").
@@ -189,6 +283,46 @@ func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedC
 		return managedCredBlob{}, false, nil
 	}
 	return blob, true, nil
+}
+
+// readAWSSSOBlob loads the captured AWS SSO credential. Same error discipline as
+// readManagedBlob: absent means "not connected", not a failure. A structurally
+// invalid blob is treated as absent so a half-written capture can never be
+// mistaken for a usable credential.
+func (s *Server) readAWSSSOBlob(ctx context.Context) (awsSSOBlob, bool, error) {
+	if s.cfg.Secrets == nil {
+		return awsSSOBlob{}, false, nil
+	}
+	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(awsSSOProvider))
+	if errors.Is(err, secretstore.ErrNotFound) {
+		return awsSSOBlob{}, false, nil
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read aws sso credential from secret store failed",
+			slog.Any("err", err))
+		return awsSSOBlob{}, false, fmt.Errorf("read aws sso credential: %w", err)
+	}
+	var blob awsSSOBlob
+	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
+		return awsSSOBlob{}, false, fmt.Errorf("parse aws sso credential blob: %w", uerr)
+	}
+	if !blob.valid() {
+		return awsSSOBlob{}, false, nil
+	}
+	return blob, true, nil
+}
+
+// storeAWSSSOBlob persists a captured AWS SSO credential under the reserved
+// harness secret name. Callers must have validated the blob first.
+func (s *Server) storeAWSSSOBlob(ctx context.Context, blob awsSSOBlob) error {
+	if s.cfg.Secrets == nil {
+		return fmt.Errorf("no secret store configured")
+	}
+	raw, err := json.Marshal(blob)
+	if err != nil {
+		return fmt.Errorf("marshal aws sso credential blob: %w", err)
+	}
+	return s.cfg.Secrets.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
 }
 
 // ── Login run launch ─────────────────────────────────────────────────────────
@@ -230,7 +364,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	now := s.cfg.Now().UTC()
 	run := types.AgentRun{
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: "claude-code", Task: harnessLoginTask,
+		Agent: hl.agent, Task: harnessLoginTask,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget,
 		Interactive:  true,
@@ -255,7 +389,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 			"provider": hl.provider, "egress": hl.egress,
 		})))
 
-	image := agentImage("claude-code", s.cfg.AgentImages)
+	image := agentImage(hl.agent, s.cfg.AgentImages)
 	// No injections, no repo, no verify plan: a blank interactive box. The `--idle`
 	// path installs the MITM CA (unused here) and attaches; the human runs
 	// `claude setup-token` and pastes the result into the UI.
@@ -334,7 +468,10 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	// Format guard (NOT authentication — the token is validated for real on first
 	// use, when the proxy injects it and Anthropic accepts or rejects it). Reject
 	// an obvious paste error early with an actionable message.
-	if !strings.HasPrefix(token, hl.tokenPrefix) {
+	// tokenPrefix == "" means the provider has no fixed prefix to guard on (AWS
+	// SSO): its credential arrives structurally validated via the helper-upload
+	// path instead, so the paste endpoint is not the capture route for it.
+	if hl.tokenPrefix != "" && !strings.HasPrefix(token, hl.tokenPrefix) {
 		writeError(w, http.StatusBadRequest,
 			"that does not look like a `claude setup-token` output (expected a token starting with "+hl.tokenPrefix+")")
 		return

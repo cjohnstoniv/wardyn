@@ -91,11 +91,22 @@ type SetupStatus struct {
 // live ~1yr with no machine-readable expiry, so Aging is a conservative
 // age-based "reconnect soon" flag, never a hard expiry claim.
 type SetupHarness struct {
-	Provider    string `json:"provider"`              // "anthropic"
+	Provider    string `json:"provider"`              // "anthropic" | "aws"
 	Captured    bool   `json:"captured"`              // a token blob is stored
 	CapturedAt  string `json:"captured_at,omitempty"` // RFC3339, when pasted
 	Aging       bool   `json:"aging,omitempty"`       // captured longer ago than harnessTokenAging
 	SourceRunID string `json:"source_run_id,omitempty"`
+	// ExpiresAt/Expired carry a REAL, machine-readable expiry and are populated
+	// only for providers whose credential exposes one (AWS SSO does; an Anthropic
+	// setup-token does not, which is the whole reason Aging exists as a
+	// conservative age heuristic). Empty here means "this provider can't tell you"
+	// — never "it doesn't expire".
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Expired   bool   `json:"expired,omitempty"`
+	// Renewable: the stored credential carries a refresh token, so it can be
+	// renewed without a fresh interactive login (AWS `sso-session` profiles).
+	// Legacy sso_start_url profiles have none and must be re-logged-in.
+	Renewable bool `json:"renewable,omitempty"`
 }
 
 // harnessCredentialCheck is the readiness row for a Wardyn-managed subscription
@@ -105,6 +116,32 @@ type SetupHarness struct {
 func harnessCredentialCheck(h SetupHarness) (SetupCheck, bool) {
 	if !h.Captured {
 		return SetupCheck{}, false
+	}
+	// AWS SSO carries a real expiry, so it gets a truthful row rather than the
+	// age heuristic below (which exists only because setup-tokens expose none).
+	if h.Provider == awsSSOProvider {
+		switch {
+		case h.Expired && h.Renewable:
+			return SetupCheck{
+				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "warn",
+				Detail: "Your captured AWS SSO session expired at " + h.ExpiresAt +
+					". It carries a refresh token, so it can be renewed without logging in again.",
+				Fix: "Re-run the containerized AWS SSO login on the provider step to refresh it.",
+			}, true
+		case h.Expired:
+			return SetupCheck{
+				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "warn",
+				Detail: "Your captured AWS SSO session expired at " + h.ExpiresAt +
+					" and has no refresh token (legacy sso_start_url profile), so Bedrock runs using it will fail.",
+				Fix: "Re-run the containerized AWS SSO login on the provider step.",
+			}, true
+		default:
+			return SetupCheck{
+				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "ok",
+				Detail: "A captured AWS SSO session is connected (expires " + h.ExpiresAt +
+					"). Bedrock runs exchange it for short-lived role credentials — no host ~/.aws mount and no static keys.",
+			}, true
+		}
 	}
 	if h.Aging {
 		return SetupCheck{
@@ -679,6 +716,20 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if llmDetail == "" {
 			llmDetail = "A Wardyn-managed Claude subscription token (captured via container login) is injected proxy-side into every run."
 		}
+	}
+	// AWS SSO (containerized login) — reports TRUE expiry, not an age heuristic.
+	// Not folded into llmDetail: it credentials Bedrock specifically, and the
+	// bedrock_provider check already owns that story.
+	if blob, ok, berr := s.readAWSSSOBlob(ctx); berr == nil && ok {
+		now := s.cfg.Now().UTC()
+		harnessCreds = append(harnessCreds, SetupHarness{
+			Provider: awsSSOProvider, Captured: true,
+			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
+			ExpiresAt:   blob.ExpiresAt.Format(time.RFC3339),
+			Expired:     blob.expired(now),
+			Renewable:   blob.RefreshToken != "",
+			SourceRunID: blob.SourceRunID,
+		})
 	}
 	llmReady := llmDetail != ""
 

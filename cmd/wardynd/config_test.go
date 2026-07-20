@@ -377,3 +377,89 @@ func TestListenBindsSpecificRoutable(t *testing.T) {
 		}
 	}
 }
+
+// ─── standard-AWS fallback for the Bedrock selectors ────────────────────────────
+//
+// WARDYN_BEDROCK_REGION / _AWS_PROFILE stay authoritative; the standard AWS env
+// fills in only where they resolve empty, so a machine already configured for
+// AWS needs no Wardyn-specific restatement.
+
+// parseBedrock runs the real parseBootFlags with a clean FlagSet and returns the
+// resolved Bedrock selectors, so these tests exercise the shipping code path
+// (including the post-parse fallback) rather than a re-implementation.
+func parseBedrock(t *testing.T, args ...string) (region, profile string) {
+	t.Helper()
+	resetFlags(t)
+	oldArgs := os.Args
+	os.Args = append([]string{"wardynd-test"}, args...)
+	t.Cleanup(func() { os.Args = oldArgs })
+	f := parseBootFlags()
+	return *f.bedrockRegion, *f.bedrockAWSProfile
+}
+
+func TestBedrockRegion_FallsBackToStandardAWSEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		wardynRegion, awsRegion      string
+		awsDefaultRegion, wantRegion string
+	}{
+		// The compose case that motivated doing this post-parse: compose always
+		// passes WARDYN_BEDROCK_REGION="" , and flagEnv treats an explicitly-empty
+		// env as an intentional blank. If the fallback were the flagEnv default
+		// argument, this row would yield "" and the feature would be dead in the
+		// default deployment mode.
+		{"compose empty passthrough still inherits", "", "us-east-1", "", "us-east-1"},
+		{"unset inherits AWS_REGION", "", "us-west-2", "", "us-west-2"},
+		{"AWS_REGION beats AWS_DEFAULT_REGION", "", "us-west-2", "eu-west-1", "us-west-2"},
+		{"AWS_DEFAULT_REGION used when AWS_REGION absent", "", "", "eu-west-1", "eu-west-1"},
+		{"WARDYN_BEDROCK_REGION wins over both", "ap-south-1", "us-west-2", "eu-west-1", "ap-south-1"},
+		{"all absent stays empty (Bedrock disabled)", "", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range map[string]string{
+				"WARDYN_BEDROCK_REGION": tc.wardynRegion,
+				"AWS_REGION":            tc.awsRegion,
+				"AWS_DEFAULT_REGION":    tc.awsDefaultRegion,
+			} {
+				if v == "" && k != "WARDYN_BEDROCK_REGION" {
+					ensureUnset(t, k)
+					continue
+				}
+				t.Setenv(k, v)
+			}
+			ensureUnset(t, "AWS_PROFILE")
+			ensureUnset(t, "WARDYN_BEDROCK_AWS_PROFILE")
+			if got, _ := parseBedrock(t); got != tc.wantRegion {
+				t.Fatalf("bedrockRegion = %q, want %q", got, tc.wantRegion)
+			}
+		})
+	}
+}
+
+func TestBedrockRegion_FlagBeatsStandardAWSEnv(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-west-2")
+	ensureUnset(t, "AWS_DEFAULT_REGION")
+	ensureUnset(t, "WARDYN_BEDROCK_REGION")
+	ensureUnset(t, "AWS_PROFILE")
+	ensureUnset(t, "WARDYN_BEDROCK_AWS_PROFILE")
+	if got, _ := parseBedrock(t, "-bedrock-region=ca-central-1"); got != "ca-central-1" {
+		t.Fatalf("bedrockRegion = %q, want ca-central-1 (explicit flag must win)", got)
+	}
+}
+
+func TestBedrockAWSProfile_FallsBackToStandardAWSProfile(t *testing.T) {
+	ensureUnset(t, "AWS_REGION")
+	ensureUnset(t, "AWS_DEFAULT_REGION")
+	ensureUnset(t, "WARDYN_BEDROCK_REGION")
+
+	t.Setenv("AWS_PROFILE", "corp-sso")
+	t.Setenv("WARDYN_BEDROCK_AWS_PROFILE", "") // compose passthrough shape
+	if _, got := parseBedrock(t); got != "corp-sso" {
+		t.Fatalf("bedrockAWSProfile = %q, want corp-sso", got)
+	}
+
+	t.Setenv("WARDYN_BEDROCK_AWS_PROFILE", "wardyn-only")
+	if _, got := parseBedrock(t); got != "wardyn-only" {
+		t.Fatalf("bedrockAWSProfile = %q, want wardyn-only (Wardyn-specific must win)", got)
+	}
+}

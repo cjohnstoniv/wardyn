@@ -26,6 +26,7 @@ deploy/images/corp-ca.pem
 # corp networks where public npm is blocked; scripts/stage-agent-binary.sh) — never commit
 deploy/images/claude-code/claude-bin
 deploy/images/codex-cli/codex-bin
+deploy/images/aws-sso/awscliv2-bin
 
 # Environment
 .env

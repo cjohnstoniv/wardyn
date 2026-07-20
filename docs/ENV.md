@@ -37,6 +37,8 @@ log them.
 | `WARDYN_RECORDING_STORE` | string | `fs` | recording store seam (flag `-recording-store`) |
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory (flag `-recording-dir`) |
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
+| `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
+| `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | `false` | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default — the gate fails closed, since an unenforceable cap is a silently-broken guarantee |
 | `WARDYN_DEFAULT_POLICY` | string | `examples/policies/default.json` | default RunPolicy spec path (flag `-default-policy`) |
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_AUDIT_SINKS` | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`) |
@@ -74,11 +76,24 @@ log them.
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`) |
 | `WARDYN_AGENT_ANTHROPIC_MODEL` | string | (unset) | pin `ANTHROPIC_MODEL` inside claude-code sandboxes (flag `-agent-anthropic-model`) |
 | `WARDYN_BEDROCK_MODEL` | string | (unset) | Bedrock inference-profile id (flag `-bedrock-model`) |
-| `WARDYN_BEDROCK_REGION` | string | (unset) | AWS region for the Bedrock transport (flag `-bedrock-region`) |
+| `WARDYN_BEDROCK_REGION` | string | (unset) | AWS region for the Bedrock transport (flag `-bedrock-region`); falls back to the standard `AWS_REGION` / `AWS_DEFAULT_REGION` when empty |
 | `WARDYN_BEDROCK_AWS_DIR` | string | (unset) | host `~/.aws` mounted read-only into Bedrock runs (flag `-bedrock-aws-dir`) |
-| `WARDYN_BEDROCK_AWS_PROFILE` | string | (unset) | `AWS_PROFILE` to select from the mounted `~/.aws` (flag `-bedrock-aws-profile`) |
+| `WARDYN_BEDROCK_AWS_PROFILE` | string | (unset) | `AWS_PROFILE` to select from the mounted `~/.aws` (flag `-bedrock-aws-profile`); falls back to the standard `AWS_PROFILE` when empty |
 | `WARDYN_BEDROCK_AWS_SSO_REGION` | string | (= bedrock-region) | AWS SSO region for the sandbox token exchange (flag `-bedrock-aws-sso-region`) |
 | `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
+
+Standard AWS environment variables are honored as **fallbacks only** — the
+Wardyn-specific Bedrock names above always win when set. Compose forwards them from
+the operator's shell (`docker-compose.yaml`); in host mode wardynd reads them
+directly. Region alone cannot enable Bedrock (that also needs
+`WARDYN_BEDROCK_MODEL`), and no AWS *credentials* are read from the environment —
+only these selectors.
+
+| Variable | Type | Falls back into | Notes |
+|---|---|---|---|
+| `AWS_REGION` | string | `WARDYN_BEDROCK_REGION` | preferred over `AWS_DEFAULT_REGION`, matching AWS SDK precedence |
+| `AWS_DEFAULT_REGION` | string | `WARDYN_BEDROCK_REGION` | used only when `AWS_REGION` is absent |
+| `AWS_PROFILE` | string | `WARDYN_BEDROCK_AWS_PROFILE` | selects a profile from the mounted `~/.aws` |
 
 ## `wardyn-proxy` (egress sidecar)
 
@@ -169,6 +184,7 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_COMPOSE_MODEL` | string | (unset) | compose run: optional claude model override |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
+| `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
 
 ## Test / internal-only (not operator configuration)
 

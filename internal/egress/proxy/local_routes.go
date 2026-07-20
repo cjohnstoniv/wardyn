@@ -37,7 +37,11 @@ const (
 	routeScanResults    = "/wardyn/v1/scan-results/"
 	routeVerifyResults  = "/wardyn/v1/verify-results/"
 	routeComposeResults = "/wardyn/v1/compose-results/"
-	routeLLM            = "/wardyn/llm/"
+	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
+	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
+	// scan/verify/compose result uploads.
+	routeSSOToken = "/wardyn/v1/sso-token/"
+	routeLLM      = "/wardyn/llm/"
 
 	// llmAnthropicPrefix selects the Anthropic LLM passthrough. The remainder
 	// after this prefix is appended to the Anthropic API base.
@@ -57,6 +61,7 @@ const (
 	ruleSourceScanResults    = "brokered:scan-result"
 	ruleSourceVerifyResults  = "brokered:verify-result"
 	ruleSourceComposeResults = "brokered:compose-result"
+	ruleSourceSSOToken       = "brokered:sso-token"
 	ruleSourceLLM            = "brokered:llm"
 	// ruleSourceLLMBlocked marks an LLM request refused by content inspection;
 	// ruleSourceLLMBlind marks an opaque CONNECT to an LLM host that inspection
@@ -106,6 +111,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerVerifyResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeComposeResults):
 		p.handleBrokerComposeResult(w, r)
+	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
+		p.handleBrokerSSOToken(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):
@@ -233,6 +240,17 @@ func (p *Proxy) handleBrokerScanResult(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleBrokerVerifyResult(w http.ResponseWriter, r *http.Request) {
 	p.forwardBrokeredUpload(w, r, routeVerifyResults, "/api/v1/internal/verify-results/",
 		ruleSourceVerifyResults, "read verify result body", maxScanResultBody)
+}
+
+// handleBrokerComposeResult forwards PUT /wardyn/v1/compose-results/{runID} to the
+// control plane's internal compose-result endpoint with the run token injected —
+// the exact sibling of handleBrokerScanResult. It carries the AI Run Composer's
+// in-sandbox claude proposal JSON back to the waiting RunClaudeCompose. Cross-run
+// uploads are rejected control-plane-side (token run id must match the path run
+// id); the sandbox-supplied Authorization is stripped, the run token injected.
+func (p *Proxy) handleBrokerSSOToken(w http.ResponseWriter, r *http.Request) {
+	p.forwardBrokeredUpload(w, r, routeSSOToken, "/api/v1/internal/sso-token/",
+		ruleSourceSSOToken, "read sso token body", maxScanResultBody)
 }
 
 // handleBrokerComposeResult forwards PUT /wardyn/v1/compose-results/{runID} to the

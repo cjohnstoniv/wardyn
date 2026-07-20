@@ -55,7 +55,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  setup                 - One-command Wardyn: containerized by default (Enter = containerized), host is advanced,"
-	@echo "                          credential, builds, up, opens browser. Headless defaults to host; scripts pick"
+	@echo "                          credential, builds, up, opens browser. Headless defaults to containerized; scripts pick"
 	@echo "                          with WARDYN_SETUP_MODE=local|container. Team (multi-user) is coming soon."
 	@echo "                          (non-interactive opt-ins: WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1,"
 	@echo "                           WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
@@ -102,7 +102,7 @@ help:
 	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
 	@echo "  compose-down          - Stop docker-compose stack"
 	@echo "  demo                  - End-to-end compose demo (build, up, run, audit)"
-	@echo "  agent-images          - Build all agent OCI images (claude-code + codex-cli + oracle e2e stand-in)"
+	@echo "  agent-images          - Build all agent OCI images (claude-code + codex-cli + oracle e2e stand-in + aws-sso)"
 	@echo "  agent-images-core     - Build just the user-facing agent images (claude-code + codex-cli)"
 	@echo "  test-drive            - Guided governance test-drive against a running compose stack"
 	@echo "                          (ARGS='--up' to bring the stack up first)"
@@ -119,7 +119,9 @@ agent-images-core:
 
 agent-images: agent-images-core
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/aws-sso/Dockerfile     -t wardyn/agent-aws-sso:local     .
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
+	@echo "AWS SSO login image built: wardyn/agent-aws-sso:local"
 
 # The full toolchain image: the core claude-code agent PLUS real language toolchains
 # (Go, Python, Rust, JDK/Maven, pnpm). Workspace import's Record/Verify runs the
@@ -450,13 +452,14 @@ test-e2e-ui:
 screenshots:
 	./scripts/screenshots.sh
 
-# HOST mode (the only supported deployment for now): wardynd runs as you and uses
-# your existing Claude login (no re-login, no stale credential copy). Team/compose
-# mode is a coming-soon feature. In a terminal this PROMPTS for each credential
-# (staging, AWS, SCM); a headless run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1
-# / WARDYN_IMPORT_AWS=1 / WARDYN_IMPORT_SCM=1 are set.
+# ONE front door: asks containerized (default, recommended — the compose stack) vs
+# host (advanced escape hatch — wardynd runs as you, using your resident Claude
+# login). Enter / headless = containerized; team (multi-user) mode is coming soon.
+# In host mode a terminal PROMPTS for each credential (staging, AWS, SCM); a headless
+# run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1 /
+# WARDYN_IMPORT_SCM=1 are set.
 setup:
-	@echo "Wardyn setup (host mode) — detects your host, prompts for each credential, launches + opens the UI..."
+	@echo "Wardyn setup — asks containerized (default) vs host, then launches + opens the UI..."
 	./scripts/setup.sh
 
 # Stage the resident Claude login for per-run subscription mounts, even headless.

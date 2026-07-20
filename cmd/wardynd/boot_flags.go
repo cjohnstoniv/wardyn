@@ -141,10 +141,10 @@ func parseBootFlags() *bootFlags {
 		// (aws-access-key-id/aws-secret-access-key/aws-session-token), read at
 		// dispatch time since Bedrock's SigV4 request signing can't be
 		// proxy-injected. See internal/api.Config.BedrockRegion/BedrockModel.
-		bedrockRegion:       flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty = Bedrock disabled.`),
+		bedrockRegion:       flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Falls back to the standard AWS_REGION / AWS_DEFAULT_REGION when left empty. Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty (and no AWS_REGION) = Bedrock disabled.`),
 		bedrockModel:        flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code (a cross-region inference-profile id, e.g. "us.anthropic.claude-sonnet-4-5-...", not a bare foundation-model id). Requires -bedrock-region too.`),
 		bedrockAWSDir:       flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself. SSO/IAM-Identity-Center auto-refresh works only for sso-session profiles whose CACHED token is still valid (the read-only mount cannot write back a rotated token; legacy sso_start_url profiles need a periodic host 'aws sso login'). Works in compose too (mount it via the WARDYN_BEDROCK_AWS_DIR bind, same path host==container). Exposes the WHOLE ~/.aws to the untrusted sandbox — point it at ~/.aws only. Leave empty to use static aws-* secrets or a bedrock-api-key instead.`),
-		bedrockAWSProfile:   flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Only used with -bedrock-aws-dir.`),
+		bedrockAWSProfile:   flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Falls back to the standard AWS_PROFILE when left empty. Only used with -bedrock-aws-dir.`),
 		bedrockAWSSSORegion: flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", `optional: AWS SSO region whose oidc.<r>/portal.sso.<r> endpoints the sandbox may reach to exchange an SSO token for role creds. Defaults to -bedrock-region. Only used with -bedrock-aws-dir.`),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
@@ -168,6 +168,29 @@ func parseBootFlags() *bootFlags {
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
 	}
 	flag.Parse()
+
+	// Standard-AWS fallback. An operator whose environment is already configured
+	// for AWS shouldn't have to restate the same values under a Wardyn-specific
+	// name. WARDYN_BEDROCK_* (and its flag) stay authoritative — these apply only
+	// where it resolved EMPTY.
+	//
+	// Post-parse, NOT as the flagEnv default argument: compose passes
+	// WARDYN_BEDROCK_REGION="" unconditionally (docker-compose.yaml) and flagEnv
+	// honours an explicitly-empty env as an intentional blank, so a default-arg
+	// fallback would be dead in the deployment mode most people run. Here in
+	// parseBootFlags rather than resolveLocalMode (where the sibling Bedrock
+	// auto-detect lives) because that function returns early when local mode is
+	// off — which is every auth-configured deployment, i.e. exactly the
+	// enterprise Bedrock audience.
+	//
+	// Cannot silently enable Bedrock: that needs region AND model, and there is
+	// no standard env for the model.
+	if *f.bedrockRegion == "" {
+		*f.bedrockRegion = envOr("AWS_REGION", envOr("AWS_DEFAULT_REGION", ""))
+	}
+	if *f.bedrockAWSProfile == "" {
+		*f.bedrockAWSProfile = envOr("AWS_PROFILE", "")
+	}
 	return f
 }
 

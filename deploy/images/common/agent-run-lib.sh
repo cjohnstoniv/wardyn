@@ -111,6 +111,34 @@ install_artifact_config() {
     done <<< "$WARDYN_ARTIFACT_CONFIG_B64"
 }
 
+# ── AWS SSO session (containerized `aws sso login`) ──────────────────────────
+# Materialize the minimal synthetic ~/.aws the control plane generated from a
+# CAPTURED AWS SSO session: an ~/.aws/config binding a [sso-session wardyn] +
+# [profile wardyn], and the SSO token cache the AWS SDK reads to mint SHORT-LIVED
+# role credentials itself (portal.sso.<region> GetRoleCredentials). Same
+# newline-delimited "<home-relative-path>\t<base64>" shape as
+# install_artifact_config, but 0600 (this carries a live SSO access token, not a
+# registry URL) and WITHOUT that function's `-n "$b64"` guard — an empty record is
+# never emitted here, and dropping it keeps a zero-length file writable if one ever
+# is. No-op when the var is unset (every non-SSO run).
+materialize_aws_sso_config() {
+    [[ -n "${WARDYN_AWS_SSO_CONFIG_B64:-}" ]] || return 0
+    local relpath b64 dst
+    while IFS=$'\t' read -r relpath b64; do
+        [[ -n "$relpath" ]] || continue
+        case "$relpath" in
+            /*|*..*) echo "agent-run: skipping unsafe aws-sso-config path: $relpath" >&2; continue ;;
+        esac
+        dst="${HOME}/${relpath}"
+        mkdir -p "$(dirname "$dst")"
+        if printf '%s' "$b64" | base64 -d > "$dst" 2>/dev/null; then
+            chmod 0600 "$dst"
+        else
+            echo "agent-run: WARNING failed to write aws-sso config ${relpath}" >&2
+        fi
+    done <<< "$WARDYN_AWS_SSO_CONFIG_B64"
+}
+
 # ── git credential helper caller-auth secret ─────────────────────────────────
 # Provision the per-run secret that gates wardyn-git-helper credential emission.
 # Only meaningful when the run can mint a git credential — i.e. it has a

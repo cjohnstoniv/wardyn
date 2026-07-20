@@ -673,6 +673,7 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 // via internal/cliutil (mirrored duplicates there previously).
 var (
 	flagEnv      = cliutil.FlagEnv
+	envOr        = cliutil.EnvOr
 	flagBool     = cliutil.FlagBool
 	flagDuration = cliutil.FlagDuration
 	splitCSV     = cliutil.SplitCSV

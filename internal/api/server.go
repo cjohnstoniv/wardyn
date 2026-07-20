@@ -648,6 +648,16 @@ func (s *Server) routes() chi.Router {
 			// logs) from inside a governed verify run via the proxy's brokered
 			// verify-result route. Same cross-run guard + trusted linkage as scan.
 			r.Put("/internal/verify-results/{runID}", s.handleUploadVerifyResult)
+
+			// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
+			// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the
+			// aws-sso container-login run (via the proxy's brokered sso-token
+			// route, which injects the run token). Same cross-run guard as scan;
+			// the run-kind check is harnessLoginTask + awsSSOAgent instead of a
+			// governed workspace run.
+			if s.cfg.Secrets != nil {
+				r.Put("/internal/sso-token/{runID}", s.handleUploadSSOToken)
+			}
 		})
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).

@@ -143,6 +143,7 @@ if [[ "${1:-}" == "--idle" ]]; then
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
+    materialize_aws_sso_config
     provision_git_helper_secret
     workdir="${HOME}/work"
     mkdir -p "$workdir"
@@ -173,6 +174,7 @@ prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred moun
 # Materialize any operator-configured artifact-registry redirect config (no-op
 # unless WARDYN_ARTIFACT_CONFIG_B64 is set) before clone/install.
 install_artifact_config
+materialize_aws_sso_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
 # (the clone below and the agent's own git both need it).  Called directly so the

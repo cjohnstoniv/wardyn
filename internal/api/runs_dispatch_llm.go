@@ -167,6 +167,9 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		case t.bedrock.bearer:
 			detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
 			mode = "bearer"
+		case t.bedrock.ssoInject:
+			detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident for now — Phase B injects it proxy-side on portal.sso instead"
+			mode = "sso-inject"
 		case t.bedrock.awsMount:
 			detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
 			mode = "aws-dir-mount"

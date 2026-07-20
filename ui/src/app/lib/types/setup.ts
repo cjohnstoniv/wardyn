@@ -78,11 +78,21 @@ export interface SetupBedrock {
 // (honesty law: not live-verified). `aging` is a conservative age-based
 // "reconnect soon" flag, never a hard expiry claim.
 export interface SetupHarness {
-  provider: string;
+  provider: string; // "anthropic" | "aws"
   captured: boolean;
   captured_at?: string;
   aging?: boolean;
   source_run_id?: string;
+  // Real, machine-readable expiry — populated ONLY by providers whose credential
+  // exposes one (AWS SSO does; an Anthropic setup-token does not, which is why
+  // `aging` exists at all). Absent means "this provider can't tell you", never
+  // "it doesn't expire".
+  expires_at?: string;
+  expired?: boolean;
+  // The stored credential carries a refresh token, so it can be renewed without
+  // a fresh interactive login (AWS `sso-session` profiles; legacy
+  // sso_start_url profiles have none).
+  renewable?: boolean;
 }
 
 // Host-proxy detection — mirrors internal/setup/detect_proxy.go. Every value is

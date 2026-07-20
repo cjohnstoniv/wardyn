@@ -6,10 +6,15 @@ package api
 import (
 	"cmp"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // mavenProxyOpts builds the MAVEN_OPTS JVM proxy sysprops that route Maven
@@ -122,6 +127,13 @@ type bedrockAuth struct {
 	// resident-key path; bearer still wins over it.
 	awsMount       bool
 	awsMountSource string
+	// ssoInject selects the captured-AWS-SSO-credential delivery path (a
+	// container-login `aws sso login` — see awsSSOBlob in harnesscred.go): a
+	// minimal synthetic ~/.aws is materialized in the sandbox from an env var
+	// (no host mount, no static keys stored). See the resolveBedrockAuth
+	// residency note for why this differs from bearer. Mutually exclusive with
+	// awsMount and the resident-key path; bearer still wins over it.
+	ssoInject bool
 }
 
 // bedrockRuntimeHost is the regional Bedrock DATA-PLANE host claude-code's
@@ -149,8 +161,74 @@ func ssoEgressHosts(ssoRegion string) []string {
 	}
 }
 
-// sandboxAWSDir is where the host ~/.aws is bind-mounted read-only in the run.
+// sandboxAWSDir is where the host ~/.aws is bind-mounted read-only in the run
+// (awsMount) OR materialized by agent-run from an env var (ssoInject) — same
+// path either way, so the SDK env vars below don't need to branch on which.
 const sandboxAWSDir = "/home/agent/.aws"
+
+// awsSSOProfileName is both the generated [sso-session <name>] and
+// [profile <name>] name for a captured SSO credential (ssoInject). Fixed, not
+// operator-configured: this profile exists only inside the ephemeral sandbox
+// ~/.aws Wardyn generates, so there is no collision to name around.
+const awsSSOProfileName = "wardyn"
+
+// awsSSOConfigEnvVar carries the generated ~/.aws files (config + SSO token
+// cache) into the sandbox: same shape as WARDYN_ARTIFACT_CONFIG_B64 —
+// newline-delimited "<home-relative-path>\t<base64(content)>" records (see
+// encodeArtifactConfig, reused here as-is). agent-run-lib.sh must materialize
+// it before claude/aws-sdk runs; that function does not exist yet (owned by
+// another agent) — see the snippet in resolveBedrockAuth's doc comment above
+// the ssoInject branch.
+const awsSSOConfigEnvVar = "WARDYN_AWS_SSO_CONFIG_B64"
+
+// awsSSOCacheFileName is the AWS CLI/SDK's cache-filename convention for an
+// sso-session-based profile: the SHA1 hex digest of the session name (a
+// LEGACY non-session profile instead hashes the start URL — irrelevant here
+// since the generated config always uses an sso-session block, chosen so one
+// name derives both the config block and the cache file unambiguously).
+func awsSSOCacheFileName(sessionName string) string {
+	sum := sha1.Sum([]byte(sessionName))
+	return hex.EncodeToString(sum[:])
+}
+
+// awsSSOConfigFileContents generates a minimal ~/.aws/config binding the
+// captured SSO session to a single profile the sandbox SDK resolves against.
+func awsSSOConfigFileContents(b awsSSOBlob) string {
+	return fmt.Sprintf(
+		"[sso-session %[1]s]\nsso_start_url = %[3]s\nsso_region = %[4]s\nsso_registration_scopes = sso:account:access\n\n"+
+			"[profile %[1]s]\nsso_session = %[1]s\nsso_account_id = %[5]s\nsso_role_name = %[6]s\noutput = json\n",
+		awsSSOProfileName, awsSSOProfileName, b.StartURL, b.Region, b.AccountID, b.RoleName,
+	)
+}
+
+// awsSSOCacheFileContents generates the SSO token-cache JSON the AWS SDK reads
+// from ~/.aws/sso/cache/<awsSSOCacheFileName>.json: accessToken/expiresAt
+// (RFC3339) are always present; the refresh/registration fields ride along
+// when the login also registered a public client, so the SDK can silently
+// refresh instead of forcing a re-login once only the access token (not the
+// client registration) has lapsed.
+func awsSSOCacheFileContents(b awsSSOBlob) string {
+	cache := map[string]any{
+		"startUrl":    b.StartURL,
+		"region":      b.Region,
+		"accessToken": b.AccessToken,
+		"expiresAt":   b.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+	if b.RefreshToken != "" {
+		cache["refreshToken"] = b.RefreshToken
+	}
+	if b.ClientID != "" {
+		cache["clientId"] = b.ClientID
+	}
+	if b.ClientSecret != "" {
+		cache["clientSecret"] = b.ClientSecret
+	}
+	if !b.RegistrationExpiresAt.IsZero() {
+		cache["registrationExpiresAt"] = b.RegistrationExpiresAt.UTC().Format(time.RFC3339)
+	}
+	raw, _ := json.Marshal(cache)
+	return string(raw)
+}
 
 // resolveBedrockAuth decides whether this run should authenticate to Claude via
 // Amazon Bedrock and, if so, returns the sandbox env additions (the
@@ -196,6 +274,93 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// overwrites the Authorization header with the real token on the wire.
 		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
 		return bedrockAuth{env: env, egressHosts: hosts, ready: true, bearer: true, runtimeHost: runtimeHost}
+	}
+
+	// CAPTURED AWS SSO CREDENTIAL: a container-login `aws sso login` captured an
+	// SSO access token (readAWSSSOBlob / awsSSOBlob, harnesscred.go). This wins
+	// over the host ~/.aws mount and static keys below — it needs no host access
+	// and stores no long-lived static key — but an explicit bearer token still
+	// wins over it (bearer is never-resident; this mode is).
+	//
+	// RESIDENCY (contrast with bearer above): the captured SSO access token DOES
+	// land resident in the sandbox — a minimal synthetic ~/.aws, delivered the
+	// same way the managed-subscription sentinel is (base64 in a sandbox env
+	// var, materialized by agent-run; see WARDYN_CLAUDE_MANAGED_B64 /
+	// materialize_managed_claude_config in deploy/images/common/agent-run-lib.sh
+	// for the precedent this mirrors). The sandbox SDK then exchanges that token
+	// for SHORT-LIVED role credentials itself (portal.sso.<region>
+	// GetRoleCredentials) — those role credentials were always going to be
+	// resident (SigV4 can't be proxy-injected, see the resident-key fallback
+	// below); what's new here is the longer-lived SSO access token also being
+	// resident, not just the ephemeral role creds it mints.
+	//
+	// PHASE B (not yet built): proxy-inject the token as the
+	// `x-amz-sso_bearer_token` header on portal.sso.<region> instead of writing
+	// it into the sandbox — that call is authtype:none (unsigned), so a MITM can
+	// set the header without the sandbox ever holding the token, mirroring the
+	// Bedrock bearer path above. Until Phase B ships, this is an accepted,
+	// documented tradeoff (same class as the resident-SigV4 fallback), not an
+	// oversight.
+	//
+	// agent-run-lib.sh needs a materialization function for awsSSOConfigEnvVar
+	// (does not exist yet — owned by another agent), mirroring
+	// install_artifact_config:
+	//
+	//   materialize_aws_sso_config() {
+	//       [[ -n "${WARDYN_AWS_SSO_CONFIG_B64:-}" ]] || return 0
+	//       local relpath b64 dst
+	//       while IFS=$'\t' read -r relpath b64; do
+	//           [[ -n "$relpath" ]] || continue
+	//           case "$relpath" in
+	//               /*|*..*) echo "agent-run: skipping unsafe aws-sso-config path: $relpath" >&2; continue ;;
+	//           esac
+	//           dst="${HOME}/${relpath}"
+	//           mkdir -p "$(dirname "$dst")"
+	//           if printf '%s' "$b64" | base64 -d > "$dst" 2>/dev/null; then
+	//               chmod 0600 "$dst"
+	//           else
+	//               echo "agent-run: WARNING failed to write aws-sso-config ${relpath}" >&2
+	//           fi
+	//       done <<< "$WARDYN_AWS_SSO_CONFIG_B64"
+	//   }
+	//
+	// (install_artifact_config's own `-n "$b64"` guard would silently DROP an
+	// empty-content record; this variant drops that guard since it never emits
+	// one — AWS_SHARED_CREDENTIALS_FILE deliberately points at a path nothing
+	// creates, see below.) Call it alongside prepare_claude_config_dir /
+	// materialize_managed_claude_config / install_artifact_config, before any
+	// aws/claude invocation.
+	if blob, found, berr := s.readAWSSSOBlob(ctx); berr == nil && found {
+		if blob.expired(s.cfg.Now()) {
+			// Observable so the UI can tell the operator to re-login (setup status
+			// reads the same readAWSSSOBlob + expired() this checks); fall through to
+			// the next credential mode rather than handing the run a dead token.
+			slog.WarnContext(ctx, "wardynd: captured AWS SSO credential expired; falling back to the next Bedrock credential mode",
+				slog.Time("expired_at", blob.ExpiresAt))
+		} else {
+			env := base()
+			env["AWS_CONFIG_FILE"] = sandboxAWSDir + "/config"
+			// Deliberately not materialized: a missing shared-credentials file is
+			// normal ("no static creds") and every AWS SDK treats it that way, which
+			// is exactly right here — the only credential source is the SSO cache.
+			env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
+			env["AWS_PROFILE"] = awsSSOProfileName
+			env[awsSSOConfigEnvVar] = encodeArtifactConfig(map[string]string{
+				".aws/config": awsSSOConfigFileContents(blob),
+				".aws/sso/cache/" + awsSSOCacheFileName(awsSSOProfileName) + ".json": awsSSOCacheFileContents(blob),
+			})
+			hosts = append(hosts, ssoEgressHosts(blob.Region)...)
+			// Mask GLOBALLY (not per-run, like the static-key branch below does via
+			// the caller): this captured credential is reused across every run that
+			// picks this mode, not minted fresh per run, so a per-run Add would miss
+			// every run after the first. Mirrors handleHarnessCredentialPaste
+			// (harnesscred.go). AddGlobal no-ops on the empty strings when a field
+			// wasn't captured (Registry.MinLen).
+			s.cfg.MaskRegistry.AddGlobal([]byte(blob.AccessToken))
+			s.cfg.MaskRegistry.AddGlobal([]byte(blob.RefreshToken))
+			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
+			return bedrockAuth{env: env, egressHosts: hosts, ready: true, ssoInject: true}
+		}
 	}
 
 	// HOST-MODE ~/.aws MOUNT: bind the operator's host ~/.aws read-only into the
