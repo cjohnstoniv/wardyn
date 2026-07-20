@@ -10,10 +10,14 @@ import { asJson, wfetch } from "./core";
 export const harnessAuth = {
   // POST /api/v1/setup/harness-login — launch an interactive login sandbox for a
   // provider (default "anthropic"); returns the run id to attach to.
-  async harnessLogin(provider = "anthropic"): Promise<string> {
+  // ssoStartUrl is REQUIRED by the "aws" provider and ignored by the others: the
+  // server seeds it (with its configured SSO region) as the sandbox's pre-login
+  // ~/.aws/config, which is what `aws sso login --sso-session wardyn` reads.
+  // Wardyn stores no copy of it — it is per-organization operator config.
+  async harnessLogin(provider = "anthropic", ssoStartUrl = ""): Promise<string> {
     const res = await wfetch("/setup/harness-login", {
       method: "POST",
-      body: JSON.stringify({ provider }),
+      body: JSON.stringify({ provider, sso_start_url: ssoStartUrl }),
     });
     const body = await asJson<{ run_id: string }>(res);
     return body.run_id;

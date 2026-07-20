@@ -374,7 +374,7 @@ export function ModelStep({
                 ? awsSSOCred.expired
                   ? `Session expired ${awsSSOCred.expires_at ?? ""}. Re-run the login to refresh it.`
                   : `Session connected, expires ${awsSSOCred.expires_at ?? "—"}. Bedrock runs exchange it for short-lived role credentials.`
-                : "Log in once in a sandbox (device code — approve in any browser). No host ~/.aws mount and no static keys."}
+                : "Log in once in a sandbox: give Wardyn your AWS access portal URL, then approve the device code in any browser. No host ~/.aws mount and no static keys."}
             </p>
           </div>
           <Button size="sm" variant="outline" onClick={() => setAwsLoginOpen(true)}>

@@ -13,6 +13,13 @@
 // The only unavoidable human step is approving the OAuth in the browser and
 // pasting the callback code back into the terminal. A manual paste field remains
 // as a fallback if auto-capture misses. Renders inline (never routes away).
+//
+// The AWS flow adds one step BEFORE the sandbox launches: it asks for the
+// organization's access portal (start) URL, because `aws sso login` reads
+// sso_start_url + sso_region from ~/.aws/config and Wardyn stores no start URL
+// (the region is daemon boot config). The server seeds both into the sandbox as
+// a credential-free ~/.aws/config, which is what makes the auto-typed
+// `aws sso login --sso-session wardyn …` run unattended.
 import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, CornerDownLeft } from "lucide-react";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
@@ -21,7 +28,7 @@ import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 
-type Phase = "launching" | "attached" | "saving" | "done" | "error";
+type Phase = "prompt" | "launching" | "attached" | "saving" | "done" | "error";
 
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
@@ -42,7 +49,22 @@ type LoginFlow = {
   capture: CaptureMode;
   // Marker the in-sandbox helper prints on success (capture: "helper" only).
   doneMarker?: string;
+  // The flow cannot start until the operator supplies their AWS access-portal
+  // start URL: `aws sso login` reads sso_start_url + sso_region from the
+  // sandbox's ~/.aws/config, and Wardyn stores no start URL anywhere (the region
+  // is boot config; the start URL is per-organization and asked for here). The
+  // server seeds both into the sandbox before the command is auto-typed.
+  needsStartUrl?: boolean;
 };
+
+// isLikelyStartUrl mirrors the server's validateSSOStartURL (harnesscred.go) so
+// the operator sees the problem before a round trip. Deliberately loose — the
+// server is the authority, and the egress policy, not this check, decides what
+// the sandbox may dial. Exported for tests.
+export function isLikelyStartUrl(s: string): boolean {
+  const v = s.trim();
+  return /^https:\/\/[^\s/]+/.test(v);
+}
 
 const LOGIN_FLOWS: Record<string, LoginFlow> = {
   anthropic: {
@@ -61,15 +83,19 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
     ),
   },
   aws: {
-    // Chained so the helper uploads the moment the login succeeds — the operator
-    // never has to run a second command.
-    cmd: "aws sso login --no-browser --use-device-code && wardyn-aws-sso",
+    // --sso-session wardyn selects the [sso-session wardyn] block the server
+    // seeded into ~/.aws/config; chained so the helper uploads the moment the
+    // login succeeds — the operator never has to run a second command.
+    cmd: "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso",
     title: "Connect an AWS SSO session via container login",
     capture: "helper",
     doneMarker: "wardyn: aws sso credential captured",
+    needsStartUrl: true,
     blurb: (
       <>
-        Wardyn opened a sandbox and is running{" "}
+        Give Wardyn your organization&apos;s AWS access portal URL and it opens a sandbox, writes a minimal{" "}
+        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">~/.aws/config</code> holding just that URL and
+        the configured SSO region (no credential — the sandbox has none to start with), and runs{" "}
         <code className="rounded bg-background/70 px-1 py-0.5 font-mono">aws sso login</code> for you. It prints a
         verification URL and a short user code — open the link in any browser, enter the code, and approve. Wardyn then
         captures the SSO session automatically so later Bedrock runs can exchange it for short-lived role credentials —
@@ -158,7 +184,9 @@ export function HarnessLoginPane({
   // Called when the operator backs out before capturing.
   onCancel: () => void;
 }) {
-  const [phase, setPhase] = React.useState<Phase>("launching");
+  const flow = loginFlow(provider);
+  const [phase, setPhase] = React.useState<Phase>(flow.needsStartUrl ? "prompt" : "launching");
+  const [startUrl, setStartUrl] = React.useState("");
   const [runId, setRunId] = React.useState<string | null>(null);
   const [token, setToken] = React.useState("");
   const [error, setError] = React.useState("");
@@ -166,7 +194,6 @@ export function HarnessLoginPane({
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
 
-  const flow = loginFlow(provider);
   const termRef = React.useRef<AttachTerminalHandle>(null);
 
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
@@ -184,22 +211,24 @@ export function HarnessLoginPane({
     setAutoCaptured(false);
     setAuthUrl("");
     try {
-      const id = await harnessAuthApi.harnessLogin(provider);
+      const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
       setRunId(id);
       setPhase("attached");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("error");
     }
-  }, [provider]);
+  }, [provider, startUrl]);
 
   // Opening the pane IS the intent to connect — launch the sandbox immediately,
   // once. (The ref guards React's dev-mode double-invoke of mount effects.)
+  // EXCEPT when the flow needs a start URL first (AWS): there is nothing to
+  // launch until the operator supplies it, so the pane waits on the form below.
   React.useEffect(() => {
-    if (launchedRef.current) return;
+    if (flow.needsStartUrl || launchedRef.current) return;
     launchedRef.current = true;
     void launch();
-  }, [launch]);
+  }, [launch, flow.needsStartUrl]);
 
   // saveToken stores a token (explicit from auto-capture, or the pasted field).
   const saveToken = React.useCallback(
@@ -292,6 +321,40 @@ export function HarnessLoginPane({
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <p>{error}</p>
+        </div>
+      )}
+
+      {phase === "prompt" && (
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-foreground" htmlFor="harness-login-start-url">
+            Your AWS access portal URL
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id="harness-login-start-url"
+              value={startUrl}
+              onChange={(e) => setStartUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && isLikelyStartUrl(startUrl)) void launch();
+              }}
+              placeholder="https://my-org.awsapps.com/start"
+              className="h-9 min-w-[18rem] flex-1 font-mono"
+              aria-label="AWS access portal start URL"
+            />
+            <Button size="sm" onClick={() => void launch()} disabled={!isLikelyStartUrl(startUrl)}>
+              <KeyRound className="size-3.5" /> Start login
+            </Button>
+            <Button size="sm" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Find it in the AWS access portal (IAM Identity Center) — it looks like{" "}
+            <code className="rounded bg-background/70 px-1 py-0.5 font-mono">https://my-org.awsapps.com/start</code>.
+            Wardyn does not store it; the SSO region comes from the daemon&apos;s{" "}
+            <code className="rounded bg-background/70 px-1 py-0.5 font-mono">-bedrock-aws-sso-region</code> /{" "}
+            <code className="rounded bg-background/70 px-1 py-0.5 font-mono">-bedrock-region</code> setting.
+          </p>
         </div>
       )}
 

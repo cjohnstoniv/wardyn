@@ -35,27 +35,7 @@ type dispatchParams struct {
 	Interactive        bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode           string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	VerifyPlan         json.RawMessage         // non-nil ⇒ VERIFY run (execs wardyn-verify with these commands)
-	ComposeEnv         map[string]string       // non-nil ⇒ COMPOSE run: WARDYN_COMPOSE_* env (discriminator + base64 prompt/schema) for the in-sandbox claude compose wire
-}
-
-// dispatchWithVerify is the positional entry point retained for the harness-login
-// caller (harnesscred.go), which dispatches a blank interactive box with an
-// all-nil grant set (no swap hazard). Every other caller builds dispatchParams
-// and calls dispatchRun directly; this thin shim avoids churning that out-of-lane
-// file. Prefer dispatchRun for new callers.
-func (s *Server) dispatchWithVerify(ctx context.Context, run types.AgentRun, runToken, image string, policy types.RunPolicySpec, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, verifyPlan json.RawMessage) {
-	s.dispatchRun(ctx, run, dispatchParams{
-		RunToken:           runToken,
-		Image:              image,
-		Policy:             policy,
-		FirstGitHubGrantID: firstGitHubGrantID,
-		GitPATGrants:       gitPATGrants,
-		SSHGrants:          sshGrants,
-		Injections:         injections,
-		Interactive:        interactive,
-		TaskMode:           taskMode,
-		VerifyPlan:         verifyPlan,
-	})
+	ExtraEnv           map[string]string       // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -150,13 +130,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	sandboxEnv := buildBaseSandboxEnv(run, proxyURL)
 	applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, taskMode, firstGitHubGrantID, gitPATGrants, sshGrants)
 	applyRepoCloneEnv(sandboxEnv, run, policy)
-	// Compose-only mode (AI Run Composer sandbox backend): the WARDYN_COMPOSE_*
-	// env (discriminator + base64 prompt/schema) rides here — the same "only a
+	// Caller-supplied non-secret env (p.ExtraEnv): compose-only mode's
+	// WARDYN_COMPOSE_* (discriminator + base64 prompt/schema), or the AWS harness
+	// login's pre-login WARDYN_AWS_SSO_CONFIG_B64 — the same "only a
 	// discriminator + non-secret payload changes; clone/grants/EGRESS/recording/
 	// LLM-injection are identical" contract as scan/verify/exec. resolveLLMTransport
 	// below sees an ordinary (no-WorkspaceID) claude-code run and injects the
 	// managed subscription token proxy-side from the launcher's policy.
-	for k, v := range p.ComposeEnv {
+	for k, v := range p.ExtraEnv {
 		sandboxEnv[k] = v
 	}
 

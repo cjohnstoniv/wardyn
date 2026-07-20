@@ -544,3 +544,135 @@ func TestAgentHarnessLogin(t *testing.T) {
 		t.Fatal("codex-cli must NOT support container login in v1")
 	}
 }
+
+// TestValidateSSOStartURL: the one operator-supplied value that gets written
+// into a file inside the sandbox. A newline would smuggle extra keys into the
+// generated INI, so whitespace is rejected outright; everything non-https is
+// rejected because the login flow only ever dials https.
+func TestValidateSSOStartURL(t *testing.T) {
+	for _, ok := range []string{
+		"https://my-org.awsapps.com/start",
+		"https://my-org.awsapps.com/start#/",
+		"https://identitycenter.amazonaws.com/ssoins-1234567890abcdef",
+	} {
+		if err := validateSSOStartURL(ok); err != nil {
+			t.Errorf("validateSSOStartURL(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"my-org.awsapps.com/start",
+		"http://my-org.awsapps.com/start",
+		"https://my-org.awsapps.com/start\nsso_region = attacker-region",
+		"https://my-org.awsapps.com/start sso_region = x",
+	} {
+		if err := validateSSOStartURL(bad); err == nil {
+			t.Errorf("validateSSOStartURL(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// TestAWSSSOLoginConfigIsPreLoginOnly: the login sandbox gets CONFIGURATION and
+// nothing else — the sso-session block `aws sso login --sso-session wardyn`
+// reads, with no profile, no account/role (unknown before the login) and above
+// all no token cache. It exists to OBTAIN a credential, so it must never be
+// handed one.
+func TestAWSSSOLoginConfigIsPreLoginOnly(t *testing.T) {
+	got := awsSSOLoginConfigFileContents("https://my-org.awsapps.com/start", "eu-west-2")
+	for _, want := range []string{
+		"[sso-session " + awsSSOProfileName + "]",
+		"sso_start_url = https://my-org.awsapps.com/start",
+		"sso_region = eu-west-2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("pre-login config is missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"accessToken", "sso_account_id", "sso_role_name", "[profile"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("pre-login config leaks post-login material %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+// TestLoginConfigEnv: the AWS login sandbox is seeded with the pre-login
+// ~/.aws/config through the SAME env channel a Bedrock run uses, and with
+// NOTHING when either half is unknown or the provider isn't AWS.
+func TestLoginConfigEnv(t *testing.T) {
+	aws, _ := agentHarnessLogin(awsSSOAgent)
+	anthropic, _ := agentHarnessLogin("claude-code")
+
+	env := aws.loginConfigEnv("https://my-org.awsapps.com/start", "eu-west-2")
+	rec := env[awsSSOConfigEnvVar]
+	if rec == "" {
+		t.Fatalf("aws login env is missing %s: %v", awsSSOConfigEnvVar, env)
+	}
+	if len(env) != 1 {
+		t.Errorf("login env carries more than the config record: %v", env)
+	}
+	relpath, b64, ok := strings.Cut(strings.TrimSpace(rec), "\t")
+	if !ok || relpath != ".aws/config" {
+		t.Fatalf("record = %q, want a single \".aws/config\\t<base64>\" line", rec)
+	}
+	raw, derr := base64.StdEncoding.DecodeString(b64)
+	if derr != nil {
+		t.Fatalf("decode seeded config: %v", derr)
+	}
+	if got := string(raw); !strings.Contains(got, "sso_start_url = https://my-org.awsapps.com/start") ||
+		!strings.Contains(got, "sso_region = eu-west-2") {
+		t.Errorf("seeded config does not carry the start URL + region:\n%s", got)
+	}
+
+	if got := aws.loginConfigEnv("", "eu-west-2"); got != nil {
+		t.Errorf("no start URL must seed nothing, got %v", got)
+	}
+	if got := aws.loginConfigEnv("https://my-org.awsapps.com/start", ""); got != nil {
+		t.Errorf("no region must seed nothing, got %v", got)
+	}
+	if got := anthropic.loginConfigEnv("https://my-org.awsapps.com/start", "eu-west-2"); got != nil {
+		t.Errorf("a non-AWS login must never get an ~/.aws, got %v", got)
+	}
+}
+
+// TestHandleHarnessLogin_AWSNeedsStartURLAndRegion: `aws sso login` cannot run
+// without an sso_start_url + sso_region, and Wardyn stores neither (there is no
+// start-URL config knob at all — it arrives with the request; the region is boot
+// config). Refuse before launching a sandbox whose auto-typed command is
+// guaranteed to fail.
+func TestHandleHarnessLogin_AWSNeedsStartURLAndRegion(t *testing.T) {
+	const path = "/api/v1/setup/harness-login"
+	newSrv := func(region string) *Server {
+		h := newHarness(t)
+		cfg := h.srv.cfg
+		cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+		cfg.BedrockRegion = region
+		return New(cfg)
+	}
+
+	srv := newSrv("us-east-1")
+	// No start URL at all → 400 naming what's missing.
+	w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"aws"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "access portal") {
+		t.Errorf("missing start url: code = %d, body = %s; want 400 naming the access portal URL", w.Code, w.Body.String())
+	}
+	// Malformed start URL → 400.
+	if w := do(t, srv, http.MethodPost, path, adminToken,
+		`{"provider":"aws","sso_start_url":"my-org.awsapps.com/start"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("malformed start url: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	// Valid start URL, but no configured SSO region → 400 naming the flag.
+	w = do(t, newSrv(""), http.MethodPost, path, adminToken,
+		`{"provider":"aws","sso_start_url":"https://my-org.awsapps.com/start"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "bedrock-aws-sso-region") {
+		t.Errorf("no region: code = %d, body = %s; want 400 naming the region flag", w.Code, w.Body.String())
+	}
+	// Both present → validation passes and the launch itself fails (no runner) → 500.
+	if w := do(t, srv, http.MethodPost, path, adminToken,
+		`{"provider":"aws","sso_start_url":"https://my-org.awsapps.com/start"}`); w.Code != http.StatusInternalServerError {
+		t.Errorf("valid aws login: code = %d, want 500 (no runner configured); body=%s", w.Code, w.Body.String())
+	}
+	// The anthropic flow needs no start URL — unchanged.
+	if w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"anthropic"}`); w.Code != http.StatusInternalServerError {
+		t.Errorf("anthropic login: code = %d, want 500 (no runner configured); body=%s", w.Code, w.Body.String())
+	}
+}

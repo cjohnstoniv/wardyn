@@ -7,7 +7,10 @@
 #   Usage: agent-run --selftest
 #
 # This image has no LLM harness — its only job is to host an interactive
-# `aws sso login --no-browser --use-device-code` session. Both normal task
+# `aws sso login --sso-session wardyn --no-browser --use-device-code` session.
+# The [sso-session wardyn] block it reads (sso_start_url + sso_region, no
+# credential) is seeded by the control plane via WARDYN_AWS_SSO_CONFIG_B64 and
+# written by materialize_aws_sso_config below. Both normal task
 # mode and idle mode converge on that same command; there is no "task" for an
 # aws-sso run to interpret, so the task text (if any) is logged, not consumed.
 # The intended usage is `wardyn attach` into an idle run and typing the login
@@ -69,14 +72,14 @@ resolve_workdir
 
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
 # Prepare the workspace then hold open for `wardyn attach`, where the operator
-# runs `aws sso login --no-browser --use-device-code` by hand and follows the
+# runs `aws sso login --sso-session wardyn --no-browser --use-device-code` by hand and follows the
 # printed URL/code.
 if [[ "${1:-}" == "--idle" ]]; then
     mkdir -p "$HOME/.wardyn"
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
     : > "$HOME/.wardyn/prep-done"
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
-    echo "agent-run: run 'aws sso login --no-browser --use-device-code' in the attached shell" >&2
+    echo "agent-run: run 'aws sso login --sso-session wardyn --no-browser --use-device-code' in the attached shell" >&2
     exec sleep infinity
 fi
 
@@ -92,5 +95,5 @@ maybe_exec_task_mode "${1:-}"
 if [[ -n "${1:-}" ]]; then
     echo "agent-run: task text ignored ('${1}') — aws-sso always runs the SSO login flow" >&2
 fi
-echo "agent-run: launching 'aws sso login --no-browser --use-device-code'" >&2
-exec aws sso login --no-browser --use-device-code
+echo "agent-run: launching 'aws sso login --sso-session wardyn --no-browser --use-device-code'" >&2
+exec aws sso login --sso-session wardyn --no-browser --use-device-code

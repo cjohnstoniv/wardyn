@@ -12,6 +12,7 @@ import (
 
 	gh "github.com/google/go-github/v88/github"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -71,6 +72,21 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	// no rejection is warranted. The SSRF/private-IP guard and the exact-entry
 	// requirement for credential injection are enforced by the proxy and are
 	// unaffected by this mode.
+	// Every domain entry must be a shape the proxy's matcher can actually
+	// match. A dead entry (mid-label wildcard, URL, bad :port) reads as
+	// protection but allows/denies nothing — reject it at every ingest point
+	// (stored policy write, inline run policy, WARDYN_DEFAULT_POLICY file,
+	// composer/profile clamp) rather than ship a policy that lies.
+	for i, d := range spec.AllowedDomains {
+		if err := proxy.ValidDomainEntry(d); err != nil {
+			return fmt.Errorf("allowed_domains[%d]: %w", i, err)
+		}
+	}
+	for i, d := range spec.DeniedDomains {
+		if err := proxy.ValidDomainEntry(d); err != nil {
+			return fmt.Errorf("denied_domains[%d]: %w", i, err)
+		}
+	}
 	for i, g := range spec.EligibleGrants {
 		if err := validateEligibleGrant(i, g); err != nil {
 			return err

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -66,7 +67,6 @@ type harnessLogin struct {
 	injectHost  string   // the ONLY host the sentinel may inject to
 	tokenPrefix string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
 	egress      []string // region-free hosts the interactive login flow must reach
-	hint        string   // the command the operator runs in the terminal
 	// regionalSSOEgress: the flow also dials REGION-SCOPED AWS SSO endpoints,
 	// which no static allowlist entry can express (see loginEgress) — they are
 	// derived from the operator's configured SSO region at launch.
@@ -95,7 +95,6 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 			// console/api hosts. Enumerated empirically; prune/extend from the login
 			// run's decision log (any extra host surfaces as a deny_with_review).
 			egress: []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
-			hint:   "claude setup-token",
 		}, true
 	case awsSSOAgent:
 		return harnessLogin{
@@ -125,7 +124,6 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 			// than a silent deny.
 			egress:            []string{"*.awsapps.com"},
 			regionalSSOEgress: true,
-			hint:              "aws sso login --no-browser --use-device-code",
 			captureViaHelper:  true,
 		}, true
 	default:
@@ -161,6 +159,25 @@ func (hl harnessLogin) loginEgress(ssoRegion string) []string {
 		hosts = append(hosts, fmt.Sprintf("device.sso.%s.amazonaws.com", ssoRegion))
 	}
 	return hosts
+}
+
+// loginConfigEnv is the sandbox env that seeds the login box's NON-SECRET
+// configuration — for AWS, the pre-login ~/.aws/config the auto-typed
+// `aws sso login --sso-session wardyn` reads. Delivered through the SAME
+// WARDYN_AWS_SSO_CONFIG_B64 channel a Bedrock run uses (materialize_aws_sso_config
+// in deploy/images/common/agent-run-lib.sh), so there is one materializer, not two.
+// nil for every other provider, and nil when either half is unknown (a
+// half-written sso-session block is worse than none: the operator can still run
+// `aws configure sso` by hand).
+func (hl harnessLogin) loginConfigEnv(ssoStartURL, ssoRegion string) map[string]string {
+	if !hl.regionalSSOEgress || ssoStartURL == "" || ssoRegion == "" {
+		return nil
+	}
+	return map[string]string{
+		awsSSOConfigEnvVar: encodeArtifactConfig(map[string]string{
+			".aws/config": awsSSOLoginConfigFileContents(ssoStartURL, ssoRegion),
+		}),
+	}
 }
 
 // harnessLoginByProvider finds the login convention by provider id.
@@ -379,7 +396,14 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, blob awsSSOBlob) error {
 // asciicast is ever persisted. The gate lives at that single call site so a future
 // second attach path cannot miss it. (harness.login.started and session.attach
 // still record who attached, when, and why — no provenance is lost.)
-func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin) (types.AgentRun, error) {
+// ssoStartURL (AWS only, "" for every other provider) is the operator's IAM
+// Identity Center access-portal URL. It is seeded into the sandbox as a
+// pre-login ~/.aws/config so the auto-typed `aws sso login --sso-session wardyn`
+// has an sso_start_url/sso_region to read — see awsSSOLoginConfigFileContents.
+// There is no server-side start-URL config to read it from (deliberately: it is
+// per-organization and this is the only flow that needs it), so it arrives with
+// the login request and is validated by the caller.
+func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string) (types.AgentRun, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
 	}
@@ -409,7 +433,8 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// the SSO region if set, else the Bedrock region (same precedence
 	// resolveBedrockAuth uses). Empty means "not configured": the flow's regional
 	// hosts are then left to first-use approval rather than pre-allowed wide.
-	egress := hl.loginEgress(cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion))
+	ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
+	egress := hl.loginEgress(ssoRegion)
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		// Default-deny, limited to the OAuth hosts. An off-policy host the login
@@ -425,16 +450,27 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if err != nil {
 		return types.AgentRun{}, fmt.Errorf("create harness login run: %w", err)
 	}
+	// Pre-login ~/.aws/config for the AWS flow, delivered through the SAME
+	// WARDYN_AWS_SSO_CONFIG_B64 channel a Bedrock run uses (materialized by
+	// materialize_aws_sso_config in agent-run-lib.sh). Non-secret: an sso-session
+	// block with the start URL + region and NO token cache — the login sandbox
+	// must not receive a credential, it exists to produce one.
+	extraEnv := hl.loginConfigEnv(ssoStartURL, ssoRegion)
+
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
 		runID.String(), "success", mustJSON(map[string]any{
 			"provider": hl.provider, "egress": egress,
+			"sso_start_url": ssoStartURL, // operator config, not a credential
 		})))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
-	// No injections, no repo, no verify plan: a blank interactive box. The `--idle`
-	// path installs the MITM CA (unused here) and attaches; the human runs
-	// `claude setup-token` and pastes the result into the UI.
-	s.dispatchWithVerify(ctx, created, id.Token, image, policy, nil, nil, nil, nil, true, "", nil)
+	// No injections, no repo, no verify plan: a blank interactive box (plus, for
+	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
+	// CA and attaches; the login pane auto-types the provider's command.
+	s.dispatchRun(ctx, created, dispatchParams{
+		RunToken: id.Token, Image: image, Policy: policy,
+		Interactive: true, ExtraEnv: extraEnv,
+	})
 	return s.refreshRun(ctx, runID, created), nil
 }
 
@@ -442,6 +478,25 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 
 type harnessLoginRequest struct {
 	Provider string `json:"provider"`
+	// SSOStartURL is required by (and only by) the AWS flow — see
+	// validateSSOStartURL and launchHarnessLoginRun.
+	SSOStartURL string `json:"sso_start_url"`
+}
+
+// validateSSOStartURL guards the one operator-supplied value that gets written
+// into a file inside the sandbox: it must be a plain https URL with no
+// whitespace (a newline would let a paste smuggle extra keys into the generated
+// INI). Not an authorization check — the egress policy still decides what the
+// sandbox may dial.
+func validateSSOStartURL(raw string) error {
+	if strings.ContainsAny(raw, " \t\r\n") {
+		return fmt.Errorf("the AWS access portal URL must not contain whitespace")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("that does not look like an AWS access portal URL (expected e.g. https://my-org.awsapps.com/start)")
+	}
+	return nil
 }
 type harnessLoginResponse struct {
 	RunID string `json:"run_id"`
@@ -469,8 +524,29 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "provider does not support container login in this version: "+provider)
 		return
 	}
+	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
+	// in the sandbox's ~/.aws/config, and Wardyn stores neither — the region is
+	// boot config, the start URL comes with this request. Refuse up front rather
+	// than launching a sandbox whose auto-typed command is guaranteed to fail.
+	startURL := strings.TrimSpace(req.SSOStartURL)
+	if hl.regionalSSOEgress {
+		if startURL == "" {
+			writeError(w, http.StatusBadRequest,
+				"aws sso login needs your organization's AWS access portal URL (e.g. https://my-org.awsapps.com/start); Wardyn has no stored copy of it")
+			return
+		}
+		if verr := validateSSOStartURL(startURL); verr != nil {
+			writeError(w, http.StatusBadRequest, verr.Error())
+			return
+		}
+		if cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) == "" {
+			writeError(w, http.StatusBadRequest,
+				"no AWS SSO region is configured; set -bedrock-aws-sso-region (WARDYN_BEDROCK_AWS_SSO_REGION) or -bedrock-region and restart wardynd")
+			return
+		}
+	}
 	_, actor := actorFromRequest(r)
-	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl)
+	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "launch login sandbox: "+err.Error())
 		return

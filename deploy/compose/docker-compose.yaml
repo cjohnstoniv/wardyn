@@ -466,7 +466,7 @@ services:
   # agent-aws-sso: same build-only convention as agent-claude-code/agent-codex-cli
   # above — never started by the demo, exists so `docker compose --profile
   # build-only build` produces the tagged image. Hosts an interactive
-  # `aws sso login --no-browser --use-device-code` session (AWS CLI v2; see
+  # `aws sso login --sso-session wardyn --no-browser --use-device-code` session (AWS CLI v2; see
   # deploy/images/aws-sso/Dockerfile).
   agent-aws-sso:
     build:

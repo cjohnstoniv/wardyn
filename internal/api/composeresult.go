@@ -98,7 +98,7 @@ func (s *Server) handleUploadComposeResult(w http.ResponseWriter, r *http.Reques
 // deltas: (1) NO WorkspaceID (an ordinary model run — resolveLLMTransport's
 // managed path fires, injecting the token; a scan run makes no model call); (2)
 // the WARDYN_COMPOSE_* env (discriminator + base64 prompt/schema) rides
-// ComposeEnv, the exact same "only a discriminator + non-secret payload changes;
+// ExtraEnv, the exact same "only a discriminator + non-secret payload changes;
 // clone/grants/EGRESS/recording/LLM-injection are identical" contract as
 // scan/verify/exec; (3) it WAITS for the run to finish and reads the uploaded
 // proposal from the compose-results store.
@@ -170,7 +170,7 @@ func (s *Server) RunClaudeCompose(ctx context.Context, promptJSON []byte) ([]byt
 		RunToken:   id.Token,
 		Image:      agentImage("claude-code", s.cfg.AgentImages),
 		Policy:     policy,
-		ComposeEnv: composeSandboxEnv(cp),
+		ExtraEnv:   composeSandboxEnv(cp),
 	})
 
 	// Wait for the run to finish, then take its uploaded proposal. The in-sandbox

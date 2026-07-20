@@ -1,7 +1,7 @@
 # wardyn/agent-aws-sso: AWS SSO device-code login image.
 #
 # This is NOT a coding agent — it has no LLM harness. Its ONLY job is to host
-# an interactive `aws sso login --no-browser --use-device-code` session so an
+# an interactive `aws sso login --sso-session wardyn --no-browser --use-device-code` session so an
 # operator can `wardyn attach` into a governed sandbox and authenticate an AWS
 # SSO profile. It carries AWS CLI v2 — v1 (apt's `awscli` package) does not
 # support the sso-session / device-code flow, so this image does NOT use apt
@@ -217,4 +217,4 @@ USER agent
 # No ENTRYPOINT on purpose (see contract above). The Wardyn docker driver
 # replaces CMD with `sleep infinity` at container create.
 ENTRYPOINT []
-CMD ["/bin/bash", "-c", "echo 'wardyn aws-sso agent: attach and run aws sso login --no-browser --use-device-code' && sleep infinity"]
+CMD ["/bin/bash", "-c", "echo 'wardyn aws-sso agent: attach and run aws sso login --sso-session wardyn --no-browser --use-device-code' && sleep infinity"]

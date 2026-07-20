@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { extractSetupToken, extractAuthUrl } from "./harness-login-pane";
+import { extractSetupToken, extractAuthUrl, isLikelyStartUrl } from "./harness-login-pane";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -69,5 +69,20 @@ describe("extractAuthUrl", () => {
       "https://claude.ai/oauth/authorize?response_type=code&client_id=abcdef0123456789&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=Zm9vYmFyYmF6cXV4&code_challenge_method=S256&state=deadbeefcafef00d";
     expect(extractAuthUrl(`Visit:\r\n${url}\r\nPaste the code here:\r\n`)).toBe(url);
     expect(new URL(extractAuthUrl(`\r\n${url}\r\n`)!).searchParams.get("response_type")).toBe("code");
+  });
+});
+
+describe("isLikelyStartUrl", () => {
+  it("accepts a real AWS access portal URL", () => {
+    expect(isLikelyStartUrl("https://my-org.awsapps.com/start")).toBe(true);
+    expect(isLikelyStartUrl("  https://identitycenter.amazonaws.com/ssoins-abc  ")).toBe(true);
+  });
+
+  it("rejects what the server would also reject", () => {
+    expect(isLikelyStartUrl("")).toBe(false);
+    expect(isLikelyStartUrl("my-org.awsapps.com/start")).toBe(false);
+    expect(isLikelyStartUrl("http://my-org.awsapps.com/start")).toBe(false);
+    // A newline would smuggle extra keys into the generated ~/.aws/config INI.
+    expect(isLikelyStartUrl("https://\nsso_region = x")).toBe(false);
   });
 });

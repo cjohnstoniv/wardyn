@@ -201,6 +201,22 @@ func awsSSOConfigFileContents(b awsSSOBlob) string {
 	)
 }
 
+// awsSSOLoginConfigFileContents generates the PRE-login half of the same
+// ~/.aws/config: only the [sso-session] block, no [profile] and no token cache.
+// It is what the containerized `aws sso login --sso-session wardyn` needs to
+// exist BEFORE it runs (the CLI reads sso_start_url/sso_region from it); the
+// account/role and the token are outputs of that login, not inputs.
+//
+// Non-secret by construction — the start URL and region are operator
+// configuration, which is why the login sandbox may hold them (it must hold no
+// credential; it exists to obtain one).
+func awsSSOLoginConfigFileContents(startURL, region string) string {
+	return fmt.Sprintf(
+		"[sso-session %s]\nsso_start_url = %s\nsso_region = %s\nsso_registration_scopes = sso:account:access\n",
+		awsSSOProfileName, startURL, region,
+	)
+}
+
 // awsSSOCacheFileContents generates the SSO token-cache JSON the AWS SDK reads
 // from ~/.aws/sso/cache/<awsSSOCacheFileName>.json: accessToken/expiresAt
 // (RFC3339) are always present; the refresh/registration fields ride along

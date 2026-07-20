@@ -144,9 +144,13 @@ it and injects it only when forwarding internal API calls.
 — NOT a real coding agent: it runs a task's scripted, known-good solution so
 the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its
 grader scores correctly — and `aws-sso/`, also not a coding agent: its only
-job is to host an interactive `aws sso login --no-browser --use-device-code`
-session (device-code flow) so an operator can `wardyn attach` in and
-authenticate an AWS SSO profile from inside a governed sandbox. It carries AWS
+job is to host an interactive
+`aws sso login --sso-session wardyn --no-browser --use-device-code` session
+(device-code flow) so an operator can `wardyn attach` in and authenticate an
+AWS SSO profile from inside a governed sandbox. The `[sso-session wardyn]`
+block that command reads (`sso_start_url` from the setup UI + `sso_region`
+from the daemon's config — no credential) is seeded by the control plane via
+`WARDYN_AWS_SSO_CONFIG_B64`. It carries AWS
 CLI **v2** — there is no apt package for v2, so the Dockerfile downloads the
 official per-version zip installer and GPG-verifies it against AWS's published
 public key (baked into the image, same convention as the baked GitHub/Azure

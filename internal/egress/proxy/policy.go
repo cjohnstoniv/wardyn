@@ -184,6 +184,47 @@ func classifyDomain(d string) (exact, wild string, port int) {
 	return d, "", port
 }
 
+// ValidDomainEntry reports whether d is an allowlist/denylist entry the matcher
+// above can ever match, and is the ONE shape check every operator-supplied
+// policy ingest point runs (validatePolicySpec, internal/api). classifyDomain
+// accepts anything — a mid-label pattern like "oidc.*.amazonaws.com" compiles
+// to an exact hostname no real request can equal, so it silently protects
+// nothing. Operator input fails closed instead: reject the dead entry at write
+// time rather than ship a policy the operator believes is guarding them.
+//
+// Valid: a bare exact host ("api.anthropic.com"), a leading-"*." wildcard
+// ("*.example.com"), and either with a valid ":port" qualifier.
+func ValidDomainEntry(d string) error {
+	exact, wild, _ := classifyDomain(d)
+	bad := func(why string) error {
+		return fmt.Errorf("domain %q never matches any request (%s); supported forms: "+
+			`"example.com", "*.example.com", "example.com:443", "*.example.com:443"`, d, why)
+	}
+	switch {
+	case exact == "" && wild == "":
+		return bad("empty")
+	case strings.Contains(exact, "*"), strings.Contains(wild, "*"):
+		return bad(`a "*" is only supported as a leading "*."`)
+	case strings.ContainsAny(exact, "/ \t"), strings.ContainsAny(wild, "/ \t"):
+		return bad("must be a bare host, not a URL")
+	// classifyDomain leaves a malformed ":port" attached to the host (so it
+	// cannot silently widen to any-port) — which makes it a dead entry.
+	// An IPv6 literal legitimately contains ':', so exempt it.
+	case strings.Contains(exact, ":") && net.ParseIP(exact) == nil:
+		return bad(`the ":port" qualifier must be a number in 1..65535`)
+	// Same check on the wildcard branch, which is otherwise unguarded: a valid
+	// ":port" is stripped into the port by classifyDomain, and there is no IPv6
+	// wildcard form, so ANY residual ':' here is a malformed qualifier. Without
+	// this, "*.example.com:0" compiles to the suffix ".example.com:0" — which no
+	// request host can end with, since evalHost is handed host and port
+	// separately. That is precisely the "policy that lies" this function exists
+	// to reject, and it was slipping through the branch the exact case guards.
+	case strings.Contains(wild, ":"):
+		return bad(`the ":port" qualifier must be a number in 1..65535`)
+	}
+	return nil
+}
+
 // matchWild reports whether host falls under any wildcard suffix. A suffix
 // ".example.com" matches "a.example.com" and "x.y.example.com" but NOT
 // "example.com" itself nor "notexample.com" (label-boundary safe).
