@@ -243,7 +243,9 @@ type Config struct {
 	// BedrockAWSSSORegion is the AWS region whose SSO endpoints (oidc.<r>,
 	// portal.sso.<r>) the sandbox is allowed to reach so the SDK can exchange an
 	// SSO token for role credentials. It often differs from BedrockRegion.
-	// Empty defaults to BedrockRegion. Only meaningful with BedrockAWSConfigDir.
+	// Empty defaults to BedrockRegion. Used by the BedrockAWSConfigDir mount path
+	// AND by the containerized `aws sso login` (harnessLogin.loginEgress), which
+	// has no other way to know which regional SSO endpoints to allow.
 	BedrockAWSSSORegion string
 	// Secrets is the at-rest secret store. It backs the admin secret-management
 	// endpoints (PUT/DELETE/list — values are NEVER readable via the API) and

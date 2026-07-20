@@ -11,11 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -443,6 +446,84 @@ func TestHandleHarnessDisconnect_Errors(t *testing.T) {
 	if _, srv := harnessCredSrv(t, fail); true {
 		if w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/anthropic", adminToken, ""); w.Code != http.StatusInternalServerError {
 			t.Errorf("store Delete failure: code = %d, want 500; body=%s", w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestHarnessLoginEgress_MatchableByTheProxy pins the ONE property every
+// harness-login egress entry must have: the proxy's matcher must actually be
+// able to match it. That matcher (classifyDomain, internal/egress/proxy) knows
+// exactly two forms — a LEADING "*." suffix, or an exact host — so a mid-label
+// wildcard ("oidc.*.amazonaws.com") silently degrades into an exact hostname no
+// real request can ever equal. It looks like a pre-allow, allows nothing, and
+// the flow it exists for is denied on the very hosts it names.
+//
+// The check is deliberately GENERAL (the whole table, every row, empty and
+// populated regions), not a golden list: any future row that reintroduces the
+// shape fails here. Teeth: the real builtin evaluator is asked whether a
+// CONCRETE host derived from each entry (every "*" label replaced by a real
+// label) is allowed — the old strings fail this because
+// "oidc.us-east-1.amazonaws.com" never equals the literal "oidc.*.amazonaws.com".
+func TestHarnessLoginEgress_MatchableByTheProxy(t *testing.T) {
+	for _, agent := range []string{"claude-code", awsSSOAgent} {
+		hl, ok := agentHarnessLogin(agent)
+		if !ok {
+			t.Fatalf("%s must support container login", agent)
+		}
+		for _, region := range []string{"", "us-east-1", "eu-west-2"} {
+			hosts := hl.loginEgress(region)
+			ev := proxy.NewBuiltinEvaluator(types.RunPolicySpec{AllowedDomains: hosts})
+			for _, entry := range hosts {
+				// A "*" anywhere but a leading "*." is the defect: classifyDomain
+				// keeps it verbatim as an exact host.
+				if strings.Contains(strings.TrimPrefix(entry, "*."), "*") {
+					t.Errorf("%s/%q: egress entry %q has a mid-label wildcard — the proxy compiles it to an unmatchable exact host",
+						agent, region, entry)
+					continue
+				}
+				probe := strings.ReplaceAll(entry, "*", "wardyn-probe")
+				v, err := ev.EvaluateHost(context.Background(), egress.Request{Host: probe, Port: 443})
+				if err != nil {
+					t.Fatalf("evaluate %q: %v", probe, err)
+				}
+				if v != egress.VerdictAllow {
+					t.Errorf("%s/%q: entry %q does not allow %q (verdict %v) — it allows nothing real",
+						agent, region, entry, probe, v)
+				}
+			}
+		}
+	}
+}
+
+// TestHarnessLoginEgress_AWSSSORegionScoped pins the resolved content: with a
+// region the three region-scoped SSO endpoints are exact hosts for THAT region,
+// and with no configured region nothing regional (and nothing wider, e.g.
+// "*.amazonaws.com") is pre-allowed — those hosts go through first-use approval
+// instead.
+func TestHarnessLoginEgress_AWSSSORegionScoped(t *testing.T) {
+	hl, _ := agentHarnessLogin(awsSSOAgent)
+
+	got := hl.loginEgress("eu-west-2")
+	for _, want := range []string{
+		"*.awsapps.com",
+		"oidc.eu-west-2.amazonaws.com",
+		"portal.sso.eu-west-2.amazonaws.com",
+		"device.sso.eu-west-2.amazonaws.com",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("login egress %v is missing %q", got, want)
+		}
+	}
+
+	bare := hl.loginEgress("")
+	if len(bare) != 1 || bare[0] != "*.awsapps.com" {
+		t.Fatalf("with no configured SSO region the login must pre-allow only the org portal, got %v", bare)
+	}
+	// The table row itself must stay region-free — a static regional host would
+	// be wrong for every other operator.
+	for _, entry := range hl.egress {
+		if strings.Contains(entry, "amazonaws.com") {
+			t.Errorf("static row entry %q is region-scoped; derive it in loginEgress instead", entry)
 		}
 	}
 }

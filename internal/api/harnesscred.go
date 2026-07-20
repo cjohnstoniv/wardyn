@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -64,8 +65,12 @@ type harnessLogin struct {
 	sentinel    string   // injection sentinel (types.ManagedOAuthSecret); "" = no injection
 	injectHost  string   // the ONLY host the sentinel may inject to
 	tokenPrefix string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
-	egress      []string // hosts the interactive login flow must reach
+	egress      []string // region-free hosts the interactive login flow must reach
 	hint        string   // the command the operator runs in the terminal
+	// regionalSSOEgress: the flow also dials REGION-SCOPED AWS SSO endpoints,
+	// which no static allowlist entry can express (see loginEgress) — they are
+	// derived from the operator's configured SSO region at launch.
+	regionalSSOEgress bool
 	// captureViaHelper: the credential is written to a FILE in the sandbox and
 	// uploaded by an in-sandbox helper (wardyn-aws-sso), not printed to the PTY
 	// and scraped. Also means the run is safe to record: the terminal only ever
@@ -107,24 +112,55 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 			// No AWS analogue to `sk-ant-oat`: the SSO cache is structured JSON, so
 			// capture validates its SHAPE instead of a prefix.
 			tokenPrefix: "",
-			// `aws sso login --no-browser --use-device-code` (RFC 8628): oidc.* does
-			// RegisterClient/StartDeviceAuthorization/CreateToken, device.sso.* serves
-			// the verification page, portal.sso.* answers GetRoleCredentials +
-			// list-accounts/roles, and *.awsapps.com is the org access portal.
-			// Region isn't known statically here, hence the wildcards; anything else
-			// the flow dials surfaces as a deny_with_review rather than a silent deny.
-			egress: []string{
-				"oidc.*.amazonaws.com",
-				"portal.sso.*.amazonaws.com",
-				"device.sso.*.amazonaws.com",
-				"*.awsapps.com",
-			},
-			hint:             "aws sso login --no-browser --use-device-code",
-			captureViaHelper: true,
+			// `aws sso login --no-browser --use-device-code` (RFC 8628): oidc.<r> does
+			// RegisterClient/StartDeviceAuthorization/CreateToken, device.sso.<r>
+			// serves the verification page, portal.sso.<r> answers
+			// list-accounts/list-account-roles (wardyn-aws-sso resolves account+role
+			// at capture time), and *.awsapps.com is the org access portal.
+			// The first three are REGION-SCOPED and the region is not knowable in
+			// this static table, so they are derived at launch from the operator's
+			// configured SSO region — see loginEgress for why a wildcard cannot
+			// express them. Only the region-free portal host is listed here;
+			// anything else the flow dials surfaces as a deny_with_review rather
+			// than a silent deny.
+			egress:            []string{"*.awsapps.com"},
+			regionalSSOEgress: true,
+			hint:              "aws sso login --no-browser --use-device-code",
+			captureViaHelper:  true,
 		}, true
 	default:
 		return harnessLogin{}, false
 	}
+}
+
+// loginEgress is the allowlist the login sandbox actually runs under: the row's
+// region-free hosts plus, for a region-scoped flow, the AWS SSO endpoints for
+// ssoRegion.
+//
+// Region-DERIVED, never wildcarded, because the proxy's only matcher
+// (classifyDomain, internal/egress/proxy/policy.go) understands exactly two
+// forms: a LEADING "*." suffix match, or an exact host. A mid-label pattern
+// like "oidc.*.amazonaws.com" is neither — it compiles to an exact hostname no
+// real request can ever equal, so it allows nothing (the shipped bug this
+// replaces: the login was denied on the very hosts it "pre-allowed"). The one
+// supported form that would cover every region is "*.amazonaws.com", which
+// opens every AWS service (S3, EC2, …) to the sandbox — far too wide for a
+// login box, so the region is resolved instead of widened.
+//
+// ssoRegion == "" (Bedrock region not configured yet) pre-allows nothing
+// regional: the two hosts the CLI dials then surface as deny_with_review
+// approvals the operator can grant from the login pane — recoverable and
+// honest, unlike the silent dead entries it replaces.
+func (hl harnessLogin) loginEgress(ssoRegion string) []string {
+	hosts := append([]string(nil), hl.egress...)
+	if hl.regionalSSOEgress && ssoRegion != "" {
+		// oidc.<r> + portal.sso.<r> — the same pair a Bedrock run needs.
+		hosts = append(hosts, ssoEgressHosts(ssoRegion)...)
+		// … plus the device-authorization verification page, which only the
+		// interactive login flow displays.
+		hosts = append(hosts, fmt.Sprintf("device.sso.%s.amazonaws.com", ssoRegion))
+	}
+	return hosts
 }
 
 // harnessLoginByProvider finds the login convention by provider id.
@@ -369,13 +405,18 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		RunnerTarget: s.cfg.RunnerTarget,
 		Interactive:  true,
 	}
+	// Region-scoped SSO endpoints are resolved from the operator's boot config —
+	// the SSO region if set, else the Bedrock region (same precedence
+	// resolveBedrockAuth uses). Empty means "not configured": the flow's regional
+	// hosts are then left to first-use approval rather than pre-allowed wide.
+	egress := hl.loginEgress(cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion))
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		// Default-deny, limited to the OAuth hosts. An off-policy host the login
 		// flow dials ESCALATES to the operator (visible in the login pane) rather
 		// than a silent hard-deny, so the empirical egress list can be tightened.
 		AllowAllEgress:   false,
-		AllowedDomains:   append([]string(nil), hl.egress...),
+		AllowedDomains:   egress,
 		FirstUseApproval: types.FirstUseDenyWithReview,
 		AutoStopAfterSec: int(harnessLoginIdleCap.Seconds()),
 	}
@@ -386,7 +427,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
 		runID.String(), "success", mustJSON(map[string]any{
-			"provider": hl.provider, "egress": hl.egress,
+			"provider": hl.provider, "egress": egress,
 		})))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
