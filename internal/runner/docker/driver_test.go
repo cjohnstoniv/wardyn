@@ -16,10 +16,51 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// unenforceableInfo is a host that reports it CANNOT enforce resource caps
+// (cgroup-v1-rootless-without-delegation shape): runc present, all cap booleans
+// false. Used to exercise CreateSandbox's fail-closed resource-cap probe.
+func unenforceableInfo() system.Info {
+	return system.Info{
+		Runtimes:      map[string]system.RuntimeWithStatus{"runc": {}},
+		CgroupVersion: "1",
+		CgroupDriver:  "cgroupfs",
+	}
+}
+
+// TestCreateSandbox_FailsClosedOnUnenforceableCaps: a host that can't enforce
+// CPU/memory/pids caps must refuse the run (an untrusted sandbox must not run
+// uncapped), creating nothing — unless the operator opts out on a trusted host.
+func TestCreateSandbox_FailsClosedOnUnenforceableCaps(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	f.info = unenforceableInfo()
+	d := newTestDriver(f)
+	_, err := d.CreateSandbox(context.Background(), testSpec())
+	if err == nil {
+		t.Fatal("CreateSandbox must fail closed when caps are unenforceable, got nil")
+	}
+	if !errors.Is(err, errCapsUnenforceable) {
+		t.Errorf("error must wrap errCapsUnenforceable, got %v", err)
+	}
+	if len(f.networks) != 0 {
+		t.Errorf("fail-closed must happen BEFORE creating the network, got %d networks", len(f.networks))
+	}
+
+	// Opt-out: WARDYN_ALLOW_UNENFORCEABLE_CAPS on a trusted host lets it proceed.
+	f2 := newFakeDocker()
+	f2.images["busybox:latest"] = true
+	f2.info = unenforceableInfo()
+	d2 := newWithClient(f2, Config{ProxyImage: "wardyn-proxy:dev", AllowUnenforceableCaps: true})
+	if _, err := d2.CreateSandbox(context.Background(), testSpec()); err != nil {
+		t.Errorf("AllowUnenforceableCaps must let the run proceed, got %v", err)
+	}
+}
 
 func testSpec() runner.SandboxSpec {
 	return runner.SandboxSpec{

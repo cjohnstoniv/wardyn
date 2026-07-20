@@ -161,6 +161,34 @@ func classToRuntime(class types.ConfinementClass, info system.Info) (runtimeName
 	}
 }
 
+// checkResourceCapsEnforceable fails closed when the Docker daemon reports it
+// cannot enforce the CPU / memory / pids limits resourcesFromSpec sets. On a
+// cgroup-v1 host under rootless Docker (or any host where the cpu/memory/pids
+// controllers aren't delegated to the runtime user), ContainerCreate SILENTLY
+// accepts the limits and the kernel ignores them — leaving an untrusted sandbox
+// effectively uncapped (a fork bomb or memory hog can then take out the host).
+// Docker's own system.Info booleans are authoritative here: they reflect the live
+// cgroup controller state the daemon probed at startup, so this needs no extra
+// syscalls. Mirrors classToRuntime's fail-closed contract (invariant 5): refuse
+// rather than run a workload without its guardrails.
+func checkResourceCapsEnforceable(info system.Info) error {
+	var missing []string
+	if !info.MemoryLimit {
+		missing = append(missing, "memory")
+	}
+	if !info.PidsLimit {
+		missing = append(missing, "pids (fork-bomb guard)")
+	}
+	if !info.CPUCfsQuota {
+		missing = append(missing, "cpu (CFS quota)")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the Docker daemon cannot enforce these resource limits: %s (cgroup v%s, driver %q) — an untrusted sandbox would run without them. On cgroup v2, delegate the controllers to the runtime user (systemd unit: Delegate=yes; rootless Docker: enable cgroup v2 delegation per the rootless docs). Set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 to override on a TRUSTED host: %w",
+		strings.Join(missing, ", "), info.CgroupVersion, info.CgroupDriver, errCapsUnenforceable)
+}
+
 // resolveRuntime is classToRuntime with operator overrides applied: it is the
 // substrate-selection seam for CC3 (and CC2). An override pins the EXACT runtime
 // family a class must use (still probed against `docker info` and FAIL CLOSED

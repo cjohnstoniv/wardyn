@@ -47,11 +47,14 @@ func init() {
 		// concurrent stacks don't share one network — it MUST match the compose
 		// network's name (deploy/compose: both derive from WARDYN_NS).
 		s, err := New(Config{
-			ProxyImage:          d.ProxyImage,
-			Record:              true,
-			RecordingMount:      recordingMount,
-			InternalNetwork:     os.Getenv("WARDYN_INTERNAL_NETWORK"),
-			ConfinementRuntimes: d.ConfinementRuntimes,
+			ProxyImage:      d.ProxyImage,
+			Record:          true,
+			RecordingMount:  recordingMount,
+			InternalNetwork: os.Getenv("WARDYN_INTERNAL_NETWORK"),
+			// Fail closed by default when the host can't enforce resource caps;
+			// WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 (trusted host) downgrades to a warn.
+			AllowUnenforceableCaps: os.Getenv("WARDYN_ALLOW_UNENFORCEABLE_CAPS") == "1",
+			ConfinementRuntimes:    d.ConfinementRuntimes,
 		})
 		if err != nil {
 			return nil, err

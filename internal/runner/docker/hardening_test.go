@@ -8,6 +8,7 @@ package docker
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
@@ -25,7 +26,18 @@ func infoWithRuntimes(names ...string) system.Info {
 	for _, n := range names {
 		rt[n] = system.RuntimeWithStatus{}
 	}
-	return system.Info{Runtimes: rt}
+	// Represent a normal host that CAN enforce resource caps (cgroup v2, delegated)
+	// so CreateSandbox in the driver tests isn't refused by the fail-closed cap
+	// probe — the unenforceable-cap case is exercised directly in
+	// TestCheckResourceCapsEnforceable.
+	return system.Info{
+		Runtimes:      rt,
+		MemoryLimit:   true,
+		PidsLimit:     true,
+		CPUCfsQuota:   true,
+		CgroupVersion: "2",
+		CgroupDriver:  "systemd",
+	}
 }
 
 func TestCapabilitiesFor_ClassMapping(t *testing.T) {
@@ -118,6 +130,41 @@ func TestClassToRuntime_FailsClosed(t *testing.T) {
 	// Unknown class fails closed too.
 	if _, _, err := classToRuntime(types.ConfinementClass("CC9"), infoWithRuntimes()); err == nil {
 		t.Fatal("unknown class must error, got nil")
+	}
+}
+
+func TestCheckResourceCapsEnforceable(t *testing.T) {
+	// A modern host with all controllers delegated: no error.
+	ok := system.Info{MemoryLimit: true, PidsLimit: true, CPUCfsQuota: true, CgroupVersion: "2", CgroupDriver: "systemd"}
+	if err := checkResourceCapsEnforceable(ok); err != nil {
+		t.Fatalf("all caps enforceable must pass, got %v", err)
+	}
+
+	// Each missing controller must fail closed, wrapping errCapsUnenforceable and
+	// naming the missing cap (the cgroup-v1-rootless-without-delegation case).
+	cases := []struct {
+		name string
+		info system.Info
+		want string
+	}{
+		{"no-memory", system.Info{PidsLimit: true, CPUCfsQuota: true, CgroupVersion: "1"}, "memory"},
+		{"no-pids", system.Info{MemoryLimit: true, CPUCfsQuota: true, CgroupVersion: "1"}, "pids"},
+		{"no-cpu", system.Info{MemoryLimit: true, PidsLimit: true, CgroupVersion: "1"}, "cpu"},
+		{"none", system.Info{CgroupVersion: "1", CgroupDriver: "cgroupfs"}, "memory"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkResourceCapsEnforceable(tt.info)
+			if err == nil {
+				t.Fatalf("unenforceable caps must error, got nil")
+			}
+			if !errors.Is(err, errCapsUnenforceable) {
+				t.Errorf("error must wrap errCapsUnenforceable, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error must name the missing cap %q, got %v", tt.want, err)
+			}
+		})
 	}
 }
 

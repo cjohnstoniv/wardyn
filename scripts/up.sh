@@ -216,6 +216,16 @@ cmd_doctor() {
     case "${_runtimes}" in *'"runsc"'*) _classes="${_classes}, CC2 (gVisor/runsc)" ;; esac
     case "${_runtimes}" in *'"kata'*)   _classes="${_classes}, CC3 (kata)" ;; esac
     report ok "confinement classes available: ${_classes}"
+
+    # Resource-cap enforceability: the daemon's own report of whether CPU/memory/
+    # pids limits will actually bind. On a cgroup-v1 rootless host without
+    # delegation these come back false and a governed run REFUSES (fail closed) so
+    # an untrusted sandbox never runs uncapped — surface it here before that.
+    _caps=$(docker info --format '{{.MemoryLimit}}/{{.PidsLimit}}/{{.CPUCfsQuota}}' 2>/dev/null || echo '?/?/?')
+    case "${_caps}" in
+      true/true/true) report ok "resource caps enforceable (memory + pids + cpu; cgroup v$(docker info --format '{{.CgroupVersion}}' 2>/dev/null || echo '?'))." ;;
+      *) report warn "the docker daemon reports it CANNOT enforce some resource limits (memory/pids/cpu = ${_caps}). A governed run will REFUSE unless WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 — delegate the cgroup v2 controllers to the runtime user (systemd: Delegate=yes; rootless: enable cgroup v2 delegation)." ;;
+    esac
   fi
 
   _port="${WARDYN_UP_PORT:-8080}"

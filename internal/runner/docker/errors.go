@@ -17,6 +17,14 @@ var errRuntimeUnavailable = errors.New("required confinement runtime unavailable
 // egress sidecar but no proxy image was configured on the driver.
 var errProxyImageUnset = errors.New("wardyn-proxy image not configured")
 
+// errCapsUnenforceable is the fail-closed sentinel for resource-cap gating: the
+// Docker daemon reports it cannot enforce the CPU/memory/pids limits a sandbox
+// needs (a cgroup controller is missing or not delegated — classically cgroup v1
+// under rootless Docker). Wrapped (%w) so callers can errors.Is on it and refuse
+// the run rather than launch an untrusted workload effectively uncapped. Override
+// on a trusted host with WARDYN_ALLOW_UNENFORCEABLE_CAPS=1.
+var errCapsUnenforceable = errors.New("resource caps not enforceable on this host")
+
 // errTeardownUnresolved is returned when teardown removed the agent container but
 // could not resolve its run id (neither the run-id label nor the deterministic
 // agent container name), so the sibling proxy sidecar (routable network, run

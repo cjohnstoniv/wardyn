@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +68,12 @@ type Config struct {
 	// (never downgrades). Non-OCI VMM substrates (SmolVM/Firecracker) are a future
 	// Runner driver, not a runtime name here.
 	ConfinementRuntimes map[types.ConfinementClass]string
+	// AllowUnenforceableCaps downgrades the fail-closed resource-cap probe to a
+	// warning: when the Docker daemon reports it cannot enforce CPU/memory/pids
+	// limits (cgroup controller missing / not delegated), CreateSandbox proceeds
+	// instead of refusing. OFF by default — an untrusted sandbox must not run
+	// uncapped. Set only on a trusted host (WARDYN_ALLOW_UNENFORCEABLE_CAPS=1).
+	AllowUnenforceableCaps bool
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -279,6 +286,20 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+
+	// Fail closed if the host cannot actually enforce resource caps (a cgroup
+	// controller missing / not delegated) — an untrusted sandbox must not run
+	// effectively uncapped. Authoritative from `docker info`; opt out on a trusted
+	// host with WARDYN_ALLOW_UNENFORCEABLE_CAPS=1.
+	if capErr := checkResourceCapsEnforceable(info); capErr != nil {
+		if d.cfg.AllowUnenforceableCaps {
+			slog.Warn("wardynd: resource caps not enforceable on this host — proceeding because WARDYN_ALLOW_UNENFORCEABLE_CAPS=1; the sandbox may run without CPU/memory/pids limits",
+				slog.String("detail", capErr.Error()))
+		} else {
+			return runner.Sandbox{}, capErr
+		}
+	}
+
 	enforced := spec.ConfinementClass
 	if enforced == "" {
 		// Class-less floor for direct driver callers only: every wardynd
