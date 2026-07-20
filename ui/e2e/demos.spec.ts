@@ -37,7 +37,15 @@ test.describe("Demo sandboxes", () => {
     // Browsing works, but no barrier is ready → every Start is closed, with a hint.
     await expect(page.getByTestId("demos-not-ready")).toBeVisible();
     const starts = page.getByRole("button", { name: /start demo/i });
-    await expect(starts).toHaveCount(4);
-    await expect(starts.first()).toBeDisabled();
+    // The four keyless demos always render; the harness-aware fifth
+    // ("agent-in-the-box", needsModel) appears only once a model is connected
+    // (demo-screen filters on llmReady), so the visible count tracks model
+    // readiness. Pin the invariant this test exists for instead — on a
+    // runner-less host EVERY Start is closed, not just the first.
+    const n = await starts.count();
+    expect(n).toBeGreaterThanOrEqual(DEMO_TITLES.length);
+    for (let i = 0; i < n; i++) {
+      await expect(starts.nth(i)).toBeDisabled();
+    }
   });
 });

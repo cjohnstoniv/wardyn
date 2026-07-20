@@ -36,14 +36,27 @@ test.describe("Getting Started funnel", () => {
     const main = page.getByRole("main");
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
 
+    // STEP_ORDER (steps.ts PHASES): essentials [environment, host_proxy,
+    // artifact_repo, provider] → demos(4) → your work [scm_provider, credentials,
+    // workspaces] → finish [review, launch]. The harness-first reorder moved the
+    // corporate-network steps AHEAD of the model step (egress must be settled
+    // before connecting a model or running the demos) and put credentials before
+    // workspaces (onboarding a private repo needs the git credential first).
     // 1 environment
     await expect(main.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
-    // 2 provider
+    // 2-3 corporate network: host_proxy → artifact_repo (now inside Essentials)
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /corporate host proxy/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(
+      main.getByRole("heading", { name: /artifact registry redirection/i }),
+    ).toBeVisible();
+    // 4 provider
     await nextBtn.click();
     await expect(
       main.getByRole("heading", { name: /connect a model or agent harness/i }),
     ).toBeVisible();
-    // 3-6 demos: the four demo sub-steps (heading = the demo title)
+    // 5-8 demos: the four demo sub-steps (heading = the demo title)
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /the sealed box/i })).toBeVisible();
     await nextBtn.click();
@@ -52,20 +65,13 @@ test.describe("Getting Started funnel", () => {
     await expect(main.getByRole("heading", { name: /held at the door/i })).toBeVisible();
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /lines that can't be crossed/i })).toBeVisible();
-    // 7-8 corporate network: host_proxy → artifact_repo
-    await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /corporate host proxy/i })).toBeVisible();
-    await nextBtn.click();
-    await expect(
-      main.getByRole("heading", { name: /artifact registry redirection/i }),
-    ).toBeVisible();
-    // 9-11 your work: scm_provider → workspaces → credentials
+    // 9-11 your work: scm_provider → credentials → workspaces
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /source control provider/i })).toBeVisible();
     await nextBtn.click();
-    await expect(main.getByRole("heading", { name: /onboard a workspace/i })).toBeVisible();
-    await nextBtn.click();
     await expect(main.getByRole("heading", { name: /repo & cloud credentials/i })).toBeVisible();
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /onboard a workspace/i })).toBeVisible();
     // 12-13 finish: review → launch
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /review readiness/i })).toBeVisible();

@@ -52,7 +52,14 @@ async function bootWithStoredToken(page: Page, token: string): Promise<void> {
 }
 
 async function readToken(page: Page): Promise<string | null> {
-  return page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY);
+  // Mirror getToken's `ssGet(key) ?? lsGet(key)` resolution (lib/api/core.ts): a
+  // default sign-in ("Remember on this device" off) now persists to sessionStorage
+  // and clears localStorage, so a localStorage-only read would miss it. The
+  // returning-operator flows seed localStorage directly, which the fallback covers.
+  return page.evaluate(
+    (key) => sessionStorage.getItem(key) ?? localStorage.getItem(key),
+    TOKEN_KEY,
+  );
 }
 
 // The sign-in gate, identified by its "Admin token" field + "Sign in" submit.

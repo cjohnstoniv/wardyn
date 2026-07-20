@@ -231,9 +231,12 @@ test.describe("AI Run Composer — Describe your task", () => {
     await compose(page, dlg, "Run something that needs the weakest isolation tier.");
 
     // Overall HIGH; the barrier renders as "Fence" — never a CCx wire code in
-    // any VISIBLE text (collapsed raw-JSON is excluded from innerText).
+    // any VISIBLE text (collapsed raw-JSON is excluded from innerText). Match the
+    // barrier CHIP by exact text: the model-rationale prose also contains the word
+    // "Fence" but sits in a collapsed <details>, so a loose substring .first()
+    // would resolve to that hidden node instead of the visible chip.
     await expect(dlg.getByText("High", { exact: true }).first()).toBeVisible();
-    await expect(dlg.getByText("Fence").first()).toBeVisible();
+    await expect(dlg.getByText("Fence", { exact: true }).first()).toBeVisible();
     expect(await dlg.innerText()).not.toMatch(/\bCC[123]\b/);
     await expect(page.locator('[data-testid="high-risk-section"]')).toBeVisible();
     await expect(dlg.getByText(/High-risk configuration/)).toBeVisible();

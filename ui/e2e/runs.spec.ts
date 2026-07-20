@@ -70,7 +70,12 @@ async function switchToTable(page: Page): Promise<void> {
 
 // A table body row scoped by its task text (the header row has no fixture text).
 function runRow(page: Page, task: string): Locator {
-  return page.getByRole("row").filter({ hasText: task });
+  // A table data row is a clickable <TableRow role="button"> (runs.tsx), not a
+  // role="row" — only the header keeps the row role. Match the button whose
+  // subtree carries the task text, scoped to the table so board-view cards
+  // (also role="button") never match. The nested "Run actions" button doesn't
+  // contain the task text, so the filter selects exactly the row.
+  return page.getByRole("table").getByRole("button").filter({ hasText: task });
 }
 
 test.describe("Runs board (default view)", () => {
@@ -299,7 +304,10 @@ test.describe("Killing an active run", () => {
     // The Refresh button re-fetches the list (aria-label "Refresh now").
     await page.getByRole("button", { name: "Refresh now" }).click();
     await switchToTable(page);
-    // Still nine runs total (a kill changes a state, not the count).
-    await expect(page.getByRole("row").filter({ hasText: /e2e fixture \d/ })).toHaveCount(9);
+    // Still nine runs total (a kill changes a state, not the count). Data rows
+    // are role="button" (see runRow), so count those, not role="row".
+    await expect(
+      page.getByRole("table").getByRole("button").filter({ hasText: /e2e fixture \d/ }),
+    ).toHaveCount(9);
   });
 });

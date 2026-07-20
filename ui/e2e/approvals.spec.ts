@@ -164,10 +164,11 @@ test.describe("Approvals screen", () => {
 
   test("credential pending card carries the honest broker blast copy (mint is authorized, not immediate)", async ({ page }) => {
     // The credential card's blast banner uses the broker line verbatim — the
-    // agent works through a short-lived scoped credential; the stored key stays
-    // in Wardyn — and never claims a token is minted on approval.
+    // run works through a short-lived scoped credential; the stored key stays
+    // in Wardyn — and never claims a token is minted on approval. ("The run",
+    // not "The agent", since the platform-first reframe — see wardyn/copy.ts.)
     await expect(
-      page.getByText(/The agent works through a short-lived, scoped credential/i),
+      page.getByText(/The run works through a short-lived, scoped credential/i),
     ).toBeVisible();
     await expect(
       page.getByText(/The broker mints a short-lived, scoped credential bound to this run's identity/i),

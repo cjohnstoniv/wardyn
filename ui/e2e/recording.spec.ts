@@ -18,7 +18,11 @@ import type { Page } from "@playwright/test";
 //
 // Recording-fetch URLs match /api/v1/runs/{id}/recording/{id}.
 const RECORDING_GLOB = "**/api/v1/runs/*/recording/*";
-const RUNS_LIST_GLOB = "**/api/v1/runs";
+// listRuns() requests /api/v1/runs?limit=1000 (withLimit in lib/api/core.ts), and
+// Playwright anchors a "**/api/v1/runs" glob with a trailing `$`, so it never
+// matches the query-string form. A RegExp matches the list endpoint with or without
+// the ?limit= query, while still not matching /api/v1/runs/{id}/... sub-resources.
+const RUNS_LIST_GLOB = /\/api\/v1\/runs(\?|$)/;
 
 // A minimal, valid asciicast v2 document (header line + one output event).
 const CAST =

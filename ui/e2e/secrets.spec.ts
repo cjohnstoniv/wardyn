@@ -282,9 +282,14 @@ test.describe("Secrets screen", () => {
 
     // Intercept the DELETE for THIS secret and return a 500 so confirmDelete()
     // hits its catch branch.
+    // The response BODY is what the toast description surfaces: the fetch wrapper
+    // sets HttpError.message to the server's error detail (lib/api/core.ts), and
+    // DeleteConfirmDialog toasts getErrorMessage(e) as the description — the raw
+    // status is never formatted into the message. So assert on the detail body.
+    const serverDetail = "secret store unavailable";
     await page.route(`**/api/v1/secrets/${encodeURIComponent(victim)}`, async (route) => {
       if (route.request().method() === "DELETE") {
-        await route.fulfill({ status: 500, contentType: "text/plain", body: "boom" });
+        await route.fulfill({ status: 500, contentType: "text/plain", body: serverDetail });
       } else {
         await route.continue();
       }
@@ -297,13 +302,13 @@ test.describe("Secrets screen", () => {
     await confirm.getByRole("button", { name: "Delete secret" }).click();
 
     // The failure is surfaced as a toast.error (NOT silent). The toast title
-    // names the secret (the description carries the server's "HTTP 500" detail),
-    // so we key on the title text + the victim name to pin the title node.
+    // names the secret, so we key on the title text + the victim name to pin the
+    // title node.
     await expect(
       page.getByText(new RegExp(`Failed to delete secret .*${victim}`))
     ).toBeVisible();
-    // The toast also surfaces the underlying server error as its description.
-    await expect(page.getByText(/HTTP 500/)).toBeVisible();
+    // The toast also surfaces the underlying server error detail as its description.
+    await expect(page.getByText(serverDetail)).toBeVisible();
     // ... the confirm dialog stays open so the operator can retry ...
     await expect(confirm).toBeVisible();
 

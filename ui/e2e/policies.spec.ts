@@ -78,7 +78,9 @@ async function createPolicyViaUi(page: Page, name: string, specJson = VALID_SPEC
 
 // A table row scoped by the policy name (Name is the first cell).
 function policyRow(page: Page, name: string) {
-  return page.getByRole("row").filter({ hasText: name });
+  // Data rows are clickable <TableRow role="button"> (policies.tsx), not
+  // role="row"; match the button carrying the name, scoped to the table.
+  return page.getByRole("table").getByRole("button").filter({ hasText: name });
 }
 
 // Open the row's action dropdown and click a menu item directly.
