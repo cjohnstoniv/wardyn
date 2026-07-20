@@ -209,7 +209,7 @@ func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
 
-	future := time.Now().Add(100 * 24 * time.Hour) // ~100 days ahead
+	future := time.Now().Add(100 * 24 * time.Hour)    // ~100 days ahead
 	hb := groundtruth.HeartbeatEventWithDropped(0, 0) // kernel.* + NULL run_id => no DB needed
 	hb.Time = future
 	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
@@ -292,7 +292,7 @@ func healthzEbpf(t *testing.T, h *harness) map[string]any {
 	return gt
 }
 
-// TestHealthzEbpfIdleWhenNoEventsObserved is the red-first regression for 
+// TestHealthzEbpfIdleWhenNoEventsObserved is the red-first regression for
 // a FRESH heartbeat proves the sidecar process is alive and reaching the control
 // plane, but if it has mapped zero kernel events (Tetragon dead / wrong export
 // path / no TracingPolicy) the stream is BLIND. /healthz must report "idle", not
