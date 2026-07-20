@@ -51,7 +51,12 @@ guidance rather than failing confusingly partway through.
 > GitHub Enterprise / Azure DevOps (PAT or SSH-over-443 through the credential
 > broker); **AWS Bedrock** (below) gives Claude access with no direct Anthropic
 > egress, billed through AWS; and `make setup`'s build retries with
-> `GOTOOLCHAIN=local` when a proxy blocks the public Go module proxy.
+> `GOTOOLCHAIN=local` when a proxy blocks the public Go module proxy. If your
+> registry can't serve `pnpm` (a strict allowlist mirror), `make setup` builds
+> the web UI on your host and retries automatically — no env var to discover.
+> The **Host proxy** step detects on the *host* even when the control plane runs
+> in a container, and says so plainly when it can't look rather than reporting
+> "nothing configured."
 
 A couple of config facts before you customize:
 

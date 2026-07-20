@@ -375,9 +375,13 @@ export function HostProxyStep({
 
   return (
     <div className="space-y-5">
+      {/* Stays true whether or not anything was detected — the check row below
+          says what was actually found (and, in a container, what couldn't be
+          looked at). Do not reintroduce a "Wardyn detected these settings" lede:
+          it rendered unconditionally, above an empty result. */}
       <p className="text-sm leading-relaxed text-muted-foreground">
-        Wardyn detected these host proxy settings; the sandbox reaches the internet only through
-        wardyn-proxy, which can chain through your corporate proxy.
+        The sandbox reaches the internet only through wardyn-proxy, which can chain through your
+        corporate proxy.
       </p>
 
       {check && (

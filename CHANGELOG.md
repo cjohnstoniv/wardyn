@@ -6,6 +6,68 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-20
+
+A corporate-network onboarding fix release, from two adopter field reports (kept in
+[docs/adoption/](docs/adoption/)). Both are onboarding-trust bugs on the containerized
+default path: one hard-blocked `make setup`, the other made the Getting-Started
+checklist assert something it never actually checked. No interface changes.
+
+### Fixed
+
+- **`make setup` no longer dies on a registry that can't serve `pnpm`.** Behind a
+  corporate allowlist mirror that hasn't onboarded pnpm, the image's default
+  `ui-build` stage failed with a raw `npm error code E404` (or 403) and the stack
+  never came up — the one command the docs tell a new user to run did not work out of
+  the box. `scripts/up.sh` now catches a failed build and retries with the UI built on
+  your host (`make ui` + `WARDYN_UI_STAGE=ui-prebuilt`), explaining each step. The
+  escape hatch was already there; it just required knowing an env var the failure
+  never named. An explicit `WARDYN_UI_STAGE` is still honored and disables the
+  fallback, and the OSS path with a working registry is unchanged — the retry branch
+  is never entered. Chose retry over probing the registry first: the 404 is on the
+  *tarball* path, so a mirror that proxies metadata answers a probe with 200 and the
+  build dies anyway.
+
+- **Staging a corporate CA no longer breaks the image build.** The `ui-build` stage
+  ran `update-ca-certificates`, but its `node:*-bookworm-slim` base purges the
+  `ca-certificates` package in its own build, so the binary is absent — meaning any
+  operator who followed `make doctor`'s own advice and staged `deploy/images/corp-ca.pem`
+  hit a hard `exit 127`, every time, before the pnpm step even ran. That stage now
+  relies on `NODE_EXTRA_CA_CERTS` alone (npm/pnpm are its only TLS clients, and they
+  read it). `deploy/images/README.md`'s snippet — which is what produced the bug —
+  was corrected so it stops reproducing it.
+
+- **The Host proxy step tells the truth on the containerized stack.** It reported
+  "No host-side proxy configuration detected" on hosts unambiguously behind a
+  corporate proxy, in the same session whose `HTTP_PROXY` Wardyn's own image build had
+  just consumed. `DetectHostProxy()` runs *in* the wardynd process, and in a distroless
+  container every tier is structurally blind: the env tier sees only the container's
+  env (compose forwarded the proxy as a **build arg** only), `HOME` is unset so no
+  shell profile or tool config is reachable, there is no `git` binary, and the OS/PAC
+  tier dispatches on the *process's* `GOOS`. `make setup` now runs the same detector
+  **on the host** (new `wardyn setup detect-proxy`, from a host-native binary the image
+  cross-compiles) and seeds the result in, recovering the macOS `scutil`/PAC,
+  Windows-registry, shell-profile, git and tool-config tiers that are inherently
+  host-side. It re-runs on every `up`, so it cannot go stale across a network change.
+  Deliberately **not** done by forwarding `HTTP_PROXY` into wardynd's runtime
+  environment: Go's `net/http` honors those names process-wide, which would silently
+  reroute wardynd's own OIDC discovery, audit webhooks, GitHub App minting and AWS
+  credential chain through the corporate proxy — a live-traffic change to fix a
+  diagnostic. A run's egress is unaffected either way (the sandbox env is built from
+  scratch and always points at wardyn-proxy).
+
+- **An honest empty result when detection genuinely can't look.** When wardynd is
+  containerized and no host-side reading was seeded, the step no longer asserts a
+  false negative: it says detection ran inside the container, names what it therefore
+  could not read, and carries a next step. The step's static lede ("Wardyn detected
+  these host proxy settings…"), which rendered unconditionally *above* an empty
+  result, is gone. Same honesty rule the Vault/KVM copy already followed.
+
+- **A set-but-empty `HTTP_PROXY` no longer counts as a detected proxy.** `os.LookupEnv`
+  reports ok for `export HTTP_PROXY=`, and every consumer downstream tested presence
+  only — so an empty value rendered a blank-valued "detected" row. Empty and
+  whitespace-only values are now filtered, in the one place all tiers route through.
+
 ## [0.4.0] — 2026-07-19
 
 Wardyn remains **pre-alpha**: interfaces are not stable and this release changes

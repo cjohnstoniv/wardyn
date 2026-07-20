@@ -40,6 +40,9 @@ var envDocAllow = map[string]bool{
 var envDocShellOnly = map[string]bool{
 	"WARDYN_NS": true, "WARDYN_UP_PORT": true, "WARDYN_PG_PORT": true, "WARDYN_DEX_PORT": true,
 	"WARDYN_CI_PROJECT": true,
+	// UI build stage + its cross-compile targets: read by scripts/up.sh and
+	// interpolated by docker-compose.yaml into build args, never by Go.
+	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

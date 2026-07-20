@@ -28,6 +28,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/url"
@@ -144,11 +145,55 @@ type HostProxyDetection struct {
 	HasCredentials bool `json:"has_credentials"`
 }
 
+// hostProxySeedEnv carries a base64'd HostProxyDetection captured by running
+// this same detector ON THE HOST (`wardyn setup detect-proxy`, seeded into the
+// compose env by scripts/up.sh). A containerized wardynd is structurally blind
+// to every host-side tier — the OS/PAC tier dispatches on the *process's* GOOS,
+// git needs a binary the distroless image lacks, and HOME is unset so no shell
+// profile or tool config is reachable — so the host reading is the only truthful
+// one on the container path. base64 because compose interpolates `$` inside .env
+// values; the payload is already credential-masked by newProxySetting.
+const hostProxySeedEnv = "WARDYN_HOST_PROXY_B64"
+
+// HostProxySeeded reports whether a host-side detection was seeded in, so the
+// setup check can tell "ran blind in a container" apart from "ran on the host's
+// behalf and genuinely found nothing".
+func HostProxySeeded() bool {
+	_, ok := decodeHostProxySeed()
+	return ok
+}
+
+// decodeHostProxySeed parses the seed, tolerating absence and any malformed
+// value (best-effort, exactly like every other detector here: a bad seed
+// degrades to live in-process detection, it never errors the wizard).
+func decodeHostProxySeed() (HostProxyDetection, bool) {
+	raw := strings.TrimSpace(os.Getenv(hostProxySeedEnv))
+	if raw == "" {
+		return HostProxyDetection{}, false
+	}
+	blob, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return HostProxyDetection{}, false
+	}
+	var det HostProxyDetection
+	if err := json.Unmarshal(blob, &det); err != nil {
+		return HostProxyDetection{}, false
+	}
+	return det, true
+}
+
 // DetectHostProxy runs every detector in the R4 catalog and merges the
 // generic HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY signal by precedence
 // (env > shell profile > OS). It never fails: every detector tolerates the
 // absence of its mechanism (missing file, missing binary, non-zero exit).
+//
+// A host-side seed (see hostProxySeedEnv) wins outright: it was produced by this
+// same code running natively, where the tiers this process cannot reach are all
+// live.
 func DetectHostProxy() HostProxyDetection {
+	if det, ok := decodeHostProxySeed(); ok {
+		return det
+	}
 	home, _ := os.UserHomeDir()
 
 	envCandidates, mismatches := detectEnvProxyCandidates()
@@ -283,10 +328,18 @@ var envProxyKeys = []struct{ category, upper, lower string }{
 // detectEnvProxyCandidates reads the env-var mechanism: lowercase preferred
 // (httpoxy hygiene) when both cases are set; mismatches records any pair whose
 // values disagree so the step can warn about it.
+//
+// A set-but-EMPTY var does not count as a detected proxy: os.LookupEnv reports
+// ok for `export HTTP_PROXY=`, and every consumer downstream tests presence only
+// (winningSetting -> newProxySetting is never nil; the API check tests != nil),
+// so counting it would render a blank-valued "detected" row. Same filter the git
+// tier already applies in gitConfigGet.
 func detectEnvProxyCandidates() (candidates []proxyCandidate, mismatches []string) {
 	for _, k := range envProxyKeys {
 		upperVal, upperOK := os.LookupEnv(k.upper)
 		lowerVal, lowerOK := os.LookupEnv(k.lower)
+		upperOK = upperOK && strings.TrimSpace(upperVal) != ""
+		lowerOK = lowerOK && strings.TrimSpace(lowerVal) != ""
 		switch {
 		case lowerOK && upperOK:
 			if upperVal != lowerVal {

@@ -262,12 +262,18 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 ```
 
-On **Alpine** stages `update-ca-certificates` needs the package first:
-`RUN apk add --no-cache ca-certificates && if [ -f ... ]; then ...; fi`. On a
-**distroless** final stage there is no shell — copy the already-updated bundle:
+`update-ca-certificates` needs the package installed first on **Alpine**
+(`RUN apk add --no-cache ca-certificates && if [ -f ... ]; then ...; fi`) **and on
+`-slim` Debian bases** — `node:*-bookworm-slim` `apt-get purge --auto-remove`s
+`ca-certificates` in its own build, so the binary is absent and the snippet above
+exits 127. Check before you copy it: `docker run --rm --entrypoint sh <base> -c
+'command -v update-ca-certificates'`. On a **distroless** final stage there is no
+shell — copy the already-updated bundle:
 `COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt`.
-For Node stages that also need the CA at runtime, add
-`ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem`.
+
+For **Node** stages, prefer `ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem` on its
+own and skip the system-trust `RUN` entirely: npm/pnpm read that var, and it needs
+no package. That is what `deploy/compose/Dockerfile.wardynd`'s `ui-build` does.
 
 **2. Go builds:** add `ENV GOTOOLCHAIN=local` so the pinned-toolchain self-upgrade
 fetch (blocked behind a MITM proxy) is skipped; the corp CA above lets

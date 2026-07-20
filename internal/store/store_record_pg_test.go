@@ -24,7 +24,10 @@ func TestPG_RecordResultUpsertAndStatusCAS(t *testing.T) {
 
 	now := time.Now().UTC()
 	ws, err := store.NewPG(pool).CreateWorkspace(ctx, types.Workspace{
-		ID: uuid.New(), Name: "rec-pg", Kind: types.WorkspaceKindLocalDir,
+		// Name is UNIQUE: a fixed literal makes the test pass once and fail on
+		// every later run against the same database (and `make release-check`
+		// runs this suite twice — unit lane, then docker lane).
+		ID: uuid.New(), Name: "rec-pg-" + uuid.NewString(), Kind: types.WorkspaceKindLocalDir,
 		Source: "/tmp/rec-pg-" + uuid.NewString(), Status: types.WorkspaceScanned,
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -85,7 +88,8 @@ func TestPG_ClaimAndClearActiveRunCAS(t *testing.T) {
 
 	now := time.Now().UTC()
 	ws, err := store.NewPG(pool).CreateWorkspace(ctx, types.Workspace{
-		ID: uuid.New(), Name: "claim-pg", Kind: types.WorkspaceKindLocalDir,
+		// Unique per run — see the note in the sibling test above.
+		ID: uuid.New(), Name: "claim-pg-" + uuid.NewString(), Kind: types.WorkspaceKindLocalDir,
 		Source: "/tmp/claim-pg-" + uuid.NewString(), Status: types.WorkspaceScanned,
 		CreatedAt: now, UpdatedAt: now,
 	})

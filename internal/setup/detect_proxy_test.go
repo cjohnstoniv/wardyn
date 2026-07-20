@@ -4,6 +4,8 @@
 package setup
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"os"
 	"os/exec"
@@ -103,6 +105,76 @@ func TestDetectEnvProxyCandidates_LowercasePreferredAndMismatch(t *testing.T) {
 	for _, c := range candidates {
 		if c.source != ProxySourceEnv {
 			t.Errorf("candidate %+v source = %q, want %q", c, c.source, ProxySourceEnv)
+		}
+	}
+}
+
+// A set-but-EMPTY proxy var is NOT a detected proxy: every consumer downstream
+// tests presence only, so counting it would render a blank-valued "detected" row
+// and turn the corp-onboarding false negative into a false positive.
+func TestDetectEnvProxyCandidates_EmptyValueIsNotDetected(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("https_proxy", "   ")
+
+	if candidates, _ := detectEnvProxyCandidates(); len(candidates) != 0 {
+		t.Fatalf("candidates = %+v, want none (empty/whitespace values are not a proxy)", candidates)
+	}
+	// End to end: the aggregate must leave the fields nil, which is what the
+	// setup check tests.
+	t.Setenv(hostProxySeedEnv, "")
+	os.Unsetenv(hostProxySeedEnv)
+	if det := DetectHostProxy(); det.HTTPProxy != nil || det.HTTPSProxy != nil {
+		t.Errorf("DetectHostProxy() = %+v, want no http/https setting", det)
+	}
+}
+
+// The host-side seed wins outright: it was produced by this same detector running
+// natively, where the tiers a containerized wardynd cannot reach are all live.
+func TestDetectHostProxy_HostSeedRoundTrip(t *testing.T) {
+	clearProxyEnv(t)
+	seeded := HostProxyDetection{
+		HTTPProxy: &HostProxySetting{
+			Value: "http://corp.proxy:8080", Source: ProxySourceEnv, Detail: "HTTP_PROXY",
+		},
+		PAC: &HostProxyPAC{
+			URL: "http://127.0.0.1:9000/proxy.pac", Source: ProxySourceOS,
+			Detail: "macOS scutil --proxy ProxyAutoConfigURLString",
+		},
+	}
+	blob, err := json.Marshal(seeded)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	t.Setenv(hostProxySeedEnv, base64.StdEncoding.EncodeToString(blob))
+
+	if !HostProxySeeded() {
+		t.Fatal("HostProxySeeded() = false, want true")
+	}
+	got := DetectHostProxy()
+	if got.HTTPProxy == nil || got.HTTPProxy.Value != "http://corp.proxy:8080" {
+		t.Errorf("HTTPProxy = %+v, want the seeded value", got.HTTPProxy)
+	}
+	// The PAC tier is unreachable in-container (GOOS is the container's linux),
+	// so recovering it is the whole point of seeding.
+	if got.PAC == nil || got.PAC.URL != "http://127.0.0.1:9000/proxy.pac" {
+		t.Errorf("PAC = %+v, want the seeded PAC URL", got.PAC)
+	}
+}
+
+// A malformed seed must degrade to live detection, never error the wizard.
+func TestDetectHostProxy_MalformedSeedFallsBackToLive(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", "http://live.proxy:8080")
+
+	for _, bad := range []string{"not-base64!!", base64.StdEncoding.EncodeToString([]byte("{not json"))} {
+		t.Setenv(hostProxySeedEnv, bad)
+		if HostProxySeeded() {
+			t.Errorf("HostProxySeeded() = true for %q, want false", bad)
+		}
+		got := DetectHostProxy()
+		if got.HTTPProxy == nil || got.HTTPProxy.Value != "http://live.proxy:8080" {
+			t.Errorf("seed %q: HTTPProxy = %+v, want the LIVE value", bad, got.HTTPProxy)
 		}
 	}
 }

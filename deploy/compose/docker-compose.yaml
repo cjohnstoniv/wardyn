@@ -102,6 +102,11 @@ services:
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
+        # Target for the host-native `wardyn` the image also builds (see
+        # Dockerfile.wardynd) — scripts/up.sh sets these from the host's uname so
+        # it can extract and run that binary for host-side proxy detection.
+        HOST_GOOS: "${WARDYN_HOST_GOOS:-linux}"
+        HOST_GOARCH: "${WARDYN_HOST_GOARCH:-amd64}"
     image: wardyn/wardynd:local
     container_name: ${WARDYN_NS:-wardyn}-api
     # The docker runner needs to reach the host daemon to create sandboxes.
@@ -115,6 +120,15 @@ services:
       WARDYN_GROUNDTRUTH_TOKEN_FILE: "/var/run/wardyn-gt/token"
       WARDYN_PG_DSN: "postgres://wardyn:wardyn-dev@postgres:5432/wardyn?sslmode=disable"
       WARDYN_LISTEN: ":8080"
+      # Host-side proxy detection, captured by scripts/up.sh (base64 JSON, already
+      # credential-masked). DIAGNOSTICS ONLY. Deliberately NOT named HTTP_PROXY/
+      # HTTPS_PROXY: Go's net/http honors those process-wide, so the standard names
+      # here would silently reroute wardynd's OWN outbound calls — OIDC discovery to
+      # dex (Go exempts only loopback, never a bare service name), the audit webhook
+      # sink, GitHub App token minting, the AWS credential chain — through the corp
+      # proxy. A run's egress is unaffected either way: the sandbox env is built from
+      # scratch in runs_dispatch.go and always points at wardyn-proxy.
+      WARDYN_HOST_PROXY_B64: "${WARDYN_HOST_PROXY_B64:-}"
       # The control-plane bridge the docker runner connects the proxy sidecar to.
       # MUST equal the `wardyn` network's name (both derive from WARDYN_NS) — a
       # shared multi-job host sets WARDYN_NS per project so concurrent stacks each

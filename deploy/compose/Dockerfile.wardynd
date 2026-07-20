@@ -23,16 +23,17 @@ ARG UI_STAGE=ui-build
 FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui-build
 WORKDIR /ui
 
-# Corporate build support (no-ops on an OSS build): install the optional corp CA
-# into the system + node trust so `pnpm install` can verify registry TLS through a
-# corp MITM proxy. The README.md companion makes the COPY succeed when the
-# corp-ca.pem* glob matches nothing.
+# Corporate build support (no-ops on an OSS build): stage the optional corp CA so
+# `pnpm install` can verify registry TLS through a corp MITM proxy. The README.md
+# companion makes the COPY succeed when the corp-ca.pem* glob matches nothing.
+#
+# NODE_EXTRA_CA_CERTS is the ONLY trust wiring here, deliberately: this base
+# `apt-get purge --auto-remove`s ca-certificates in its own build, so it ships no
+# update-ca-certificates — a system-trust install here exits 127 and hard-breaks
+# the build for every operator who stages a corp CA. npm/pnpm are the only TLS
+# clients in this stage and they read this var. If a future step shells out to
+# curl/apt over TLS, add `apt-get install ca-certificates` INSIDE the guard first.
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
-RUN if [ -f /corp-ca/corp-ca.pem ]; then \
-        mkdir -p /usr/local/share/ca-certificates && \
-        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
-        update-ca-certificates; \
-    fi
 ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 
 # Optional alternate npm registry / proxy for the pnpm install (build-only ARGs,
@@ -104,6 +105,16 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -tags docker -o /out/wardynd ./cmd/wardynd \
  && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn
 
+# A HOST-NATIVE `wardyn` for scripts/up.sh's host-side proxy detection. The
+# containerized wardynd cannot see the host's shell profiles, git/tool configs or
+# OS/PAC proxy settings — the OS tier dispatches on the *process's* GOOS — so
+# up.sh extracts this binary, runs `wardyn setup detect-proxy` on the host, and
+# seeds the result in. Pure Go (CGO off) cross-compiles for free; the
+# linux/amd64 default keeps a build without these args working unchanged.
+ARG HOST_GOOS=linux
+ARG HOST_GOARCH=amd64
+RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardyn-host ./cmd/wardyn
+
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
 
 # Carry the builder's CA bundle (standard roots + any staged corp CA) into the
@@ -115,6 +126,9 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 
 COPY --from=builder /out/wardynd /wardynd
 COPY --from=builder /out/wardyn /usr/local/bin/wardyn
+# Host-native build of the same CLI, for scripts/up.sh to extract and run ON THE
+# HOST (host-side proxy detection). Never executed inside this image.
+COPY --from=builder /out/wardyn-host /host/wardyn
 # Ship the example policies so -default-policy resolves inside the image.
 COPY --from=builder /build/examples/policies /examples/policies
 # Ship the built UI and serve it by default (overridable via WARDYN_UI_DIR).

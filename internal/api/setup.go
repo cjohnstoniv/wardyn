@@ -870,7 +870,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	checks = append(checks, hostProxyCheck(hostProxy))
+	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// site_config: whether an operator-wide corporate baseline (upstream proxy,
 	// artifact-registry overrides, default SCM hosts) has been authored yet.
@@ -1024,7 +1024,12 @@ func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPos
 // the Host Proxy step renders. Always "info": detection never blocks setup,
 // it only surfaces what's already configured on the host so the step can
 // suggest matching settings.
-func hostProxyCheck(d setup.HostProxyDetection) SetupCheck {
+//
+// blind is true when this wardynd is containerized AND no host-side detection
+// was seeded in: every tier (shell profiles, git, tool configs, OS/PAC) is then
+// structurally unreachable, so an empty result must say "couldn't look there"
+// rather than assert "nothing is there". Same honesty rule as vaultKVMDetail.
+func hostProxyCheck(d setup.HostProxyDetection, blind bool) SetupCheck {
 	var found []string
 	if d.HTTPProxy != nil || d.HTTPSProxy != nil || d.AllProxy != nil {
 		found = append(found, "an env/shell/OS proxy setting")
@@ -1043,6 +1048,13 @@ func hostProxyCheck(d setup.HostProxyDetection) SetupCheck {
 		found = append(found, "a PAC/WPAD auto-config URL (cannot be resolved automatically)")
 	}
 	if len(found) == 0 {
+		if blind {
+			return SetupCheck{
+				ID: "host_proxy", Label: "Host proxy", Status: "info",
+				Detail: "Detection ran inside the wardynd container, so it only sees this container's environment — not your host's shell profiles, git config, per-tool configs, or OS/PAC proxy settings. That is \"couldn't look there\", not \"nothing is there\".",
+				Fix:    "If your host uses a corporate proxy, store its URL as a secret and reference it below — or re-run `make setup` (it detects on the host and seeds the result in).",
+			}
+		}
 		return SetupCheck{
 			ID: "host_proxy", Label: "Host proxy", Status: "info",
 			Detail: "No host-side proxy configuration detected (env vars, shell profiles, git config, tool configs, or OS proxy settings).",

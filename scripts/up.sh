@@ -112,6 +112,48 @@ port_in_use() {
   fi
 }
 
+# host_goarch — this host's GOARCH, for cross-compiling the host-native `wardyn`
+# the image builds (see Dockerfile.wardynd). Defaults to amd64 on anything
+# unrecognized: a wrong guess only costs host-side proxy detection, which is
+# best-effort and degrades to the container's own honest "couldn't look there".
+host_goarch() {
+  case "$(uname -m 2>/dev/null || echo unknown)" in
+    x86_64|amd64)  echo amd64 ;;
+    arm64|aarch64) echo arm64 ;;
+    *)             echo amd64 ;;
+  esac
+}
+
+# seed_host_proxy — run the host-proxy detector ON THE HOST and stash the result
+# for the containerized wardynd. Inside the container every tier is blind (the OS
+# tier dispatches on the process's GOOS; git needs a binary distroless lacks; HOME
+# is unset so no shell profile or tool config is reachable), so the wizard would
+# otherwise assert a false negative on exactly the corp hosts that have a proxy.
+#
+# Wholly best-effort: every step tolerates failure and leaves the seed unset, in
+# which case the wizard says "detection ran in a container and couldn't look at
+# your host" instead of "nothing is configured". Rewritten on every `up`, so it
+# can never go stale across a network change. base64 because compose interpolates
+# `$` inside .env values; the payload is credential-masked before it is emitted.
+seed_host_proxy() {
+  _shp_bin="${REPO_ROOT}/bin/wardyn-host"
+  mkdir -p "${REPO_ROOT}/bin" 2>/dev/null || return 0
+  # distroless has no shell, so `docker run … cat` can't work — create, cp, rm.
+  _shp_cid=$(docker create wardyn/wardynd:local 2>/dev/null) || return 0
+  docker cp "${_shp_cid}:/host/wardyn" "${_shp_bin}" >/dev/null 2>&1 || true
+  docker rm -f "${_shp_cid}" >/dev/null 2>&1 || true
+  [ -x "${_shp_bin}" ] || { unset _shp_bin _shp_cid; return 0; }
+  _shp_json=$("${_shp_bin}" setup detect-proxy 2>/dev/null) || _shp_json=""
+  if [ -n "${_shp_json}" ]; then
+    _shp_b64=$(printf '%s' "${_shp_json}" | base64 2>/dev/null | tr -d '\n') || _shp_b64=""
+    if [ -n "${_shp_b64}" ]; then
+      env_set "${ENV_FILE}" WARDYN_HOST_PROXY_B64 "${_shp_b64}"
+      log "Host proxy detection seeded from this host (the container can't read your shell/OS/PAC settings)."
+    fi
+  fi
+  unset _shp_bin _shp_cid _shp_json _shp_b64
+}
+
 # open_url URL — best-effort browser opener. Honors WARDYN_UP_NO_BROWSER=1.
 open_url() {
   if [ "${WARDYN_UP_NO_BROWSER:-0}" = "1" ]; then
@@ -324,8 +366,34 @@ cmd_doctor() {
 cmd_up() {
   cmd_doctor
 
+  # Target the host-native `wardyn` the image also builds, for host-side proxy
+  # detection after boot (seed_host_proxy). Must be set BEFORE the build.
+  WARDYN_HOST_GOARCH="${WARDYN_HOST_GOARCH:-$(host_goarch)}"
+  case "$(os_kind)" in
+    darwin) WARDYN_HOST_GOOS="${WARDYN_HOST_GOOS:-darwin}" ;;
+    *)      WARDYN_HOST_GOOS="${WARDYN_HOST_GOOS:-linux}" ;;   # wsl -> linux
+  esac
+  export WARDYN_HOST_GOOS WARDYN_HOST_GOARCH
+
   log "Building the wardynd image (serves the REST API + embedded UI)"
-  compose build
+  # ponytail: retry, don't predict. A corp allowlist mirror 404s the pnpm TARBALL,
+  # which is only observable from inside the build — a registry probe hits the
+  # metadata path, gets 200, and the build dies anyway (deploy/images/README.md).
+  # Retrying with a host-built ui/dist recovers it with no probe and covers every
+  # ui-build failure mode. The OSS path never enters this branch.
+  if ! compose build; then
+    [ -z "${WARDYN_UI_STAGE:-}" ] \
+      || die "wardynd image build failed with WARDYN_UI_STAGE=${WARDYN_UI_STAGE} (the failing step is above)."
+    command -v pnpm >/dev/null 2>&1 \
+      || die "wardynd image build failed (the failing step is above). If it died at 'npm install -g pnpm' with a 404/403, your registry can't serve pnpm: build the UI where it can, then re-run with 'WARDYN_UI_STAGE=ui-prebuilt make setup' — see deploy/images/README.md."
+    warn "wardynd image build failed — retrying with the UI built on THIS host (WARDYN_UI_STAGE=ui-prebuilt), the documented recovery for a registry that can't serve pnpm."
+    make -C "${REPO_ROOT}" ui \
+      || die "the host UI build failed too — fix pnpm on this host, then re-run: pnpm -C ui build && WARDYN_UI_STAGE=ui-prebuilt make setup"
+    WARDYN_UI_STAGE=ui-prebuilt; export WARDYN_UI_STAGE
+    compose build \
+      || die "still failing with WARDYN_UI_STAGE=ui-prebuilt (the failing step is above). If the error is x509, stage your corp root CA at deploy/images/corp-ca.pem — see deploy/images/README.md."
+    log "Recovered: built the UI on this host and reused it (WARDYN_UI_STAGE=ui-prebuilt)."
+  fi
 
   if [ ! -f "${ENV_FILE}" ]; then
     log "Creating ${ENV_FILE} from .env.example"
@@ -429,6 +497,11 @@ cmd_up() {
     chmod 600 "${ENV_FILE}" 2>/dev/null || true
   fi
   unset _br_on _br_region
+
+  # Must precede `compose up`: the seed is read from the wardynd container's env
+  # at boot (docker-compose.yaml WARDYN_HOST_PROXY_B64).
+  seed_host_proxy
+  chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   log "Starting postgres + wardynd (local mode, no SSO — see \`docker compose --profile sso up\` for Dex)"
   compose up -d postgres wardynd

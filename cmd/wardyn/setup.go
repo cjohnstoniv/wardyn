@@ -64,6 +64,7 @@ func setupCmd(client clientFn) *cobra.Command {
 	}
 	cmd.AddCommand(
 		setupStatusCmd(client),
+		setupDetectProxyCmd(),
 		setupTierCmd("wall"),
 		setupTierCmd("vault"),
 	)
@@ -110,6 +111,27 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the raw setup-status JSON")
 	return cmd
+}
+
+// setupDetectProxyCmd runs the host-proxy detector IN THIS PROCESS and prints the
+// result as JSON. Purely local — no client, no running control plane: the point
+// is to run it natively on the host, where the tiers a containerized wardynd
+// cannot reach (macOS scutil/PAC, the Windows registry via WSL, shell profiles,
+// git and per-tool configs) are all live. scripts/up.sh runs this on the host and
+// seeds the output into the compose env; see internal/setup's hostProxySeedEnv.
+//
+// Output is already credential-masked by the detector (userinfo -> user:***@host);
+// the raw credential is never in the struct, so this is safe to pipe and store.
+func setupDetectProxyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "detect-proxy",
+		Short: "Print this host's detected proxy configuration as JSON (credentials masked)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			return enc.Encode(setup.DetectHostProxy())
+		},
+	}
 }
 
 func setupTierCmd(use string) *cobra.Command {
