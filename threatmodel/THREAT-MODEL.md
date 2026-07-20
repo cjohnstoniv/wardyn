@@ -404,17 +404,26 @@ postures:
   opaque (a `MITM-all-egress` mode is a deliberate future option, gated on the
   cert-pinning/non-HTTP-over-443 risks). DNS-tunnel/domain-fronting residuals
   (§5 #2, #3) are unchanged.
-- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** When an
-  operator configures an upstream corp proxy (`p.upstream`, site-config-only —
-  not sandbox- or agent-controlled), the proxy hands the corp proxy the target
-  HOSTNAME rather than a proxy-resolved-and-pinned IP: `VetHost` is skipped for
-  that hop because the corp proxy performs its own outbound DNS+dial, and the
-  sandbox host frequently cannot resolve external names at all
-  (`internal/egress/proxy/proxy.go:370-382`). Policy default-deny and the
-  method/approval checks above it are unaffected, and an agent naming a literal
-  private/loopback/link-local/metadata IP directly is still denied at the
-  earlier literal-IP guard — only the resolved-IP re-check for a *hostname*
-  target is deferred to the operator's own corp proxy for this hop.
+- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** The upstream
+  corp-proxy mode is a **supported, operator-configured egress lane** (site-config
+  only — not sandbox- or agent-controlled), and is the **intended path for reaching
+  internal / corporate endpoints** (an internal model-inference API, a corp-proxied
+  code-search SaaS, an internal package mirror) from a sandbox that has no direct
+  internet route. The *residual* documented here is one precise relaxation, not the
+  feature: when `p.upstream` is set, the proxy hands the corp proxy the target
+  HOSTNAME rather than a proxy-resolved-and-pinned IP, so `VetHost`'s resolved-IP
+  re-check is skipped for that hop (the corp proxy performs its own outbound
+  DNS+dial, and the sandbox host frequently cannot resolve external names at all —
+  `internal/egress/proxy/proxy.go:370-382`). **Bounds, stated exactly so operators
+  don't over- or under-read it:** this does NOT make private IPs reachable. Reaching
+  an internal-IP-resolving hostname still requires ALL of — (1) an operator
+  configured the upstream proxy, (2) the run's own egress **policy** allows that
+  hostname (default-deny allowlist + first-use approval + method rules, all
+  unaffected), and (3) the destination is named by HOSTNAME: an agent naming a
+  literal private/loopback/link-local/metadata IP directly is still denied at the
+  earlier literal-IP guard. What is deferred is only the resolved-IP re-check for a
+  policy-allowed *hostname*, to the operator's own corp proxy, for this hop — the
+  same trust the operator already places in that proxy + its corp-root CA.
 - The optional out-of-process **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: it fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so `block`
@@ -450,7 +459,17 @@ postures:
   handshake to that host (closed-direction failure — a loud error, not a
   silent trust bypass or leaked credential) rather than succeeding through the
   intercept. Fixing this needs a per-runtime trust-store import at the same
-  install point, tracked as a follow-up.
+  install point, tracked as a follow-up. **Scope of the impact (important for JVM /
+  Deno workloads):** MITM content-inspection is **not** mandatory for any egress
+  class — only the LLM hosts (`api.anthropic.com`/`api.openai.com`) and any
+  operator-configured corp artifact hosts (`MITMHosts`) are intercepted
+  (`internal/egress/proxy/mitm.go:145-151`); **every other host, including internal
+  endpoints reached via the upstream corp-proxy lane, is an opaque CONNECT tunnel
+  that is never TLS-terminated by Wardyn.** So a JVM/Deno client reaching an
+  internal API or corp SaaS is unaffected — the trust-store gap only bites when such
+  a client is pointed at one of the explicitly MITM-eligible hosts. Operators who
+  need a JVM/Deno client to reach a MITM'd host today should route it through a
+  non-inspected lane or wait on the trust-store-import follow-up.
 
 ---
 
@@ -541,6 +560,33 @@ floor and the control plane refuses to schedule below it.
 **Recommended use:** development environments where the host is already a
 dedicated machine and the threat model does not include adversarial agent
 workloads. Must be explicitly selected; CC2 is the default.
+
+**Deployment note — rootless Docker / Podman (the supported model, and its
+ceiling).** Running the runner against a **rootless** daemon (socket under
+`/run/user/<uid>`, no root) is supported at **CC1 only**. The full CC1 posture is
+rootless-compatible — cap-drop ALL, no-new-privileges, `RuntimeDefault` seccomp
+(never `unconfined`), host-gated AppArmor, retained SELinux labeling
+(`internal/runner/docker/hardening.go`) — and **all tier-independent controls hold
+unchanged**: the per-run gatewayless (`Internal:true`) network, the wardyn-proxy
+sidecar as the sole egress path, brokered **never-resident** credentials, and the
+three audit streams. **CC2/CC3 are NOT available rootless:** current gVisor only
+starts under rootless Docker with `--TESTONLY-unsafe-nonroot`, which disables the
+host isolation Wall exists to provide, and Kata needs device passthrough that
+rootless can't grant (`cmd/wardyn/setup.go` reports both as unsupported). A policy
+that mandates CC2/CC3 on a rootless host is **refused, fail-closed**, by the
+existing runtime probe (`classToRuntime`) — it never silently downgrades. So the
+honest offer on rootless is: CC1 + default-deny egress + brokered creds + the
+hardened runc floor — not Wall/Vault. Pick and pin **one** rootless UID model
+(host-mode socket, an explicit `user: UID:GID` matching the rootless daemon's
+socket owner, or userns-remap) for the wardynd container; the driver itself is
+UID-agnostic (`client.FromEnv`, no hardcoded socket). **Rootless Podman** speaks
+the Docker Engine API via the same `FromEnv` client but is a *separate* proof from
+rootless Docker (the Docker-compat REST API is a partial emulation): the
+highest-risk divergences to verify before relying on it are `docker info`'s
+`Runtimes` map (CC2/CC3 gating), `Internal:true` bridge semantics (the L0
+no-default-route guarantee), storage-driver quota parsing, `SecurityOptions`
+formatting, and `host.docker.internal` resolution — run `make test-e2e` twice, once
+per daemon, and document any divergence rather than assuming Docker-API parity.
 
 ---
 
