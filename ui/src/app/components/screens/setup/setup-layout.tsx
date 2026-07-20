@@ -23,7 +23,6 @@ import {
   type SetupStepId,
 } from "./steps";
 import { StatusChip } from "../../wardyn/status-chip";
-import { BTN } from "../../wardyn/copy";
 import { HowItWorksStrip, IntroBlurb } from "../onboarding/intro";
 
 export function SetupLayout({
@@ -33,7 +32,7 @@ export function SetupLayout({
   lastCheckedLabel,
   onRecheck,
   onSelect,
-  onFinishLater,
+  onFinish,
   onLaunch,
   canLaunch,
   fastPath,
@@ -47,7 +46,10 @@ export function SetupLayout({
   lastCheckedLabel: string;
   onRecheck: () => void;
   onSelect: (step: SetupStepId) => void;
-  onFinishLater: () => void;
+  // Complete setup and enter the app: dismisses the first-run gate (unlocks nav)
+  // WITHOUT requiring a launched run. The end-of-flow completion action — there
+  // is no early "skip" escape any more (the gate keeps the operator in setup).
+  onFinish: () => void;
   onLaunch: () => void;
   canLaunch: boolean;
   fastPath: boolean;
@@ -103,13 +105,6 @@ export function SetupLayout({
             </button>
           </div>
           <HowItWorksStrip />
-          <p className="mt-3 text-sm text-muted-foreground">
-            Not sure it works?{" "}
-            <a href="/demos" className="font-medium text-primary underline underline-offset-2">
-              Run a demo sandbox first
-            </a>{" "}
-            — no repo or key needed.
-          </p>
         </section>
       )}
 
@@ -166,37 +161,37 @@ export function SetupLayout({
           </div>
           {children}
 
-          {/* Footer */}
-          <footer className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t pt-5">
-            <button
-              onClick={onFinishLater}
-              className="text-left text-sm text-muted-foreground hover:text-foreground"
-            >
-              <span className="block text-foreground">{BTN.finishLater}</span>
-              {BTN.finishLaterHint}
-            </button>
-            <div className="flex gap-2">
-              {skipTarget && (
-                <Button variant="ghost" onClick={() => onSelect(skipTarget)}>
-                  Skip {skipPhase?.label.toLowerCase()}
-                </Button>
-              )}
-              <Button variant="outline" disabled={!prev} onClick={() => prev && onSelect(prev)}>
-                <ArrowLeft className="size-4" aria-hidden />
-                Back
+          {/* Footer — forward-only. No early "skip"/"finish later" escape: the
+              first-run gate keeps the operator in setup until the flow's end, where
+              "Finish setup" completes it (barrier is the only requirement; launching
+              a run is offered but optional). */}
+          <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
+            {skipTarget && (
+              <Button variant="ghost" onClick={() => onSelect(skipTarget)}>
+                Skip {skipPhase?.label.toLowerCase()}
               </Button>
-              {next ? (
-                <Button onClick={() => onSelect(next)}>
-                  Next: {STEP_LABEL[next]}
-                  <ArrowRight className="size-4" aria-hidden />
-                </Button>
-              ) : (
-                <Button onClick={onLaunch} disabled={!canLaunch}>
+            )}
+            <Button variant="outline" disabled={!prev} onClick={() => prev && onSelect(prev)}>
+              <ArrowLeft className="size-4" aria-hidden />
+              Back
+            </Button>
+            {next ? (
+              <Button onClick={() => onSelect(next)}>
+                Next: {STEP_LABEL[next]}
+                <ArrowRight className="size-4" aria-hidden />
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={onLaunch} disabled={!canLaunch}>
                   Launch your first run
                   <Rocket className="size-4" aria-hidden />
                 </Button>
-              )}
-            </div>
+                <Button onClick={onFinish}>
+                  Finish setup
+                  <ArrowRight className="size-4" aria-hidden />
+                </Button>
+              </>
+            )}
           </footer>
         </div>
       </div>

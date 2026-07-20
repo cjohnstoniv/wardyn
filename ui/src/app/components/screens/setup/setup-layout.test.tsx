@@ -18,7 +18,7 @@ function renderLayout(overrides: Partial<ComponentProps<typeof SetupLayout>> = {
     lastCheckedLabel: "just now",
     onRecheck: vi.fn(),
     onSelect: vi.fn(),
-    onFinishLater: vi.fn(),
+    onFinish: vi.fn(),
     onLaunch: vi.fn(),
     canLaunch: true,
     fastPath: false,

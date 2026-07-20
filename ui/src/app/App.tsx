@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
@@ -14,7 +14,7 @@ import { RunsScreen } from "./components/screens/runs";
 // setup-gate holds only the pure auto-open decision, so the funnel itself (and
 // the xterm stack it reaches through harness-login-pane) stays out of the entry
 // chunk. Import these from the screen module and the split below is undone.
-import { setupDismissed, shouldOpenSetup } from "./components/screens/setup/setup-gate";
+import { setupGateActive } from "./components/screens/setup/setup-gate";
 import { WardynMark } from "./components/wardyn/logo";
 import { onUnauthorized, probeAuth, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
@@ -22,9 +22,28 @@ import { setup as setupApi } from "./lib/api/setup";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
-import type { AgentRun } from "./lib/types";
+import type { AgentRun, SetupStatus } from "./lib/types";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
+
+// How often the first-run gate re-checks setup status, so nav unlocks promptly
+// once the barrier comes up / the operator finishes (the dismiss flag is read
+// live, so finishing unlocks on the next render regardless of this poll).
+const SETUP_POLL_MS = 5000;
+
+// Route guard for the mandatory first-run gate: while the gate is active, every
+// app route redirects to /setup — only Getting started (/setup) and the demos
+// that are part of it (/demos) stay reachable — so a fresh local operator goes
+// through setup before the app opens. Nav groups are hidden in parallel
+// (AppShell). Finishing the flow (dismissSetup), a first run, an onboarded
+// console, SSO mode, or an unreachable daemon all clear the gate.
+function RequireSetupComplete({ gated }: { gated: boolean }) {
+  const loc = useLocation();
+  if (gated && loc.pathname !== "/setup" && loc.pathname !== "/demos") {
+    return <Navigate to="/setup" replace />;
+  }
+  return <Outlet />;
+}
 
 // Route-level code-splitting. Runs is the landing route (every "/" redirects
 // there) so it stays eager — lazying it would only add a load waterfall to the
@@ -86,7 +105,6 @@ export default function App() {
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
   const [attentionCount, setAttentionCount] = React.useState(0);
   const navigate = useNavigate();
-  const location = useLocation();
 
   const refreshPending = React.useCallback(() => {
     approvalsApi
@@ -139,31 +157,27 @@ export default function App() {
   }, [refreshAttention, refreshPending]);
   usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed");
 
-  // Auto-open the first-run "Getting started" wizard once, right after auth
-  // flips to "authed" — fire-and-forget (Runs renders first; it may flip to
-  // Setup a beat later, which is an acceptable brief flash). getSetupStatus()
-  // never rejects except on a 401 (routed through onUnauthorized already), so a
-  // rejected promise here just means "leave the route alone".
-  React.useEffect(() => {
-    if (auth !== "authed") return;
-    let active = true;
+  // The mandatory first-run gate: fetch setup status (poll so it stays fresh as
+  // the barrier comes up / setup finishes) and derive whether the app is gated.
+  // Replaces the old soft auto-open with a hard redirect (RequireSetupComplete)
+  // + hidden nav (AppShell). getSetupStatus never rejects except on 401 (routed
+  // through onUnauthorized), so a rejected probe just leaves the gate as-is.
+  const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
+  const refreshSetupStatus = React.useCallback(() => {
     setupApi
       .getSetupStatus()
-      .then((status) => {
-        if (active && location.pathname !== "/setup" && shouldOpenSetup(status, setupDismissed())) {
-          navigate("/setup");
-        }
-      })
+      .then(setSetupStatus)
       .catch(() => {
-        /* leave the route alone — never trap the operator behind a failed probe */
+        /* leave the last-known status in place — never trap behind a failed probe */
       });
-    return () => {
-      active = false;
-    };
-    // Only re-run when auth flips — this is a one-shot first-run check, not a
-    // route-change listener (it must not re-fire on every navigation).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth]);
+  }, []);
+  React.useEffect(() => {
+    if (auth === "authed") refreshSetupStatus();
+  }, [auth, refreshSetupStatus]);
+  usePoll(refreshSetupStatus, SETUP_POLL_MS, auth !== "authed");
+  // setupGateActive reads the dismiss flag live, so finishing the funnel (or a
+  // launched run) unlocks nav on the next render even before the poll refetches.
+  const gated = setupStatus ? setupGateActive(setupStatus) : false;
 
   if (auth === "checking") {
     return (
@@ -197,6 +211,7 @@ export default function App() {
             <AppShell
               pendingApprovals={pendingApprovals}
               attentionCount={attentionCount}
+              gated={gated}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token
@@ -210,61 +225,12 @@ export default function App() {
             />
           }
         >
-          <Route path="/" element={<Navigate to="/runs" replace />} />
-          <Route path="/runs" element={<RunsScreen />} />
+          {/* Always reachable — Getting started and the demos that are part of it. */}
           <Route
-            path="/runs/:id"
+            path="/setup"
             element={
               <React.Suspense fallback={<RouteFallback />}>
-                <RunDetailScreen />
-              </React.Suspense>
-            }
-          />
-          <Route
-            path="/approvals"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <ApprovalsScreen onChanged={refreshPending} />
-              </React.Suspense>
-            }
-          />
-          <Route
-            path="/policies"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <PoliciesScreen />
-              </React.Suspense>
-            }
-          />
-          <Route
-            path="/secrets"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <SecretsScreen />
-              </React.Suspense>
-            }
-          />
-          <Route
-            path="/workspaces"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <WorkspacesScreen />
-              </React.Suspense>
-            }
-          />
-          <Route
-            path="/audit"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <AuditScreen />
-              </React.Suspense>
-            }
-          />
-          <Route
-            path="/recordings"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <RecordingScreen />
+                <GettingStarted onDone={() => navigate("/runs")} />
               </React.Suspense>
             }
           />
@@ -276,17 +242,71 @@ export default function App() {
               </React.Suspense>
             }
           />
-          <Route
-            path="/setup"
-            element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <GettingStarted onDone={() => navigate("/runs")} />
-              </React.Suspense>
-            }
-          />
-          {/* Fleet is retired — merged into Runs. Keep the old path working. */}
-          <Route path="/fleet" element={<Navigate to="/runs" replace />} />
-          <Route path="*" element={<Navigate to="/runs" replace />} />
+          {/* Everything else waits behind the first-run gate (redirects to /setup
+              while active; open once setup is finished). */}
+          <Route element={<RequireSetupComplete gated={gated} />}>
+            <Route path="/" element={<Navigate to="/runs" replace />} />
+            <Route path="/runs" element={<RunsScreen />} />
+            <Route
+              path="/runs/:id"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <RunDetailScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/approvals"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <ApprovalsScreen onChanged={refreshPending} />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/policies"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <PoliciesScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/secrets"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <SecretsScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/workspaces"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <WorkspacesScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/audit"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <AuditScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/recordings"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <RecordingScreen />
+                </React.Suspense>
+              }
+            />
+            {/* Fleet is retired — merged into Runs. Keep the old path working. */}
+            <Route path="/fleet" element={<Navigate to="/runs" replace />} />
+            <Route path="*" element={<Navigate to="/runs" replace />} />
+          </Route>
         </Route>
       </Routes>
       <Toaster />

@@ -143,18 +143,25 @@ function SidebarNav({
   attentionCount,
   readiness,
   meta,
+  gated,
   onNavigate,
 }: {
   pendingApprovals: number;
   attentionCount: number;
   readiness: StatusKind;
   meta: ShellMeta;
+  // First-run gate: while active, the operate/configure/forensics groups are
+  // hidden (routes redirect to /setup too — App.tsx) so a fresh operator goes
+  // through Getting started before the app opens up. The pinned Getting-started
+  // entry below stays visible.
+  gated?: boolean;
   onNavigate?: () => void;
 }) {
   return (
     <>
       <nav className="space-y-4">
-        {NAV_GROUPS.map((group) => (
+        {!gated &&
+          NAV_GROUPS.map((group) => (
           <div key={group.label} className="space-y-0.5">
             <SectionLabel className="px-2.5 pb-1">{group.label}</SectionLabel>
             {group.items.map((item) => {
@@ -231,6 +238,7 @@ export function MobileNav(props: {
   attentionCount: number;
   readiness: StatusKind;
   meta: ShellMeta;
+  gated?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
@@ -252,10 +260,14 @@ export function AppShell({
   pendingApprovals,
   attentionCount,
   onSignOut,
+  gated,
 }: {
   pendingApprovals: number;
   attentionCount: number;
   onSignOut: () => void;
+  // First-run setup gate (computed in App.tsx from the same setup status): hides
+  // the nav groups; App.tsx also redirects gated routes to /setup.
+  gated?: boolean;
 }) {
   const meta = useMeta();
   const location = useLocation();
@@ -298,6 +310,7 @@ export function AppShell({
         pendingApprovals={pendingApprovals}
         attentionCount={attentionCount}
         readiness={readiness}
+        gated={gated}
         onNewRun={() => {
           setNewRunMounted(true);
           setNewRunOpen(true);
@@ -310,6 +323,7 @@ export function AppShell({
             attentionCount={attentionCount}
             readiness={readiness}
             meta={meta}
+            gated={gated}
           />
         </aside>
 
@@ -340,6 +354,7 @@ function TopBar({
   pendingApprovals,
   attentionCount,
   readiness,
+  gated,
   onNewRun,
 }: {
   onSignOut: () => void;
@@ -347,6 +362,7 @@ function TopBar({
   pendingApprovals: number;
   attentionCount: number;
   readiness: StatusKind;
+  gated?: boolean;
   onNewRun: () => void;
 }) {
   const { theme, toggle } = useTheme();
@@ -357,6 +373,7 @@ function TopBar({
         attentionCount={attentionCount}
         readiness={readiness}
         meta={meta}
+        gated={gated}
       />
       <Link to="/runs" className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
         <WardynWordmark />
@@ -371,9 +388,13 @@ function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
-        <Button onClick={onNewRun} size="sm">
-          <Plus className="size-4" /> New run
-        </Button>
+        {/* No "New run" while the first-run gate is active — the operator finishes
+            setup first (the funnel offers "Launch your first run" at its end). */}
+        {!gated && (
+          <Button onClick={onNewRun} size="sm">
+            <Plus className="size-4" /> New run
+          </Button>
+        )}
 
         <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
           {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}

@@ -224,7 +224,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         lastCheckedLabel={lastCheckedLabel(lastCheckedAt)}
         onRecheck={recheck}
         onSelect={setStepId}
-        onFinishLater={finish}
+        onFinish={finish}
         onLaunch={() => setNewRunOpen(true)}
         // A barrier is enough to launch (an interactive run works with no model —
         // the operator drives it over an attached terminal). The fast-path banner,

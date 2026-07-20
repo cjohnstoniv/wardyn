@@ -327,12 +327,17 @@ describe("SetupScreen", () => {
     expect(within(artifactBtn).getByText("Optional")).toBeInTheDocument();
   });
 
-  it("'Finish later' (the single exit verb) dismisses setup and calls onDone", async () => {
+  it("'Finish setup' at the end of the flow dismisses setup and calls onDone (no early exit)", async () => {
     const onDone = vi.fn();
     render(<SetupScreen onDone={onDone} />);
     await screen.findByText("Fence");
 
-    await user.click(screen.getByRole("button", { name: /finish later/i }));
+    // No early escape any more — the mandatory gate keeps the operator in setup.
+    expect(screen.queryByRole("button", { name: /finish later/i })).not.toBeInTheDocument();
+
+    // Jump to the final (Launch) step via the rail and complete via "Finish setup".
+    await user.click(screen.getByRole("button", { name: /^Launch —/ }));
+    await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
     expect(setupDismissed()).toBe(true);
     expect(onDone).toHaveBeenCalledTimes(1);
   });

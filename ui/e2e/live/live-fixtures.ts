@@ -46,7 +46,7 @@ export const test = base.extend({
           localStorage.setItem(key, tok);
           // Mark the onboarding welcome hero seen so "Getting started" lands
           // directly on the setup funnel (the hero otherwise gates it until a
-          // human clicks "Get set up").
+          // human clicks "Get started").
           localStorage.setItem("wardyn-onboarding-seen", "1");
         } catch {
           /* private mode — ignore */

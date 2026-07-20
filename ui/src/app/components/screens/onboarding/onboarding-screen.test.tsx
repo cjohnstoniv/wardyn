@@ -40,7 +40,7 @@ describe("OnboardingScreen (welcome hero)", () => {
   });
 
   it("is ONE glanceable intro (hero + 5-node strip), not a 7-page tour", async () => {
-    render(<OnboardingScreen onGetStarted={() => {}} onSkip={() => {}} />);
+    render(<OnboardingScreen onGetStarted={() => {}} />);
     expect(screen.getByText("Let agents work. Keep your keys.")).toBeInTheDocument();
     // the single how-it-works strip
     expect(screen.getByText("Behind a barrier")).toBeInTheDocument();
@@ -52,22 +52,22 @@ describe("OnboardingScreen (welcome hero)", () => {
   });
 
   it("surfaces live readiness from getSetupStatus (barrier tier + connected model)", async () => {
-    render(<OnboardingScreen onGetStarted={() => {}} onSkip={() => {}} />);
+    render(<OnboardingScreen onGetStarted={() => {}} />);
     expect(await screen.findByText(/Barrier: Fence ready/)).toBeInTheDocument();
     expect(screen.getByText(/Model: Claude connected/)).toBeInTheDocument();
   });
 
-  it("Get set up advances (onGetStarted); Skip for now exits (onSkip)", async () => {
+  it("is a single forward CTA (onGetStarted) — no skip, no demo side-door", async () => {
     const onGetStarted = vi.fn();
-    const onSkip = vi.fn();
-    render(<OnboardingScreen onGetStarted={onGetStarted} onSkip={onSkip} />);
+    render(<OnboardingScreen onGetStarted={onGetStarted} />);
     await screen.findByText(/Barrier:/);
 
-    await user.click(screen.getByRole("button", { name: /get set up|finish setup/i }));
+    await user.click(screen.getByRole("button", { name: /get started|finish setup/i }));
     expect(onGetStarted).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole("button", { name: /skip for now/i }));
-    expect(onSkip).toHaveBeenCalledTimes(1);
+    // The escape hatches are gone — the mandatory setup gate keeps the operator here.
+    expect(screen.queryByRole("button", { name: /skip for now/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /demo sandbox/i })).not.toBeInTheDocument();
   });
 
   it("onboardingSeen()/markOnboardingSeen() round-trip through localStorage", () => {
@@ -77,7 +77,7 @@ describe("OnboardingScreen (welcome hero)", () => {
   });
 
   it("never renders a Composer chip (zero composer UI surfaces on the hero)", async () => {
-    render(<OnboardingScreen onGetStarted={() => {}} onSkip={() => {}} />);
+    render(<OnboardingScreen onGetStarted={() => {}} />);
     await screen.findByText(/Barrier:/);
     expect(screen.queryByText(/Composer/)).not.toBeInTheDocument();
   });

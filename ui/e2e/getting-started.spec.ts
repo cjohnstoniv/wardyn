@@ -23,8 +23,8 @@ async function openSetupFunnel(page: import("@playwright/test").Page) {
   await gotoConsole(page);
   await navTo(page, "Getting started");
   // The welcome hero (onboarding tour) renders first on a fresh session.
-  await expect(page.getByRole("button", { name: /get set up|finish setup/i })).toBeVisible();
-  await page.getByRole("button", { name: /get set up|finish setup/i }).click();
+  await expect(page.getByRole("button", { name: /get started|finish setup/i })).toBeVisible();
+  await page.getByRole("button", { name: /get started|finish setup/i }).click();
   // The SetupScreen funnel replaces the hero.
   await expect(page.getByRole("heading", { name: "Getting started" })).toBeVisible();
   await expect(page.getByText(/step 1 of 13/i)).toBeVisible();
@@ -94,13 +94,20 @@ test.describe("Getting Started funnel", () => {
     await expect(main.getByText(/a sandbox barrier is required first/i)).toBeVisible();
   });
 
-  test("Finish later dismisses to Runs and the sidebar entry returns", async ({ page }) => {
+  test("'Finish setup' at the flow's end completes to Runs; no early exit", async ({ page }) => {
     await openSetupFunnel(page);
-    await page.getByRole("button", { name: /finish later/i }).click();
-    // Dismissal lands on Runs...
+    // No early "Finish later" escape any more — the mandatory gate keeps the
+    // operator in setup until the end (this seeded backend is admin-token, not
+    // local, so nav itself isn't hidden — but the escape verb is still gone).
+    await expect(page.getByRole("button", { name: /finish later/i })).toHaveCount(0);
+    // Walk to the final (Launch) step and complete via "Finish setup".
+    const nextBtn = page.getByRole("button", { name: /^Next:/i });
+    for (let i = 0; i < 12; i++) await nextBtn.click();
+    await page.getByRole("button", { name: /^finish setup$/i }).click();
+    // Completion lands on Runs...
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
-    // ...and Getting started remains reachable from the sidebar (now straight
-    // to the funnel — the tour is one-shot).
+    // ...and Getting started remains reachable from the sidebar (straight to the
+    // funnel — the tour is one-shot).
     await navTo(page, "Getting started");
     await expect(page.getByRole("heading", { name: "Getting started" })).toBeVisible();
     await expect(page.getByText(/step 1 of 13/i)).toBeVisible();

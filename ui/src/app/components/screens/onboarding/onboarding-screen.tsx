@@ -10,8 +10,7 @@
 // the AppShell as the "Getting started" nav content; "Get set up" advances to the
 // setup funnel, "Skip" drops the operator into the console.
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowRight, BrickWall, FlaskConical, KeyRound, Shield } from "lucide-react";
+import { ArrowRight, BrickWall, KeyRound, Shield } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -39,23 +38,16 @@ export function markOnboardingSeen(): void {
 // funnel. No double stepper — the welcome has no stepper; the funnel has one.
 export function GettingStarted({ onDone }: { onDone: () => void }) {
   const [seen, setSeen] = React.useState(onboardingSeen());
-  const navigate = useNavigate();
   if (!seen) {
+    // Single forward path: the welcome hands off INTO the funnel (no skip, no
+    // demo side-door — demos live inside the funnel). The mandatory setup gate
+    // (App.tsx) keeps the operator here until they finish the flow.
     return (
       <OnboardingScreen
         onGetStarted={() => {
           markOnboardingSeen();
           setSeen(true);
         }}
-        onSkip={() => {
-          // Skipping the intro must NOT dismiss the funnel — it still lives in the
-          // sidebar (and auto-opens) until the operator finishes or launches.
-          markOnboardingSeen();
-          onDone();
-        }}
-        // Browsing the demo catalog is always allowed (the runner gate lives on the
-        // per-demo Start buttons) — jump straight there without marking the welcome seen.
-        onTryDemo={() => navigate("/demos")}
       />
     );
   }
@@ -86,29 +78,36 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
   // confinement-class list.
   const strongest = status ? strongestAvailable(status.runner.confinement_classes) : undefined;
   const strongestLabel = strongest ? CC_META[strongest].label : CC_META.CC1.label;
-  // Barrier + Model only — no Composer chip (zero composer UI surfaces on the
-  // hero; deriveReadiness().composerReady is left untouched, just unused here).
+  // Barrier (the one hard requirement) + Model (optional). The model chip reads
+  // neutral "optional" when absent — not a warning "Needs setup" — because a run
+  // works with no model (you drive it, or bring your own container). No Composer
+  // chip (zero composer UI on the hero; composerReady is left unused here).
+  const modelChip =
+    loading || !readiness ? (
+      <Chip tone="neutral">
+        <KeyRound className="size-3" /> Checking…
+      </Chip>
+    ) : readiness.llmReady ? (
+      <Chip tone="success" dot>
+        <KeyRound className="size-3" /> {readiness.llmLabel ? `Model: ${readiness.llmLabel}` : "Model: ready"}
+      </Chip>
+    ) : (
+      <Chip tone="neutral">
+        <KeyRound className="size-3" /> Model: optional
+      </Chip>
+    );
   return (
     <div className="mt-8 w-full rounded-xl border border-border bg-muted/40 p-4 text-left">
       <div className="mb-3 text-sm text-muted-foreground">This host right now:</div>
       <div className="flex flex-wrap gap-2">
         {chip(BrickWall, !!readiness?.barrierReady, `Barrier: ${strongestLabel} ready`)}
-        {chip(KeyRound, !!readiness?.llmReady, readiness?.llmLabel ? `Model: ${readiness.llmLabel}` : "Model: ready")}
+        {modelChip}
       </div>
     </div>
   );
 }
 
-export function OnboardingScreen({
-  onGetStarted,
-  onSkip,
-  onTryDemo,
-}: {
-  onGetStarted: () => void;
-  onSkip: () => void;
-  /** Jump to the hands-on demo sandboxes. Optional so bare renders (tests) work. */
-  onTryDemo?: () => void;
-}) {
+export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void }) {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [loading, setLoading] = React.useState(true);
 
@@ -127,7 +126,6 @@ export function OnboardingScreen({
   }, []);
 
   const readiness = status ? deriveReadiness(status) : null;
-  const ready = !!readiness?.ready;
 
   return (
     <div className="mx-auto w-full max-w-[780px] px-6 py-12">
@@ -149,23 +147,13 @@ export function OnboardingScreen({
 
       <div className="mt-6 flex flex-wrap items-center gap-2.5">
         <Button onClick={onGetStarted}>
-          {ready ? "Finish setup" : "Get set up — about 2 minutes"} <ArrowRight className="size-4" />
-        </Button>
-        <Button variant="outline" onClick={onSkip}>
-          Skip for now
-        </Button>
-        <Button variant="ghost" onClick={onTryDemo}>
-          <FlaskConical className="size-4" /> Try a 2-minute demo sandbox
+          Get started — about 2 minutes <ArrowRight className="size-4" />
         </Button>
       </div>
-      {readiness && !readiness.barrierReady && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Demos need the sandbox runner — set up the Environment step first to start one.
-        </p>
-      )}
 
       <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">
-        Shown once — everything lives on under “Getting started” in the sidebar.
+        A quick guided setup — the barrier is the only requirement; a model or agent
+        is optional. You can revisit anytime under “Getting started” in the sidebar.
       </p>
     </div>
   );
