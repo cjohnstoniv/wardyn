@@ -14,6 +14,12 @@ host that was running 0.3.1.
 
 ### Added
 
+- **The console's default sizing now matches 110% browser zoom.** The root font
+  token moved from 16px to 17.6px and the hardcoded `px` text utilities were
+  converted to `rem`, so text and spacing scale together rather than the small
+  labels being left behind. One token (`--font-size` in `ui/src/styles/theme.css`)
+  rescales the whole console.
+
 - **Container as an execution environment.** A workspace can now be a container
   image (a new `container` kind, `Source` = image ref, no mount) alongside a local
   directory or repository, and any workspace/container can carry an operator-owned
