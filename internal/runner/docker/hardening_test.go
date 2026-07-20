@@ -133,36 +133,37 @@ func TestClassToRuntime_FailsClosed(t *testing.T) {
 	}
 }
 
-func TestCheckResourceCapsEnforceable(t *testing.T) {
-	// A modern host with all controllers delegated: no error.
-	ok := system.Info{MemoryLimit: true, PidsLimit: true, CPUCfsQuota: true, CgroupVersion: "2", CgroupDriver: "systemd"}
-	if err := checkResourceCapsEnforceable(ok); err != nil {
-		t.Fatalf("all caps enforceable must pass, got %v", err)
+func TestVerifyCapsEnforced(t *testing.T) {
+	// A daemon that applied the caps returns no discard warning — pass. This is
+	// also the Podman case (its compat create response is empty for capped
+	// containers, verified), which the old docker-info probe false-positived on.
+	for _, warns := range [][]string{nil, {}, {"some unrelated informational warning"}} {
+		if err := verifyCapsEnforced(warns); err != nil {
+			t.Errorf("no discard warning must pass, got %v (warns=%v)", err, warns)
+		}
 	}
 
-	// Each missing controller must fail closed, wrapping errCapsUnenforceable and
-	// naming the missing cap (the cgroup-v1-rootless-without-delegation case).
+	// A "…Limitation discarded" warning (real Moby on a cgroup-v1-rootless host)
+	// must fail closed, wrapping errCapsUnenforceable and echoing the warning.
 	cases := []struct {
 		name string
-		info system.Info
-		want string
+		warn string
 	}{
-		{"no-memory", system.Info{PidsLimit: true, CPUCfsQuota: true, CgroupVersion: "1"}, "memory"},
-		{"no-pids", system.Info{MemoryLimit: true, CPUCfsQuota: true, CgroupVersion: "1"}, "pids"},
-		{"no-cpu", system.Info{MemoryLimit: true, PidsLimit: true, CgroupVersion: "1"}, "cpu"},
-		{"none", system.Info{CgroupVersion: "1", CgroupDriver: "cgroupfs"}, "memory"},
+		{"memory", "Your kernel does not support memory limit capabilities or the cgroup is not mounted. Limitation discarded."},
+		{"cpu-quota", "Your kernel does not support CPU cfs quota. Quota discarded."},
+		{"pids", "Your kernel does not support pids limit capabilities or the cgroup is not mounted. PIDs limit discarded."},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkResourceCapsEnforceable(tt.info)
+			err := verifyCapsEnforced([]string{tt.warn})
 			if err == nil {
-				t.Fatalf("unenforceable caps must error, got nil")
+				t.Fatalf("a discard warning must error, got nil")
 			}
 			if !errors.Is(err, errCapsUnenforceable) {
 				t.Errorf("error must wrap errCapsUnenforceable, got %v", err)
 			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("error must name the missing cap %q, got %v", tt.want, err)
+			if !strings.Contains(err.Error(), "discard") {
+				t.Errorf("error must echo the discard warning, got %v", err)
 			}
 		})
 	}

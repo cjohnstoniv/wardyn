@@ -588,14 +588,16 @@ off-host egress (the L0 no-default-route guarantee), the `Runtimes` map is
 populated (CC-gating can read it), `host.docker.internal:host-gateway` resolves,
 the `overlay` storage driver is recognized, and CPU/memory/pids caps **actually
 enforce** (verified by reading a capped container's cgroup v2 `cpu.max`/
-`memory.max`/`pids.max`). **One documented divergence:** Podman's compat
-`docker info` under-reports `CpuCfsQuota` as `false` even though the quota binds,
-so Wardyn's Phase-4 pre-flight cap probe (which trusts `docker info`) FALSE-
-POSITIVES fail-closed on Podman — set `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` there
-(caps still enforce, verified). A robust fix (verify caps post-create from the
-container's own cgroup rather than pre-flight `docker info`) is a tracked follow-up.
-Re-run the probe (and `make test-e2e` for the full governed-run proof) on your own
-Podman version before relying on it — this box's WSL2 Podman is not a CI fleet.
+`memory.max`/`pids.max`). **Divergence noted and handled:** Podman's compat
+`docker info` under-reports `CpuCfsQuota` as `false` even though the quota binds.
+Wardyn's resource-cap gate is therefore **post-create and authoritative** — it
+fails a run closed only when the daemon's ContainerCreate response actually reports
+it DISCARDED a requested limit (`verifyCapsEnforced`), which Moby emits on a
+genuinely-uncapped host and Podman never emits for caps it applied. So Podman runs
+are **not** false-positived; the `docker info` booleans are used only as an
+advisory `doctor` hint. Re-run the probe (and `make test-e2e` for the full
+governed-run proof) on your own Podman version before relying on it — this box's
+WSL2 Podman is not a CI fleet.
 
 ---
 

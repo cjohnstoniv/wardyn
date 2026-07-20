@@ -217,14 +217,16 @@ cmd_doctor() {
     case "${_runtimes}" in *'"kata'*)   _classes="${_classes}, CC3 (kata)" ;; esac
     report ok "confinement classes available: ${_classes}"
 
-    # Resource-cap enforceability: the daemon's own report of whether CPU/memory/
-    # pids limits will actually bind. On a cgroup-v1 rootless host without
-    # delegation these come back false and a governed run REFUSES (fail closed) so
-    # an untrusted sandbox never runs uncapped — surface it here before that.
+    # Resource-cap enforceability HINT (pre-boot; advisory). The authoritative gate
+    # is post-create: a governed run refuses only if the daemon actually DISCARDS a
+    # requested limit (create-response warning). These docker-info booleans are just
+    # an early heads-up and are UNRELIABLE on Podman's compat API (it under-reports
+    # CpuCfsQuota=false even when the quota binds), so treat a warn here as "check",
+    # not "will fail".
     _caps=$(docker info --format '{{.MemoryLimit}}/{{.PidsLimit}}/{{.CPUCfsQuota}}' 2>/dev/null || echo '?/?/?')
     case "${_caps}" in
-      true/true/true) report ok "resource caps enforceable (memory + pids + cpu; cgroup v$(docker info --format '{{.CgroupVersion}}' 2>/dev/null || echo '?'))." ;;
-      *) report warn "the docker daemon reports it CANNOT enforce some resource limits (memory/pids/cpu = ${_caps}). A governed run will REFUSE unless WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 — delegate the cgroup v2 controllers to the runtime user (systemd: Delegate=yes; rootless: enable cgroup v2 delegation)." ;;
+      true/true/true) report ok "resource caps look enforceable (memory + pids + cpu; cgroup v$(docker info --format '{{.CgroupVersion}}' 2>/dev/null || echo '?'))." ;;
+      *) report warn "docker info hints some resource limits may not enforce (memory/pids/cpu = ${_caps}). If a real run is refused (daemon discarded a limit), delegate the cgroup v2 controllers (systemd: Delegate=yes; rootless: enable cgroup v2 delegation) or set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1. On Podman this is often a false alarm (compat API under-reports; caps still bind)." ;;
     esac
   fi
 

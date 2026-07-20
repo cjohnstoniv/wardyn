@@ -70,8 +70,9 @@ type fakeDocker struct {
 	containers map[string]*createdContainer // id (== name) -> record
 
 	// failpoints
-	failCreateContainer string // name prefix that should fail on create
-	failImagePull       bool   // ImagePull returns an error (image absent + unpullable)
+	failCreateContainer string   // name prefix that should fail on create
+	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
+	createWarnings      []string // Warnings the ContainerCreate response carries (e.g. a discarded resource limit)
 	// onCreate, when set, runs INSIDE ContainerCreate (before the container is
 	// recorded) so a test can interleave another driver call with an in-flight
 	// create. Called without f.mu held.
@@ -187,7 +188,9 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		net:   opts.NetworkingConfig,
 		state: &container.State{Status: "created"},
 	}
-	return client.ContainerCreateResult{ID: name}, nil
+	// createWarnings simulates a daemon that discarded a requested limit (e.g. a
+	// cgroup-v1-rootless host) — surfaced in the create response like real Moby.
+	return client.ContainerCreateResult{ID: name, Warnings: f.createWarnings}, nil
 }
 
 func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {

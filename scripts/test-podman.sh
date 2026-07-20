@@ -72,7 +72,7 @@ if [ "${_cap_ok}" = 1 ]; then
   pass "resource caps ACTUALLY enforce (memory.max=${_mem}, pids.max=${_pids}, cpu.max='${_cpu}') — despite docker info reporting ${_info_caps}"
   case "${_info_caps}" in
     true/true/true) : ;;
-    *) warn "docker info under-reports caps as ${_info_caps} (Podman quirk). Wardyn's Phase-4 pre-flight probe reads docker info, so it will FALSE-POSITIVE fail-closed here — set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 (caps still enforce, verified above)." ;;
+    *) warn "docker info under-reports caps as ${_info_caps} (Podman quirk) — harmless: Wardyn's cap gate is post-create (verifyCapsEnforced reads the daemon's discard warning), so it does NOT false-positive on Podman. The docker-info booleans are only an advisory doctor hint." ;;
   esac
 else
   diverge "resource caps do NOT all actually bind (memory.max=${_mem} want 268435456, pids.max=${_pids} want 64, cpu.max='${_cpu}' want '100000 100000') — an untrusted sandbox could run uncapped. Enable rootless cgroup v2 delegation for the missing controller."

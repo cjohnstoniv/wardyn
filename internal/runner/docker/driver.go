@@ -287,19 +287,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{}, err
 	}
 
-	// Fail closed if the host cannot actually enforce resource caps (a cgroup
-	// controller missing / not delegated) — an untrusted sandbox must not run
-	// effectively uncapped. Authoritative from `docker info`; opt out on a trusted
-	// host with WARDYN_ALLOW_UNENFORCEABLE_CAPS=1.
-	if capErr := checkResourceCapsEnforceable(info); capErr != nil {
-		if d.cfg.AllowUnenforceableCaps {
-			slog.Warn("wardynd: resource caps not enforceable on this host — proceeding because WARDYN_ALLOW_UNENFORCEABLE_CAPS=1; the sandbox may run without CPU/memory/pids limits",
-				slog.String("detail", capErr.Error()))
-		} else {
-			return runner.Sandbox{}, capErr
-		}
-	}
-
 	enforced := spec.ConfinementClass
 	if enforced == "" {
 		// Class-less floor for direct driver callers only: every wardynd
@@ -567,6 +554,21 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	if _, err := d.cli.ContainerStart(ctx, agentResp.ID, client.ContainerStartOptions{}); err != nil {
 		return fail(fmt.Errorf("docker: start agent: %w", err))
+	}
+
+	// Fail closed if the daemon DISCARDED a resource limit we requested (a cgroup
+	// controller missing / not delegated) — an untrusted sandbox must not run
+	// effectively uncapped. Authoritative post-create signal (the create-response
+	// discard warning), correct on both Moby and Podman; opt out on a trusted host
+	// with WARDYN_ALLOW_UNENFORCEABLE_CAPS=1. rollback tears down the agent + proxy
+	// + per-run network on failure.
+	if capErr := verifyCapsEnforced(agentResp.Warnings); capErr != nil {
+		if d.cfg.AllowUnenforceableCaps {
+			slog.Warn("wardynd: the daemon discarded a resource limit — proceeding because WARDYN_ALLOW_UNENFORCEABLE_CAPS=1; the sandbox may run without CPU/memory/pids limits",
+				slog.String("detail", capErr.Error()))
+		} else {
+			return fail(capErr)
+		}
 	}
 
 	// Recording requires two agent-writable directories that do NOT exist
