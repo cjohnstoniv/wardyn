@@ -142,7 +142,7 @@ func runCmd(client clientFn) *cobra.Command {
 			fmt.Fprintln(tw, "ID\tAGENT\tREPO\tCC\tSTATE\tCREATED_BY\tCREATED")
 			for _, r := range runs {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					short(r.ID.String()), r.Agent, r.Repo, r.ConfinementClass, r.State,
+					r.ID, r.Agent, r.Repo, r.ConfinementClass, r.State,
 					r.CreatedBy, r.CreatedAt.Format(time.RFC3339))
 			}
 			return tw.Flush()
@@ -313,7 +313,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tREQUESTED")
 			for _, a := range aps {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					short(a.ID.String()), short(a.RunID.String()), a.Kind, a.State,
+					a.ID, short(a.RunID.String()), a.Kind, a.State,
 					a.RequestedAt.Format(time.RFC3339))
 			}
 			return tw.Flush()
@@ -439,6 +439,13 @@ func newTab() *tabwriter.Writer {
 }
 
 // short truncates an id-like string to its first segment for table density.
+//
+// Use it ONLY for columns that are context, never for the id a subcommand will
+// ask for back. Truncating an ACTIONABLE id breaks the obvious `list` → copy →
+// `kill`/`approve` flow: the commands parse a full UUID and reject 8 chars with
+// "invalid UUID length: 8". So the ID column of runs/approvals/policies prints in
+// full, and short() is left for the likes of an approval's RUN column or an audit
+// target, which nothing takes as an argument.
 func short(s string) string {
 	if len(s) > 8 {
 		return s[:8]

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1009,5 +1010,70 @@ func TestRecordSaveCmd_RequiresName(t *testing.T) {
 	srv.mu.Unlock()
 	if n != 0 {
 		t.Errorf("server saw %d requests, want 0 (required-flag check must short-circuit)", n)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it printed.
+// The table writers target os.Stdout directly (newTab), not cobra's out sink,
+// so the cobra SetOut in execCmd cannot see them.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
+	fn()
+	_ = w.Close()
+	os.Stdout = orig
+	return <-done
+}
+
+// An ACTIONABLE id must print in full. `run kill` / `approve` / `deny` / `--policy`
+// all parse a full UUID and reject a truncated one ("invalid UUID length: 8"), so
+// truncating the ID column here would break the obvious list → copy → act flow.
+// Found by running the CLI e2e: `run list` printed 790047a8 and `run kill 790047a8`
+// then failed. Context-only columns (an approval's RUN, an audit target) may stay short.
+func TestListCmds_PrintFullActionableIDs(t *testing.T) {
+	runID := uuid.New()
+	apprID, apprRun := uuid.New(), uuid.New()
+	polID := uuid.New()
+
+	for _, tc := range []struct {
+		name string
+		body any
+		args []string
+		want uuid.UUID
+		// notWant, when set, must NOT appear in full (a context-only column).
+		notWant *uuid.UUID
+	}{
+		{"run list", []types.AgentRun{{ID: runID, Agent: "claude-code"}},
+			[]string{"run", "list"}, runID, nil},
+		{"approvals list", []types.ApprovalRequest{{ID: apprID, RunID: apprRun, State: types.ApprovalPending}},
+			[]string{"approvals", "list"}, apprID, &apprRun},
+		{"policy list", []types.RunPolicy{{ID: polID, Name: "p"}},
+			[]string{"policy", "list"}, polID, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newCmdServer(t, http.StatusOK, tc.body)
+			var execErr error
+			out := captureStdout(t, func() {
+				execErr = execCmd(t, append(tc.args, "--url", srv.URL, "--token", "tok")...)
+			})
+			if execErr != nil {
+				t.Fatalf("%s: %v", tc.name, execErr)
+			}
+			if !strings.Contains(out, tc.want.String()) {
+				t.Errorf("%s must print the FULL actionable id %s (a truncated id is rejected by the action subcommands); got:\n%s",
+					tc.name, tc.want, out)
+			}
+			if tc.notWant != nil && strings.Contains(out, tc.notWant.String()) {
+				t.Errorf("%s: context-only column should stay truncated, but printed %s in full:\n%s",
+					tc.name, tc.notWant, out)
+			}
+		})
 	}
 }

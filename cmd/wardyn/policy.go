@@ -46,7 +46,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			fmt.Fprintln(tw, "ID\tNAME\tMIN_CC\tFIRST_USE\tGRANTS\tUPDATED")
 			for _, p := range policies {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
-					short(p.ID.String()), p.Name, p.Spec.MinConfinementClass,
+					p.ID, p.Name, p.Spec.MinConfinementClass,
 					p.Spec.FirstUseApproval.Normalize(), len(p.Spec.EligibleGrants),
 					p.UpdatedAt.Format(time.RFC3339))
 			}
