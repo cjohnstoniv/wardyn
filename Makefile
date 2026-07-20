@@ -56,7 +56,7 @@ help:
 	@echo "Targets:"
 	@echo "  setup                 - One-command Wardyn: containerized by default (Enter = containerized), host is advanced,"
 	@echo "                          credential, builds, up, opens browser. Headless defaults to containerized; scripts pick"
-	@echo "                          with WARDYN_SETUP_MODE=local|container. Team (multi-user) is coming soon."
+	@echo "                          with WARDYN_SETUP_MODE=local|container. Team (multi-user) mode is not scheduled — see ROADMAP.md."
 	@echo "                          (non-interactive opt-ins: WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1,"
 	@echo "                           WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
 	@echo "  stage-claude          - Stage your Claude login for per-run subscription mounts (restarts wardynd)"
@@ -88,6 +88,8 @@ help:
 	@echo "  test-e2e-live         - Live TASK e2e: real sandboxes run the corpus, graded on state (needs Docker)"
 	@echo "  test-e2e-subscription - Live SUBSCRIPTION e2e: proxy-side inject-on attach + inject-off escape hatch (restarts wardynd)"
 	@echo "  test-e2e-byoi         - Live BYOI e2e: wrap stock/harness/hostile/nonexistent bases + selftest gate (needs Docker)"
+	@echo "  test-e2e-concurrent   - Shared-host concurrency: two project-scoped stacks up at once,"
+	@echo "                          no collision + cross-network isolation (needs Docker)"
 	@echo "  test-report           - Go unit tests with detailed md/coverage reports"
 	@echo "  test-report-pg        - Postgres-gated suite with reports (needs WARDYN_TEST_PG)"
 	@echo "  test-report-docker    - -tags docker suite with reports (fakeDocker; no daemon needed,"
@@ -454,7 +456,7 @@ screenshots:
 
 # ONE front door: asks containerized (default, recommended — the compose stack) vs
 # host (advanced escape hatch — wardynd runs as you, using your resident Claude
-# login). Enter / headless = containerized; team (multi-user) mode is coming soon.
+# login). Enter / headless = containerized; team (multi-user) mode is not scheduled (see ROADMAP.md).
 # In host mode a terminal PROMPTS for each credential (staging, AWS, SCM); a headless
 # run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1 /
 # WARDYN_IMPORT_SCM=1 are set.

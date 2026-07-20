@@ -10,9 +10,9 @@ commodity. Apache-2.0 everything; no `enterprise/` directory; CNCF Sandbox is
 the governance target.
 
 > **Status markers.** Controls below are tagged **[shipped]** /
-> **[v0.2 — building]** / **[v0.5+ — planned]**, matching
+> **[experimental]** / **[v0.5+ — planned]**, matching
 > [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md); an untagged item
-> is shipped.
+> is shipped. What each planned tag covers is in [`ROADMAP.md`](ROADMAP.md).
 
 ## Components
 

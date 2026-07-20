@@ -27,7 +27,8 @@ make setup    # containerized control plane → launch → open http://localhost
 > subscription with `WARDYN_SUBSCRIPTION_TOKEN`. **Host mode**
 > (`WARDYN_SETUP_MODE=local`) is an advanced escape hatch — `wardynd` runs as you
 > using your resident Claude login, but its Verify/Record callbacks don't route
-> under Docker Desktop + WSL2 NAT. **Team mode** (multi-user SSO/RBAC) is **coming soon**.
+> under Docker Desktop + WSL2 NAT. **Team mode** (multi-user SSO/RBAC) does not exist
+> yet and is not scheduled — see [ROADMAP.md](../ROADMAP.md).
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
@@ -117,9 +118,10 @@ make demo                # compose up: postgres + dex + wardynd; creates a demo 
 
 Then:
 
-- **UI**: http://localhost:8080 — use the CLI or admin token. (Human SSO login
-  via the UI is **coming soon** — the "Sign in with SSO" button is disabled in
-  this version, though the `/auth/login` flow still works server-side.)
+- **UI**: http://localhost:8080 — use the CLI or admin token. (There is no
+  human SSO login: the "Sign in with SSO" button is disabled, though the
+  `/auth/login` flow still works server-side. Multi-user auth is unscheduled —
+  see [ROADMAP.md](../ROADMAP.md).)
 - **CLI** (inside or outside the container):
 
 ```sh
@@ -175,7 +177,8 @@ minted installation token is 1h, repo-scoped, and permission-clamped to
 (`wardyn/<run-id>/*`) is recorded in the token metadata but is
 **advisory-only today** — the token can push to any branch (including the
 default) within its granted repos; real branch-namespace enforcement is
-**[v0.5 — planned]** (see `threatmodel/THREAT-MODEL.md` asset #4).
+**[v0.5 — planned]** (see `threatmodel/THREAT-MODEL.md` asset #4 and
+[ROADMAP.md](../ROADMAP.md)).
 
 ### Model auth: three ways to give Claude Code its LLM access
 

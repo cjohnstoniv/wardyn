@@ -6,36 +6,368 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-19
+
+Wardyn remains **pre-alpha**: interfaces are not stable and this release changes
+several defaults. Read "Upgrading from 0.3.1" below before pulling it onto a
+host that was running 0.3.1.
+
 ### Added
 
 - **Container as an execution environment.** A workspace can now be a container
-  image (a new `container` kind) alongside a local directory or repository, and any
-  workspace/container can carry an operator-owned model/harness credential binding
-  (managed, API key, or Bedrock — names/refs only, never secret values). A run
-  inherits the model access of the workspace/container it picks; the binding is
-  folded into the run policy at create and injected proxy-side, so the sandbox never
-  holds the credential. Onboard and edit bindings from the Workspaces screen
-  (`PUT /workspaces/{id}/llm-cred`).
+  image (a new `container` kind, `Source` = image ref, no mount) alongside a local
+  directory or repository, and any workspace/container can carry an operator-owned
+  model/harness credential binding (`none|managed|api_key|bedrock` — secret
+  names/refs only, never secret values). A run inherits the model access of the
+  workspace/container it picks; the binding is folded into the run policy at create
+  and injected proxy-side, so the sandbox never holds the credential. Onboard and
+  edit bindings from the Workspaces screen or `PUT /workspaces/{id}/llm-cred`
+  (migration `0024_workspace_llm_cred`).
+- **YAML policies.** `wardyn run --policy-file` and `wardyn policy create|update -f`
+  accept JSON or YAML; `wardyn policy render -f <file>` (or `-f -`) converts either
+  to canonical JSON and strictly validates it without touching the control plane.
+  Commented examples ship in `examples/policies/`: `sandbox.yaml`,
+  `sandbox-claude.yaml`, and `sandbox-workspace.yaml` (a governed agent on a real
+  local directory — note the mount source must be an **onboarded** `local_dir`
+  workspace, and `read_only` defaults to `true`, so edits need it set `false`).
+- **`wardyn subscription connect|status|disconnect`.** Capture a `claude setup-token`
+  from **stdin only** (never argv, never `.env`), stored age-encrypted and injected
+  proxy-side into eligible runs — the sandbox holds only an inert sentinel. Connect
+  is idempotent (skip-if-live, `--reconnect` to replace). The reserved secret name
+  `wardyn-harness-anthropic-oauth` is blocked from the generic secrets API so this
+  is the only supported path. `WARDYN_SUBSCRIPTION_TOKEN` seeds it headlessly through
+  `scripts/up.sh` / `scripts/ci-run.sh`. SDK: `ConnectManagedSubscription` /
+  `DisconnectManagedSubscription`. The setup-token is long-lived (~1 year),
+  age-encrypted and non-rotating — documented, not hidden.
+- **`wardyn setup status`**: the console's readiness checklist in the terminal
+  (same `/setup/status` source), each unmet check naming the exact next command.
+- **AI Run Composer on the container path.** A composer backend that runs the real
+  `claude` inside a governed one-shot sandbox with the managed subscription injected
+  proxy-side (never resident), mirroring the governed scan-run pattern — brokered
+  `/internal/compose-results/{runID}`, `WARDYN_COMPOSE_ONLY` agent-run mode,
+  cross-run guard, fail-closed when no subscription is connected, reclaim-on-timeout.
+- **Containerized AWS SSO login for Bedrock.** A fourth Bedrock credential path for
+  SSO-only orgs: the operator authorizes a device code in any browser and Bedrock
+  runs get short-lived role credentials — no host `aws sso login`, no `~/.aws` mount.
+  `deploy/images/aws-sso` is a dedicated login image (AWS CLI v2, GPG-verified) so
+  ~600 MB of CLI stays out of normal runs; `cmd/wardyn-aws-sso` uploads the SSO cache
+  through the brokered internal endpoint; `runs_bedrock` materializes a minimal
+  synthetic `~/.aws` (sso-session + hashed cache file). The pane collects your org
+  portal URL and the server seeds a credential-free `[sso-session wardyn]` via
+  `WARDYN_AWS_SSO_CONFIG_B64`; Wardyn persists no copy. **Honest bound:** the SSO
+  token and the derived role credentials are **resident** in the sandbox (the UI says
+  so with an amber chip), and Wardyn cannot revoke a captured SSO session. Validated
+  against a fake sso-oidc/portal built from the real botocore service models, not
+  against a live IAM Identity Center.
+- **Standard AWS environment is honored.** `WARDYN_BEDROCK_REGION` /
+  `WARDYN_BEDROCK_AWS_PROFILE` fall back to `AWS_REGION` / `AWS_DEFAULT_REGION` /
+  `AWS_PROFILE`; the Wardyn-specific names still win. A region alone cannot enable
+  Bedrock (that also needs a model), so this cannot switch the transport on by surprise.
+- **Corporate-network image builds.** Corp-CA staging (`corp-ca.pem`, documented in
+  `deploy/images/README.md`) and `NPM_REGISTRY` / `HTTP_PROXY` / `HTTPS_PROXY` /
+  `NO_PROXY` are threaded into every `docker build` and through compose `build.args`;
+  `Dockerfile.wardynd` gains a `UI_STAGE` selector (`ui-build` default,
+  `ui-prebuilt` via `WARDYN_UI_STAGE`) so a mirror that cannot serve pnpm consumes a
+  host-built `ui/dist`. `up.sh` builds agent images one at a time and continues past a
+  blocked image with a summary instead of aborting the bring-up. **corepack does not
+  work around a mirror missing pnpm** (it fetches from the same 404ing registry path)
+  — hence the prebuilt stage.
+- **Opt-in native agent-CLI install for corp networks** (npm stays the default):
+  `CLAUDE_INSTALL=native` installs the native `claude` binary, checksum-verified
+  against the release manifest from `downloads.claude.ai` (the only host it contacts —
+  allowlist it) or from a host-staged binary for fully offline builds;
+  `CLAUDE_CODE_VERSION` pins it. `CODEX_INSTALL=native` is staged-only and fails
+  loudly if no binary is staged, because codex has no Wardyn-verified public download
+  contract. `scripts/stage-agent-binary.sh` does the host-side staging.
+- **Shared-host concurrency for the compose control plane.** Every explicitly named
+  compose object is parameterized off `WARDYN_NS` (default `wardyn`, so the
+  single-user default is byte-for-byte unchanged): container names, the internal
+  network (`WARDYN_INTERNAL_NETWORK`, now threaded into `wardynd` config), and the
+  recordings volume. `WARDYN_PG_PORT` parameterizes the Postgres host port.
+  `ci-run.sh` takes a per-job `COMPOSE_PROJECT_NAME` + `WARDYN_NS` (unique per
+  invocation, pinnable via `WARDYN_CI_PROJECT`), ephemeral host ports, a
+  container-health wait, and a project-scoped `down --volumes` that can no longer wipe
+  another job's stack. `make test-e2e-concurrent` (`scripts/test-concurrent.sh`) is the
+  live two-job acceptance test and passes. Boundary: this is safe for **one trusted
+  operator** (e.g. a CI fleet under one service account), not for mutually distrusting
+  tenants.
+- **Fail-closed resource caps.** On a host where the daemon silently ignores
+  `NanoCPUs`/`Memory`/`PidsLimit` (cgroup v1, or rootless without controller
+  delegation), the sandbox ran effectively uncapped and nothing detected it. The
+  daemon's `ContainerCreate` response warnings are now authoritative: any
+  "…Limitation discarded" warning refuses the run and rolls the sandbox back.
+  `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` overrides on a trusted host (downgrades to a
+  loud warning); `wardyn doctor` surfaces the signal pre-boot as an advisory hint.
 - **Run type in the New Run wizard.** The Basics step offers "Agent run" vs
-  "Governed command" (a plain shell command, `task_mode=exec`, no agent/model), and
-  bring-your-own base image is promoted out of the Advanced section into a
-  first-class field. Picking a container attaches it as the run's base image.
-- **Harness-aware demo.** When a model/harness provider is connected, the Getting
-  Started demos include an interactive Claude Code demo alongside the keyless
-  egress-boundary demos.
+  "Governed command" (a plain shell command, `task_mode=exec`, no agent, no LLM
+  credentials), and bring-your-own base image is promoted out of Advanced into a
+  first-class field. Picking a container workspace attaches it as the run's base
+  image (it rides `run.image`, so the backend resolves it back by image ref to inherit
+  its bound credentials instead of 422ing at the onboarded-mount gate).
+- **Harness-aware demo.** A fifth demo ("The agent in the box") appears on `/demos`
+  once a model/harness provider is connected, scoped to Anthropic egress. Like every
+  demo it comes up idle and you run `claude` yourself in the attached terminal. The
+  four keyless egress-boundary demos stay LLM-free and remain the frozen set inside
+  Getting Started.
+- **Enterprise onboarding and a corp-aware `doctor`.** The wizard now offers the
+  Bedrock credentials the backend already read but never exposed — the preferred
+  never-resident bearer (`bedrock-api-key`) and the SSO session token
+  (`aws-session-token`), ordered by `resolveBedrockAuth` precedence. `up.sh` wires
+  operator-provided Bedrock config (region/model, `~/.aws` bind with the uid-1000 ACL
+  note) into `deploy/compose/.env` on the container path. Rancher Desktop is detected
+  by docker context and its non-bind-mountable `~/.rd/docker.sock` is remapped to the
+  in-VM socket, and `wardyn setup wall` gains a Rancher branch (`rdctl shell`) instead
+  of telling a Rancher user to install Colima. `doctor` warns when a forward proxy is
+  set with no corp CA staged (before a three-minute build dies on x509) and asserts the
+  chosen docker socket is actually bind-mountable, not merely reachable.
+- **Rootless and Podman: documented and probed.** THREAT-MODEL now states the
+  supported rootless model — rootless Docker/Podman is supported at **CC1 only**; CC2
+  and CC3 are refused fail-closed (gVisor needs `--TESTONLY-unsafe-nonroot`, Kata needs
+  device passthrough) — and reframes the upstream corp-proxy hop as a supported,
+  operator-configured egress lane with its bounds stated (it does not make private IPs
+  reachable; only the resolved-IP re-check is deferred to that proxy). It also answers
+  the JVM/Deno trust-store question: MITM is not mandatory for any egress class, so
+  only a client pointed at an explicitly MITM'd host is affected. `scripts/test-podman.sh`
+  probes the exact primitives the runner depends on and **passes against a live
+  rootless Podman 4.9.3** (internal bridge blocks off-host egress, runtimes map
+  readable, host-gateway resolves, caps verified by reading the container's cgroup v2
+  `cpu.max`/`memory.max`/`pids.max`).
+- **`docs/ADO-GIT-BROKER.md`**: a reviewed **design only** for never-resident
+  proxy-side Azure DevOps git egress. The working lane today is still the resident
+  `git_pat`. The named ceiling: Azure DevOps has no token-minting API, so the operator
+  PAT's scope is the boundary — never-resident yes, per-repo auto-expiring scoping no.
+  Not implemented, because the switch touches the credential path and needs a real ADO
+  PAT and repo to validate.
 
 ### Changed
 
+- **`make setup` is containerized by default.** Host mode is now an advanced escape
+  hatch (`WARDYN_SETUP_MODE=local`); `WARDYN_SETUP_MODE=team` prints a notice and exits.
 - **First-run setup is a mandatory gate.** The welcome screen is a single
-  "Get started" call to action into Getting Started — the "try a demo sandbox" and
-  "skip for now" escapes are gone, and no navigation appears until setup is finished.
-  Returning operators (existing runs) and team/SSO deployments are never gated.
-- **The model/harness provider is optional.** Only the sandbox barrier is required;
-  the provider step is an explicit, skippable choice (the AI Composer and agent runs
-  need it, plain governed commands and bring-your-own containers do not).
+  "Get started" call to action into Getting Started — the "try a 2-minute demo sandbox"
+  side door and the "skip for now" / "finish later" escapes are gone. While the gate is
+  active every route except `/setup` and `/demos` redirects to `/setup`, the
+  Operate/Configure/Forensics nav groups are hidden, and the top-bar New-run action is
+  hidden. The gate keys on the console being **new**, not on backend readiness (see
+  Fixed), and team/SSO deployments are never gated.
+- **The model/harness provider is optional.** Only the sandbox barrier is a hard
+  requirement: the `llm_provider` setup check is INFO rather than a warning, the step
+  carries a neutral "Optional" chip with an explicit "Skip — run without a model"
+  control, and the Review/Launch rollup keys off the barrier alone. The AI Composer and
+  agent runs need a provider; a governed command (`task_mode=exec`), a
+  bring-your-own container, and an interactive run you drive yourself do not.
+- **The model step asks about the harness first.** Choosing "container login" no
+  longer silently commits you to a Claude subscription: you pick the agent harness,
+  then that harness's credential path, each named for the credential rather than the
+  mechanism ("Set up Claude subscription" / "Set up Anthropic API key" / "Set up AWS
+  Bedrock", the last expanding its four modes inline). Each path keeps its posture chip
+  — green proxy-injected, amber resident.
+- **The setup funnel is ordered by prerequisite, not by theme.** Host Proxy and
+  Artifact Redirect move out of a collapsible "Corporate network" section that sat
+  *after* the demos and into Essentials *ahead* of the model step (connecting a model
+  needs egress, and so do the demos, so meeting an unconfigured proxy later made Wardyn
+  look broken rather than unconfigured). Credentials now precedes Workspaces, because
+  onboarding a private repo needs the git credential to clone. The fast-path "You're
+  ready — launch your first run now" banner is removed; it duplicated the Launch step
+  and talked over whatever step was being configured.
 - **Platform-first framing.** Wardyn is presented as a governed-sandbox platform for
   any workload — scripts, builds, tools, and coding agents — with AI agents as the
-  flagship use rather than the definition (welcome, setup, runs, and glossary copy).
+  flagship use rather than the definition (hero, IntroBlurb, setup tagline, runs copy,
+  glossary, README).
+- **The AI Run Composer is marked Beta** (a chip on the "Describe your task" entry
+  card and on the "AI Run Composer" review eyebrow). "Configure manually" is unmarked.
+- **The composer's "Proposed setup" review leads with what blocks you.** The model's
+  rationale and advisory `model_notes` collapse behind "Why this setup" disclosures;
+  real blockers, the deterministic clamp notices, and the risk gate stay primary.
+- **Setup persists the chosen Docker socket.** `wardyn_pick_docker_host` wrote
+  `WARDYN_DOCKER_SOCK` into the environment only, so any `docker compose up -d wardynd`
+  run outside `up.sh` fell back to compose's `/var/run/docker.sock` default. On a
+  dual-daemon box that daemon has no `runsc`/`kata`, so the barrier silently collapsed
+  from three tiers to Fence-only. The value is now written into `deploy/compose/.env`,
+  so every later compose invocation from any shell drives the same daemon.
+- **Operator-supplied egress domains are validated server-side.** A mid-label wildcard
+  like `oidc.*.amazonaws.com` compiles to an exact hostname no request can equal — the
+  matcher supports a **leading** `*.` suffix or an exact host, nothing else. Until now
+  the API, inline policies and `WARDYN_DEFAULT_POLICY` all accepted such an entry (only
+  the UI checked, client-side), so a policy could carry a silently dead rule. One
+  predicate, `ValidDomainEntry`, now runs at the `validatePolicySpec` chokepoint every
+  operator ingest point routes through. Entries with a port or path attached
+  (`*.example.com:0`, `*.example.com/path`) are rejected too. **This can reject a
+  policy that 0.3.1 accepted — but only entries that never matched anything.**
+- **A half-specified per-workspace Bedrock override is rejected at write time.** A
+  Bedrock model id is a region-scoped inference profile, so a region without a model
+  (or the reverse) fails at invoke. Omitting the block entirely remains the
+  inherit-everything case. `validateWorkspaceLLMCred` also rejects an `api_key_secret`
+  naming a sink-reserved secret.
+- **The resident-secret disclosure is corrected.** The threat model claimed secrets
+  reach the sandbox in "two named, bounded exceptions" and said so in three places that
+  did not agree on which two. Reading the code, there are **eight** — including the
+  AWS SSO token this release adds, which the threat model did not mention at all.
+  Section 5.1a is now the single authoritative enumeration: what lands, why it cannot
+  be proxy-injected, what bounds it, and where no bound exists (Wardyn cannot revoke a
+  captured SSO session, and verbatim-only masking does not match the base64 copy carried
+  in the env var). The other sites point at it instead of restating a count.
+- **The compose banner's "production path is Kubernetes" claim is corrected**: the
+  Kubernetes data plane is v0.5-planned and cannot create sandboxes yet.
+- **CLI list output prints ids in full.** `run list` printed 8-character ids and
+  `run kill <that id>` then rejected them ("invalid UUID length: 8"); the same mismatch
+  broke `approvals list` → `approve`/`deny` and `policy list` → `run --policy`.
+  The ID column of runs/approvals/policies is no longer truncated; context-only columns
+  (an approval's RUN column, an audit target) still are.
+- Personal paths and usernames are scrubbed from the tree (the example policy no longer
+  pins the author's home directory, `docs/FRESH-START.md` no longer names a
+  pre-rename checkout, local-principal fixtures use `alice`). No behavior change.
+- Repo gates are back in truth with the tree: the diagram manifest re-points at
+  `runs_lifecycle.go`/`runs_dispatch.go` after the `runs.go` split, `workspaces.tsx`
+  is split on two single-concern seams (1226 → 609 + 437 + 217 lines) instead of being
+  allowlisted, and the image-pin gate resolves a bare `${VAR}` against the Dockerfile's
+  own `ARG` default before its alias check (so `FROM ${UI_STAGE}` is no longer a false
+  positive, and a `${VAR}` that resolves to a real registry image still needs a digest).
+
+### Fixed
+
+- **A workspace's model credential binding never reached the run's persisted grants —
+  and the operator's Claude subscription was billed for it.** `persistRunGrants`
+  snapshotted the run spec's grants, proxy injections and SCM egress; `applyWorkspaceCreds`
+  mutated that same by-value spec fifty-two lines later and nothing re-read it. So a
+  workspace bound to its **own `api_key`** contributed no grant at all and the run fell
+  through to the control-plane managed subscription — the operator paid for a run the
+  workspace had explicitly bound to its own key. `managed` and `bedrock` bindings could
+  not displace a competing api-key grant either, so the api key won over the transport
+  the operator chose. The binding was stored, rendered in the UI and audited; it simply
+  never took effect. Credential resolution now runs **before** grants are persisted, and
+  the tests drive `POST /api/v1/runs` and assert on the persisted grants — the only
+  formulation that could have caught it. One visible consequence: when a workspace's
+  approved egress already listed `api.anthropic.com`, that host is now contributed by the
+  credential binding, so it no longer appears in the `run.workspace.egress` audit's
+  `added_domains`. The domain sets dedupe, so the effective policy is unchanged.
+- **Per-workspace Bedrock bindings are actually applied.** Until now a workspace's
+  Bedrock region/model/profile was stored and displayed while dispatch explicitly ignored
+  it (the UI said so). Region, model and profile are threaded through
+  `resolveBedrockAuth` with the global config as fallback, the region's
+  `bedrock-runtime`/`bedrock` hosts are unioned into the run's egress, the SSO region
+  falls back to the **effective** region (not the global one, which would hand a
+  relocated run the wrong oidc/portal endpoints), and the `run.llm.bedrock` audit names
+  the effective region. Not claimed, because it needs live Bedrock: that a cross-region
+  inference-profile id resolves in the overridden region, and the bearer-mode exchange
+  against a real `bedrock-runtime` endpoint.
+- **The AWS SSO login pre-allowed three hosts the proxy could never match.**
+  `oidc.*.amazonaws.com`, `portal.sso.*.amazonaws.com` and `device.sso.*.amazonaws.com`
+  are mid-label wildcards, which `classifyDomain` compiles to literal hostnames matching
+  nothing — so the login failed on the very hosts it claimed to allow, stored an empty
+  account/role, and every downstream Bedrock run inherited `sso_account_id = `. The
+  regional hosts are now derived at launch from `BedrockAWSSSORegion` (falling back to
+  `BedrockRegion`) and recorded in the `harness.login.started` audit. With **no** region
+  configured nothing regional is pre-allowed and the two hosts surface as first-use
+  approvals — deliberately not falling back to `*.amazonaws.com`, which would hand the
+  sandbox S3, EC2 and STS to fix a login. Net egress is strictly narrower than what
+  0.3.1 shipped.
+- **The AWS SSO login sandbox had no `~/.aws` at all**, while the setup pane auto-typed
+  `aws sso login --no-browser --use-device-code` — a command that needs an
+  `sso_start_url` and `sso_region` to already exist. No start-URL configuration existed
+  anywhere (not a flag, not the Config struct, not the UI), so the sandbox was launched
+  structurally unable to complete its one job, and the only way through was to run
+  `aws configure sso` by hand in the attach terminal, which nothing documented. The pane
+  now collects the org portal URL and the server seeds an all-or-nothing session block.
+  The request is refused (400) when the start URL is missing, is not https, or contains
+  whitespace (a newline would smuggle extra keys into the generated INI), or when no SSO
+  region is configured — naming the flag to set.
+- **The `aws-sso` image was in the default agent-image map and offered by the setup UI,
+  but neither setup path built it**, so first use failed at pull against a `:local` tag
+  that exists in no registry. Both build loops now build it.
+- **The first-run gate could lock an existing console out on a transient daemon blip.**
+  The gate keyed on `!has_runs || !ready` and the setup orchestrator does not cache probe
+  errors, so a momentary Docker hiccup pulled an operator with existing runs out of the
+  entire console — every route redirecting to `/setup`, all nav hidden, the only escape on
+  the funnel's last step. (0.3.1's claim that returning consoles are never gated was not
+  true.) The gate now keys on the console being new; readiness is left to the soft
+  auto-open.
+- **The managed Claude subscription never actually worked for runs.**
+  `detect_anthropic_mode` looked for credentials only under `~/.claude`, but a managed
+  subscription materializes its inert sentinel into `CLAUDE_CONFIG_DIR` (dispatch points
+  there because the resident path may mount `~/.claude` read-only). The run fell through
+  to "apikey" mode, which keeps `ANTHROPIC_BASE_URL` on the x-api-key inject gateway while
+  the proxy injects an OAuth Bearer — surfacing as "401 Invalid bearer token".
+  `CLAUDE_CONFIG_DIR` is checked first now, so the run detects "subscription" and tunnels
+  to `api.anthropic.com` for the proxy swap.
+- **The composer's model-access verdict was gated on the wrong toggle.** With a connected
+  setup-token and the per-run "use subscription" opt-in off, the Review checklist announced
+  "no model access — this run will do nothing" about a run dispatch would happily
+  credential. That toggle gates the credential **mount** path; a managed subscription needs
+  no mount. Mount gating and verdict are now separate.
+- `examples/policies/sandbox-claude.yaml`'s `github_token` grant had `repos: []`, which
+  the git-broker rejects ("github token requires at least one repo").
+- **The resource-cap gate ran after `ContainerStart`, and its pre-flight probe
+  false-positived on Podman.** An untrusted agent container on an uncapped host was
+  therefore started and executed for the duration of the check before rollback tore it
+  down — a host that cannot enforce caps must not launch the container at all, and
+  started-then-killed does not satisfy that; the gate now sits between create and start.
+  Separately the probe trusted `docker info`'s `MemoryLimit`/`PidsLimit`/`CPUCfsQuota`
+  booleans, which rootless Podman 4.9.3 under-reports (`CpuCfsQuota=false` even though
+  the quota binds, verified by reading the container's cgroup) — so Wardyn refused runs
+  whose caps do enforce. The authoritative post-create warning replaces it; the
+  `docker info` booleans are now only an advisory `doctor` hint, with the Podman caveat
+  spelled out.
+- **The New Run wizard silently dropped bring-your-own-image and `task_mode`.** Neither
+  was ever forwarded onto the wire, so BYOI was lost end to end from the UI.
+- **The subscription login URL arrived truncated** ("Invalid response_type: missing"):
+  `claude setup-token` hard-wraps its OAuth URL at the PTY width, cutting both the scraped
+  link and the fallback link. The login PTY is now forced to 512 columns so it does not
+  wrap at the source.
+- **The composer review printed two sentences twice**: the model-access line (the
+  setup-checklist row's Detail is `llm_access.note` verbatim, and a standalone success
+  line repeated it — the standalone line now shows only when there is no checklist row to
+  carry it), and, on the launch-blocked path, the top risk rationale (shown both inline
+  next to the badge and as the first entry of the "High-risk configuration" list — the
+  inline copy now shows only when there is no list).
+- Docker-tagged AWS SSO tests no longer burn a 30-second timeout each against a `:local`
+  image nothing builds; they skip when the image is absent.
+
+### Security
+
+- **The dex host port was published on `0.0.0.0`.** It is now loopback-only and
+  parameterized (`WARDYN_DEX_PORT`, `0` for an ephemeral port) so concurrent
+  `sso`-profile stacks do not collide; dex only runs under the `sso` compose profile.
+- Server-side egress-domain validation (see Changed) closes a defect class where an
+  operator-authored allowlist entry could be silently dead. Adversarial review caught the
+  first version of the predicate failing open in exactly the way it was written to
+  prevent — only the exact-host branch was guarded — so both branches are checked; removing
+  either guard fails five pinned cases.
+- `pkg/client`'s `HarnessLogin` method is deleted. It had zero callers, and `client.go`
+  and `docs/sdk.md` both already listed harness-login as **not** covered by the SDK — the
+  method contradicted its own documentation.
+
+### Upgrading from 0.3.1
+
+- **`make setup` now brings up the containerized stack.** If you were running host mode,
+  pass `WARDYN_SETUP_MODE=local` explicitly.
+- **Re-run setup on an existing compose deployment** (or hand-edit
+  `deploy/compose/.env`): `WARDYN_DOCKER_SOCK` is now persisted there. If you have more
+  than one Docker daemon and you skip this, a plain `docker compose up -d wardynd` drives
+  compose's default socket and the barrier silently collapses to Fence-only.
+- **A host that cannot enforce resource caps will now refuse to launch runs.** cgroup v1,
+  or rootless without controller delegation, previously ran uncapped and silent; you will
+  now see `resource caps not enforceable on this host`. Fix the host, or set
+  `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` if you trust the workload — that returns 0.3.1's
+  behavior, uncapped.
+- **A fresh console cannot be skipped past Getting Started.** Automation that drove a new
+  local-mode console straight to `/runs` must complete setup first, or seed the completion
+  flag. Team/SSO deployments and consoles that already have runs are unaffected.
+- **Check your policies for mid-label wildcards.** An `AllowedDomains` entry like
+  `oidc.*.amazonaws.com`, or one carrying a port or path, is now rejected at write time by
+  the API, inline `--policy-file` policies and `WARDYN_DEFAULT_POLICY`. Such an entry never
+  matched any request, so rewriting it as a leading `*.` suffix or an exact host changes
+  what your policy *does*, not just whether it saves.
+- **Check any per-workspace Bedrock binding.** A half-specified override (region without
+  model, or model without region) is now rejected on write, and — unlike 0.3.1 — a complete
+  one is actually applied at dispatch, so a workspace that has carried a stale
+  region/model since 0.3.1 will start moving its runs there. Omit the block to inherit the
+  server's global Bedrock config.
+- **Verify which runs your workspace credential bindings bill.** Before this release an
+  `api_key` binding was ignored and those runs were billed to the control-plane managed
+  subscription; after it they use the workspace's key.
+- Rebuild your agent images (`make agent-images-core` or `scripts/up.sh`) — the `aws-sso`
+  login image is new and is pulled by tag from no registry.
 
 ## [0.3.1] — 2026-07-18
 

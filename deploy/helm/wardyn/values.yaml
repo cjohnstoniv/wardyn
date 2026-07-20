@@ -16,9 +16,9 @@ image:
   #   helm install ... --set image.repository=<registry>/wardynd --set image.tag=<tag>
   repository: ghcr.io/cjohnstoniv/wardynd
   pullPolicy: IfNotPresent
-  # Empty => .Chart.AppVersion, currently "0.0.1" — which matches no git tag
-  # (releases are v0.1.0/v0.2.0/v0.3.0) and no published image. Set this to the
-  # tag you actually built and pushed.
+  # Empty => .Chart.AppVersion, currently "0.4.0" — which matches the git tag
+  # (releases are v0.1.0/v0.2.0/v0.3.0/v0.3.1/v0.4.0) but no published image. Set
+  # this to the tag you actually built and pushed.
   tag: ""
   # Names of imagePullSecrets for a private registry (list of {name: ...}).
   pullSecrets: []

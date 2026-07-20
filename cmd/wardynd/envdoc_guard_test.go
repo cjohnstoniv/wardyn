@@ -32,6 +32,16 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
 }
 
+// envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
+// the operator scripts, never by Go. They are real operator configuration (so
+// they belong in ENV.md's "Compose / scripts" section), but the reverse ratchet
+// below would flag them as stale rows since no Go file reads them. Keep in sync
+// with that section.
+var envDocShellOnly = map[string]bool{
+	"WARDYN_NS": true, "WARDYN_UP_PORT": true, "WARDYN_PG_PORT": true, "WARDYN_DEX_PORT": true,
+	"WARDYN_CI_PROJECT": true,
+}
+
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
 
 // readVars returns every WARDYN_* string literal read in non-test .go under the
@@ -97,6 +107,9 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 	for v := range documented {
 		if envDocAllow[v] {
 			continue // documented purely as test-only; read only from _test.go
+		}
+		if envDocShellOnly[v] {
+			continue // compose/scripts config; no Go reader by design
 		}
 		if !seen[v] {
 			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only)", v, envDocRoots)

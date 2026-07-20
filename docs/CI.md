@@ -154,6 +154,64 @@ What synthesis does and does not derive:
   un-recorded host fails the job instead of raising an approval nobody is
   watching.
 
+## Concurrent jobs on a shared host
+
+Several jobs can run on one build host at the same time, under one trusted
+operator (e.g. a CI fleet on one service account). `scripts/ci-run.sh` already
+does this for you: it scopes every compose object to a unique project +
+namespace and binds host ports ephemerally, so parallel invocations don't
+collide on container names, the control-plane network, the recordings volume or
+a port — and one job's `down --volumes` never tears down another's.
+
+The variables that do it (see [docs/ENV.md](ENV.md#compose--scripts-shell-only--not-read-by-go)):
+
+```sh
+# ci-run.sh derives all of this from one name:
+WARDYN_CI_PROJECT="$CI_JOB_ID" scripts/ci-run.sh
+#   -> COMPOSE_PROJECT_NAME=$CI_JOB_ID   (compose bookkeeping + unnamed volumes)
+#   -> WARDYN_NS=$CI_JOB_ID              (container names, network, recordings volume)
+#   -> WARDYN_UP_PORT=0, WARDYN_PG_PORT=0 (OS-assigned ephemeral host ports)
+
+# Driving compose directly (no ci-run.sh) needs the same four, set by hand:
+COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
+  docker compose -p job-a -f deploy/compose/docker-compose.yaml up -d
+```
+
+`WARDYN_NS` and `COMPOSE_PROJECT_NAME` must be the **same** value, and
+`WARDYN_NS` must match wardynd's `WARDYN_INTERNAL_NETWORK` (compose derives it
+from `WARDYN_NS`) — otherwise a run's proxy sidecar joins another job's bridge.
+Leaving `WARDYN_CI_PROJECT` unset is fine: the default is unique per invocation.
+
+Isolation is not asserted, it is tested: `make test-e2e-concurrent`
+(`scripts/test-concurrent.sh`) brings up two stacks concurrently and checks that
+both come up healthy with no collision, that a container on job A's network
+cannot reach job B's wardynd, that A survives B's `down --volumes`, and that each
+tears down independently. It needs a live daemon and `wardyn/wardynd:local` (the
+target builds it if absent), so it is a manual/pre-release check, not a CI job.
+
+**Scope of this:** one trusted operator on one host. Concurrent jobs share the
+docker daemon, so this is job *isolation*, not a multi-tenant boundary — a job
+that can reach the daemon can reach everything on it.
+
+## Operator scripts that are deliberately not in CI
+
+Two scripts have no `make` target and no CI caller **by design**. This is not an
+oversight — do not wire them into `.github/workflows/ci.yml`:
+
+- **`scripts/test-podman.sh`** — rootless Podman divergence probe. It needs
+  root-installed prerequisites (podman, `uidmap`, crun, fuse-overlayfs,
+  slirp4netns, `/etc/subuid`+`/etc/subgid`) and a `podman.socket` the runner
+  points `DOCKER_HOST` at. GitHub's `ubuntu-latest` runs dockerd, so a CI copy
+  would test nothing it doesn't already test. Run it by hand when re-validating
+  the Podman claim in
+  [threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md).
+- **`scripts/stage-agent-binary.sh`** — stages a checksum-verified agent CLI
+  binary into `deploy/images/<agent>/` for corp networks where public npm is
+  blocked. The output is gitignored and the default image build installs from
+  npm, so there is nothing for CI to run; it is invoked by an operator before
+  `make agent-images-core` (see
+  [deploy/images/README.md](../deploy/images/README.md)).
+
 ## Driving an existing control plane instead
 
 If you already run wardynd somewhere, skip `ci-run.sh` and use the CLI

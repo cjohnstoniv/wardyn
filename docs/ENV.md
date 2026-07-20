@@ -38,7 +38,7 @@ log them.
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory (flag `-recording-dir`) |
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
-| `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | `false` | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default — the gate fails closed, since an unenforceable cap is a silently-broken guarantee |
+| `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | `1` only | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default — the gate fails closed, since an unenforceable cap is a silently-broken guarantee. **Not a `cliutil` bool**: `register.go` compares against the literal string `1`, so `true`/`yes`/`on` do **not** enable it and a garbage value is silently ignored rather than exiting 2 |
 | `WARDYN_DEFAULT_POLICY` | string | `examples/policies/default.json` | default RunPolicy spec path (flag `-default-policy`) |
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_AUDIT_SINKS` | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`) |
@@ -185,6 +185,21 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
+
+## Compose / scripts (shell-only — not read by Go)
+
+Read by `deploy/compose/docker-compose.yaml` and the operator scripts, never by
+Go, so they are outside the `envdoc_guard_test.go` ratchet above. They exist to
+scope a compose stack so several can coexist on one host — see
+[docs/CI.md](CI.md#concurrent-jobs-on-a-shared-host).
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `WARDYN_NS` | string | `wardyn` | namespace prefix for every compose object that is *explicitly named*: the containers (`${WARDYN_NS}-postgres`, `-dex`, `-api`, `-tetragon`, `-tetragon-ingest`), the control-plane network (`${WARDYN_NS}-internal`) and the recordings volume. Compose sets wardynd's `WARDYN_INTERNAL_NETWORK` from the same value; they **must** stay equal or each run's proxy sidecar joins the wrong bridge. Leave unset for a single interactive stack |
+| `WARDYN_UP_PORT` | int | `8080` | host port the control plane/UI publishes on (loopback-only). `0` = OS-assigned ephemeral port, which is what `scripts/ci-run.sh` uses (it reaches wardynd inside the container, not over the host port) |
+| `WARDYN_PG_PORT` | int | `5432` | host port the compose Postgres publishes on (loopback-only, so a host-mode wardynd can reach the same database). `0` = OS-assigned ephemeral port — used by CI, which reaches Postgres in-network by service name and never needs a predictable host port |
+| `WARDYN_DEX_PORT` | int | `5556` | host port the compose Dex publishes on (loopback-only; Dex runs only under the `sso` profile). `0` = OS-assigned ephemeral port, so concurrent jobs on one host don't collide |
+| `WARDYN_CI_PROJECT` | string | `wardyn-ci-$$` (unique per invocation) | `scripts/ci-run.sh` only: the one name used for **both** `COMPOSE_PROJECT_NAME` (compose's own bookkeeping + unnamed volumes) and `WARDYN_NS` (the explicitly-named objects). Pin it to the CI job id for a stable, greppable stack name; the per-PID default guarantees concurrent invocations never collide and that one job's `down --volumes` cannot tear down another's |
 
 ## Test / internal-only (not operator configuration)
 

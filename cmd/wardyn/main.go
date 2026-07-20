@@ -20,7 +20,7 @@ import (
 )
 
 // version is surfaced via `wardyn --version`; kept in step with CHANGELOG.md.
-const version = "0.3.0"
+const version = "0.4.0"
 
 // exitError carries a specific process exit code through the cobra error
 // return (run --wait maps run outcomes to codes CI can branch on).

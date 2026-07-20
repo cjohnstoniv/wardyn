@@ -194,12 +194,12 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
           {/* SSO / team sign-in (the multi-user service: SSO logins, per-user
               identity/RBAC) is a coming-soon feature — disabled for now. The
               admin-token form above is the supported path in this version. */}
-          <Button variant="outline" className="w-full" disabled title="SSO / team sign-in is coming soon">
+          <Button variant="outline" className="w-full" disabled title="SSO / team sign-in is not available in this release">
             <Building2 className="size-4" />
             Sign in with SSO
           </Button>
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            SSO / team sign-in (multi-user) is coming soon — use an admin token for now.
+            SSO / team sign-in (multi-user) is not available in this release — use an admin token.
           </p>
         </div>
 

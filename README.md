@@ -49,7 +49,8 @@ around them:
   rules, first-use approval, and proxy-side credential injection (L2 **[shipped]**).
   The env-var-bypass class is defended *structurally*: with no route, an agent that
   ignores `HTTP_PROXY` reaches nothing. L1 default-deny and an MCP gateway are
-  **[v0.5+ — planned]**. Full table in [ARCHITECTURE.md](ARCHITECTURE.md).
+  **[v0.5+ — planned]**. Full table in [ARCHITECTURE.md](ARCHITECTURE.md); what
+  "planned" covers is in [ROADMAP.md](ROADMAP.md).
 
 - **Three-stream append-only audit.** The control-plane event log (Postgres trigger
   blocks UPDATE/DELETE), PTY replay via `wardyn-rec`, and the eBPF/Tetragon
@@ -248,7 +249,8 @@ wardyn setup status   # what's configured, with the exact next command per unmet
 
 **Host mode** (`WARDYN_SETUP_MODE=local`) is an advanced escape hatch — `wardynd` runs as
 you, using your resident Claude login directly (note: its workspace Verify/Record callbacks
-don't route under Docker Desktop + WSL2 NAT). **Team mode** (multi-user SSO/RBAC) is **coming soon**.
+don't route under Docker Desktop + WSL2 NAT). **Team mode** (multi-user SSO/RBAC) does not
+exist yet and is not scheduled — see [ROADMAP.md](ROADMAP.md).
 
 Prove the egress boundary hands-on first? The UI's **/demos** screen launches
 interactive sandboxes with no repo and no keys — see [TRY-IT Level 0.5](docs/TRY-IT.md).
@@ -303,13 +305,21 @@ kind — today only the Docker target runs functionally (see Status below).
 
 ## Status
 
-| Milestone | Highlights | Status |
-|---|---|---|
-| **v0.1** | Per-run identity (embedded provider), approval FSM, credential broker, L2 egress proxy, append-only Postgres audit + PTY replay, CC1/CC2 confinement gating, Compose deploy | **Shipped (pre-alpha)** |
-| **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, policy CRUD, run-completion state, control-plane TLS, real conformance gate + supply-chain CI | **Shipped (pre-alpha)** |
-| **v0.3** | CI mode (BYOA): headless pipeline launches with no pre-running control plane — `wardyn run --wait` (outcome exit codes), `--image` (bring-your-own-container, wrapped + governed), `task_mode: exec` (plain commands, no agent/LLM), one-shot `scripts/ci-run.sh`, GitHub Actions / Azure DevOps examples ([docs/CI.md](docs/CI.md)) | **Shipped (pre-alpha)** |
-| **v0.5** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway, arbitrary-domain L2 TLS-intercept (targeted LLM/registry MITM already ships), Helm chart, cloud STS federation, OTLP/OCSF SIEM sinks, signed image publishing (turns CI-mode builds into pulls + enables a reusable GitHub Action) | Planned |
-| **v1.0** | CC3 Kata packaged/GA (experimental today — see Confinement Classes), Cilium toFQDNs, hash-chained audit + signed action receipts, separation-of-duty on control plane, conformance suite across both targets | Planned |
+**v0.4 (pre-alpha)** is the current release: containerized setup by default, a
+first-class credential CLI (`wardyn subscription`, `wardyn setup status`), YAML
+policies, container workspaces with their own model credentials, Bedrock via AWS
+SSO, and the corporate-network build/egress lanes. v0.1–v0.3.1 shipped per-run
+identity, the approval FSM and credential broker, the L2 egress proxy and
+append-only audit, CC1/CC2 confinement, CI mode (BYOA), and the repo-scoped
+git-broker.
+
+Still unbuilt: SPIRE, OpenBao, L1 default-deny, an MCP/tool gateway,
+arbitrary-domain TLS interception, a Kubernetes runner driver, OTLP/OCSF sinks,
+and multi-user team mode.
+
+Full shipped-and-planned detail — including the named gaps with no milestone —
+is in [ROADMAP.md](ROADMAP.md); per-release detail is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ---
 

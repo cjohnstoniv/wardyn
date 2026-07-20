@@ -30,7 +30,7 @@ var ErrUnknownBackend = errors.New("composer: unknown backend")
 // carries NO secrets — only the display identity.
 type BackendInfo struct {
 	Name      string `json:"name"`
-	Provider  string `json:"provider"` // "anthropic" | "openai" | "cli" | "fake"
+	Provider  string `json:"provider"` // "anthropic" | "openai" | "cli" | "sandbox" | "fake"
 	Model     string `json:"model"`
 	IsDefault bool   `json:"is_default"`
 }
