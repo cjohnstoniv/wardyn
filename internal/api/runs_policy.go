@@ -251,7 +251,7 @@ func actorTypeFromRequest(r *http.Request) types.ActorType {
 //  1. LOCAL HOST MODE — the operator injected by humanOrAdminAuth on the trusted
 //     single-dev machine. Here (and ONLY here, off SSO) the X-Wardyn-Principal
 //     DEV-ONLY override (docs/sdk.md) is honored, since the machine is trusted;
-//     otherwise the configured operator (e.g. "local:cjohn") is used.
+//     otherwise the configured operator (e.g. "local:alice") is used.
 //  2. A VERIFIED OIDC SSO session (the IdP "sub"), published by humanOrAdminAuth.
 //     A real human already won, so the X-Wardyn-Principal header is moot.
 //  3. Admin bearer token, NO verified human. Attributed to a non-human

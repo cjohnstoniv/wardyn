@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rootless Podman divergence probe (Doc-2 Gap 4).
+# Rootless Podman divergence probe.
 #
 # The docker runner speaks the Docker Engine API via client.FromEnv; Podman's
 # Docker-compat REST API is a PARTIAL emulation, so rootless Podman is a SEPARATE

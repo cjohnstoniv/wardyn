@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Two-job shared-host concurrency acceptance test (Doc-2 Gap 1).
+# Two-job shared-host concurrency acceptance test.
 #
 # Proves the compose control plane is concurrency-safe on a shared, multi-job
 # build host: two ci-run-style stacks, brought up CONCURRENTLY under one user with

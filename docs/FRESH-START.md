@@ -28,7 +28,7 @@ gotchas that bite every time.
 ## 0. One-time: point your shell at the tier-capable daemon
 
 ```bash
-cd ~/containerized-agent-envs
+cd wardyn   # your clone
 export DOCKER_HOST=unix:///run/wardyn-docker.sock
 
 # Sanity: you want runsc + kata/krun here, not just runc.

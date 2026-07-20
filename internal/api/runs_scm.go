@@ -16,7 +16,7 @@ import (
 )
 
 // gitEmailLocal makes a git-safe email local-part from a principal (e.g.
-// "local:cjohn" -> "local_cjohn"): keep alphanumerics and a few safe symbols,
+// "local:alice" -> "local_alice"): keep alphanumerics and a few safe symbols,
 // map everything else to '_', so the synthesized GIT_AUTHOR_EMAIL is well-formed.
 func gitEmailLocal(principal string) string {
 	if principal == "" {
