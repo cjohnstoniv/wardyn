@@ -254,20 +254,34 @@ func TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree(t *testing.T) {
 	started := make(chan struct{})
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	// wrote signals that at least one chunk has landed in the recorder. finish()
+	// intentionally skips persisting a header-only (no-output) cast
+	// (see newSessionRecorder), so without this the pump could lose the race to
+	// finish's snapshot and produce nothing to open — a flake, not the torn-JSON
+	// case this test exists to catch. Gating on one buffered write keeps the pump
+	// writing concurrently with finish (the real property) while guaranteeing the
+	// cast is non-empty.
+	wrote := make(chan struct{})
 	go func() {
 		defer close(done)
 		close(started)
+		first := true
 		for {
 			select {
 			case <-stop:
 				return
 			default:
 				_, _ = tee.Write([]byte("interactive terminal output chunk\r\n"))
+				if first {
+					first = false
+					close(wrote)
+				}
 			}
 		}
 	}()
 
 	<-started
+	<-wrote
 	// Detach + persist concurrently with the still-running pump.
 	finish(context.Background(), types.ActorHuman, "dave@example.com")
 	close(stop)

@@ -133,7 +133,12 @@ describe("setupDismissed()/dismissSetup() — localStorage flag", () => {
   });
 });
 
-describe("SetupScreen", () => {
+// 20s suite default, not vitest's 5s: every test here renders the full SetupScreen
+// (a heavy tree) and several walk multiple funnel steps with real user-event
+// clicks and lazily-loaded step bodies. They run 1.5-4.5s locally but flake
+// against the 5s default on a loaded CI runner — the walks are the point of the
+// tests, so give the whole suite headroom rather than chasing individual timeouts.
+describe("SetupScreen", { timeout: 20_000 }, () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
   beforeEach(() => {
@@ -170,10 +175,6 @@ describe("SetupScreen", () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  // 20s, not the 5s default: this walks all thirteen steps with real user-event
-  // clicks and lazily-loaded step bodies, so it runs 1.5-4.5s locally and has
-  // flaked against the default on a loaded CI runner. The walk is the point of
-  // the test — shortening it would trade coverage for speed.
   it("walks all thirteen funnel steps and Next/Back move within bounds", async () => {
     render(<SetupScreen onDone={() => {}} />);
 
@@ -254,7 +255,7 @@ describe("SetupScreen", () => {
     // Back from launch lands on Review (the new penultimate step).
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
-  }, 20_000);
+  });
 
   it("host proxy step renders the masked detected-proxy breakdown when present", async () => {
     getSetupStatusMock.mockResolvedValue(
