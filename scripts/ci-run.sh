@@ -35,7 +35,25 @@ source "${REPO_ROOT}/scripts/lib/common.sh"
 
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.yaml"
 CI_OVERLAY="${REPO_ROOT}/deploy/compose/docker-compose.ci.yaml"
-COMPOSE=(docker compose -f "${COMPOSE_FILE}" -f "${CI_OVERLAY}")
+
+# Per-job isolation on a shared, multi-job build host: scope EVERY compose object
+# to a unique project + namespace so concurrent ci-run.sh invocations never
+# collide on container names, the control-plane network, the recordings volume, or
+# host ports — and one job's `down --volumes` teardown never touches another's.
+# Caller may pin WARDYN_CI_PROJECT (e.g. to the CI job id) for a stable name;
+# default is unique per invocation ($$ = this shell's PID, distinct across
+# concurrent runs). COMPOSE_PROJECT_NAME scopes compose's own bookkeeping +
+# unnamed volumes; WARDYN_NS scopes the explicitly-named objects (container_name /
+# network / recordings volume) and MUST match wardynd's WARDYN_INTERNAL_NETWORK.
+CI_PROJECT="${WARDYN_CI_PROJECT:-wardyn-ci-$$}"
+export COMPOSE_PROJECT_NAME="${CI_PROJECT}"
+export WARDYN_NS="${CI_PROJECT}"
+# Host UI/postgres ports are unused in CI (the CLI runs in-container and health is
+# read from the container): bind them to OS-assigned ephemeral ports so two jobs
+# never fight over 8080/5432.
+export WARDYN_UP_PORT="${WARDYN_UP_PORT:-0}"
+export WARDYN_PG_PORT="${WARDYN_PG_PORT:-0}"
+COMPOSE=(docker compose -p "${CI_PROJECT}" -f "${COMPOSE_FILE}" -f "${CI_OVERLAY}")
 
 TASK="${WARDYN_CI_TASK:-}"
 IMAGE="${WARDYN_CI_IMAGE:-}"
@@ -123,10 +141,22 @@ trap cleanup EXIT
 # closed (by design) on the decrypt mismatch. Every invocation starts clean.
 "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
 
-log "Starting postgres + wardynd (WARDYN_ENVBUILD on for the BYOA wrap)"
-"${COMPOSE[@]}" up -d postgres wardynd || die "compose up (check 'docker compose -f ${COMPOSE_FILE} logs postgres wardynd' and that ports 8080/5432 are free)"
-log "Waiting for wardynd at ${BASE_URL}"
-wait_healthy "${BASE_URL}" 90 2 || { "${COMPOSE[@]}" logs --tail 50 wardynd; die "wardynd did not become healthy"; }
+log "Starting postgres + wardynd (WARDYN_ENVBUILD on for the BYOA wrap; project ${CI_PROJECT})"
+"${COMPOSE[@]}" up -d postgres wardynd || die "compose up (check '${COMPOSE[*]} logs postgres wardynd')"
+# Health from the CONTAINER, not a host port: CI publishes wardynd on an ephemeral
+# host port (WARDYN_UP_PORT=0), so localhost:PORT is unknown here — but the
+# container's own healthcheck runs `wardyn runs list` inside it. This is also
+# topology-independent (works under Docker Desktop + WSL2 NAT).
+log "Waiting for wardynd (container health, project ${CI_PROJECT})"
+_cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
+_tries=0
+until [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; do
+  _tries=$((_tries + 1))
+  if [ "${_tries}" -gt 45 ]; then "${COMPOSE[@]}" logs --tail 50 wardynd; die "wardynd did not become healthy"; fi
+  sleep 2
+  _cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
+done
+log "wardynd healthy"
 
 # ── seed secrets (values via stdin, never argv) ──────────────────────────────
 if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then

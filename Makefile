@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license ci
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -266,6 +266,14 @@ test-envbuild-integration:
 test-e2e:
 	@echo "Running live security e2e (requires Docker; WARDYN_TEST_DOCKER=1)..."
 	WARDYN_TEST_DOCKER=1 ./test/e2e/e2e.sh
+
+# Shared-host concurrency acceptance test: two project-scoped stacks up at once,
+# proving no name/network/volume/port collision, cross-network isolation, and that
+# one job's `down --volumes` never tears down another's. Needs wardyn/wardynd:local.
+test-e2e-concurrent:
+	@echo "Running 2-job shared-host concurrency test (requires Docker + wardyn/wardynd:local)..."
+	@docker image inspect wardyn/wardynd:local >/dev/null 2>&1 || $(MAKE) -s compose-build
+	./scripts/test-concurrent.sh
 
 # Live TASK e2e: real sandboxes running the test/e2e/tasks corpus, graded on
 # final workspace STATE (did the agent actually do the work?), plus per-tier

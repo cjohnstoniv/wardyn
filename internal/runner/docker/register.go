@@ -41,10 +41,16 @@ func init() {
 				slog.String("recording_mount", recordingMount),
 			)
 		}
+		// WARDYN_INTERNAL_NETWORK names the control-plane bridge the proxy sidecar
+		// joins. Empty => withDefaults() keeps "wardyn-internal" (single-tenant
+		// default, unchanged). A shared multi-job host sets a per-project name so
+		// concurrent stacks don't share one network — it MUST match the compose
+		// network's name (deploy/compose: both derive from WARDYN_NS).
 		s, err := New(Config{
 			ProxyImage:          d.ProxyImage,
 			Record:              true,
 			RecordingMount:      recordingMount,
+			InternalNetwork:     os.Getenv("WARDYN_INTERNAL_NETWORK"),
 			ConfinementRuntimes: d.ConfinementRuntimes,
 		})
 		if err != nil {

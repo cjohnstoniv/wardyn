@@ -8,11 +8,21 @@
 #   The wardynd service bind-mounts /var/run/docker.sock. That grants wardynd
 #   root-equivalent control of the host Docker daemon — it can create, inspect,
 #   and destroy ANY container on the host, not just Wardyn's. This is acceptable
-#   ONLY for a local, single-tenant demo on a machine you trust. Do NOT expose
-#   this stack to untrusted networks or run it multi-tenant. The production path
-#   is Kubernetes (deploy/helm/wardyn), where the runner uses scoped RBAC and no
-#   host socket is shared. See ARCHITECTURE.md "Deployment surface".
+#   ONLY for a machine you trust, run by ONE trusted operator. Do NOT expose this
+#   stack to untrusted networks or share the host between MUTUALLY-UNTRUSTED users
+#   (any job holding the socket controls the whole daemon). True multi-TENANT
+#   isolation (untrusted users, scoped RBAC, no shared host socket) is the
+#   Kubernetes runner — deploy/helm/wardyn stands up the control plane today, but
+#   its sandbox-launching data plane is v0.5-planned (see deploy/helm/wardyn/
+#   README.md); use this compose stack for a working governed run today.
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# CONCURRENT JOBS on a shared host (one trusted operator, e.g. a CI fleet under one
+# service account) ARE supported: scripts/ci-run.sh scopes every object to a unique
+# COMPOSE_PROJECT_NAME + WARDYN_NS (container names, the control-plane network, the
+# recordings volume) and binds host ports ephemerally, so parallel invocations don't
+# collide and one job's `down --volumes` never tears down another's. The single-user
+# interactive default (WARDYN_NS unset => wardyn-*) is unchanged.
 #
 # Defaults below are demo-grade secrets. Override via a sibling .env file or the
 # shell environment for anything beyond a laptop demo.
@@ -22,11 +32,14 @@ services:
     # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
     # so the digest freezes the exact image; bump both together on a version move.
     image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
-    container_name: wardyn-postgres
+    container_name: ${WARDYN_NS:-wardyn}-postgres
     # Loopback-only publish so a HOST-MODE wardynd (run outside compose, e.g. to use
     # the resident `claude` CLI composer backend) can reach the same database.
+    # Host port parameterized (WARDYN_PG_PORT) so concurrent stacks on a shared host
+    # don't collide on 5432; set WARDYN_PG_PORT=0 for an OS-assigned ephemeral port
+    # (CI, which reaches postgres only in-network by service name).
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${WARDYN_PG_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: wardyn
       POSTGRES_DB: wardyn
@@ -44,7 +57,7 @@ services:
   dex:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
     image: ghcr.io/dexidp/dex:v2.40.0@sha256:3e35d5d0f7dbd33fbadc36a71ff58cf4097ab98d73d22f6cb9a6471a32e028af
-    container_name: wardyn-dex
+    container_name: ${WARDYN_NS:-wardyn}-dex
     # Opt-in: human SSO is OFF by default (`make setup` / `scripts/up.sh up`
     # starts only postgres+wardynd with WARDYN_LOCAL_MODE=true and an empty
     # OIDC issuer). Bring dex up explicitly with `docker compose --profile sso
@@ -61,7 +74,11 @@ services:
     volumes:
       - ./dex.yaml:/etc/dex/config.yaml:ro
     ports:
-      - "5556:5556"
+      # Loopback-only (was 0.0.0.0 — a hardening gap: dex must never be reachable
+      # off-host) and host-port parameterized so concurrent sso-profile stacks
+      # don't collide. Dex only runs under the `sso` profile; set WARDYN_DEX_PORT=0
+      # for an ephemeral port.
+      - "127.0.0.1:${WARDYN_DEX_PORT:-5556}:5556"
     healthcheck:
       # Dex serves an OIDC discovery doc once ready.
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5556/.well-known/openid-configuration"]
@@ -86,7 +103,7 @@ services:
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
     image: wardyn/wardynd:local
-    container_name: wardyn-api
+    container_name: ${WARDYN_NS:-wardyn}-api
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
     # (demo only; see the DAEMON-TRUST note above).
@@ -98,6 +115,11 @@ services:
       WARDYN_GROUNDTRUTH_TOKEN_FILE: "/var/run/wardyn-gt/token"
       WARDYN_PG_DSN: "postgres://wardyn:wardyn-dev@postgres:5432/wardyn?sslmode=disable"
       WARDYN_LISTEN: ":8080"
+      # The control-plane bridge the docker runner connects the proxy sidecar to.
+      # MUST equal the `wardyn` network's name (both derive from WARDYN_NS) — a
+      # shared multi-job host sets WARDYN_NS per project so concurrent stacks each
+      # get their own network. Default wardyn-internal (single-tenant, unchanged).
+      WARDYN_INTERNAL_NETWORK: "${WARDYN_NS:-wardyn}-internal"
       # Transport security (TLS). The demo serves PLAIN HTTP on localhost; wardynd
       # logs a loud WARNING at boot. For any non-localhost deployment, add TLS via
       # ONE of the two options below (see this directory's README "Transport
@@ -328,7 +350,7 @@ services:
   tetragon:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
     image: quay.io/cilium/tetragon:v1.1.2@sha256:fca204b06c8bd5ade16cbe46f52429e11863dc2ce630cc8a2140b74eedbecde7
-    container_name: wardyn-tetragon
+    container_name: ${WARDYN_NS:-wardyn}-tetragon
     profiles: ["groundtruth"]
     # Host eBPF sensor: needs privileged + host PID/cgroup + kernel mounts.
     privileged: true
@@ -353,7 +375,7 @@ services:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.tetragon-ingest
     image: wardyn/wardyn-tetragon-ingest:local
-    container_name: wardyn-tetragon-ingest
+    container_name: ${WARDYN_NS:-wardyn}-tetragon-ingest
     profiles: ["groundtruth"]
     environment:
       WARDYN_TETRAGON_EXPORT: "/var/log/tetragon/tetragon.log"
@@ -440,7 +462,9 @@ volumes:
   recordings:
     # Explicit name so the docker runner can mount the SAME volume into agent
     # containers by name (compose would otherwise prefix it with the project).
-    name: wardyn-recordings
+    # Per-namespace so concurrent stacks don't share one recordings volume
+    # (default wardyn-recordings, single-tenant unchanged).
+    name: ${WARDYN_NS:-wardyn}-recordings
   audit:
   # Tetragon JSON export shared between the tetragon sensor (writer) and the
   # wardyn-tetragon-ingest sidecar (reader). Part of the groundtruth profile.
@@ -448,5 +472,9 @@ volumes:
 
 networks:
   wardyn:
-    name: wardyn-internal
+    # Per-namespace name so concurrent stacks on a shared host don't share one
+    # control-plane network. Default wardyn-internal (single-tenant, unchanged).
+    # MUST match wardynd's WARDYN_INTERNAL_NETWORK (both derive from WARDYN_NS) so
+    # the docker runner connects the proxy sidecar to the right network.
+    name: ${WARDYN_NS:-wardyn}-internal
     driver: bridge

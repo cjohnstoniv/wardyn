@@ -462,7 +462,7 @@ cmd_up() {
   # lets workspace VERIFY report its result (the exact thing that can't work on
   # Docker Desktop + WSL2 when wardynd runs host-mode). Prove it with a
   # throwaway container on the same network; never fatal.
-  if docker run --rm --network wardyn-internal curlimages/curl:latest \
+  if docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
        -s -m 5 -o /dev/null "http://wardynd:8080/healthz" >/dev/null 2>&1; then
     log "Sandbox → control-plane reachability: OK — workspace Verify and Record will complete on this instance."
   else
@@ -477,7 +477,7 @@ cmd_up() {
   # peer, like the docker gateway a host request arrives as): 200 = forwarder OK;
   # 403 = the peer gate is wrongly rejecting compose traffic (a real regression).
   # WSL2 NAT can't do this from the host shell, so probe from the network instead.
-  _me_code=$(docker run --rm --network wardyn-internal curlimages/curl:latest \
+  _me_code=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
     -s -m 5 -o /dev/null -w '%{http_code}' "http://wardynd:8080/api/v1/me" 2>/dev/null || echo 000)
   case "${_me_code}" in
     200) log "Local-mode no-auth gate: OK (gated API reachable from a non-loopback peer — WARDYN_LOCAL_TRUST_FORWARDER effective)." ;;
