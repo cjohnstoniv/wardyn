@@ -77,7 +77,7 @@ export function StepBasics({
               <Label htmlFor="runtype-agent" className="cursor-pointer">
                 Agent run
               </Label>
-              <p className="text-[11px] leading-snug text-muted-foreground">Coding agent under the harness</p>
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">Coding agent under the harness</p>
             </div>
           </label>
           <label className="flex items-start gap-2 rounded-lg border border-border p-2.5">
@@ -86,7 +86,7 @@ export function StepBasics({
               <Label htmlFor="runtype-command" className="cursor-pointer">
                 Governed command
               </Label>
-              <p className="text-[11px] leading-snug text-muted-foreground">Plain shell command, no agent</p>
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">Plain shell command, no agent</p>
             </div>
           </label>
         </RadioGroup>
@@ -171,7 +171,7 @@ export function StepBasics({
                   <Label htmlFor={`profile-${p.key}`} className="cursor-pointer">
                     {p.label}
                   </Label>
-                  <p className="text-[11px] leading-snug text-muted-foreground">
+                  <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                     Recorded on this workspace — loads its access, egress &amp; confinement.
                   </p>
                 </div>
@@ -183,7 +183,7 @@ export function StepBasics({
                 <Label htmlFor="profile-manual" className="cursor-pointer">
                   Configure manually
                 </Label>
-                <p className="text-[11px] leading-snug text-muted-foreground">
+                <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                   Step through access, egress &amp; confinement yourself.
                 </p>
               </div>
@@ -207,7 +207,7 @@ export function StepBasics({
               <Label htmlFor="mode-interactive" className="cursor-pointer">
                 Interactive
               </Label>
-              <p className="text-[11px] leading-snug text-muted-foreground">You drive via attach</p>
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">You drive via attach</p>
             </div>
           </label>
           <label className="flex items-start gap-2 rounded-lg border border-border p-2.5">
@@ -216,7 +216,7 @@ export function StepBasics({
               <Label htmlFor="mode-batch" className="cursor-pointer">
                 Autonomous
               </Label>
-              <p className="text-[11px] leading-snug text-muted-foreground">Runs the task</p>
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">Runs the task</p>
             </div>
           </label>
         </RadioGroup>

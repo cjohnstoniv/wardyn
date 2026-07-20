@@ -408,7 +408,7 @@ function PolicyDetail({
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-0.5">{value}</div>
     </div>
   );
@@ -506,7 +506,7 @@ function PolicyEditor({
               spellCheck={false}
               className="font-mono text-xs"
             />
-            <p className="text-[11px] leading-snug text-muted-foreground">
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
               Requires <span className="font-mono">min_confinement_class</span> (CC1|CC2|CC3 = the
               Fence/Wall/Vault barrier). Optional:
               <span className="font-mono"> allowed_domains</span>, <span className="font-mono">denied_domains</span>,

@@ -145,7 +145,7 @@ export function LLMCredFields({
         </>
       )}
 
-      <p className="text-[11px] leading-snug text-muted-foreground">
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
         A run that picks this workspace/container inherits this model access — injected proxy-side at
         launch, never resident.
       </p>

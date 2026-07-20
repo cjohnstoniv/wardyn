@@ -458,10 +458,10 @@ function SectionHeading({
   return (
     <div className="mb-3 flex items-center gap-2">
       {Icon && <Icon className={cn("size-3.5", iconTint)} />}
-      <h2 className={cn("text-[11px] font-semibold uppercase tracking-wider", titleTint)}>{title}</h2>
+      <h2 className={cn("text-[0.6875rem] font-semibold uppercase tracking-wider", titleTint)}>{title}</h2>
       <span
         className={cn(
-          "rounded-full px-1.5 text-[11px] font-semibold",
+          "rounded-full px-1.5 text-[0.6875rem] font-semibold",
           countTint === "warning"
             ? "bg-warning-subtle text-warning"
             : "bg-muted text-muted-foreground",
@@ -524,7 +524,7 @@ function DoneSection({
             <div key={g.key}>
               <div className="mb-2.5 flex items-center gap-2">
                 <g.Icon className={cn("size-3.5", g.tint)} />
-                <span className="text-[12.5px] font-semibold text-foreground">{g.label}</span>
+                <span className="text-[0.7813rem] font-semibold text-foreground">{g.label}</span>
                 <span className="text-xs text-muted-foreground">{g.runs.length}</span>
                 {g.runs.length > GROUP_PREVIEW && (
                   <button
@@ -614,7 +614,7 @@ function RunCard({
       </div>
 
       {note && (
-        <div className="flex items-center gap-1.5 text-[12.5px] text-warning">
+        <div className="flex items-center gap-1.5 text-[0.7813rem] text-warning">
           <BellRing className="size-3.5 shrink-0" />
           <span>{note}</span>
         </div>
@@ -648,10 +648,10 @@ function RunCard({
               Review
             </Button>
           )}
-          <Mono className="max-w-[8rem] truncate text-[11px]" title={run.id}>
+          <Mono className="max-w-[8rem] truncate text-[0.6875rem]" title={run.id}>
             {shortId(run.id)}
           </Mono>
-          <span className="whitespace-nowrap text-[11px] text-muted-foreground" title={run.created_at}>
+          <span className="whitespace-nowrap text-[0.6875rem] text-muted-foreground" title={run.created_at}>
             {relativeTime(run.created_at)}
           </span>
         </div>
@@ -726,7 +726,7 @@ function RunsTable({
                 <TableCell>
                   {/* Run ID never truncates — it stays fully readable and the table
                       scrolls horizontally instead. */}
-                  <span className="whitespace-nowrap font-mono text-[11.5px] text-muted-foreground">{run.id}</span>
+                  <span className="whitespace-nowrap font-mono text-[0.7188rem] text-muted-foreground">{run.id}</span>
                 </TableCell>
                 <TableCell>
                   <span className="whitespace-nowrap text-xs text-muted-foreground" title={run.created_at}>

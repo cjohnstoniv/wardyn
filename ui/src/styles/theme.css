@@ -12,7 +12,11 @@
    ============================================================ */
 
 :root {
-  --font-size: 16px;
+  /* Root font size = THE knob for global UI scale. 17.6px = 110% of the 16px
+     base, i.e. default sizing equals what you used to get at 110% browser zoom.
+     Tailwind's rem-based spacing/text scales follow it, so change this one
+     number to rescale the whole console. */
+  --font-size: 17.6px;
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
@@ -265,7 +269,7 @@
 
   /* eyebrow / section micro-label: UPPERCASE, tracked, muted */
   .label-eyebrow {
-    font-size: 11px;
+    font-size: 0.6875rem;
     line-height: 1.4;
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.06em;

@@ -62,7 +62,7 @@ export function WorkspacePicker({
       </div>
 
       {selections.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[0.6875rem] text-muted-foreground">
           No workspace attached — the run gets an empty scratch directory inside the sandbox (nothing
           on your machine is reachable). Attach an onboarded directory or repo to work on real code.
         </p>
@@ -84,7 +84,7 @@ export function WorkspacePicker({
                       {w && <Chip tone={STATUS_TONE[w.status]}>{STATUS_LABEL[w.status]}</Chip>}
                     </div>
                     {w && (
-                      <Mono className="text-[11px] text-muted-foreground" title={w.source}>
+                      <Mono className="text-[0.6875rem] text-muted-foreground" title={w.source}>
                         {w.source}
                       </Mono>
                     )}
@@ -102,7 +102,7 @@ export function WorkspacePicker({
                   // A container isn't mounted — it's the run's base image, so a
                   // mount target / read-only toggle don't apply. The run inherits
                   // this environment's bound model/harness access.
-                  <p className="mt-2.5 border-t border-border pl-[26px] pt-2.5 text-[11px] text-muted-foreground">
+                  <p className="mt-2.5 border-t border-border pl-[26px] pt-2.5 text-[0.6875rem] text-muted-foreground">
                     Runs as this environment&apos;s sandbox image — the run inherits its model access.
                   </p>
                 ) : (
@@ -110,7 +110,7 @@ export function WorkspacePicker({
                     <div className="flex-1 space-y-1">
                       <Label
                         htmlFor={`ws-target-${sel.workspaceId}`}
-                        className="text-[11px] font-normal text-muted-foreground"
+                        className="text-[0.6875rem] font-normal text-muted-foreground"
                       >
                         Target override (optional)
                       </Label>
@@ -133,7 +133,7 @@ export function WorkspacePicker({
                         />
                         <Label
                           htmlFor={`ws-ro-${sel.workspaceId}`}
-                          className="text-[11px] font-normal text-muted-foreground"
+                          className="text-[0.6875rem] font-normal text-muted-foreground"
                         >
                           Read-only
                         </Label>
@@ -198,7 +198,7 @@ function WorkspaceCombobox({
                 >
                   <div className="flex min-w-0 flex-col">
                     <span className="truncate text-sm">{w.name}</span>
-                    <span className="truncate font-mono text-[11px] text-muted-foreground">
+                    <span className="truncate font-mono text-[0.6875rem] text-muted-foreground">
                       {w.source}
                     </span>
                   </div>

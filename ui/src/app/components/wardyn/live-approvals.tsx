@@ -84,7 +84,7 @@ export function LiveApprovals({
 
   if (pending.length === 0) {
     return (
-      <p className="text-[11px] text-muted-foreground" data-testid="live-approvals-idle">
+      <p className="text-[0.6875rem] text-muted-foreground" data-testid="live-approvals-idle">
         {idleHint}
       </p>
     );
@@ -111,7 +111,7 @@ export function LiveApprovals({
               <ShieldAlert className="size-3.5 shrink-0 text-warning" />
             )}
             <Mono className="flex-1 text-foreground">{host}</Mono>
-            {held && <span className="text-[10px] uppercase tracking-wide text-warning">waiting</span>}
+            {held && <span className="text-[0.625rem] uppercase tracking-wide text-warning">waiting</span>}
             <Button size="sm" variant="outline" className="h-7" disabled={busy === a.id} onClick={() => decide(a, true)}>
               <Check className="size-3.5" /> Approve
             </Button>

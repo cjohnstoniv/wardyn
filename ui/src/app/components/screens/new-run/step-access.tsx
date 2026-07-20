@@ -72,7 +72,7 @@ export function StepAccess({
       {isClaude ? (
         <div className="rounded-lg border border-border p-3">
           <Label className="text-sm font-semibold text-foreground">Anthropic auth</Label>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
             How Claude Code authenticates to Anthropic. Pick one — its details open below.
           </p>
           <RadioGroup
@@ -106,7 +106,7 @@ export function StepAccess({
                   </Button>
                 </div>
                 {!state.llmSecretName && (
-                  <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[11px] leading-snug text-warning">
+                  <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[0.6875rem] leading-snug text-warning">
                     <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
                     No key selected — this run will launch with no model access and its first model call
                     will 404. Pick a stored key (or Add secret).
@@ -158,7 +158,7 @@ export function StepAccess({
             <KeyRound className="size-4 text-primary" />
             <Label className="text-sm font-semibold text-foreground">OpenAI API key</Label>
           </div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
             Pick a stored secret by name. Its value is injected proxy-side as{" "}
             <span className="font-mono">Authorization: Bearer …</span> — the agent
             never sees the raw key.
@@ -175,7 +175,7 @@ export function StepAccess({
             </Button>
           </div>
           {!state.llmSecretName && (
-            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[11px] leading-snug text-warning">
+            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[0.6875rem] leading-snug text-warning">
               <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
               No key selected — this run will launch with no model access and its first model call will
               404. Pick a stored key (or Add secret).
@@ -193,7 +193,7 @@ export function StepAccess({
               <Label htmlFor="gh-enable" className="text-sm font-semibold text-foreground">
                 GitHub token
               </Label>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 Mint a short-lived, repo-scoped installation token. The broker clamps
                 permissions to its ceiling regardless of what's requested.
               </p>
@@ -269,7 +269,7 @@ export function StepAccess({
               <Label htmlFor="pat-enable" className="text-sm font-semibold text-foreground">
                 Git PAT (non-GitHub host)
               </Label>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 Broker a stored Personal Access Token to git for Azure DevOps /
                 GitLab. Unlike an LLM key, the PAT value reaches git via the
                 credential helper — Wardyn can't expire or down-scope it.
@@ -382,7 +382,7 @@ function AuthOption({
         {badge && (
           <span
             className={cn(
-              "rounded-md border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
+              "rounded-md border px-1.5 py-0.5 text-[0.625rem] font-semibold tracking-wide uppercase",
               badgeTone === "primary"
                 ? "border-primary/30 bg-primary/15 text-primary"
                 : "border-border bg-muted text-muted-foreground",
@@ -393,7 +393,7 @@ function AuthOption({
         )}
         <Icon className="ml-auto size-4 shrink-0 text-muted-foreground" />
       </div>
-      <p className="pl-[26px] text-[11px] leading-snug text-muted-foreground">{hint}</p>
+      <p className="pl-[26px] text-[0.6875rem] leading-snug text-muted-foreground">{hint}</p>
       {checked && children && <div className="pl-[26px]">{children}</div>}
     </label>
   );

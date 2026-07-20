@@ -271,7 +271,7 @@ function NewSessionForm({
           <Radio className="size-3.5" /> Start recording
         </Button>
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[0.6875rem] text-muted-foreground">
         Opens an attached terminal with the repo + your model provider ready. Do the real thing, then
         click Done recording to capture what it used. You&apos;ll replay it in verify mode next.
       </p>
@@ -415,7 +415,7 @@ function VerifyRecordingCard({
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
             Verify this recording
           </Button>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[0.6875rem] text-muted-foreground">
             Replays it in a locked sandbox (only your approved access). Re-run its steps — off-policy
             hosts are blocked live.
           </p>
@@ -462,7 +462,7 @@ function VerifyRecordingCard({
 function DetectedHints({ commands }: { commands: string[] }) {
   if (commands.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-2 text-[0.6875rem] text-muted-foreground">
       <span>Detected commands:</span>
       {commands.slice(0, 4).map((c) => (
         <CopyPill key={c} text={c} />
@@ -478,7 +478,7 @@ function AuthModeLine({ rr }: { rr: RecordResult }) {
   const label =
     rr.llm_mode === "subscription" ? "Claude subscription" : rr.llm_mode === "api-key" ? "API key" : rr.llm_mode;
   return (
-    <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="session-auth-mode">
+    <p className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground" data-testid="session-auth-mode">
       <ShieldCheck className="size-3 shrink-0 text-success" />
       Model access: <span className="font-medium text-foreground">{label}</span>
       {rr.model ? (
@@ -551,7 +551,7 @@ function RecordReviewCard({
             <Check className="size-3.5" /> Promoted
           </Chip>
         ) : newHosts.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[0.6875rem] text-muted-foreground">
             No new hosts to approve — everything this task reached is already allowed.
           </p>
         ) : (
@@ -572,7 +572,7 @@ function RecordReviewCard({
         {alreadyApproved.length > 0 && (
           <ul className="space-y-1 pt-1" aria-label="Already approved">
             {alreadyApproved.map((h) => (
-              <li key={h} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <li key={h} className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                 <Check className="size-3 shrink-0" />
                 <span className="font-mono line-through">{h}</span>
               </li>
@@ -671,7 +671,7 @@ function ConfinedReviewCard({
       <section className="space-y-2">
         <SectionLabel>Ran within your approved access</SectionLabel>
         {allowed.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[0.6875rem] text-muted-foreground">
             No egress captured yet — re-run your build/test/agent steps in the session above.
           </p>
         ) : (
@@ -691,7 +691,7 @@ function ConfinedReviewCard({
               <li key={h} className="flex items-center gap-2">
                 <ShieldAlert className="size-3.5 shrink-0 text-danger" />
                 <Mono className="flex-1 text-foreground">{h}</Mono>
-                <span className="text-[11px] text-danger">blocked</span>
+                <span className="text-[0.6875rem] text-danger">blocked</span>
                 <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHost(h)}>
                   <Check className="size-3.5" /> Approve
                 </Button>
@@ -701,14 +701,14 @@ function ConfinedReviewCard({
               <li key={h} className="flex items-center gap-2">
                 <Info className="size-3.5 shrink-0 text-warning" />
                 <Mono className="flex-1 text-foreground">{h}</Mono>
-                <span className="text-[11px] text-warning">pending approval</span>
+                <span className="text-[0.6875rem] text-warning">pending approval</span>
                 <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHost(h)}>
                   <Check className="size-3.5" /> Approve
                 </Button>
               </li>
             ))}
           </ul>
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             These were denied or held for approval because they aren&apos;t in your approved set. Approve
             one only if this workspace legitimately needs it — otherwise leave it blocked.
           </p>
@@ -734,7 +734,7 @@ function ConfinedReviewCard({
 // A muted advisory note (the masking + sensor-blind honesty lines).
 function HonestyNote({ text }: { text: string }) {
   return (
-    <p className="flex items-start gap-1.5 text-[11px] leading-snug text-muted-foreground">
+    <p className="flex items-start gap-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
       <Info className="mt-0.5 size-3 shrink-0" />
       <span>{text}</span>
     </p>

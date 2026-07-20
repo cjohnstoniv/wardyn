@@ -107,7 +107,7 @@ export function ComposeQandA({
         <MessageCircleQuestion className="size-4 text-primary" />
         <span className="font-medium">A few questions before I propose</span>
         {round > 0 && (
-          <span className="text-[11px] text-muted-foreground">round {round + 1}</span>
+          <span className="text-[0.6875rem] text-muted-foreground">round {round + 1}</span>
         )}
       </div>
 
@@ -115,7 +115,7 @@ export function ComposeQandA({
 
       {assumptions && assumptions.length > 0 && (
         <div className="rounded-lg border border-border bg-muted/30 p-3">
-          <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <div className="mb-1 text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
             Working assumptions
           </div>
           <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
@@ -147,7 +147,7 @@ export function ComposeQandA({
         </ol>
       )}
 
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+      <div className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
         Question {currentIndex + 1} of {questions.length}
       </div>
 

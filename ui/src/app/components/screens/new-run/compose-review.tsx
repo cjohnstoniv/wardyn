@@ -146,7 +146,7 @@ export function ComposeReview({
             Beta
           </Chip>
           <StepDots />
-          <span className="text-[11.5px] text-muted-foreground">
+          <span className="text-[0.7188rem] text-muted-foreground">
             Describe · Clarify · <span className="text-foreground">Review</span>
           </span>
         </div>
@@ -289,7 +289,7 @@ export function ComposeReview({
         </summary>
         <div className="border-t border-border p-3">
           <YamlBlock value={inline_policy} />
-          <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+          <p className="mt-2 text-[0.6875rem] leading-snug text-muted-foreground">
             The lists above are derived from this policy — the one that will actually be enforced —
             not from the model&apos;s description of itself.
           </p>
@@ -389,12 +389,12 @@ function RiskPanel({
             list below already prints it — showing it inline too duplicated the
             sentence on the launch-blocked path. Inline why is for the Medium/Low
             case (no list); when there's a list, let the list own it. */}
-        {!needsAck && why[0] && <span className="text-[12.5px] text-foreground">{why[0]}</span>}
+        {!needsAck && why[0] && <span className="text-[0.7813rem] text-foreground">{why[0]}</span>}
       </div>
       {/* Non-exhaustive on purpose — the deterministic grader (composer/risk.go)
           has more HIGH triggers (weakest barrier tier, never-reap, …) and this
           copy must never claim to enumerate them. */}
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
         {RISK_ATTRIBUTION} High-graded choices — such as the weakest barrier tier, allow-all
         egress, host-writable mounts, or write-capable credentials — require an explicit
         acknowledgment before launch.
@@ -508,7 +508,7 @@ function SetupChecklistRow({
         <p className="mt-0.5 text-xs leading-snug text-muted-foreground">Required by {item.required_by}</p>
         {item.detail && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{item.detail}</p>}
         {residencyNote && (
-          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{residencyNote}</p>
+          <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">{residencyNote}</p>
         )}
       </div>
       <StatusChip

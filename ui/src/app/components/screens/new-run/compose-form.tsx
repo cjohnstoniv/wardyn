@@ -243,7 +243,7 @@ export function ComposeForm({
                 )}
               >
                 <span className="text-sm font-medium text-foreground">{opt.label}</span>
-                <span className="text-[11px] leading-snug text-muted-foreground">{opt.desc}</span>
+                <span className="text-[0.6875rem] leading-snug text-muted-foreground">{opt.desc}</span>
               </button>
             );
           })}
@@ -259,7 +259,7 @@ export function ComposeForm({
           <label htmlFor="compose-use-subscription" className="text-sm font-medium text-foreground">
             Use my Claude subscription
           </label>
-          <span className="text-[11px] leading-snug text-muted-foreground">
+          <span className="text-[0.6875rem] leading-snug text-muted-foreground">
             Uses your Claude subscription for this run (Claude agents only). By default the token is
             injected proxy-side — a live, host-refreshed token, so nothing sensitive stays resident in the
             sandbox. Off = a brokered API key instead.
@@ -317,7 +317,7 @@ export function ComposeForm({
               {backends[0].model && (
                 <Mono className="text-muted-foreground">{backends[0].model}</Mono>
               )}
-              <span className="ml-auto text-[11px] uppercase tracking-wide text-muted-foreground">
+              <span className="ml-auto text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
                 {backends[0].provider}
               </span>
             </div>
@@ -377,7 +377,7 @@ export function ComposeForm({
               ))}
             </ul>
           )}
-          {attachError && <p className="text-[11px] text-danger">{attachError}</p>}
+          {attachError && <p className="text-[0.6875rem] text-danger">{attachError}</p>}
         </div>
       </Field>
 
@@ -414,7 +414,7 @@ export function ComposeForm({
               {sources.map((s) => (
                 <span
                   key={s}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-foreground"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 font-mono text-[0.6875rem] text-foreground"
                 >
                   {s}
                   <button
@@ -435,14 +435,14 @@ export function ComposeForm({
       {error && (
         <div
           role="alert"
-          className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-subtle/40 px-3 py-2 text-[12px] leading-snug text-danger"
+          className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-subtle/40 px-3 py-2 text-[0.75rem] leading-snug text-danger"
         >
           <span className="font-semibold">Compose failed:</span>
           <span className="text-foreground/90">{error}</span>
         </div>
       )}
       <div className="flex items-center justify-between border-t border-border pt-4">
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[0.6875rem] text-muted-foreground">
           {fmtKiB(totalBytes)} / {fmtKiB(MAX_TOTAL_INPUT_BYTES)} used
         </span>
         <div className="flex items-center gap-2">

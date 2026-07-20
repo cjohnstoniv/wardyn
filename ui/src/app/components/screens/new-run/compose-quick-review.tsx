@@ -79,11 +79,11 @@ function CapColumn({
     >
       <div className="mb-2.5 flex items-center gap-2">
         <HeadIcon className={cn("size-3.5", accent)} aria-hidden="true" />
-        <h3 className={cn("text-[12.5px] font-semibold", accent)}>{title}</h3>
+        <h3 className={cn("text-[0.7813rem] font-semibold", accent)}>{title}</h3>
       </div>
       <ul className="space-y-2.5" aria-label={title}>
         {lines.map((l, i) => (
-          <li key={i} className="flex gap-2 text-[12.5px] leading-snug text-foreground">
+          <li key={i} className="flex gap-2 text-[0.7813rem] leading-snug text-foreground">
             <l.icon className={cn("mt-0.5 size-3.5 shrink-0", accent)} aria-hidden="true" />
             <span>{l.text}</span>
           </li>

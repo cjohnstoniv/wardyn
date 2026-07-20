@@ -91,7 +91,7 @@ export function StepEgress({
       <div className="flex items-center justify-between rounded-lg border border-border p-3">
         <div>
           <Label htmlFor="allow-all-egress">Allow all egress (deny-list only)</Label>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
             Permit any public host except the deny-list below. Private/internal IPs
             stay blocked by the SSRF guard. Credential injection still needs an
             explicit allowlisted host.
@@ -118,7 +118,7 @@ export function StepEgress({
                   type="button"
                   onClick={() => togglePreset(domain)}
                   className={cn(
-                    "rounded-md border px-2 py-1 font-mono text-[11px] transition-colors",
+                    "rounded-md border px-2 py-1 font-mono text-[0.6875rem] transition-colors",
                     on
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border text-muted-foreground hover:border-border-strong",
@@ -154,7 +154,7 @@ export function StepEgress({
               <Plus className="size-4" /> Add
             </Button>
           </div>
-          {customError && <p className="text-[11px] text-danger">{customError}</p>}
+          {customError && <p className="text-[0.6875rem] text-danger">{customError}</p>}
           {customDomains.length > 0 && (
             <div className="pt-1">
               <DomainPillList domains={customDomains} onRemove={removeAllowed} />
@@ -166,7 +166,7 @@ export function StepEgress({
       {!allowAll && (
         <div className="rounded-lg border border-border p-3">
           <Label htmlFor="first-use">Unknown domains</Label>
-          <p className="mb-2 mt-0.5 text-[11px] text-muted-foreground">
+          <p className="mb-2 mt-0.5 text-[0.6875rem] text-muted-foreground">
             How the proxy handles a domain that isn't on the allow-list.
           </p>
           <Select
@@ -217,7 +217,7 @@ export function StepEgress({
             <Plus className="size-4" /> Add
           </Button>
         </div>
-        {denyError && <p className="text-[11px] text-danger">{denyError}</p>}
+        {denyError && <p className="text-[0.6875rem] text-danger">{denyError}</p>}
         <div className="pt-1">
           <DomainPillList domains={state.deniedDomains} onRemove={removeDenied} tone="danger" />
         </div>

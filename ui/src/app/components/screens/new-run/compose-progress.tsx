@@ -17,7 +17,7 @@ export function ComposeProgress({ stage }: { stage?: string }) {
       <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
       <div className="min-w-0">
         <div className="text-sm font-medium text-foreground">{stageLabel(stage)}</div>
-        <div className="text-[11px] text-muted-foreground">Composing your sandbox…</div>
+        <div className="text-[0.6875rem] text-muted-foreground">Composing your sandbox…</div>
       </div>
     </div>
   );

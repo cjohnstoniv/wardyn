@@ -172,7 +172,7 @@ function value(v: string): React.ReactNode {
 /** Inline monospace identity / id token. */
 export function Mono({ children, className, title }: { children: React.ReactNode; className?: string; title?: string }) {
   return (
-    <span title={title} className={cn("font-mono text-[12.5px] text-muted-foreground", className)}>
+    <span title={title} className={cn("font-mono text-[0.7813rem] text-muted-foreground", className)}>
       {children}
     </span>
   );

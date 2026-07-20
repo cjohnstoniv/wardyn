@@ -361,7 +361,7 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
           <Play className="size-4 translate-x-px" />
         </span>
         {durationSec != null && (
-          <span className="absolute bottom-2.5 right-3 rounded-md border border-border bg-background/85 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          <span className="absolute bottom-2.5 right-3 rounded-md border border-border bg-background/85 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
             {formatDuration(durationSec)}
           </span>
         )}

@@ -187,7 +187,7 @@ function SidebarNav({
                       <item.icon className={cn("size-4", isActive && "text-foreground")} />
                       <span className="flex-1 text-left">{item.label}</span>
                       {count > 0 && (
-                        <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-[11px] font-semibold text-warning">
+                        <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-[0.6875rem] font-semibold text-warning">
                           {count}
                         </span>
                       )}
@@ -219,7 +219,7 @@ function SidebarNav({
             <Fingerprint className="size-3.5 text-muted-foreground" />
             <span className="font-mono">{meta.trustDomain}</span>
           </div>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground">
             All agent identities anchored to this trust domain.
           </p>
         </div>
@@ -411,7 +411,7 @@ function TopBar({
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="font-mono text-xs text-muted-foreground">{meta.principal}</div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground">
+              <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 {meta.method === "sso" ? "signed in via SSO" : meta.method === "token" ? "admin token" : ""}
               </div>
             </DropdownMenuLabel>

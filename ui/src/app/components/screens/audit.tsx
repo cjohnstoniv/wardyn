@@ -592,7 +592,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
       {event.run_id && (
         <button
           onClick={() => onDrill(event.run_id!)}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground hover:border-primary/40 hover:text-primary"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground hover:border-primary/40 hover:text-primary"
         >
           {event.run_id.replace("run_", "")}
         </button>

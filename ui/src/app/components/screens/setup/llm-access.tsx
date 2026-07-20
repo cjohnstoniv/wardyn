@@ -348,7 +348,7 @@ export function ModelStep({
               Bearer token {BEDROCK_BEARER_CHIP}
               <Chip tone="primary">Recommended</Chip>
             </div>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+            <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">
               An Amazon Bedrock API key, injected at the proxy — never stored in the sandbox.
             </p>
           </div>
@@ -369,7 +369,7 @@ export function ModelStep({
               {awsSSOCred && !awsSSOCred.expired && <Chip tone="success">Connected</Chip>}
               {awsSSOCred?.expired && <Chip tone="warning">Expired</Chip>}
             </div>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+            <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">
               {awsSSOCred
                 ? awsSSOCred.expired
                   ? `Session expired ${awsSSOCred.expires_at ?? ""}. Re-run the login to refresh it.`
@@ -398,7 +398,7 @@ export function ModelStep({
             <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
               Host ~/.aws profile {BEDROCK_RESIDENT_CHIP}
             </div>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+            <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">
               Mount the operator&apos;s existing ~/.aws read-only (exposes every profile in it). Set
               WARDYN_BEDROCK_AWS_DIR (+ WARDYN_BEDROCK_AWS_PROFILE) on wardynd, restart, then Re-check.
             </p>
@@ -414,7 +414,7 @@ export function ModelStep({
             <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
               Access keys {BEDROCK_RESIDENT_CHIP}
             </div>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+            <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">
               Static access key + secret (+ optional session token for SSO/STS); signed in-process,
               so they live in the sandbox.
             </p>

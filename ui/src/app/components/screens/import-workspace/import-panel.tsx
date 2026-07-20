@@ -703,7 +703,7 @@ function ScanPane({
             : "Reading committed files — detecting languages, package managers, declared secret names (never values), and the egress hosts a build would need."}
         </p>
         {isRepo && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[0.6875rem] text-muted-foreground">
             Runs as a real confined run — watch it in <span className="font-medium">Runs</span>, or it clears
             here the moment it finishes.
           </p>
@@ -844,7 +844,7 @@ function SetupCommandsCard({ ws, onSaved }: { ws: Workspace; onSaved: (w: Worksp
   return (
     <section className="space-y-2.5" data-testid="setup-commands">
       <SectionLabel>Setup commands</SectionLabel>
-      <p className="text-[11px] leading-snug text-muted-foreground">
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
         Detected from committed files (untrusted). Approve or edit what runs during verify — nothing
         runs until you save.
       </p>
@@ -1046,7 +1046,7 @@ function VerifyPane({
           "permission denied" isn't misread as a denied-host problem. */}
       {!running && result && !result.ok && result.failure_hint && (
         <div
-          className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-[11px] leading-snug text-foreground"
+          className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-[0.6875rem] leading-snug text-foreground"
           data-testid="verify-failure-hint"
         >
           {result.failure_hint}
@@ -1056,7 +1056,7 @@ function VerifyPane({
       {/* One-click fix from denied egress — only on a settled failure/partial. */}
       {!running && result && !result.ok && (
         <div className="space-y-2 rounded-lg border border-border p-3" data-testid="verify-fix">
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             A build often fails because a needed host was denied. Approve a denied host, then re-run.
           </p>
           {observed === null ? (
@@ -1065,7 +1065,7 @@ function VerifyPane({
               Suggest a fix from denied egress
             </Button>
           ) : deniedNotApproved.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[0.6875rem] text-muted-foreground">
               No denied egress to approve from {observed.runs_examined} recent run
               {observed.runs_examined === 1 ? "" : "s"}.
             </p>
@@ -1090,7 +1090,7 @@ function VerifyPane({
           via the Approve buttons above or in Configure — nothing is auto-applied. */}
       {!running && result && !result.ok && composerEnabled && (
         <div className="space-y-2 rounded-lg border border-border p-3" data-testid="verify-ai-fix">
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Or ask AI to diagnose the failure from the (secret-masked) logs. It suggests one likely
             fix — a host to allow, a secret to add, or a corrected command — for you to apply. It
             never changes anything on its own.
@@ -1103,14 +1103,14 @@ function VerifyPane({
           ) : (
             <div className="space-y-2" data-testid="verify-ai-suggestion">
               <CopyableBlock text={aiSuggestion} />
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                 Suggested by the model — you decide. Approve any host above, or add a secret / edit a
                 command back in Configure.
               </p>
             </div>
           )}
           {aiError && (
-            <p className="flex items-start gap-1.5 text-[11px] text-danger" data-testid="verify-ai-error">
+            <p className="flex items-start gap-1.5 text-[0.6875rem] text-danger" data-testid="verify-ai-error">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
               {aiError}
             </p>
@@ -1211,7 +1211,7 @@ export function VerifyStepRow({ row }: { row: VerifyRow }) {
 // as-is inside a fixed-height scroller so a long tail doesn't blow out the row.
 export function LogPre({ text }: { text: string }) {
   return (
-    <pre className="scroll-thin mt-2 max-h-40 overflow-auto rounded-md bg-surface-2/60 p-2 text-[11px] leading-relaxed text-muted-foreground">
+    <pre className="scroll-thin mt-2 max-h-40 overflow-auto rounded-md bg-surface-2/60 p-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
       <code className="font-mono">{text}</code>
     </pre>
   );
@@ -1279,7 +1279,7 @@ function FinalizePane({
           <span className="block text-sm font-medium text-foreground">
             Emit devcontainer.json / AGENTS.md
           </span>
-          <span className="block text-[11px] leading-snug text-muted-foreground">
+          <span className="block text-[0.6875rem] leading-snug text-muted-foreground">
             Generate committable environment-as-code files from the reviewed profile.
           </span>
         </span>

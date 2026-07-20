@@ -168,11 +168,11 @@ export function WorkspaceNeedsPanel({
                     {f.path}
                     {f.line != null ? `:${f.line}` : ""}
                   </Mono>
-                  <span className="text-[11px] text-muted-foreground">— {f.kind}</span>
+                  <span className="text-[0.6875rem] text-muted-foreground">— {f.kind}</span>
                 </li>
               ))}
             </ul>
-            <p className="text-[11px] leading-snug text-muted-foreground">
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
               Only the location and detector are flagged — the secret value itself is never shown or stored.
             </p>
           </div>
@@ -209,7 +209,7 @@ export function WorkspaceNeedsPanel({
               />
             ))}
           </ul>
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Declared by workspace files (untrusted) — names only, values are never read.
           </p>
         </section>
@@ -223,7 +223,7 @@ export function WorkspaceNeedsPanel({
               <SecretNeedRow key={s.name} need={s} />
             ))}
           </ul>
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Env vars referenced in source or CI — advisory, and may be plain config (ports, flags),
             not credentials.
           </p>
@@ -249,7 +249,7 @@ export function WorkspaceNeedsPanel({
 
           {autoAllowed.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-[11px] font-medium text-muted-foreground">Allowed automatically</p>
+              <p className="text-[0.6875rem] font-medium text-muted-foreground">Allowed automatically</p>
               <div className="flex flex-wrap gap-1.5">
                 {autoAllowed.map((h) => (
                   <Chip key={h} tone="success" mono>
@@ -262,7 +262,7 @@ export function WorkspaceNeedsPanel({
 
           {approved.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-[11px] font-medium text-muted-foreground">Approved by you</p>
+              <p className="text-[0.6875rem] font-medium text-muted-foreground">Approved by you</p>
               <ul className="space-y-1.5">
                 {approved.map((h) => (
                   <HostRow key={h} host={h} busy={busy} action="remove" onClick={() => removeHost(h)} />
@@ -273,7 +273,7 @@ export function WorkspaceNeedsPanel({
 
           {suggested.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-[11px] font-medium text-muted-foreground">
+              <p className="text-[0.6875rem] font-medium text-muted-foreground">
                 Suggested — needs review, not auto-allowed
               </p>
               <ul className="space-y-1.5">
@@ -294,7 +294,7 @@ export function WorkspaceNeedsPanel({
 
       <section className="space-y-2" data-testid="ws-observed-egress">
         <SectionLabel>Observed but denied</SectionLabel>
-        <p className="text-[11px] leading-snug text-muted-foreground">
+        <p className="text-[0.6875rem] leading-snug text-muted-foreground">
           Hosts that runs using this workspace tried to reach but were denied — least-privilege
           promotion candidates. Approve one to allow it for every future run that mounts this workspace.
         </p>
@@ -304,7 +304,7 @@ export function WorkspaceNeedsPanel({
             Check run history
           </Button>
         ) : observedDenied.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[0.6875rem] text-muted-foreground">
             No denied egress observed
             {observed.runs_examined
               ? ` from ${observed.runs_examined} recent run${observed.runs_examined === 1 ? "" : "s"}`
@@ -324,7 +324,7 @@ export function WorkspaceNeedsPanel({
                 />
               ))}
             </ul>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[0.6875rem] text-muted-foreground">
               from {observed.runs_examined} recent run{observed.runs_examined === 1 ? "" : "s"}
             </p>
           </>
@@ -343,14 +343,14 @@ export function WorkspaceNeedsPanel({
                 </li>
               ))}
             </ul>
-            <p className="text-[11px] leading-snug text-muted-foreground">
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
               These files would be readable by the agent if this directory is mounted.
             </p>
           </div>
         </div>
       )}
 
-      <p className="text-[11px] leading-snug text-muted-foreground">
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
         Detected from committed files only — runtime hosts hidden behind env-var defaults, secrets
         mentioned only in docs, and files deeper than 4 levels are not visible to the scan.
       </p>
@@ -381,7 +381,7 @@ function ChipRow({ label, items }: { label: string; items?: string[] }) {
   if (!items || items.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[11px] font-medium text-muted-foreground">{label}:</span>
+      <span className="text-[0.6875rem] font-medium text-muted-foreground">{label}:</span>
       {items.map((it) => (
         <Chip key={it} tone="neutral">
           {it}

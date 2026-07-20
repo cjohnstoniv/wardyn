@@ -56,7 +56,7 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         {recording.header.title ? (
           <span className="ml-3 font-mono text-xs text-muted-foreground">{recording.header.title}</span>
         ) : null}
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+        <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
           {recording.events.length} events
         </span>
       </div>

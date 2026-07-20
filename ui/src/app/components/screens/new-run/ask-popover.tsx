@@ -81,7 +81,7 @@ export function AskPopover({
             {answer}
           </div>
         )}
-        <p className="text-[10px] leading-snug text-muted-foreground">
+        <p className="text-[0.625rem] leading-snug text-muted-foreground">
           Advisory help — it can&apos;t change your sandbox. You still review and approve everything.
         </p>
       </PopoverContent>

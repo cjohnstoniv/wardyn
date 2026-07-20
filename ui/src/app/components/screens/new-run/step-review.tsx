@@ -172,7 +172,7 @@ export function StepReview({
             ) : (
               <div className="flex flex-wrap gap-1">
                 {inline_policy.eligible_grants!.map((g, i) => (
-                  <Chip key={i} tone="info" mono className="px-1.5 py-0 text-[10px]">
+                  <Chip key={i} tone="info" mono className="px-1.5 py-0 text-[0.625rem]">
                     {String(g.kind)}
                   </Chip>
                 ))}
@@ -204,7 +204,7 @@ export function StepReview({
                   return (
                     <div key={sel.workspaceId} className="flex items-center gap-1.5">
                       {i === 0 && (
-                        <Chip tone="primary" className="px-1.5 py-0 text-[10px]">
+                        <Chip tone="primary" className="px-1.5 py-0 text-[0.625rem]">
                           primary
                         </Chip>
                       )}
@@ -216,7 +216,7 @@ export function StepReview({
                       {/* Surface scan status so a still-pending / errored workspace isn't
                           attached silently at the final gate. */}
                       {w && w.status !== "ready" && (
-                        <Chip tone={STATUS_TONE[w.status]} className="px-1.5 py-0 text-[10px]">
+                        <Chip tone={STATUS_TONE[w.status]} className="px-1.5 py-0 text-[0.625rem]">
                           {STATUS_LABEL[w.status]}
                         </Chip>
                       )}
@@ -230,7 +230,7 @@ export function StepReview({
       </div>
 
       <div>
-        <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        <Label className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
           inline_policy (sent verbatim)
         </Label>
         <YamlBlock value={inline_policy} className="mt-1.5" />
@@ -243,7 +243,7 @@ export function StepReview({
           <div className="flex items-center justify-between">
             <div>
               <Label htmlFor="save-profile">Save as a reusable policy</Label>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 Persist this spec as a named policy so future runs can reference it.
               </p>
             </div>
@@ -274,7 +274,7 @@ export function StepReview({
 function Summary({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-foreground">{value}</div>
     </div>
   );

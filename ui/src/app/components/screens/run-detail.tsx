@@ -219,7 +219,7 @@ export function RunDetailScreen() {
         <Mono className="text-foreground" title={id}>
           {shortId}
         </Mono>
-        <Button variant="outline" size="sm" className="ml-1 h-6 gap-1 px-2 text-[11.5px]" onClick={copyLink}>
+        <Button variant="outline" size="sm" className="ml-1 h-6 gap-1 px-2 text-[0.7188rem]" onClick={copyLink}>
           {copied ? <Check className="size-3 text-success" /> : <LinkIcon className="size-3" />}
           {copied ? "Copied" : "Copy link"}
         </Button>
@@ -264,7 +264,7 @@ export function RunDetailScreen() {
               <TabsTrigger value="approvals" className="gap-1.5">
                 <ShieldCheck className="size-3.5" /> Approvals
                 {pendingCount(approvals) > 0 && (
-                  <span className="rounded-full bg-warning-subtle px-1.5 text-[10.5px] font-semibold text-warning">
+                  <span className="rounded-full bg-warning-subtle px-1.5 text-[0.6563rem] font-semibold text-warning">
                     {pendingCount(approvals)}
                   </span>
                 )}
@@ -450,7 +450,7 @@ function OverviewTab({
           {audit.length > 12 && (
             <button
               onClick={onGoAudit}
-              className="mt-3 text-[12.5px] font-medium text-primary hover:underline"
+              className="mt-3 text-[0.7813rem] font-medium text-primary hover:underline"
             >
               View full trail in Audit →
             </button>
@@ -460,7 +460,7 @@ function OverviewTab({
         <SectionCard
           title="Live terminal"
           right={
-            <button onClick={onGoRecording} className="text-[12.5px] font-medium text-primary hover:underline">
+            <button onClick={onGoRecording} className="text-[0.7813rem] font-medium text-primary hover:underline">
               Open full recording →
             </button>
           }
@@ -491,7 +491,7 @@ function OverviewTab({
       {/* side column */}
       <div className="flex min-w-0 flex-col gap-4">
         <SectionCard title="Identity" Icon={Fingerprint}>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-2 text-[12.5px]">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-2 text-[0.7813rem]">
             <KV label="Run ID">
               <Mono className="text-foreground">{run.id}</Mono>
             </KV>
@@ -545,12 +545,12 @@ function OverviewTab({
           ) : (
             <div className="flex flex-col gap-2">
               {egress.slice(-6).map((e) => (
-                <div key={e.id} className="flex items-center gap-2 text-[12.5px]">
+                <div key={e.id} className="flex items-center gap-2 text-[0.7813rem]">
                   <EgressDecisionChip decision={e.decision} />
                   <span className="min-w-0 truncate font-mono text-muted-foreground" title={e.domain}>
                     {e.domain}
                   </span>
-                  <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                  <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
                     {relativeTime(e.time)}
                   </span>
                 </div>
@@ -559,7 +559,7 @@ function OverviewTab({
           )}
           <button
             onClick={onGoAudit}
-            className="mt-3 text-[12.5px] font-medium text-primary hover:underline"
+            className="mt-3 text-[0.7813rem] font-medium text-primary hover:underline"
           >
             Full history in Audit →
           </button>
@@ -579,7 +579,7 @@ function GrantsCard({ grants, audit }: { grants: CredentialGrant[]; audit: Audit
   const minted = audit.filter((e) => e.action === "credential.mint" && e.outcome === "success");
   return (
     <SectionCard title="Credential grants" Icon={KeyRound}>
-      <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
+      <p className="mb-3 text-[0.75rem] leading-relaxed text-muted-foreground">
         Eligibility — what this run may request. When you approve, the broker mints a short-lived,
         scoped token; the agent never sees your real keys.
       </p>
@@ -592,9 +592,9 @@ function GrantsCard({ grants, audit }: { grants: CredentialGrant[]; audit: Audit
             <div key={g.id} className="flex items-start gap-2.5 rounded-lg border border-border p-2.5">
               <KeyRound className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
-                <div className="break-all font-mono text-[12.5px] text-foreground">{g.scope}</div>
+                <div className="break-all font-mono text-[0.7813rem] text-foreground">{g.scope}</div>
                 <div className="mt-1">
-                  <Chip tone="neutral" className="text-[11px]">
+                  <Chip tone="neutral" className="text-[0.6875rem]">
                     eligible to mint
                   </Chip>
                 </div>
@@ -606,17 +606,17 @@ function GrantsCard({ grants, audit }: { grants: CredentialGrant[]; audit: Audit
 
       {minted.length > 0 && (
         <div className="mt-3">
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
             Minted this run
           </div>
           <div className="flex flex-col gap-1.5">
             {minted.map((e) => (
-              <div key={e.id} className="flex items-center gap-2 text-[12px]">
-                <Chip tone="info" className="text-[11px]">brokered</Chip>
+              <div key={e.id} className="flex items-center gap-2 text-[0.75rem]">
+                <Chip tone="info" className="text-[0.6875rem]">brokered</Chip>
                 <span className="min-w-0 truncate font-mono text-muted-foreground" title={e.target}>
                   {e.target || "credential"}
                 </span>
-                <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
                   {relativeTime(e.time)}
                 </span>
               </div>
@@ -627,7 +627,7 @@ function GrantsCard({ grants, audit }: { grants: CredentialGrant[]; audit: Audit
 
       {grants.length > 0 && (
         <details className="mt-3">
-          <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground">
+          <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[0.75rem] text-muted-foreground hover:text-foreground">
             View raw JSON
           </summary>
           <JsonBlock value={grants} className="mt-2" />
@@ -651,11 +651,11 @@ function Timeline({ events }: { events: AuditEvent[] }) {
             </div>
             <div className={cn("min-w-0 flex-1", last ? "pb-0" : "pb-4")}>
               <div className="flex items-baseline gap-2">
-                <span className="min-w-0 truncate font-mono text-[12.5px] text-foreground" title={e.action}>
+                <span className="min-w-0 truncate font-mono text-[0.7813rem] text-foreground" title={e.action}>
                   {e.action}
                 </span>
                 <ActorTypeChip type={e.actor_type} />
-                <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
                   {new Date(e.time).toLocaleTimeString(undefined, {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -664,7 +664,7 @@ function Timeline({ events }: { events: AuditEvent[] }) {
                 </span>
               </div>
               {e.target && (
-                <div className="mt-0.5 break-words text-[12px] leading-relaxed text-muted-foreground">
+                <div className="mt-0.5 break-words text-[0.75rem] leading-relaxed text-muted-foreground">
                   {e.target}
                 </div>
               )}
@@ -719,7 +719,7 @@ function ApprovalsTab({
               </span>
             </div>
             <div className="mt-3">
-              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <Label className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
                 Requested scope
               </Label>
               <JsonBlock value={a.requested_scope} className="mt-1.5" />
@@ -770,7 +770,7 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
             {events.map((e) => (
               <div key={e.id} className="flex items-center gap-3 px-4 py-2.5">
                 <span
-                  className="w-[68px] shrink-0 font-mono text-[11px] text-muted-foreground"
+                  className="w-[68px] shrink-0 font-mono text-[0.6875rem] text-muted-foreground"
                   title={absoluteTime(e.time)}
                 >
                   {new Date(e.time).toLocaleTimeString(undefined, {
@@ -780,10 +780,10 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
                   })}
                 </span>
                 <ActorTypeChip type={e.actor_type} />
-                <span className="w-[190px] shrink-0 truncate font-mono text-[12px] text-muted-foreground" title={e.action}>
+                <span className="w-[190px] shrink-0 truncate font-mono text-[0.75rem] text-muted-foreground" title={e.action}>
                   {e.action}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground" title={e.target}>
+                <span className="min-w-0 flex-1 truncate text-[0.7813rem] text-foreground" title={e.target}>
                   {e.target || "—"}
                 </span>
               </div>
@@ -863,7 +863,7 @@ function SectionCard({
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
         {Icon && <Icon className="size-4 text-muted-foreground" />}
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
         {right && <div className="ml-auto">{right}</div>}
       </div>
       {children}

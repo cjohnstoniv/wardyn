@@ -431,7 +431,7 @@ export function AddSecretDialog({
               autoComplete="off"
               className="font-mono text-xs"
             />
-            <p className="text-[11px] leading-snug text-muted-foreground">
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
               This field is cleared on save and the value is never displayed again.
             </p>
           </div>
@@ -483,7 +483,7 @@ function ProviderNameChips({ onPick }: { onPick: (name: string) => void }) {
           key={n}
           type="button"
           onClick={() => onPick(n)}
-          className="rounded-md border border-border px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+          className="rounded-md border border-border px-2 py-1 font-mono text-[0.6875rem] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
         >
           {n}
         </button>
@@ -491,7 +491,7 @@ function ProviderNameChips({ onPick }: { onPick: (name: string) => void }) {
       <button
         type="button"
         onClick={() => onPick("")}
-        className="rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+        className="rounded-md border border-dashed border-border px-2 py-1 text-[0.6875rem] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
       >
         Custom…
       </button>

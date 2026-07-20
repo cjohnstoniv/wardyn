@@ -178,7 +178,7 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
           {error && (
             <div
               role="alert"
-              className="mt-3 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-[12.5px] text-danger"
+              className="mt-3 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-[0.7813rem] text-danger"
             >
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <span>{error}</span>

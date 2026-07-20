@@ -501,7 +501,7 @@ export function AddWorkspaceDialog({
               autoComplete="off"
             />
             {kind === "repo" && (
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                 A private repo clones through the credential broker — it needs a{" "}
                 <code className="font-mono">git-pat-&lt;host&gt;</code> (HTTPS) or{" "}
                 <code className="font-mono">ssh-key-&lt;host&gt;</code> (SSH) secret, added under
@@ -509,7 +509,7 @@ export function AddWorkspaceDialog({
               </p>
             )}
             {kind === "container" && (
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                 A tag or digest — pulled as the sandbox's base image. No host mount: nothing here needs
                 a path.
               </p>
@@ -541,7 +541,7 @@ export function AddWorkspaceDialog({
                 className="font-mono"
                 autoComplete="off"
               />
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                 Where this attaches in the sandbox by default. A run may override it per attachment.
               </p>
             </div>
@@ -565,7 +565,7 @@ export function AddWorkspaceDialog({
                   <span className="font-medium text-foreground">
                     Let agents write to this directory
                   </span>
-                  <span className="block text-[11px] leading-snug text-muted-foreground">
+                  <span className="block text-[0.6875rem] leading-snug text-muted-foreground">
                     Required to install dependencies, build, or have an agent change code. Leave
                     unticked and the workspace mounts read-only — <span className="font-mono">install</span>{" "}
                     and <span className="font-mono">build</span> steps will fail.
@@ -573,7 +573,7 @@ export function AddWorkspaceDialog({
                 </span>
               </label>
               {writable && (
-                <p className="rounded-md bg-warning-subtle px-2 py-1.5 text-[11px] leading-snug text-warning">
+                <p className="rounded-md bg-warning-subtle px-2 py-1.5 text-[0.6875rem] leading-snug text-warning">
                   The agent&apos;s changes persist to the host directory{" "}
                   <span className="font-mono">{source.trim() || "…"}</span>. Point this at a
                   disposable clone, not a working tree you care about.

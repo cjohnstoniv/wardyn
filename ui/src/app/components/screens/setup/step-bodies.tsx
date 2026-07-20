@@ -122,7 +122,7 @@ export function ReviewStep({
         <div className="flex items-center gap-2">
           <SectionLabel>{label}</SectionLabel>
           <span
-            className={`text-[11px] font-semibold tabular-nums ${
+            className={`text-[0.6875rem] font-semibold tabular-nums ${
               tone === "warning" ? "text-warning" : tone === "success" ? "text-success" : "text-muted-foreground"
             }`}
           >
@@ -147,7 +147,7 @@ export function ReviewStep({
         </p>
         <div className="flex shrink-0 items-center gap-2.5">
           {lastCheckedAt && (
-            <span className="text-[11.5px] text-muted-foreground">{lastCheckedLabel(lastCheckedAt)}</span>
+            <span className="text-[0.7188rem] text-muted-foreground">{lastCheckedLabel(lastCheckedAt)}</span>
           )}
           <Button variant="outline" size="sm" onClick={onRecheck} disabled={rechecking}>
             {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
@@ -827,13 +827,13 @@ export function WorkspacesStep({
                     {w.kind === "repo" ? "repo" : "local dir"} · {w.source}
                   </span>
                   {summary && (
-                    <span className="block truncate text-[11px] text-muted-foreground">{summary}</span>
+                    <span className="block truncate text-[0.6875rem] text-muted-foreground">{summary}</span>
                   )}
                   {STATUS_TONE[w.status] === "danger" && (
                     // The failure reason itself is only in the import overlay's scan
                     // pane (the toast is ephemeral) — point at the recovery path
                     // inline instead of leaving a bare red chip.
-                    <span className="block text-[11px] text-danger">
+                    <span className="block text-[0.6875rem] text-danger">
                       Scan failed — Resume import to see what went wrong and retry.
                     </span>
                   )}

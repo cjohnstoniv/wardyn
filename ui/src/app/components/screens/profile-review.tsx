@@ -214,7 +214,7 @@ function ProfileBody({
             ) : (
               <div className="flex flex-wrap gap-1">
                 {inline_policy.eligible_grants!.map((g, i) => (
-                  <Chip key={i} tone="info" mono className="px-1.5 py-0 text-[10px]">
+                  <Chip key={i} tone="info" mono className="px-1.5 py-0 text-[0.625rem]">
                     {String(g.kind)}
                   </Chip>
                 ))}
@@ -236,7 +236,7 @@ function ProfileBody({
             {inline_policy.allowed_domains.map((d) => (
               <span
                 key={d}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-foreground"
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 font-mono text-[0.6875rem] text-foreground"
               >
                 {d}
               </span>
@@ -264,7 +264,7 @@ function ProfileBody({
       {/* --- analyzer / clamp warnings --- */}
       {warnings && warnings.length > 0 && (
         <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3">
-          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-warning">
+          <div className="mb-1 text-[0.6875rem] font-medium uppercase tracking-wide text-warning">
             Warnings
           </div>
           <ul className="list-disc space-y-0.5 pl-4 text-xs text-warning">
@@ -277,7 +277,7 @@ function ProfileBody({
 
       {/* --- proposed inline_policy, verbatim --- */}
       <div>
-        <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        <Label className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
           inline_policy (proposed)
         </Label>
         <YamlBlock value={inline_policy} className="mt-1.5" />
@@ -323,7 +323,7 @@ export function Observations({ observations }: { observations: ProfileProposal["
       <div className="rounded-lg border border-border">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
           <Globe className="size-3.5" /> Egress domains
-          <span className="rounded-full bg-muted px-1.5 text-[11px]">{domains.length}</span>
+          <span className="rounded-full bg-muted px-1.5 text-[0.6875rem]">{domains.length}</span>
         </div>
         {domains.length === 0 ? (
           <EmptyMini text="No egress was observed." />
@@ -332,20 +332,20 @@ export function Observations({ observations }: { observations: ProfileProposal["
             {domains.map((d) => (
               <li key={d.host} className="px-3 py-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-mono text-[12.5px] text-foreground">{d.host}</span>
+                  <span className="font-mono text-[0.7813rem] text-foreground">{d.host}</span>
                   <div className="flex items-center gap-1.5">
                     {d.allow_count > 0 && (
-                      <Chip tone="success" className="px-1.5 py-0 text-[10px]">
+                      <Chip tone="success" className="px-1.5 py-0 text-[0.625rem]">
                         {d.allow_count} allow
                       </Chip>
                     )}
                     {d.deny_count > 0 && (
-                      <Chip tone="danger" className="px-1.5 py-0 text-[10px]">
+                      <Chip tone="danger" className="px-1.5 py-0 text-[0.625rem]">
                         {d.deny_count} deny
                       </Chip>
                     )}
                     {d.pending_count > 0 && (
-                      <Chip tone="warning" className="px-1.5 py-0 text-[10px]">
+                      <Chip tone="warning" className="px-1.5 py-0 text-[0.625rem]">
                         {d.pending_count} pending
                       </Chip>
                     )}
@@ -356,7 +356,7 @@ export function Observations({ observations }: { observations: ProfileProposal["
                     {d.methods.map((m) => (
                       <span
                         key={m}
-                        className="rounded border border-border bg-surface-2 px-1 font-mono text-[10px] text-muted-foreground"
+                        className="rounded border border-border bg-surface-2 px-1 font-mono text-[0.625rem] text-muted-foreground"
                       >
                         {m}
                       </span>
@@ -382,7 +382,7 @@ export function Observations({ observations }: { observations: ProfileProposal["
         <div className="flex items-center gap-2 text-danger">
           <AlertTriangle className="size-4" />
           <span className="text-sm font-semibold">Anomalies</span>
-          <span className="rounded-full bg-danger/15 px-1.5 text-[11px] text-danger">
+          <span className="rounded-full bg-danger/15 px-1.5 text-[0.6875rem] text-danger">
             {anomalies.length}
           </span>
         </div>
@@ -417,14 +417,14 @@ function ObsList({
     <div className="rounded-lg border border-border">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
         <Icon className="size-3.5" /> {title}
-        <span className="rounded-full bg-muted px-1.5 text-[11px]">{items.length}</span>
+        <span className="rounded-full bg-muted px-1.5 text-[0.6875rem]">{items.length}</span>
       </div>
       {items.length === 0 ? (
         <EmptyMini text="None observed." />
       ) : (
         <ul className="space-y-1 px-3 py-2">
           {items.map((it, i) => (
-            <li key={`${it}-${i}`} className="break-all font-mono text-[12px] text-foreground">
+            <li key={`${it}-${i}`} className="break-all font-mono text-[0.75rem] text-foreground">
               {it}
             </li>
           ))}
@@ -528,14 +528,14 @@ function RiskRow({ item }: { item: RiskItem }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="font-mono text-xs text-foreground">{item.field}</span>
-          <span className="font-mono text-[11px] text-muted-foreground">= {item.value}</span>
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">= {item.value}</span>
           {item.invariant_ref && (
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[0.625rem] text-muted-foreground">
               (invariant {item.invariant_ref})
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{item.rationale}</p>
+        <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">{item.rationale}</p>
       </div>
     </li>
   );
@@ -544,7 +544,7 @@ function RiskRow({ item }: { item: RiskItem }) {
 function Summary({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-foreground">{value}</div>
     </div>
   );
@@ -552,7 +552,7 @@ function Summary({ label, value }: { label: string; value: React.ReactNode }) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">{children}</div>
+    <div className="mb-1.5 text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{children}</div>
   );
 }
 

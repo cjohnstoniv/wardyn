@@ -48,7 +48,7 @@ export function StepIndicator<T extends string = WizardStepId>({
               >
                 <span
                   className={cn(
-                    "flex size-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold",
+                    "flex size-7 shrink-0 items-center justify-center rounded-full border text-[0.6875rem] font-semibold",
                     state === "active" && "border-primary bg-primary text-primary-foreground",
                     state === "done" && "border-primary bg-primary text-primary-foreground",
                     state === "todo" && "border-border text-muted-foreground",
@@ -100,7 +100,7 @@ export function Field({
     <div className={cn("space-y-2", className)}>
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
-      {hint && <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+      {hint && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -136,7 +136,7 @@ export function OptionCard({
     >
       <div className="text-sm font-medium text-foreground">{title}</div>
       {hint && (
-        <div className="mt-1 text-[11px] leading-snug text-muted-foreground">{hint}</div>
+        <div className="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">{hint}</div>
       )}
     </button>
   );
@@ -156,7 +156,7 @@ export function DomainPillList({
 }) {
   if (!domains.length) {
     return emptyHint ? (
-      <p className="text-[11px] text-muted-foreground">{emptyHint}</p>
+      <p className="text-[0.6875rem] text-muted-foreground">{emptyHint}</p>
     ) : null;
   }
   return (
@@ -165,7 +165,7 @@ export function DomainPillList({
         <span
           key={d}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px]",
+            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[0.6875rem]",
             tone === "danger"
               ? "border-danger/25 bg-danger-subtle text-danger"
               : "border-border bg-surface-2 text-foreground",

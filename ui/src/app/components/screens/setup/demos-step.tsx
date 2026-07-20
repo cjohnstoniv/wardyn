@@ -89,7 +89,7 @@ export default function DemoDetail({
         <ol className="space-y-1.5">
           {demo.setupUi.map((step, i) => (
             <li key={i} className="flex gap-2 text-sm text-muted-foreground">
-              <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium text-foreground">
+              <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[0.6875rem] font-medium text-foreground">
                 {i + 1}
               </span>
               <span className="min-w-0 leading-snug">{step}</span>

@@ -153,15 +153,15 @@ export function StepConfinement({
                     Recommended
                   </Chip>
                 )}
-                <p className="mt-2.5 text-[12px] leading-snug text-foreground/80">
+                <p className="mt-2.5 text-[0.75rem] leading-snug text-foreground/80">
                   {TIER_GUIDANCE[cc]}
                 </p>
-                <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+                <p className="mt-2 text-[0.6875rem] leading-snug text-muted-foreground">
                   <span className="font-semibold text-foreground/80">{RESIDUAL_PREFIX}</span>{" "}
                   {meta.doesntProtect}
                 </p>
                 {!enabled && (
-                  <p className="mt-2 text-[11px] leading-snug text-danger">
+                  <p className="mt-2 text-[0.6875rem] leading-snug text-danger">
                     {disabledReason}
                   </p>
                 )}
@@ -172,7 +172,7 @@ export function StepConfinement({
             );
           })}
         </div>
-        <p className="mt-3 flex items-start gap-2 text-[11px] leading-snug text-muted-foreground">
+        <p className="mt-3 flex items-start gap-2 text-[0.6875rem] leading-snug text-muted-foreground">
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-primary" />
           {CONFINEMENT_CONSTANT_NOTE}
         </p>
@@ -200,7 +200,7 @@ export function StepConfinement({
             <Label htmlFor="lc-never" className="flex-1 cursor-pointer">
               Keep running until I stop it
             </Label>
-            <span className="font-mono text-[10.5px] text-muted-foreground">
+            <span className="font-mono text-[0.6563rem] text-muted-foreground">
               auto_stop_after_sec
             </span>
           </label>
@@ -222,7 +222,7 @@ export function StepConfinement({
               />
               <span className="text-sm text-muted-foreground">min</span>
             </div>
-            <span className="font-mono text-[10.5px] text-muted-foreground">
+            <span className="font-mono text-[0.6563rem] text-muted-foreground">
               auto_stop_after_sec
             </span>
           </label>
