@@ -142,8 +142,11 @@ test.describe("AI Run Composer — Describe your task", () => {
     const dlg = await openDescribe(page);
     await compose(page, dlg, "Triage the failing CI and open a PR with a fix.");
 
-    // The fake summary describes a least-privilege WALL run — the user label,
-    // never the CC2 wire code.
+    // The model's rationale is collapsed by default (it is the wordiest block and
+    // answers "why", asked last) — expand "Why this setup" to read it. The fake
+    // summary then describes a least-privilege WALL run by the user label, never
+    // the CC2 wire code.
+    await dlg.getByText("Why this setup").click();
     await expect(dlg.getByText(/least-privilege Wall run/i)).toBeVisible();
 
     // Neutral identity facts: agent + the barrier as its user label.

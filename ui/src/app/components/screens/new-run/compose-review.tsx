@@ -99,6 +99,15 @@ export function ComposeReview({
     () => setupItems?.find((i) => i.kind === "llm_access")?.fix,
     [setupItems],
   );
+  // When the setup checklist already carries an llm_access row, its Detail IS
+  // llm_access.note verbatim (compose_setup.go setupLLMAccessItem) — so rendering
+  // the standalone positive line below would print the SAME sentence twice. Only
+  // show the standalone reassurance when there is no checklist row to carry it
+  // (older server / no setupItems), never in addition to it.
+  const hasLlmAccessItem = React.useMemo(
+    () => !!setupItems?.some((i) => i.kind === "llm_access"),
+    [setupItems],
+  );
 
   const highItems = React.useMemo(
     () => risk_assessment.filter((r) => r.risk_level === "high"),
@@ -143,7 +152,22 @@ export function ComposeReview({
           <h2 className="text-lg font-semibold leading-snug tracking-tight text-foreground">
             {run.task || "Proposed run"}
           </h2>
-          {summary && <p className="mt-1 text-sm text-muted-foreground">{summary}</p>}
+          {/* The model's rationale is the wordiest block on the screen and answers
+              "why did it decide this" — a question the operator asks LAST, if at
+              all. Collapse it (same <details> idiom as "View the exact policy"
+              below) so the primary content is the envelope + blockers, not prose. */}
+          {summary && (
+            <details className="group mt-1">
+              <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                Why this setup
+                <ChevronDown
+                  className="size-3 transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{summary}</p>
+            </details>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -206,7 +230,7 @@ export function ComposeReview({
           </div>
         </div>
       )}
-      {llm_access?.provisioned && (
+      {llm_access?.provisioned && !hasLlmAccessItem && (
         <p className="flex items-start gap-2 text-xs leading-relaxed text-success">
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
           {llm_access.note}
@@ -228,19 +252,26 @@ export function ComposeReview({
         </div>
       )}
 
-      {/* --- the model's OWN advisory notes (M7): untrusted prose, clearly NOT policy --- */}
+      {/* --- the model's OWN advisory notes (M7): untrusted prose, clearly NOT
+          policy. Collapsed by default — advisory model prose is secondary to the
+          deterministic clamp notices above, and a top source of the wall of text.
+          The count on the summary keeps it discoverable without printing it. --- */}
       {model_notes && model_notes.length > 0 && (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          <WandSparkles className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-          <div>
-            <span className="font-medium">Model notes (advisory — not enforced):</span>
-            <ul className="mt-1 list-disc space-y-0.5 pl-4">
-              {model_notes.map((n, i) => (
-                <li key={i}>{n}</li>
-              ))}
-            </ul>
-          </div>
-        </div>
+        <details className="group rounded-lg border border-border bg-muted/40">
+          <summary className="flex cursor-pointer list-none items-center gap-2 p-3 text-xs text-muted-foreground hover:text-foreground">
+            <WandSparkles className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="font-medium">Model notes ({model_notes.length}) — advisory, not enforced</span>
+            <ChevronDown
+              className="ml-auto size-3.5 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <ul className="list-disc space-y-0.5 border-t border-border px-3 pb-3 pl-7 pt-2 text-xs leading-relaxed text-muted-foreground">
+            {model_notes.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {/* --- exact policy, one click away (C7): humane content is primary, JSON secondary --- */}
@@ -350,7 +381,12 @@ function RiskPanel({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-foreground">Risk:</span>
         <RiskBadge level={overallRisk} />
-        {why[0] && <span className="text-[12.5px] text-foreground">{why[0]}</span>}
+        {/* whyRisky() returns the HIGH items' rationales first, so when needsAck is
+            true why[0] === highItems[0].rationale and the "High-risk configuration"
+            list below already prints it — showing it inline too duplicated the
+            sentence on the launch-blocked path. Inline why is for the Medium/Low
+            case (no list); when there's a list, let the list own it. */}
+        {!needsAck && why[0] && <span className="text-[12.5px] text-foreground">{why[0]}</span>}
       </div>
       {/* Non-exhaustive on purpose — the deterministic grader (composer/risk.go)
           has more HIGH triggers (weakest barrier tier, never-reap, …) and this

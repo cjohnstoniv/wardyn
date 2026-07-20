@@ -160,12 +160,13 @@ describe("ComposeReview — risk grade", () => {
     expect(screen.getByText("Wall")).toBeInTheDocument();
     expect(screen.getByText("acme/payments")).toBeInTheDocument();
     expect(screen.getByText(/auto-stops after 2h/i)).toBeInTheDocument();
-    // The wire code is allowed ONLY inside the "exact policy" operator escape hatch.
-    const details = container.querySelector("details");
-    expect(details?.textContent).toMatch(/CC2/);
-    // Everything OUTSIDE it — the human summary, chips, risk panel — must not leak
-    // the wire class or invariant refs (D4).
-    details?.remove();
+    // The wire code is allowed ONLY inside a collapsible operator escape hatch
+    // (the "exact policy" JSON) — one of possibly several <details> disclosures.
+    const disclosures = Array.from(container.querySelectorAll("details"));
+    expect(disclosures.some((d) => /CC2/.test(d.textContent ?? ""))).toBe(true);
+    // Everything OUTSIDE every disclosure — the human summary, chips, risk panel —
+    // must not leak the wire class or invariant refs (D4).
+    disclosures.forEach((d) => d.remove());
     expect(container.textContent).not.toMatch(/CC2/);
     expect(container.textContent).not.toMatch(/invariant/i);
   });
@@ -246,6 +247,14 @@ describe("ComposeReview — high-risk acknowledgment gate (D8)", () => {
     expect(within(section).queryByText(/min_confinement_class/)).toBeNull();
   });
 
+  it("does not print the first high rationale twice (inline 'why' vs the high-risk list)", () => {
+    // whyRisky() returns HIGH rationales first, so why[0] === highItems[0].rationale
+    // on the launch-blocked path. Guard: the first high rationale renders ONCE (in
+    // the gated list), not also inline next to the Risk badge.
+    renderReview(highRiskResult(), { acknowledged: false });
+    expect(screen.getAllByText(/weakest isolation/i)).toHaveLength(1);
+  });
+
   it("enables launch immediately when there are no high-risk items (no gate)", () => {
     renderReview(baseResult());
     expect(screen.queryByTestId("high-risk-section")).toBeNull();
@@ -301,6 +310,32 @@ describe("ComposeReview — setup checklist", () => {
   it("renders no checklist section when setupItems is absent/empty", () => {
     renderReview(baseResult());
     expect(screen.queryByText(/setup checklist/i)).toBeNull();
+  });
+
+  it("does not print the model-access note twice (checklist row vs standalone line)", () => {
+    // setupLLMAccessItem sets Detail = llm_access.note verbatim, so when both the
+    // checklist row and the standalone success line render, the SAME sentence
+    // prints twice. Guard: with an llm_access checklist item present, the note
+    // appears exactly ONCE (the row owns it).
+    const note = "Model access provisioned via your managed Claude subscription.";
+    const llmItem: SetupItem = {
+      id: "llm_access:claude-code",
+      kind: "llm_access",
+      label: "Model access for claude-code",
+      required_by: "the agent's own model calls",
+      status: "satisfied",
+      detail: note,
+    };
+    renderReview(baseResult({ llm_access: { provisioned: true, note } }), { setupItems: [llmItem] });
+    expect(screen.getAllByText(note)).toHaveLength(1);
+  });
+
+  it("keeps the standalone model-access line when there is no checklist row for it", () => {
+    // Older server / no setupItems: the standalone success line is the only carrier
+    // of the positive verdict, so it must still render (no regression from the dedup).
+    const note = "Model access provisioned via an api-key grant.";
+    renderReview(baseResult({ llm_access: { provisioned: true, note } }));
+    expect(screen.getByText(note)).toBeInTheDocument();
   });
 
   it("renders each item's label, detail, and status copy", () => {
