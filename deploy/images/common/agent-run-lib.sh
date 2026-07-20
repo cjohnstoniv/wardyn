@@ -341,3 +341,53 @@ maybe_exec_compose_mode() {
     fi
     exit 0
 }
+
+# ── selftest report blocks ────────────────────────────────────────────────────
+# Shared, report-only selftest output: these echo/inspect, never mutate $ok and
+# never exit — the PASS/FAIL decision stays with the caller. Split in two
+# because claude-code prints its anthropic-auth section between them, so the
+# output order stays CA -> (anthropic auth) -> repo/git.
+selftest_report_mitm_ca() {
+    echo "--- TLS-MITM CA trust (selftest: report only) ---"
+    if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
+        [[ -f /tmp/wardyn/mitm-ca.pem ]] \
+            && echo "  proxy CA: INSTALLED (/tmp/wardyn/mitm-ca.pem)" \
+            || echo "  proxy CA: DELIVERED but not yet installed (installed at idle/task start)"
+        if [[ -f /tmp/wardyn/ca-bundle.pem ]]; then
+            local sys_found=0
+            for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
+                [[ -f "$c" ]] && sys_found=1 && break
+            done
+            if [[ $sys_found -eq 1 ]]; then
+                echo "  combined bundle: PRESENT (/tmp/wardyn/ca-bundle.pem = system roots + proxy CA)"
+            else
+                echo "  combined bundle: PROXY-CA-ONLY (no system CA bundle in image; non-MITM TLS hosts will not verify)"
+            fi
+        else
+            echo "  combined bundle: not yet assembled"
+        fi
+    else
+        echo "  proxy CA: not delivered (run did not opt into TLS-MITM)"
+    fi
+}
+
+selftest_report_repo_and_git() {
+    echo "--- repo wiring (selftest never clones) ---"
+    echo "  WARDYN_REPO_URL=${WARDYN_REPO_URL:-<unset (no repo to clone)>}"
+    echo "  WARDYN_REPO_SLUG=${WARDYN_REPO_SLUG:-<unset>}"
+    if [ -n "$(find "${HOME}/work" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | head -1)" ]; then
+        echo "  workspace repo: PRESENT (a .git exists under ~/work)"
+    else
+        echo "  workspace repo: ABSENT (would clone WARDYN_REPO_URL if set)"
+    fi
+    echo "--- git credential helper ---"
+    echo "  WARDYN_GIT_PAT_GRANTS=${WARDYN_GIT_PAT_GRANTS:-<unset (no git_pat grants)>}"
+    git config --system --get credential.helper 2>/dev/null \
+        && echo "  OK (system config, global)" || echo "  MISSING (system gitconfig not wired)"
+    # Caller-auth gate (selftest never provisions — that happens at task time):
+    if [[ -n "${WARDYN_GITHUB_GRANT_ID:-}" || -n "${WARDYN_GIT_PAT_GRANTS:-}" ]]; then
+        echo "  caller-auth gate: ACTIVE at task time (a git grant is present; agent-run will provision WARDYN_GIT_HELPER_SECRET + a 0400 secret file)"
+    else
+        echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
+    fi
+}

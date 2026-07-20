@@ -144,7 +144,7 @@ the L3 tool gateway planned at v0.5.
 
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
-| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with two named, bounded exceptions (see §5.1a): an `ssh_key` grant materializes a RESIDENT private key (written 0400, wiped after clone), and Bedrock access-key mode places `aws-access-key-id`/`aws-secret-access-key` in the sandbox env because SigV4 signing can't be proxy-injected. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). NOTE: the optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. | B1, B2, B4 |
+| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). NOTE: the optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. | B1, B2, B4 |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | On the shipped Docker path this holds at **L0**: each run's network is `Internal:true` (gatewayless), so the sandbox has no off-host route and 169.254.169.254 is structurally unreachable **[shipped]**. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5 — planned]**. | L0 (L1 v0.5) |
 | MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5 — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
@@ -238,7 +238,8 @@ hiding them would repeat the failure mode we are designed to avoid.
    (`kernel.process.exec` with `data.loader=true` for `ld-linux*`/`ld-musl*`) so
    the bypass is at least *visible* in the audit trail — it does not block it.
    Agents can also observe enforcement effects. The real boundary is structural
-   (no network path, no resident credentials) enforced out-of-band.
+   (no network path, no resident credentials outside the §5.1a exceptions)
+   enforced out-of-band.
 
 6. **Host eBPF blindness to in-guest syscalls under Tier-3 Kata microVMs.**
    Requires an in-guest sensor or orchestration-layer audit fallback. This is a
@@ -336,29 +337,42 @@ exactly these terms.
   Bedrock stays opaque regardless (client-side SigV4 cannot be re-forwarded). The
   `require_inspectable_llm` policy fails an opaque-transport run **closed** at
   schedule time for strict operators.
-
-**Bedrock credential residency (a documented exception, like `ssh_key`).** The
-default Wardyn invariant is "no resident secrets": credentials are proxy-injected
-so the sandbox process never holds them. Bedrock has two auth modes with different
-postures:
-- **Bearer mode (preferred, never-resident):** a `bedrock-api-key` bearer token is
-  a *static* `Authorization` header, so the proxy TLS-MITMs `bedrock-runtime.*` and
-  injects it exactly like an api-key — the sandbox holds only a placeholder. Same
-  posture as api-key / subscription; the CA private key stays in proxy memory, the
-  host is an exact (non-wildcard) operator-configured MITM entry with a paired
-  injection rule (the corp-artifact-host trust boundary in `isMITMHost`).
-- **Access-key mode (resident, explicit exception):** AWS SigV4 signs each request
-  in-process, so it cannot be proxy-injected — `aws-access-key-id` /
-  `aws-secret-access-key` (+ optional session token) are placed in the sandbox env.
-  This is a **deliberate exception** to "no resident secrets" (the only other is the
-  subscription `~/.claude` mount). It is bounded: the values are output-masked
-  (PTY/recordings), withheld from non-model (verify/scan) runs, and IAM
-  least-privilege scoping — ideally short-TTL STS session creds scoped to one Bedrock
-  inference profile — is the operator's responsibility. Prefer bearer mode when the
-  never-resident posture matters.
 - Detections recorded **without storing the secret** — detector + field path +
   offset + count + masked placeholder only; never the matched bytes, never a
   reversible hash (the audit log is append-only and SIEM-fanned).
+
+**Resident-secret exceptions — the complete, authoritative list.** Wardyn's
+default invariant is "no resident secrets": a credential is late-bound by the
+broker and injected proxy-side, so the sandbox process never holds it. The table
+below is the COMPLETE set of places a live credential does land inside a sandbox
+— §4 and §8 point here rather than restating a count, because a hardcoded count
+is exactly how this list drifted before. Each row states what lands, why it
+cannot be proxy-injected, and what bounds it; where a bound does not exist, it
+says so.
+
+| Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
+|---|---|---|---|
+| `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time and shredded right after the clone; mask-registered at mint. Within that window anything running as the agent uid can read it. Wardyn cannot down-scope or expire an SSH private key (`internal/broker/broker.go` `mintSSHKey`, `deploy/images/*/agent-run`). |
+| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret; the value is mask-registered at mint. **No expiry, no down-scoping** — Wardyn holds an operator-provisioned PAT and can only forward it (no ADO/GitLab token-minting integration); that is this grant kind's honesty ceiling. GitHub's *transport* is the contrast the ADO design targets — a granted repo's git traffic is rewritten (`insteadOf`) to the proxy-side git broker, which mints the App installation token SERVER-side and re-originates with it, so the clone/push itself never carries a token into the sandbox, and github.com is not in the run's egress. State that precisely, though: the in-sandbox credential helper still has a GitHub mint path, gated only by the same per-run caller-auth secret, so the installation token remains OBTAINABLE from inside the sandbox — bounded by being repo-scoped and ≤1h, which is exactly what the ADO PAT is not. See [`docs/ADO-GIT-BROKER.md`](../docs/ADO-GIT-BROKER.md). |
+| Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — there is no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
+| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | A minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — this is a **not-yet-built** gap, not an impossibility. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative, mirroring Bedrock bearer mode). Until that ships, the token is written into the sandbox. | Files written `0600`; the token values are mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh + client secret again at use; a lapsed token is detected before dispatch and the run falls through to the next credential mode rather than being handed a dead token; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy carried in the env var is not matched, and Wardyn cannot revoke an SSO session. |
+| **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
+| Bedrock **host `~/.aws` mount** (`WARDYN_BEDROCK_AWS_DIR`) | Whatever the operator's host `~/.aws` holds — the SSO token cache, and any static keys in it — readable at `/home/agent/.aws` | The AWS SDK resolves credentials from the file itself | Bind-mounted **read-only**, so the sandbox can never write the operator's host AWS state; nothing is stored by Wardyn and no keys go into env. Wardyn never reads the contents, so it cannot mask them. A single-user / self-hosted choice, not for a shared multi-tenant service. |
+| Subscription `~/.claude` mount, **`WARDYN_SUBSCRIPTION_INJECT=off` only** | A real, refreshable **copy** of the operator's Claude OAuth credentials | With injection off there is no proxy-side token provider to inject from (the distroless compose `wardynd` carries no `claude` binary of its own) | **Mode-dependent — read the defaults carefully.** With injection ON (the host-mode default) the staged `.credentials.json` is sanitized to an inert sentinel (refresh token blanked, access token replaced, expiry pinned), so nothing usable is resident. The **compose stack defaults this env var to `off`**, so on that stack the resident copy is the default. The mount is read-only, and it lands only on an explicit per-request human opt-in (`use_subscription`) against an operator-blessed ceiling mount. |
+| Container-**login** runs (`harness login`) | The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing, default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run, so no replayable asciicast is persisted (masking could not have covered it: the value arrives after the run's mask snapshot). |
+
+Everything else is never-resident — `api_key`, the Bedrock **bearer** token
+(`bedrock-api-key`), and the default proxy-injected subscription: the value is
+resolved at the injection sink or re-originated proxy-side, and the sandbox
+holds only a placeholder or an inert sentinel. GitHub's `github_token` sits
+between the two lists: its git *transport* is never-resident (broker-injected,
+see the `git_pat` row), but the credential helper can still mint it in-sandbox.
+Bedrock bearer mode is therefore the one to prefer when the never-resident
+posture matters: a bearer token is a *static* `Authorization` header, so the
+proxy TLS-MITMs `bedrock-runtime.*` and injects it exactly like an api-key (the
+CA private key stays in proxy memory; the host is an exact, non-wildcard
+operator-configured MITM entry with a paired injection rule — the
+corp-artifact-host trust boundary in `isMITMHost`).
 
 **Wardyn may NOT claim (these would repeat the industry's egress-veto overclaim):**
 - "Prevents/blocks data exfiltration to the model," "exfil-proof," or "DLP." An
@@ -568,9 +582,10 @@ rootless-compatible — cap-drop ALL, no-new-privileges, `RuntimeDefault` seccom
 (never `unconfined`), host-gated AppArmor, retained SELinux labeling
 (`internal/runner/docker/hardening.go`) — and **all tier-independent controls hold
 unchanged**: the per-run gatewayless (`Internal:true`) network, the wardyn-proxy
-sidecar as the sole egress path, brokered **never-resident** credentials, and the
-three audit streams. **CC2/CC3 are NOT available rootless:** current gVisor only
-starts under rootless Docker with `--TESTONLY-unsafe-nonroot`, which disables the
+sidecar as the sole egress path, brokered **never-resident** credentials (the
+§5.1a exceptions aside), and the three audit streams. **CC2/CC3 are NOT
+available rootless:** current gVisor only starts under rootless Docker with
+`--TESTONLY-unsafe-nonroot`, which disables the
 host isolation Wall exists to provide, and Kata needs device passthrough that
 rootless can't grant (`cmd/wardyn/setup.go` reports both as unsupported). A policy
 that mandates CC2/CC3 on a rootless host is **refused, fail-closed**, by the
@@ -672,7 +687,7 @@ The following controls apply regardless of Confinement Class:
 
 | Control | Layer | What it closes |
 |---|---|---|
-| No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths **[shipped]** (the optional `-out-dir` recording fallback is unmasked, and `ssh_key`/Bedrock-access-key are named residual exceptions — see §4, §5.1a) | AT-1.1: agent reading secrets from sandbox env/disk |
+| No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths **[shipped]** (the optional `-out-dir` recording fallback is unmasked, and there is a named, bounded set of residual exceptions — §5.1a is the complete list) | AT-1.1: agent reading secrets from sandbox env/disk |
 | Env-var proxy bypass defended | L0 (gatewayless network; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
 | Egress enforced outside the sandbox | L0/L1 | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
 | Two enforcement planes (network B2 + tool B3) | L2 **[shipped]** + L3 **[v0.5 — planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |

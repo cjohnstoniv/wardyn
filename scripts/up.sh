@@ -539,7 +539,7 @@ cmd_up() {
     # so a failed agent image is a warning, not a teardown. Building via compose so
     # the corp-build args (NPM_REGISTRY/HTTP(S)_PROXY) wired into these stanzas apply.
     _agent_img_warn=0
-    for _svc in agent-claude-code agent-codex-cli; do
+    for _svc in agent-claude-code agent-codex-cli agent-aws-sso; do
       log "Building ${_svc}…"
       if compose --profile build-only build "${_svc}"; then
         log "  built ${_svc}"

@@ -5,8 +5,12 @@
 #     --policy-file examples/policies/sandbox-claude.yaml
 #
 # Prereq: connect the managed subscription once (never-resident, stored
-# age-encrypted): POST /api/v1/setup/harness-login -> attach -> `claude
-# setup-token` -> PUT /api/v1/setup/harness-credential/anthropic. See docs/TRY-IT.md.
+# age-encrypted):
+#
+#   claude setup-token | wardyn subscription connect
+#
+# (headless/CI: `printf '%s' "$TOKEN" | wardyn subscription connect --token-stdin`).
+# See docs/TRY-IT.md.
 #
 # Why NO api_key grant below: dispatch picks the model path by precedence
 # (host ~/.claude mount > managed setup-token > Bedrock > api-key). Leaving out the

@@ -415,7 +415,8 @@ fi
 . scripts/lib/images.sh
 hd "Agent images (per-run sandboxes)"
 for _img in claude-code:wardyn/agent-claude-code:local \
-            codex-cli:wardyn/agent-codex-cli:local; do
+            codex-cli:wardyn/agent-codex-cli:local \
+            aws-sso:wardyn/agent-aws-sso:local; do
   _img_dir="${_img%%:*}"; _img_tag="${_img#*:}"
   if image_missing "$_img_tag"; then
     info "Building ${_img_tag} (first run; this can take several minutes)…"

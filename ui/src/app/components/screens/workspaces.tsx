@@ -91,7 +91,7 @@ export const STATUS_LABEL: Record<Workspace["status"], string> = {
 // Icon + label for the three onboardable kinds. "container" has no host mount
 // (source is an image ref), so it gets its own icon rather than reusing the
 // local-dir folder.
-const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: string }> = {
+export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: string }> = {
   local_dir: { Icon: FolderOpen, label: "local dir" },
   repo: { Icon: FolderGit2, label: "repo" },
   container: { Icon: Box, label: "container" },

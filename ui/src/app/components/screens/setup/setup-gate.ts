@@ -62,10 +62,17 @@ export function shouldOpenSetup(status: SetupStatus, dismissed: boolean): boolea
 // The HARD first-run gate: while active, the app nav is hidden and every route
 // except Getting Started (and the demos that are part of it) redirects to
 // /setup, so a fresh local operator must go THROUGH setup rather than landing in
-// an unconfigured app. Same predicate as the soft auto-open — finishing the flow
-// (dismissSetup), a first launched run, an already-onboarded console (has_runs),
-// SSO/team mode, or an unreachable daemon all clear it. Reads the dismiss flag
-// live so completing the funnel unlocks nav on the next render.
+// an unconfigured app. Finishing the flow (dismissSetup), a first launched run /
+// an already-onboarded console (has_runs), SSO/team mode, or an unreachable
+// daemon all clear it. Reads the dismiss flag live so completing the funnel
+// unlocks nav on the next render.
+//
+// Deliberately NOT keyed on `ready`, unlike the soft auto-open: readiness is a
+// live probe with no error caching, so a transient daemon blip would otherwise
+// yank an operator with existing runs out of the entire console (every route
+// redirects, all nav hidden, the only escape on the funnel's last step).
 export function setupGateActive(status: SetupStatus): boolean {
-  return shouldOpenSetup(status, setupDismissed());
+  return (
+    !setupDismissed() && !status.unreachable && status.auth.mode === "local" && !status.has_runs
+  );
 }

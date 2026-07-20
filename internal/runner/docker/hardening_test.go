@@ -26,18 +26,7 @@ func infoWithRuntimes(names ...string) system.Info {
 	for _, n := range names {
 		rt[n] = system.RuntimeWithStatus{}
 	}
-	// Represent a normal host that CAN enforce resource caps (cgroup v2, delegated)
-	// so CreateSandbox in the driver tests isn't refused by the fail-closed cap
-	// probe — the unenforceable-cap case is exercised directly in
-	// TestCheckResourceCapsEnforceable.
-	return system.Info{
-		Runtimes:      rt,
-		MemoryLimit:   true,
-		PidsLimit:     true,
-		CPUCfsQuota:   true,
-		CgroupVersion: "2",
-		CgroupDriver:  "systemd",
-	}
+	return system.Info{Runtimes: rt}
 }
 
 func TestCapabilitiesFor_ClassMapping(t *testing.T) {

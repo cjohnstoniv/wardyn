@@ -75,9 +75,8 @@ type Server struct {
 	userCode   string
 	approved   bool
 
-	// Tokens. accessToken/refreshToken rotate on every successful
-	// CreateToken (device-code grant or refresh_token grant) so a test can
-	// assert the LATEST token is what's expected.
+	// Tokens. accessToken rotates on every successful CreateToken so a test
+	// can assert the LATEST token is what's expected.
 	accessToken  string
 	refreshToken string
 
@@ -254,7 +253,6 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		ClientSecret string `json:"clientSecret"`
 		GrantType    string `json:"grantType"`
 		DeviceCode   string `json:"deviceCode"`
-		RefreshToken string `json:"refreshToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeOIDCError(w, "InvalidRequestException", "invalid_request", err.Error())
@@ -278,30 +276,11 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 			writeOIDCError(w, "AuthorizationPendingException", "authorization_pending", "device authorization is still pending user approval")
 			return
 		}
-		// Rotate on issuance so RefreshToken exercises a real state change
-		// too (Phase B's refresh path).
+		// Rotate on issuance so checkBearer only accepts the token this
+		// login just handed out.
 		s.accessToken = "fake-access-token-" + randHex(8)
 		access := s.accessToken
 		refresh := s.refreshToken
-		s.mu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]any{
-			"accessToken":  access,
-			"tokenType":    "Bearer",
-			"expiresIn":    3600,
-			"refreshToken": refresh,
-		})
-		return
-
-	case "refresh_token":
-		s.mu.Lock()
-		if req.RefreshToken != s.refreshToken {
-			s.mu.Unlock()
-			writeOIDCError(w, "InvalidGrantException", "invalid_grant", "unknown refresh token")
-			return
-		}
-		s.accessToken = "fake-access-token-" + randHex(8)
-		s.refreshToken = "fake-refresh-token-" + randHex(8)
-		access, refresh := s.accessToken, s.refreshToken
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"accessToken":  access,

@@ -195,9 +195,9 @@ func awsSSOCacheFileName(sessionName string) string {
 // captured SSO session to a single profile the sandbox SDK resolves against.
 func awsSSOConfigFileContents(b awsSSOBlob) string {
 	return fmt.Sprintf(
-		"[sso-session %[1]s]\nsso_start_url = %[3]s\nsso_region = %[4]s\nsso_registration_scopes = sso:account:access\n\n"+
-			"[profile %[1]s]\nsso_session = %[1]s\nsso_account_id = %[5]s\nsso_role_name = %[6]s\noutput = json\n",
-		awsSSOProfileName, awsSSOProfileName, b.StartURL, b.Region, b.AccountID, b.RoleName,
+		"[sso-session %[1]s]\nsso_start_url = %[2]s\nsso_region = %[3]s\nsso_registration_scopes = sso:account:access\n\n"+
+			"[profile %[1]s]\nsso_session = %[1]s\nsso_account_id = %[4]s\nsso_role_name = %[5]s\noutput = json\n",
+		awsSSOProfileName, b.StartURL, b.Region, b.AccountID, b.RoleName,
 	)
 }
 

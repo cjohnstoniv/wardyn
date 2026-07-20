@@ -9,7 +9,7 @@
 // (mirrors DomainPillList), and a disclosed per-item config card (mirrors
 // StepAccess's AuthOption) — rather than inventing new interaction patterns.
 import * as React from "react";
-import { Box, ChevronsUpDown, FolderGit2, FolderOpen, Plus, X } from "lucide-react";
+import { ChevronsUpDown, Plus, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -28,7 +28,7 @@ import { Mono } from "../../wardyn/code-block";
 import type { Workspace, WorkspaceSelection } from "../../../lib/types";
 // Reuse the single widened status vocabulary so this picker can't drift from the
 // /workspaces screen (and covers every import-flow status, not just three).
-import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
+import { STATUS_TONE, STATUS_LABEL, KIND_META } from "../workspaces";
 
 export function WorkspacePicker({
   selections,
@@ -70,16 +70,11 @@ export function WorkspacePicker({
         <div className="space-y-2">
           {selections.map((sel, i) => {
             const w = byId.get(sel.workspaceId);
+            const KindIcon = (w && KIND_META[w.kind] ? KIND_META[w.kind] : KIND_META.local_dir).Icon;
             return (
               <div key={sel.workspaceId} className="rounded-lg border border-border p-2.5">
                 <div className="flex items-center gap-2.5">
-                  {w?.kind === "repo" ? (
-                    <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
-                  ) : w?.kind === "container" ? (
-                    <Box className="size-4 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
-                  )}
+                  <KindIcon className="size-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium text-foreground">

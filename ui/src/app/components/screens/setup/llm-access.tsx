@@ -119,6 +119,20 @@ const BEDROCK_BEARER_CHIP = (
 // compact "Set up:" button under the method list (container login, add key, …).
 type SetupOption = { key: string; label: string; onClick: () => void; icon?: React.ReactNode };
 
+// The "Set up:" button row, identical for every harness.
+function SetupOptionRow({ options }: { options: SetupOption[] }) {
+  if (options.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {options.map((o) => (
+        <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
+          {o.icon ?? <Plus className="size-3.5" />} {o.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 export function ModelStep({
   status,
   readiness,
@@ -661,15 +675,7 @@ export function ModelStep({
               (bedrockConfigured || bedrockOpen) && bedrockRow,
             ].filter(Boolean)}
           </ul>
-          {claudeOptions.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {claudeOptions.map((o) => (
-                <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
-                  {o.icon ?? <Plus className="size-3.5" />} {o.label}
-                </Button>
-              ))}
-            </div>
-          )}
+          <SetupOptionRow options={claudeOptions} />
           {/* Host mode only: wardynd CAN see a resident ~/.claude, so offer that
               route as a secondary alternative to the sandbox login above. On a
               sealed control plane it could never satisfy this step, so it's hidden. */}
@@ -707,15 +713,7 @@ export function ModelStep({
           <ul className="space-y-2.5">
             {[openai && openaiKeyRow, codexDetected && codexRow].filter(Boolean)}
           </ul>
-          {codexOptions.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {codexOptions.map((o) => (
-                <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
-                  {o.icon ?? <Plus className="size-3.5" />} {o.label}
-                </Button>
-              ))}
-            </div>
-          )}
+          <SetupOptionRow options={codexOptions} />
           <p className="text-xs leading-relaxed text-muted-foreground">
             Codex connects with an API key — there&apos;s no container login.
           </p>

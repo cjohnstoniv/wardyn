@@ -7,7 +7,7 @@
 # support the sso-session / device-code flow, so this image does NOT use apt
 # for the CLI itself.
 #
-# Stage 1: build wardyn-rec, wardyn-git-helper, wardyn-scan, wardyn-verify from
+# Stage 1: build wardyn-rec and wardyn-git-helper from
 # the repository root — pure-Go CGO_ENABLED=0 builds, fully static, so the
 # runtime stage needs no extra libc for them.
 # Stage 2: debian:bookworm-slim (no Node.js — this image never runs npm/node,
@@ -23,9 +23,7 @@
 #     and idle (attach) mode both converge on the same interactive SSO login —
 #     the task text is not a prompt, it is ignored (logged, not consumed).
 #   - /usr/local/bin/wardyn-rec: session recorder (records the login session).
-#   - /usr/local/bin/wardyn-git-helper, wardyn-scan, wardyn-verify: shipped for
-#     contract parity with the sibling images (this image's job never clones a
-#     repo, but nothing about the contract says it can't).
+#   - /usr/local/bin/wardyn-git-helper: backs the system credential helper below.
 #   - USER agent (uid 1000), home /home/agent, workspace /home/agent/work.
 #   - System gitconfig wires the credential helper GLOBALLY (all hosts).
 #
@@ -58,9 +56,7 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec        ./cmd/wardyn-rec \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-scan       ./cmd/wardyn-scan \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-verify     ./cmd/wardyn-verify
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
@@ -94,7 +90,6 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
         cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
         update-ca-certificates; \
     fi
-ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
@@ -197,8 +192,6 @@ RUN groupadd -g 1000 agent \
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec
 COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
-COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
-COPY --from=builder /out/wardyn-verify     /usr/local/bin/wardyn-verify
 
 # agent-run: the thin shell wrapper the Wardyn driver uses to launch/attach.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
@@ -209,8 +202,6 @@ COPY deploy/images/aws-sso/agent-run /usr/local/bin/agent-run
 COPY --chown=agent:agent deploy/images/common/attach-bashrc.sh /home/agent/.bashrc
 RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
-           /usr/local/bin/wardyn-scan \
-           /usr/local/bin/wardyn-verify \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts) — same wiring as the

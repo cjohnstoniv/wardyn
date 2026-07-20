@@ -242,10 +242,10 @@ func (p *Proxy) handleBrokerVerifyResult(w http.ResponseWriter, r *http.Request)
 		ruleSourceVerifyResults, "read verify result body", maxScanResultBody)
 }
 
-// handleBrokerComposeResult forwards PUT /wardyn/v1/compose-results/{runID} to the
-// control plane's internal compose-result endpoint with the run token injected —
-// the exact sibling of handleBrokerScanResult. It carries the AI Run Composer's
-// in-sandbox claude proposal JSON back to the waiting RunClaudeCompose. Cross-run
+// handleBrokerSSOToken forwards PUT /wardyn/v1/sso-token/{runID} to the control
+// plane's internal sso-token endpoint with the run token injected — the exact
+// sibling of handleBrokerScanResult. It carries the AWS SSO session
+// wardyn-aws-sso captured in the sandbox back to the control plane. Cross-run
 // uploads are rejected control-plane-side (token run id must match the path run
 // id); the sandbox-supplied Authorization is stripped, the run token injected.
 func (p *Proxy) handleBrokerSSOToken(w http.ResponseWriter, r *http.Request) {

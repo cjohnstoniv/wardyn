@@ -111,6 +111,7 @@ export function LLMCredFields({
       )}
 
       {value.mode === "bedrock" && (
+        <>
         <div className="grid grid-cols-3 gap-2">
           <Input
             placeholder="Region"
@@ -134,18 +135,17 @@ export function LLMCredFields({
             autoComplete="off"
           />
         </div>
-      )}
-      {value.mode === "bedrock" && (
-        // Honest expectation: binding Bedrock here selects it as this environment's
-        // model path (dropping a competing API-key grant), but runs currently use
-        // the server's GLOBAL Bedrock region/model (WARDYN_BEDROCK_REGION/MODEL).
-        // Per-environment region/model/profile override is not yet applied at
-        // dispatch — the credential values come from the secret store / ~/.aws mount.
+        {/* Honest expectation: binding Bedrock here selects it as this environment's
+            model path (dropping a competing API-key grant), but runs currently use
+            the server's GLOBAL Bedrock region/model (WARDYN_BEDROCK_REGION/MODEL).
+            Per-environment region/model/profile override is not yet applied at
+            dispatch — the credential values come from the secret store / ~/.aws mount. */}
         <p className="text-xs leading-relaxed text-muted-foreground">
           Selects Bedrock for this environment. Region/model/profile are stored but
           not yet applied per-run — today runs use the server's global Bedrock
           configuration; the AWS credentials come from the secret store or ~/.aws mount.
         </p>
+        </>
       )}
 
       <p className="text-[11px] leading-snug text-muted-foreground">

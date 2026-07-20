@@ -4,6 +4,7 @@
 package awsssofake
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -90,31 +91,15 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 		DefaultImage,
 		"aws", "sso", "login", "--profile", profileName, "--no-browser", "--use-device-code",
 	)
-	out, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	cmd.Stdout = cmd.Stderr // aws CLI writes the verification prompt to stdout
+	// Buffer stdout+stderr (aws CLI writes the verification prompt to stdout);
+	// exec copies into the buffer itself, so nothing can block on a full pipe.
+	// Only read logBuf.Bytes() after cmd.Wait().
+	var logBuf bytes.Buffer
+	cmd.Stdout = &logBuf
+	cmd.Stderr = &logBuf
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start docker run: %v", err)
 	}
-	// Drain (and discard, keeping only for failure diagnostics) stderr/stdout
-	// concurrently so the CLI's pipe never fills and blocks it.
-	logCh := make(chan []byte, 1)
-	go func() {
-		buf := make([]byte, 0, 4096)
-		tmp := make([]byte, 4096)
-		for {
-			n, rerr := out.Read(tmp)
-			if n > 0 {
-				buf = append(buf, tmp[:n]...)
-			}
-			if rerr != nil {
-				break
-			}
-		}
-		logCh <- buf
-	}()
 
 	// Wait for the CLI to hit StartDeviceAuthorization, then approve. Poll
 	// briefly rather than sleeping a fixed guess.
@@ -129,7 +114,7 @@ func RunDeviceCodeLogin(t *testing.T, s *Server, sessionName, profileName, start
 	s.Approve()
 
 	waitErr := cmd.Wait()
-	cliLog := <-logCh
+	cliLog := logBuf.Bytes()
 	if waitErr != nil {
 		t.Fatalf("aws sso login failed: %v\n--- container output ---\n%s", waitErr, cliLog)
 	}
@@ -221,5 +206,10 @@ func requireDockerBinary(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not found on PATH; skipping")
+	}
+	// Nothing in CI builds DefaultImage, and `docker run` on a missing image
+	// burns the whole test timeout pulling/failing — skip instead.
+	if err := exec.Command("docker", "image", "inspect", DefaultImage).Run(); err != nil {
+		t.Skipf("image %s not present locally (build it with `make agent-images`); skipping", DefaultImage)
 	}
 }

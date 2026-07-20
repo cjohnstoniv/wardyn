@@ -105,27 +105,10 @@ func (c *Client) SetupStatus(ctx context.Context) (json.RawMessage, error) {
 	return out, err
 }
 
-// harnessLoginRequest / harnessLoginResponse mirror the server wire shape for
-// POST /api/v1/setup/harness-login (internal/api/harnesscred.go).
-type harnessLoginRequest struct {
-	Provider string `json:"provider"`
-}
-type harnessLoginResponse struct {
-	RunID string `json:"run_id"`
-}
+// harnessCredRequest mirrors the server wire shape for PUT
+// /api/v1/setup/harness-credential/{provider} (internal/api/harnesscred.go).
 type harnessCredRequest struct {
 	Token string `json:"token"`
-}
-
-// HarnessLogin launches a governed container-login sandbox for a provider (e.g.
-// "anthropic") where the operator runs the CLI's `setup-token` device flow, and
-// returns the run id to attach to. POST /api/v1/setup/harness-login.
-func (c *Client) HarnessLogin(ctx context.Context, provider string) (string, error) {
-	var out harnessLoginResponse
-	if err := c.do(ctx, http.MethodPost, "/api/v1/setup/harness-login", harnessLoginRequest{Provider: provider}, &out); err != nil {
-		return "", err
-	}
-	return out.RunID, nil
 }
 
 // ConnectManagedSubscription stores a captured provider setup-token so the proxy

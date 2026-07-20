@@ -467,15 +467,12 @@ services:
   # above — never started by the demo, exists so `docker compose --profile
   # build-only build` produces the tagged image. Hosts an interactive
   # `aws sso login --no-browser --use-device-code` session (AWS CLI v2; see
-  # deploy/images/aws-sso/Dockerfile). NPM_REGISTRY is unused by this image
-  # (no npm install) but threaded through for ARG parity with the sibling
-  # build-only stanzas.
+  # deploy/images/aws-sso/Dockerfile).
   agent-aws-sso:
     build:
       context: ../..
       dockerfile: deploy/images/aws-sso/Dockerfile
       args:
-        NPM_REGISTRY: "${NPM_REGISTRY:-}"
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
