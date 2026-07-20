@@ -183,6 +183,28 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// workspace-image resolution below.
 	wsRefs := s.unionRunEgress(ctx, runID, &spec, gw)
 
+	// Fold the PRIMARY workspace/container's operator-owned model/harness cred
+	// binding into the run (the credential analogue of unionRunEgress) — a run
+	// inherits the model access of the workspace/container it picks. The primary is
+	// the first referenced local_dir/repo workspace, or — for a bring-your-own-
+	// container run — the onboarded CONTAINER workspace whose image this run
+	// launches. A workspace that binds nothing leaves the run on the global
+	// provider config (or a plain governed command).
+	var credPrimary *types.Workspace
+	if len(wsRefs) > 0 {
+		credPrimary = &wsRefs[0]
+	} else if req.Image != "" && s.cfg.Store != nil {
+		if cw, err := s.cfg.Store.GetWorkspaceBySource(ctx, types.WorkspaceKindContainer, req.Image); err == nil {
+			credPrimary = &cw
+		}
+	}
+	if credPrimary != nil {
+		if mode := s.applyWorkspaceCreds(ctx, &spec, credPrimary, req.Agent); mode != "" {
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
+				runID.String(), "success", mustJSON(map[string]any{"mode": string(mode)})))
+		}
+	}
+
 	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchWithVerify's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
 	// run row exists and MUST be driven to a terminal state or dispatched. An image

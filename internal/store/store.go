@@ -312,18 +312,31 @@ func workspaceApprovedParam(domains []string) any {
 	return b
 }
 
-// wsCols is the canonical workspace column list (order matches scanWorkspaceInto).
+// workspaceLLMCredParam serializes the operator-owned model/harness cred binding
+// for its JSONB column; nil ⇒ NULL (no binding).
+func workspaceLLMCredParam(c *types.WorkspaceLLMCred) any {
+	if c == nil {
+		return nil
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return nil // fail-safe to "no binding"
+	}
+	return b
+}
+
+// wsCols is the canonical workspace column list (order matches scanWorkspace).
 const wsCols = `id, name, kind, source, ref, default_target, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, setup_commands, verify_result, ` +
 	`verified_profile_hash, verified_at, active_run_id, status, created_at, updated_at, ` +
-	`record_results, writable`
+	`record_results, writable, llm_cred`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is core A's opaque WorkspaceProfile blob (nil until scanned).
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		RETURNING ` + wsCols
 	return scanWorkspace(s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
@@ -331,7 +344,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
 		workspaceProfileParam(ws.VerifyResult), ws.VerifiedProfileHash, ws.VerifiedAt,
 		ws.ActiveRunID, string(ws.Status), ws.CreatedAt, ws.UpdatedAt,
-		workspaceProfileParam(ws.RecordResults), ws.Writable,
+		workspaceProfileParam(ws.RecordResults), ws.Writable, workspaceLLMCredParam(ws.LLMCred),
 	))
 }
 
@@ -361,8 +374,8 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 			profile=$6, image_ref=$7, built_profile_hash=$8, approved_egress=$9,
 			setup_commands=$10, verify_result=$11, verified_profile_hash=$12,
 			verified_at=$13, active_run_id=$14, status=$15, record_results=$16,
-			writable=$17, updated_at=now()
-		WHERE id=$18
+			writable=$17, llm_cred=$18, updated_at=now()
+		WHERE id=$19
 		RETURNING ` + wsCols
 	return scanWorkspace(s.Pool.QueryRow(ctx, q,
 		ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
@@ -370,8 +383,18 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
 		workspaceProfileParam(ws.VerifyResult), ws.VerifiedProfileHash, ws.VerifiedAt,
 		ws.ActiveRunID, string(ws.Status), workspaceProfileParam(ws.RecordResults),
-		ws.Writable, id,
+		ws.Writable, workspaceLLMCredParam(ws.LLMCred), id,
 	))
+}
+
+// SetWorkspaceLLMCred replaces ONLY the operator-owned model/harness cred
+// binding column (plus updated_at), returning the updated row. Scoped like
+// SetWorkspaceApprovedEgress so it can never clobber a concurrently-persisted
+// async scan. Pass nil to clear the binding.
+func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error) {
+	return scanWorkspace(s.Pool.QueryRow(ctx,
+		`UPDATE workspaces SET llm_cred=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		workspaceLLMCredParam(cred), id))
 }
 
 // SetWorkspaceApprovedEgress replaces ONLY the operator-owned approved-egress
@@ -557,12 +580,12 @@ func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
 	var kind, status string
-	var profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw []byte
+	var profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw, llmCredRaw []byte
 	err := row.Scan(
 		&ws.ID, &ws.Name, &kind, &ws.Source, &ws.Ref, &ws.DefaultTarget,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &setupRaw, &verifyRaw,
 		&ws.VerifiedProfileHash, &ws.VerifiedAt, &ws.ActiveRunID, &status, &ws.CreatedAt, &ws.UpdatedAt,
-		&recordRaw, &ws.Writable,
+		&recordRaw, &ws.Writable, &llmCredRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
@@ -588,6 +611,12 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		// Malformed JSONB is unreachable via workspaceApprovedParam; on the
 		// off chance, fail safe to "nothing approved" rather than error.
 		_ = json.Unmarshal(approvedRaw, &ws.ApprovedEgress)
+	}
+	if llmCredRaw != nil {
+		var c types.WorkspaceLLMCred
+		if json.Unmarshal(llmCredRaw, &c) == nil {
+			ws.LLMCred = &c
+		}
 	}
 	return ws, nil
 }

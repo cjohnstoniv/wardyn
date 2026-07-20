@@ -46,6 +46,30 @@ type workspaceRequest struct {
 	// agent's changes then PERSIST to the host directory — the same trade the
 	// composer's ws.ReadWrite already exposes on the New Run path.
 	Writable bool `json:"writable,omitempty"`
+	// LLMCred is the operator-owned model/harness credential BINDING for this
+	// workspace/container (refs/names only). A run that picks it inherits this
+	// model access (applyWorkspaceCreds). Nil => no binding. Also settable
+	// standalone via PUT /workspaces/{id}/llm-cred.
+	LLMCred *types.WorkspaceLLMCred `json:"llm_cred,omitempty"`
+}
+
+// validateWorkspaceLLMCred checks an operator-supplied cred binding (names only;
+// the secret's presence is checked at run-create, not here).
+func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
+	if c == nil {
+		return ""
+	}
+	switch c.Mode {
+	case types.WorkspaceLLMCredNone, types.WorkspaceLLMCredManaged, types.WorkspaceLLMCredBedrock:
+		return ""
+	case types.WorkspaceLLMCredAPIKey:
+		if strings.TrimSpace(c.APIKeySecret) == "" {
+			return "llm_cred.api_key_secret is required for mode=api_key"
+		}
+		return ""
+	default:
+		return `llm_cred.mode must be "" (none), "managed", "api_key", or "bedrock"`
+	}
 }
 
 // decodeWorkspaceRequest decodes and validates a workspace request body. It
@@ -87,13 +111,23 @@ func decodeWorkspaceRequest(r *http.Request) (workspaceRequest, string) {
 		if repoCloneURL(req.Source) == "" {
 			return workspaceRequest{}, "source is not a recognized repo slug or http(s) clone URL"
 		}
+	case types.WorkspaceKindContainer:
+		// A bring-your-own base IMAGE as a named execution environment. Source is
+		// the image ref (tag or digest); there is no host mount to validate. Basic
+		// shape guard only — the daemon validates the ref for real at pull/wrap time.
+		if !repoFieldSafe(req.Source) {
+			return workspaceRequest{}, "source (image ref) must not contain control characters or whitespace"
+		}
 	default:
-		return workspaceRequest{}, `kind must be "local_dir" or "repo"`
+		return workspaceRequest{}, `kind must be "local_dir", "repo", or "container"`
 	}
 	if req.DefaultTarget != "" {
 		if err := runner.ValidateTarget(req.DefaultTarget); err != nil {
 			return workspaceRequest{}, "invalid default_target: " + err.Error()
 		}
+	}
+	if msg := validateWorkspaceLLMCred(req.LLMCred); msg != "" {
+		return workspaceRequest{}, msg
 	}
 	return req, ""
 }
@@ -190,6 +224,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Ref:           req.Ref,
 		DefaultTarget: req.DefaultTarget,
 		Writable:      req.Writable,
+		LLMCred:       req.LLMCred,
 		Status:        types.WorkspacePendingScan,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -330,6 +365,43 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.egress.approve", id.String(), "success", mustJSON(map[string]any{
 			"domains": domains,
+		})))
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// handleSetWorkspaceLLMCred binds (or clears) the operator-owned model/harness
+// credential for a workspace/container — the scoped write behind
+// PUT /workspaces/{id}/llm-cred. A run that picks this workspace inherits the
+// binding (applyWorkspaceCreds). Body: a WorkspaceLLMCred; mode="" (or null)
+// clears it. Names/refs only — the secret itself lives in the store.
+func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "workspace")
+	if !ok {
+		return
+	}
+	var req types.WorkspaceLLMCred
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	if msg := validateWorkspaceLLMCred(&req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	var cred *types.WorkspaceLLMCred
+	if req.Mode != types.WorkspaceLLMCredNone {
+		cred = &req
+	}
+	updated, err := s.cfg.Store.SetWorkspaceLLMCred(r.Context(), id, cred)
+	if notFoundIf(w, err, "workspace") {
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "set workspace llm cred: "+err.Error())
+		return
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"workspace.llm_cred.set", id.String(), "success", mustJSON(map[string]any{
+			"mode": string(req.Mode),
 		})))
 	writeJSON(w, http.StatusOK, updated)
 }

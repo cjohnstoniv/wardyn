@@ -93,6 +93,12 @@ func (s *createDetachStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 	return types.SiteConfig{}, nil
 }
 
+// No onboarded workspaces in this fixture — the create-run path resolves a
+// primary workspace/container for cred-folding, so answer "not found".
+func (s *createDetachStore) GetWorkspaceBySource(context.Context, types.WorkspaceKind, string) (types.Workspace, error) {
+	return types.Workspace{}, store.ErrNotFound
+}
+
 func (s *createDetachStore) state(id uuid.UUID) types.RunState {
 	s.mu.Lock()
 	defer s.mu.Unlock()

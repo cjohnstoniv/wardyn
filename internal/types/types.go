@@ -452,7 +452,51 @@ type WorkspaceKind string
 const (
 	WorkspaceKindLocalDir WorkspaceKind = "local_dir"
 	WorkspaceKindRepo     WorkspaceKind = "repo"
+	// WorkspaceKindContainer is an onboarded base IMAGE — a bring-your-own
+	// container as a first-class, named, reusable execution environment (Source is
+	// the image ref, no mount). Picking it for a run resolves the run's image (like
+	// a workspace resolves its mount/repo). This makes "a container" a bindable
+	// entity that carries its own egress + model/harness creds, not a per-run
+	// --image string.
+	WorkspaceKindContainer WorkspaceKind = "container"
 )
+
+// WorkspaceLLMCredMode selects how a run that picks this workspace/container is
+// credentialed for model/harness access. Empty ("" / none) => this workspace
+// binds no model; the run falls back to the global provider config.
+type WorkspaceLLMCredMode string
+
+const (
+	WorkspaceLLMCredNone    WorkspaceLLMCredMode = ""
+	WorkspaceLLMCredManaged WorkspaceLLMCredMode = "managed" // Wardyn-managed Claude subscription (setup-token), proxy-injected
+	WorkspaceLLMCredAPIKey  WorkspaceLLMCredMode = "api_key" // a named secret, proxy-injected as an api_key grant
+	WorkspaceLLMCredBedrock WorkspaceLLMCredMode = "bedrock" // AWS Bedrock (region/model/profile)
+)
+
+// WorkspaceLLMCred is the OPERATOR-owned model/harness credential BINDING on a
+// workspace/container: a run that picks this workspace inherits this model
+// access. It carries refs/NAMES only, never secret values (the SiteConfig
+// precedent) — the actual secret lives in the store and is resolved/injected at
+// dispatch. Mirrors ApprovedEgress's operator-owned discipline (never scan-
+// written; cleared on source/kind change) and is folded into a run's policy at
+// create (applyWorkspaceCreds). Nil / Mode="" => no binding; the run uses the
+// global provider config, or is a plain governed command when it needs no model.
+type WorkspaceLLMCred struct {
+	Mode WorkspaceLLMCredMode `json:"mode"`
+	// APIKeySecret is the store secret name for Mode=api_key (e.g. a
+	// workspace-specific "acme-anthropic-key"). Injected proxy-side; never resident.
+	APIKeySecret string `json:"api_key_secret,omitempty"`
+	// Bedrock carries the per-workspace Bedrock selection for Mode=bedrock.
+	Bedrock *WorkspaceBedrockRef `json:"bedrock,omitempty"`
+}
+
+// WorkspaceBedrockRef is a workspace's Bedrock model selection (non-secret; the
+// AWS credentials themselves come from the store / mounted ~/.aws, unchanged).
+type WorkspaceBedrockRef struct {
+	Region     string `json:"region,omitempty"`
+	Model      string `json:"model,omitempty"`
+	AWSProfile string `json:"aws_profile,omitempty"`
+}
 
 // WorkspaceStatus is the onboarding/scan lifecycle of a Workspace.
 type WorkspaceStatus string
@@ -553,9 +597,14 @@ type Workspace struct {
 	// only via the scoped SetWorkspaceRecordResults; cleared on source/kind
 	// change (recordings were reviewed against the OLD source).
 	RecordResults json.RawMessage `json:"record_results,omitempty"`
-	Status        WorkspaceStatus `json:"status"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	// LLMCred is the OPERATOR-owned model/harness credential binding: a run that
+	// picks this workspace/container inherits it (refs/names only). Nil => no
+	// binding. Folded into the run policy at create (applyWorkspaceCreds); written
+	// only via the scoped SetWorkspaceLLMCred, mirroring ApprovedEgress.
+	LLMCred   *WorkspaceLLMCred `json:"llm_cred,omitempty"`
+	Status    WorkspaceStatus   `json:"status"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // ResourceLimits caps a sandbox's resource consumption. A ZERO field means "use

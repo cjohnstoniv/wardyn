@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -226,6 +227,77 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 // It emits NO warning: whether the run actually ENDS UP with model access is decided
 // after the clamp (which may strip the grant or the domain), so reconcileLLMAccess
 // reports the truthful FINAL state — never a pre-clamp promise the clamp revokes.
+// applyWorkspaceCreds folds the PRIMARY workspace/container's operator-owned
+// model/harness cred BINDING (types.WorkspaceLLMCred) into the run's policy at
+// create — the credential analogue of unionWorkspaceEgress. A run that picks a
+// workspace/container inherits its model access; a workspace that binds nothing
+// (nil / Mode="") leaves the run on the global provider config, or a plain
+// governed command that needs no model. Refs/names only — the secret is resolved
+// and injected at dispatch, never resident. Returns the mode applied (for audit),
+// or "" when nothing was bound.
+func (s *Server) applyWorkspaceCreds(ctx context.Context, spec *types.RunPolicySpec, primary *types.Workspace, agent string) types.WorkspaceLLMCredMode {
+	if primary == nil || primary.LLMCred == nil || primary.LLMCred.Mode == types.WorkspaceLLMCredNone {
+		return ""
+	}
+	p, ok := agentLLMProvider(agent)
+	if !ok {
+		return "" // non-LLM agent — nothing to bind
+	}
+	c := primary.LLMCred
+	switch c.Mode {
+	case types.WorkspaceLLMCredAPIKey:
+		// A workspace-specific api_key secret, injected proxy-side (never resident).
+		if c.APIKeySecret == "" || !s.secretPresent(ctx, c.APIKeySecret) {
+			return "" // absent secret would fail the proxy closed — fall back rather than hard-fail
+		}
+		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
+			return c.Mode // an api_key grant for this host was already proposed; respect it
+		}
+		scope, _ := json.Marshal(map[string]string{
+			"host": p.host, "header": p.header, "format": p.format, "secret_name": c.APIKeySecret,
+		})
+		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
+		})
+		if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
+			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
+		}
+	case types.WorkspaceLLMCredManaged:
+		// The Wardyn-managed subscription injects proxy-side at dispatch when the run
+		// has anthropic egress and NO api-key grant for the host (resolveLLMTransport's
+		// managed gate). Ensure the egress; drop any competing api-key grant so managed
+		// wins. (The managed token itself is a control-plane-wide connected credential.)
+		removeAPIKeyGrantForHost(spec, p.host)
+		for _, d := range []string{"*.anthropic.com", p.host} {
+			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
+				spec.AllowedDomains = append(spec.AllowedDomains, d)
+			}
+		}
+	case types.WorkspaceLLMCredBedrock:
+		// Bedrock is resolved from operator config at dispatch (resolveBedrockAuth);
+		// the binding drops any competing api-key grant so Bedrock is the path taken.
+		// A per-workspace region/model override is a dispatch-threading follow-up
+		// (today the globally-configured Bedrock is used).
+		removeAPIKeyGrantForHost(spec, p.host)
+	}
+	return c.Mode
+}
+
+// secretPresent reports whether a secret name exists in the store (best-effort;
+// a store error reads as "present" so a transient List failure never silently
+// drops a legitimately-configured workspace binding — the proxy still fails
+// closed at startup if it's truly absent).
+func (s *Server) secretPresent(ctx context.Context, name string) bool {
+	if s.cfg.Secrets == nil {
+		return false
+	}
+	names, err := s.cfg.Secrets.List(ctx)
+	if err != nil {
+		return true
+	}
+	return slices.Contains(names, name)
+}
+
 func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscribed bool) {
 	p, ok := agentLLMProvider(agent)
 	if !ok {

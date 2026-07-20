@@ -527,6 +527,9 @@ func (s *Server) routes() chi.Router {
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			r.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+			// Bind (or clear) the workspace/container's model/harness creds — a run
+			// that picks it inherits them (applyWorkspaceCreds). Scoped write.
+			r.Put("/workspaces/{id}/llm-cred", s.handleSetWorkspaceLLMCred)
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
