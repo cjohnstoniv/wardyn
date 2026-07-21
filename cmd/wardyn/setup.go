@@ -65,6 +65,7 @@ func setupCmd(client clientFn) *cobra.Command {
 	cmd.AddCommand(
 		setupStatusCmd(client),
 		setupDetectProxyCmd(),
+		setupProxyRelayCmd(),
 		setupTierCmd("wall"),
 		setupTierCmd("vault"),
 	)

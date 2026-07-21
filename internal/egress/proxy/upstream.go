@@ -15,7 +15,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// upstreamConnectTimeout bounds the CONNECT handshake with the corporate parent
+// proxy (dial + reply). Matches the 15s dialer in newProxy: an upstream that
+// accepts TCP but never answers must surface as a dial failure, never as a hang.
+const upstreamConnectTimeout = 15 * time.Second
 
 // upstreamProxy is the OPTIONAL corporate parent proxy that wardyn-proxy chains
 // its egress through. In a locked-down corporate network the sandbox host has NO
@@ -161,6 +167,19 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 		return nil, fmt.Errorf("write upstream CONNECT: %w", err)
 	}
 	// Read the proxy's reply to our CONNECT; a 2xx means the tunnel is open.
+	//
+	// BOUND THE READ. A proxy that accepts the TCP connection and then never
+	// answers would otherwise block here forever: the MITM path has already told
+	// the agent "200 Connection Established" before this dial, so the operator
+	// sees an APPROVED request hang indefinitely instead of failing. That is the
+	// reported symptom when a corp client binds its proxy to loopback only — the
+	// container-runtime VM can open nothing, but a misrouted address can still
+	// accept and stall. Fail fast instead; the caller turns the error into the
+	// normal dial-failed DENY + 502. Matches the dialer timeout in proxy.go.
+	if err := conn.SetReadDeadline(time.Now().Add(upstreamConnectTimeout)); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("set upstream CONNECT deadline: %w", err)
+	}
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
 	if err != nil {
@@ -168,6 +187,12 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 		return nil, fmt.Errorf("read upstream CONNECT response: %w", err)
 	}
 	_ = resp.Body.Close()
+	// Clear the deadline: the tunnel that follows is long-lived (an agent may
+	// hold a streaming response open far longer than the handshake budget).
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("clear upstream CONNECT deadline: %w", err)
+	}
 	if resp.StatusCode/100 != 2 {
 		_ = conn.Close()
 		return nil, fmt.Errorf("upstream proxy refused CONNECT: %s", resp.Status)

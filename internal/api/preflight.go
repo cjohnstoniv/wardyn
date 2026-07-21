@@ -121,12 +121,27 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// grant, so reflect that instead of a false "no model access".
 	llmSpec := spec
 	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, "api.anthropic.com")
-	managed := req.Agent == "claude-code" && !specHasMountTarget(&llmSpec, claudeCredTarget) &&
+	subscriptionActive := specHasMountTarget(&llmSpec, claudeCredTarget)
+	managed := req.Agent == "claude-code" && !subscriptionActive &&
 		!hasAnthropicKey && s.managedInjectReady(req.Agent) &&
 		(llmSpec.AllowAllEgress || len(llmSpec.AllowedDomains) > 0)
 	var llmAccess *composeLLMAccess
 	if note, provisioned := reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), managed); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
+	}
+	// Operator-configured Bedrock credentials the run automatically: dispatch's
+	// resolveBedrockAuth OVERRIDES the per-run api-key selection at launch, so a
+	// run that picked no api_key still authenticates. Ask the same resolver here
+	// (ws=nil — the global config; a workspace can only narrow region/model, not
+	// supply credentials) so the checklist and the wizard's no-model-access banner
+	// stop telling an operator with working Bedrock access that they have none.
+	if llmAccess == nil || !llmAccess.Provisioned {
+		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, nil); ba.ready {
+			llmAccess = &composeLLMAccess{
+				Provisioned: true,
+				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",
+			}
+		}
 	}
 
 	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess, nil, composeSubscriptionState{})

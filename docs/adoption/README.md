@@ -20,3 +20,10 @@ survives redaction intact. Write "a corporate allowlist mirror", not the vendor.
 |---|---|
 | [host-proxy detection is blind on the containerized control plane](host-proxy-detection-blind-on-compose.md) | Fixed in 0.4.1 |
 | [`make setup` requires a hand-set `WARDYN_UI_STAGE` behind a pnpm-less mirror](make-setup-requires-ui-stage-on-pnpm-less-mirror.md) | Fixed in 0.4.1 |
+| [corporate-network adoption: findings, local fixes, and open gaps](corp-network-onboarding-findings.md) | A1–A4, B4, B5 fixed in 0.4.2; B1–B3 and C1–C2 open |
+
+Reference notes that came out of these reports:
+
+| Note | Covers |
+|---|---|
+| [a forward proxy bound to loopback](loopback-only-forward-proxy.md) | why sandbox egress can't use it, and `wardyn setup proxy-relay` |

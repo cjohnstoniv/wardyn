@@ -273,6 +273,13 @@ resolve_workdir() {
                  -exec dirname {} \; 2>/dev/null | head -1 || true)"
         if [[ -n "$repo" ]]; then
             workdir="$repo"
+            # A bind-mounted workspace is owned by the HOST user, whose uid rarely
+            # matches the sandbox agent's — and some runtimes squash the owner
+            # outright. git then refuses every command with "detected dubious
+            # ownership", which reads like a Wardyn bug rather than a uid mismatch.
+            # The repo is operator-onboarded and already mounted, so trusting it
+            # grants nothing new.
+            git config --global --add safe.directory "$repo" 2>/dev/null || true
         fi
     fi
 }

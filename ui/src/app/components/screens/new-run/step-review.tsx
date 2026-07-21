@@ -63,8 +63,21 @@ export function StepReview({
   // No-model-access surfacing (B3): the api-key path (Claude apikey / Codex) with no
   // stored secret selected — the run launches but its first model call 404s.
   // Subscription mounts creds (has access); bedrock is its own path.
+  //
+  // Never contradict the server. An operator-configured transport (Bedrock, a
+  // managed subscription) is applied AT DISPATCH and overrides the per-run
+  // api-key selection, so this local guess would otherwise tell an operator whose
+  // model access demonstrably works — in red — that they have none, and point
+  // them at a secret list that holds no model key. The preflight's llm_access
+  // verdict is the same one launch uses; when it says access is provisioned, it
+  // wins. (Preflight is advisory and may be absent/loading: fall back to the
+  // local guess rather than silently hiding a real gap.)
+  const llmAccessItem = preflight?.setup_items?.find((i) => i.kind === "llm_access");
   const noLlmCred =
-    (!isClaude || state.anthropicAuth === "apikey") && !state.llmSecretName && !isSubscription;
+    (!isClaude || state.anthropicAuth === "apikey") &&
+    !state.llmSecretName &&
+    !isSubscription &&
+    llmAccessItem?.status !== "satisfied";
 
   // The run will run at enforced_confinement_class, which the deterministic
   // blast-radius floor can raise ABOVE the operator's pick when the run holds a

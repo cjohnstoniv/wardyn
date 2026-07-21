@@ -1064,6 +1064,20 @@ func hostProxyCheck(d setup.HostProxyDetection, blind bool) SetupCheck {
 	if d.HasCredentials {
 		detail += " A detected proxy carries an embedded credential — store it as a secret rather than a plain URL."
 	}
+	// A loopback-bound proxy is reachable from host processes but from nothing
+	// else: a sandbox's 127.0.0.1 is its own, and on a VM-backed Docker host the
+	// runtime VM cannot reach the host's loopback either. Chaining sandbox egress
+	// through it therefore cannot work, and the failure lands late (at the first
+	// approved request) rather than at setup — so say it here, where the operator
+	// is still configuring. Warn, not fail: detection is never a gate, and a
+	// host-mode wardynd on the same machine CAN use it.
+	if a := d.LoopbackBound(); len(a) > 0 {
+		return SetupCheck{
+			ID: "host_proxy", Label: "Host proxy", Status: "warn",
+			Detail: detail + " " + strings.Join(a, ", ") + " is bound to loopback, which a sandbox cannot reach (its 127.0.0.1 is its own; a VM-backed Docker host can't reach the host's loopback either). Chaining sandbox egress through it will fail to connect.",
+			Fix:    "Point the upstream proxy at an address the sandbox can reach: run `wardyn setup proxy-relay <listen-port> <proxy-port>` on the host and store http://<host-gateway>:<listen-port> as the upstream-proxy secret — see docs/adoption/loopback-only-forward-proxy.md.",
+		}
+	}
 	return SetupCheck{ID: "host_proxy", Label: "Host proxy", Status: "info", Detail: detail}
 }
 

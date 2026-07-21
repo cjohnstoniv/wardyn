@@ -576,7 +576,10 @@ export function AddWorkspaceDialog({
                 <p className="rounded-md bg-warning-subtle px-2 py-1.5 text-[0.6875rem] leading-snug text-warning">
                   The agent&apos;s changes persist to the host directory{" "}
                   <span className="font-mono">{source.trim() || "…"}</span>. Point this at a
-                  disposable clone, not a working tree you care about.
+                  disposable clone, not a working tree you care about. If your Docker runtime
+                  runs inside a VM (Rancher Desktop / Colima / Docker Desktop on macOS), the
+                  stronger barriers may still deny writes here regardless of host permissions —
+                  see docs/adoption.
                 </p>
               )}
             </div>

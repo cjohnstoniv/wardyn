@@ -616,3 +616,44 @@ func TestDetectHostProxy_NeverPanicsOrErrors(t *testing.T) {
 		t.Error("HasCredentials inconsistent with the per-field flags")
 	}
 }
+
+// A loopback-bound proxy is reachable from host processes but from nothing else
+// — a sandbox's 127.0.0.1 is its own. Flagging it at setup is the difference
+// between a clear warning and an approved request that fails at launch time.
+func TestHostProxyDetection_LoopbackBound(t *testing.T) {
+	set := func(v string) *HostProxySetting { return &HostProxySetting{Value: v, Source: ProxySourceEnv} }
+
+	for _, tc := range []struct {
+		name string
+		det  HostProxyDetection
+		want []string
+	}{
+		{"no proxy at all", HostProxyDetection{}, nil},
+		{"routable host is fine", HostProxyDetection{HTTPProxy: set("http://proxy.corp.example:8080")}, nil},
+		{"ipv4 loopback", HostProxyDetection{HTTPProxy: set("http://127.0.0.1:3128")}, []string{"HTTP_PROXY"}},
+		{"ipv4 loopback, other octet", HostProxyDetection{HTTPProxy: set("http://127.9.9.9:3128")}, []string{"HTTP_PROXY"}},
+		{"localhost", HostProxyDetection{HTTPSProxy: set("https://localhost:8443")}, []string{"HTTPS_PROXY"}},
+		{"ipv6 loopback", HostProxyDetection{AllProxy: set("http://[::1]:3128")}, []string{"ALL_PROXY"}},
+		{"bare host:port, no scheme", HostProxyDetection{HTTPProxy: set("127.0.0.1:3128")}, []string{"HTTP_PROXY"}},
+		{"credential-masked value still matches", HostProxyDetection{HTTPProxy: set("http://user:***@127.0.0.1:3128")}, []string{"HTTP_PROXY"}},
+		{"several at once", HostProxyDetection{
+			HTTPProxy:  set("http://127.0.0.1:3128"),
+			HTTPSProxy: set("http://127.0.0.1:3128"),
+		}, []string{"HTTP_PROXY", "HTTPS_PROXY"}},
+		// Must not fire on a routable host that merely mentions loopback.
+		{"loopback only in the path", HostProxyDetection{HTTPProxy: set("http://proxy.corp.example:8080/localhost")}, nil},
+		{"host named like loopback but routable", HostProxyDetection{HTTPProxy: set("http://127-0-0-1.corp.example:8080")}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.det.LoopbackBound()
+			if len(got) != len(tc.want) {
+				t.Fatalf("LoopbackBound() = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("LoopbackBound()[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}

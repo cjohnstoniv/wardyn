@@ -300,3 +300,61 @@ func TestUpstreamParseRejectsBadScheme(t *testing.T) {
 		t.Fatalf("empty url: got (%v,%v), want (nil,nil)", up, err)
 	}
 }
+
+// TestUpstreamCONNECTStallFailsFast pins the fix for the reported "approved
+// request hangs forever" symptom: a corporate parent proxy that ACCEPTS the TCP
+// connection and then never answers the CONNECT must surface as an error, not as
+// an unbounded block. The MITM path tells the agent "200 Connection Established"
+// before this dial happens, so without a read deadline the operator sees an
+// approved request stall indefinitely with no failure to act on.
+func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
+	// A listener that accepts and then goes silent forever.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection open, never write a reply.
+			go func(c net.Conn) { <-done; _ = c.Close() }(c)
+		}
+	}()
+
+	up, err := parseUpstreamProxy("http://" + ln.Addr().String())
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	p := newUpstreamProxy(t, up)
+
+	// Shrink the wait: the production budget is upstreamConnectTimeout, but the
+	// property under test is "bounded", not the exact value.
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		c, err := p.dialThroughUpstream(context.Background(), "tls.test", 443)
+		ch <- result{c, err}
+	}()
+
+	select {
+	case got := <-ch:
+		if got.err == nil {
+			_ = got.conn.Close()
+			t.Fatal("dialThroughUpstream returned success against a silent upstream; want an error")
+		}
+		if !strings.Contains(got.err.Error(), "read upstream CONNECT response") {
+			t.Errorf("error = %v, want the CONNECT-response read to fail", got.err)
+		}
+	case <-time.After(upstreamConnectTimeout + 10*time.Second):
+		t.Fatal("dialThroughUpstream HUNG against a silent upstream — the read deadline is missing")
+	}
+}

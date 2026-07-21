@@ -387,8 +387,27 @@ cmd_up() {
     command -v pnpm >/dev/null 2>&1 \
       || die "wardynd image build failed (the failing step is above). If it died at 'npm install -g pnpm' with a 404/403, your registry can't serve pnpm: build the UI where it can, then re-run with 'WARDYN_UI_STAGE=ui-prebuilt make setup' — see deploy/images/README.md."
     warn "wardynd image build failed — retrying with the UI built on THIS host (WARDYN_UI_STAGE=ui-prebuilt), the documented recovery for a registry that can't serve pnpm."
-    make -C "${REPO_ROOT}" ui \
-      || die "the host UI build failed too — fix pnpm on this host, then re-run: pnpm -C ui build && WARDYN_UI_STAGE=ui-prebuilt make setup"
+    # Reuse an already-complete node_modules instead of reinstalling. A mirror
+    # that serves ordinary packages can still 403 the PLATFORM-specific binaries
+    # a reinstall's postinstall scripts fetch (this lockfile fans out
+    # @tailwindcss/oxide-* and @esbuild/* per platform), which killed this very
+    # fallback for a 0.4.1 adopter even though node_modules was already good and
+    # `pnpm build` alone succeeds.
+    #
+    # The guard compares the lockfile against pnpm's own copy of the one it
+    # installed from, so it fails safe: a drifted lockfile OR an absent
+    # node_modules both fall through to the full install (today's behavior).
+    # vite's emptyOutDir means `pnpm build` cannot ship a stale bundle.
+    #
+    # ponytail: this only helps the SECOND `make setup` — a fresh clone has no
+    # node_modules and still takes the install path.
+    if cmp -s "${REPO_ROOT}/ui/pnpm-lock.yaml" "${REPO_ROOT}/ui/node_modules/.pnpm/lock.yaml" \
+       && ( cd "${REPO_ROOT}/ui" && pnpm build ); then
+      log "Rebuilt ui/dist from the existing node_modules (skipped the reinstall)."
+    else
+      make -C "${REPO_ROOT}" ui \
+        || die "the host UI build failed too. If it died fetching a platform-specific package (e.g. '@scope/<os>-<arch>' 403/404), your mirror serves the package but not its per-platform binaries — install those, or copy a populated ui/node_modules from a machine that can, then re-run: pnpm -C ui build && WARDYN_UI_STAGE=ui-prebuilt make setup. Please report the exact package + URL so we can close this properly."
+    fi
     WARDYN_UI_STAGE=ui-prebuilt; export WARDYN_UI_STAGE
     compose build \
       || die "still failing with WARDYN_UI_STAGE=ui-prebuilt (the failing step is above). If the error is x509, stage your corp root CA at deploy/images/corp-ca.pem — see deploy/images/README.md."
@@ -783,6 +802,13 @@ cmd_reset_all() {
   fi
   _ra_mark "$([ "${_ra_containers:-0}" -gt 0 ] && echo 1 || echo 0)" "compose containers: ${_ra_containers:-0} (project '${_ra_proj}')"
   _ra_mark "$([ -n "${_ra_volumes}" ] && echo 1 || echo 0)" "compose volumes: ${_ra_volumes:-none }(runs + audit + recordings — IRREVERSIBLE)"
+  # The corporate baseline lives in Postgres, so the volume takes it too. Say so
+  # HERE, while the operator can still capture it: otherwise the stack comes back
+  # up looking healthy and sandbox egress is silently unconfigured.
+  if [ -n "${_ra_volumes}" ]; then
+    printf '  [destroy] site-config + secrets (upstream proxy, artifact mirrors, SCM hosts) — they live in the Postgres volume.\n'
+    printf '            Capture first if this host needs them back:  wardyn site-config get > corp-baseline.json\n'
+  fi
   if [ "${_ra_net}" = 1 ]; then
     _ra_mark 1 "docker network wardyn-internal (${_ra_net_attached} attached — removed only if 0 remain after teardown)"
   else

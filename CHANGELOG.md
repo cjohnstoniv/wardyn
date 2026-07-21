@@ -6,6 +6,75 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-07-20
+
+A follow-up to 0.4.1 from the same adopter, now running the containerized stack on a
+corporate laptop end to end. The full report — including the gaps still open — is in
+[docs/adoption/](docs/adoption/corp-network-onboarding-findings.md). One entry below is a
+regression 0.4.1 introduced; two more were bugs that had been silent for longer.
+
+### Fixed
+
+- **An unreachable corporate proxy no longer hangs an approved request.** When the
+  configured upstream proxy accepted the TCP connection but never answered the `CONNECT`,
+  wardyn-proxy waited forever: the handshake read had no deadline, and the MITM path had
+  already told the agent `200 Connection Established`. An operator saw an *approved* egress
+  sit there with nothing to act on. The handshake is now bounded and a stalled upstream
+  surfaces as a normal dial failure — deny + 502, logged. This is the reported "200 then
+  hang" on hosts whose connectivity client binds its proxy to loopback only.
+
+- **The `make setup` UI fallback no longer reinstalls.** 0.4.1 taught `make setup` to build
+  the UI on the host when the registry can't serve pnpm — but it retried via `make ui`, which
+  reinstalls, and the reinstall's postinstall scripts fetch platform-specific native binaries
+  (`@tailwindcss/oxide-*`, `@esbuild/*`) that a partial mirror also refuses. So the fallback
+  died anyway, with `node_modules` already complete. It now rebuilds from an existing
+  `node_modules` when the lockfile matches, and only reinstalls when the tree is absent or
+  stale. Note the ceiling: a *fresh clone* has no `node_modules`, so this fixes the second and
+  later `make setup`, not a cold start.
+
+- **The New Run wizard no longer claims you have no model access when you do.** With an
+  operator-configured cloud model (Bedrock), the Access step still defaulted to the api-key
+  option and warned in red that the run's first model call would 404 — while dispatch was
+  going to supply model access automatically, and the secret list it pointed at held no model
+  key. The preflight now asks the same resolver dispatch uses, and Review defers to that
+  verdict instead of guessing. When the preflight is unavailable the old local check still
+  applies, so a real gap is never hidden.
+
+### Added
+
+- **`wardyn setup proxy-relay <listen-port> <proxy-port>`.** Forwards a reachable port to a
+  forward proxy bound to `127.0.0.1`, which no container can reach — a sandbox's loopback is
+  its own, and on a VM-backed Docker host the runtime VM can't reach the host's loopback
+  either. Foreground and unsupervised on purpose (Wardyn owns no host daemons); it fails
+  immediately if nothing is listening on the target port. See
+  [docs/adoption/loopback-only-forward-proxy.md](docs/adoption/loopback-only-forward-proxy.md).
+
+- **The Host proxy step warns when a detected proxy is loopback-bound**, naming the symptom
+  and the fix, instead of leaving it to be discovered at the first launch. Shows up in
+  `wardyn setup status` too.
+
+- **`wardyn site-config get|apply`.** The corporate baseline (upstream-proxy ref, artifact
+  mirrors, SCM hosts) lives in Postgres, so `make reset` and `make reset-all` take it with the
+  volume — a reset previously came back up looking healthy with egress silently unconfigured.
+  The baseline is now a file you can keep; it carries secret *names*, never values. `reset-all`
+  also names what it is about to destroy and prints the capture command first.
+
+### Changed
+
+- **Writable workspaces name the VM-backed-host caveat.** An adopter reported that a
+  `writable: true` host mount is read-only in practice under the Wall tier on macOS. Testing
+  on a native Linux host with all four runtimes did **not** reproduce it — runc, gVisor, Kata
+  and libkrun all wrote successfully — so the cause appears to be the macOS→VM file-sharing
+  layer beneath the runtime, not the barrier itself. The Workspaces banner now says exactly
+  that, scoped to VM-backed runtimes, rather than claiming a tier "cannot write" (which would
+  be a new false statement of the kind these reports keep surfacing). The measured
+  tier↔writability matrix is in the adoption doc.
+
+- **The agent registers its workspace as a git `safe.directory`.** A bind-mounted checkout is
+  owned by the host user, whose uid rarely matches the sandbox agent's, so git refused every
+  command with "detected dubious ownership" — which reads like a Wardyn defect rather than a
+  uid mismatch.
+
 ## [0.4.1] — 2026-07-20
 
 A corporate-network onboarding fix release, from two adopter field reports (kept in

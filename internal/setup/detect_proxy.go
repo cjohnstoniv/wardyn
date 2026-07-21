@@ -145,6 +145,47 @@ type HostProxyDetection struct {
 	HasCredentials bool `json:"has_credentials"`
 }
 
+// LoopbackBound returns the labels of any detected generic proxy setting bound
+// to loopback (127.0.0.0/8, localhost, ::1). Such a proxy is reachable from host
+// processes but from nothing else: a sandbox's own 127.0.0.1 is its own, and on
+// a VM-backed Docker host the runtime VM cannot reach the host's loopback
+// either — so chaining sandbox egress through it cannot work, and the failure
+// otherwise lands late, at the first approved request.
+//
+// Values arrive already credential-masked and a masked value keeps its
+// host:port, so this is a pure string test — it never parses or dials anything.
+func (d HostProxyDetection) LoopbackBound() []string {
+	var out []string
+	for _, s := range []struct {
+		label   string
+		setting *HostProxySetting
+	}{
+		{"HTTP_PROXY", d.HTTPProxy},
+		{"HTTPS_PROXY", d.HTTPSProxy},
+		{"ALL_PROXY", d.AllProxy},
+	} {
+		if s.setting == nil {
+			continue
+		}
+		v := strings.ToLower(strings.TrimSpace(s.setting.Value))
+		// Authority only: a bare "127.0.0.1:8080" has no "//", and a path or
+		// query that merely mentions localhost must not trip this.
+		if i := strings.Index(v, "//"); i >= 0 {
+			v = v[i+2:]
+		}
+		// Drop userinfo — a credentialed proxy arrives masked as
+		// "user:***@127.0.0.1:3128", which would otherwise hide the host.
+		if i := strings.LastIndex(v, "@"); i >= 0 {
+			v = v[i+1:]
+		}
+		if strings.HasPrefix(v, "127.") || strings.HasPrefix(v, "localhost") ||
+			strings.HasPrefix(v, "[::1]") || strings.HasPrefix(v, "::1") {
+			out = append(out, s.label)
+		}
+	}
+	return out
+}
+
 // hostProxySeedEnv carries a base64'd HostProxyDetection captured by running
 // this same detector ON THE HOST (`wardyn setup detect-proxy`, seeded into the
 // compose env by scripts/up.sh). A containerized wardynd is structurally blind
