@@ -6,6 +6,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **The console's default sizing is back to 100%.** 0.4.0 moved the root font token
+  to 17.6px so the default matched 110% browser zoom; it is 16px again, the sizing
+  that shipped through 0.3.1. The `px`→`rem` text-utility conversion from that change
+  stays — those values were computed against a 16px base, so each one reproduces its
+  original size exactly, and `--font-size` in `ui/src/styles/theme.css` remains the
+  single knob for anyone who wants the larger console back.
+
 ## [0.4.2] — 2026-07-20
 
 A follow-up to 0.4.1 from the same adopter, now running the containerized stack on a
