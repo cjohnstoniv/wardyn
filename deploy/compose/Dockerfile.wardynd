@@ -20,7 +20,7 @@ ARG UI_STAGE=ui-build
 # This is the default UI stage (UI_STAGE=ui-build). Behind a corporate allowlist
 # mirror that hasn't onboarded pnpm (every pnpm tarball 404s), select the
 # ui-prebuilt stage below instead and pass a host-built ui/dist in the context.
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui-build
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so
@@ -67,7 +67,7 @@ RUN pnpm build
 # ui/dist is un-ignored in .dockerignore ONLY so this COPY can see it; the build
 # fails loudly (empty COPY) if you selected this stage without building the UI
 # first, rather than shipping a stale bundle silently.
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS ui-prebuilt
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS ui-prebuilt
 WORKDIR /ui
 COPY ui/dist ./dist
 RUN test -f ./dist/index.html || { echo "UI_STAGE=ui-prebuilt but ui/dist/index.html is absent — run 'make ui' on the host first"; exit 1; }
@@ -115,7 +115,7 @@ ARG HOST_GOOS=linux
 ARG HOST_GOARCH=amd64
 RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardyn-host ./cmd/wardyn
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 
 # Carry the builder's CA bundle (standard roots + any staged corp CA) into the
 # distroless runtime: wardynd makes its OWN outbound TLS calls (e.g. a configured
