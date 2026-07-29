@@ -74,11 +74,10 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 These are known, documented ceilings. They are listed so they are not mistaken for
 shipped behavior; none is scheduled.
 
-- **Never-resident Azure DevOps git egress.** Designed, not built:
-  [docs/ADO-GIT-BROKER.md](docs/ADO-GIT-BROKER.md). ADO works today through the
-  `git_pat` grant, on which the PAT *is* resident in the sandbox. The ceiling is
-  stated in that design: ADO has no token-minting API, so the operator PAT's scope
-  is the boundary — never-resident is achievable, per-repo auto-expiring scoping is not.
+- **Never-resident Azure DevOps git egress.** Designed, not built. ADO works today
+  through the `git_pat` grant, on which the PAT *is* resident in the sandbox. The
+  ceiling: ADO has no token-minting API, so the operator PAT's scope is the boundary
+  — never-resident is achievable, per-repo auto-expiring scoping is not.
 - **Proxy-side injection of the Bedrock SSO bearer.** Would make the SSO token
   never-resident; the derived role credentials stay resident regardless, because
   SigV4 signs in-process.

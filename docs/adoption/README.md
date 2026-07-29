@@ -27,3 +27,4 @@ Reference notes that came out of these reports:
 | Note | Covers |
 |---|---|
 | [a forward proxy bound to loopback](loopback-only-forward-proxy.md) | why sandbox egress can't use it, and `wardyn setup proxy-relay` |
+| [authoring Dockerfiles behind a corporate proxy / mirror](corp-image-authoring.md) | corp CA staging, `GOTOOLCHAIN=local`, npm/pnpm proxy ARGs, native agent-binary installs |

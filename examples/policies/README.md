@@ -9,15 +9,19 @@ inline comments the JSON files can't have (see `sandbox.yaml` below).
 `wardyn policy render -f <file>` converts either to canonical JSON and fails on a
 misspelled field, so you can sanity-check a policy before you launch.
 
-## sandbox.yaml / sandbox-claude.yaml
+## sandbox.yaml / sandbox-claude.yaml / sandbox-workspace.yaml
 
-The keyless quick-start pair. `sandbox.yaml` is a sealed floor (empty allowlist,
-`always_deny`, `CC1`) you pass straight to `wardyn run --policy-file` to prove the
-egress boundary with a plain `--task-mode exec` command — no keys, no repo.
+The keyless quick-start trio: sealed floor -> real Claude -> real code.
+`sandbox.yaml` is the sealed floor (empty allowlist, `always_deny`, `CC1`) you
+pass straight to `wardyn run --policy-file` to prove the egress boundary with a
+plain `--task-mode exec` command — no keys, no repo.
 `sandbox-claude.yaml` is the "give it a real Claude" step: Anthropic egress and a
 read-only git-broker grant, and deliberately **no** `api_key` grant so dispatch
 falls through to the managed Claude subscription (injected proxy-side; the sandbox
-holds only an inert sentinel). Both are commented.
+holds only an inert sentinel). `sandbox-workspace.yaml` is the "give it real
+code" step: the same keyless subscription path plus one operator-authored
+`workspace_mounts` entry, so the agent edits REAL files in the one host
+directory you name — edit `source` before you run it.  All three are commented.
 
 ## default.json
 

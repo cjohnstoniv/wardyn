@@ -1,20 +1,18 @@
 # Wardyn Helm Chart
 
-The ONE blessed Kubernetes deployment path for Wardyn governance control plane.
-
 This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connecting to a Postgres database for state persistence and audit logging.
 
 > **YOU MUST BUILD AND PUSH THE IMAGE FIRST — no wardynd image is published
 > anywhere.** No workflow in this repo pushes to a registry (see
 > [docs/CI.md](../../../docs/CI.md)), so the chart's default
 > `image.repository` (`ghcr.io/cjohnstoniv/wardynd`) and its default tag
-> (`.Chart.AppVersion` = `0.0.1`) resolve to an image **that does not exist**.
+> (`.Chart.AppVersion`) resolve to an image **that does not exist**.
 > `helm install` with the defaults renders fine and then `ImagePullBackOff`s
 > forever. Build + push your own and point `image.*` at it — see
 > [Build and push wardynd](#build-and-push-wardynd) below, which every
 > `helm install` example here assumes you have done.
 
-> **[v0.5 — planned] Kubernetes data plane.** There is no Kubernetes runner
+> **[v0.5+ — planned] Kubernetes data plane.** There is no Kubernetes runner
 > driver yet. This chart stands up `wardynd` and its dependencies, but
 > **cannot create sandboxes** yet. Use Docker Compose (`deploy/compose/`) for
 > a working agent run today.
@@ -38,8 +36,6 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 - Single control plane deployment
 - Postgres backend for all state and audit logs
 - Default-deny NetworkPolicy (L3/L4); Cilium `toFQDN` integration for egress-by-domain
-- Full RBAC support **[v0.5 — planned]**
-- Per-run identity with SPIFFE integration **[v0.5 — planned]** (blocked on the Kubernetes runner above)
 
 ## Prerequisites
 
@@ -130,8 +126,7 @@ See `values.yaml` for all options. Key settings:
 
 - `image.repository` / `image.tag`: wardynd container image. **Required in
   practice** — the defaults name an unpublished image (see the warning at the
-  top). `image.tag` empty => `.Chart.AppVersion` (`0.0.1`), which no release and
-  no registry carries.
+  top). `image.tag` empty => `.Chart.AppVersion`, which no registry carries.
 - `image.pullSecrets`: list of `{name: ...}` pull secrets for a private registry
 - `postgres.dsn.secretRef.name`: existing Secret holding the DSN under `postgres.dsn.key` (empty => inline mode)
 - `postgres.dsn.value`: inline DSN (inline mode only)
@@ -140,11 +135,4 @@ See `values.yaml` for all options. Key settings:
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `replicas`: number of wardynd replicas
 
-## Roadmap
-
-This chart is the v0.5 blessed path. Future releases will add:
-
-- CRD support for RunPolicy, AgentRun, ApprovalRequest
-- Cilium NetworkPolicy automation
-- SPIRE sidecar injection for per-run identities
-- Observability (metrics, tracing) via OpenTelemetry
+Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

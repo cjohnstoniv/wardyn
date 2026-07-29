@@ -48,6 +48,8 @@ scripts/ci-run.sh
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | `1` = leave the stack up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | `1` = reuse existing local images | unset |
+| `WARDYN_CI_TOOLS_DIR` | host directory of runner tools staged into the job's sandbox image | unset |
+| `WARDYN_DOCKER_SOCK` | which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
 
 ### Exit codes
 
@@ -195,7 +197,7 @@ that can reach the daemon can reach everything on it.
 
 ## Operator scripts that are deliberately not in CI
 
-Two scripts have no `make` target and no CI caller **by design**. This is not an
+These scripts run in no workflow **by design**. This is not an
 oversight — do not wire them into `.github/workflows/ci.yml`:
 
 - **`scripts/test-podman.sh`** — rootless Podman divergence probe. It needs
@@ -211,6 +213,15 @@ oversight — do not wire them into `.github/workflows/ci.yml`:
   npm, so there is nothing for CI to run; it is invoked by an operator before
   `make agent-images-core` (see
   [deploy/images/README.md](../deploy/images/README.md)).
+- **`scripts/run-e2e-byoi.sh`** (`make test-e2e-byoi`) — live BYOI wrap +
+  selftest proof. It requires a wardynd ALREADY running with `-envbuild` and a
+  staged `WARDYN_ENVBUILD_TOOLS_DIR`; the nightly stack boots without envbuild,
+  so a CI copy would skip its load-bearing assertions. Run by hand when
+  re-validating BYOI (see RELEASING.md).
+- **`scripts/run-e2e-subscription.sh`** (`make test-e2e-subscription`) — live
+  subscription proxy-injection proof. It needs a real operator
+  `claude setup-token`; no repository secret carries one. Run by hand before a
+  release that touches the credential path.
 
 ## Driving an existing control plane instead
 

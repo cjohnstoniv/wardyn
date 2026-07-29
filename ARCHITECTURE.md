@@ -32,30 +32,28 @@ How they fit together (same diagram as the README):
 
 ```mermaid
 flowchart LR
-  operator(["Human operator"])
-  cli["wardyn CLI"]
-  operator -->|"UI — SSO or no-login local mode"| wardynd
-  cli -->|"WARDYN_ADMIN_TOKEN"| wardynd
+  entry(["Human operator<br/>UI or wardyn CLI"])
   subgraph control["Control plane (trusted)"]
-    direction TB
     wardynd["wardynd<br/>REST API + embedded UI<br/>policy engine / approval FSM<br/>token broker / audit ingest"]
     pg[("Postgres<br/>append-only audit")]
     wardynd --> pg
   end
   subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
-    direction TB
-    agent["Coding agent<br/>claude-code / codex-cli"] -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
+    agent["Coding agent<br/>claude-code / codex-cli"]
     rec["wardyn-rec<br/>PTY recorder"]
+    agent -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
+    rec --> proxy
   end
-  wardynd -->|"launch: wardyn-runner (docker driver)"| sandbox
-  proxy -->|"allowlisted L7, creds injected on the wire"| net(("Internet / APIs"))
-  proxy -.->|"egress decision log"| wardynd
-  rec -.->|"masked session cast (brokered via proxy)"| proxy
+  entry --> wardynd
+  wardynd -->|"launch (docker driver)"| agent
+  proxy -->|"allowlisted L7, creds injected"| net(("Internet / APIs"))
 ```
 
 The trusted control plane launches each agent into an untrusted, gatewayless
-sandbox whose only path out is the `wardyn-proxy` sidecar; sidecars stream
-decisions and session casts back into the append-only audit log.
+sandbox whose only path out is the `wardyn-proxy` sidecar. Decision logs and
+masked session casts flow back into the append-only audit log — drawn in
+[`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §4, "The three
+audit streams".
 
 ### Feature surfaces on top of the core loop (all shipped)
 
@@ -119,15 +117,9 @@ stateDiagram-v2
   PENDING --> KILLED: kill switch
   STARTING --> KILLED: kill switch
   RUNNING --> KILLED: kill switch
-  COMPLETED --> [*]
-  FAILED --> [*]
-  KILLED --> [*]
-  STOPPED --> [*]
 ```
 
-A run is created `PENDING`, dispatches through `STARTING` into `RUNNING`, and
-ends in exactly one terminal state — `COMPLETED`, `FAILED`, `STOPPED`, or
-`KILLED` (the kill switch can fire from any live state).
+`COMPLETED`, `FAILED`, `STOPPED`, and `KILLED` are terminal.
 `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
 forward-compatibility values; no transition produces them today.
 
@@ -136,35 +128,23 @@ forward-compatibility values; no transition produces them today.
 1. **Secrets never enter the sandbox — with three named, bounded exceptions.**
    Late binding via the broker; third-party API credentials are injected
    proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
-   disk, or args. Three documented residuals break that rule deliberately: an
-   `ssh_key` grant materializes a RESIDENT private key (written 0400,
-   descendant-scoped, wiped after clone); Bedrock **access-key** mode
-   (as opposed to the preferred, never-resident bearer mode) places
-   `aws-access-key-id`/`aws-secret-access-key` in the sandbox env because
-   SigV4 request-signing happens in-process and cannot be proxy-injected; and
-   the `WARDYN_SUBSCRIPTION_INJECT=off` escape hatch (`cmd/wardynd/main.go`'s
-   subscription-token wiring) stages a sanitized RESIDENT COPY of the
-   operator's Claude subscription credential — `~/.claude` + `~/.claude.json`,
-   copied read-only into the sandbox by `scripts/stage-claude-creds.sh` from a
-   host staging dir (default `~/.wardyn/claude-creds`) — instead of the default
-   proxy-side injection. It is a real, refreshable OAuth token (unlike the
-   default's inert sentinel, which the proxy replaces with the live token on
-   the wire), it goes stale as the operator's own `claude` rotates its refresh
-   token (re-run the staging script to refresh), and its use is disclosed by
-   the ABSENCE of the `run.llm.subscription_inject` audit event on an
-   otherwise subscription-mounted run (present = proxy-injected; absent =
-   resident copy). All three are bounded (output-masked, withheld from
-   non-model runs, or — for the resident copy — opt-in and audit-visible by
-   that discriminator) and named honestly rather than hidden — see
-   `threatmodel/THREAT-MODEL.md` §5.1a. Output masking
-   of secret values on the audit/recording/decision-log streams ships via
-   `internal/secretmask`
-   (verbatim-match; the encoded/transformed-exfil residual is documented).
-   Masking is structurally **control-plane-side**, on the brokered upload
-   path only: the optional `WARDYN_RECORDING_MOUNT`/`wardyn-rec -out-dir`
-   shared-mount recording fallback bypasses the control plane and therefore
-   delivers **UNMASKED** casts — do not use it where recordings are
-   viewer-exposed (see `threatmodel/THREAT-MODEL.md` §4).
+   disk, or args. Three residuals break that rule deliberately — each bounded
+   and disclosed rather than hidden (`threatmodel/THREAT-MODEL.md` §5.1a):
+
+   | Exception | Why it can't be brokered | Bound / disclosure |
+   |---|---|---|
+   | `ssh_key` grant | `ssh` reads the key from disk | RESIDENT private key, written 0400, descendant-scoped, wiped after clone |
+   | Bedrock **access-key** mode | SigV4 request-signing happens in-process, so there is nothing to inject on the wire | `aws-access-key-id`/`aws-secret-access-key` sit in the sandbox env; the preferred bearer mode is never resident |
+   | `WARDYN_SUBSCRIPTION_INJECT=off` (`cmd/wardynd/main.go`) | Opt-in escape hatch, not a limitation: stages a sanitized RESIDENT COPY of the operator's Claude credential — `~/.claude` + `~/.claude.json`, copied read-only by `scripts/stage-claude-creds.sh` from a host staging dir (default `~/.wardyn/claude-creds`). It is a real, refreshable OAuth token, unlike the default's inert sentinel that the proxy replaces on the wire, and it goes stale as the operator's own `claude` rotates its refresh token (re-run the staging script) | The ABSENCE of the `run.llm.subscription_inject` audit event on an otherwise subscription-mounted run (present = proxy-injected; absent = resident copy) |
+
+   Secret values are masked on the audit/recording/decision-log streams by
+   `internal/secretmask` (verbatim-match; the encoded/transformed-exfil residual
+   is documented). Masking is structurally **control-plane-side**, on the
+   brokered upload path only: the optional
+   `WARDYN_RECORDING_MOUNT`/`wardyn-rec -out-dir` shared-mount recording fallback
+   bypasses the control plane and therefore delivers **UNMASKED** casts — do not
+   use it where recordings are viewer-exposed (see
+   `threatmodel/THREAT-MODEL.md` §4).
    *(Scope note: the BROKERED credential — the GitHub/API token — is what never
    lands in env/disk/args; it reaches `git` stdout-only via `wardyn-git-helper`.
    The helper's per-run caller-auth gate value is a separate, low-value
@@ -191,7 +171,8 @@ forward-compatibility values; no transition produces them today.
    agent loop.
 5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;
    policy refuses what a substrate cannot enforce (Confinement Classes
-   CC1 runc / CC2 gVisor default / CC3 Kata **[experimental]** — surfaced in
+   CC1 runc / CC2 gVisor, preferred wherever `runsc` is registered / CC3 Kata
+   **[experimental]** — surfaced in
    the README, UI, and CLI by their friendly names **Fence / Wall / Vault**).
    Embedded identity provider
    refuses `cloud_sts` grants (SPIRE required). Residual risks are
@@ -223,10 +204,8 @@ sequenceDiagram
   participant Br as Token broker
   participant DB as Postgres
   participant M as Credential minter (e.g. GitHub App)
-  Note over API,DB: CredentialGrant = eligibility only, not issuance
   Op->>API: POST /approvals/{id}/approve
   API->>DB: approval state PENDING -> APPROVED (records the decision only)
-  Note over Sbx,Br: mint is PULL-based — triggered later by the run's own credential request
   Sbx->>Br: MintForGrant(caller run identity, grantID)
   Br->>DB: BEGIN
   Br->>DB: read grant + approval (state must be APPROVED, minted_jti empty)
@@ -241,15 +220,15 @@ sequenceDiagram
     Br->>DB: COMMIT
     Br-->>Sbx: minted (scope == what the approver saw)
   end
-  Note over Br,Sbx: api_key grants are injected proxy-side — agent never sees them
-  Note over Br,Sbx: git tokens reach git via wardyn-git-helper stdout only
 ```
 
 Approval records the human decision only; the credential is minted **later**,
 when the run's own proxy or git-helper requests it (`MintForGrant`) — inside
 the same Postgres transaction that re-verifies the `APPROVED` approval for that
 exact run and grant and claims `minted_jti`, so the minted scope always equals
-the approved scope and a grant can never mint twice.
+the approved scope and a grant can never mint twice. `api_key` grants are then
+injected proxy-side (the agent never sees them); git tokens reach `git` via
+`wardyn-git-helper` stdout only.
 
 ## Layered egress (identical semantics on both targets)
 
@@ -274,46 +253,26 @@ end-to-end by the nightly full-stack e2e) and ONE blessed Helm chart
 
 The compose stack (`deploy/compose/docker-compose.yaml`):
 
-```mermaid
-flowchart TB
-  browser(["localhost:8080<br/>(WSL: opens in the Windows browser)"])
-  browser --> wardynd
-  subgraph net["compose network"]
-    postgres[("postgres")]
-    wardynd["wardynd :8080"]
-    dex["dex — SSO<br/>profile: sso (opt-in)"]
-    tetragon["tetragon<br/>profile: groundtruth (opt-in)"]
-    ingest["wardyn-tetragon-ingest<br/>profile: groundtruth"]
-    wardynd --> postgres
-    wardynd -.->|"WARDYN_LOCAL_MODE bypasses"| dex
-    tetragon --> ingest --> wardynd
-  end
-  subgraph images["build-only profile (images, not services)"]
-    imgs["proxy-image / agent-claude-code / agent-codex-cli"]
-  end
-  subgraph perrun["per-run sandboxes (gatewayless networks)"]
-    agent["agent container"] --- proxy["wardyn-proxy sidecar"]
-  end
-  wardynd -->|"docker API: create sandbox"| perrun
-  pgvol[("postgres_data")]
-  wvol[("recordings / audit")]
-  postgres --- pgvol
-  wardynd --- wvol
-```
+- **Control plane** — one `wardynd` service on `:8080` (the browser opens
+  `localhost:8080`; under WSL, in the Windows browser) plus `postgres`, both on
+  the compose network. That is the whole control plane.
+- **Opt-in profiles** — `sso` adds Dex (`WARDYN_LOCAL_MODE` bypasses it);
+  `groundtruth` adds `tetragon` → `wardyn-tetragon-ingest` → `wardynd`.
+- **Build-only profile** — `proxy-image` / `agent-claude-code` /
+  `agent-codex-cli` are images, not services.
+- **Per-run sandboxes** — `wardynd` calls the Docker API to create each run its
+  own gatewayless network (agent container + `wardyn-proxy` sidecar). State
+  persists to the `postgres_data` volume; `wardynd` holds `recordings` and
+  `audit`.
 
-One `wardynd` service plus Postgres is the whole control plane; Dex (SSO) and
-the Tetragon ground-truth sensor are opt-in profiles, agent/proxy images are a
-build-only profile, and every run gets its own gatewayless sandbox network.
-Postgres persists to the `postgres_data` volume; `wardynd` holds the
-`recordings` and `audit` volumes.
-
-> **Deployment status:** host mode (`make setup`) is the supported path today.
+> **Deployment status:** containerized (compose) is the default; host mode is an
+> escape hatch (`WARDYN_SETUP_MODE=local`).
 > A first-class **team** deployment — the compose control plane running as a
 > sealed, multi-user shared service with human SSO — is **coming soon**; the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, but the UI's SSO login
-> is disabled for now. `make setup` asks **host vs containerized** (both
-> single-user); team is not a selectable mode (`WARDYN_SETUP_MODE=team` prints
-> a notice and exits).
+> is disabled for now. `make setup` asks **containerized vs host** (Enter =
+> containerized; both single-user); team is not a selectable mode
+> (`WARDYN_SETUP_MODE=team` prints a notice and exits).
 
 ## Parity rule
 
@@ -323,57 +282,9 @@ lands, Kubernetes) client libraries — with one blessed exception:
 `internal/envbuild` (plus its narrow shared helper `internal/dockerutil`)
 legitimately imports the Docker client directly because it drives the
 coder/envbuilder devcontainer build as a Docker container
-(`internal/envbuild/doc.go`), a distinct concern from launching the agent
+(see `docs/ENVBUILD.md`), a distinct concern from launching the agent
 sandbox itself.
 `test/conformance` runs the full suite against the **docker** target in CI.
-There is no Kubernetes runner driver yet (**[v0.5 — planned]**); a feature is
+There is no Kubernetes runner driver yet (**[v0.5+ — planned]**); a feature is
 not done on Kubernetes until a real driver passes conformance against a live
 cluster.
-
-## Large files (the 1000-line allowlist)
-
-Function size and complexity are gated by `.golangci.yml`
-(funlen/gocyclo/gocognit/lll) and file size by `scripts/check-file-size.sh`
-(both run in `make lint`): no new non-test `.go` file may exceed 1000 lines,
-and no new function may exceed the funlen/complexity thresholds without an
-inline `//nolint` carrying a real reason. Four pre-existing files sit above
-1000 lines on a frozen allowlist (they may shrink freely; material growth
-fails the gate). Why each is cohesive enough to keep for now:
-
-- `internal/workspacescan/detect.go` (~1.24k) — the deterministic workspace
-  scanner's detection tables: per-ecosystem filename/content rules and derived
-  setup commands. It is long because the ecosystem TABLE is long, not because
-  the logic branches; splitting per-ecosystem would scatter one table across
-  files.
-- `internal/runner/docker/driver.go` (~1.14k) — the Docker sandbox driver:
-  network, proxy sidecar, hardening, mounts, lifecycle against one client. One
-  driver, one file mirrors the planned k8s driver layout; the hardening
-  specifics already live in `hardening.go`.
-- `internal/api/workspace_run.go` (~1.09k) — the workspace scan/record/verify
-  run launchers, which share sandbox-launch plumbing deliberately kept private
-  to this file rather than exported.
-- `internal/api/setup.go` (~1.03k) — GET/POST setup: the first-run readiness
-  checklist. `handleSetupStatus` is the one intentionally long checklist
-  function (see its `//nolint`); the file is that checklist plus its helpers.
-
-The other former god-files were decomposed instead of allowlisted — the cap
-forcing that conversation is the point of the gate. `cmd/wardynd/main.go` boot
-phases live in `boot_flags.go` / `boot_deps.go` / `boot_serve.go`;
-`internal/api/runs_dispatch.go` split its LLM-transport phases into
-`runs_dispatch_llm.go` and its terminal lifecycle into `runs_lifecycle.go`;
-`internal/api/compose.go` shed the shared LLM-credential helpers to
-`llmcred.go`; and `internal/store/store.go` shed the pagination surface to
-`pagination.go`. All are under the threshold and OFF the allowlist, so they
-cannot silently regrow.
-
-**Large UI modules.** `scripts/check-file-size.sh` also gates `ui/src/**/*.ts`
-and `*.tsx` files at the same 1000-line threshold, with two pre-existing
-allowlist entries:
-
-- `ui/src/app/components/screens/import-workspace/import-panel.tsx` (~1.31k)
-- `ui/src/app/components/screens/setup/step-bodies.tsx` (~1.06k)
-
-Both are internally sectioned single-screen bodies (one screen, one owner);
-splitting is deferred until a second consumer needs to import a piece of
-either in isolation. The ratchet's job here is the same as on the Go side: it
-prevents *new* 1000+ line UI files, not shrink these two.

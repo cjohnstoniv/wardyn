@@ -5,28 +5,11 @@ Import `github.com/cjohnstoniv/wardyn/pkg/client` (one non-stdlib dependency,
 through `client.*` (e.g. `client.AgentRun`, `client.ApprovalPending`), so you
 never import `internal/types`.
 
-> **Coverage (read this first).** `pkg/client` is a curated SDK over the route
-> families external tooling automates, **not** a 1:1 mirror of every wardynd
-> route. It wraps: **run** (create/get/list/grants/kill/profile), **approval**
-> (list/approve/deny), **policy** (CRUD), **workspace** (CRUD + scan/verify/
-> record), **audit** (per-run + global feed), **secret** (list/set/delete),
-> **site-config** (get/put), **setup** (status), **identity** (`Me`), and
-> **health** (`Healthz`). It does **not** wrap the AI Run Composer
-> (`/runs/compose*`), preflight, attach (the interactive terminal WebSocket) /
-> attach-ticket, the harness-login device flow, or the agent-facing
-> `/internal/*` mint & decision endpoints — drive those with the `wardyn` CLI /
-> UI or raw HTTP. `TestClientCoversRouteFamilies` pins that every family named
-> here has a real method, so this list cannot silently drift from the code (the
-> same honesty rule as [`docs/PLUGGABILITY.md`](PLUGGABILITY.md)).
->
-> **Pagination.** The list methods and `AuditEvents`/`RecentAuditEvents` take an
-> optional `client.ListOpts{Limit, Offset}` (variadic — existing zero-arg calls
-> are unchanged) that sends `?limit=&offset=`. wardynd defaults to 200 rows
-> (audit keeps its historical 1000/500) and hard-caps at 1000; a truncated page
-> sets the `X-Wardyn-Truncated` response header, and you page forward with
-> `Offset += len(page)`. Because the per-run audit trail stays chronological
-> (ASC), paging forward is how you reach the terminal `run.complete` event on a
-> trail longer than one page.
+> **Coverage and pagination.** `pkg/client` is a curated SDK over the route families
+> external tooling automates, not a 1:1 mirror of wardynd. The exact list of what it
+> wraps and what it does not — and the `ListOpts` / `X-Wardyn-Truncated` pagination
+> contract — is the package doc on `pkg/client` itself, where your IDE shows it at the
+> call site; `TestClientCoversRouteFamilies` pins it against the real methods.
 
 ```go
 package main
@@ -141,35 +124,23 @@ c.Principal = "alice@example.com"
 
 The API is **fail-closed behind a bearer token** (it also accepts a valid OIDC
 session cookie); the Compose default is `WARDYN_ADMIN_TOKEN=demo-admin-token`,
-sent as a bearer header on **every** call (omitting it returns `401`):
+sent on **every** call (omitting it returns `401`):
 
 ```sh
-# Create a run
+# Create a run. Optional fields: "image" (bring-your-own container, wrapped +
+# governed), "task_mode":"exec" (plain shell command, no agent), "inline_policy".
 curl -s -X POST http://localhost:8080/api/v1/runs \
   -H 'Authorization: Bearer demo-admin-token' \
   -H 'Content-Type: application/json' \
   -d '{"agent":"claude-code","repo":"org/repo","task":"fix the flaky test"}'
-# Optional create fields: "image" (bring-your-own-container, wrapped + governed),
-# "task_mode":"exec" (run the task as a plain shell command — no agent),
-# "inline_policy" (full RunPolicySpec instead of policy_id).
 
-# Wait for the outcome (poll until terminal; the run.complete audit event
-# carries the task's real exit code). The CLI wraps this: `wardyn run --wait`.
+# The outcome contract: poll until .state is terminal, then read the task's real
+# exit code off the run.complete audit event. `wardyn run --wait` wraps this.
 curl -s -H 'Authorization: Bearer demo-admin-token' \
-  http://localhost:8080/api/v1/runs/<id>          # .state: COMPLETED | FAILED | ...
-curl -s -H 'Authorization: Bearer demo-admin-token' \
-  'http://localhost:8080/api/v1/audit?run_id=<id>' # run.complete -> .data.exit_code
-# The per-run trail is chronological and returns up to 1000 events by default.
-# On a longer trail the response sets `X-Wardyn-Truncated: true`; page forward
-# with &limit=&offset= (offset += page size) to reach the terminal run.complete.
-
-# List pending approvals
-curl -s -H 'Authorization: Bearer demo-admin-token' \
-  'http://localhost:8080/api/v1/approvals?state=PENDING'
-
-# Approve
-curl -s -X POST http://localhost:8080/api/v1/approvals/<id>/approve \
-  -H 'Authorization: Bearer demo-admin-token' \
-  -H 'Content-Type: application/json' \
-  -d '{"reason":"reviewed scope, looks correct"}'
+  'http://localhost:8080/api/v1/audit?run_id=<id>'   # run.complete -> .data.exit_code
 ```
+
+The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
+trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
+reach the terminal `run.complete`. Everything else here is one method on the Go
+client above, or one `wardyn` CLI command.

@@ -116,7 +116,7 @@ ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 # host-staged file if present (fully offline / strict allowlist mirror; stage it
 # with scripts/stage-agent-binary.sh), else downloaded checksum-verified from the
 # official downloads.claude.ai surface (the ONLY host that path needs reachable
-# through the corp proxy). See deploy/images/README.md "Native-binary agent installs".
+# through the corp proxy). See docs/adoption/corp-image-authoring.md "Native-binary agent installs".
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=

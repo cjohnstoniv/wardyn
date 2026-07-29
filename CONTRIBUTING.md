@@ -4,54 +4,20 @@ Thank you for your interest in contributing to Wardyn, the open-source governanc
 
 ## Developer Certificate of Origin
 
-By contributing to Wardyn, you certify that:
-
-1. The contribution was created in whole or in part by you and you have the right to submit it under the open source license indicated in the file; or
-2. The contribution is based upon previous work that, to the best of your knowledge, is covered under an appropriate open source license and I have the right under that license to submit that work with modifications, whether created in whole or in part by you, under the same open source license (unless you are permitted to submit under a different license), as indicated in the file; or
-3. The contribution was provided directly to you by some other person who certified (1), (2) or (3) and you have not modified it.
-4. You understand and agree that this project and the contribution are public and that a record of the contribution (including all personal information you submit with it) is maintained indefinitely and may be redistributed consistent with this project's license(s) or the open source licenses it includes.
-
-You must sign off every commit with:
+Every commit must carry a sign-off certifying the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/) — that you
+wrote the contribution or have the right to submit it, and that it is public and
+kept indefinitely. CI enforces the line:
 
 ```
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
-Using the `-s` flag with `git commit` will automatically add this line.
-
-### Full DCO 1.1 Text
-
-```
-Developer's Certificate of Origin 1.1
-
-By making a contribution to this project, I certify that:
-
-(a) The contribution was created in whole or in part by me and I
-    have the right to submit it under the open source license
-    indicated in the file; or
-
-(b) The contribution is based upon previous work that, to the best
-    of my knowledge, is covered under an appropriate open source
-    license and I have the right under that license to submit that
-    work with modifications, whether created in whole or in part
-    by me, under the same open source license (unless I am
-    permitted to submit under a different license), as indicated
-    in the file; or
-
-(c) The contribution was provided directly to me by some other
-    person who certified (a), (b) or (c) and I have not modified
-    it.
-
-(d) I understand and agree that this project and the contribution
-    are public and that a record of the contribution (including all
-    personal information I submit with it) is maintained indefinitely
-    and may be redistributed consistent with this project's license(s)
-    or the open source licenses it includes.
-```
+`git commit -s` adds it for you.
 
 ## Code of Conduct
 
-Contributors are expected to behave professionally and respectfully. Harassment and discriminatory behavior will not be tolerated.
+See [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
 
 ## Licensing
 
@@ -61,7 +27,7 @@ All contributions to Wardyn are made under the Apache License 2.0. By contributi
 
 All contributors and subagents MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
 
-1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args, with two named, bounded exceptions: a resident `ssh_key` grant (wiped after clone) and Bedrock access-key mode's `aws-*` env vars (SigV4 signing can't be proxy-injected) — see ARCHITECTURE.md invariant 1.
+1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args, except the named, bounded exceptions ARCHITECTURE.md invariant 1 enumerates (credentials that structurally cannot be proxy-injected). That enumeration is authoritative — do not restate a count here, it is what drifts.
 2. **Approval mints the credential** — Credential scope is verified atomically in the same transaction.
 3. **L0 structural egress** — Sandbox has no default route; only path out is wardyn-proxy.
 4. **Per-run identity with full attribution** — Every token carries `sub`, `act`, and `sponsor`.
@@ -70,7 +36,7 @@ All contributors and subagents MUST preserve the six security invariants documen
 
 ## Conformance Gate
 
-Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5 — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). All pull requests must pass CI checks. Honesty note: GitHub branch protection is **not yet enabled** on `main` — until the repo owner runs the one-time protection setup (see `RELEASING.md`), the checks below are the review bar CI reports on every PR, not a server-side merge block:
+Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5+ — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). Every pull request must pass these CI checks — they are a server-side merge block, not advice:
 
 - `go build` and `go vet` — both plain and `-tags docker`
 - Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=65 over the
@@ -86,6 +52,16 @@ Features are not done until they pass the conformance suite (`test/conformance`)
   (`make license-headers`)
 - DCO: a `Signed-off-by` line on every commit (see Getting Started)
 
+### Large files
+
+`scripts/check-file-size.sh` (run by `make lint`) caps every new non-test `.go`
+file, every `ui/src/**/*.{ts,tsx}` file, and every `scripts/*.sh` file at 1000
+lines; `.golangci.yml` (funlen/gocyclo/gocognit/lll) caps function size and
+complexity. Exceeding either needs an inline `//nolint` carrying a real reason —
+or, for a whole file, an entry on the frozen allowlist inside
+`scripts/check-file-size.sh`, which is the authoritative list. The allowlist is
+frozen: listed files may shrink freely, but material growth fails the gate.
+
 ## Getting Started
 
 1. Fork the repository
@@ -96,20 +72,20 @@ Features are not done until they pass the conformance suite (`test/conformance`)
    - No panics in library code
    - Security decisions fail closed
    - Audit events use dotted action names
-4. Run tests: `make test`
+4. Run the gate: `make ci` (the widest local gate — build, lint, Go tests, UI, diagrams, supply chain)
 5. Commit with sign-off: `git commit -s`
 6. Push and create a pull request
 
 ## Testing
 
-Run the full test suite locally:
+`make ci` is the gate. `make test` alone runs just the Go suites:
 
 ```bash
 make test
 ```
 
-`make help` lists every target, including the ones not covered here (the
-live e2e harnesses, `make dev-pg`, the guided `make test-drive` walkthrough).
+`make help` lists the common targets, including ones not covered here
+(`make dev-pg`, the guided `make test-drive` walkthrough).
 
 Docker-dependent tests live behind the `docker` build tag — plain `make test`
 compiles them out entirely. To actually run them:

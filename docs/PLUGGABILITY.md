@@ -13,9 +13,10 @@ and the blessed-default-vs-alternate matrix per subsystem.
 > *recommended production default* are deliberately kept as **two separate
 > columns** below, and for every seam `/healthz.components` covers — exactly
 > `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` — it
-> reports the **actual running** impl in `components.<seam>.selected` with
-> `recommended_production` beside it (the other matrix rows surface elsewhere;
-> see §2 step 5). A row that
+> reports the **actual running** impl in `components.<seam>.selected`, plus
+> `available` and `source` — the recommended-production column lives in the
+> matrix below and ROADMAP.md, because a runtime endpoint reports runtime
+> facts (see §2 step 5). A row that
 > recommends, say, SPIRE does **not** mean the running binary is SPIRE — it means
 > SPIRE is the standard Wardyn recommends converging to, and the seam + a
 > conformance suite are ready to hold an implementation to contract when it
@@ -129,30 +130,20 @@ row with a seam (or a planned one) and a conformance contract ready to hold it.
 
 ## 4. The recommended-vs-shipped tension, made honest
 
-Wardyn deliberately lets the *recommended production default* differ from the
-*shipped out-of-box default*: we recommend SPIRE / OpenBao / OPA / Kata-CC3 /
-Tetragon for hostile-multi-tenant production while the binary ships
-embedded / pg / builtin / docker(runc..kata) / heartbeat-only. The risk is a
-credibility gap — a matrix that says "recommended: SPIRE" must never be misread
-as "you are running SPIRE." Three mechanisms keep it honest:
+We recommend SPIRE / OpenBao / OPA / Kata-CC3 / Tetragon for hostile-multi-tenant
+production while the binary ships embedded / pg / builtin / docker(runc..kata) /
+heartbeat-only. "Recommended: SPIRE" must never be misread as "you are running
+SPIRE", so three things keep the gap visible:
 
-1. **Two never-merged columns.** "Shipped out-of-box" and "Recommended (prod)"
-   are separate above; promoted entries are bold and the alternate is marked
-   *planned* until built.
-2. **Machine-honest `/healthz`.** For every seam `components` covers (§2 step 5
-   lists the exact set and where the other rows surface),
-   `components.<seam>.selected` reports the *actual* running impl and
-   `components.<seam>.available` what this build's registry actually holds;
-   `recommended_production` sits beside them; `source` distinguishes `default`
-   from `configured`. The gap is visible at runtime, not
-   just in prose — the same structural anti-overclaim guarantee as
-   `ebpf_groundtruth` (healthy only while real heartbeats arrive) and runner
-   `Capabilities` (a class is advertised only when its runtime is registered).
-3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must
-   pass the *same* `RunConformance` suite the shipped default passes, so the
-   recommendation is a roadmap commitment backed by a live gate. Until an
-   alternate is built and green, the shipped default is what you run — and
-   `/healthz` will say so.
+1. The two columns above never merge.
+2. **`/healthz` is machine-honest.** For every seam `components` covers,
+   `components.<seam>.selected` is the *actual* running impl,
+   `components.<seam>.available` is what this build's registry actually holds, and
+   `source` distinguishes `default` from `configured`. Same structural anti-overclaim guarantee as
+   `ebpf_groundtruth` and runner `Capabilities`.
+3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass
+   the *same* `RunConformance` suite the shipped default passes — until an alternate
+   is built and green, the shipped default is what you run.
 
 ---
 

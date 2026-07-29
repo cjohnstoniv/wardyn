@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. **SSO / team login (a shared multi-user service: SSO logins, per-user identity/RBAC) is a coming-soon feature** — the UI's SSO button is disabled; use the admin-token path or the CLI. |
+| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. **Team mode** (multi-user SSO/RBAC) does not exist yet and is not scheduled — see [ROADMAP.md](../../ROADMAP.md); the UI's SSO button is disabled, so use the admin-token path or the CLI. |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -14,13 +14,11 @@ launches) but not run as a long-lived service.
 
 ## Quick start
 
-> **Note:** this stack is the SUPPORTED single-user **containerized** setup —
-> `make setup` offers it as choice 2 (or force it with
-> `WARDYN_SETUP_MODE=container make setup`), which runs `./scripts/up.sh up`
-> for you; `make compose-up` is the raw-compose variant. Choice 1 / the
-> headless default is **host mode** (wardynd as a host process) instead.
-> A first-class **team** setup — this control plane as a shared *multi-user*
-> service (SSO logins, per-user identity/RBAC) — is **coming soon**.
+> **Note:** this stack is the SUPPORTED single-user **containerized** setup.
+> `make setup` launches it by default (Enter at the prompt, or
+> `WARDYN_SETUP_MODE=container`), which runs `./scripts/up.sh up` for you;
+> choice 2 / `local` is advanced host mode, and `make compose-up` is the
+> raw-compose variant.
 
 ```sh
 ./scripts/up.sh up    # doctor preflight, build, mint a secret key, bring up postgres+wardynd, open the UI
@@ -44,10 +42,8 @@ launch until those finish (skip them with `WARDYN_UP_SKIP_RUN_IMAGES=1`). Run
   detects a native Windows shell and blocks with this same guidance.
 
 Want the SSO/Dex + bearer-token demo instead (a scripted governed run against
-the full stack, incl. Dex)? **Note: human SSO login via the UI is coming soon
-(the SSO button is disabled)** — the demo's run creation is driven by the admin
-token / CLI, which still works; the browser SSO-login step below is not yet
-available.
+the full stack, incl. Dex)? The demo's run creation is driven by the admin
+token / CLI.
 
 ```sh
 make agent-images  # build the agent OCI images the demo run launches (claude-code + codex)
@@ -61,8 +57,6 @@ make demo          # build images, bring the stack up, create a demo run, show i
 Then:
 
 - UI / API: <http://localhost:8080>
-- Human SSO: **coming soon** — the `/auth/login` flow still works server-side, but
-  the UI's "Sign in with SSO" button is disabled in this version. Use the admin token.
 - Dex discovery: <http://localhost:5556/.well-known/openid-configuration>
 - Admin API: `Authorization: Bearer demo-admin-token`
 
@@ -115,7 +109,7 @@ and destroy *any* container on the host, not just Wardyn's. This is acceptable
 
 - **Never** expose this stack to untrusted networks or run it multi-tenant.
 - A future production path is **Kubernetes** (`deploy/helm/wardyn`), planned to
-  use scoped RBAC and share no host socket **[v0.5 — planned]** — there is no
+  use scoped RBAC and share no host socket **[v0.5+ — planned]** — there is no
   Kubernetes runner driver yet, so the Helm chart cannot launch sandboxes
   today. Right now this Docker/Compose data plane (with its docker.sock
   daemon-trust tradeoff) is the only one that can actually run agents.
@@ -124,36 +118,11 @@ See `ARCHITECTURE.md` → "Deployment surface".
 
 ## Transport security (TLS)
 
-By default `wardynd` serves **plain HTTP** and logs a loud `WARNING` at startup.
-That is fine for a localhost demo, but the control plane **MUST** sit behind TLS
-for any non-localhost deployment — otherwise the admin bearer token, OIDC session
-cookie, and minted credentials cross the network in the clear. There are two
-supported ways to add TLS:
-
-**(a) Built-in TLS.** Point `wardynd` at a certificate and key and it serves
-HTTPS directly via `ListenAndServeTLS`:
-
-```sh
-WARDYN_TLS_CERT=/certs/tls.crt WARDYN_TLS_KEY=/certs/tls.key
-```
-
-Both must be set together (setting only one fails closed at boot). When built-in
-TLS is on, the OIDC session and login cookies are automatically marked `Secure`.
-
-**(b) TLS-terminating reverse proxy.** Front `wardynd` with a proxy (nginx,
-Caddy, Traefik, a cloud load balancer, …) that terminates TLS and forwards plain
-HTTP to `wardynd` on the internal network. In that case set:
-
-```sh
-WARDYN_TLS_TERMINATED=true
-```
-
-This tells `wardynd` the browser connection is HTTPS even though it speaks plain
-HTTP to the proxy, so it marks the session/login cookies `Secure`.
-
-> ⚠️ Cookies marked `Secure` are **never sent over plain HTTP**. Leave both
-> `WARDYN_TLS_*` cert/key unset and `WARDYN_TLS_TERMINATED` unset (the default)
-> for the plain-HTTP localhost demo — otherwise the demo login silently breaks.
+`wardynd` serves plain HTTP by default (loud startup `WARNING`). For any
+non-localhost deploy set `WARDYN_TLS_CERT`+`WARDYN_TLS_KEY` (both or neither —
+one alone fails closed at boot), or `WARDYN_TLS_TERMINATED=true` behind a
+terminating proxy; see [docs/ENV.md](../../docs/ENV.md). Do NOT set either for
+the plain-HTTP localhost demo — the `Secure` cookie flag silently breaks login.
 
 ## Confinement classes on plain Docker
 
@@ -167,18 +136,15 @@ Wardyn **fails closed** — it refuses to launch a run it cannot confine
 WARDYN_DEFAULT_POLICY=/examples/policies/default.json make demo
 ```
 
-## Environment variable reference
+## Environment variables
 
-Beyond the vars covered above, the stack respects these — set them via
-`deploy/compose/.env` (copy `.env.example`) or the shell environment:
-
-| Var | Purpose | Default |
-|---|---|---|
-| `WARDYN_SUBSCRIPTION_INJECT` | `off` (this stack's default) makes a run that mounts `~/.claude` use those creds directly (RESIDENT-COPY) — the distroless compose `wardynd` has no `claude` binary of its own, so proxy-side OAuth injection would fail-lazily and crash the run's proxy. Stage creds with `WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`. Host mode (`WARDYN_SETUP_MODE=local make setup`) defaults to proxy-side injection instead. | `off` |
-| `WARDYN_SETUP_MODE` | Picks `make setup`'s installer path non-interactively. The friendly name shown in prompts is **host**, but the token this var actually accepts is **`local`** (`container` selects this compose stack; `team` prints a coming-soon notice and exits). | unset (interactive prompt) |
-| `WARDYN_WORKSPACES_ROOT` | Bind-mounts a host directory READ-ONLY at the *same path* inside the `wardynd` container, so `local_dir` workspace onboarding (scanned in-process — `internal/api/workspaces.go`) can see host source. Point it at the narrowest project directory you have — **never** your home directory (wardynd would then be able to read `~/.ssh`, `~/.aws`, `~/.claude`, and staged Claude creds). Unset = local-directory import stays unavailable rather than silently exposing anything. | unset (no host path exposed) |
-| `WARDYN_DOCKER_SOCK` | Which host Docker socket `wardynd` binds and drives. Matters on hosts running two daemons (e.g. Docker Desktop's `/var/run/docker.sock` vs. a native in-distro `dockerd`) — the driver probes CC2/CC3 runtimes against *this socket's* daemon and fails closed when they're absent, so pointing at a runc-only daemon caps the whole stack at CC1. | `/var/run/docker.sock` |
-| `WARDYN_COMPOSER_API_KEY` | Fallback API key for a `WARDYN_COMPOSER_CONFIG` backend whose `api_key_secret` has no matching entry in the secret store — used as-is, unvalidated (`cmd/wardynd/composer.go`). Prefer `wardyn secret set <api_key_secret>` (rotatable, audited); this is a bootstrap/dev escape hatch, not the recommended path. | unset (backend init fails with "no API key" if neither is set) |
+Full reference: [docs/ENV.md](../../docs/ENV.md) — set them via
+`deploy/compose/.env` (copy `.env.example`) or the shell environment. One
+default is stack-specific: `WARDYN_SUBSCRIPTION_INJECT=off`, because the
+distroless compose `wardynd` has no `claude` binary, so proxy-side OAuth
+injection would fail-lazily and crash the run's proxy; a run that mounts
+`~/.claude` uses those creds directly instead (stage them with
+`WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`).
 
 **CI overlay.** [`docker-compose.ci.yaml`](docker-compose.ci.yaml) layers onto
 the base stack (`docker compose -f docker-compose.yaml -f docker-compose.ci.yaml`)

@@ -84,7 +84,7 @@ ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 # a WARDYN_CODEX_BIN_URL you control). Unlike claude-code, codex has no
 # Wardyn-verified public download contract, so the native path is staged-only:
 # the build fails loudly if native is selected without a staged binary rather than
-# guessing a URL. See deploy/images/README.md "Native-binary agent installs".
+# guessing a URL. See docs/adoption/corp-image-authoring.md "Native-binary agent installs".
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=

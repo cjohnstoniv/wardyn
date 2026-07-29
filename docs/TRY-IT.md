@@ -1,133 +1,60 @@
 # Try Wardyn in 10 minutes
 
-Everything below runs on a single machine with Docker, easiest first: the
-**fastest start** (just the UI + Getting-started — no keys, no login), the
-**hands-on demo sandboxes** (prove the egress boundary yourself, no keys), the
-**governance demo** (a scripted governed run, no API keys), and the **real
-agent run** (bring an Anthropic API key).
-
-## Level 0 — fastest start: the UI + Getting-started (no keys, no login)
-
-The recommended first step. One command brings up the **containerized** control
-plane (`wardynd` in a compose container), launches with no SSO and no token, and
-opens the **Getting-started page** in your browser the moment the UI is live:
-
-```sh
-make setup    # containerized control plane → launch → open http://localhost:8080
-              # stop with `make compose-down` (keeps data) / start over with `make reset`
-```
-
-> Containerized is the default because `wardynd` runs in a container on the
-> `wardyn-internal` network, so sandbox→control-plane callbacks route in-network —
-> the fix for workspace Verify/Record on Docker Desktop + WSL2 NAT. Set up model
-> access at the CLI: **`claude setup-token | wardyn subscription connect`** (Claude
-> subscription — never resident, injected proxy-side), an **API key** (`wardyn
-> secret set anthropic-api-key`), or **Bedrock**; `wardyn setup status` shows what's
-> configured with the exact next command per unmet check. Headless/CI seeds a
-> subscription with `WARDYN_SUBSCRIPTION_TOKEN`. **Host mode**
-> (`WARDYN_SETUP_MODE=local`) is an advanced escape hatch — `wardynd` runs as you
-> using your resident Claude login, but its Verify/Record callbacks don't route
-> under Docker Desktop + WSL2 NAT. **Team mode** (multi-user SSO/RBAC) does not exist
-> yet and is not scheduled — see [ROADMAP.md](../ROADMAP.md).
+The guided walkthrough. It picks up where the [README quickstart](../README.md)
+stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
+`wardyn setup status` says what model access is still missing. Easiest first: a
+**governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
+key), **record → verify** to onboard your own work, and the **AI Composer**.
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
 Kata microVM; whichever are missing show a copy-paste
 `wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
 setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. This is all you need to look around. On WSL, run it
-inside your WSL distro's shell; it opens the UI in your Windows browser
-automatically. **Native Windows** (cmd.exe/PowerShell) is not a target — install
-WSL2 + Docker Desktop with WSL integration and run `make setup` inside the WSL
-distro; `make doctor` detects a native Windows shell and blocks with this same
-guidance rather than failing confusingly partway through.
+straight into your first run. Inside a corporate network, its **Corporate
+network** and **SCM Provider** steps chain the sandbox proxy through your proxy,
+redirect npm/pip/cargo/maven/go/nuget at an Artifactory/Nexus mirror, and cover
+GitHub Enterprise / Azure DevOps — see [`docs/adoption/`](adoption/).
 
-![The New Run wizard's barrier comparison — Fence / Wall / Vault with this host's real availability](img/tier-matrix.png)
-
-> **Inside a corporate network?** The enterprise-engineer path is built in:
-> the Getting Started wizard's **Corporate network** steps chain the sandbox
-> proxy through your corporate HTTP proxy and redirect npm/pip/cargo/maven/
-> go/nuget to an Artifactory/Nexus mirror; the **SCM Provider** step covers
-> GitHub Enterprise / Azure DevOps (PAT or SSH-over-443 through the credential
-> broker); **AWS Bedrock** (below) gives Claude access with no direct Anthropic
-> egress, billed through AWS; and `make setup`'s build retries with
-> `GOTOOLCHAIN=local` when a proxy blocks the public Go module proxy. If your
-> registry can't serve `pnpm` (a strict allowlist mirror), `make setup` builds
-> the web UI on your host and retries automatically — no env var to discover.
-> The **Host proxy** step detects on the *host* even when the control plane runs
-> in a container, and says so plainly when it can't look rather than reporting
-> "nothing configured."
+![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 
 A couple of config facts before you customize:
 
 - **Policy defaults are launch-path-specific.** A bare hand-launched `wardynd`
   loads `examples/policies/default.json` (CC2, no `api_key` grant — composed runs
-  can't reach a model under it); `make setup` / `scripts/up.sh` auto-pick a policy
-  by what's configured — host mode picks `examples/policies/composer-dev.json`,
-  or your staged subscription ceiling after `make stage-claude`. The Getting
-  Started **Model access for composed runs** check warns when your stored
-  credential and the live `WARDYN_DEFAULT_POLICY` disagree.
+  can't reach a model under it); `make setup` / `scripts/up.sh` auto-pick one:
+  containerized picks `demo.json` (CC1) on a runc-only host, `default.json` (CC2)
+  when gVisor is registered, and `composer-dev.json` once a real model path is
+  configured; host mode picks `composer-dev.json` or your staged subscription
+  ceiling. The Getting Started **Model access for composed runs** check warns when
+  your stored credential and the live `WARDYN_DEFAULT_POLICY` disagree.
 - **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist a
   `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age
   key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a
   durable one.
 
-## Level 0.5 — hands-on demo sandboxes (no keys)
-
-Prove the egress boundary yourself before onboarding any workspace. The UI has a
-**/demos** screen — click **"Try a 2-minute demo sandbox"** on the Welcome hero,
-or open <http://localhost:8080/demos> — with four hands-on scenarios. Each launches
-an interactive sandbox with an embedded terminal and live approvals; none needs a
-repo, an API key, or any model access — only the sandbox barrier itself:
-
-1. **The sealed box** (`always_deny`) — `curl` an unlisted domain and it fails
-   instantly with a 403; check the Audit tab.
-2. **Fail, then approve** (`deny_with_review`) — `curl` fails, an approval appears,
-   Approve it, retry the same command → it succeeds.
-3. **Held at the door** (`wait_for_review`) — `curl` **hangs**, held open at the
-   proxy; Approve within ~30 seconds and the same in-flight command completes.
-4. **Lines that can't be crossed** (allow-all policy) — general egress works, yet
-   cloud-metadata (`169.254.169.254`) and private-IP probes stay denied
-   unconditionally — no policy can grant them.
-
-**Headless?** Write your sandbox rules as one small file and hand it to one
-command — the CLI runs the same sandboxes, no repo required. A policy file is
-**JSON or YAML**; the shipped [`examples/policies/sandbox.yaml`](../examples/policies/sandbox.yaml)
-is a commented, sealed floor (empty allowlist, `always_deny`, `CC1`):
-
-```sh
-# Interactive: come up idle, attach a terminal, drive it yourself.
-wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml
-wardyn attach <id>     # curl an unlisted host -> instant 403; check `wardyn audit <id>`
-
-# Background / unattended: run a plain command in YOUR image under the same
-# governance; --wait blocks to the outcome and exits with the task's code.
-wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
-  --task 'echo hello from a governed sandbox' \
-  --policy-file examples/policies/sandbox.yaml --wait
-```
-
-`wardyn policy render -f examples/policies/sandbox.yaml` prints the canonical JSON
-(and rejects a misspelled field) if you want to check a policy before launching.
-[`docs/CI.md`](CI.md) has the full pipeline story (GitHub Actions / Azure DevOps,
-one-shot `scripts/ci-run.sh`). To give the sandbox a real Claude, connect a
-managed subscription (Level 2, below) and swap in
-[`examples/policies/sandbox-claude.yaml`](../examples/policies/sandbox-claude.yaml).
-
 ## Level 1 — governance demo (no keys)
 
 ```sh
-make agent-images        # build wardyn/agent-claude-code:local (+codex)
-make demo                # compose up: postgres + dex + wardynd; creates a demo run
+make agent-images-core   # build wardyn/agent-claude-code:local + agent-codex-cli:local
+make test-drive          # ARGS defaults to --up, which brings the compose stack up first
 ```
 
-Then:
+`make test-drive` ([`scripts/test-drive.sh`](../scripts/test-drive.sh)) walks the
+table below against the running stack and prints what each step proved: a
+governed clone and the no-default-route check, an egress deny, the cloud-metadata
+block (a proof the table doesn't cover), a first-use approval (queue → approve →
+retry), the brokered git-credential chain, and the kill cascade with its
+`actor_type=human` audit event. Its one weak step is the recording: it uploads a
+synthetic asciicast and fetches it back, which exercises the endpoint but does not
+prove the recorder captured a live session — use the Replay tab for that.
+`ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to
+poke at.
 
-- **UI**: http://localhost:8080 — use the CLI or admin token. (There is no
-  human SSO login: the "Sign in with SSO" button is disabled, though the
-  `/auth/login` flow still works server-side. Multi-user auth is unscheduled —
-  see [ROADMAP.md](../ROADMAP.md).)
-- **CLI** (inside or outside the container):
+By hand against the same stack (the UI is at http://localhost:8080 — there is no
+human SSO login: the "Sign in with SSO" button is disabled, though the
+`/auth/login` flow still works server-side; multi-user auth is unscheduled, see
+[ROADMAP.md](../ROADMAP.md)):
 
 ```sh
 export WARDYN_URL=http://localhost:8080 WARDYN_ADMIN_TOKEN=demo-admin-token
@@ -137,19 +64,35 @@ wardyn audit <id>
 wardyn approve <approval-id> --reason "reviewed scope, looks correct"
 ```
 
+Prefer clicking? The UI's **/demos** screen (<http://localhost:8080/demos>, or
+"Try a 2-minute demo sandbox" on the Welcome hero) launches four interactive
+sandboxes with an embedded terminal and live approvals — no repo, no keys, only
+the sandbox barrier itself: **the sealed box** (`always_deny` — `curl` fails
+instantly with a 403), **fail then approve** (`deny_with_review` — approve, retry,
+it succeeds), **held at the door** (`wait_for_review` — `curl` *hangs* at the
+proxy until you approve, then the same in-flight command completes), and **lines
+that can't be crossed** (allow-all policy, yet `169.254.169.254` and private-IP
+probes stay denied — no policy can grant them).
+
 ![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
 
 What you can verify live, even without keys:
 
 | What | How |
 |---|---|
-| L0 isolation | `docker exec wardyn-agent-<id> ip route` → no default route |
+| L0 isolation | `docker exec wardyn-agent-<id> cat /proc/net/route` → no row with an all-zero destination, i.e. no default route (the slim agent image ships no `ip` binary) |
 | Egress policy | from the sandbox, curl an unlisted domain via the proxy → 403 + a pending approval in the UI |
 | Approval queue | the Approvals tab; approve/deny and watch the audit trail |
 | Attributed audit | Audit tab: every event carries `actor_type` human/agent/system |
 | Terminal replay | Runs tab → Replay (the recorder captures even failed agent starts) |
 | Kill switch | `wardyn run kill <id>` → container gone, run token revoked (401), audit `run.kill` |
 | Brokered credentials | `docker exec wardyn-agent-<id> sh -c 'printf "protocol=https\nhost=github.com\n\n" \| wardyn-git-helper get'` → raises a credential approval; approving it hits the fail-closed mint (no GitHub App configured) — the whole chain is visible in audit |
+
+Want a worked scenario per control? [`examples/workspaces/`](../examples/workspaces/)
+is a catalog of six small workspaces — benign, exfil attempt, metadata probe,
+needs-approval, github-push, long-running — each with the exact task text, the
+`wardyn run` command, and its PASS criteria, plus a key-free `probes.sh` you can
+point at any RUNNING sandbox.
 
 ## Level 2 — real Claude Code run (bring an Anthropic API key)
 
@@ -169,7 +112,8 @@ wardyn run --agent claude-code --repo octocat/Hello-World \
 What happens: the run's policy carries an auto-mintable `api_key` grant for
 `api.anthropic.com`; the proxy resolves the key **at startup, into proxy
 memory only** (the sandbox never sees it — check: `docker exec
-wardyn-agent-<id> env | grep -i key` is empty); Claude Code talks to
+wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel
+`wardyn-proxy-injected`, never your key); Claude Code talks to
 `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the
 proxy injects `x-api-key` and logs every model call as a `brokered:llm`
 decision in the audit trail. Watch the session live in the Replay tab.
@@ -182,7 +126,7 @@ minted installation token is 1h, repo-scoped, and permission-clamped to
 (`wardyn/<run-id>/*`) is recorded in the token metadata but is
 **advisory-only today** — the token can push to any branch (including the
 default) within its granted repos; real branch-namespace enforcement is
-**[v0.5 — planned]** (see `threatmodel/THREAT-MODEL.md` asset #4 and
+**[v0.5+ — planned]** (see `threatmodel/THREAT-MODEL.md` asset #4 and
 [ROADMAP.md](../ROADMAP.md)).
 
 ### Model auth: three ways to give Claude Code its LLM access
@@ -305,6 +249,17 @@ make reset               # start over from an empty Runs list: wipes Postgres + 
 brings up a *containerized* wardynd. It does not touch a host-mode daemon — to
 reset host mode, `make stop-host && make setup`. `make doctor` is read-only —
 re-run it any time to re-check this host's capabilities.
+
+### When it goes wrong
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `compose up` fails on network labels | a dead run's sandbox pair still holds `wardyn-internal` | `docker ps -aq --filter name=wardyn- \| xargs -r docker rm -f`, then `docker network rm wardyn-internal` |
+| `docker ps` shows nothing but the UI works | your shell is on a different daemon than Wardyn's scripts picked | `export DOCKER_HOST=unix:///run/wardyn-docker.sock` (the tier-capable native daemon they prefer over the default socket) |
+| Only Fence/CC1 offered | ditto — that daemon registers no `runsc`/`kata` | same; `make doctor` prints the classes it can actually see |
+| Verify/Record hangs forever | host mode under Docker Desktop + WSL2 NAT | use containerized mode (the default) — drop `WARDYN_SETUP_MODE=local` |
+| Run fails "issue with selected model" | no model access configured, or a stale credential | `claude setup-token \| wardyn subscription connect`, then `wardyn setup status` |
+| Port 5432 in use | another Postgres | stop it, or set `WARDYN_PG_PORT` |
 
 Honest limits of this demo deployment (see `threatmodel/`): single host,
 CC1/CC2 only unless a Kata runtime is registered (CC3/Vault is experimental —

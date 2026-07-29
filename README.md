@@ -5,227 +5,25 @@
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod)
 [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
 
-**The open-source governed-sandbox control plane for any workload —
-identity, controls, and audit are the product; the sandbox is a pluggable
-commodity.** Wardyn governs run-identity and tokens for anything you launch —
-a script, a build, a plain command, or a coding agent (its flagship use): a
-*wardyn* authorizes one specific, scoped action — which is exactly what the
-broker mints.
+**The open-source governed-sandbox control plane for any workload — identity,
+controls, and audit are the product; the sandbox is a pluggable commodity.**
+Anything you run under your own credentials — a script, a build, a CI job, a
+coding agent — inherits your full blast radius. Wardyn is the governance layer in
+between: each run gets its own identity, scoped credentials minted on demand, one
+audited path off-host, and no resident secrets. Coding agents (Claude Code, Codex
+CLI, and successors) are the flagship use, so most of what follows is framed
+around them.
 
-> **Name & trademark.** "Wardyn" is a working name — a formal trademark
-> clearance (USPTO full-text + GitHub org / domain / package handles) is still
-> pending, so the name may change before a 1.0. The module path
-> `github.com/cjohnstoniv/wardyn` is a personal namespace for now; re-homing to a
-> dedicated org later is a one-line change.
+> **Status: pre-alpha.** Interfaces are not stable. Do not run production
+> workloads. "Wardyn" is a working name — trademark clearance (USPTO full-text +
+> org / domain / package handles) is still pending, so the name and the personal
+> `github.com/cjohnstoniv/wardyn` module path may change before a 1.0.
 
 ![Wardyn's Getting-started page — pick a confinement barrier (Fence / Wall / Vault) with your host's real capabilities detected live](docs/img/getting-started.png)
 
 ---
 
-## What Wardyn Is
-
-Anything you run under your own credentials — a script, a build, a CI job, a
-coding agent — inherits your full blast radius. A prompt-injected agent, a
-poisoned dependency, or a compromised MCP server inherits the same repos,
-cloud access, and reach as whatever launched it. Wardyn is the governance
-layer between a human operator and anything running on their behalf; a run
-doesn't have to be an agent at all, but coding agents (Claude Code, Codex
-CLI, and successors) are the flagship use, so most of what follows is framed
-around them:
-
-- **Per-run identity.** Every run gets a SPIFFE ID
-  (`spiffe://<trust-domain>/agent-run/<id>`) distinct from the human; the human's
-  `sub`, the run's `act`, and the accountable `sponsor` travel together in every
-  token, commit, and audit event. **[shipped]** (embedded JWT-SVID issuer;
-  SPIRE-backed **[v0.5+ — planned]**).
-
-- **Broker-minted scoped credentials.** The agent never holds a credential; the
-  broker mints short-lived, repo-scoped, down-scoped credentials on demand, injected
-  proxy-side. Approval-required grants mint inside the Postgres transaction that
-  verifies an `APPROVED` request for that exact run+scope — no widening. **[shipped]**
-
-- **Layered egress.** A run's sandbox is gatewayless — its only path off-host is the
-  `wardyn-proxy` sidecar (L0 **[shipped]**), which enforces an L7 allowlist, method
-  rules, first-use approval, and proxy-side credential injection (L2 **[shipped]**).
-  The env-var-bypass class is defended *structurally*: with no route, an agent that
-  ignores `HTTP_PROXY` reaches nothing. L1 default-deny and an MCP gateway are
-  **[v0.5+ — planned]**. Full table in [ARCHITECTURE.md](ARCHITECTURE.md); what
-  "planned" covers is in [ROADMAP.md](ROADMAP.md).
-
-- **Three-stream append-only audit.** The control-plane event log (Postgres trigger
-  blocks UPDATE/DELETE), PTY replay via `wardyn-rec`, and the eBPF/Tetragon
-  ground-truth stream (`kernel.*` correlated on `run_id`) — all **[shipped]**.
-  Ground-truth is **detection, not prevention** and **honestly degradable**
-  (`/healthz` reports `ebpf_groundtruth=unavailable` without a sensor; blind inside
-  CC3/Kata guests; its Tetragon mapper is validated against documented shapes, not a
-  live deployment yet). SIEM export (JSON webhook/syslog/file) is **[shipped]** and
-  free; OTLP/OCSF **[v0.5+ — planned]**.
-
-- **Confinement Classes.** Friendly UI names — **Fence** = CC1, **Wall** = CC2,
-  **Vault** = CC3. CC1/Fence (hardened shared-kernel runc) **[shipped]**, CC2/Wall
-  (gVisor userspace kernel — default) **[shipped]**,
-  CC3/Vault (Kata microVM) **[experimental]** — live-proven on a Docker daemon with
-  the Kata runtime registered (needs `/dev/kvm`; not on Docker Desktop). Fence needs
-  only Docker; Wall adds `runsc`; Vault adds `/dev/kvm` + Kata. Policy can mandate a
-  minimum class; the plane refuses a run a substrate cannot satisfy.
-
-- **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the plane
-  wraps it with the runner tools (opt-in via `WARDYN_ENVBUILD`) and gates launch on an
-  in-sandbox self-test, fail-closed. The wrap is **wrap-only** — a `FROM` + `COPY` that
-  adds layers and never runs image-controlled code on the host: a base carrying `ONBUILD`
-  triggers is **refused**, because those would execute on the host daemon at wrap time.
-  A tag or a digest-pinned ref (`repo@sha256:…`) both work; pinning is honored end-to-end
-  and recommended, but **not enforced** — Wardyn resolves a mutable tag at wrap time, so
-  what a tag points at stays the operator's call. **[shipped]**
-
-- **Model access without resident keys.** An Anthropic API key or a Claude
-  subscription (from the operator's live login) is injected proxy-side, never resident;
-  a containerized plane connects a **Wardyn-managed Claude subscription** via container
-  login. AWS Bedrock is operator-configured (bearer proxy-injected; SigV4 keys resident, documented). **[shipped]**
-
----
-
-## Architecture at a glance
-
-<!-- The code-true, CI-label-checked mermaid version of this and the other
-     diagrams lives in ARCHITECTURE.md and threatmodel/THREAT-MODEL.md. -->
-![Wardyn system overview: a trusted control plane (wardynd + Postgres) launches each run — coding agent, script, or build — into an untrusted, gatewayless per-run sandbox whose only path off-host is the wardyn-proxy egress sidecar](docs/img/architecture.png)
-
-A trusted control plane (`wardynd` + Postgres) launches each run — a coding
-agent, a script, a build, whatever the workload is — into an untrusted,
-gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar;
-credentials are injected at the proxy, and every decision and PTY session
-streams back into the append-only audit log.
-
----
-
-## Why Now
-
-Coding agents today inherit developer credentials at launch. No purpose-built,
-open-source governance layer existed to scope, gate, and attribute what an
-agent can do. The incumbent tools have filled parts of the gap in ways that
-create new problems:
-
-- Existing governance controls ship as paid tiers of commercial platforms,
-  closed-source services, or vendor-bundled runtimes — you cannot audit what
-  you cannot read, and you cannot run it on your own infrastructure without a
-  commercial agreement.
-- Existing sandboxing tools have overclaimed their isolation properties: in
-  documented red-team exercises, hook-based in-agent enforcement was bypassed
-  via the dynamic linker (`ld-linux`/`mmap`); at least one commercially-shipped
-  sandbox escaped via a CVE in the container runtime.
-
-Wardyn's thesis is that the real boundary is structural (no network path, no
-resident credentials, enforcement outside the agent process) and that honest
-disclosure of residual risks is a feature, not a liability. See
-[`threatmodel/`](threatmodel/THREAT-MODEL.md).
-
-The substrate is a pluggable commodity: every major subsystem (sandbox, identity,
-secrets, egress, policy, audit) sits behind a seam with a blessed, tested default
-and documented swappable alternates. See
-[`docs/PLUGGABILITY.md`](docs/PLUGGABILITY.md).
-
----
-
-## What It Does
-
-### Identity, approval, and the credential mint
-
-The delegation chain is `human sub → agent-run SPIFFE ID → scoped minted credential`;
-`wardynd` mints it at sandbox start and every downstream token and commit carries it
-(embedded identity provider, or SPIRE at v0.5). A `CredentialGrant` is eligibility, not
-issuance — with `RequiresApproval` set the broker mints only inside the Postgres
-transaction that verifies `approvals.state = 'APPROVED'` for this `run_id`+`grant_id`
-and claims `minted_jti`, so minted scope equals what the approver saw. On run stop the
-kill-switch cascades automatically: teardown → deny-list run token → revoke credentials → durable state.
-
-### Egress model
-
-L0 gatewayless sandbox → L1 default-deny nftables/NetworkPolicy (blocks
-`169.254.169.254`) → L2 `wardyn-proxy` (L7 allowlist, method rules, first-use approval
-— `always_deny`/`deny_with_review`/`wait_for_review` holds the connection for a live
-decision — plus proxy-side credential injection) → L3 MCP/tool gateway (v0.5). The
-same seam carries the corporate lanes (upstream proxy hop, artifact-mirror
-redirection, brokered SCM creds). Full table in [ARCHITECTURE.md](ARCHITECTURE.md).
-
-### Audit streams
-
-1. `audit_events` (Postgres, append-only — `UPDATE`/`DELETE` trigger raises). System of record.
-2. eBPF/Tetragon ground-truth — a tamper-proof counterpart to agent self-report:
-   detection, not prevention (flags the `ld-linux`/`mmap` bypass, never blocks),
-   honestly degradable via `/healthz`, blind inside CC3/Kata guests. Opt-in.
-3. PTY session replay via `wardyn-rec` (execs `asciinema`; GPL subprocess, never
-   linked). Each stream is keyed on `run_id` and exported to customer SIEM free.
-
-### Recorded profiles → governed reruns
-
-The primary way to onboard real work: **record** a named interactive session in a
-workspace, then rerun it as a governed profile — the New Run dialog offers recorded
-sessions as fast-track profiles with observed egress preloaded. **Verify** re-runs the
-steps in a fresh CONFINED session (a live re-run, not a byte-for-byte replay):
-default-deny egress limited to the workspace's approved set unioned with the baseline
-clone/registry hosts. HONEST RESIDUAL: that baseline is a fixed default, not derived
-from the workspace's own source — a `local_dir` workspace that clones nothing still
-gets the GitHub bundle (incl. `*.githubusercontent.com`), so a confined verify is much
-tighter than the open recording but is not minimal. See
-[TRY-IT Level 2.5](docs/TRY-IT.md).
-
-### AI Run Composer (optional)
-
-Describe a task in plain English and Wardyn proposes a confined run (agent, repo,
-confinement, egress, grants) and grades it deterministically. It's **advisory**
-(backend never sees run credentials) and **off by default**; configure a backend via
-`WARDYN_COMPOSER_CONFIG` (see [`examples/composer-configs/`](examples/composer-configs/);
-`fake.json` needs no key) and the Describe surface appears in the New Run dialog —
-else it falls back to the manual wizard. See [TRY-IT Level 3](docs/TRY-IT.md).
-
----
-
-## Honest Security Posture
-
-Wardyn publishes what it does **not** defend against. The full published
-residual-risk list is in [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md).
-
-Notable residual risks:
-
-- **The model-API channel is an unavoidable data-exit path.** The LLM gateway
-  logs every prompt/token/tool call but cannot prevent an agent from encoding
-  data into a prompt to a model it is permitted to call.
-- **Domain fronting and DNS-tunnel exfil** are not closed below the optional
-  L2 TLS-intercept tier. Per-run TLS interception **is** shipped for
-  operator-listed MITM-eligible hosts (LLM endpoints, artifact registries —
-  opt-in, off by default); interception of **arbitrary** domains is the v0.5
-  target, so most non-LLM HTTPS egress remains an opaque CONNECT tunnel.
-- **Tier-1 hardened-runc shares the host kernel.** A kernel 0-day on a
-  runc-only host defeats the sandbox boundary. Wardyn defaults to CC2 (gVisor)
-  for this reason.
-- **The 1-hour minted-token window** before kill-switch revocation is a real
-  exposure window that cannot be fully eliminated, only minimized by TTL.
-
----
-
-## Requirements
-
-- **Docker** with the `compose` v2 plugin (Docker Desktop or a native Docker
-  Engine). Fence/CC1 runs need nothing more; Wall/CC2 adds gVisor's `runsc`,
-  Vault/CC3 adds `/dev/kvm` + a Kata runtime — `wardyn setup wall|vault`
-  prints the exact steps for your machine.
-- **Go 1.26+** and **Node 22 + pnpm 9** — only for building from source
-  (host mode builds `bin/wardynd` + the UI locally).
-- **Claude Code CLI** (optional, host mode) — `make setup` stages an existing
-  `claude` login so sandboxes can use your subscription; without one, runs
-  have no model access until you add an API key (or Bedrock) in the UI.
-- Postgres is **included** in the compose file — nothing external to install,
-  no hosted service to sign up for.
-
-`go install github.com/cjohnstoniv/wardyn/cmd/wardyn@latest` installs the **CLI**. But
-`wardynd` is **not** `go install`-able (it needs `-tags docker` + a built `ui/dist`; a
-bare install has no embedded UI or sandbox runner) — run it via `make setup` or the container image.
-
-## Quickstart (pre-alpha)
-
-> **Status: pre-alpha.** Interfaces are not stable. Do not run production
-> workloads.
+## Quickstart
 
 ```sh
 git clone https://github.com/cjohnstoniv/wardyn
@@ -233,10 +31,11 @@ cd wardyn
 make setup   # brings up the containerized control plane + opens the UI
 ```
 
-`make setup` (== `scripts/setup.sh`) runs **containerized mode** — the default: `wardynd`
-runs in a compose container (sandbox→control-plane callbacks route in-network, so workspace
-**Verify/Record** work even on Docker Desktop + WSL2 NAT), starts Postgres, opens the UI,
-and prints commands for any missing confinement barrier. Stop with `make compose-down`.
+`make setup` asks **containerized vs host** (Enter = containerized); set
+`WARDYN_SETUP_MODE=container` to skip the question, `=local` for the host escape
+hatch. Containerized runs `wardynd` in a compose container, so sandbox→control-plane
+callbacks route in-network and workspace **Verify/Record** work even on Docker
+Desktop + WSL2 NAT. Stop with `make compose-down`.
 
 Give it a model — pick any, all first-class at the CLI (or in the UI):
 
@@ -247,14 +46,6 @@ echo "$KEY"        | wardyn secret set anthropic-api-key   # API key
 wardyn setup status   # what's configured, with the exact next command per unmet check
 ```
 
-**Host mode** (`WARDYN_SETUP_MODE=local`) is an advanced escape hatch — `wardynd` runs as
-you, using your resident Claude login directly (note: its workspace Verify/Record callbacks
-don't route under Docker Desktop + WSL2 NAT). **Team mode** (multi-user SSO/RBAC) does not
-exist yet and is not scheduled — see [ROADMAP.md](ROADMAP.md).
-
-Prove the egress boundary hands-on first? The UI's **/demos** screen launches
-interactive sandboxes with no repo and no keys — see [TRY-IT Level 0.5](docs/TRY-IT.md).
-
 **Prefer one file and one command?** Write your sandbox rules as a small **YAML**
 (or JSON) policy and hand it to a single `wardyn run` — interactive or unattended:
 
@@ -264,42 +55,143 @@ wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
   --policy-file examples/policies/sandbox.yaml --wait
 ```
 
-The commented [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml) is
-a sealed floor you can edit at a glance; `wardyn policy render -f <file>` checks it.
+The commented [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml)
+is a sealed floor you can edit at a glance; `wardyn policy render -f <file>`
+checks it.
 
-**In a pipeline instead of on a desktop?** [`docs/CI.md`](docs/CI.md) — one script
-brings up a fresh control plane on any CI runner (GitHub Actions, Azure DevOps),
-runs one governed BYOA sandbox (your image, or just a plain command), and exits
-with the task's exit code. No UI, no human.
+### Requirements
 
-### The local access model in one picture
-
-![The local access model: your machine is the hard ceiling — everything you can do bounds everything a sandbox can; the Wardyn policy ceiling clamps that down; and each run receives only the minimal subset (scoped credential, task egress allowlist, onboarded mounts) its task needs](docs/img/access-model.png)
-
-On your desktop, Wardyn never *adds* power: a sandbox reaches at most what you (the
-operating user) already can, the operator policy clamps that to what you allow, and
-each run gets only the minimal subset (scoped credential, egress allowlist, mounts) it needs.
-
-New to Wardyn? [`docs/TRY-IT.md`](docs/TRY-IT.md) is the guided walkthrough (no-key
-governance demo, hands-on demo sandboxes, then a real Claude Code run);
-[`docs/sdk.md`](docs/sdk.md) covers the Go SDK + raw curl API;
-[`deploy/compose/README.md`](deploy/compose/README.md) the compose stack, no-login
-local mode, and TLS; and [`examples/`](examples/) holds demo policies and configs.
+- **Docker** with the `compose` v2 plugin (Desktop or native Engine). Postgres
+  is in the compose file — nothing external to install. Fence/CC1 needs nothing
+  more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 adds `/dev/kvm` + a Kata
+  runtime — `wardyn setup wall|vault` prints the exact steps for your machine.
+- **Go 1.26+** and **Node 22 + pnpm 9** — only to build from source (host mode
+  builds `bin/wardynd` + the UI locally).
+- `go install …/cmd/wardyn@latest` installs the **CLI** only; `wardynd` is
+  **not** `go install`-able (it needs `-tags docker` + a built `ui/dist`) — run
+  it via `make setup` or the container image.
 
 ---
 
-## Deployment Surface
+## What you get
 
-Two paths — only one runs sandboxes today:
+- **Per-run identity.** Every run gets a SPIFFE ID
+  (`spiffe://<trust-domain>/agent-run/<id>`) distinct from the human; the human's
+  `sub`, the run's `act`, and the accountable `sponsor` travel together in every
+  token, commit, and audit event. **[shipped]** (embedded JWT-SVID issuer;
+  SPIRE-backed **[v0.5+ — planned]**).
 
-| Path | Location | Status |
-|---|---|---|
-| Docker Compose | `deploy/compose/` | **[shipped]** — the only working data plane today |
-| Helm chart (one blessed chart) | `deploy/helm/wardyn/` | **[v0.5 — planned]** — render-checked only (`helm lint` + `helm template` in CI); there is no Kubernetes runner driver yet, so the chart deploys the control plane but cannot create sandboxes yet |
+- **Broker-minted scoped credentials.** The run never holds a credential: the
+  broker mints short-lived, repo-scoped ones on demand, injected proxy-side.
+  Approval-required grants mint inside the Postgres transaction that verifies an
+  `APPROVED` request for that exact run+scope — no widening. **[shipped]**
 
-No "bring your own arbitrary Kubernetes manifests." The parity rule: a
-feature is not done until it passes the conformance suite on both Docker and
-kind — today only the Docker target runs functionally (see Status below).
+- **Layered egress.** A sandbox is gatewayless — its only path off-host is the
+  `wardyn-proxy` sidecar (L7 allowlist, method rules, first-use approval,
+  proxy-side credential injection), so the env-var-bypass class is defended
+  *structurally*: with no route, an agent that ignores `HTTP_PROXY` reaches
+  nothing. **[shipped]**; L1 default-deny and an MCP gateway are **[v0.5+ —
+  planned]**. Full table in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+- **Three-stream append-only audit.** The control-plane event log (a Postgres
+  trigger blocks UPDATE/DELETE), PTY replay via `wardyn-rec`, and the opt-in
+  eBPF/Tetragon ground-truth stream correlated on `run_id` — all **[shipped]**.
+  Ground-truth is **detection, not prevention** and honestly degradable
+  (`/healthz` reports `ebpf_groundtruth=unavailable`; blind inside CC3/Kata
+  guests). SIEM export (JSON webhook/syslog/file) is **[shipped]** and free;
+  OTLP/OCSF **[v0.5+ — planned]**.
+
+- **Confinement Classes.** Friendly UI names — **Fence** = CC1 (hardened
+  shared-kernel runc) **[shipped]**, **Wall** = CC2 (gVisor userspace kernel)
+  **[shipped]**, CC3/Vault (Kata microVM) **[experimental]** (needs `/dev/kvm` +
+  a registered Kata runtime; not on Docker Desktop). CC2/Wall is the strongest
+  tier that needs no host install and is preferred whenever `runsc` is
+  registered; on a runc-only host `make setup` falls back to a CC1 policy
+  (`examples/policies/demo.json`) so runs can start — `wardyn setup status`
+  reports which tier you actually got. Policy can mandate a minimum class; the
+  plane refuses a run a substrate cannot satisfy.
+
+- **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the
+  plane wraps it with the runner tools (opt-in via `WARDYN_ENVBUILD`) and gates
+  launch on an in-sandbox self-test, fail-closed. The wrap is **wrap-only** — a
+  `FROM` + `COPY` that never runs image-controlled code on the host, so a base
+  carrying `ONBUILD` triggers is **refused**. **[shipped]**
+
+- **Model access without resident keys.** An Anthropic API key or a Claude
+  subscription (from the operator's live login) is injected proxy-side, never
+  resident; a containerized plane connects a **Wardyn-managed Claude
+  subscription** via container login. AWS Bedrock is operator-configured (bearer
+  proxy-injected; SigV4 keys resident, documented). **[shipped]**
+
+- **Recorded profiles → governed reruns.** Record a named interactive session in
+  a workspace, then rerun it confined as a fast-track profile with its observed
+  egress preloaded — [TRY-IT Level 2.5](docs/TRY-IT.md). **[shipped]**
+
+- **AI Run Composer (optional).** Describe a task in plain English and Wardyn
+  proposes a confined run and grades it deterministically — advisory, **off by
+  default** — [TRY-IT Level 3](docs/TRY-IT.md). **[shipped]**
+
+---
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+  entry(["Human operator<br/>UI or wardyn CLI"])
+  subgraph control["Control plane (trusted)"]
+    wardynd["wardynd<br/>REST API + embedded UI<br/>policy engine / approval FSM<br/>token broker / audit ingest"]
+    pg[("Postgres<br/>append-only audit")]
+    wardynd --> pg
+  end
+  subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
+    agent["Coding agent<br/>claude-code / codex-cli"]
+    rec["wardyn-rec<br/>PTY recorder"]
+    agent -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
+    rec --> proxy
+  end
+  entry --> wardynd
+  wardynd -->|"launch (docker driver)"| agent
+  proxy -->|"allowlisted L7, creds injected"| net(("Internet / APIs"))
+```
+
+A trusted control plane (`wardynd` + Postgres) launches each run — a coding
+agent, a script, a build, whatever the workload is — into an untrusted,
+gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, with
+credentials injected at the proxy. Decision logs and masked session casts flow
+back into the append-only audit log — drawn in
+[THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §4, "The three audit streams".
+
+Wardyn never *adds* power: a sandbox reaches at most what you (the operating
+user) already can, operator policy clamps that to what you allow, and each run
+gets only the minimal subset (scoped credential, egress allowlist, mounts) its
+task needs.
+
+---
+
+## Honest security posture
+
+Wardyn publishes what it does **not** defend against; the full list is in
+[`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md). Notable residuals:
+
+- **The model-API channel is an unavoidable data-exit path.** The LLM gateway
+  logs every prompt/token/tool call but cannot stop an agent from encoding data
+  into a prompt to a model it is permitted to call.
+- **Domain fronting and DNS-tunnel exfil** are not closed below TLS interception,
+  which ships only for operator-listed MITM-eligible hosts (opt-in, off by
+  default); **arbitrary**-domain interception is the v0.5 target, so most
+  non-LLM HTTPS egress remains an opaque CONNECT tunnel.
+- **CC1/Fence shares the host kernel.** A kernel 0-day defeats the sandbox
+  boundary there; CC2/Wall (gVisor) is the answer wherever `runsc` is registered.
+- **The 1-hour minted-token window** before kill-switch revocation cannot be
+  eliminated, only minimized by TTL.
+
+That honesty is the point. The incumbents ship governance as paid tiers of
+closed platforms or vendor-bundled runtimes — unauditable, un-self-hostable —
+and sandboxes have overclaimed isolation before: in documented red-team
+exercises hook-based in-agent enforcement was bypassed via the dynamic linker
+(`ld-linux`/`mmap`), and at least one commercially-shipped sandbox escaped via a
+container-runtime CVE. Wardyn's thesis is that the real boundary is structural —
+no network path, no resident credentials, enforcement outside the agent process.
 
 ---
 
@@ -313,38 +205,34 @@ identity, the approval FSM and credential broker, the L2 egress proxy and
 append-only audit, CC1/CC2 confinement, CI mode (BYOA), and the repo-scoped
 git-broker.
 
-Still unbuilt: SPIRE, OpenBao, L1 default-deny, an MCP/tool gateway,
-arbitrary-domain TLS interception, a Kubernetes runner driver, OTLP/OCSF sinks,
-and multi-user team mode.
-
-Full shipped-and-planned detail — including the named gaps with no milestone —
-is in [ROADMAP.md](ROADMAP.md); per-release detail is in
-[CHANGELOG.md](CHANGELOG.md).
+Exactly two deployment paths, and only one runs sandboxes today: `deploy/compose`
+**[shipped]** and one blessed Helm chart `deploy/helm/wardyn` **[v0.5+ —
+planned]**, render-checked in CI but with no Kubernetes runner driver behind it
+yet. Also still unbuilt: SPIRE, OpenBao, L1 default-deny, an MCP/tool gateway,
+arbitrary-domain TLS interception, OTLP/OCSF sinks, and multi-user team mode.
 
 ---
 
-## Components
+## Where to go next
 
-`wardynd` (control plane: REST API, embedded UI, policy engine, approval FSM,
-token broker, audit ingest) · `wardyn-runner` (docker driver) · `wardyn-proxy`
-(L2 egress sidecar) · `wardyn-rec` (PTY recorder) · `wardyn-tetragon-ingest`
-(ground-truth ingest, opt-in) · `wardyn-git-helper` (stdout-only git credential
-broker) · `wardyn-scan` / `wardyn-verify` (workspace onboarding) · `wardyn` (CLI).
-Full per-binary roles in [ARCHITECTURE.md](ARCHITECTURE.md).
+| | |
+|---|---|
+| Guided walkthrough — no-key governance demo, hands-on demo sandboxes, then a real Claude Code run | [`docs/TRY-IT.md`](docs/TRY-IT.md) |
+| Run it in a pipeline (GitHub Actions, Azure DevOps) — no UI, no human | [`docs/CI.md`](docs/CI.md) |
+| Binaries, egress table, security invariants, state machine | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Threat model and published residual risks | [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) |
+| Shipped vs planned, then per-release detail | [`ROADMAP.md`](ROADMAP.md) · [`CHANGELOG.md`](CHANGELOG.md) |
+| Compose stack, no-login local mode, TLS | [`deploy/compose/README.md`](deploy/compose/README.md) |
+| Go SDK + raw curl API | [`docs/sdk.md`](docs/sdk.md) |
+| Demo policies and example configs | [`examples/`](examples/) |
+| Swappable seams behind every subsystem | [`docs/PLUGGABILITY.md`](docs/PLUGGABILITY.md) |
 
 ---
 
-## License and Governance
+## License and governance
 
 Apache-2.0. Contributor sign-off via DCO (`Signed-off-by`). No `enterprise/`
-directory — every control is in the open. No hosted backend either: it runs on
-your infrastructure or it doesn't run. Nothing here is a free tier of a paid
-product — there is no paid product. Every control described above (identity,
-egress, audit, approvals) is in this repo under Apache-2.0, not gated behind a
-commercial license. CNCF Sandbox is the governance target.
-
-Contributions welcome. See `CONTRIBUTING.md`.
-
----
-
-*Wardyn is a working name, pending trademark search.*
+directory and no hosted backend — every control described above is in this repo,
+and it runs on your infrastructure or it doesn't run. Nothing here is a free tier
+of a paid product; there is no paid product. CNCF Sandbox is the governance
+target. Contributions welcome — see `CONTRIBUTING.md`.
