@@ -109,12 +109,7 @@ func modelProviderEgress(ceiling types.RunPolicySpec) []string {
 }
 
 func ceilingBlessesClaudeCreds(ceiling types.RunPolicySpec) bool {
-	for _, wm := range ceiling.WorkspaceMounts {
-		if wm.Target == claudeCredTarget {
-			return true
-		}
-	}
-	return false
+	return specHasMountTarget(&ceiling, claudeCredTarget)
 }
 
 // anthropicReachable reports whether the FINAL spec's egress lets the agent reach
@@ -137,12 +132,9 @@ func anthropicReachable(spec *types.RunPolicySpec) bool {
 
 // specHasMountTarget reports whether the spec already carries a mount at target.
 func specHasMountTarget(spec *types.RunPolicySpec, target string) bool {
-	for _, wm := range spec.WorkspaceMounts {
-		if wm.Target == target {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(spec.WorkspaceMounts, func(wm types.WorkspaceMount) bool {
+		return wm.Target == target
+	})
 }
 
 // applyLLMCredMount injects the ceiling's operator-blessed Claude credential

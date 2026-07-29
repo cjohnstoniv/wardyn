@@ -25,8 +25,8 @@ import type { Page, Locator } from "@playwright/test";
 //
 // The board groups runs into "Needs your attention" (FAILED +
 // WAITING_FOR_CONFIRMATION), "Active" (non-terminal, non-attention), and "Done"
-// (terminal, grouped by outcome). State is asserted via the RunStatusBadge TEXT
-// (run-status-badge.tsx / primitives.tsx), never CSS classes:
+// (terminal, grouped by outcome). State is asserted via the RunStateBadge TEXT
+// (primitives.tsx), never CSS classes:
 //   PENDING "Pending", STARTING "Starting", RUNNING "Running",
 //   WAITING_FOR_CONFIRMATION "Awaiting confirmation", COMPLETED "Completed",
 //   STOPPED "Stopped", FAILED "Failed", KILLED "Killed", ARCHIVED "Archived".

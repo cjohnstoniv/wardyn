@@ -70,33 +70,10 @@ export interface Demo {
   needsModel?: boolean;
 }
 
-// policyToYaml renders a demo's inline_policy as a compact YAML block — the same
-// shape you'd hand-write as a Wardyn policy file (the canonical on-disk form is
-// JSON, e.g. examples/policies/*.json; this is the readable equivalent). Only the
-// flat fields the demos actually set are emitted, in a stable, human order.
-export function policyToYaml(p: RunPolicySpec): string {
-  const fmt = (k: string, v: unknown): string => {
-    if (Array.isArray(v)) {
-      return v.length === 0 ? `${k}: []` : `${k}:\n` + v.map((x) => `  - ${String(x)}`).join("\n");
-    }
-    return `${k}: ${String(v)}`;
-  };
-  const order: (keyof RunPolicySpec)[] = [
-    "min_confinement_class",
-    "allowed_domains",
-    "allow_all_egress",
-    "first_use_approval",
-    "auto_stop_after_sec",
-  ];
-  return order
-    .filter((k) => p[k] !== undefined)
-    .map((k) => fmt(k as string, p[k]))
-    .join("\n");
-}
-
 // Shared across every demo: weakest barrier (runs anywhere), reaped 15 min after
 // the operator walks away, and deliberately nothing else — no grants, no mounts,
-// no repos. Spread into each policy so the invariants live in one place.
+// no repos. Spread into each policy FIRST so the barrier leads the rendered YAML
+// (YamlBlock emits keys in insertion order).
 const SHARED = {
   min_confinement_class: "CC1" as const,
   auto_stop_after_sec: 900,
@@ -110,9 +87,9 @@ export const DEMOS: Demo[] = [
     overview:
       "The strictest posture: the sandbox has no allowed destinations and never asks. Any host you didn't pre-approve is refused at the proxy the instant it's dialed — the agent can't reach out, can't leak, and can't stall waiting on a human. Reach for this when a task should touch nothing on the network.",
     policy: {
+      ...SHARED,
       allowed_domains: [],
       first_use_approval: "always_deny",
-      ...SHARED,
     },
     steps: [
       {
@@ -135,9 +112,9 @@ export const DEMOS: Demo[] = [
     overview:
       "Same default-deny, but a blocked host isn't the end of the story: the first attempt is denied AND raises an approval you can grant. Approve it and the very next try to that host succeeds — the grant sticks for the rest of the run. Good for exploratory work where you want to vet each new destination once, on the fly.",
     policy: {
+      ...SHARED,
       allowed_domains: [],
       first_use_approval: "deny_with_review",
-      ...SHARED,
     },
     steps: [
       {
@@ -163,9 +140,9 @@ export const DEMOS: Demo[] = [
     overview:
       "The interactive variant: instead of failing fast, Wardyn holds the connection open while it waits for your live decision, so an approved request completes in the same command — no retry needed. Miss the ~30-second window and it falls back to a denial. Best when a human is watching and you want zero-retry approvals.",
     policy: {
+      ...SHARED,
       allowed_domains: [],
       first_use_approval: "wait_for_review",
-      ...SHARED,
     },
     steps: [
       {
@@ -196,10 +173,10 @@ export const DEMOS: Demo[] = [
     caution:
       "Fence (CC1) shares your machine's kernel and this box allows the public internet — the widest window Wardyn opens. It's safe here only because nothing is mounted: no repo, no key, no workspace. The point of this demo is the two denials that still hold with egress wide open.",
     policy: {
+      ...SHARED,
       allowed_domains: [],
       allow_all_egress: true,
       first_use_approval: "always_deny",
-      ...SHARED,
     },
     steps: [
       {
@@ -229,9 +206,9 @@ export const DEMOS: Demo[] = [
     overview:
       "Every demo above proved the policy holds against a human at a terminal. This one hands you the same terminal to run a real Claude Code agent: it reaches Anthropic's API to think, and nothing else — the same default-deny-plus-allowlist confinement, now doing the job Wardyn actually exists for. It uses the model you connected in setup, injected proxy-side (never resident in the sandbox). A run doesn't have to be an agent at all — Wardyn governs any sandboxed workload — but this is the flagship case, so it gets its own demo.",
     policy: {
+      ...SHARED,
       allowed_domains: ["api.anthropic.com", "*.anthropic.com"],
       first_use_approval: "always_deny",
-      ...SHARED,
     },
     needsModel: true,
     steps: [

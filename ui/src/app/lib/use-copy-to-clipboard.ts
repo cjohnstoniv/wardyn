@@ -9,8 +9,7 @@ import * as React from "react";
 // affordance shared by every copy button in the console.
 //
 // `resetMs` controls the auto-reset timer (default 1500ms); pass `null` to
-// disable it when a caller resets `copied` itself on some other event (e.g.
-// SetupGuideDialog resets when the dialog's `guide` prop changes instead).
+// disable it when a caller resets `copied` itself on some other event.
 //
 // Two copy variants, since call sites split on whether they need to know the
 // write actually succeeded before flipping the flag:

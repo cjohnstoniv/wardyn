@@ -4,77 +4,51 @@
  */
 
 import * as React from "react";
-import { Check, Copy } from "lucide-react";
 import { cn } from "../ui/utils";
-import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
+import { CopyButton } from "./copy-button";
 
-/** Syntax-tinted pretty-printed JSON in a mono code block. */
-export function JsonBlock({ value, className }: { value: unknown; className?: string }) {
-  const text = React.useMemo(() => JSON.stringify(value, null, 2), [value]);
-  const { copied, copy } = useCopyToClipboard();
-
+/** A mono code block with a copy button. `children` is the tinted rendering of
+ *  `text`; without it the raw text is shown (arbitrary emitted-file contents). */
+export function CodeBlock({
+  text,
+  className,
+  children,
+}: {
+  text: string;
+  className?: string;
+  children?: React.ReactNode;
+}) {
   return (
     <div className={cn("group relative rounded-lg border border-border bg-surface-2/60", className)}>
-      <button
-        onClick={() => copy(text)}
-        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:text-foreground"
-        aria-label="Copy"
-      >
-        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-      </button>
-      <span aria-live="polite" className="sr-only">{copied ? "Copied" : ""}</span>
+      <CopyButton
+        text={text}
+        className="absolute right-2 top-2 z-10 size-7 justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:text-foreground"
+      />
       <pre className="scroll-thin overflow-x-auto p-3 text-xs leading-relaxed">
-        <code className="font-mono">{highlight(text)}</code>
+        <code className="font-mono">{children ?? text}</code>
       </pre>
     </div>
   );
 }
 
-function highlight(json: string): React.ReactNode {
-  const lines = json.split("\n");
-  return lines.map((line, i) => {
-    const m = line.match(/^(\s*)"([^"]+)":\s*(.*)$/);
-    if (m) {
-      return (
-        <div key={i}>
-          {m[1]}
-          <span className="text-info">"{m[2]}"</span>
-          <span className="text-muted-foreground">: </span>
-          {value(m[3])}
-        </div>
-      );
-    }
-    // Non key/value line (array element, bracket) — PRESERVE leading indentation.
-    const lead = line.match(/^(\s*)/)?.[1] ?? "";
-    return (
-      <div key={i}>
-        {lead}
-        <span className="text-muted-foreground">{value(line.slice(lead.length))}</span>
-      </div>
-    );
-  });
+/** Syntax-tinted pretty-printed JSON in a mono code block. */
+export function JsonBlock({ value, className }: { value: unknown; className?: string }) {
+  const text = React.useMemo(() => JSON.stringify(value, null, 2), [value]);
+  return (
+    <CodeBlock text={text} className={className}>
+      {tintLines(text, /^("[^"]+"):(\s?)(.*)$/)}
+    </CodeBlock>
+  );
 }
 
 /** Pretty-printed YAML in a mono code block — the preferred, readable rendering for
  *  policy specs (indented, no noisy braces/quotes). Copy yields the YAML text. */
 export function YamlBlock({ value: v, className }: { value: unknown; className?: string }) {
   const text = React.useMemo(() => toYaml(v), [v]);
-  const { copied, copy } = useCopyToClipboard();
-
   return (
-    <div className={cn("group relative rounded-lg border border-border bg-surface-2/60", className)}>
-      <button
-        onClick={() => copy(text)}
-        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:text-foreground"
-        aria-label="Copy"
-      >
-        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-      </button>
-      <span aria-live="polite" className="sr-only">{copied ? "Copied" : ""}</span>
-      <pre className="scroll-thin overflow-x-auto p-3 text-xs leading-relaxed">
-        <code className="font-mono">{highlightYaml(text)}</code>
-      </pre>
-    </div>
+    <CodeBlock text={text} className={className}>
+      {tintLines(text, /^([\w.*-]+):(\s?)(.*)$/)}
+    </CodeBlock>
   );
 }
 
@@ -126,13 +100,14 @@ function yamlScalar(s: string): string {
   return needsQuote ? JSON.stringify(s) : s;
 }
 
-// highlightYaml tints keys/values per line WITHOUT touching indentation (the JSON
-// highlighter's old bug). Renders each source line as its own div.
-function highlightYaml(yaml: string): React.ReactNode {
-  return yaml.split("\n").map((line, i) => {
+// tintLines renders each source line as its own div, tinting a `key: value` pair
+// matched by `kv` (group 1 = key, 2 = separator space, 3 = value) WITHOUT touching
+// indentation. Shared by both blocks — JSON and YAML differ only in the key regex.
+function tintLines(text: string, kvRe: RegExp): React.ReactNode {
+  return text.split("\n").map((line, i) => {
     const lead = line.match(/^(\s*(?:- )?)/)?.[1] ?? "";
     const rest = line.slice(lead.length);
-    const kv = rest.match(/^([\w.*-]+):(\s?)(.*)$/);
+    const kv = rest.match(kvRe);
     if (kv) {
       return (
         <div key={i}>

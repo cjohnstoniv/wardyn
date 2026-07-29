@@ -3,7 +3,6 @@
 
 //go:build docker
 
-// Package envbuild is documented in doc.go.
 package envbuild
 
 import (

@@ -23,7 +23,7 @@
 // /dev/kvm reason) and the PICK_WHEN / NOT_DETECTED copy live only here — this
 // step is the sole barrier picker in Getting started.
 import * as React from "react";
-import { Check, X, AlertTriangle, Copy, Info, AlertOctagon, Terminal } from "lucide-react";
+import { Check, X, AlertTriangle, Info, AlertOctagon, Terminal } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { StatusChip } from "../../wardyn/status-chip";
@@ -41,7 +41,7 @@ import {
 import { RESIDUAL_PREFIX, BTN, type StatusKind } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
 import { TIER_GUIDES } from "./setup-guide";
-import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
+import { CopyButton } from "../../wardyn/copy-button";
 import type { ConfinementClass, SetupStatus } from "../../../lib/types";
 
 type TierState = "ready" | "todo" | "incompatible";
@@ -424,7 +424,6 @@ function ColumnState({
   // The recheckToken captured when the command was revealed — a later bump means
   // a host re-check completed while the panel was open, so it's "still not detected".
   const [openedAt, setOpenedAt] = React.useState(0);
-  const { copied, copyAsync } = useCopyToClipboard(1400);
   const guide = TIER_GUIDES[cc];
   // Mirror RunnerTiers' rowStatus: a re-check in flight reads "Checking…" for any
   // not-yet-ready tier, overriding needs-setup/incompatible until it resolves.
@@ -477,19 +476,13 @@ function ColumnState({
           <>
             <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted px-2.5 py-1.5">
               <code className="truncate font-mono text-xs text-foreground">$ {guide.command}</code>
-              <button
-                type="button"
+              <CopyButton
+                text={guide.command}
+                label="Copy setup command"
+                iconClassName="size-4"
                 disabled={disabled}
-                onClick={() => void copyAsync(guide.command)}
                 className="shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-50"
-                aria-label="Copy setup command"
-              >
-                {copied ? (
-                  <Check className="size-4 text-success" aria-hidden />
-                ) : (
-                  <Copy className="size-4" aria-hidden />
-                )}
-              </button>
+              />
             </div>
             {stillNotDetected && <p className="text-xs text-danger">{stillNotDetected}</p>}
           </>

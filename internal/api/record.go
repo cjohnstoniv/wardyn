@@ -24,10 +24,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	neturl "net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -420,11 +421,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		merged[h] = struct{}{}
 		promoted = append(promoted, h)
 	}
-	domains := make([]string, 0, len(merged))
-	for d := range merged {
-		domains = append(domains, d)
-	}
-	sort.Strings(domains)
+	domains := slices.Sorted(maps.Keys(merged))
 	if len(domains) > maxApprovedEgress {
 		writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the approved-egress cap (max 64) — prune the list first")
 		return

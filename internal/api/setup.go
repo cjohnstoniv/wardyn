@@ -4,14 +4,17 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -413,12 +416,10 @@ func subscriptionLLMDetail(tok subscription.Token, peekErr error, injectEnabled 
 func llmCeilingAdmits(ceiling types.RunPolicySpec, p llmProvider, hasKey, hasSub bool) bool {
 	if hasKey {
 		hostAllowed := ceiling.AllowAllEgress || domainAllowedExact(ceiling.AllowedDomains, p.host)
-		if hostAllowed {
-			for _, g := range ceiling.EligibleGrants {
-				if g.Kind == types.GrantAPIKey && !g.RequiresApproval {
-					return true
-				}
-			}
+		if hostAllowed && slices.ContainsFunc(ceiling.EligibleGrants, func(g types.GrantSpec) bool {
+			return g.Kind == types.GrantAPIKey && !g.RequiresApproval
+		}) {
+			return true
 		}
 	}
 	if hasSub && p.host == "api.anthropic.com" && ceilingBlessesClaudeCreds(ceiling) && anthropicReachable(&ceiling) {
@@ -558,7 +559,8 @@ func isConventionNodeOnlyImage(ref string) bool {
 // secret names, and per-backend composer readiness — capability disclosure that
 // must never appear on the public /healthz.
 //
-//nolint:funlen,gocyclo,gocognit // Deliberate: one linear checklist that computes EVERY /setup/status readiness item in reading order (DB, runner, composer, LLM cred, workspaces, …); splitting it would scatter the checklist that operators and the wizard read as one unit. Next candidate if it grows: one helper per checklist item.
+// The handler gathers state; every checklist row is a small pure function below
+// (one per item, in the order the wizard renders them).
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -575,31 +577,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		authMode = "disabled"
 	}
 
-	// runner: copy handleHealthz's Capabilities pattern (nil Runner => "none",
-	// empty classes). Driver is the runner's Name(), classes/substrates come from
-	// the live Capabilities.
-	rnr := SetupRunner{Driver: "none", ConfinementClasses: []string{}}
-	if s.cfg.Runner != nil {
-		rnr.Driver = s.cfg.Runner.Name()
-		if c, err := s.cfg.Runner.Capabilities(ctx); err == nil {
-			for _, cc := range c.ConfinementClasses {
-				rnr.ConfinementClasses = append(rnr.ConfinementClasses, string(cc))
-			}
-			if len(c.Resolved) > 0 {
-				rnr.ConfinementSubstrates = make(map[string]string, len(c.Resolved))
-				for k, v := range c.Resolved {
-					rnr.ConfinementSubstrates[string(k)] = v
-				}
-			}
-		}
-	}
-	hasCC2Plus := false
-	for _, cc := range rnr.ConfinementClasses {
-		if cc != "CC1" {
-			hasCC2Plus = true
-			break
-		}
-	}
+	rnr := setupRunnerInfo(ctx, s.cfg.Runner)
 
 	// composer: enablement + boot-snapshot backends.
 	comp := SetupComposer{Backends: s.cfg.ComposerBackends}
@@ -611,38 +589,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		comp.Default = s.cfg.Composer.Default()
 	}
 
-	// providers: resident coding-agent CLIs. Peek the resident Claude subscription
-	// OAuth token (read-only; never refreshes) so we can label the claude row's
-	// auth mode and enrich the LLM provenance with fresh/expired + inject wording.
-	// Skipped when no subscription provider is wired (tests / unconfigured host).
-	provs := setup.DetectCLIProviders()
-	var subTok subscription.Token
-	var subPeekErr error
-	subWired := s.cfg.SubscriptionToken != nil
-	if subWired {
-		subTok, subPeekErr = s.cfg.SubscriptionToken.Peek()
-	}
-	subOK := subWired && subPeekErr == nil && subTok.Value != ""
-	now := s.cfg.Now()
-
-	providers := make([]SetupProvider, 0, len(provs))
-	var claudeDetail string // subscription-aware detail for a logged-in claude CLI
-	for _, p := range provs {
-		sp := SetupProvider{
-			Tool: p.Tool, Installed: p.Installed, LoggedIn: p.LoggedIn, LoginDetectedVia: p.LoginVia,
-		}
-		if p.Tool == "claude" && subWired {
-			// auth_mode "subscription" iff a subscription OAuth token is present
-			// (fresh OR expired — freshness is carried in the detail, not the mode).
-			if subOK {
-				sp.AuthMode = "subscription"
-			}
-			if p.LoggedIn {
-				claudeDetail = subscriptionLLMDetail(subTok, subPeekErr, s.subscriptionInjectEnabled(), p.LoginVia, p.BinPath, now)
-			}
-		}
-		providers = append(providers, sp)
-	}
+	providers, claudeDetail := s.setupProviders()
 
 	// secrets: names only (reserved excluded); github_app iff both App secrets present.
 	secretNames := []string{}
@@ -680,151 +627,35 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// winning signal (not a change to llmProvenance's own priority order) so a
 	// Bedrock-only operator still sees "LLM access: ok" without touching the
 	// existing CLI/composer/secret-name signals or their tests.
-	// AWSMount mirrors resolveBedrockAuth's opt-in host-mode path: BedrockAWSConfigDir
-	// set AND the dir still exists (stat it so a since-deleted ~/.aws doesn't read ready).
-	awsMount := false
-	if s.cfg.BedrockAWSConfigDir != "" {
-		if st, err := os.Stat(s.cfg.BedrockAWSConfigDir); err == nil && st.IsDir() {
-			awsMount = true
-		}
-	}
-	bedrock := SetupBedrock{
-		Region:        s.cfg.BedrockRegion,
-		Model:         s.cfg.BedrockModel,
-		CredsPresent:  present[bedrockAccessKeyIDSecret] && present[bedrockSecretAccessKeySecret],
-		AWSMount:      awsMount,
-		BearerPresent: present[bedrockAPIKeySecret],
-	}
-	bedrock.Ready = bedrock.ready()
-	if llmDetail == "" && bedrock.ready() {
+	bedrock := s.setupBedrock(present)
+	if llmDetail == "" && bedrock.Ready {
 		llmDetail = fmt.Sprintf(
 			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",
 			bedrock.Region, bedrock.Model, bedrock.credSourceDesc())
 	}
 
-	// Wardyn-managed subscription (container-login setup-token): a compose-mode
-	// LLM-access source with no resident host login. Presence-only; folded in as an
-	// ADDITIONAL winning signal so a managed-only operator reads "LLM access: ok"
-	// without changing llmProvenance's own priority order or its tests.
-	var harnessCreds []SetupHarness
-	if blob, ok, berr := s.readManagedBlob(ctx, "anthropic"); berr == nil && ok {
-		aging := s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging
-		harnessCreds = append(harnessCreds, SetupHarness{
-			Provider: "anthropic", Captured: true,
-			CapturedAt: blob.CapturedAt.Format(time.RFC3339), Aging: aging, SourceRunID: blob.SourceRunID,
-		})
-		if llmDetail == "" {
-			llmDetail = "A Wardyn-managed Claude subscription token (captured via container login) is injected proxy-side into every run."
-		}
+	harnessCreds, managedDetail := s.setupHarnessCreds(ctx)
+	if llmDetail == "" {
+		llmDetail = managedDetail
 	}
-	// AWS SSO (containerized login) — reports TRUE expiry, not an age heuristic.
-	// Not folded into llmDetail: it credentials Bedrock specifically, and the
-	// bedrock_provider check already owns that story.
-	if blob, ok, berr := s.readAWSSSOBlob(ctx); berr == nil && ok {
-		now := s.cfg.Now().UTC()
-		harnessCreds = append(harnessCreds, SetupHarness{
-			Provider: awsSSOProvider, Captured: true,
-			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
-			ExpiresAt:   blob.ExpiresAt.Format(time.RFC3339),
-			Expired:     blob.expired(now),
-			Renewable:   blob.RefreshToken != "",
-			SourceRunID: blob.SourceRunID,
-		})
-	}
-	llmReady := llmDetail != ""
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
 	// they cannot clear.
-	checks := []SetupCheck{}
-
-	switch {
-	case rnr.Driver == "none" || len(rnr.ConfinementClasses) == 0:
-		checks = append(checks, SetupCheck{
-			ID: "runner", Label: "Sandbox runner", Status: "fail",
-			Detail: "No sandbox runner is configured, so runs cannot launch.",
-			Fix:    "Start wardynd with -runner docker (built with -tags docker) so runs are confined and executed.",
-		})
-	case hasCC2Plus:
-		labeled := make([]string, len(rnr.ConfinementClasses))
-		for i, c := range rnr.ConfinementClasses {
-			labeled[i] = tierLabel(types.ConfinementClass(c))
-		}
-		checks = append(checks, SetupCheck{
-			ID: "runner", Label: "Sandbox runner", Status: "ok",
-			Detail: "Runner live with the Wall tier or stronger (" + strings.Join(labeled, ", ") + ").",
-		})
-	default:
-		checks = append(checks, SetupCheck{
-			ID: "runner", Label: "Sandbox runner", Status: "info",
-			Detail: "Only the Fence tier (weakest — a shared-kernel container) is available on this host; runs work but with the lowest isolation.",
-			Fix:    "Unlock the Wall or Vault tier: run `wardyn setup wall` (or `wardyn setup vault`) on the host — it detects your OS/Docker setup and prints the exact steps.",
-		})
+	checks := []SetupCheck{
+		runnerCheck(rnr),
+		agentImageCheck(s.cfg.AgentImages),
+		llmProviderCheck(llmDetail),
 	}
-
-	checks = append(checks, agentImageCheck(s.cfg.AgentImages))
-
-	if llmReady {
-		checks = append(checks, SetupCheck{
-			ID: "llm_provider", Label: "LLM access", Status: "ok",
-			Detail: llmDetail,
-		})
-	} else {
-		// INFO, not a warning: a model/harness provider is OPTIONAL. It's only
-		// needed to run an agent under Wardyn's own harness or to enable the AI Run
-		// Composer — a plain governed run (bring-your-own-container / task_mode=exec,
-		// or an interactive run you drive) needs no model. So "no model" is a
-		// deliberate, non-blocking state, never a gap the operator must clear.
-		checks = append(checks, SetupCheck{
-			ID: "llm_provider", Label: "LLM access", Status: "info",
-			Detail: "No model/harness provider configured (optional): needed only for agent-harness runs or the AI Run Composer. Bring-your-own-container and interactive runs work without one.",
-			Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Getting Started → Model), or bind creds to a workspace/container.",
-		})
-	}
-
-	// bedrock_provider: surfaced only once the operator has touched ANY Bedrock
-	// knob — silent otherwise, so the overwhelming majority who never use AWS
-	// aren't shown an irrelevant row. ok when fully wired; warn when partially
-	// configured (a real gap worth fixing); the fully-unconfigured case adds no
-	// check at all.
-	if bedrock.configured() {
-		if bedrock.ready() {
-			checks = append(checks, SetupCheck{
-				ID: "bedrock_provider", Label: "AWS Bedrock", Status: "ok",
-				Detail: fmt.Sprintf("Bedrock is configured (region %s, model %s) for Claude runs via %s.", bedrock.Region, bedrock.Model, bedrock.credSourceDesc()),
-			})
-		} else {
-			var missing []string
-			if bedrock.Region == "" {
-				missing = append(missing, "-bedrock-region")
-			}
-			if bedrock.Model == "" {
-				missing = append(missing, "-bedrock-model")
-			}
-			if !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent {
-				missing = append(missing, "a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, or aws-access-key-id + aws-secret-access-key secrets")
-			}
-			checks = append(checks, SetupCheck{
-				ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-				Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
-				Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
-			})
-		}
+	if chk, ok := bedrockProviderCheck(bedrock); ok {
+		checks = append(checks, chk)
 	}
 
 	// composer_llm_ceiling: a credential is present but does the DEFAULT POLICY
 	// ceiling actually let a COMPOSED run use it? Catches the "everything green, first
 	// run 404s" trap where WARDYN_DEFAULT_POLICY (e.g. demo.json/default.json) carries
 	// no api_key grant. A resident Claude CLI login signals the subscription path.
-	hasClaudeSub := false
-	claudeLoginVia := ""
-	for _, p := range providers {
-		if p.Tool == "claude" && p.LoggedIn {
-			hasClaudeSub = true
-			claudeLoginVia = p.LoginDetectedVia
-			break
-		}
-	}
+	hasClaudeSub, claudeLoginVia := claudeLoginSignal(providers)
 	if chk, ok := composerCeilingCheck(s.cfg.DefaultPolicy, present["anthropic-api-key"], present["openai-api-key"], hasClaudeSub); ok {
 		checks = append(checks, chk)
 	}
@@ -844,81 +675,25 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if comp.Enabled {
-		checks = append(checks, SetupCheck{
-			ID: "composer", Label: "AI Run Composer", Status: "ok",
-			Detail: "The AI Run Composer is enabled (default backend: " + comp.Default + ").",
-		})
-	} else {
-		checks = append(checks, SetupCheck{
-			ID: "composer", Label: "AI Run Composer", Status: "info",
-			Detail: "The AI Run Composer is not enabled (optional); runs can still be configured manually.",
-			Fix:    "Set -composer-config / WARDYN_COMPOSER_CONFIG to enable natural-language run composition.",
-		})
-	}
+	checks = append(checks, composerCheck(comp), ageKeyCheck(s.cfg.AgeKeyDurable),
+		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
-	if s.cfg.AgeKeyDurable {
-		checks = append(checks, SetupCheck{
-			ID: "age_key", Label: "Secret store durability", Status: "ok",
-			Detail: "The secret store age key is durable; stored secrets survive a restart.",
-		})
-	} else {
-		checks = append(checks, SetupCheck{
-			ID: "age_key", Label: "Secret store durability", Status: "warn",
-			Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
-			Fix:    "Generate a durable key with `wardynd -gen-age-key` and set it as WARDYN_AGE_KEY (or -age-key).",
-		})
-	}
-
-	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
-
-	// site_config: whether an operator-wide corporate baseline (upstream proxy,
-	// artifact-registry overrides, default SCM hosts) has been authored yet.
-	// Always "info" — it is optional and skippable, never a blocking gate.
 	if s.cfg.Store != nil {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			configured := sc.UpstreamProxySecretRef != "" || len(sc.ArtifactOverrides) > 0 || len(sc.ScmHosts) > 0
-			if configured {
-				checks = append(checks, SetupCheck{
-					ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-					Detail: "An operator-wide site config is set (upstream proxy / artifact-registry overrides / SCM hosts); every run inherits it.",
-				})
-			} else {
-				checks = append(checks, SetupCheck{
-					ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-					Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
-					Fix:    "Set one via PUT /api/v1/site-config (or the Host Proxy / Artifact Redirect setup steps).",
-				})
-			}
-			checks = append(checks, artifactRepoCheck(sc))
+			checks = append(checks, siteConfigCheck(sc), artifactRepoCheck(sc))
 		}
 	}
 
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
+	checks = append(checks, platformChecks(plat)...)
 
-	// Platform info rows (permanent, non-fixable => "info").
-	if plat.WSL {
-		checks = append(checks, SetupCheck{
-			ID: "platform_wsl", Label: "WSL networking", Status: "info", Platform: "wsl",
-			Detail: "Running under WSL2: host<->sandbox networking is split. Reach the UI from Windows via localhost port-forwarding, and bind wardynd to a WSL-reachable address. With Docker Desktop's default NAT networking, sandbox->wardynd callbacks don't route in host mode — workspace Verify results never report and Record captures land empty.",
-			Fix:    "Enable WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then `wsl --shutdown`), or run the containerized stack (`make compose-up`) where callbacks route in-network.",
-		})
-	}
-	if plat.OS == "darwin" {
-		checks = append(checks, SetupCheck{
-			ID: "platform_macos", Label: "macOS virtualization", Status: "info", Platform: "darwin",
-			Detail: "macOS has no /dev/kvm; the Vault tier (CC3, hardware-virtualized) is unavailable — runs use container isolation.",
-		})
-	}
-
-	// has_runs: cheap existence check via the store.
-	// reuses ListRuns (fine for a first-run wizard); a dedicated
-	// COUNT(*)/EXISTS is the upgrade if run volume ever makes this scan matter.
+	// has_runs: cheap existence check via the store. reuses ListRuns (fine for a
+	// first-run wizard); a dedicated COUNT(*)/EXISTS is the upgrade if run volume
+	// ever makes this scan matter.
 	hasRuns := false
 	if s.cfg.Store != nil {
-		if runs, err := s.cfg.Store.ListRuns(ctx); err == nil && len(runs) > 0 {
-			hasRuns = true
-		}
+		runs, err := s.cfg.Store.ListRuns(ctx)
+		hasRuns = err == nil && len(runs) > 0
 	}
 
 	// ready: CONSERVATIVE — false when the runner is nil / has no live class, so
@@ -943,6 +718,134 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Deployment: SetupDeployment{HostLike: deploymentHostLike(providers)},
 		Harness:    harnessCreds,
 	})
+}
+
+// setupProviders detects the resident coding-agent CLIs and returns them plus
+// the subscription-aware detail for a logged-in claude CLI ("" when there is
+// none). It peeks the resident Claude subscription OAuth token (read-only; never
+// refreshes) so the claude row can carry auth_mode "subscription" — set whenever
+// a token is present, fresh OR expired, because freshness belongs in the detail,
+// not the mode. Skipped when no subscription provider is wired (tests /
+// unconfigured host).
+func (s *Server) setupProviders() ([]SetupProvider, string) {
+	var subTok subscription.Token
+	var subPeekErr error
+	subWired := s.cfg.SubscriptionToken != nil
+	if subWired {
+		subTok, subPeekErr = s.cfg.SubscriptionToken.Peek()
+	}
+	subOK := subWired && subPeekErr == nil && subTok.Value != ""
+
+	provs := setup.DetectCLIProviders()
+	providers := make([]SetupProvider, 0, len(provs))
+	claudeDetail := ""
+	for _, p := range provs {
+		sp := SetupProvider{
+			Tool: p.Tool, Installed: p.Installed, LoggedIn: p.LoggedIn, LoginDetectedVia: p.LoginVia,
+		}
+		if p.Tool == "claude" && subWired {
+			if subOK {
+				sp.AuthMode = "subscription"
+			}
+			if p.LoggedIn {
+				claudeDetail = subscriptionLLMDetail(subTok, subPeekErr, s.subscriptionInjectEnabled(), p.LoginVia, p.BinPath, s.cfg.Now())
+			}
+		}
+		providers = append(providers, sp)
+	}
+	return providers, claudeDetail
+}
+
+// claudeLoginSignal reports whether a resident claude CLI is logged in (the
+// subscription-path signal) and how that login was detected.
+func claudeLoginSignal(providers []SetupProvider) (bool, string) {
+	for _, p := range providers {
+		if p.Tool == "claude" && p.LoggedIn {
+			return true, p.LoginDetectedVia
+		}
+	}
+	return false, ""
+}
+
+// setupBedrock reports Bedrock readiness: region/model are boot-time config
+// (non-secret, safe to echo to the UI) and CredsPresent mirrors
+// resolveBedrockAuth's secret-name check — presence, never the value. AWSMount
+// mirrors resolveBedrockAuth's opt-in host-mode path: BedrockAWSConfigDir set AND
+// the dir still exists (stat it, so a since-deleted ~/.aws doesn't read ready).
+func (s *Server) setupBedrock(present map[string]bool) SetupBedrock {
+	awsMount := false
+	if s.cfg.BedrockAWSConfigDir != "" {
+		st, err := os.Stat(s.cfg.BedrockAWSConfigDir)
+		awsMount = err == nil && st.IsDir()
+	}
+	b := SetupBedrock{
+		Region:        s.cfg.BedrockRegion,
+		Model:         s.cfg.BedrockModel,
+		CredsPresent:  present[bedrockAccessKeyIDSecret] && present[bedrockSecretAccessKeySecret],
+		AWSMount:      awsMount,
+		BearerPresent: present[bedrockAPIKeySecret],
+	}
+	b.Ready = b.ready()
+	return b
+}
+
+// setupHarnessCreds reports the credentials captured by a containerized login,
+// plus the llm-access detail the MANAGED subscription contributes ("" when there
+// is none) — a compose-mode LLM source with no resident host login, folded in by
+// the caller as an ADDITIONAL winning signal so a managed-only operator reads
+// "LLM access: ok" without changing llmProvenance's own priority order. The AWS
+// SSO entry is deliberately NOT folded in: it credentials Bedrock specifically,
+// and the bedrock_provider check already owns that story. It reports TRUE expiry
+// rather than the managed token's age heuristic.
+func (s *Server) setupHarnessCreds(ctx context.Context) ([]SetupHarness, string) {
+	var out []SetupHarness
+	managedDetail := ""
+	if blob, ok, err := s.readManagedBlob(ctx, "anthropic"); err == nil && ok {
+		out = append(out, SetupHarness{
+			Provider: "anthropic", Captured: true,
+			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
+			Aging:       s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging,
+			SourceRunID: blob.SourceRunID,
+		})
+		managedDetail = "A Wardyn-managed Claude subscription token (captured via container login) is injected proxy-side into every run."
+	}
+	if blob, ok, err := s.readAWSSSOBlob(ctx); err == nil && ok {
+		out = append(out, SetupHarness{
+			Provider: awsSSOProvider, Captured: true,
+			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
+			ExpiresAt:   blob.ExpiresAt.Format(time.RFC3339),
+			Expired:     blob.expired(s.cfg.Now().UTC()),
+			Renewable:   blob.RefreshToken != "",
+			SourceRunID: blob.SourceRunID,
+		})
+	}
+	return out, managedDetail
+}
+
+// setupRunnerInfo reports the live runner selection for /setup/status, copying
+// handleHealthz's Capabilities pattern: a nil runner (or one whose Capabilities
+// call fails) reads honestly as "none" with no classes rather than claiming
+// isolation this host cannot deliver.
+func setupRunnerInfo(ctx context.Context, rn runner.Runner) SetupRunner {
+	out := SetupRunner{Driver: "none", ConfinementClasses: []string{}}
+	if rn == nil {
+		return out
+	}
+	out.Driver = rn.Name()
+	c, err := rn.Capabilities(ctx)
+	if err != nil {
+		return out
+	}
+	for _, cc := range c.ConfinementClasses {
+		out.ConfinementClasses = append(out.ConfinementClasses, string(cc))
+	}
+	if len(c.Resolved) > 0 {
+		out.ConfinementSubstrates = make(map[string]string, len(c.Resolved))
+		for k, v := range c.Resolved {
+			out.ConfinementSubstrates[string(k)] = v
+		}
+	}
+	return out
 }
 
 // scmProviderCheck grades the SCM credential posture against the safest-path
@@ -1094,15 +997,13 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 			Fix:    "Set artifact_overrides via PUT /api/v1/site-config (or the Artifact Redirect setup step).",
 		}
 	}
-	ecos := make([]string, 0, len(sc.ArtifactOverrides))
+	ecos := slices.Sorted(maps.Keys(sc.ArtifactOverrides))
 	tokened := 0
-	for eco, ov := range sc.ArtifactOverrides {
-		ecos = append(ecos, eco)
+	for _, ov := range sc.ArtifactOverrides {
 		if ov.TokenSecretRef != "" {
 			tokened++
 		}
 	}
-	sort.Strings(ecos)
 	detail := "Redirecting " + strings.Join(ecos, ", ") + " to a corporate mirror; every run's egress substitutes the corp host for those public registries."
 	if tokened > 0 {
 		detail += fmt.Sprintf(" %d with a token injected proxy-side (the sandbox never holds it).", tokened)

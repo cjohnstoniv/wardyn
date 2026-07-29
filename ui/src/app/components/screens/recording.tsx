@@ -34,8 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { AgentBadge, ConfinementChip } from "../wardyn/primitives";
-import { RunStatusBadge } from "../wardyn/run-status-badge";
+import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -242,7 +241,7 @@ export function RecordingScreen() {
                     <SelectItem value="all">Outcome · All</SelectItem>
                     {stateOptions.map((s) => (
                       <SelectItem key={s} value={s}>
-                        <RunStatusBadge state={s} />
+                        <RunStateBadge state={s} />
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -383,7 +382,7 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2.5">
           <ConfinementChip value={run.confinement_class} />
-          <RunStatusBadge state={run.state} />
+          <RunStateBadge state={run.state} />
           <Mono>{fmtBytes(bytes)}</Mono>
           <span className="text-xs text-muted-foreground" title={run.created_at}>
             {relativeTime(run.created_at)}

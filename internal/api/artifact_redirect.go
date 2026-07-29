@@ -7,7 +7,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -83,11 +84,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	// Dedupe token injection by corp HOST — one Artifactory commonly backs several
 	// ecosystems on different paths. Deterministic: iterate ecosystems sorted so a
 	// shared host with divergent token refs resolves first-wins stably.
-	ecos := make([]string, 0, len(sc.ArtifactOverrides))
-	for eco := range sc.ArtifactOverrides {
-		ecos = append(ecos, eco)
-	}
-	sort.Strings(ecos)
+	ecos := slices.Sorted(maps.Keys(sc.ArtifactOverrides))
 	seenHost := map[string]bool{}
 	for _, eco := range ecos {
 		ov := sc.ArtifactOverrides[eco]
@@ -145,11 +142,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 // base64 carries arbitrary file bytes (XML/TOML/newlines) through the env var and
 // out of any shell parsing.
 func encodeArtifactConfig(files map[string]string) string {
-	paths := make([]string, 0, len(files))
-	for p := range files {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
+	paths := slices.Sorted(maps.Keys(files))
 	var b strings.Builder
 	for i, p := range paths {
 		if i > 0 {

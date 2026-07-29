@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import type { ApprovalRequest } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
+import { usePoll } from "../../lib/use-poll";
 import { Button } from "../ui/button";
 import { Mono } from "./code-block";
 import { SectionLabel } from "./primitives";
@@ -56,11 +57,11 @@ export function LiveApprovals({
     }
   }, [runId]);
 
+  // usePoll drives the BACKGROUND refreshes only; the initial load is ours.
   React.useEffect(() => {
     void refresh();
-    const t = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(t);
   }, [refresh]);
+  usePoll(refresh, POLL_MS, false);
 
   const decide = async (a: ApprovalRequest, approve: boolean) => {
     const host = String((a.requested_scope?.host as string) ?? "");

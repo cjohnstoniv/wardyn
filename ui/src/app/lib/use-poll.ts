@@ -6,7 +6,7 @@
 import * as React from "react";
 
 // usePoll — a small auto-refresh primitive. Invokes `fn` every `intervalMs`
-// while `paused` is false, so a "live" board (the Fleet view) never goes stale.
+// while `paused` is false, so a "live" view (the Runs board, ~3s) never goes stale.
 //
 // Design notes:
 //  - The latest `fn` is read through a ref, so the interval doesn't reset (and

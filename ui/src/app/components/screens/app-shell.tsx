@@ -93,8 +93,8 @@ function initials(principal: string): string {
 const READINESS_POLL_MS = 15000;
 
 // Grouped sidebar nav (redesign): OPERATE / CONFIGURE / FORENSICS, plus a
-// pinned "Getting started" entry. Fleet is intentionally NOT here — it stays
-// routable at /fleet but is retired from the nav in a later phase.
+// pinned "Getting started" entry. Fleet is intentionally NOT here — the board
+// was merged into Runs and its route removed.
 interface NavItem {
   to: string;
   label: string;

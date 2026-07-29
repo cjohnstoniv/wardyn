@@ -338,20 +338,18 @@ type Config struct {
 	ScanAIAdvisor func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
 }
 
-// ComponentInfo describes one pluggable seam's selection for /healthz. Selected
-// is ALWAYS the actual running implementation; RecommendedProduction is the
-// standard Wardyn recommends converging to and may differ from Selected (and even
-// from the shipped default — the honest recommended-vs-shipped split documented
-// in docs/PLUGGABILITY.md). Source is "default" or "configured".
+// ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
+// facts only: Selected is ALWAYS the actual running implementation. The
+// recommended-vs-shipped split is prose and lives in docs/PLUGGABILITY.md +
+// ROADMAP.md. Source is "default" or "configured".
 type ComponentInfo struct {
 	Selected string `json:"selected"`
 	// Available lists every implementation self-registered in this build's seam
 	// registry (so /healthz truthfully shows what THIS binary can run — e.g. a
 	// tagless build advertises sandbox.available=[]). Empty for seams without a
 	// registry (policy_engine today).
-	Available             []string `json:"available,omitempty"`
-	RecommendedProduction string   `json:"recommended_production,omitempty"`
-	Source                string   `json:"source,omitempty"`
+	Available []string `json:"available,omitempty"`
+	Source    string   `json:"source,omitempty"`
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -704,9 +702,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// "CC3":"oci/kata-qemu") — honest visibility into the pluggable substrate.
 		"confinement_classes":    caps,
 		"confinement_substrates": substrates,
-		// components reports the SELECTED pluggable-component impl per seam plus
-		// the recommended production default. selected is always the actual
-		// running impl; recommended_production may differ (honest advertisement).
+		// components reports the SELECTED pluggable-component impl per seam, plus
+		// what this build's registries actually hold. Runtime facts only.
 		"components": s.cfg.Components,
 		// ebpf_groundtruth is the honest health of the SECOND audit stream. It
 		// is driven by the most recent kernel.sensor.heartbeat: healthy only when

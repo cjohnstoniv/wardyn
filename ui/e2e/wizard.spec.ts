@@ -24,38 +24,23 @@
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
 
-// The AI Run Composer is enabled (the old features.ts flag was deleted). With
-// composer backends configured (scripts/e2e-backend.sh), "New run" opens the
-// chooser, and the manual wizard is reached via "Configure manually". The
-// dual-path helper below keeps the no-composer branch for safety.
-const COMPOSER_UI_ENABLED = true;
-
 // The wizard renders inside a Dialog; scope everything to it so step copy never
 // collides with the screen behind it.
 function wizard(page: Page): Locator {
   return page.getByRole("dialog");
 }
 
-// Open the shell top-bar "New run" dialog. With the AI composer flag off
-// (features.ts), new-run-dialog.tsx skips the /composer/backends probe and the
-// chooser entirely and opens straight into the manual wizard's Basics step. If
-// the flag is ever flipped on, the chooser returns — keep that path too.
+// Open the shell top-bar "New run" dialog. With composer backends configured
+// (scripts/e2e-backend.sh), "New run" opens the chooser and the manual wizard is
+// reached via "Configure manually".
 async function openWizard(page: Page): Promise<Locator> {
   await gotoConsole(page);
-  if (COMPOSER_UI_ENABLED) {
-    const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
-    await page.getByRole("button", { name: "New run" }).click();
-    await backends;
-    const dlg = wizard(page);
-    await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
-    await dlg.getByRole("button", { name: /Configure manually/ }).click();
-    // Step 1 is Basics — its onboarded-Workspaces field proves we're on it.
-    await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
-    return dlg;
-  }
+  const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
   await page.getByRole("button", { name: "New run" }).click();
+  await backends;
   const dlg = wizard(page);
   await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
+  await dlg.getByRole("button", { name: /Configure manually/ }).click();
   // Step 1 is Basics — its onboarded-Workspaces field proves we're on it.
   await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
   return dlg;

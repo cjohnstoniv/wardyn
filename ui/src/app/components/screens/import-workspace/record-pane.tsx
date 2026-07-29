@@ -16,7 +16,6 @@
 import * as React from "react";
 import {
   Check,
-  Copy,
   Info,
   Loader2,
   Radio,
@@ -28,7 +27,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
-import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
+import { CopyButton } from "../../wardyn/copy-button";
 import { recordResult, recordSessions, verifyKeyOf, policyNameFor, isEmptyCapture, newEgressHosts } from "./import-types";
 import { Observations } from "../profile-review";
 import { AttachTerminal } from "../../attach-terminal";
@@ -745,16 +744,14 @@ function HonestyNote({ text }: { text: string }) {
 // Exported so the demo-sandbox screen can reuse the exact same pill for its
 // numbered curl instructions instead of duplicating it.
 export function CopyPill({ text }: { text: string }) {
-  const { copied, copy } = useCopyToClipboard();
   return (
-    <button
-      type="button"
-      onClick={() => copy(text)}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2/60 px-2 py-0.5 hover:text-foreground"
-      aria-label="Copy command"
+    <CopyButton
+      text={text}
+      label="Copy command"
+      iconClassName="size-3"
+      className="gap-1.5 rounded-md border border-border bg-surface-2/60 px-2 py-0.5 hover:text-foreground"
     >
       <Mono className="text-foreground">{text}</Mono>
-      {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-    </button>
+    </CopyButton>
   );
 }

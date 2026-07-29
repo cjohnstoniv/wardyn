@@ -372,32 +372,14 @@ func VetHost(host string, res resolver) IPGuardResult {
 	return IPGuardResult{IP: ips[0]}
 }
 
-// blockedV4 / blockedV6 are the unconditionally-denied CIDR ranges:
-// RFC1918 private space, loopback, link-local, the cloud metadata address
-// (169.254.169.254 is inside 169.254.0.0/16), CGNAT, and IPv6 ULA/loopback/
-// link-local. These are denied regardless of policy.
-var (
-	blockedV4 []*net.IPNet
-	blockedV6 []*net.IPNet
-)
-
-func init() {
-	// Shared private/reserved core (internal/ipguard) + the proxy-only entries:
-	// unlike the composer transport (which spares loopback under its operator
-	// allowPrivate escape hatch), the proxy denies loopback/link-local always,
-	// so those ranges live in ITS table.
-	blockedV4 = append(ipguard.MustCIDRs(
-		"127.0.0.0/8",    // loopback
-		"169.254.0.0/16", // link-local incl. 169.254.169.254 metadata
-	), ipguard.PrivateReservedV4...)
-	blockedV6 = append(ipguard.MustCIDRs(
-		"::1/128",   // loopback
-		"fe80::/10", // link-local
-		"::/128",    // unspecified
-	), ipguard.UniqueLocalV6...)
-}
-
-// isBlockedIP reports whether ip is in an unconditionally-denied range.
+// isBlockedIP reports whether ip is in an unconditionally-denied range:
+// loopback, link-local (incl. the 169.254.169.254 metadata address), multicast,
+// the unspecified address, RFC1918/ULA private space and the reserved ranges in
+// internal/ipguard. Denied regardless of policy — unlike the composer transport
+// (which spares loopback under its operator allowPrivate escape hatch), the
+// proxy denies loopback/link-local ALWAYS, which is exactly what the net.IP
+// predicates below give (they cover 127.0.0.0/8, ::1, 169.254.0.0/16, fe80::/10
+// and 0.0.0.0 / :: precisely, so no proxy-local CIDR table is needed on top).
 // IPv4-mapped IPv6 addresses are unwrapped so a "::ffff:127.0.0.1" cannot
 // smuggle a loopback target past the guard.
 func isBlockedIP(ip net.IP) (bool, string) {
@@ -408,18 +390,8 @@ func isBlockedIP(ip net.IP) (bool, string) {
 		ip.IsLinkLocalMulticast() || ip.IsMulticast() {
 		return true, "loopback/link-local/multicast"
 	}
-	if v4 := ip.To4(); v4 != nil {
-		for _, n := range blockedV4 {
-			if n.Contains(v4) {
-				return true, "private/reserved v4 " + n.String()
-			}
-		}
-		return false, ""
-	}
-	for _, n := range blockedV6 {
-		if n.Contains(ip) {
-			return true, "private/reserved v6 " + n.String()
-		}
+	if blocked, why := ipguard.PrivateReserved(ip); blocked {
+		return true, "private/reserved " + why
 	}
 	// NAT64-embedded IPv4 smuggling: inside a NAT64 prefix the low 32 bits ARE a
 	// real IPv4, so 64:ff9b::a9fe:a9fe reaches 169.254.169.254 while To4()==nil.

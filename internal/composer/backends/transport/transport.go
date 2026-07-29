@@ -140,15 +140,6 @@ func (g *Guard) Vet(ctx context.Context, host string) (net.IP, error) {
 	return ips[0], nil
 }
 
-// blockedV4 / blockedV6 are the unconditionally-denied CIDR ranges, shared
-// with the egress proxy via internal/ipguard (loopback, link-local, multicast,
-// and the unspecified address are handled separately via the net.IP predicates
-// so they can stay blocked even under allowPrivate).
-var (
-	blockedV4 = ipguard.PrivateReservedV4
-	blockedV6 = ipguard.UniqueLocalV6
-)
-
 // IsBlocked reports whether ip is in an unconditionally-denied range. IPv4-mapped
 // IPv6 addresses are unwrapped first so a "::ffff:127.0.0.1" cannot smuggle a
 // loopback (or metadata) target past the guard. When allowPrivate is true the
@@ -184,18 +175,12 @@ func IsBlocked(ip net.IP, allowPrivate bool) (bool, string) {
 	if ip.IsLoopback() { // 127.0.0.0/8 and ::1
 		return true, "loopback"
 	}
-	if v4 := ip.To4(); v4 != nil {
-		for _, n := range blockedV4 {
-			if n.Contains(v4) {
-				return true, "private/reserved v4 " + n.String()
-			}
-		}
-		return false, ""
-	}
-	for _, n := range blockedV6 {
-		if n.Contains(ip) {
-			return true, "private/reserved v6 " + n.String()
-		}
+	// Private/reserved membership is the table shared with the egress proxy
+	// (internal/ipguard). Loopback, link-local, multicast and the unspecified
+	// address are handled by the net.IP predicates above so they stay blocked
+	// even under allowPrivate.
+	if blocked, why := ipguard.PrivateReserved(ip); blocked {
+		return true, "private/reserved " + why
 	}
 	return false, ""
 }

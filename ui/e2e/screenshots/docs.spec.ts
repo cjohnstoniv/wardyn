@@ -31,7 +31,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navTo, ADMIN_TOKEN } from "../fixtures";
+import { test, expect, gotoConsole, ADMIN_TOKEN } from "../fixtures";
 
 // Self-skip unless driven by scripts/screenshots.sh: a bare `pnpm e2e` runs ALL
 // projects, and without this guard it would overwrite the tracked docs/img PNGs
@@ -89,8 +89,10 @@ async function restagePresentableRuns(page: Page): Promise<void> {
     expect(res.ok(), `POST run "${r.task}" failed (${res.status()})`).toBeTruthy();
   }
 
-  // 2 RUNNING / 1 WAITING_FOR_CONFIRMATION / 2 COMPLETED / 1 PENDING, keyed by
-  // created order (the e2e-backend.sh UPDATE-by-created-order technique).
+  // 1 RUNNING / 2 WAITING_FOR_CONFIRMATION / 2 COMPLETED / 1 PENDING, keyed by
+  // created order (the e2e-backend.sh UPDATE-by-created-order technique). Two
+  // waiting runs on purpose: "Needs your attention" is a two-column grid, and a
+  // single card there leaves half the shot empty background.
   sql(
     `WITH ordered AS (
        SELECT id, row_number() OVER (ORDER BY created_at) AS rn
@@ -99,14 +101,14 @@ async function restagePresentableRuns(page: Page): Promise<void> {
      UPDATE agent_runs a SET state = v.state
      FROM ordered o
      JOIN (VALUES
-       (1,'RUNNING'),(2,'RUNNING'),(3,'WAITING_FOR_CONFIRMATION'),
+       (1,'RUNNING'),(2,'WAITING_FOR_CONFIRMATION'),(3,'WAITING_FOR_CONFIRMATION'),
        (4,'COMPLETED'),(5,'COMPLETED'),(6,'PENDING')
      ) AS v(rn,state) ON v.rn = o.rn
      WHERE a.id = o.id`,
   );
 
-  // One PENDING approval bound to the WAITING run so the board's attention badge
-  // and the Approvals count read true (INSERT shape from approvals.spec.ts).
+  // One PENDING approval bound to the first WAITING run so the board's attention
+  // badge and the Approvals count read true (INSERT shape from approvals.spec.ts).
   const waitingId = sql(
     "SELECT id FROM agent_runs WHERE state = 'WAITING_FOR_CONFIRMATION' ORDER BY created_at LIMIT 1",
   );
@@ -133,19 +135,57 @@ test.describe("Docs screenshots", () => {
     await page.addInitScript(() => {
       try {
         localStorage.setItem("wardyn-theme", "dark");
+        // /setup renders the WELCOME hero ("Run anything. Keep your keys.") until
+        // this flag is set — the funnel only replaces it once the operator clicks
+        // "Get started" (onboarding-screen.tsx GettingStarted). Same pre-seed as
+        // e2e/live/live-fixtures.ts, so the capture lands straight on the funnel.
+        localStorage.setItem("wardyn-onboarding-seen", "1");
       } catch {
         /* private mode — ignore */
       }
     });
   });
 
-  // getting-started.png is NOT captured here: on this none-runner backend the
-  // barrier picker renders a red "No sandbox runner — runs can't launch" fatal
-  // banner with zero tiers ready, which photographs as a broken product. That
-  // hero is captured MANUALLY from a live host-mode instance (make setup, real
-  // docker runner → Fence genuinely Ready, Wall/Vault honestly "Needs setup"),
-  // /setup → "Finish setup", 1440×900 dark — the documented exception to the
-  // scripted set. Re-do it by hand after a visible funnel redesign.
+  // getting-started.png (the README hero): the barrier picker on step 1. This
+  // none-runner backend would photograph as a red "No sandbox runner" card, so
+  // the ONE call the picker reads — GET /setup/status (environment-step.tsx
+  // branches on runner.confinement_classes + platform.kvm) — is served from a
+  // fixture: Fence Ready, Wall + Vault honestly "Needs setup", exactly what a
+  // real single-host install shows. kvm:true keeps Vault at "Needs setup"
+  // rather than "Incompatible here" (that split is a hardware fact).
+  test("getting-started.png — barrier picker", async ({ page }) => {
+    await page.route("**/api/v1/setup/status", (route) =>
+      route.fulfill({
+        json: {
+          ready: true,
+          checks: [],
+          auth: { mode: "local", local_loopback: true },
+          runner: {
+            driver: "docker",
+            confinement_classes: ["CC1"],
+            confinement_substrates: { CC1: "runc" },
+          },
+          composer: { enabled: false, backends: [] },
+          providers: [],
+          secrets: { present: [], github_app: false },
+          age_key: { durable: true },
+          has_runs: false,
+          platform: { os: "linux", wsl: false, kvm: true },
+        },
+      }),
+    );
+    // Straight to /setup: the fixture's has_runs:false arms the first-run gate,
+    // so the console's nav groups are hidden and gotoConsole's Runs link isn't there.
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: "Getting started", level: 1 })).toBeVisible();
+    const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });
+    await expect(matrix.getByText("Ready", { exact: true })).toHaveCount(1);
+    await expect(matrix.getByText("Needs setup", { exact: true })).toHaveCount(2);
+    // The host-status strip and sidebar chip both poll — don't catch "Checking…".
+    await expect(page.getByText(/Checking/)).toHaveCount(0, { timeout: 10_000 });
+    await settle(page);
+    await page.screenshot({ path: path.join(DOCS_IMG, "getting-started.png") });
+  });
 
   // runs-board.png (new): the Runs board after re-staging presentable data.
   test("runs-board.png — populated runs board", async ({ page }) => {
@@ -162,39 +202,4 @@ test.describe("Docs screenshots", () => {
     await page.screenshot({ path: path.join(DOCS_IMG, "runs-board.png") });
   });
 
-  // tier-matrix.png (new): the New Run wizard → Confinement → "Compare all
-  // three" barrier matrix dialog. Navigation is self-contained (no imports from
-  // wizard.spec.ts — a parallel agent is editing it + the wizard's workspace
-  // validation); we only replicate the few selectors we need.
-  test("tier-matrix.png — barrier compare matrix", async ({ page }) => {
-    await gotoConsole(page);
-    const dlg = page.getByRole("dialog");
-
-    // Open "New run". With composer backends seeded (e2e-backend.sh), the chooser
-    // appears first → reach the manual wizard via "Configure manually".
-    const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
-    await page.getByRole("button", { name: "New run" }).click();
-    await backends;
-    await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
-    const manual = dlg.getByRole("button", { name: /Configure manually/ });
-    if (await manual.isVisible().catch(() => false)) await manual.click();
-    await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
-
-    // Attach the seeded `payments` workspace (optional after the parallel wizard
-    // change, but gives nicer data + keeps Next un-gated either way). The option
-    // list renders in a portal OUTSIDE the wizard dialog.
-    await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
-    await page.getByRole("option", { name: /payments/ }).click();
-
-    // Basics → Access → Egress → Confinement (defaults are all valid).
-    for (let i = 0; i < 3; i++) await dlg.getByRole("button", { name: "Next" }).click();
-    await expect(dlg.getByText("Barrier").first()).toBeVisible();
-
-    // Open the tier matrix (step-confinement.tsx "Compare all three →").
-    await dlg.getByRole("button", { name: /Compare all three/ }).click();
-    const matrix = page.getByRole("dialog", { name: /Compare the three barriers/ });
-    await expect(matrix.getByText(/Isolated from your files/).first()).toBeVisible();
-    await settle(page);
-    await page.screenshot({ path: path.join(DOCS_IMG, "tier-matrix.png") });
-  });
 });

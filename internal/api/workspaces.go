@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -343,50 +344,30 @@ const maxApprovedEgress = 64
 // the list lives OUTSIDE the scan-owned profile blob: a rescan can neither
 // widen nor resurrect it. Plain lowercase dotted hosts only.
 func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "workspace")
-	if !ok {
-		return
-	}
-	var req struct {
+	type body struct {
 		Domains []string `json:"domains"`
 	}
-	if !decodeStrict(w, r, &req) {
-		return
-	}
-	if len(req.Domains) > maxApprovedEgress {
-		writeError(w, http.StatusBadRequest, "too many domains (max 64)")
-		return
-	}
-	set := map[string]struct{}{}
-	for _, d := range req.Domains {
-		d = strings.ToLower(strings.TrimSpace(d))
-		if !workspacescan.ValidApprovedHost(d) {
-			writeError(w, http.StatusBadRequest, "invalid domain (plain lowercase host, no scheme/port/wildcard): "+d)
-			return
-		}
-		set[d] = struct{}{}
-	}
-	domains := make([]string, 0, len(set))
-	for d := range set {
-		domains = append(domains, d)
-	}
-	slices.Sort(domains)
-
-	// Scoped single-column write: an approval must never clobber a
-	// concurrently-finishing async repo scan's profile/status.
-	updated, err := s.cfg.Store.SetWorkspaceApprovedEgress(r.Context(), id, domains)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "set approved egress: "+err.Error())
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.egress.approve", id.String(), "success", mustJSON(map[string]any{
-			"domains": domains,
-		})))
-	writeJSON(w, http.StatusOK, updated)
+	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
+		func(req body) ([]string, string) {
+			if len(req.Domains) > maxApprovedEgress {
+				return nil, "too many domains (max 64)"
+			}
+			set := map[string]struct{}{}
+			for _, d := range req.Domains {
+				d = strings.ToLower(strings.TrimSpace(d))
+				if !workspacescan.ValidApprovedHost(d) {
+					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+				}
+				set[d] = struct{}{}
+			}
+			return slices.Sorted(maps.Keys(set)), ""
+		},
+		// Wrapped, not passed as a method value: the store call must not be
+		// resolved until validation has passed.
+		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
+			return s.cfg.Store.SetWorkspaceApprovedEgress(ctx, id, doms)
+		},
+		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
 }
 
 // handleSetWorkspaceLLMCred binds (or clears) the operator-owned model/harness
@@ -395,35 +376,26 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 // binding (applyWorkspaceCreds). Body: a WorkspaceLLMCred; mode="" (or null)
 // clears it. Names/refs only — the secret itself lives in the store.
 func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "workspace")
-	if !ok {
-		return
-	}
-	var req types.WorkspaceLLMCred
-	if !decodeStrict(w, r, &req) {
-		return
-	}
-	if msg := validateWorkspaceLLMCred(&req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-	var cred *types.WorkspaceLLMCred
-	if req.Mode != types.WorkspaceLLMCredNone {
-		cred = &req
-	}
-	updated, err := s.cfg.Store.SetWorkspaceLLMCred(r.Context(), id, cred)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "set workspace llm cred: "+err.Error())
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.llm_cred.set", id.String(), "success", mustJSON(map[string]any{
-			"mode": string(req.Mode),
-		})))
-	writeJSON(w, http.StatusOK, updated)
+	scopedWorkspaceWrite(s, w, r, "workspace.llm_cred.set",
+		func(req types.WorkspaceLLMCred) (*types.WorkspaceLLMCred, string) {
+			if msg := validateWorkspaceLLMCred(&req); msg != "" {
+				return nil, msg
+			}
+			if req.Mode == types.WorkspaceLLMCredNone {
+				return nil, "" // nil clears the binding
+			}
+			return &req, ""
+		},
+		func(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error) {
+			return s.cfg.Store.SetWorkspaceLLMCred(ctx, id, cred)
+		},
+		func(cred *types.WorkspaceLLMCred) map[string]any {
+			mode := types.WorkspaceLLMCredNone
+			if cred != nil {
+				mode = cred.Mode
+			}
+			return map[string]any{"mode": string(mode)}
+		})
 }
 
 // Observed-egress synthesis bounds: scan the most recent runs that reference
@@ -492,11 +464,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 			denied[host] = struct{}{}
 		}
 	}
-	out := make([]string, 0, len(denied))
-	for h := range denied {
-		out = append(out, h)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(denied))
 	writeJSON(w, http.StatusOK, map[string]any{"denied": out, "runs_examined": scanned})
 }
 
@@ -523,45 +491,32 @@ const maxSetupCommands = 32
 // commands RUN (confined) at verify time, so each is validated to a single-line,
 // bounded, control-char-free string, and only known stages are accepted.
 func (s *Server) handleSetSetupCommands(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "workspace")
-	if !ok {
-		return
-	}
-	var req struct {
+	type body struct {
 		Commands []workspacescan.SetupCommand `json:"commands"`
 	}
-	if !decodeStrict(w, r, &req) {
-		return
-	}
-	if len(req.Commands) > maxSetupCommands {
-		writeError(w, http.StatusBadRequest, "too many commands (max 32)")
-		return
-	}
-	for _, c := range req.Commands {
-		if !workspacescan.ValidSetupCommand(c) {
-			writeError(w, http.StatusBadRequest, "invalid setup command (stage must be install|build|test|lint; command single-line ≤512 chars)")
-			return
-		}
-	}
-	blob := mustJSON(req.Commands) // canonical stored form
-	updated, err := s.cfg.Store.SetWorkspaceSetupCommands(r.Context(), id, blob)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "set setup commands: "+err.Error())
-		return
-	}
-	// Counts + stages only in audit — never anything value-shaped.
-	stages := make([]string, 0, len(req.Commands))
-	for _, c := range req.Commands {
-		stages = append(stages, c.Stage)
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.import.setup_commands", id.String(), "success", mustJSON(map[string]any{
-			"count": len(req.Commands), "stages": stages,
-		})))
-	writeJSON(w, http.StatusOK, updated)
+	scopedWorkspaceWrite(s, w, r, "workspace.import.setup_commands",
+		func(req body) ([]workspacescan.SetupCommand, string) {
+			if len(req.Commands) > maxSetupCommands {
+				return nil, "too many commands (max 32)"
+			}
+			for _, c := range req.Commands {
+				if !workspacescan.ValidSetupCommand(c) {
+					return nil, "invalid setup command (stage must be install|build|test|lint; command single-line ≤512 chars)"
+				}
+			}
+			return req.Commands, ""
+		},
+		func(ctx context.Context, id uuid.UUID, cmds []workspacescan.SetupCommand) (types.Workspace, error) {
+			return s.cfg.Store.SetWorkspaceSetupCommands(ctx, id, mustJSON(cmds)) // canonical stored form
+		},
+		func(cmds []workspacescan.SetupCommand) map[string]any {
+			// Counts + stages only in audit — never anything value-shaped.
+			stages := make([]string, 0, len(cmds))
+			for _, c := range cmds {
+				stages = append(stages, c.Stage)
+			}
+			return map[string]any{"count": len(cmds), "stages": stages}
+		})
 }
 
 // handleVerifyWorkspace launches a governed VERIFY run that executes the

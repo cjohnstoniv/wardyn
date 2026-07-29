@@ -3,6 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-@import './fonts.css';
-@import './tailwind.css';
+/* Self-hosted fonts — no external font CDN request (governed-egress product). */
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
+@import 'tailwindcss' source(none);
+@source '../**/*.{js,ts,jsx,tsx}';
+
+@import 'tw-animate-css';
 @import './theme.css';

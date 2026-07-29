@@ -1,29 +1,29 @@
-# golangci-lint configuration — the function-size / complexity gate.
+# golangci-lint configuration — the function-size / complexity gate, plus the
+# structured-logging ratchet.
 #
-# SCOPE (deliberate): this gate enforces exactly one review criterion — no more
-# god-functions — via funlen + gocyclo + gocognit, plus a pathological-line
-# guard (lll). It is NOT the general linter suite: correctness/style linting is
-# covered by `go vet` (both tag sets) and staticcheck in `make lint` /
-# release-check. Do not enable broad defaults here without cleaning the tree
-# under them first.
+# SCOPE (deliberate): this gate enforces two review criteria — no more
+# god-functions (funlen + gocyclo + gocognit, plus a pathological-line guard,
+# lll) and no stdlib `log` in the packages migrated to log/slog (depguard). It is
+# NOT the general linter suite: correctness/style linting is covered by `go vet`
+# (both tag sets) and staticcheck in `make lint` / release-check. Do not enable
+# broad defaults here without cleaning the tree under them first.
 #
 # THRESHOLDS (measured against the whole repo at introduction, 2026-07-16, so
 # the gate lands GREEN at HEAD — they are ratchets, not aspirations):
 #   funlen lines=150 (ignore-comments): the largest legitimate remaining
 #     function measures 141 non-comment lines; the next offenders above 150 are
-#     the three explicitly //nolint'd long-but-linear functions. New code has no
+#     the two explicitly //nolint'd long-but-linear functions. New code has no
 #     business beating the worst of the cleaned-up tree.
 #   funlen statements=100: same shape — worst passing function has ~89.
-#   gocyclo 30: golangci's historical default; everything except the two
-#     //nolint'd pipeline/status functions is ≤30.
-#   gocognit 60 (2x the common 30): only the //nolint'd setup-status checklist
-#     exceeds it. Tightening to 30 today would demand ~13 refactors out of scope.
+#   gocyclo 30: golangci's historical default; everything except the
+#     //nolint'd compose pipeline is ≤30.
+#   gocognit 60 (2x the common 30): nothing in the tree exceeds it today.
+#     Tightening to 30 would demand ~13 refactors out of scope.
 #   lll 350: catches runaway generated-style lines while tolerating this repo's
 #     documented-flag style (long flag usage strings are excluded below).
 #
 # Every //nolint for these linters must carry a reason. Current justified set
-# (grep '//nolint:funlen'): api.handleSetupStatus, api.runComposePipeline,
-# docker.CreateSandbox.
+# (grep '//nolint:funlen'): api.runComposePipeline, docker.CreateSandbox.
 version: "2"
 
 run:
@@ -39,6 +39,7 @@ linters:
     - gocyclo
     - gocognit
     - lll
+    - depguard
   settings:
     funlen:
       lines: 150
@@ -52,6 +53,35 @@ linters:
       min-complexity: 60
     lll:
       line-length: 350
+    depguard:
+      rules:
+        # The daemon/sidecar packages whose operator-facing logging has been
+        # migrated onto log/slog with typed attrs (the pattern in
+        # internal/audit/sink.go) must stay migrated: log.Printf emits an opaque
+        # line an operator cannot filter or ship to a structured sink, so a
+        # single reintroduced call quietly re-opens the hole. Denying the IMPORT
+        # is what makes it airtight — an alias (`import stdlog "log"`) or a
+        # fmt.Fprintf(os.Stderr) workaround slips past a textual scan, but no
+        # file can use the package without importing it. log/slog is a distinct
+        # path and is unaffected.
+        slog-only:
+          # lax + the longer allow prefix: depguard matches package prefixes, so
+          # denying "log" would take "log/slog" with it; the longest match wins.
+          list-mode: lax
+          allow:
+            - log/slog
+          files:
+            - "**/cmd/wardynd/*.go"
+            - "**/cmd/wardyn-tetragon-ingest/*.go"
+            - "**/cmd/wardyn-proxy/*.go"
+            - "**/internal/approval/*.go"
+            - "**/internal/runner/docker/*.go"
+            - "**/internal/api/*.go"
+            - "**/internal/egress/proxy/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: log
+              desc: "use log/slog with typed attrs (slog.String/slog.Int/slog.Duration...) — see internal/audit/sink.go"
   exclusions:
     # Skip generated files (none in-tree today; future-proofing).
     generated: lax

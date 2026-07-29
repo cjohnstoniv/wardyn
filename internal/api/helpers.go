@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -90,14 +91,7 @@ func (s *Server) authSandboxRunUpload(w http.ResponseWriter, r *http.Request, no
 		writeError(w, http.StatusForbidden, notGovernedMsg)
 		return nil, types.AgentRun{}, false
 	}
-	match := false
-	for _, t := range wantTasks {
-		if run.Task == t {
-			match = true
-			break
-		}
-	}
-	if !match {
+	if !slices.Contains(wantTasks, run.Task) {
 		writeError(w, http.StatusForbidden, wrongTaskMsg)
 		return nil, types.AgentRun{}, false
 	}
@@ -147,6 +141,45 @@ func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uu
 		return types.Workspace{}, false
 	}
 	return ws, true
+}
+
+// scopedWorkspaceWrite is the shared body of the operator-owned single-column
+// workspace writes (PUT semantics, full replacement): parse the id, strict-decode
+// the body into T, normalize+validate it into the stored value V (a non-empty
+// message is a 400), write JUST that column so a concurrently-finishing async
+// scan's profile/status is never clobbered, audit, and return the updated
+// workspace. Callers supply only what genuinely differs: normalize, the store
+// setter, and the audit payload — which stays count/shape-only, never
+// value-shaped, for anything that could carry repo content.
+func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Request, action string,
+	normalize func(T) (V, string),
+	set func(context.Context, uuid.UUID, V) (types.Workspace, error),
+	data func(V) map[string]any,
+) {
+	id, ok := parseIDParam(w, r, "id", "workspace")
+	if !ok {
+		return
+	}
+	var req T
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	val, msg := normalize(req)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	updated, err := set(r.Context(), id, val)
+	if notFoundIf(w, err, "workspace") {
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, action+": "+err.Error())
+		return
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		action, id.String(), "success", mustJSON(data(val))))
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // decodeStrict strict-decodes the request body into dst (unknown fields

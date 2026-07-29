@@ -303,8 +303,6 @@ export default function App() {
                 </React.Suspense>
               }
             />
-            {/* Fleet is retired — merged into Runs. Keep the old path working. */}
-            <Route path="/fleet" element={<Navigate to="/runs" replace />} />
             <Route path="*" element={<Navigate to="/runs" replace />} />
           </Route>
         </Route>

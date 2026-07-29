@@ -17,7 +17,8 @@ import {
   StepList,
   useDemoRuns,
 } from "../demos/demo-screen";
-import { policyToYaml, type Demo } from "../demos/demo-catalog";
+import { type Demo } from "../demos/demo-catalog";
+import { YamlBlock } from "../../wardyn/code-block";
 import type { SetupStepId } from "./steps";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -77,12 +78,9 @@ export default function DemoDetail({
           The exact confinement this sandbox launches under — the readable form of a Wardyn policy
           (the canonical on-disk form is JSON, e.g. <code className="font-mono">examples/policies/*.json</code>).
         </p>
-        <pre
-          className="overflow-x-auto rounded-lg border border-border bg-background/70 p-3 font-mono text-xs leading-relaxed text-foreground"
-          data-testid={`demo-policy-${demo.id}`}
-        >
-          {policyToYaml(demo.policy)}
-        </pre>
+        <div data-testid={`demo-policy-${demo.id}`}>
+          <YamlBlock value={demo.policy} />
+        </div>
       </Section>
 
       <Section title="Set up a sandbox like this yourself">

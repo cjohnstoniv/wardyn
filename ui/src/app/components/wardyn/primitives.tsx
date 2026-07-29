@@ -7,11 +7,15 @@ import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
 import {
+  Archive,
   Bot,
   User,
+  Check,
   Cpu,
   Fence,
   BrickWall,
+  ShieldX,
+  Square,
   Vault,
   CircleCheck,
   CircleX,
@@ -115,23 +119,38 @@ function metaFor<T>(table: Record<string, T>, key: string, fallback: NoInfer<T>)
   return (key != null && table[key]) || fallback;
 }
 
-/* ---------- run state ---------- */
-const runStateMeta: Record<string, { tone: Tone; label: string; pulse?: boolean }> = {
+/* ---------- run state ----------
+ * ONE run badge for the board, the table, and the detail header, so the same
+ * state always reads the same way. Live states keep the dot + pulse chip;
+ * terminal outcomes are differentiated by an ICON (C4) instead, and `solid`
+ * (saturated red) is reserved EXCLUSIVELY for Killed — the enforcement outcome,
+ * matching the Audit kill event.
+ */
+const runStateMeta: Record<
+  string,
+  { tone: Tone; label: string; pulse?: boolean; Icon?: React.ElementType; solid?: boolean }
+> = {
   PENDING: { tone: "neutral", label: "Pending" },
   STARTING: { tone: "info", label: "Starting", pulse: true },
   RUNNING: { tone: "success", label: "Running", pulse: true },
   WAITING_FOR_CONFIRMATION: { tone: "warning", label: "Awaiting confirmation", pulse: true },
-  COMPLETED: { tone: "success", label: "Completed" },
-  STOPPED: { tone: "neutral", label: "Stopped" },
-  ARCHIVED: { tone: "neutral", label: "Archived" },
-  FAILED: { tone: "danger", label: "Failed" },
-  KILLED: { tone: "danger", label: "Killed" },
+  COMPLETED: { tone: "success", label: "Completed", Icon: Check },
+  STOPPED: { tone: "neutral", label: "Stopped", Icon: Square },
+  ARCHIVED: { tone: "neutral", label: "Archived", Icon: Archive },
+  FAILED: { tone: "danger", label: "Failed", Icon: CircleX },
+  KILLED: { tone: "danger", label: "Killed", Icon: ShieldX, solid: true },
 };
 
 export function RunStateBadge({ state }: { state: RunState }) {
   const m = metaFor(runStateMeta, state as string, { tone: "neutral", label: String(state) });
   return (
-    <Chip tone={m.tone} dot pulse={m.pulse}>
+    <Chip
+      tone={m.tone}
+      dot={!m.Icon}
+      pulse={m.pulse}
+      className={cn(m.Icon && "gap-1", m.solid && "border-danger bg-danger text-danger-foreground")}
+    >
+      {m.Icon && <m.Icon className="size-3" />}
       {m.label}
     </Chip>
   );

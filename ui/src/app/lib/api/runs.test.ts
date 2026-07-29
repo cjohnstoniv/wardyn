@@ -65,3 +65,39 @@ describe("runs.getGrants — grant-record projection", () => {
     expect(await runs.getGrants("run-4")).toEqual([]);
   });
 });
+
+// runs.createRun() carries an optional compose_session_id — correlates the
+// launched run's audit row back to the compose conversation that produced it.
+describe("runs.createRun() — compose_session_id", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  it("sends compose_session_id when the run was launched from a compose session", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: "run-1" }));
+    await runs.createRun({
+      agent: "claude-code",
+      repo: "acme/payments",
+      task: "fix CI",
+      compose_session_id: "11111111-1111-1111-1111-111111111111",
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.compose_session_id).toBe("11111111-1111-1111-1111-111111111111");
+  });
+
+  it("omits compose_session_id for a run with no compose session (e.g. the manual wizard)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: "run-1" }));
+    await runs.createRun({ agent: "claude-code", repo: "acme/payments", task: "fix CI" });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body).not.toHaveProperty("compose_session_id");
+  });
+});

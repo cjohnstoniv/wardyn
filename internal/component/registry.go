@@ -20,7 +20,8 @@ package component
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 )
 
@@ -69,12 +70,7 @@ func (r *Registry[C]) Lookup(name string) (C, bool) {
 func (r *Registry[C]) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.ctors))
-	for n := range r.ctors {
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(r.ctors))
 }
 
 // Resolve maps name (empty → default) to its constructor and the resolved name,

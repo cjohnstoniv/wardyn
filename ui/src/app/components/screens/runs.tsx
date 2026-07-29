@@ -72,9 +72,8 @@ import {
   TableHeader,
   TableRow,
 } from "../ui/table";
-import { AgentBadge, ConfinementChip } from "../wardyn/primitives";
+import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
-import { RunStatusBadge } from "../wardyn/run-status-badge";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -621,7 +620,7 @@ function RunCard({
       )}
 
       <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-border pt-3">
-        <RunStatusBadge state={run.state} />
+        <RunStateBadge state={run.state} />
         <ConfinementChip value={run.confinement_class} />
         <BarrierStrengthStrip tier={run.confinement_class} muted={done} />
         <div className="ml-auto flex items-center gap-2.5">
@@ -715,7 +714,7 @@ function RunsTable({
                   </div>
                 </TableCell>
                 <TableCell>
-                  <RunStatusBadge state={run.state} />
+                  <RunStateBadge state={run.state} />
                 </TableCell>
                 <TableCell>
                   <ConfinementChip value={run.confinement_class} />

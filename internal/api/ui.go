@@ -65,8 +65,5 @@ func (s *Server) mountUI(r chi.Router) {
 // withinDir guards against path traversal escaping the UI directory.
 func withinDir(dir, full string) bool {
 	rel, err := filepath.Rel(dir, full)
-	if err != nil {
-		return false
-	}
-	return !strings.HasPrefix(rel, "..")
+	return err == nil && filepath.IsLocal(rel)
 }

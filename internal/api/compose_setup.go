@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -361,11 +362,7 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 	if len(bySane) == 0 {
 		return nil
 	}
-	sanes := make([]string, 0, len(bySane))
-	for s := range bySane {
-		sanes = append(sanes, s)
-	}
-	slices.Sort(sanes)
+	sanes := slices.Sorted(maps.Keys(bySane))
 
 	var items []SetupItem
 	for i, sane := range sanes {

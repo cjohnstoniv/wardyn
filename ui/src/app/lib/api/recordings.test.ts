@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { recordings } from "./recordings";
+import { HttpError } from "./core";
 
 // parseRecording turns an UNTRUSTED asciicast document (fetched as text from the
 // recording store) into the terminal-player shape. It must be robust to garbage:
@@ -73,5 +74,21 @@ describe("recordings.getRecording — asciicast v2 parsing", () => {
   it("returns undefined for an empty/whitespace-only document", async () => {
     fetchMock.mockResolvedValueOnce(textResponse("   \n  \n"));
     expect(await recordings.getRecording("run-5")).toBeUndefined();
+  });
+
+  // a non-404 failure must surface the control plane's `{"error":"…"}`
+  // message, not a hardcoded "failed to load recording" string that discards
+  // the server's actionable reason.
+  it("surfaces the server error message on a 500", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "recording store offline" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const err = await recordings.getRecording("run-6").catch((e) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(500);
+    expect((err as HttpError).message).toBe("recording store offline");
   });
 });

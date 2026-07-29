@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	neturl "net/url"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -133,11 +133,7 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 	drop := map[string]bool{}
 	var add []string
 	added := map[string]bool{}
-	ecos := make([]string, 0, len(sc.ArtifactOverrides))
-	for eco := range sc.ArtifactOverrides {
-		ecos = append(ecos, eco)
-	}
-	sort.Strings(ecos) // deterministic add order
+	ecos := slices.Sorted(maps.Keys(sc.ArtifactOverrides)) // deterministic add order
 	for _, eco := range ecos {
 		corp := strings.ToLower(workspacescan.HostOf(sc.ArtifactOverrides[eco].BaseURL))
 		if corp == "" {
@@ -293,6 +289,79 @@ func verifyEgressDomains(ws types.Workspace) []string {
 	return base.AllowedDomains
 }
 
+// claimImportStep atomically claims the workspace's serial import-step slot for
+// runID, CAS-ing active_run_id from the value the caller observed (M1/H14): two
+// concurrent step launches that both saw the slot free cannot both dispatch —
+// the loser gets errImportStepBusy. It returns the CLAIMED workspace row (the
+// base any pre-dispatch status write must build on so it preserves the claim)
+// and the release compensator EVERY pre-dispatch failure path must return
+// through — it fails the persisted-but-undispatched run and frees the slot, so a
+// failed launch never bricks the next step (failPendingRun no-ops pre-CreateRun).
+func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID uuid.UUID) (types.Workspace, func(error) error, error) {
+	claimed, ok, err := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID)
+	if err != nil {
+		return types.Workspace{}, nil, fmt.Errorf("claim import-step slot: %w", err)
+	}
+	if !ok {
+		return types.Workspace{}, nil, errImportStepBusy
+	}
+	return claimed, func(e error) error {
+		s.failPendingRun(ctx, runID)
+		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
+		return e
+	}, nil
+}
+
+// newWorkspaceStepRun mints the run identity and builds the run row every
+// workspace step run (scan/verify/record) shares: PENDING, claude-code, and
+// linked to ws through WorkspaceID — the TRUSTED linkage each step's upload
+// authorises on, never sandbox input. Callers set only what differs (Repo,
+// Interactive, AutoStopAfterSec) and take run.CreatedAt as the launch clock.
+func (s *Server) newWorkspaceStepRun(ctx context.Context, runID uuid.UUID, actor, task string, ws types.Workspace, cc types.ConfinementClass) (types.AgentRun, string, error) {
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
+	if err != nil {
+		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
+	}
+	now := s.cfg.Now().UTC()
+	wsID := ws.ID
+	return types.AgentRun{
+		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
+		Agent: "claude-code", Task: task,
+		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
+		RunnerTarget: s.cfg.RunnerTarget,
+		WorkspaceID:  &wsID,
+	}, id.Token, nil
+}
+
+// defaultFloorClass is the operator's configured confinement floor (CC1 when
+// unset) — what a scan/verify inherits, as opposed to record's strongest-class.
+func (s *Server) defaultFloorClass() types.ConfinementClass {
+	if cc := s.cfg.DefaultPolicy.MinConfinementClass; cc != "" {
+		return cc
+	}
+	return types.CC1
+}
+
+// workspaceRunImage is the image a verify/record run executes in: the
+// workspace's BUILT devcontainer image (built now if needed), falling back to
+// the convention agent image when no builder is configured.
+func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) string {
+	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws); ok {
+		return built
+	}
+	return agentImage("claude-code", s.cfg.AgentImages)
+}
+
+// dispatchAndSettle is the shared launch tail: dispatch, re-read the run so the
+// caller returns the store's freshest row, and settle a launch that already
+// reached a terminal state (see settleTerminalLaunch).
+func (s *Server) dispatchAndSettle(ctx context.Context, created types.AgentRun, p dispatchParams) types.AgentRun {
+	s.dispatchRun(ctx, created, p)
+	created = s.refreshRun(ctx, created.ID, created)
+	s.settleTerminalLaunch(ctx, created.ID, created)
+	return created
+}
+
 // launchVerifyRun starts a throwaway GOVERNED run that runs wardyn-verify — it
 // executes the workspace's OPERATOR-APPROVED SetupCommands (install/build/test)
 // in the BUILT devcontainer image (resolveWorkspaceImage) under confinement,
@@ -313,39 +382,17 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	// convention image — which then fails on a missing toolchain (exit 127).
 	ctx = context.WithoutCancel(ctx)
 	runID := uuid.New()
-	// Atomically claim the workspace's serial import-step slot BEFORE dispatch (M1):
-	// CAS active_run_id from the value the caller observed (ws.ActiveRunID) to this
-	// run. Two concurrent verifies (or a verify racing a record) that both saw the
-	// slot free cannot both launch — the loser gets errImportStepBusy. This also
-	// establishes the fence the verify-result upload enforces (H6). Released on any
-	// pre-dispatch failure so a failed launch never bricks re-verify.
-	if _, claimed, cerr := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID); cerr != nil {
-		return types.AgentRun{}, fmt.Errorf("claim import-step slot: %w", cerr)
-	} else if !claimed {
-		return types.AgentRun{}, errImportStepBusy
-	}
-	release := func(e error) (types.AgentRun, error) {
-		s.failPendingRun(ctx, runID)
-		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
-		return types.AgentRun{}, e
-	}
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
+	// The claim also establishes the fence the verify-result upload enforces (H6).
+	_, release, err := s.claimImportStep(ctx, ws, runID)
 	if err != nil {
-		return release(fmt.Errorf("mint run identity: %w", err))
+		return types.AgentRun{}, err
 	}
-	cc := s.cfg.DefaultPolicy.MinConfinementClass
-	if cc == "" {
-		cc = types.CC1
+	cc := s.defaultFloorClass()
+	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace verify", ws, cc)
+	if err != nil {
+		return types.AgentRun{}, release(err)
 	}
-	now := s.cfg.Now().UTC()
-	wsID := ws.ID
-	run := types.AgentRun{
-		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: "claude-code", Task: "workspace verify",
-		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget: s.cfg.RunnerTarget,
-		WorkspaceID:  &wsID, // trusted linkage for the verify-result upload
-	}
+	now := run.CreatedAt
 	// Source wiring: a repo clones (run.Repo); a local dir is bind-mounted.
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
@@ -359,13 +406,13 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 	cloneURL := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
-		return release(fmt.Errorf("create verify run: %w", err))
+		return types.AgentRun{}, release(fmt.Errorf("create verify run: %w", err))
 	}
 	// Clone grants only AFTER the run row exists — credential_grants.run_id has an
 	// immediate FK to agent_runs(id).
 	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, cloneURL)
 	if gerr != nil {
-		return release(fmt.Errorf("create verify clone grants: %w", gerr))
+		return types.AgentRun{}, release(fmt.Errorf("create verify clone grants: %w", gerr))
 	}
 
 	// Flip to `verifying` BEFORE dispatch — mirror launchScanRun's pre-dispatch
@@ -380,24 +427,16 @@ func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Wor
 		&runID, &runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
 
 	// Run IN the built devcontainer image (build it now if needed — this is
-	// Stage 5 folded into verify). Fall back to the convention image if no
-	// builder is configured.
-	image := agentImage("claude-code", s.cfg.AgentImages)
-	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws); ok {
-		image = built
-	}
-	s.dispatchRun(ctx, created, dispatchParams{
-		RunToken:           id.Token,
-		Image:              image,
+	// Stage 5 folded into verify).
+	return s.dispatchAndSettle(ctx, created, dispatchParams{
+		RunToken:           runToken,
+		Image:              s.workspaceRunImage(ctx, runID, ws),
 		Policy:             policy,
 		FirstGitHubGrantID: ghGrantID,
 		GitGrants:          gitBrokerGrant(cloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		VerifyPlan:         commands,
-	})
-	created = s.refreshRun(ctx, runID, created)
-	s.settleTerminalLaunch(ctx, runID, created)
-	return created, nil
+	}), nil
 }
 
 // launchRecordRun starts one session's interactive sandbox — launchVerifyRun
@@ -447,47 +486,35 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	weakCC := cc == types.CC1
 
 	runID := uuid.New()
-	if _, claimed, cerr := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID); cerr != nil {
-		return types.AgentRun{}, false, fmt.Errorf("claim import-step slot: %w", cerr)
-	} else if !claimed {
-		return types.AgentRun{}, false, errImportStepBusy
+	_, release, err := s.claimImportStep(ctx, ws, runID)
+	if err != nil {
+		return types.AgentRun{}, false, err
 	}
 	startedAt := s.cfg.Now().UTC()
 	if _, _, perr := s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 		RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined, Status: recordStatusRecording, StartedAt: startedAt,
 	}, ""); perr != nil {
-		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
-		return types.AgentRun{}, false, fmt.Errorf("persist record state: %w", perr)
+		return types.AgentRun{}, false, release(fmt.Errorf("persist record state: %w", perr))
 	}
-	abort := func(reason error) (types.AgentRun, bool, error) {
+	// A CreateGrant failure AFTER CreateRun (below) would otherwise orphan the
+	// persisted RunPending run + leave its minted run token / eligible grants
+	// un-revoked, so every failure path from here on returns through abort.
+	abort := func(reason error) error {
 		now := s.cfg.Now().UTC()
-		// A CreateGrant failure AFTER CreateRun (below) would otherwise orphan the
-		// persisted RunPending run + leave its minted run token / eligible grants
-		// un-revoked.
-		s.failPendingRun(ctx, runID)
 		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 			RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined, Status: recordStatusFailed, StartedAt: now, FinishedAt: &now,
 			FailureHint: "launch failed: " + reason.Error(),
 		}, recordStatusRecording)
-		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
-		return types.AgentRun{}, false, reason
+		return release(reason)
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
-	if err != nil {
-		return abort(fmt.Errorf("mint run identity: %w", err))
-	}
-	now := s.cfg.Now().UTC()
-	wsID := ws.ID
 	interactive := mode == recordModeInteractive
-	run := types.AgentRun{
-		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: "claude-code", Task: "workspace record",
-		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget: s.cfg.RunnerTarget,
-		WorkspaceID:  &wsID, // trusted linkage for uploads + capture
-		Interactive:  interactive,
+	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace record", ws, cc)
+	if err != nil {
+		return types.AgentRun{}, false, abort(err)
 	}
+	now := run.CreatedAt
+	run.Interactive = interactive
 	// A confined verify escalates an off-policy host to the operator (deny_with_review:
 	// raise a pending approval, deny the in-flight probe, and let a retry through once
 	// approved) — the direct successor to the legacy forced-true. Deliberately NOT
@@ -525,21 +552,18 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	cloneURL := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
-		return abort(fmt.Errorf("create record run: %w", err))
+		return types.AgentRun{}, false, abort(fmt.Errorf("create record run: %w", err))
 	}
 	// Clone grants only AFTER the run row exists — credential_grants.run_id has an
 	// immediate FK to agent_runs(id).
 	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, cloneURL)
 	if gerr != nil {
-		return abort(fmt.Errorf("create record clone grants: %w", gerr))
+		return types.AgentRun{}, false, abort(fmt.Errorf("create record clone grants: %w", gerr))
 	}
 
 	// Record in the built devcontainer image so the task actually runs (its
 	// toolchain isn't in the convention agent image) — same lane as verify.
-	image := agentImage("claude-code", s.cfg.AgentImages)
-	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws); ok {
-		image = built
-	}
+	image := s.workspaceRunImage(ctx, runID, ws)
 
 	// The model provider is part of the HARNESS the operator configured (getting
 	// started), not per-workspace app egress they approve — so its host must be
@@ -585,7 +609,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 			if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 				ID: grantID, RunID: runID, CreatedAt: now, Spec: g,
 			}); gerr != nil {
-				return abort(fmt.Errorf("create llm grant: %w", gerr))
+				return types.AgentRun{}, false, abort(fmt.Errorf("create llm grant: %w", gerr))
 			}
 			if rule, rerr := injectionRuleFromScope(g.Scope); rerr == nil {
 				injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
@@ -608,8 +632,8 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var plan json.RawMessage
-	s.dispatchRun(ctx, created, dispatchParams{
-		RunToken:           id.Token,
+	return s.dispatchAndSettle(ctx, created, dispatchParams{
+		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,
 		FirstGitHubGrantID: ghGrantID,
@@ -618,10 +642,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		Injections:         injections,
 		Interactive:        interactive,
 		VerifyPlan:         plan,
-	})
-	created = s.refreshRun(ctx, runID, created)
-	s.settleTerminalLaunch(ctx, runID, created)
-	return created, weakCC, nil
+	}), weakCC, nil
 }
 
 // failPendingRun finalizes a run that was persisted but never dispatched: CAS
@@ -963,12 +984,7 @@ func (s *Server) mintedSecretNames(ctx context.Context, runID uuid.UUID, minted 
 	if len(seen) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(seen))
-	for n := range seen {
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(seen))
 }
 
 // launchScanRun starts a throwaway GOVERNED run that clones a repo workspace and
@@ -997,52 +1013,27 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	ctx = context.WithoutCancel(ctx)
 
 	runID := uuid.New()
-	// Claim the workspace's serial import-step slot BEFORE dispatch (H14): the scan
-	// self-heal in reconcileWorkspaceRun keys on ws.ActiveRunID == runID, so a scan
-	// that never claims the slot leaves that branch DEAD — a scan whose facts upload
-	// is lost (e.g. sandbox can't reach the control plane) then strands the workspace
-	// in `scanning` forever. Mirrors record/verify. Released on any pre-dispatch fail.
-	claimedWS, claimed, cerr := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID)
-	if cerr != nil {
-		return types.AgentRun{}, fmt.Errorf("claim import-step slot: %w", cerr)
-	} else if !claimed {
-		return types.AgentRun{}, errImportStepBusy
-	}
-	scanRelease := func(e error) (types.AgentRun, error) {
-		s.failPendingRun(ctx, runID)
-		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
-		return types.AgentRun{}, e
-	}
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
+	// The scan self-heal in reconcileWorkspaceRun keys on ws.ActiveRunID == runID,
+	// so a scan that never claims the slot leaves that branch DEAD — a scan whose
+	// facts upload is lost (e.g. sandbox can't reach the control plane) would then
+	// strand the workspace in `scanning` forever.
+	claimedWS, release, err := s.claimImportStep(ctx, ws, runID)
 	if err != nil {
-		return scanRelease(fmt.Errorf("mint run identity: %w", err))
+		return types.AgentRun{}, err
 	}
 	// Confinement: inherit the operator's default floor. A scan is read-only,
 	// ephemeral, and holds no credentials; the operator's floor still governs.
-	cc := s.cfg.DefaultPolicy.MinConfinementClass
-	if cc == "" {
-		cc = types.CC1
+	cc := s.defaultFloorClass()
+	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace scan", ws, cc)
+	if err != nil {
+		return types.AgentRun{}, release(err)
 	}
-	now := s.cfg.Now().UTC()
-	wsID := ws.ID
-	run := types.AgentRun{
-		ID:               runID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		CreatedBy:        actor,
-		Agent:            "claude-code", // carries wardyn-scan + git; no model call in scan-only mode
-		Repo:             ws.Source,
-		Task:             "workspace scan",
-		ConfinementClass: cc,
-		State:            types.RunPending,
-		SPIFFEID:         id.SPIFFEID,
-		RunnerTarget:     s.cfg.RunnerTarget,
-		WorkspaceID:      &wsID,          // marks this a scan run + the trusted linkage
-		AutoStopAfterSec: scanIdleCapSec, // reaper reads the run row; == scanPolicy below
-	}
+	now := run.CreatedAt
+	run.Repo = ws.Source                  // wardyn-scan clones it; no model call in scan-only mode
+	run.AutoStopAfterSec = scanIdleCapSec // reaper reads the run row; == scanPolicy below
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
-		return scanRelease(fmt.Errorf("create scan run: %w", err))
+		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}
 
 	// Flip the workspace to `scanning` so the import UI's poll (which watches only the
@@ -1065,7 +1056,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	// SSH clone URL: synthesize the ssh_key grant + surface it as WARDYN_SSH_GRANTS.
 	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, url)
 	if gerr != nil {
-		return scanRelease(fmt.Errorf("create scan clone grants: %w", gerr))
+		return types.AgentRun{}, release(fmt.Errorf("create scan clone grants: %w", gerr))
 	}
 
 	// Minimal scan policy: allow only the git host(s) the clone needs + a short
@@ -1077,18 +1068,14 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		AutoStopAfterSec:    scanIdleCapSec,
 	}
 
-	image := agentImage("claude-code", s.cfg.AgentImages)
-	s.dispatchRun(ctx, created, dispatchParams{
-		RunToken:           id.Token,
-		Image:              image,
+	return s.dispatchAndSettle(ctx, created, dispatchParams{
+		RunToken:           runToken,
+		Image:              agentImage("claude-code", s.cfg.AgentImages),
 		Policy:             scanPolicy,
 		FirstGitHubGrantID: ghGrantID,
 		GitGrants:          gitBrokerGrant(url, ghGrantID),
 		SSHGrants:          sshGrants,
-	})
-	created = s.refreshRun(ctx, runID, created)
-	s.settleTerminalLaunch(ctx, runID, created)
-	return created, nil
+	}), nil
 }
 
 // scanEgressDomains returns the egress allowlist a scan/verify run needs to clone

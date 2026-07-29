@@ -38,8 +38,8 @@ export { expect };
 
 // Sidebar labels (app-shell.tsx). Navigating by accessible name keeps specs
 // resilient to markup churn and needs no shared test-ids. Runs is the first/
-// default screen; Fleet is retired from the nav (still routable at /fleet, but
-// not a sidebar entry, so it is intentionally absent from this list).
+// default screen; the Fleet board was merged into Runs and no longer exists, so
+// it is intentionally absent from this list.
 export type NavLabel =
   | "Runs"
   | "Approvals"

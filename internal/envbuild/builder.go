@@ -3,7 +3,29 @@
 
 //go:build docker
 
-// Package envbuild is documented in doc.go.
+// Package envbuild converts a devcontainer.json repository into a runnable
+// workspace image by driving the coder/envbuilder container as a Docker
+// container (not a Go library import), keeping envbuilder out of the main
+// module's dependency tree.
+//
+// A build is two stages. ENVBUILDER clones the repo and builds the devcontainer
+// image inside an untrusted-code sandbox container (no Docker socket, network
+// "none" by default, CapDrop ALL, resource caps), delivering it by PUSHING to
+// the configured OCI registry — the only delivery mechanism, and it FAILS CLOSED
+// with no registry. FINALIZE then layers Wardyn's runner tool binaries onto that
+// image with a host-daemon FROM + COPY build and returns the local tag the
+// runner execs. FinalizeBase exposes that second stage on its own: the
+// Bring-Your-Own-Image path, with no envbuilder stage at all.
+//
+// FINALIZE runs outside every confinement tier, so it is wrap-ONLY: FROM + COPY
+// executes nothing the base image controls. The one escape from that — Docker
+// ONBUILD triggers, which fire host-side when a base is used as a FROM — is
+// refused by preflight (assertWrapSafeBase), and the base is pulled by Builder
+// so the wrap builds FROM the exact image the preflight inspected.
+//
+// The ENVBUILDER_* environment contract, the build-sandbox controls, the
+// residuals that remain open, and the operator-facing limitations are in
+// docs/ENVBUILD.md.
 package envbuild
 
 import (
@@ -168,7 +190,7 @@ type Builder struct {
 	// pre-created named network to OPT IN to build-time egress. Opting in is
 	// required for a functional build, because envbuilder must reach git hosts
 	// and package/base-image registries; doing so also gives the untrusted RUN
-	// steps that same network (see the residual note in doc.go).
+	// steps that same network (see the residual note in docs/ENVBUILD.md).
 	BuildNetwork string
 }
 
@@ -405,7 +427,7 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 		// the built image to the cache registry, so a functional build requires
 		// opting in — at which point the RUN steps share that network. Full
 		// RUN-step network isolation needs a BuildKit-style builder (--network=none
-		// for RUN only); see doc.go "Residual".
+		// for RUN only); see docs/ENVBUILD.md "Residual".
 		NetworkMode: container.NetworkMode(b.effectiveBuildNetwork()),
 
 		// Drop privileges so a compromised build step has minimal capability.
@@ -581,7 +603,7 @@ func validateBuildInput(spec BuildSpec) error {
 // parent-directory ("..") traversal, and no NUL/whitespace/leading-dash that
 // could escape the repo root or be misread as a git/envbuilder option. Symlink
 // resolution happens inside the builder against the cloned tree and therefore
-// cannot be checked host-side; see the residual note in doc.go.
+// cannot be checked host-side; see the residual note in docs/ENVBUILD.md.
 func validateRepoRelPath(field, p string) error {
 	if strings.ContainsAny(p, " \t\r\n\x00") {
 		return fmt.Errorf("envbuild: %s %q contains illegal whitespace/control characters", field, p)

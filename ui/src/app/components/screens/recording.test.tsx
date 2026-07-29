@@ -160,15 +160,15 @@ describe("RecordingScreen", () => {
     await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
   });
 
-  it("gives a KILLED run the same enforcement badge (RunStatusBadge) runs.tsx/run-detail.tsx use", async () => {
+  it("gives a KILLED run the same enforcement badge (RunStateBadge) runs.tsx/run-detail.tsx use", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "escape attempt", state: "KILLED" })]);
     getRecordingMock.mockResolvedValue(rec("run_1"));
     renderScreen();
 
     await screen.findByText("escape attempt");
-    // RunStatusBadge reserves solid bg-danger EXCLUSIVELY for Killed; the plain
-    // RunStateBadge this card used to call renders Killed as an ordinary
-    // bg-danger-subtle dot chip (no bg-danger token at all).
+    // RunStateBadge reserves solid bg-danger EXCLUSIVELY for Killed; this card
+    // used to render Killed as an ordinary bg-danger-subtle dot chip (no
+    // bg-danger token at all).
     expect(screen.getByText("Killed")).toHaveClass("bg-danger");
   });
 

@@ -8,11 +8,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-// The AI Run Composer is enabled (the old features.ts flag was deleted); the live
-// stack shows the chooser when its composer has backends, else falls back to the
-// wizard. The dual-path helpers below keep the no-composer branch.
-const COMPOSER_UI_ENABLED = true;
-
 // Fixtures for the LIVE Playwright project (playwright.config.ts project "live").
 // These specs drive the REAL host-mode stack started by scripts/run-host.sh —
 // real wardynd on :8080, the docker runner (real sandboxes), the real composer —
@@ -78,22 +73,12 @@ export async function openNewRunChooser(page: Page): Promise<Locator> {
   return dlg;
 }
 
-// Enter the manual 5-step PermissionWizard on its Basics step. With the AI
-// composer flag off (features.ts), new-run-dialog.tsx skips the
-// /composer/backends probe and the chooser entirely and opens straight into
-// the wizard — mirrors ../wizard.spec.ts's openWizard. If the flag is ever
-// flipped on, the chooser returns — keep that path too.
+// Enter the manual 5-step PermissionWizard on its Basics step: the live stack's
+// chooser is reached first, then "Configure manually" — mirrors ../wizard.spec.ts's
+// openWizard.
 export async function openManualWizard(page: Page): Promise<Locator> {
-  await gotoConsole(page);
-  if (COMPOSER_UI_ENABLED) {
-    const dlg = await openNewRunChooser(page);
-    await dlg.getByRole("button", { name: /Configure manually/ }).click();
-    await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
-    return dlg;
-  }
-  await page.getByRole("button", { name: "New run" }).click();
-  const dlg = page.getByRole("dialog");
-  await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
+  const dlg = await openNewRunChooser(page);
+  await dlg.getByRole("button", { name: /Configure manually/ }).click();
   await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
   return dlg;
 }
@@ -155,7 +140,7 @@ export async function apiKillRun(page: Page, runId: string): Promise<void> {
     .catch(() => {});
 }
 
-// RunStatusBadge labels for terminal states (run-status-badge.tsx). ARCHIVED is
+// RunStateBadge labels for terminal states (primitives.tsx). ARCHIVED is
 // unreachable for a freshly-launched run.
 const TERMINAL_BADGES = ["Completed", "Failed", "Stopped", "Killed"] as const;
 

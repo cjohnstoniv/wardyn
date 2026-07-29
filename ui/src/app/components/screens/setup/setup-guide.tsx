@@ -10,8 +10,8 @@
 // /setup/status. (API-key setup stays one-click via AddSecretDialog; only the
 // host-side actions route through here — wardynd holds no host privileges.)
 import * as React from "react";
-import { Check, Copy, Loader2, RotateCw } from "lucide-react";
-import { Button } from "../../ui/button";
+import { Loader2, RotateCw } from "lucide-react";
+import { Button, buttonVariants } from "../../ui/button";
 import {
   Dialog,
   DialogContent,
@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { Mono } from "../../wardyn/code-block";
-import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
+import { CopyButton } from "../../wardyn/copy-button";
 import type { ConfinementClass } from "../../../lib/types";
 
 export interface SetupGuide {
@@ -102,19 +102,11 @@ export function SetupGuideDialog({
   onRecheck: () => void;
   rechecking: boolean;
 }) {
-  // No auto-reset timer here — copied resets when the dialog is re-opened for
-  // a different guide (below), not on a clock.
-  const { copied, setCopied, copyAsync } = useCopyToClipboard(null);
   const [showManual, setShowManual] = React.useState(false);
   React.useEffect(() => {
-    if (guide) {
-      setCopied(false);
-      setShowManual(false);
-    }
-  }, [guide, setCopied]);
+    if (guide) setShowManual(false);
+  }, [guide]);
   if (!guide) return null;
-
-  const copy = () => void copyAsync(guide.command);
 
   return (
     <Dialog open={!!guide} onOpenChange={(o) => !o && onClose()}>
@@ -129,9 +121,11 @@ export function SetupGuideDialog({
             <p className="text-sm text-muted-foreground">Run this on the Wardyn host:</p>
             <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2">
               <Mono className="min-w-0 flex-1 truncate text-sm text-foreground">{guide.command}</Mono>
-              <Button size="sm" variant="ghost" onClick={copy} aria-label="Copy command">
-                {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-              </Button>
+              <CopyButton
+                text={guide.command}
+                label="Copy command"
+                className={buttonVariants({ variant: "ghost", size: "sm" })}
+              />
             </div>
           </div>
 

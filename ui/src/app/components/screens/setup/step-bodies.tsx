@@ -206,21 +206,37 @@ export function ReviewStep({
 // ------------------------------------------------------------
 const ARTIFACT_ECOSYSTEMS = ["npm", "pip", "cargo", "maven", "go", "nuget"] as const;
 
-// Shared save wrapper for the three steps above: PUTs via the orchestrator-owned
-// saveSiteConfig, toasting and reporting failure as `false` so each step's caller
-// only commits its own local field state once the PUT actually lands.
-async function trySaveSiteConfig(
+// The three site-config steps (host proxy / SCM host / artifact repo) share one
+// prologue: the V2 clobber guard (re-GET on step entry) and a `saving` flag
+// around each write. Written once here so the hard-constraint guard can't drift
+// between copies. `mutate` PUTs via the orchestrator-owned saveSiteConfig and
+// reports failure as `false` — toasting the server's reason — so each step only
+// commits its own local field state once the PUT actually lands.
+function useSiteConfigStep(
+  reloadSiteConfig: () => Promise<void>,
   saveSiteConfig: (next: SiteConfig) => Promise<void>,
-  next: SiteConfig,
-  errorMessage: string,
-): Promise<boolean> {
-  try {
-    await saveSiteConfig(next);
-    return true;
-  } catch (e) {
-    toast.error(errorMessage, { description: getErrorMessage(e) });
-    return false;
-  }
+) {
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const mutate = async (next: SiteConfig, errorMessage: string): Promise<boolean> => {
+    setSaving(true);
+    try {
+      await saveSiteConfig(next);
+      return true;
+    } catch (e) {
+      toast.error(errorMessage, { description: getErrorMessage(e) });
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return { saving, mutate };
 }
 
 function RecheckButton({ onRecheck, rechecking }: { onRecheck: () => void; rechecking: boolean }) {
@@ -344,13 +360,7 @@ export function HostProxyStep({
 }) {
   const check = status.checks.find((c) => c.id === "host_proxy");
   const [secretName, setSecretName] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-
-  // Clobber guard (V2, hard constraint) — re-GET on step entry.
-  React.useEffect(() => {
-    reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
   // Seed the field from the freshest doc exactly once (matches the old
   // useSiteConfig onLoad callback) — never again, so a later reload (e.g. from
@@ -365,12 +375,10 @@ export function HostProxyStep({
 
   const save = async () => {
     const name = secretName.trim();
-    setSaving(true);
     const next: SiteConfig = { ...(siteConfig ?? {}), upstream_proxy_secret_ref: name || undefined };
-    if (await trySaveSiteConfig(saveSiteConfig, next, "Failed to save the upstream proxy secret")) {
+    if (await mutate(next, "Failed to save the upstream proxy secret")) {
       toast.success("Upstream proxy secret saved");
     }
-    setSaving(false);
   };
 
   return (
@@ -443,22 +451,14 @@ export function ScmProviderStep({
 }) {
   const check = status.checks.find((c) => c.id === "scm_provider");
   const [host, setHost] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-
-  // Clobber guard (V2, hard constraint) — re-GET on step entry.
-  React.useEffect(() => {
-    reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
   const addHost = async () => {
     const h = host.trim().toLowerCase();
     if (!h) return;
-    setSaving(true);
     const hosts = Array.from(new Set([...(siteConfig?.scm_hosts ?? []), h]));
     const next: SiteConfig = { ...(siteConfig ?? {}), scm_hosts: hosts };
-    if (await trySaveSiteConfig(saveSiteConfig, next, "Failed to add the SCM host")) setHost("");
-    setSaving(false);
+    if (await mutate(next, "Failed to add the SCM host")) setHost("");
   };
 
   const removeHost = async (h: string) => {
@@ -466,7 +466,7 @@ export function ScmProviderStep({
       ...(siteConfig ?? {}),
       scm_hosts: (siteConfig?.scm_hosts ?? []).filter((x) => x !== h),
     };
-    await trySaveSiteConfig(saveSiteConfig, next, "Failed to remove the SCM host");
+    await mutate(next, "Failed to remove the SCM host");
   };
 
   return (
@@ -602,34 +602,26 @@ export function ArtifactRepoStep({
   const [eco, setEco] = React.useState<string>(ARTIFACT_ECOSYSTEMS[0]);
   const [baseUrl, setBaseUrl] = React.useState("");
   const [tokenRef, setTokenRef] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-
-  // Clobber guard (V2, hard constraint) — re-GET on step entry.
-  React.useEffect(() => {
-    reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
   const overrides = siteConfig?.artifact_overrides ?? {};
 
   const save = async () => {
     const url = baseUrl.trim();
     if (!url) return;
-    setSaving(true);
     const nextOverrides = { ...overrides, [eco]: { base_url: url, token_secret_ref: tokenRef.trim() || undefined } };
     const next: SiteConfig = { ...(siteConfig ?? {}), artifact_overrides: nextOverrides };
-    if (await trySaveSiteConfig(saveSiteConfig, next, "Failed to save the artifact override")) {
+    if (await mutate(next, "Failed to save the artifact override")) {
       setBaseUrl("");
       setTokenRef("");
     }
-    setSaving(false);
   };
 
   const remove = async (name: string) => {
     const nextOverrides = { ...overrides };
     delete nextOverrides[name];
     const next: SiteConfig = { ...(siteConfig ?? {}), artifact_overrides: nextOverrides };
-    await trySaveSiteConfig(saveSiteConfig, next, "Failed to remove the artifact override");
+    await mutate(next, "Failed to remove the artifact override");
   };
 
   return (

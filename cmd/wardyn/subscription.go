@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -53,12 +54,7 @@ func fetchSetupStatus(ctx context.Context, c *sdk.Client) (setupStatusLite, erro
 // captured — the server emits the harness_credential check ONLY when one exists
 // (internal/api/setup.go harnessCredentialCheck), so its presence is the signal.
 func subscriptionConnected(st setupStatusLite) bool {
-	for _, c := range st.Checks {
-		if c.ID == "harness_credential" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(st.Checks, func(c setupCheckLite) bool { return c.ID == "harness_credential" })
 }
 
 // subscriptionCmd manages the Wardyn-managed Claude subscription: a `claude

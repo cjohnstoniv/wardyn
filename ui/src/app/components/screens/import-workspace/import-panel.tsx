@@ -17,7 +17,6 @@ import {
   Check,
   CircleCheck,
   CircleX,
-  Copy,
   FileCode2,
   Loader2,
   Play,
@@ -36,7 +35,6 @@ import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { composer as composerApi } from "../../../lib/api/compose";
 import { usePoll } from "../../../lib/use-poll";
-import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { getErrorMessage as msg } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { hasLlmPath } from "../onboarding/intro";
@@ -51,7 +49,7 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
-import { Mono } from "../../wardyn/code-block";
+import { CodeBlock, Mono } from "../../wardyn/code-block";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { StepIndicator, OptionCard } from "../new-run/step-shell";
 import { AddWorkspaceDialog } from "../workspaces";
@@ -1102,7 +1100,7 @@ function VerifyPane({
             </Button>
           ) : (
             <div className="space-y-2" data-testid="verify-ai-suggestion">
-              <CopyableBlock text={aiSuggestion} />
+              <CodeBlock text={aiSuggestion} />
               <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                 Suggested by the model — you decide. Approve any host above, or add a secret / edit a
                 command back in Configure.
@@ -1252,7 +1250,7 @@ function FinalizePane({
                 <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                   <FileCode2 className="size-3.5 text-cyan" /> {name}
                 </div>
-                <CopyableBlock text={content} />
+                <CodeBlock text={content} />
               </div>
             ))}
           </section>
@@ -1292,22 +1290,3 @@ function FinalizePane({
   );
 }
 
-// A minimal copy-to-clipboard code block for arbitrary emitted-file TEXT (JsonBlock
-// pretty-prints a JSON value; these are raw file contents). Same affordance shape.
-function CopyableBlock({ text }: { text: string }) {
-  const { copied, copy } = useCopyToClipboard();
-  return (
-    <div className="group relative rounded-lg border border-border bg-surface-2/60">
-      <button
-        onClick={() => copy(text)}
-        className="absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground"
-        aria-label="Copy"
-      >
-        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-      </button>
-      <pre className="scroll-thin overflow-x-auto p-3 text-xs leading-relaxed">
-        <code className="font-mono">{text}</code>
-      </pre>
-    </div>
-  );
-}

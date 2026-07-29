@@ -312,10 +312,10 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 // /healthz. "selected" is the ACTUAL running impl; "available" is what each
 // seam's registry has self-registered in THIS build (so a newly registered
 // substrate/provider appears with no edit here — and a tagless build honestly
-// shows sandbox.available=[]); "recommended_production" is the standard Wardyn
-// recommends converging to (may differ from the shipped default — the honest
-// recommended-vs-shipped split, see docs/PLUGGABILITY.md). policy_engine has no
-// registry yet, so it carries no "available".
+// shows sandbox.available=[]). Runtime facts only: the recommended-vs-shipped
+// split lives in docs/PLUGGABILITY.md and ROADMAP.md, where a recommendation
+// this build cannot yet run belongs. policy_engine has no registry yet, so it
+// carries no "available".
 func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentInfo {
 	sourceOf := func(selected, def string) string {
 		if selected == def {
@@ -324,10 +324,10 @@ func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentI
 		return "configured"
 	}
 	return map[string]api.ComponentInfo{
-		"identity":      {Selected: *f.identitySel, Available: identity.Names(), RecommendedProduction: "spire", Source: sourceOf(*f.identitySel, "embedded")},
-		"secret_store":  {Selected: *f.secretStoreSel, Available: secretstore.Names(), RecommendedProduction: "openbao", Source: sourceOf(*f.secretStoreSel, "pg")},
-		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), RecommendedProduction: "fs", Source: sourceOf(*f.recordingSel, "fs")},
-		"policy_engine": {Selected: "builtin", RecommendedProduction: "opa"},
-		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), RecommendedProduction: "kata-cc3", Source: sourceOf(*f.runnerSel, "none")},
+		"identity":      {Selected: *f.identitySel, Available: identity.Names(), Source: sourceOf(*f.identitySel, "embedded")},
+		"secret_store":  {Selected: *f.secretStoreSel, Available: secretstore.Names(), Source: sourceOf(*f.secretStoreSel, "pg")},
+		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "fs")},
+		"policy_engine": {Selected: "builtin"},
+		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), Source: sourceOf(*f.runnerSel, "none")},
 	}
 }

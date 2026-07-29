@@ -3,27 +3,34 @@
 
 package transport
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
-// TestBlockedTablesMatchPreExtractionLists pins the shared-table wiring to the
-// exact CIDR set this file carried inline before the internal/ipguard
-// extraction — the transport's table is the shared core verbatim (loopback and
-// link-local stay predicate-handled so allowPrivate semantics are unchanged).
-func TestBlockedTablesMatchPreExtractionLists(t *testing.T) {
-	wantV4 := map[string]bool{
-		"10.0.0.0/8": true, "172.16.0.0/12": true, "192.168.0.0/16": true,
-		"100.64.0.0/10": true, "0.0.0.0/8": true, "192.0.0.0/24": true,
-		"198.18.0.0/15": true, "255.255.255.255/32": true,
+// TestBlockedRangesMatchPreExtractionLists pins IsBlocked to the exact CIDR set
+// this file carried as an inline table before it moved onto internal/ipguard —
+// one representative address per range, so a literal that is no longer covered
+// fails HERE. Loopback and link-local stay predicate-handled (see TestIsBlocked)
+// so allowPrivate semantics are unchanged.
+func TestBlockedRangesMatchPreExtractionLists(t *testing.T) {
+	blocked := []string{
+		"10.0.0.1", "172.16.5.4", "192.168.1.1", // RFC1918
+		"100.64.0.1",      // CGNAT
+		"0.1.2.3",         // 0.0.0.0/8
+		"192.0.0.1",       // IETF protocol assignments
+		"198.19.0.1",      // benchmarking
+		"255.255.255.255", // limited broadcast
+		"fc00::1",         // IPv6 ULA
 	}
-	if len(blockedV4) != len(wantV4) {
-		t.Fatalf("blockedV4 has %d entries, want %d", len(blockedV4), len(wantV4))
-	}
-	for _, n := range blockedV4 {
-		if !wantV4[n.String()] {
-			t.Errorf("unexpected blockedV4 entry %s", n)
+	for _, s := range blocked {
+		if ok, _ := IsBlocked(net.ParseIP(s), false); !ok {
+			t.Errorf("IsBlocked(%s) = false, want blocked", s)
 		}
 	}
-	if len(blockedV6) != 1 || blockedV6[0].String() != "fc00::/7" {
-		t.Errorf("blockedV6 = %v, want exactly [fc00::/7]", blockedV6)
+	for _, s := range []string{"8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"} {
+		if ok, why := IsBlocked(net.ParseIP(s), false); ok {
+			t.Errorf("IsBlocked(%s) = true (%s), want allowed", s, why)
+		}
 	}
 }

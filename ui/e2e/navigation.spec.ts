@@ -11,8 +11,8 @@ import { test, expect, gotoConsole, navTo, sidebarLink, type NavLabel } from "./
 // Forensics + a pinned Getting started entry) whose entries are react-router
 // <NavLink>s (role="link") labelled Runs/Approvals/Policies/Secrets/Audit/
 // Recordings/Getting started, a top-bar "Toggle theme" button (aria-label), and
-// a per-screen <h1> page title supplied by PageHeader. Fleet is retired from the
-// nav (still routable at /fleet, not covered here). AppShell wraps the routed
+// a per-screen <h1> page title supplied by PageHeader. The Fleet board was
+// merged into Runs and no longer exists. AppShell wraps the routed
 // screen in an ErrorBoundary keyed by pathname so a render error in one screen
 // degrades to an inline alert card and navigating away clears it. The theme
 // lives on <html> (documentElement.dark + color-scheme) via ThemeProvider —

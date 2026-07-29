@@ -13,26 +13,21 @@ import (
 )
 
 // Self-register the OCI/Docker substrate so a blank import (cmd/wardynd under
-// `-tags docker`) makes "docker" selectable via -runner/WARDYN_RUNNER. Like every
-// file in this package the registration is compiled ONLY under the docker build
-// tag: a tagless wardynd has no "docker" registration, so `-runner docker` fails
-// closed at registry resolve ("not registered") — the same class of error as the
-// old hardcoded not-compiled-in branch, with zero target-specific code in the
-// default control-plane build (the parity rule).
+// `-tags docker`) makes "docker" selectable via -runner/WARDYN_RUNNER. Compiled
+// ONLY under the docker tag, so a tagless wardynd fails `-runner docker` closed
+// at registry resolve ("not registered") and carries no target-specific code.
 //
 // Record is enabled so Exec wraps the agent argv with wardyn-rec (PTY session
 // recording). WARDYN_RECORDING_MOUNT names a Docker volume (or absolute host
-// path) shared between agent containers and wardynd's -recording-dir; when set,
-// wardyn-rec delivers finished casts there (-out-dir) and replay lights up.
-// Single-host delivery only — multi-node upload (via proxy) lands in v0.5.
+// path) shared between agent containers and wardynd's -recording-dir, where
+// wardyn-rec delivers finished casts (single-host delivery only).
 //
-// SECURITY (HIGH-finding): WARDYN_RECORDING_MOUNT is the REDUCED-ISOLATION
-// fallback delivery path. Casts written to the shared mount are UNMASKED (secret
-// masking lives control-plane-side, on the brokered upload path) and the mount
-// has NO cross-run isolation (all agent containers share one uid). The driver
-// prefers the masked brokered upload whenever a run token exists and only uses
-// the shared mount when no upload path is available — but operators who set this
-// must understand the tradeoff, so we warn loudly at startup.
+// SECURITY (HIGH-finding): that shared mount is the REDUCED-ISOLATION fallback
+// delivery path — casts written to it are UNMASKED (secret masking lives
+// control-plane-side, on the brokered upload path) and it has NO cross-run
+// isolation (all agent containers share one uid). The driver prefers the masked
+// brokered upload whenever a run token exists; the startup warning below is how
+// an operator who sets it anyway learns the tradeoff.
 func init() {
 	substrate.Register("docker", func(d substrate.Deps) (substrate.Substrate, error) {
 		recordingMount := os.Getenv("WARDYN_RECORDING_MOUNT")

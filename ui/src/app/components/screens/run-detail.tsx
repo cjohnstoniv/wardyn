@@ -13,7 +13,6 @@ import {
   ArrowRight,
   Check,
   ChevronRight,
-  Copy,
   Fingerprint,
   Globe,
   KeyRound,
@@ -65,10 +64,11 @@ import {
   Chip,
   ConfinementChip,
   EgressDecisionChip,
+  RunStateBadge,
 } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
-import { RunStatusBadge } from "../wardyn/run-status-badge";
 import { JsonBlock, Mono } from "../wardyn/code-block";
+import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
@@ -351,7 +351,7 @@ function SummaryHeader({
             <span title={run.created_at}>started {relativeTime(run.created_at)} by {run.created_by}</span>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <RunStatusBadge state={run.state} />
+            <RunStateBadge state={run.state} />
             <ConfinementChip value={run.confinement_class} />
             <BarrierStrengthStrip tier={run.confinement_class} />
             {run.interactive && (
@@ -881,19 +881,16 @@ function KV({ label, children }: { label: string; children: React.ReactNode }) {
 }
 
 function CopyValue({ value }: { value: string }) {
-  const { copied, copy } = useCopyToClipboard(1400);
   return (
     <span className="flex min-w-0 items-center justify-end gap-1.5">
       <span className="truncate font-mono text-foreground" title={value}>
         {value}
       </span>
-      <button
-        onClick={() => copy(value)}
-        aria-label="Copy"
+      <CopyButton
+        text={value}
+        iconClassName="size-3"
         className="shrink-0 text-muted-foreground hover:text-foreground"
-      >
-        {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-      </button>
+      />
     </span>
   );
 }

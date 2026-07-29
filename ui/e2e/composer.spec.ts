@@ -43,10 +43,6 @@
 import { test, expect, gotoConsole } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
 
-// The AI Run Composer is enabled (the old features.ts flag was deleted); with the
-// seeded 'fake' backends this suite self-activates.
-const COMPOSER_UI_ENABLED = true;
-
 // The compose + launch tests share one seeded backend; the launch test mutates
 // run state (creates a run). Serial mode keeps the read-only compose/review
 // assertions from racing the create, and runs the mutating test last.
@@ -111,7 +107,6 @@ async function compose(page: Page, dlg: Locator, prompt: string): Promise<void> 
 }
 
 test.describe("AI Run Composer — Describe your task", () => {
-  test.skip(!COMPOSER_UI_ENABLED, "AI Run Composer suite disabled via the local toggle above");
 
   test("the provider dropdown lists the configured backends with the default preselected", async ({
     page,
