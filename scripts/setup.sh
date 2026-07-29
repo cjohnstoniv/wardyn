@@ -32,7 +32,7 @@
 # Usage:  ./scripts/setup.sh                 (asks containerized vs host; headless = containerized)
 #         WARDYN_SETUP_MODE=local ...        (host mode, no prompt)
 #         WARDYN_SETUP_MODE=container ...    (containerized single-user stack, no prompt)
-#         WARDYN_SETUP_MODE=team ...         (errors: team mode is coming soon)
+#         WARDYN_SETUP_MODE=team ...         (errors: team mode does not exist and is not scheduled)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -197,8 +197,8 @@ fi
 # set up at the CLI (`wardyn subscription connect`, api-key, Bedrock). HOST mode
 # (wardynd runs as you; uses your resident Claude login directly) is an advanced
 # escape hatch. ONE front door: with a TTY and no explicit WARDYN_SETUP_MODE we
-# ask (Enter = containerized); headless defaults to containerized too. TEAM (that
-# compose control plane as a shared MULTI-USER service: SSO/RBAC) is COMING SOON.
+# ask (Enter = containerized); headless defaults to containerized too. TEAM (a
+# shared MULTI-USER service: SSO/RBAC) does not exist yet and is not scheduled.
 if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
   hd "Where should the control plane run?"
   say "    1) containerized — the compose stack (default, recommended)"
@@ -226,25 +226,25 @@ case "${WARDYN_SETUP_MODE:-container}" in
     info "Bedrock — interactively after launch or headless via WARDYN_SUBSCRIPTION_TOKEN."
     exec ./scripts/up.sh up
     ;;
-  local) ;;
+  local|host) ;;
   team)
-    hd "Team mode is coming soon"
+    hd "Team mode does not exist yet"
     warn "Team mode — this compose control plane as a shared MULTI-USER service (SSO logins,"
-    warn "per-user identity/RBAC) — is a COMING-SOON feature and isn't available in this version."
-    warn "What works today, both single-user: HOST mode ('make setup' — wardynd runs as you, your"
-    warn "Claude login injected per-request at the proxy) and CONTAINERIZED mode"
-    warn "(WARDYN_SETUP_MODE=container — the compose stack, the WSL2 workspace-Verify/Record fix)."
+    warn "per-user identity/RBAC) — does not exist yet and is not scheduled (see ROADMAP.md)."
+    warn "What works today, both single-user: CONTAINERIZED mode ('make setup' / Enter at the"
+    warn "prompt — the compose stack, the default) and HOST mode (WARDYN_SETUP_MODE=local —"
+    warn "advanced: wardynd runs as you, your Claude login injected per-request at the proxy)."
     exit 2
     ;;
   *)
-    warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid. Supported: unset/local (host"
-    warn "mode) or container (compose stack, single-user). Team mode is coming soon."
+    warn "WARDYN_SETUP_MODE='${WARDYN_SETUP_MODE:-local}' is not valid. Supported: container (the"
+    warn "compose stack — the default), or local/host (advanced host mode). Team mode is not scheduled."
     exit 2
     ;;
 esac
-ok "Mode: host (local) — team (multi-user) is coming soon"
+ok "Mode: host (local) — advanced; containerized is the default"
 
-# ── ACT (host mode only; team is coming soon, so there is no team branch) ──────
+# ── ACT (host mode only; team mode does not exist, so there is no team branch) ──────
 # local / host mode
 hd "Setting up local (host) mode"
 
@@ -412,7 +412,6 @@ fi
 # not a silent hang. The oracle image (a deterministic e2e stand-in, no LLM) is
 # deliberately NOT built here — the e2e scripts that use it build it themselves;
 # a first-time user never runs it.
-. scripts/lib/images.sh
 hd "Agent images (per-run sandboxes)"
 for _img in claude-code:wardyn/agent-claude-code:local \
             codex-cli:wardyn/agent-codex-cli:local \

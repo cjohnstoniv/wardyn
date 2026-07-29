@@ -46,7 +46,7 @@ while IFS= read -r df; do
       fail=1
     fi
   done < <(grep -iE '^FROM ' "$df")
-done < <(find . \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) ! -path './.git/*' ! -path './ui/node_modules/*')
+done < <(find . \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) ! -path './.git/*' ! -path './ui/node_modules/*' ! -path './.claude/*')
 
 # ── compose registry images ─────────────────────────────────────────────────
 compose="./deploy/compose/docker-compose.yaml"

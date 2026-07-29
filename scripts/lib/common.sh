@@ -39,10 +39,14 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# image_missing IMAGE_REF — true (0) if IMAGE_REF is not present locally. The
+# build-if-missing scripts differ in build command, failure handling and log
+# text on purpose; only this predicate is shared.
+image_missing() { ! docker image inspect "$1" >/dev/null 2>&1; }
+
 # license_scope_files — the SINGLE source of truth for which tracked files must
-# carry the SPDX/copyright header, shared by the CI gate
-# (check-license-headers.sh) and the local fixer (add-license-headers.sh) so a
-# future edit to any exclude pattern updates both at once. Excludes generated
+# carry the SPDX/copyright header, used by scripts/license-headers.sh in both
+# its gate and its --fix mode. Excludes generated
 # (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist), and the
 # MIT-origin shadcn primitives (ui/src/app/components/ui/). Run from the repo
 # root (both callers `cd` there first). Emits one path per line.

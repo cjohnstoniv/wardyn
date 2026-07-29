@@ -22,10 +22,9 @@ import (
 )
 
 // Subscription proxy-side token-injection lanes. Two mirror-image proofs of the
-// feature committed in 1138705 (see test/e2e/RESULTS.md "Subscription proxy-side
-// token injection"): a subscription run holds only an inert SENTINEL credential
-// and the egress proxy TLS-MITMs api.anthropic.com to inject the operator's LIVE
-// host OAuth token per request.
+// feature committed in 1138705: a subscription run holds only an inert SENTINEL
+// credential and the egress proxy TLS-MITMs api.anthropic.com to inject the
+// operator's LIVE host OAuth token per request.
 //
 //   - TestLive_SubscriptionInject      (WARDYN_E2E_EXPECT_INJECT=on, the default):
 //     the safe default. Launching a subscription run authors the re-mintable
@@ -44,8 +43,8 @@ import (
 //
 // The control-plane audit event is the load-bearing discriminator (it is emitted
 // directly by wardynd, so it is reliable even on a Docker-Desktop/WSL host where
-// the proxy->control-plane egress callback may not route — see RESULTS.md). The
-// in-PTY curl corroborates at the transport layer.
+// the proxy->control-plane egress callback may not route). The in-PTY curl
+// corroborates at the transport layer.
 
 const subscriptionInjectAuditAction = "run.llm.subscription_inject"
 

@@ -1,18 +1,16 @@
 # Test reports
 
-Detailed, regenerable test reports for the Wardyn platform. Every suite emits a
-human-readable Markdown report **and** machine-readable coverage artifacts so
-results carry test-case descriptions, results, durations, and failure reasons
-— not just a pass/fail exit code.
+Regenerable test artifacts for the Wardyn platform. Every suite emits the raw
+`go test -json` event stream **and** coverage profiles, so a run carries
+per-test results, durations, and failure reasons — not just a pass/fail exit
+code.
 
 ## Layout
 
 ```
 test/reports/
-  README.md                 # this file (committed)
-  rollup.md                 # aggregate across all suites + 6-invariant grid (committed)
+  README.md                 # this file (the only committed file here)
   go/<suite>/
-    report.md               # per-test-case table + failure reasons (gitignored; regenerable)
     test-output.json        # raw `go test -json` stream (gitignored)
     cover.out               # coverage profile (gitignored; *.out)
     coverage.html           # HTML coverage (gitignored)
@@ -25,8 +23,8 @@ test/reports/
     junit.xml results.json  # (gitignored)
 ```
 
-Only `rollup.md` and this README are committed; everything else under
-`test/reports/` is regenerable output and gitignored (see `.gitignore`).
+Only this README is committed; everything else under `test/reports/` is
+regenerable output and gitignored (see `.gitignore`).
 
 ## How to regenerate
 
@@ -40,5 +38,5 @@ make ui-test                     # vitest + coverage -> test/reports/ui/
 cd ui && pnpm e2e                # Playwright (seeded backend) -> test/reports/e2e/
 ```
 
-The Go report generator is `scripts/test-report.sh` (orchestration) +
-`scripts/test2md.py` (test2json → Markdown). Both are dependency-free.
+The Go report driver is `scripts/test-report.sh` — `go test -json` plus
+`go tool cover`, no extra runtimes.

@@ -1,25 +1,23 @@
 #!/usr/bin/env bash
 # Run a Go test suite and emit detailed reports under test/reports/go/<suite>/:
 #   - test-output.json  : raw go test -json event stream
-#   - report.md         : human report (per-test result, duration, failure reason)
 #   - cover.out         : coverage profile
 #   - coverage.html     : HTML coverage (go tool cover)
 #   - coverage-func.txt : per-func coverage + total
 #
 # Usage:
-#   scripts/test-report.sh <suite-name> "<report title>" [go test args/pkgs...]
+#   scripts/test-report.sh <suite-name> [go test args/pkgs...]
 # Examples:
-#   scripts/test-report.sh unit "Go unit tests" ./...
-#   scripts/test-report.sh docker "Go docker tests" -tags docker ./internal/runner/...
+#   scripts/test-report.sh unit ./...
+#   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER (passed through to go test).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SUITE="${1:?usage: test-report.sh <suite> <title> [go test args...]}"
-TITLE="${2:?usage: test-report.sh <suite> <title> [go test args...]}"
-shift 2
+SUITE="${1:?usage: test-report.sh <suite> [go test args...]}"
+shift
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then PKGS=("./..."); fi
 
@@ -31,10 +29,6 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 go test -json -covermode=atomic -coverprofile="$OUT/cover.out" "${PKGS[@]}" \
   > "$OUT/test-output.json"
 GO_EXIT=$?
-
-# Detailed markdown from the event stream.
-python3 "$ROOT/scripts/test2md.py" --title "$TITLE" \
-  --out "$OUT/report.md" < "$OUT/test-output.json"
 
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
 if [ -s "$OUT/cover.out" ]; then

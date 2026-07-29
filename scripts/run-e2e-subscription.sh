@@ -31,7 +31,6 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-source "${ROOT}/scripts/lib/images.sh"
 source "${ROOT}/scripts/lib/common.sh"
 BASE="${WARDYN_E2E_BASE_URL:-http://localhost:8080}"
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"

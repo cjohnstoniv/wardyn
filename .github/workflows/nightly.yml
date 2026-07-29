@@ -21,19 +21,28 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.5'
+          go-version-file: go.mod
       - name: Docker available
         run: docker --version
+      # test/e2e/e2e.sh prints its per-check PASS/FAIL lines and its summary to
+      # stdout and writes NO file, so the evidence has to be captured here. It
+      # used to upload test/e2e/RESULTS.md, which is gitignored and which
+      # nothing generates: upload-artifact defaults to if-no-files-found: warn,
+      # so this job stayed green while shipping an EMPTY artifact every night.
+      # if-no-files-found: error below makes that failure mode loud.
       - name: Live security e2e (compose stack)
         env:
           WARDYN_TEST_DOCKER: "1"
-        run: make test-e2e
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e 2>&1 | tee test/reports/e2e/security-e2e.log
       - name: Upload e2e results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: e2e-live-results
-          path: test/e2e/RESULTS.md
+          path: test/reports/e2e/security-e2e.log
+          if-no-files-found: error
 
   # Live TASK e2e: real sandboxes run the test/e2e/tasks corpus and are graded on
   # final workspace STATE (did the agent actually do the work?), plus per-tier
@@ -47,7 +56,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.5'
+          go-version-file: go.mod
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 9
@@ -58,16 +67,41 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       - name: Docker available
         run: docker --version
+      # Same evidence problem as e2e-live above: run-e2e-live.sh drives `go test
+      # -v` and writes no report file, so capture the transcript here rather
+      # than uploading a path nothing produces.
       - name: Live task e2e (real sandboxes + graders, oracle lane)
         env:
           WARDYN_TEST_DOCKER: "1"
-        run: make test-e2e-live
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-live 2>&1 | tee test/reports/e2e/task-e2e.log
       - name: Upload e2e results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: task-e2e-live-results
-          path: test/e2e/RESULTS.md
+          path: test/reports/e2e/task-e2e.log
+          if-no-files-found: error
+
+  # The guided governance test-drive — the walkthrough the docs point a new
+  # operator at (clone + governed egress, egress deny, metadata block, first-use
+  # approval, brokered git, kill cascade, recording). It ran in NO automation, so
+  # the first-run experience could rot silently between releases. Its own job:
+  # `make test-drive` passes --up, which brings up a compose stack of its own,
+  # so it must not share a runner with the e2e jobs above. It needs the
+  # claude-code agent image (AGENT=claude-code in the script), which the compose
+  # `up` does not build.
+  test-drive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Docker available
+        run: docker --version
+      - name: Build the agent image the test-drive launches runs with
+        run: make agent-images-core
+      - name: Guided governance test-drive (brings up its own compose stack)
+        run: make test-drive
 
   # CI-mode dogfood: the exact flow docs/ci/github-actions.yml tells users to
   # run — scripts/ci-run.sh brings up a fresh control plane, launches ONE
@@ -121,7 +155,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.5'
+          go-version-file: go.mod
       - name: Docker available
         run: docker --version
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)

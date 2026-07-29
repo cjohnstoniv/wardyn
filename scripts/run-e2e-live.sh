@@ -16,7 +16,7 @@
 # tears it down on exit. On native docker (Linux/CI) the proxy->control-plane
 # egress callback routes, so the recording-replay SYNTHESIS allowlist is populated
 # too; on a managed-VM docker (Docker Desktop/WSL) that callback may not route
-# (the relaunch-confinement proof still holds — see test/e2e/RESULTS.md).
+# (the relaunch-confinement proof still holds).
 set -uo pipefail
 
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then

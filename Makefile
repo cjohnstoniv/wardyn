@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license ci
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -50,76 +50,25 @@ DOCKER_BUILD_ARGS = \
 	$(call _build_arg,CODEX_INSTALL,$(CODEX_INSTALL)) \
 	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION))
 
+# Self-describing help: the description lives on the target line as a `##`
+# comment, so it cannot drift out of step with the target list the way the
+# hand-echoed block it replaced did (that block silently omitted `ci`, the merge
+# gate, plus 9 other targets). Operator detail too long for one line lives in the
+# comment block above each recipe.
 help:
-	@echo "Wardyn governance control plane"
-	@echo ""
-	@echo "Targets:"
-	@echo "  setup                 - One-command Wardyn: containerized by default (Enter = containerized), host is advanced,"
-	@echo "                          credential, builds, up, opens browser. Headless defaults to containerized; scripts pick"
-	@echo "                          with WARDYN_SETUP_MODE=local|container. Team (multi-user) mode is not scheduled — see ROADMAP.md."
-	@echo "                          (non-interactive opt-ins: WARDYN_STAGE_CLAUDE=1, WARDYN_IMPORT_AWS=1,"
-	@echo "                           WARDYN_IMPORT_SCM=1, WARDYN_FORCE_RESET=1)"
-	@echo "  stage-claude          - Stage your Claude login for per-run subscription mounts (restarts wardynd)"
-	@echo "  stop-host             - Stop the host-mode wardynd started by make setup (pidfile under ~/.wardyn)"
-	@echo "  reset                 - Clean slate: wipe local volumes (runs + audit + recordings) then setup"
-	@echo "  reset-all             - FULL undo of local setup: host daemon + compose + ~/.wardyn install files"
-	@echo "                          (ARGS='--dry-run' to audit; '--purge-images'/'--purge-env' to go further)"
-	@echo "  doctor                - Read-only preflight (docker, ports, confinement classes, WSL/Windows)"
-	@echo "  dev-pg                - Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)"
-	@echo "  build                 - Build Go binaries (default tags)"
-	@echo "  build-docker          - Build Go binaries with -tags docker"
-	@echo "  test                  - Run all Go tests"
-	@echo "  test-docker           - Run all Go tests with -tags docker"
-	@echo "  test-conformance-docker - Run conformance suite on Docker (requires WARDYN_TEST_DOCKER=1)"
-	@echo "  test-conformance-stub - Run the driver-agnostic conformance honesty stub (no cluster required)"
-	@echo "  test-envbuild-integration - Real-daemon envbuild push/pull smoke test (provisions a throwaway"
-	@echo "                          registry + tools dir; needs Docker; runs TestBuild_SmokeDockerd)"
-	@echo "  govulncheck           - Run govulncheck for known vulnerabilities"
-	@echo "  staticcheck           - Run staticcheck static analysis"
-	@echo "  diagrams              - Validate the mermaid diagrams in the public docs (syntax + label-truth)"
-	@echo "  license-headers       - Check (CI) SPDX headers on source files; ARGS=fix to apply"
-	@echo "  lint                  - Run go vet (both tag sets) + golangci-lint size/complexity gate + file-size gate"
-	@echo "  ui                    - Build embedded web UI"
-	@echo "  ui-typecheck          - Typecheck the web UI (tsc --noEmit)"
-	@echo "  ui-test               - Run web UI vitest unit/component tests + coverage"
-	@echo "  test-e2e-ui           - Playwright UI e2e vs a seeded backend (needs Docker + chromium)"
-	@echo "  screenshots           - Regenerate docs/img UI screenshots (run after visible UI changes, commit the diff)"
-	@echo "  test-e2e              - Live security e2e: L0 egress, metadata block, kill cascade (needs Docker)"
-	@echo "  test-e2e-live         - Live TASK e2e: real sandboxes run the corpus, graded on state (needs Docker)"
-	@echo "  test-e2e-subscription - Live SUBSCRIPTION e2e: proxy-side inject-on attach + inject-off escape hatch (restarts wardynd)"
-	@echo "  test-e2e-byoi         - Live BYOI e2e: wrap stock/harness/hostile/nonexistent bases + selftest gate (needs Docker)"
-	@echo "  test-e2e-concurrent   - Shared-host concurrency: two project-scoped stacks up at once,"
-	@echo "                          no collision + cross-network isolation (needs Docker)"
-	@echo "  test-report           - Go unit tests with detailed md/coverage reports"
-	@echo "  test-report-pg        - Postgres-gated suite with reports (needs WARDYN_TEST_PG)"
-	@echo "  test-report-docker    - -tags docker suite with reports (fakeDocker; no daemon needed,"
-	@echo "                          WARDYN_TEST_DOCKER=1 adds the real-daemon cases)"
-	@echo "  cover-check           - Enforce the COVER_MIN coverage floor over BOTH shipped builds"
-	@echo "                          (tagless + -tags docker, unioned; see scripts/cover-union.sh)"
-	@echo "  release-check         - Pre-tag gate: the RELEASING.md gate list in one command"
-	@echo "                          (pushes/tags nothing; WARDYN_TEST_PG adds the Postgres lane)"
-	@echo "  ci                    - Daemon-free merge gate (the CI checks that need no daemon/service);"
-	@echo "                          excludes docker-conformance, WARDYN_TEST_DOCKER e2e, PG + UI-e2e lanes"
-	@echo "  compose-build         - Build compose images (wardynd -tags docker + proxy)"
-	@echo "  compose-up            - Start docker-compose stack (postgres + dex + wardynd)"
-	@echo "  compose-down          - Stop docker-compose stack"
-	@echo "  demo                  - End-to-end compose demo (build, up, run, audit)"
-	@echo "  agent-images          - Build all agent OCI images (claude-code + codex-cli + oracle e2e stand-in + aws-sso)"
-	@echo "  agent-images-core     - Build just the user-facing agent images (claude-code + codex-cli)"
-	@echo "  test-drive            - Guided governance test-drive against a running compose stack"
-	@echo "                          (ARGS='--up' to bring the stack up first)"
-	@echo "  clean                 - Remove built binaries"
+	@echo "Wardyn governance control plane. Targets:"
+	@awk -F':.*##' '/^[a-z0-9-]+:.*##/{printf "  %-24s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
 # Core = the two real agent harnesses a user actually runs. The oracle image is
 # a deterministic e2e stand-in (no LLM) — dev/e2e only, so setup paths build
 # core and the e2e scripts build oracle themselves.
-agent-images-core:
+agent-images-core: ## Build the user-facing agent images (claude-code + codex-cli)
 	@echo "Building agent images (build context: repo root)..."
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:local   .
 	@echo "Agent images built: wardyn/agent-claude-code:local  wardyn/agent-codex-cli:local"
 
-agent-images: agent-images-core
+agent-images: agent-images-core ## Build all agent OCI images (core + oracle e2e stand-in + aws-sso)
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/aws-sso/Dockerfile     -t wardyn/agent-aws-sso:local     .
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
@@ -135,20 +84,20 @@ agent-images: agent-images-core
 # a stale :demo tag whose Go (1.23.5) predated this repo's own go.mod (1.26) and
 # which shipped no pnpm. Build it explicitly, then point runs at it with:
 #   WARDYN_AGENT_IMAGES='{"claude-code":"wardyn/agent-full:local"}'
-agent-image-full: agent-images-core
+agent-image-full: agent-images-core ## Build the fat toolchain agent image (Go/Python/Rust/JDK/pnpm)
 	@echo "Building the fat toolchain image (Go/Python/Rust/JDK/pnpm)..."
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
 	@echo "Full toolchain image built: wardyn/agent-full:local"
 
-build:
+build: ## Build Go binaries (default tags)
 	@echo "Building Go binaries..."
 	go build ./...
 
-build-docker:
+build-docker: ## Build Go binaries with -tags docker
 	@echo "Building Go binaries (-tags docker)..."
 	go build -tags docker ./...
 
-test:
+test: ## Run all Go tests
 	@echo "Running Go tests..."
 	go test ./...
 
@@ -159,26 +108,26 @@ test:
 # tree (internal/runner/docker, internal/envbuild) — the concurrency-heavy
 # sandbox lifecycle — so it would get zero race coverage. The docker-tagged pass
 # needs no daemon (the real-Docker cases self-skip unless WARDYN_TEST_DOCKER=1).
-test-race:
+test-race: ## Race-detector sweep over BOTH tag sets (tagless + -tags docker)
 	@echo "Running Go tests under the race detector (tagless)..."
 	go test -race ./...
 	@echo "Running Go tests under the race detector (-tags docker)..."
 	go test -race -tags docker ./...
 
-test-docker:
+test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
 	go test -tags docker ./...
 
-# ── detailed test reports (markdown + coverage) ─────────────────────────────
-# Emits per-test-case reports under test/reports/go/<suite>/. See
-# scripts/test-report.sh and scripts/test2md.py.
-test-report:
+# ── detailed test reports (JSON event stream + coverage) ────────────────────
+# Emits per-suite artifacts under test/reports/go/<suite>/. See
+# scripts/test-report.sh.
+test-report: ## Go unit suite with per-suite JSON + coverage artifacts
 	@echo "Running Go unit suite with detailed reports..."
-	./scripts/test-report.sh unit "Wardyn Go unit tests" ./...
+	./scripts/test-report.sh unit ./...
 
-test-report-pg:
+test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	./scripts/test-report.sh pg "Wardyn Postgres integration tests" \
+	./scripts/test-report.sh pg \
 		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
 		./internal/api/... ./test/apie2e/...
 
@@ -187,9 +136,9 @@ test-report-pg:
 # them — none of which the tagless build can even compile — are actually tested
 # and measured. No daemon needed: the real-Docker cases self-skip unless
 # WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
-test-report-docker:
+test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed)
 	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
-	./scripts/test-report.sh docker "Wardyn Go tests (-tags docker)" -tags docker ./...
+	./scripts/test-report.sh docker -tags docker ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of both shipped builds (tagless + -tags docker), not
@@ -199,41 +148,39 @@ test-report-docker:
 # under that with a small margin for routine churn. Raise it as coverage climbs.
 # scripts/cover-union.sh documents exactly what is and is not counted.
 COVER_MIN ?= 65
-cover-check: test-report test-report-docker
+cover-check: test-report test-report-docker ## Enforce the COVER_MIN floor over BOTH shipped builds, unioned
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
 		test/reports/go/unit/cover.out test/reports/go/docker/cover.out
 
 # ── pre-tag release gate ────────────────────────────────────────────────────
-# The gate list RELEASING.md names, as ONE command, so cutting a release is not a
-# hand-copied checklist. Runs the same commands the CI jobs run, at the same
-# pinned tool versions. It PUSHES NOTHING and TAGS NOTHING — it only tells you
-# whether the commit is tag-able.
+# `ci` PLUS the release-only checks. It used to be a hand-copied subset of ci's
+# prerequisites, which made the PRE-TAG gate WEAKER than the MERGE gate (it
+# skipped diagrams, helm-lint, compose-config, dco, npm-license and every UI
+# job). Depending on `ci` means adding a gate to ci automatically strengthens
+# the release gate. It PUSHES NOTHING and TAGS NOTHING.
 #
-# Deliberately NOT a full CI replica: test-report-pg runs only when
-# WARDYN_TEST_PG is set (and says so loudly when it isn't), and the
-# service-dependent lanes (test-conformance-docker), the UI jobs, and DCO are
-# CI-only. CI remains the authority — see RELEASING.md.
-release-check: build build-docker lint cover-check test-race staticcheck govulncheck license-headers
+# WARDYN_TEST_PG adds the Postgres lane (CI always runs it; local runs say so
+# loudly when it is skipped). Still not a full CI replica: the three jobs that
+# need a live daemon or service — conformance, envbuild-integration and the
+# Playwright ui-e2e — are CI-only. See RELEASING.md.
+release-check: ci ## Pre-tag gate: make ci + CHANGELOG + screenshot freshness (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
+	@test "$$(git log -1 --format=%ct -- docs/img)" -ge "$$(git log -1 --format=%ct -- ui/src/app/components/screens)" || (echo "docs/img is older than the newest ui/src/app/components/screens commit - run 'make screenshots' and commit the PNGs"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
 	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
 	else \
 	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
 	fi
-	@echo "==> Dependency licenses (tagless + -tags docker)"
-	@$(MAKE) licenses
-	@echo "==> Secret scan (full git history)"
-	@$(MAKE) gitleaks
 	@echo ""
-	@echo "release-check PASSED. NOT covered here: test-conformance-docker, the UI"
-	@echo "jobs, and DCO — confirm CI is green on the commit before tagging."
+	@echo "release-check PASSED. NOT covered here: conformance, envbuild-integration"
+	@echo "and the Playwright ui-e2e — confirm CI is green on the commit before tagging."
 
-test-conformance-docker:
+test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 10m ./test/conformance/...
 
-test-conformance-stub:
+test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no cluster needed)
 	@echo "Running driver-agnostic conformance honesty-stub tests (no cluster required)..."
 	go test -v -timeout 2m ./test/conformance/...
 
@@ -256,7 +203,7 @@ test-conformance-stub:
 # WSL/host loopback in any network mode. The tools are staged from the same
 # in-repo sources the agent images ship (cmd/* + deploy/images/*), so the
 # finalize COPY has real binaries to layer, not stubs.
-test-envbuild-integration:
+test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs Docker)
 	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
 	@set -eu; \
 	tools_dir="$$(mktemp -d)"; \
@@ -278,14 +225,14 @@ test-envbuild-integration:
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
 # brokered creds, recording). Heavy: stands up the compose stack. Guarded by
 # WARDYN_TEST_DOCKER=1 inside the script. Runs in the nightly workflow.
-test-e2e:
+test-e2e: ## Live security e2e: L0 egress, metadata block, kill cascade (needs Docker)
 	@echo "Running live security e2e (requires Docker; WARDYN_TEST_DOCKER=1)..."
 	WARDYN_TEST_DOCKER=1 ./test/e2e/e2e.sh
 
 # Shared-host concurrency acceptance test: two project-scoped stacks up at once,
 # proving no name/network/volume/port collision, cross-network isolation, and that
 # one job's `down --volumes` never tears down another's. Needs wardyn/wardynd:local.
-test-e2e-concurrent:
+test-e2e-concurrent: ## Two project-scoped stacks up at once: no collision, net isolation
 	@echo "Running 2-job shared-host concurrency test (requires Docker + wardyn/wardynd:local)..."
 	@docker image inspect wardyn/wardynd:local >/dev/null 2>&1 || $(MAKE) -s compose-build
 	./scripts/test-concurrent.sh
@@ -296,7 +243,7 @@ test-e2e-concurrent:
 # lane runs by default; add WARDYN_E2E_REAL_MODEL=1 (+ staged creds via
 # scripts/stage-claude-creds.sh) for the real claude-code lane. Guarded by
 # WARDYN_TEST_DOCKER=1 inside the script.
-test-e2e-live:
+test-e2e-live: ## Live TASK e2e: real sandboxes run the corpus, graded on state
 	@echo "Running live TASK e2e (real sandboxes + graders; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-live.sh
 
@@ -304,7 +251,7 @@ test-e2e-live:
 # driver RESTARTS wardynd with WARDYN_SUBSCRIPTION_INJECT flipped to run both the
 # inject-on attach-walkthrough and the inject-off escape-hatch lane, then restores
 # the safe default. Needs Docker + staged Claude creds (scripts/stage-claude-creds.sh).
-test-e2e-subscription:
+test-e2e-subscription: ## Live SUBSCRIPTION e2e: inject-on attach + inject-off escape hatch
 	@echo "Running live SUBSCRIPTION e2e (inject-on attach + inject-off escape hatch; restarts wardynd)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-subscription.sh
 
@@ -313,16 +260,16 @@ test-e2e-subscription:
 # proven to hold, including the fail-closed agent-run --selftest launch gate.
 # Needs Docker + the envbuild path; the script self-skips without
 # WARDYN_TEST_DOCKER=1.
-test-e2e-byoi:
+test-e2e-byoi: ## Live BYOI e2e: wrap stock/harness/hostile bases + selftest gate
 	@echo "Running live BYOI e2e (wrap + selftest gate; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-byoi.sh
 
-govulncheck:
+govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker)
 	@echo "Running govulncheck (tagless + -tags docker, the shipped build)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker ./...
 
-staticcheck:
+staticcheck: ## Static analysis (tagless + -tags docker)
 	@echo "Running staticcheck (tagless + -tags docker)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
@@ -332,11 +279,11 @@ staticcheck:
 # used by internal/envbuild/fake_test.go), would otherwise drift uncaught. `-diff`
 # prints the tidy diff and exits nonzero when untidy WITHOUT mutating go.mod/go.sum,
 # so it never clobbers uncommitted edits (unlike a tidy + git checkout dance).
-tidy-check:
+tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint:
+lint: ## go vet (both tag sets) + golangci-lint size/complexity + file-size gate
 	@echo "Running go vet (default + docker tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -353,20 +300,20 @@ lint:
 
 # Secret scan over full git history (NOT gitleaks-action, whose default scan
 # range is only the triggering diff — see ci.yml's gitleaks-job comment).
-gitleaks:
+gitleaks: ## Scan the FULL git history for committed secrets
 	@echo "Scanning full git history for secrets with gitleaks $(GITLEAKS_VERSION)..."
 	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml -v
 
 # Forbid copyleft / non-permissive Go dependencies. go-licenses has no -tags
 # flag, so the docker-tagged deps (moby/moby/*, containerd/errdefs) are covered
 # by driving the tag through GOFLAGS on the second pass (U112).
-licenses:
+licenses: ## Forbid copyleft/non-permissive Go dependencies (both tag sets)
 	@echo "Checking Go dependency licenses (tagless + -tags docker)..."
 	go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
 	GOFLAGS=-tags=docker go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
 
 # Helm chart lint + template-render (must render the load-bearing objects).
-helm-lint:
+helm-lint: ## Lint + template-render the Helm chart (must render the key objects)
 	@echo "Linting + rendering the Helm chart..."
 	helm lint ./deploy/helm/wardyn
 	@out=$$(helm template wardyn ./deploy/helm/wardyn); \
@@ -377,41 +324,35 @@ helm-lint:
 	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }
 
 # Validate the docker-compose file parses (does NOT need a running daemon).
-compose-config:
+compose-config: ## Validate the docker-compose file parses (no daemon needed)
 	@echo "Validating docker-compose config..."
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
 
 # DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
+#
+# git parses trailers itself (%(trailers:...) since 2.13), so there is no
+# hand-rolled regex and no `git log -1` fork per commit. `separator=` is
+# load-bearing: without it each trailer value is terminated by a line feed, which
+# would emit a phantom blank record per commit. valueonly + the key filter also
+# means a "Signed-off-by:" typed mid-body no longer counts — only a real trailer.
 DCO_RANGE ?= origin/main..HEAD
-dco:
+dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
-	@COMMITS=$$(git log --no-merges $(DCO_RANGE) --format='%H') || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
-	MISSING=0; \
-	for sha in $$COMMITS; do \
-	  msg=$$(git log -1 --format='%B' "$$sha"); \
-	  if ! echo "$$msg" | grep -qE '^Signed-off-by: .+ <.+@.+>'; then \
-	    echo "MISSING Signed-off-by in commit $$sha:"; \
-	    echo "$$msg" | head -3; \
-	    MISSING=$$((MISSING+1)); \
-	  fi; \
-	done; \
-	if [ "$$MISSING" -gt 0 ]; then \
-	  echo ""; \
-	  echo "ERROR: $$MISSING commit(s) lack a Signed-off-by trailer."; \
-	  echo "Add it with: git commit --signoff (or git commit -s)"; \
-	  exit 1; \
-	fi; \
+	@signoffs=$$(git log --no-merges $(DCO_RANGE) --format='%H%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
+	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
+	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' '$$2==""{print $$1}'); \
+	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a Signed-off-by trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 
 # CycloneDX SBOM via syft (release stub; installs syft if absent, pinned).
-sbom:
+sbom: ## Generate a CycloneDX SBOM via syft (release stub)
 	@echo "Generating CycloneDX SBOM via syft $(SYFT_VERSION)..."
 	@command -v syft >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/anchore/syft/$(SYFT_VERSION)/install.sh | sh -s -- -b /usr/local/bin $(SYFT_VERSION)
 	syft . -o cyclonedx-json > wardyn-sbom.cdx.json
 
 # Fail closed on a copyleft license in a SHIPPED (prod) UI dependency.
-npm-license:
+npm-license: ## Fail closed on copyleft in a SHIPPED (prod) UI dependency
 	@echo "Checking UI production dependency licenses (no copyleft)..."
 	./scripts/check-ui-licenses.sh
 
@@ -421,37 +362,35 @@ npm-license:
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker lint cover-check test-race staticcheck govulncheck \
-    license-headers licenses gitleaks helm-lint compose-config dco diagrams \
-    npm-license ui-typecheck ui-test ui test-conformance-stub
+ci: build build-docker lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
 	@echo "  Postgres suite (test-pg), the Playwright UI e2e (ui-e2e), and the"
 	@echo "  push-only SBOM stub — confirm CI is green before merging."
 
-ui:
+ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
 	cd ui && pnpm install --frozen-lockfile && pnpm build
 
-ui-typecheck:
+ui-typecheck: ## Typecheck the web UI (tsc --noEmit)
 	@echo "Typechecking web UI (tsc --noEmit)..."
 	cd ui && pnpm install --frozen-lockfile && pnpm typecheck
 
-ui-test:
+ui-test: ## Web UI vitest unit/component tests + coverage
 	@echo "Running web UI unit/component tests (vitest + coverage)..."
 	cd ui && pnpm install --frozen-lockfile && pnpm test:coverage
 
 # Playwright UI e2e against a seeded none-runner backend. Each spec runs against a
 # FRESHLY SEEDED backend (deterministic isolation). Requires Docker (Postgres) and
 # the Playwright chromium browser (`cd ui && pnpm exec playwright install chromium`).
-test-e2e-ui:
+test-e2e-ui: ## Playwright UI e2e vs a seeded backend (needs Docker + chromium)
 	@echo "Running Playwright UI e2e (fresh seed per spec)..."
 	cd ui && pnpm install --frozen-lockfile
 	./scripts/run-ui-e2e.sh
 
 # regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.
-screenshots:
+screenshots: ## Regenerate docs/img UI screenshots (run after visible UI changes)
 	./scripts/screenshots.sh
 
 # ONE front door: asks containerized (default, recommended — the compose stack) vs
@@ -459,8 +398,9 @@ screenshots:
 # login). Enter / headless = containerized; team (multi-user) mode is not scheduled (see ROADMAP.md).
 # In host mode a terminal PROMPTS for each credential (staging, AWS, SCM); a headless
 # run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1 /
-# WARDYN_IMPORT_SCM=1 are set.
-setup:
+# WARDYN_IMPORT_SCM=1 / WARDYN_FORCE_RESET=1 are set. Scripts that must not
+# prompt at all pick the mode up front with WARDYN_SETUP_MODE=local|container.
+setup: ## One-command Wardyn: containerized (default) or host; builds, ups, opens the UI
 	@echo "Wardyn setup — asks containerized (default) vs host, then launches + opens the UI..."
 	./scripts/setup.sh
 
@@ -468,12 +408,12 @@ setup:
 # Re-runs setup with staging forced; a running wardynd is restarted so it loads
 # the just-generated subscription ceiling. Idempotent — safe to re-run anytime
 # (e.g. after a headless `make setup` skipped the staging prompt).
-stage-claude:
+stage-claude: ## Stage your Claude login for per-run subscription mounts (restarts wardynd)
 	WARDYN_STAGE_CLAUDE=1 WARDYN_SETUP_MODE=local ./scripts/setup.sh
 
 # Stop the background host-mode wardynd started by `make setup`.
 # (Team/compose mode is stopped with `make compose-down`.)
-stop-host:
+stop-host: ## Stop the host-mode wardynd started by make setup (pidfile under ~/.wardyn)
 	@pid=$$(cat $$HOME/.wardyn/host-wardynd.pid 2>/dev/null); \
 	if [ -n "$$pid" ] && kill -0 $$pid 2>/dev/null; then \
 	  kill $$pid && rm -f $$HOME/.wardyn/host-wardynd.pid && echo "Stopped host-mode wardynd (PID $$pid)."; \
@@ -485,7 +425,7 @@ stop-host:
 # Deliberate clean slate: `make compose-down` KEEPS the named volumes (runs +
 # append-only audit + recordings survive by design); `make reset` wipes them and
 # re-runs setup, so you land on an EMPTY Runs list.
-reset:
+reset: ## Clean slate: wipe local volumes (runs + audit + recordings) then setup
 	@echo "Resetting local Wardyn (wipes volumes: runs + audit + recordings, then re-up)..."
 	./scripts/up.sh reset
 
@@ -493,47 +433,55 @@ reset:
 # + volumes, the stray wardyn-internal network, wardyn-test-pg, and the
 # ~/.wardyn install files (allowlist — staged Claude creds included; the rest of
 # ~/.wardyn is preserved). Keeps the age key (.env) and built images unless
-# ARGS='--purge-env' / '--purge-images'. Leaves the box clean — no re-up.
-reset-all:
+# ARGS='--purge-env' / '--purge-images'; ARGS='--dry-run' only audits what would
+# go. Leaves the box clean — no re-up.
+reset-all: ## FULL undo: host daemon + compose + ~/.wardyn files (ARGS: --dry-run, --purge-*)
 	./scripts/up.sh reset-all $(ARGS)
 
-doctor:
+doctor: ## Read-only preflight (docker, ports, confinement classes, WSL/Windows)
 	./scripts/up.sh doctor
 
-dev-pg:
+dev-pg: ## Start/ensure the dockerized dev/e2e Postgres (wardyn-test-pg :55432)
 	./scripts/up.sh pg
 
-compose-build:
+compose-build: ## Build compose images (wardynd -tags docker + proxy)
 	@echo "Building compose images..."
 	docker compose -f $(COMPOSE_FILE) build
 	docker compose -f $(COMPOSE_FILE) --profile build-only build proxy-image
 
-compose-up:
+compose-up: ## Start the docker-compose stack (postgres + dex + wardynd)
 	@echo "Starting docker-compose stack..."
 	docker compose -f $(COMPOSE_FILE) up -d postgres dex wardynd
 
-compose-down:
+compose-down: ## Stop the docker-compose stack
 	@echo "Stopping docker-compose stack..."
 	docker compose -f $(COMPOSE_FILE) down
 
-demo:
+demo: ## End-to-end compose demo (build, up, run, audit)
 	@echo "Running the Wardyn compose demo..."
 	./scripts/demo.sh
 
-test-drive:
+# Walks every major governance feature against a compose stack. ARGS defaults to
+# '--up' so it brings its own stack up; override for a stack that is already
+# running (ARGS=''), a single section (ARGS='--section 3'), or ARGS='--keep'.
+test-drive: ## Guided governance test-drive (ARGS defaults to --up: brings the stack up)
 	@echo "Running the Wardyn governance test-drive (brings the stack up; override with ARGS=...)..."
 	./scripts/test-drive.sh $(if $(ARGS),$(ARGS),--up)
 
-clean:
-	@echo "Cleaning built binaries..."
-	rm -f bin/*
-	rm -rf dist/
+# Every place a build actually lands: bin/ (make build), .e2e-bin/ and .local-bin/
+# (the e2e + local backend scripts), ui/dist, and the repo-root binaries
+# .gitignore already anticipates. The old recipe removed bin/* plus a `dist/`
+# that has never existed at the repo root, leaving ~74 MB of stale root binaries
+# behind — precisely the state where a re-run of setup uses old code.
+clean: ## Remove built binaries, the e2e/local bin dirs and the UI bundle
+	@echo "Cleaning built binaries and generated output..."
+	rm -rf bin .e2e-bin .local-bin ui/dist wardynd wardyn-proxy wardyn-rec wardyn-verify wardyn-git-helper wardyn-tetragon-ingest wardyn-sbom.cdx.json
 
 # Validate every fenced mermaid diagram in the public docs: parses/renders via
 # mermaid-cli and each load-bearing label still exists at its cited source.
-diagrams:
+diagrams: ## Validate the mermaid diagrams in the public docs (syntax + label-truth)
 	./scripts/check-diagrams.sh
 
 # Check SPDX license headers on source files (or apply with: make license-headers ARGS=fix).
-license-headers:
-	@if [ "$(ARGS)" = "fix" ]; then ./scripts/add-license-headers.sh; else ./scripts/check-license-headers.sh; fi
+license-headers: ## Check SPDX headers on source files; ARGS=fix to apply them
+	./scripts/license-headers.sh $(if $(filter fix,$(ARGS)),--fix)

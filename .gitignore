@@ -60,8 +60,8 @@ docker-compose.override.yml
 # local, non-published scratch (configs, keys, scratch scripts)
 /local/
 
-# Generated test-report artifacts (regenerable per run). Committed durable
-# files: test/reports/README.md and rollup.md. Everything else is generated.
+# Generated test-report artifacts (regenerable per run). The only committed
+# file under test/reports/ is its README.md; everything else is generated.
 test/reports/go/
 test/reports/ui/
 test/reports/e2e/

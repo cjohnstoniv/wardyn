@@ -19,7 +19,6 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
-source "${REPO_ROOT}/scripts/lib/images.sh"
 source "${REPO_ROOT}/scripts/lib/common.sh"
 
 # Provision + exec wardyn-test-pg on the same daemon as up.sh pg (dual-daemon boxes).
