@@ -54,7 +54,7 @@ before step 3.
    commit as the rename.
 2. **Commit** the CHANGELOG bump, DCO-signed: `git commit -s -m "release: X.Y.Z"`.
 3. **Tag** the release commit: `git tag vX.Y.Z` (tags are `v`-prefixed —
-   `v0.1.0` … `v0.4.2`).
+   `v0.1.0` … `v0.4.3`).
 4. **Push** the commit and the tag: `git push origin main && git push origin vX.Y.Z`.
 5. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
    as the body. **Mark it a pre-release** (`gh release create --prerelease`) — Wardyn is
@@ -72,21 +72,30 @@ below. A required context must be **exactly** a `.github/workflows/ci.yml` job i
 **that reports on a pull request** — re-check both halves whenever the merge gate
 changes:
 
+Change the **contexts only** — `PATCH .../protection/required_status_checks` leaves
+the review, admin and force-push settings alone. A full `PUT .../protection` rewrites
+every field, so any key you omit is silently reset (the earlier version of this
+document shipped a `PUT` body that would have flipped `strict` to false and dropped
+`require_code_owner_reviews`):
+
 ```sh
-gh api -X PUT repos/cjohnstoniv/wardyn/branches/main/protection \
+gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_status_checks \
   --input - <<'JSON'
 {
-  "required_status_checks": { "strict": false, "contexts": [
-    "build", "diagrams", "ui", "ui-e2e", "helm", "compose", "conformance",
-    "envbuild-integration", "test-pg", "govulncheck", "staticcheck",
-    "dco", "gitleaks", "licenses", "license-headers"
-  ] },
-  "enforce_admins": false,
-  "required_pull_request_reviews": null,
-  "restrictions": null
+  "strict": true,
+  "contexts": [
+    "build", "ui", "dco",
+    "gates (govulncheck)", "gates (staticcheck)", "gates (gitleaks)",
+    "gates (licenses)", "gates (license-headers)"
+  ]
 }
 JSON
 ```
+
+Read it back with
+`gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.
+A matrix job reports one context per cell as `<job-id> (<matrix-value>)`, which is why
+the five supply-chain gates are `gates (...)` rather than bare names.
 
 A job conditional on `push`, a schedule, or a path filter must **not** be a required
 context (this is why `sbom-stub` is absent above): GitHub does not treat a

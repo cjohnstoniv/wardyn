@@ -8,6 +8,44 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-07-29
+
+A clarity release: no new features, no API changes. A repo-wide audit rewrote the
+docs around a single quickstart, redrew the architecture diagram, and fixed the
+places where the docs described something the code does not do. It also found two
+CI gates that had been passing without checking anything.
+
+**Operators upgrading:** nothing to do — no schema, config, or interface changed.
+
+**Maintainers:** the CI merge gate collapsed five single-command jobs into one
+`gates` matrix, so the required status checks on `main` must be renamed from
+`govulncheck`/`staticcheck`/`gitleaks`/`licenses`/`license-headers` to
+`gates (<name>)`. Until that is applied, a pull request waits forever on contexts
+that no longer report. See [RELEASING.md](RELEASING.md), "Repo settings".
+
+### Fixed
+
+- **The nightly live e2e jobs were passing while their assertions failed.** Both
+  steps pipe `make` into `tee` to capture evidence, but GitHub's implicit shell has
+  no `pipefail`, so the step took `tee`'s exit code. These are the jobs that prove
+  the L0 egress boundary, the metadata block, and the kill cascade.
+- **`make dco` accepted any non-empty sign-off**, including `Signed-off-by: nobody` —
+  the format assertion was lost when the check moved to git's trailer parsing.
+- **The README claimed gVisor/CC2 is your default barrier.** `pick_policy` checks for
+  a configured model first, so a gVisor host running a model gets a CC1 floor. All
+  three outcomes are now stated.
+- **`docs/ENV.md` documented an admin-token default that does not exist**, so a
+  reader who set only `WARDYN_TOKEN` got an unauthenticated control plane: the real
+  default is empty, and an empty token with no OIDC on loopback auto-enables no-auth
+  local mode. Both the binary and compose defaults are now stated.
+- **The compose README described the `make setup` menu backwards**, and told readers
+  team/SSO was "coming soon" where the roadmap says it is not scheduled.
+- **Example scenario commands now run as written** (`--policy`, `wardyn run list`,
+  `wardyn deny`, and a policy file that actually parses).
+- **The Helm docs quoted three different, all-wrong chart versions.**
+- Three API payloads emitted `null` where they had emitted `[]`, one of them a live
+  response body.
+
 ### Changed
 
 - **The console's default sizing is back to 100%.** 0.4.0's 17.6px root font token is
