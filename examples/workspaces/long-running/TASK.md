@@ -8,7 +8,6 @@ Create one with a 120-second limit (enough time to observe the behavior):
 
     cat > /tmp/reaper-policy.json << 'EOF'
     {
-      "name": "reaper-demo",
       "allowed_domains": ["github.com", "*.githubusercontent.com"],
       "denied_domains": [],
       "first_use_approval": "always_deny",
@@ -21,7 +20,7 @@ Create one with a 120-second limit (enough time to observe the behavior):
 
 Upload and capture the policy ID:
 
-    POLICY_ID=$(wardyn policy create --file /tmp/reaper-policy.json | jq -r .id)
+    POLICY_ID=$(wardyn policy create --file /tmp/reaper-policy.json --name reaper-demo | jq -r .id)
     echo "Policy ID: $POLICY_ID"
 
 ## Wardyn run command

@@ -5,10 +5,8 @@ package api
 
 import (
 	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -123,7 +121,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
-	ecosystems := slices.Sorted(maps.Keys(saved.ArtifactOverrides))
+	ecosystems := sortedKeys(saved.ArtifactOverrides)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"site_config.write", "site_config", "success", mustJSON(map[string]any{
 			"upstream_proxy_configured": saved.UpstreamProxySecretRef != "",

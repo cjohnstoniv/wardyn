@@ -137,6 +137,9 @@ curl -s -X POST http://localhost:8080/api/v1/runs \
 # The outcome contract: poll until .state is terminal, then read the task's real
 # exit code off the run.complete audit event. `wardyn run --wait` wraps this.
 curl -s -H 'Authorization: Bearer demo-admin-token' \
+  http://localhost:8080/api/v1/runs/<id>   # .state: COMPLETED | FAILED | ...
+
+curl -s -H 'Authorization: Bearer demo-admin-token' \
   'http://localhost:8080/api/v1/audit?run_id=<id>'   # run.complete -> .data.exit_code
 ```
 

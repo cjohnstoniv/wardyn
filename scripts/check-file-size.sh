@@ -9,7 +9,7 @@
 # legacy file grows
 # materially past its frozen cap (current size at gate introduction + ~8%
 # headroom). The allowlist is the small set of pre-existing 1000+ line files
-# that are cohesive as-is (see ARCHITECTURE.md "Large files") — new entries
+# that are cohesive as-is (see CONTRIBUTING.md "Large files") — new entries
 # need the same written justification there, not a silent edit here.
 #
 # Companion to .golangci.yml (funlen/gocyclo/gocognit gate functions; this
@@ -45,7 +45,7 @@ while IFS= read -r f; do
   cap=${ALLOWLIST[$f]:-$THRESHOLD}
   if ((lines > cap)); then
     if [[ -n "${ALLOWLIST[$f]:-}" ]]; then
-      echo "FAIL: $f has $lines lines — allowlisted legacy file grew past its frozen cap ($cap). Split it (or re-justify in ARCHITECTURE.md 'Large files' AND raise the cap here in the same change)." >&2
+      echo "FAIL: $f has $lines lines — allowlisted legacy file grew past its frozen cap ($cap). Split it (or re-justify in CONTRIBUTING.md 'Large files' AND raise the cap here in the same change)." >&2
     else
       echo "FAIL: $f has $lines lines (> $THRESHOLD). Split it by seam; the allowlist is for pre-existing files only." >&2
     fi

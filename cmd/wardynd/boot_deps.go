@@ -228,7 +228,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 		}
 		of.authn = authn
 		slog.Info("wardynd: OIDC SSO enabled", slog.String("issuer", *f.oidcIssuer))
-		slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment is coming soon; the UI's 'Sign in with SSO' button is disabled, so use the admin token or the CLI for now")
+		slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; the UI's 'Sign in with SSO' button is disabled, so use the admin token or the CLI for now")
 	}
 
 	// Devcontainer image builder (optional; docker build tag only). When -envbuild

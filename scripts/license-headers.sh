@@ -10,6 +10,10 @@
 # staticcheck/govulncheck targets already use). The gate and the fixer therefore
 # cannot resolve DIFFERENT addlicense builds and disagree, which the previous
 # split pair (an ADDLICENSE env / on-PATH / GOPATH ladder in each) allowed.
+# That ladder was the offline escape hatch, and its removal is deliberate: this
+# gate now needs a warm module cache or a reachable module proxy. Air-gapped?
+# Pre-warm with `go install github.com/google/addlicense@v1.1.1` once (which
+# populates the same cache `go run` reads) rather than reintroducing an override.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

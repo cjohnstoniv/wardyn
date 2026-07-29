@@ -104,12 +104,14 @@ checks it.
 - **Confinement Classes.** Friendly UI names — **Fence** = CC1 (hardened
   shared-kernel runc) **[shipped]**, **Wall** = CC2 (gVisor userspace kernel)
   **[shipped]**, CC3/Vault (Kata microVM) **[experimental]** (needs `/dev/kvm` +
-  a registered Kata runtime; not on Docker Desktop). CC2/Wall is the strongest
-  tier that needs no host install and is preferred whenever `runsc` is
-  registered; on a runc-only host `make setup` falls back to a CC1 policy
-  (`examples/policies/demo.json`) so runs can start — `wardyn setup status`
-  reports which tier you actually got. Policy can mandate a minimum class; the
-  plane refuses a run a substrate cannot satisfy.
+  a registered Kata runtime; not on Docker Desktop). CC1/Fence needs only
+  Docker; CC2/Wall adds gVisor's `runsc` and is the strongest tier `wardyn setup
+  wall` can unlock without virtualization. `make setup` auto-picks a policy
+  (`scripts/up.sh` `pick_policy`): `default.json` (CC2) on a runsc-registered
+  host with no model configured, `demo.json` (CC1) on a runc-only host, and
+  `composer-dev.json` (CC1 floor) once a real model path is configured —
+  `wardyn setup status` reports which tier you actually got. Policy can mandate
+  a minimum class; the plane refuses a run a substrate cannot satisfy.
 
 - **Bring Your Own Image (BYOI).** A run may name an arbitrary base image; the
   plane wraps it with the runner tools (opt-in via `WARDYN_ENVBUILD`) and gates
@@ -144,10 +146,12 @@ flowchart LR
     wardynd --> pg
   end
   subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
-    agent["Coding agent<br/>claude-code / codex-cli"]
+    %% rec is declared first on purpose: with agent first, dagre ranks rec
+    %% between wardynd and agent and routes the launch edge through its box.
     rec["wardyn-rec<br/>PTY recorder"]
-    agent -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
-    rec --> proxy
+    agent["Coding agent<br/>claude-code / codex-cli"]
+    rec -->|"cast, brokered to wardynd"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
+    agent -->|"only path out"| proxy
   end
   entry --> wardynd
   wardynd -->|"launch (docker driver)"| agent
@@ -159,7 +163,7 @@ agent, a script, a build, whatever the workload is — into an untrusted,
 gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, with
 credentials injected at the proxy. Decision logs and masked session casts flow
 back into the append-only audit log — drawn in
-[THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §4, "The three audit streams".
+[THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8, "The three audit streams".
 
 Wardyn never *adds* power: a sandbox reaches at most what you (the operating
 user) already can, operator policy clamps that to what you allow, and each run

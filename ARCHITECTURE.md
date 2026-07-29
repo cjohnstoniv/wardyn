@@ -39,10 +39,12 @@ flowchart LR
     wardynd --> pg
   end
   subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
-    agent["Coding agent<br/>claude-code / codex-cli"]
+    %% rec is declared first on purpose: with agent first, dagre ranks rec
+    %% between wardynd and agent and routes the launch edge through its box.
     rec["wardyn-rec<br/>PTY recorder"]
-    agent -->|"only path out"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
-    rec --> proxy
+    agent["Coding agent<br/>claude-code / codex-cli"]
+    rec -->|"cast, brokered to wardynd"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
+    agent -->|"only path out"| proxy
   end
   entry --> wardynd
   wardynd -->|"launch (docker driver)"| agent
@@ -52,7 +54,7 @@ flowchart LR
 The trusted control plane launches each agent into an untrusted, gatewayless
 sandbox whose only path out is the `wardyn-proxy` sidecar. Decision logs and
 masked session casts flow back into the append-only audit log — drawn in
-[`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §4, "The three
+[`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §8, "The three
 audit streams".
 
 ### Feature surfaces on top of the core loop (all shipped)
@@ -268,7 +270,8 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > **Deployment status:** containerized (compose) is the default; host mode is an
 > escape hatch (`WARDYN_SETUP_MODE=local`).
 > A first-class **team** deployment — the compose control plane running as a
-> sealed, multi-user shared service with human SSO — is **coming soon**; the Dex
+> sealed, multi-user shared service with human SSO — **does not exist yet and is
+> not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, but the UI's SSO login
 > is disabled for now. `make setup` asks **containerized vs host** (Enter =
 > containerized; both single-user); team is not a selectable mode

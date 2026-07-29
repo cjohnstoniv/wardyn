@@ -25,8 +25,12 @@ import (
 // the stdlib log package without importing it. `log/slog` is a distinct path and
 // is unaffected.
 //
-// this repo has no golangci-lint/forbidigo (make lint == go vet), so a
-// small test is the only ratchet available. Add a linter and delete this.
+// This COMPLEMENTS the depguard `slog-only` rule in .golangci.yml — it does not
+// duplicate it. golangci-lint runs with `run.build-tags: [docker]`, so files
+// behind `//go:build !docker` (e.g. cmd/wardynd/envbuild_nodocker.go) are never
+// analyzed and depguard cannot see them. This test parses with go/parser and is
+// build-tag-agnostic, so it covers exactly that gap. Deleting it on the strength
+// of the linter alone would silently unguard every !docker file.
 var slogOnlyPackages = []string{
 	"cmd/wardynd",
 	"cmd/wardyn-tetragon-ingest",

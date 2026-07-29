@@ -36,7 +36,7 @@ All contributors and subagents MUST preserve the six security invariants documen
 
 ## Conformance Gate
 
-Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5+ — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). Every pull request must pass these CI checks — they are a server-side merge block, not advice:
+Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target (the Kubernetes runner is **[v0.5+ — planned]** and has no conformance target yet; a driver-agnostic honesty stub keeps the contract enforced). Every pull request runs these CI checks. A **subset** of them is a server-side merge block on `main`; branch protection is the source of truth, not this list — read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`. The rest are the review bar, and a red one is still a red one:
 
 - `go build` and `go vet` — both plain and `-tags docker`
 - Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=65 over the
@@ -72,7 +72,7 @@ frozen: listed files may shrink freely, but material growth fails the gate.
    - No panics in library code
    - Security decisions fail closed
    - Audit events use dotted action names
-4. Run the gate: `make ci` (the widest local gate — build, lint, Go tests, UI, diagrams, supply chain)
+4. Run the gate: `make ci` (the daemon-free merge gate, and the widest gate a contributor needs — build, lint, Go tests, UI, diagrams, supply chain). Maintainers run the strict superset `make release-check` before a tag.
 5. Commit with sign-off: `git commit -s`
 6. Push and create a pull request
 

@@ -164,17 +164,18 @@ cover-check: test-report test-report-docker ## Enforce the COVER_MIN floor over 
 # loudly when it is skipped). Still not a full CI replica: the three jobs that
 # need a live daemon or service — conformance, envbuild-integration and the
 # Playwright ui-e2e — are CI-only. See RELEASING.md.
-release-check: ci ## Pre-tag gate: make ci + CHANGELOG + screenshot freshness (+ PG lane)
+release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
-	@test "$$(git log -1 --format=%ct -- docs/img)" -ge "$$(git log -1 --format=%ct -- ui/src/app/components/screens)" || (echo "docs/img is older than the newest ui/src/app/components/screens commit - run 'make screenshots' and commit the PNGs"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
 	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
 	else \
 	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
 	fi
 	@echo ""
-	@echo "release-check PASSED. NOT covered here: conformance, envbuild-integration"
-	@echo "and the Playwright ui-e2e — confirm CI is green on the commit before tagging."
+	@echo "release-check PASSED. NOT covered here: conformance, envbuild-integration,"
+	@echo "the Playwright ui-e2e, and screenshot freshness (ci.yml's screenshots-fresh"
+	@echo "job owns that — a local commit-timestamp test cannot be cleared once the"
+	@echo "PNGs re-render byte-identical) — confirm CI is green on the commit before tagging."
 
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
@@ -336,13 +337,17 @@ compose-config: ## Validate the docker-compose file parses (no daemon needed)
 # load-bearing: without it each trailer value is terminated by a line feed, which
 # would emit a phantom blank record per commit. valueonly + the key filter also
 # means a "Signed-off-by:" typed mid-body no longer counts — only a real trailer.
+# The awk shape assertion is the other half: DCO is a claim about an identifiable
+# human, so a present-but-shapeless trailer (`Signed-off-by: nobody`) must fail
+# exactly like a missing one. `.+ <.+@.+>` is the whole contract — name, space,
+# angle-bracketed address with an @ — and it also covers the empty case.
 DCO_RANGE ?= origin/main..HEAD
 dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
 	@signoffs=$$(git log --no-merges $(DCO_RANGE) --format='%H%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
 	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
-	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' '$$2==""{print $$1}'); \
-	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a Signed-off-by trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
+	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' '$$2 !~ /.+ <.+@.+>/ {print $$1}'); \
+	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 
 # CycloneDX SBOM via syft (release stub; installs syft if absent, pinned).

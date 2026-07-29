@@ -4,10 +4,12 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 
@@ -18,6 +20,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// sortedKeys returns m's keys in order, never nil. slices.Sorted yields nil for
+// an empty map, which marshals to `null` rather than `[]` — use this wherever
+// the result reaches a response body or an audit payload.
+func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
+	if len(m) == 0 {
+		return []K{}
+	}
+	return slices.Sorted(maps.Keys(m))
+}
 
 // parseIDParam parses the {param} path segment as a UUID, writing a 400
 // "invalid <noun> id" and returning ok=false on failure. Callers must return

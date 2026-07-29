@@ -68,6 +68,11 @@ done
 # ── label-truth manifest: diagram label -> the source that must contain it ───
 # Format: <needle>\t<file>. Both sides are required: the needle must appear at
 # the cited source AND in some extracted diagram, so neither can drift alone.
+# Deliberately UNPINNED: `MintOnApproval` (internal/broker/broker.go) and
+# `StopSandbox` (internal/api/runs_lifecycle.go) were pinned here until the doc
+# consolidation; no diagram or prose in DOCS names either symbol any more, so a
+# both-sides entry would fail on the diagram half. Re-add the entry — do not
+# weaken the rule — if a doc starts naming them again.
 while IFS=$'\t' read -r needle src; do
   [ -z "$needle" ] && continue
   case "$needle" in \#*) continue;; esac
@@ -103,9 +108,11 @@ wait_for_review	internal/types/types.go	ARCHITECTURE.md
 PROSE
 
 # ── style rules: a diagram nobody can read is worse than the table it replaced ─
-# R0 flowcharts only (state/sequence diagrams have their own shape)
+# R0 flowcharts only (state/sequence diagrams have their own shape), decided on
+#    the first non-blank, non-`%%` line
 # R1 ≤12 nodes  R2 ≤12 edges  R6 ≤4 labeled edges — past that, use a table
 # R3 edge label ≤32 chars — long labels render as free-floating boxes
+#    (R3/R6 see all three label forms: |"quoted"|, |unquoted| and -- dashed -->)
 #    (ponytail: 32 is today's ceiling, tighten to 24 once the overview fences shrink)
 # R4 no edge may target a subgraph id — mermaid resolves it to an arbitrary member
 # R5 no `direction` inside a subgraph — silently discarded once an edge crosses it
@@ -113,21 +120,41 @@ PROSE
 # R8 every fence needs an edge, unless marked `%% nesting` (containment, not flow)
 for f in "$TMP"/*.mmd; do
   awk -v name="$(basename "$f")" -v maxlabel=32 '
+    function label(lab) {
+      labeled++
+      if (length(lab) > maxlabel) bad("R3 edge label >" maxlabel " chars: " lab)
+    }
     function bad(m) { printf "  FAIL style %s: %s\n", name, m; rc=1 }
-    NR==1 { if ($0 !~ /^[[:space:]]*(flowchart|graph)/) { skip=1; exit } ; next }
     /%%[[:space:]]*nesting/ { nest=1 }
+    # R0 keys off the first MEANINGFUL line, not line 1: a leading blank line or a
+    # %%{init}%% directive used to make the whole rule set skip silently.
+    !seen && /^[[:space:]]*$/ { next }
+    !seen && /^[[:space:]]*%%/ { next }
+    !seen { seen=1; if ($0 !~ /^[[:space:]]*(flowchart|graph)/) { skip=1; exit } ; next }
     /^[[:space:]]*%%/ { next }
     {
       l=$0
       if (gsub(/<br\/>/,"",l) > 3) bad("R7 >3 <br/> in one node label: " $0)
-      while (match(l, /\|"[^"]*"\|/)) {
-        lab=substr(l, RSTART+2, RLENGTH-4); labeled++
-        if (length(lab) > maxlabel) bad("R3 edge label >" maxlabel " chars: " lab)
+      # All three mermaid edge-label forms count, not just |"quoted"|: an unquoted
+      # |label| or a -- label --> was invisible to R3/R6 and silently unlimited.
+      # Node-shape chars inside the run mean the two pipes belong to two DIFFERENT
+      # node labels (A["read | write"] --> B["allow | deny"]), not to one edge.
+      while (match(l, /\|[^][(){}|]*\|/)) {
+        lab=substr(l, RSTART+1, RLENGTH-2); gsub(/^"|"$/, "", lab); label(lab)
         l=substr(l, 1, RSTART-1) substr(l, RSTART+RLENGTH)
+      }
+      # ponytail: the dash form stops at the first "-" in the label text; the
+      # pipe forms above have no such ceiling, so write hyphenated labels as |...|.
+      while (match(l, /--[^->][^->]*--[->]/)) {
+        lab=substr(l, RSTART+2, RLENGTH-5); gsub(/^[[:space:]]+|[[:space:]]+$/, "", lab); label(lab)
+        l=substr(l, 1, RSTART-1) " --> " substr(l, RSTART+RLENGTH)
       }
       gsub(/"[^"]*"/, "", l)                                   # drop remaining label text
       while (gsub(/\[[^][]*\]|\([^()]*\)|\{[^{}]*\}/, "", l)) ; # drop node shapes
       if (l ~ /^[[:space:]]*direction[[:space:]]/) { if (depth > 0) bad("R5 direction inside a subgraph"); next }
+      # Styling directives are not nodes: classDef/class/style/linkStyle survive
+      # shape-stripping and used to inflate the R1 count with phantom node names.
+      if (l ~ /^[[:space:]]*(classDef|class|style|linkStyle|click|accTitle|accDescr)[[:space:]]/) next
       e = gsub(/-\.[^>]*->|-->|==>|---/, " ", l); edges += e
       if (sub(/^[[:space:]]*subgraph[[:space:]]+/, "", l)) { split(l, t, /[[:space:]]+/); sg[t[1]]=1; depth++; next }
       if (l ~ /^[[:space:]]*end[[:space:]]*$/) { depth--; next }

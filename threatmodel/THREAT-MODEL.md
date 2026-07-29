@@ -502,7 +502,7 @@ scanner's ignore-list.
   forking `x/crypto` to drop the subpackage: there is no upstream fix to take,
   and the flagged code is dead weight in our binary, never on an execution
   path. `govulncheck` runs in CI on every push (`.github/workflows/ci.yml`,
-  job `govulncheck`, both the default and `-tags docker` builds) specifically
+  job `gates (govulncheck)`, both the default and `-tags docker` builds) specifically
   so that if a future dependency bump ever puts `openpgp` on a *called* path,
   the symbol-level scan flips from "0 vulnerabilities" to a real finding and
   CI goes red — this entry is not a standing exemption from that check.
@@ -522,7 +522,7 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
   `localStorage` instead (survives restart, larger exposure window). Both stores
   are same-origin and readable by injected script — the checkbox trades restart
   convenience for a shorter at-rest window, not for a stronger boundary.
-- **SSO session (the hardened path, `[multi-user — coming soon]`).** The session
+- **SSO session (the hardened path, `[multi-user — not yet built, unscheduled]`).** The session
   is carried in an **`HttpOnly` cookie** that page script cannot read, so an
   injected script cannot exfiltrate it. This is the stronger posture; the
   admin-token path above is the local/single-operator convenience alternative.

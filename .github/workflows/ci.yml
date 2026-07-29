@@ -95,7 +95,13 @@ jobs:
   # never a pixel diff — ui/e2e/screenshots/docs.spec.ts rejects pixel gates on
   # purpose (they flake), so this runs no browser and has no flake surface.
   # fetch-depth: 0 is required — the default shallow checkout cannot resolve
-  # origin/<base_ref>. Escape hatch: label the PR `no-screenshots`.
+  # origin/<base_ref>.
+  # Escape hatch: label the PR `no-screenshots`, THEN PUSH. The label alone does
+  # nothing: this workflow's `pull_request` trigger uses the default types
+  # [opened, synchronize, reopened], so labelling starts no run, and re-running an
+  # existing run replays the original event payload (still unlabelled). Adding
+  # `labeled`/`unlabeled` types would fix that at the cost of a full CI re-run on
+  # every label change — not worth it for an escape hatch used a few times a year.
   screenshots-fresh:
     if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'no-screenshots')
     runs-on: ubuntu-latest
@@ -104,8 +110,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: UI screens changed without docs/img
+        # Via env, not `${{ }}` inside the script body — same idiom as the dco
+        # job below, so the pattern that gets copy-pasted is the safe one.
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
           screens="$(printf '%s\n' "$changed" | grep -E '^ui/src/app/components/screens/(setup|new-run)/|^ui/src/app/components/screens/runs\.tsx$' || true)"
           if [ -n "$screens" ] && ! printf '%s\n' "$changed" | grep -q '^docs/img/'; then
             printf '%s\n' "$screens"

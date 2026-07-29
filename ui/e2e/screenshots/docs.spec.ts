@@ -89,10 +89,12 @@ async function restagePresentableRuns(page: Page): Promise<void> {
     expect(res.ok(), `POST run "${r.task}" failed (${res.status()})`).toBeTruthy();
   }
 
-  // 1 RUNNING / 2 WAITING_FOR_CONFIRMATION / 2 COMPLETED / 1 PENDING, keyed by
-  // created order (the e2e-backend.sh UPDATE-by-created-order technique). Two
-  // waiting runs on purpose: "Needs your attention" is a two-column grid, and a
-  // single card there leaves half the shot empty background.
+  // 1 RUNNING / 1 WAITING_FOR_CONFIRMATION / 1 FAILED / 2 COMPLETED / 1 PENDING,
+  // keyed by created order (the e2e-backend.sh UPDATE-by-created-order
+  // technique). "Needs your attention" is a two-column grid, so it needs two
+  // cards to not photograph half-empty — and the second is FAILED, a state the
+  // product actually reaches (WAITING_FOR_CONFIRMATION is reserved, see
+  // types.go RunWaiting). Both are in ATTENTION_STATES (runs.tsx).
   sql(
     `WITH ordered AS (
        SELECT id, row_number() OVER (ORDER BY created_at) AS rn
@@ -101,7 +103,7 @@ async function restagePresentableRuns(page: Page): Promise<void> {
      UPDATE agent_runs a SET state = v.state
      FROM ordered o
      JOIN (VALUES
-       (1,'RUNNING'),(2,'WAITING_FOR_CONFIRMATION'),(3,'WAITING_FOR_CONFIRMATION'),
+       (1,'RUNNING'),(2,'WAITING_FOR_CONFIRMATION'),(3,'FAILED'),
        (4,'COMPLETED'),(5,'COMPLETED'),(6,'PENDING')
      ) AS v(rn,state) ON v.rn = o.rn
      WHERE a.id = o.id`,
@@ -169,13 +171,18 @@ test.describe("Docs screenshots", () => {
           providers: [],
           secrets: { present: [], github_app: false },
           age_key: { durable: true },
-          has_runs: false,
+          // has_runs:true only to clear the hard first-run gate (setup-gate.ts
+          // setupGateActive), which hides every nav group — with it false the
+          // README hero photographs as a console with an empty black left rail.
+          // The funnel itself is unchanged; the "First run launched" line it
+          // enables sits on the Launch step, far below this shot's fold.
+          has_runs: true,
           platform: { os: "linux", wsl: false, kvm: true },
         },
       }),
     );
-    // Straight to /setup: the fixture's has_runs:false arms the first-run gate,
-    // so the console's nav groups are hidden and gotoConsole's Runs link isn't there.
+    // Straight to /setup rather than gotoConsole: this shot is the funnel, and
+    // the fixture only routes /setup/status.
     await page.goto("/setup");
     await expect(page.getByRole("heading", { name: "Getting started", level: 1 })).toBeVisible();
     const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });

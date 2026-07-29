@@ -30,7 +30,6 @@ const PROMPT =
   "and one short paragraph. One file only, no build tools, no network access needed.";
 
 test.describe("AI Run Composer (live)", () => {
-
   test("describe → subscription on → compose → approve & launch → COMPLETED", async ({ page }) => {
     const dlg = await openNewRunChooser(page);
     await dlg.getByRole("button", { name: /Describe your task/ }).click();

@@ -48,7 +48,6 @@ scripts/ci-run.sh
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | `1` = leave the stack up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | `1` = reuse existing local images | unset |
-| `WARDYN_CI_TOOLS_DIR` | host directory of runner tools staged into the job's sandbox image | unset |
 | `WARDYN_DOCKER_SOCK` | which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
 
 ### Exit codes

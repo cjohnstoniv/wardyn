@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -360,7 +359,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 				}
 				set[d] = struct{}{}
 			}
-			return slices.Sorted(maps.Keys(set)), ""
+			return sortedKeys(set), ""
 		},
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
@@ -464,7 +463,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 			denied[host] = struct{}{}
 		}
 	}
-	out := slices.Sorted(maps.Keys(denied))
+	out := sortedKeys(denied)
 	writeJSON(w, http.StatusOK, map[string]any{"denied": out, "runs_examined": scanned})
 }
 

@@ -62,6 +62,12 @@ wardyn run --agent claude-code --repo octocat/Hello-World --task "explain this r
 wardyn run list        # watch state
 wardyn audit <id>
 wardyn approve <approval-id> --reason "reviewed scope, looks correct"
+
+# Or bring a sandbox up idle and drive it yourself (--interactive is mutually
+# exclusive with --wait). The idle reaper still applies: sandbox.yaml stops the
+# run after 900s idle — set auto_stop_after_sec <= 0 for a never-reap session.
+wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml
+wardyn attach <id>
 ```
 
 Prefer clicking? The UI's **/demos** screen (<http://localhost:8080/demos>, or
@@ -255,7 +261,7 @@ re-run it any time to re-check this host's capabilities.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `compose up` fails on network labels | a dead run's sandbox pair still holds `wardyn-internal` | `docker ps -aq --filter name=wardyn- \| xargs -r docker rm -f`, then `docker network rm wardyn-internal` |
-| `docker ps` shows nothing but the UI works | your shell is on a different daemon than Wardyn's scripts picked | `export DOCKER_HOST=unix:///run/wardyn-docker.sock` (the tier-capable native daemon they prefer over the default socket) |
+| `docker ps` shows nothing but the UI works | your shell is on a different daemon than Wardyn's scripts picked | `export DOCKER_HOST=unix:///var/run/wardyn-docker.sock` — the socket `wardyn setup wall` configures and the CLI prints (`/run/...` also works where `/var/run` is a symlink), the tier-capable native daemon they prefer over the default socket |
 | Only Fence/CC1 offered | ditto — that daemon registers no `runsc`/`kata` | same; `make doctor` prints the classes it can actually see |
 | Verify/Record hangs forever | host mode under Docker Desktop + WSL2 NAT | use containerized mode (the default) — drop `WARDYN_SETUP_MODE=local` |
 | Run fails "issue with selected model" | no model access configured, or a stale credential | `claude setup-token \| wardyn subscription connect`, then `wardyn setup status` |

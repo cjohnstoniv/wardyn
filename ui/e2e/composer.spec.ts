@@ -107,7 +107,6 @@ async function compose(page: Page, dlg: Locator, prompt: string): Promise<void> 
 }
 
 test.describe("AI Run Composer — Describe your task", () => {
-
   test("the provider dropdown lists the configured backends with the default preselected", async ({
     page,
   }) => {

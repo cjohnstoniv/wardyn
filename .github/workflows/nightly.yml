@@ -30,9 +30,14 @@ jobs:
       # nothing generates: upload-artifact defaults to if-no-files-found: warn,
       # so this job stayed green while shipping an EMPTY artifact every night.
       # if-no-files-found: error below makes that failure mode loud.
+      # `shell: bash` is load-bearing, NOT cosmetic: the implicit Linux shell is
+      # `bash -e {0}` with NO pipefail, so `make ... | tee` would report tee's
+      # exit code and this job would be green on a failing suite. Naming bash
+      # explicitly gets `bash --noprofile --norc -eo pipefail {0}`.
       - name: Live security e2e (compose stack)
         env:
           WARDYN_TEST_DOCKER: "1"
+        shell: bash
         run: |
           mkdir -p test/reports/e2e
           make test-e2e 2>&1 | tee test/reports/e2e/security-e2e.log
@@ -73,6 +78,7 @@ jobs:
       - name: Live task e2e (real sandboxes + graders, oracle lane)
         env:
           WARDYN_TEST_DOCKER: "1"
+        shell: bash # pipefail — see the e2e-live job above
         run: |
           mkdir -p test/reports/e2e
           make test-e2e-live 2>&1 | tee test/reports/e2e/task-e2e.log

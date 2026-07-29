@@ -29,6 +29,12 @@ service: `conformance` (`make test-conformance-docker`), `envbuild-integration`
 (`make test-envbuild-integration`), and the Playwright `ui-e2e` job. Without
 `WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
+Screenshot freshness is CI-only for a different reason: `ci.yml`'s
+`screenshots-fresh` job compares the PR diff, so it can tell "you changed a
+console screen without re-shooting `docs/img`" — a local commit-timestamp test
+cannot, and cannot be cleared at all once `make screenshots` re-renders the PNGs
+byte-identically. Re-shoot with `make screenshots` when you touch a screen.
+
 `release-check` pushes nothing and tags nothing. A green local run means "no local
 reason not to tag", not "CI is green" — check the actual CI run on the commit
 before step 3.
