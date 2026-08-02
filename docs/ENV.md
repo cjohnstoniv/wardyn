@@ -60,6 +60,7 @@ log them.
 | `WARDYN_TLS_CERT` | string | (unset) | TLS certificate PEM path (flag `-tls-cert`) |
 | `WARDYN_TLS_KEY` 🔒 | string | (unset) | TLS private key PEM path (flag `-tls-key`) |
 | `WARDYN_TLS_TERMINATED` | bool | `false` | TLS terminates upstream; mark cookies Secure (flag `-tls-terminated`) |
+| `WARDYN_ALLOW_PLAINTEXT_LISTEN` | bool | `false` | override: allow boot on a specific non-loopback bind serving plain HTTP with no TLS posture configured — normally refused (`validateConfig`, `cmd/wardynd/main.go`); loopback and the unspecified bind (`:8080`, the compose topology) stay warn-only either way (flag `-allow-plaintext-listen`) |
 | `WARDYN_OIDC_ISSUER` | string | (unset) | OIDC public issuer URL; enables human SSO (flag `-oidc-issuer`) |
 | `WARDYN_OIDC_INTERNAL_ISSUER` | string | (unset) | server-reachable OIDC issuer (flag `-oidc-internal-issuer`) |
 | `WARDYN_OIDC_CLIENT_ID` | string | (unset) | OIDC client id (flag `-oidc-client-id`) |

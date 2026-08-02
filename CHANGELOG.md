@@ -8,6 +8,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **Plaintext HTTP on a specific non-loopback bind is now refused at boot**
+  (was: warn-only). Loopback and unspecified binds (compose/`make setup`)
+  are unaffected. Migration for TLS-terminating-proxy deploys on a specific
+  IP: set `WARDYN_TLS_TERMINATED=true` (or `WARDYN_ALLOW_PLAINTEXT_LISTEN=true`
+  to keep the old behavior explicitly).
+
 ## [0.4.4] — 2026-08-02
 
 The final solidification release before the K8s/corporate extension work: a

@@ -19,12 +19,14 @@ import (
 // (built-in TLS OR an upstream TLS-terminating proxy).
 func TestValidateConfig(t *testing.T) {
 	tests := []struct {
-		name          string
-		dsn           string
-		tlsCert       string
-		tlsKey        string
-		tlsTerminated bool
-		wantErr       bool
+		name                 string
+		dsn                  string
+		tlsCert              string
+		tlsKey               string
+		listen               string // "" behaves like an unspecified bind (listenBindsSpecificRoutable("") is false)
+		tlsTerminated        bool
+		allowPlaintextListen bool
+		wantErr              bool
 		// errContains is a substring the error must mention (skipped when empty).
 		errContains string
 		wantTLS     bool // expected posture.tlsEnabled (only checked on success)
@@ -89,15 +91,71 @@ func TestValidateConfig(t *testing.T) {
 			wantTLS:       true,
 			wantSecure:    true,
 		},
+		{
+			// The B1a gate: plaintext HTTP on a SPECIFIC non-loopback bind is a
+			// real cleartext-admin-API exposure, so it fails closed like the
+			// demo-admin-token / -local-trust-forwarder gates.
+			name:        "plaintext HTTP on a specific-routable bind is refused",
+			dsn:         "postgres://localhost/wardyn",
+			listen:      "10.0.0.5:8080",
+			wantErr:     true,
+			errContains: "WARDYN_ALLOW_PLAINTEXT_LISTEN",
+		},
+		{
+			name:                 "specific-routable bind allowed with the explicit override",
+			dsn:                  "postgres://localhost/wardyn",
+			listen:               "10.0.0.5:8080",
+			allowPlaintextListen: true,
+			wantTLS:              false,
+			wantSecure:           false,
+		},
+		{
+			name:          "specific-routable bind allowed when TLS terminates upstream",
+			dsn:           "postgres://localhost/wardyn",
+			listen:        "10.0.0.5:8080",
+			tlsTerminated: true,
+			wantTLS:       false,
+			wantSecure:    true,
+		},
+		{
+			name:       "plaintext HTTP on loopback keeps today's warn-only behavior",
+			dsn:        "postgres://localhost/wardyn",
+			listen:     "127.0.0.1:8080",
+			wantTLS:    false,
+			wantSecure: false,
+		},
+		{
+			// make setup / compose bind ":8080" (unspecified) — from inside the
+			// container that's indistinguishable from a safe 127.0.0.1-only
+			// publish, so it must NOT be refused (boot_flags.go documents the
+			// same reasoning for -local-trust-forwarder).
+			name:       "plaintext HTTP on the unspecified bind keeps today's warn-only behavior",
+			dsn:        "postgres://localhost/wardyn",
+			listen:     ":8080",
+			wantTLS:    false,
+			wantSecure: false,
+		},
+		{
+			// Ordering: the both-or-neither TLS check still fires first even on a
+			// specific-routable bind that would otherwise trip the plaintext
+			// refusal — a half-set cert/key pair is a config error regardless of
+			// where wardynd is listening.
+			name:        "half-configured TLS still fails closed on a specific-routable bind",
+			dsn:         "postgres://localhost/wardyn",
+			tlsCert:     "/etc/wardyn/tls.crt",
+			listen:      "10.0.0.5:8080",
+			wantErr:     true,
+			errContains: "TLS misconfigured",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			posture, err := validateConfig(tc.dsn, tc.tlsCert, tc.tlsKey, tc.tlsTerminated)
+			posture, err := validateConfig(tc.dsn, tc.tlsCert, tc.tlsKey, tc.listen, tc.tlsTerminated, tc.allowPlaintextListen)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("validateConfig(%q, %q, %q, %v): want error, got nil",
-						tc.dsn, tc.tlsCert, tc.tlsKey, tc.tlsTerminated)
+					t.Fatalf("validateConfig(%q, %q, %q, %q, %v, %v): want error, got nil",
+						tc.dsn, tc.tlsCert, tc.tlsKey, tc.listen, tc.tlsTerminated, tc.allowPlaintextListen)
 				}
 				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tc.errContains)
@@ -105,8 +163,8 @@ func TestValidateConfig(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("validateConfig(%q, %q, %q, %v): unexpected error: %v",
-					tc.dsn, tc.tlsCert, tc.tlsKey, tc.tlsTerminated, err)
+				t.Fatalf("validateConfig(%q, %q, %q, %q, %v, %v): unexpected error: %v",
+					tc.dsn, tc.tlsCert, tc.tlsKey, tc.listen, tc.tlsTerminated, tc.allowPlaintextListen, err)
 			}
 			if posture.tlsEnabled != tc.wantTLS {
 				t.Errorf("tlsEnabled = %v, want %v", posture.tlsEnabled, tc.wantTLS)
@@ -124,7 +182,7 @@ func TestValidateConfig(t *testing.T) {
 // HTTP and would break login). Asserted directly so a regression that flips the
 // default can never hide inside the larger table.
 func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
-	posture, err := validateConfig("postgres://localhost/wardyn", "", "", false)
+	posture, err := validateConfig("postgres://localhost/wardyn", "", "", "", false, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

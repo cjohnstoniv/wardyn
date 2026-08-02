@@ -86,7 +86,7 @@ func run() error {
 	// Extracted into a pure helper (validateConfig) so the fail-closed rules —
 	// DSN required, TLS cert+key both-or-neither, Secure-cookie derivation — are
 	// unit-testable without standing up the whole daemon.
-	posture, err := validateConfig(*f.dsn, *f.tlsCert, *f.tlsKey, *f.tlsTerminated)
+	posture, err := validateConfig(*f.dsn, *f.tlsCert, *f.tlsKey, *f.listen, *f.tlsTerminated, *f.allowPlaintextListen)
 	if err != nil {
 		return err
 	}
@@ -295,7 +295,14 @@ type tlsPosture struct {
 //     either wardynd serves built-in TLS, or TLS terminates at an upstream proxy
 //     (tlsTerminated). When neither holds it MUST stay false: Secure cookies are
 //     never sent over plain HTTP and would break login.
-func validateConfig(dsn, tlsCert, tlsKey string, tlsTerminated bool) (tlsPosture, error) {
+//   - plaintext HTTP (no built-in TLS, no tlsTerminated) on a SPECIFIC
+//     non-loopback bind fails closed too, same refuse-vs-warn split as the
+//     demo-admin-token and -local-trust-forwarder gates below: loopback and the
+//     unspecified bind (":8080", the compose 0.0.0.0-in-container topology) stay
+//     warn-only (boot_serve.go), since the unspecified bind is indistinguishable
+//     from a safe compose 127.0.0.1-publish from inside the container.
+//     allowPlaintextListen is the explicit escape hatch (WARDYN_ALLOW_PLAINTEXT_LISTEN).
+func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPlaintextListen bool) (tlsPosture, error) {
 	if dsn == "" {
 		return tlsPosture{}, errors.New("missing -dsn / WARDYN_PG_DSN")
 	}
@@ -303,6 +310,12 @@ func validateConfig(dsn, tlsCert, tlsKey string, tlsTerminated bool) (tlsPosture
 		return tlsPosture{}, errors.New("TLS misconfigured: set BOTH -tls-cert/WARDYN_TLS_CERT and -tls-key/WARDYN_TLS_KEY, or neither")
 	}
 	tlsEnabled := tlsCert != "" && tlsKey != ""
+	if !tlsEnabled && !tlsTerminated && !allowPlaintextListen && listenBindsSpecificRoutable(listen) {
+		return tlsPosture{}, fmt.Errorf("refusing to start: serving plaintext HTTP but the listen address %q binds a specific non-loopback interface — "+
+			"every credential and cookie the control plane speaks would travel in cleartext to any LAN/WAN peer; "+
+			"configure WARDYN_TLS_CERT/WARDYN_TLS_KEY for built-in TLS, set WARDYN_TLS_TERMINATED=true behind a TLS-terminating reverse proxy, "+
+			"or explicitly set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", listen)
+	}
 	return tlsPosture{
 		tlsEnabled:    tlsEnabled,
 		secureCookies: tlsEnabled || tlsTerminated,
