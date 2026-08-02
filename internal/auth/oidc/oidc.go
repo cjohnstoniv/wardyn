@@ -335,7 +335,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		if sess, err := a.decodeSession(r); err == nil {
 			if time.Now().UTC().Before(sess.Expiry) {
 				// Valid session: stash the principal and continue.
-				ctx := contextWithPrincipal(r.Context(), sess.Sub)
+				ctx := contextWithPrincipal(r.Context(), sess)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -356,6 +356,17 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 func PrincipalFromContext(ctx context.Context) string {
 	p, _ := ctx.Value(principalCtxKey{}).(string)
 	return p
+}
+
+// EmailFromContext returns the email claim of the session Middleware verified,
+// or "" when there is no SSO session (or the IdP returned no email — which is
+// possible whenever AllowedEmailDomains is empty, since that is the only check
+// that requires one). It is the identity internal/api resolves the minimal
+// viewer/operator role from; the "sub" is opaque and cannot be matched against
+// an operator allowlist an admin can actually write down.
+func EmailFromContext(ctx context.Context) string {
+	e, _ := ctx.Value(emailCtxKey{}).(string)
+	return e
 }
 
 // ─── session encoding ────────────────────────────────────────────────────────
@@ -480,9 +491,11 @@ func clearCookie(w http.ResponseWriter, name string) {
 	})
 }
 
-// contextWithPrincipal stores sub on the context.
-func contextWithPrincipal(ctx context.Context, sub string) context.Context {
-	return context.WithValue(ctx, principalCtxKey{}, sub)
+// contextWithPrincipal stores the verified session's sub and email on the
+// context (read back via PrincipalFromContext / EmailFromContext).
+func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
+	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
+	return context.WithValue(ctx, emailCtxKey{}, sess.Email)
 }
 
 // ─── constants ───────────────────────────────────────────────────────────────
@@ -497,6 +510,10 @@ const (
 // principalCtxKey is the context key for the human SSO principal.
 // Unexported: use PrincipalFromContext.
 type principalCtxKey struct{}
+
+// emailCtxKey is the context key for the session's email claim.
+// Unexported: use EmailFromContext.
+type emailCtxKey struct{}
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────
 

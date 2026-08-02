@@ -67,6 +67,7 @@ log them.
 | `WARDYN_OIDC_CLIENT_SECRET` 🔒 | string | (unset) | OIDC client secret (flag `-oidc-client-secret`) |
 | `WARDYN_OIDC_REDIRECT_URL` | string | (unset) | OIDC redirect URL (flag `-oidc-redirect-url`) |
 | `WARDYN_OIDC_EMAIL_DOMAINS` | CSV | (unset = any) | allowed email domains, exact match (list subdomains separately) (flag `-oidc-email-domains`) |
+| `WARDYN_OIDC_OPERATOR_EMAILS` | CSV | (unset = everyone is an operator) | operator allowlist of the minimal viewer/operator role gate: a signed-in human whose session email is NOT listed is a **viewer** — 403 on harness-credential, policy, workspace and site-config **writes**; every read is unchanged. Full addresses, case-insensitive. Admin-token and local-mode callers are always operators (one shared credential, no human to key a role off). Unset keeps today's behavior exactly: every authenticated human is admin-equivalent (flag `-oidc-operator-emails`) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire (flag `-approval-expiry-after`) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | sweep interval for stale approvals; 0 disables (flag `-approval-expiry-interval`) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
@@ -132,6 +133,7 @@ pointed at `/data/audit/audit.log`.
 |---|---|---|---|
 | `WARDYN_PROXY_CONFIG_JSON` 🔒 | string (JSON) | (unset) | full proxy config incl. run egress policy, delivered at container create |
 | `WARDYN_LLM_SCAN` | enum | (unset = per policy) | per-proxy kill-switch for outbound content inspection; `off`/`0`/`false`/`no`/`disable`/`disabled`/`none` disable, `on`/`1`/`true`/`yes`/`enable`/`enabled` (or unset) leave as policy, garbage exits 2 |
+| `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum | (unset = off) | enforce push branch-namespace confinement on the git-broker route: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise, before any mint). `1`/`true`/`yes`/`on`/`enable`/`enabled`/`enforce` enable; `0`/`false`/`no`/`off`/`disable`/`disabled`/`none` (or unset) disable; garbage fails CLOSED (enforces + logs). Off by default because agent-run does not name run branches yet — pin `wardyn/$WARDYN_RUN_ID/<name>` in your task text before enabling. The docker runner forwards it (and `WARDYN_LLM_SCAN`) from wardynd's environment to every proxy sidecar; host-run proxies read their own env. |
 
 ## `wardyn-git-helper` (git credential broker)
 

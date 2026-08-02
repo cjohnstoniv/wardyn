@@ -55,6 +55,10 @@ type bootFlags struct {
 	oidcClientSecret *string
 	oidcRedirectURL  *string
 	oidcEmailDomains *string
+	// oidcOperatorEmails is the minimal viewer/operator role gate's allowlist
+	// (api.Config.OperatorEmails). Empty = every authenticated human is an
+	// operator, i.e. exactly the pre-existing behavior.
+	oidcOperatorEmails *string
 
 	autoStopInterval *time.Duration
 
@@ -122,12 +126,13 @@ func parseBootFlags() *bootFlags {
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails (durability so a security event is never lost); empty disables"),
 
-		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL — browser-facing, matches the id_token iss (enables human SSO when set)"),
-		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls (e.g. http://dex:5556); defaults to the public issuer"),
-		oidcClientID:     flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
-		oidcClientSecret: flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
-		oidcRedirectURL:  flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains (empty = any verified email)"),
+		oidcIssuer:         flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL — browser-facing, matches the id_token iss (enables human SSO when set)"),
+		oidcInternalIss:    flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls (e.g. http://dex:5556); defaults to the public issuer"),
+		oidcClientID:       flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
+		oidcClientSecret:   flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
+		oidcRedirectURL:    flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
+		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains (empty = any verified email)"),
+		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator emails; a signed-in human NOT listed is a viewer (403 on harness-credential/policy/workspace/site-config writes). Empty = every authenticated human is an operator, as today"),
 
 		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (0 disables)"),
 

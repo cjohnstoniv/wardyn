@@ -63,6 +63,40 @@ liveness/component surface (identity, runner classes, eBPF ground-truth state);
 [ENV.md](ENV.md)) are the event stream for SIEMs — metrics deliberately carry no
 per-run detail.
 
+## Who can change what
+
+The API authenticates with **either** an OIDC session (human SSO) **or** the
+admin bearer token; local mode skips both on a loopback-only bind. That is
+authentication. Authorization is one optional list:
+
+| `WARDYN_OIDC_OPERATOR_EMAILS` | Signed-in humans | Admin token / local mode |
+|---|---|---|
+| unset (default) | all admin-equivalent | admin-equivalent |
+| set | listed = **operator**; everyone else = **viewer** | always operator |
+
+A viewer reads everything and is refused (403) on the writes with the widest
+blast radius: the managed harness credential (`POST /setup/harness-login`,
+`PUT`/`DELETE /setup/harness-credential/{provider}`), policy create/update/delete,
+every mutating `/workspaces` route (including the `approved-egress`, `llm-cred`
+and `setup-commands` writes that widen what a run may do), and `PUT /site-config`.
+
+Match is on the full address, case-insensitive (ASCII only — a session email
+containing any non-ASCII rune never matches, fail closed); entries are
+comma-separated. The address comes from the IdP's `email` claim, which is only
+forced to be *verified* when `WARDYN_OIDC_EMAIL_DOMAINS` is also set — set both
+(wardynd warns at boot if you don't). A signed-in human whose session carries no
+email is a viewer. The claim is captured at sign-in and rides the session cookie,
+so an IdP-side address change is stale until the session expires (~1h); removing
+an address from the list itself takes effect on restart regardless — the
+direction that matters.
+
+**This is not RBAC.** Nothing else is gated — secret write/delete, run create and
+run kill stay open to any signed-in human — and the admin token cannot be demoted,
+because it is one shared credential with no human behind it. Real roles and owner
+scoping are v0.5+ ([ROADMAP.md](../ROADMAP.md); `threatmodel/THREAT-MODEL.md`
+residual #14). Wardyn's operator boundary is still "everyone with a login is
+trusted staff".
+
 ## The age key has no rotation path
 
 The secret store binds **one** age identity for both encryption and decryption

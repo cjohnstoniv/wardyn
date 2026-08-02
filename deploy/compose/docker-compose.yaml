@@ -228,6 +228,12 @@ services:
       WARDYN_OIDC_CLIENT_SECRET: "${WARDYN_OIDC_CLIENT_SECRET:-wardyn-oidc-secret}"
       WARDYN_OIDC_REDIRECT_URL: "http://localhost:8080/auth/callback"
       WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
+      # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
+      # = every authenticated human is an operator (unchanged). Set it to a
+      # comma-separated list of full addresses and every other signed-in human
+      # becomes a read-only viewer on the harness-credential, policy, workspace
+      # and site-config writes. See docs/OPERATIONS.md "Who can change what".
+      WARDYN_OIDC_OPERATOR_EMAILS: "${WARDYN_OIDC_OPERATOR_EMAILS:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"

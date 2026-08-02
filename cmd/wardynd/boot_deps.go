@@ -228,7 +228,23 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 		}
 		of.authn = authn
 		slog.Info("wardynd: OIDC SSO enabled", slog.String("issuer", *f.oidcIssuer))
-		slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; the console offers the 'Sign in with SSO' link, but there is NO admin-role gate yet, so every SSO human has the same power as the admin token")
+		// The posture line differs by whether the operator allowlist is set, so
+		// the log never overstates OR understates what the deployment enforces.
+		// Log only the COUNT — the list itself is not disclosed.
+		if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
+			slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled. WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are VIEWERS (403 on harness-credential, policy, workspace and site-config writes; reads unchanged). That is the ONLY role tier — everything else, incl. the admin token, is operator",
+				slog.Int("operator_emails", len(ops)))
+			// The allowlist matches the IdP's email claim, and email_verified is
+			// only enforced when the domains list is set — without it, an IdP
+			// that lets users self-assert email lets them claim an operator's
+			// address. Warn, don't fail: failing would break the additive
+			// unset-changes-nothing guarantee for the domains knob.
+			if len(splitCSV(*f.oidcEmailDomains)) == 0 {
+				slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but WARDYN_OIDC_EMAIL_DOMAINS is not — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list too")
+			}
+		} else {
+			slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; the console offers the 'Sign in with SSO' link, and WARDYN_OIDC_OPERATOR_EMAILS is unset, so every SSO human has the same power as the admin token (set it to demote everyone else to a read-only viewer)")
+		}
 	}
 
 	// Devcontainer image builder (optional; docker build tag only). When -envbuild

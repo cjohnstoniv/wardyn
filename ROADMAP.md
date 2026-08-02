@@ -68,7 +68,7 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 | Milestone | Scope |
 |---|---|
-| **v0.5** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L1 default-deny (nftables / NetworkPolicy, blocking `169.254.169.254`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · Kubernetes runner driver + the Helm chart (`deploy/helm/wardyn/` is render-checked only today — it deploys the control plane but cannot create sandboxes) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · signed image publishing, which turns CI-mode source builds into pulls and enables a reusable one-line GitHub Action ([docs/CI.md](docs/CI.md)) · branch-namespace enforcement on minted git tokens — today the broker only *records* `wardyn/<run-id>/*` as advisory metadata and the token can push to any branch within its granted repos (`threatmodel/THREAT-MODEL.md` asset #4) |
+| **v0.5** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L1 default-deny (nftables / NetworkPolicy, blocking `169.254.169.254`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · Kubernetes runner driver + the Helm chart (`deploy/helm/wardyn/` is render-checked only today — it deploys the control plane but cannot create sandboxes) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · signed image publishing, which turns CI-mode source builds into pulls and enables a reusable one-line GitHub Action ([docs/CI.md](docs/CI.md)) · branch-namespace enforcement DEFAULT-ON for minted git tokens — the proxy-side push-ref check ships today as opt-in `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; making it the default needs agent-run to name run branches itself, plus GitHub-side rulesets so the property holds even for a leaked token (`threatmodel/THREAT-MODEL.md` asset #4) |
 | **v1.0** | CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · hash-chained audit + signed action receipts · separation of duty on the control plane · the conformance suite green on both the Docker and Kubernetes targets |
 
 ### Extension-phase handoff (v0.5 detail from the 0.4.4 solidification sweep)
@@ -77,9 +77,15 @@ The 0.4.4 campaign deliberately deferred everything below to the K8s/corporate
 extension phase — each was confirmed real, sized L (multi-day), and left out of
 the final cleanup on purpose:
 
-- **Authorization/RBAC + owner scoping.** The four in-source `humanOrAdminAuth`
-  gap sites (`internal/api/server.go`: harness-cred, site-config, policies,
-  workspaces), `CreatedBy` persisted-but-never-filtered, no tenant/org columns.
+- **Authorization/RBAC + owner scoping.** A **minimal** viewer/operator gate now
+  ships: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in human outside that list
+  is a viewer — 403 on the mutating routes of the four `humanOrAdminAuth` gap
+  sites (`internal/api/server.go`: harness-cred, site-config, policies,
+  workspaces), reads unchanged. Unset (the default) is the old behavior: every
+  authenticated human is admin-equivalent. That is one allowlist, not RBAC. Still
+  open: real roles/permissions, a role for the admin token and local mode (both
+  are a single shared credential, so both are always operators), per-resource
+  owner scoping, `CreatedBy` persisted-but-never-filtered, no tenant/org columns.
 - **Kubernetes runner driver** on the existing `substrate.Substrate` seam, plus
   the pieces it drags in: a PVC/volume mount model (today `runner.Mount` is a
   host bind), non-host-local artifact delivery, published + signed images, a
@@ -132,9 +138,11 @@ shipped behavior; none is scheduled.
   ([field report](docs/adoption/corp-network-onboarding-findings.md))
 - **Team mode (multi-user SSO/RBAC).** Speculative — no design in the tree. The
   console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is configured
-  (`/healthz` reports `sso`), and the session it mints authenticates the whole API —
-  but there are no per-user roles: anyone who signs in has the same powers as the
-  admin token.
+  (`/healthz` reports `sso`), and the session it mints authenticates the whole API.
+  There is exactly ONE role tier: `WARDYN_OIDC_OPERATOR_EMAILS` (above) demotes
+  unlisted signers-in to read-only viewers on four write clusters. Unset, or for
+  anything it does not cover, anyone who signs in has the same powers as the admin
+  token.
 
 ## What is not on the roadmap
 

@@ -8,6 +8,40 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Push branch-namespace confinement is now REAL** (opt-in). The git-broker
+  route parses the pkt-line command section of a `POST …/git-receive-pack` and
+  refuses any ref outside `refs/heads/wardyn/<run-id>/` — other branches, the
+  default branch, tags, `refs/pull/*`, and deletes outside the namespace all
+  403 before the installation token is minted, with a `brokered:git:branch-ns`
+  deny row in the decision log. Only that (≤64 KiB) command section is
+  buffered; the packfile still streams, and clone/fetch are untouched.
+  **Off by default** — nothing in Wardyn yet tells an agent to name its branch
+  `wardyn/<run-id>/…`, so enforcing by default would deny most real pushes.
+  Turn it on per proxy with `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=1` and pin the
+  convention in your task text. Unrecognized values fail closed (enforce).
+- **wardynd images are published to GHCR** (`.github/workflows/publish-image.yml`:
+  main pushes → `:latest` + `:sha-<7>`, `vX.Y.Z` tags → the bare semver the Helm
+  chart's default resolves to; `workflow_dispatch` `extra_tag` backfills
+  pre-workflow releases), and a **kind-based `helm install` CI gate**
+  (`helm-install-test`) proves the chart converges to a healthy control plane on
+  every PR — not just that it renders. The image now defaults
+  `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`, fixing the crash-loop
+  every default `docker run`/Helm install previously hit (the Go-relative
+  default never resolved from the distroless WorkingDir).
+
+- **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate** (flag
+  `-oidc-operator-emails`), the first authorization tier on the control plane.
+  List the operators and every other signed-in human becomes a **viewer**: 403
+  on the mutating routes of the four highest-blast-radius clusters (managed
+  harness credential, policies, workspaces, `PUT /site-config`); reads are
+  unchanged. Additive — unset (the default) keeps today's behavior exactly, and
+  the admin token and local mode are always operators (one shared credential,
+  no human to key a role off). This is one allowlist, not RBAC: secret
+  write/delete and run create/kill are still open to any signed-in human
+  (`ROADMAP.md`, `threatmodel/THREAT-MODEL.md` residual #14).
+
 ### Changed
 
 - **Plaintext HTTP on a specific non-loopback bind is now refused at boot**

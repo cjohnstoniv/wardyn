@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -48,6 +49,22 @@ func withOIDCHuman(ctx context.Context, sub string) context.Context {
 func oidcHumanFromContext(ctx context.Context) string {
 	p, _ := ctx.Value(oidcHumanCtxKey{}).(string)
 	return p
+}
+
+// oidcEmailCtxKey carries the email claim of the same verified OIDC session,
+// published by humanOrAdminAuth next to the principal. requireOperator reads it
+// (never oidc's own context key) for the same reason oidcHumanCtxKey exists: the
+// auth middleware stays the single place that trusts the oidc package, and the
+// role gate is unit-testable without minting a signed session cookie.
+type oidcEmailCtxKey struct{}
+
+func withOIDCEmail(ctx context.Context, email string) context.Context {
+	return context.WithValue(ctx, oidcEmailCtxKey{}, email)
+}
+
+func oidcEmailFromContext(ctx context.Context) string {
+	e, _ := ctx.Value(oidcEmailCtxKey{}).(string)
+	return e
 }
 
 // errorBody is the uniform JSON error envelope.
@@ -233,11 +250,78 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// Publish the verified human on an api-owned context key so
 			// actorFromRequest attributes the action to the real SSO human
 			// (and IGNORES any X-Wardyn-Principal header — a real identity won).
-			next.ServeHTTP(w, r.WithContext(withOIDCHuman(r.Context(), sub)))
+			// The session email rides along for requireOperator.
+			ctx := withOIDCHuman(r.Context(), sub)
+			ctx = withOIDCEmail(ctx, oidc.EmailFromContext(r.Context()))
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		admin.ServeHTTP(w, r)
 	}))
+}
+
+// requireOperator is the minimal AUTHORIZATION tier layered on top of
+// humanOrAdminAuth (which only AUTHENTICATES). It is nested inside that group on
+// the MUTATING routes of the four highest-blast-radius clusters — managed
+// harness credential, policies, workspaces, site-config (see routes in
+// Server.Handler) — and refuses a signed-in VIEWER with 403. Read routes are
+// untouched: a viewer sees everything, changes nothing.
+//
+// Roles come from ONE optional list, Config.OperatorEmails
+// (WARDYN_OIDC_OPERATOR_EMAILS), mirroring how oidc.Config.AllowedEmailDomains
+// gates sign-in:
+//
+//   - EMPTY (the default) => there are no viewers. Every authenticated caller
+//     keeps exactly the power it has today. Additive by construction: a
+//     deployment that does not set the list cannot notice this middleware.
+//   - SET => an OIDC human whose session email is not on it is a viewer.
+//
+// Admin-token and local-mode callers are ALWAYS operators. Both are a single
+// shared credential with no per-human identity to key a role off — the token IS
+// the admin — which is the documented ceiling of this gate, not an oversight.
+// Only an OIDC session carries an email.
+//
+// Fail closed where it matters: with a list configured, an OIDC human whose
+// session carries no email claim (the IdP omitted it, which only
+// AllowedEmailDomains otherwise forces) is a viewer.
+func (s *Server) requireOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isOperator(r.Context()) {
+			// Do not name the allowlist's members — the caller learns only that
+			// a list exists and that they are not on it.
+			writeError(w, http.StatusForbidden, "requires operator role (WARDYN_OIDC_OPERATOR_EMAILS is configured and this signed-in user is not in it)")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isOperator reports whether the authenticated caller on ctx may perform
+// operator-only actions. See requireOperator for the rules.
+func (s *Server) isOperator(ctx context.Context) bool {
+	if len(s.cfg.OperatorEmails) == 0 {
+		return true // no list configured: everyone is an operator (today's behavior)
+	}
+	if oidcHumanFromContext(ctx) == "" {
+		return true // admin token or local mode: no human identity to demote
+	}
+	email := strings.TrimSpace(oidcEmailFromContext(ctx))
+	if email == "" {
+		return false // signed in with no email claim: fail closed
+	}
+	// Fail closed on a non-ASCII claim: EqualFold does Unicode SIMPLE folding,
+	// under which e.g. "roſs" (U+017F) or a KELVIN-SIGN "k" (U+212A) MATCHES an
+	// ASCII allowlist entry — the escalating direction. An ASCII allowlist (the
+	// only kind this knob documents) can then never be folded onto.
+	if strings.IndexFunc(email, func(r rune) bool { return r > unicode.MaxASCII }) >= 0 {
+		return false
+	}
+	for _, allowed := range s.cfg.OperatorEmails {
+		if strings.EqualFold(strings.TrimSpace(allowed), email) {
+			return true
+		}
+	}
+	return false
 }
 
 // adminAuth gates the public API behind a constant-time bearer compare. An

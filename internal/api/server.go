@@ -192,6 +192,18 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
+	// OperatorEmails, when non-empty, is the operator allowlist of the minimal
+	// viewer/operator role gate (requireOperator, http.go): an OIDC human whose
+	// session email is not on it is a VIEWER and is refused with 403 on the
+	// MUTATING routes of the four highest-blast-radius clusters — managed
+	// harness credential, policies, workspaces, site-config. Matching is
+	// case-insensitive on the whole address; read routes are never gated.
+	//
+	// EMPTY (the default) is exactly today's behavior: every authenticated human
+	// is admin-equivalent. Admin-token and local-mode callers are always
+	// operators (one shared credential, no human to key a role off). Ignored
+	// unless OIDC is configured, since nothing else carries an email.
+	OperatorEmails []string
 	// ImageBuilder, when set, builds a per-run sandbox image from the
 	// devcontainer_repo in a create-run request. Nil disables devcontainer
 	// builds (the request degrades to the convention image).
@@ -450,6 +462,18 @@ func (s *Server) routes() chi.Router {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
 			r.Use(s.humanOrAdminAuth)
+			// operatorOnly is this same group with ONE extra middleware nested in
+			// front (chi's With is what Group is built from): the minimal role
+			// gate. Routes registered on it are authenticated exactly as before
+			// and then refused for a signed-in VIEWER — see requireOperator, which
+			// is a no-op until WARDYN_OIDC_OPERATOR_EMAILS is set. Only the
+			// MUTATING routes of the four disclosed clusters use it; every read
+			// stays on r, so the gated routes are the ones written out below and
+			// nothing else silently joins them.
+			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
+			// this line must stay immediately after the group's last r.Use, or a
+			// later-added Use applies to r's routes but silently NOT to these 19.
+			operatorOnly := r.With(s.requireOperator)
 			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
@@ -499,74 +523,84 @@ func (s *Server) routes() chi.Router {
 			// every run (compose-mode subscription without a host ~/.claude).
 			// Secret store required (the token is stored age-encrypted).
 			//
-			// RBAC caveat (same as policy/workspace below): these sit in the
-			// humanOrAdminAuth group, which is AUTHENTICATION only — dedicated
-			// admin-role gating is planned, so today ANY authenticated human in
-			// OIDC mode (not just an admin) can connect/disconnect the shared
-			// managed subscription every run inherits. Every connect/disconnect is
-			// audited (harness.credential.captured/disconnected).
+			// RBAC (same as policy/workspace/site-config below): humanOrAdminAuth
+			// is AUTHENTICATION only, so these are ALSO on operatorOnly — with
+			// WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that list
+			// is a viewer and gets 403 here. UNSET (the default) is the disclosed
+			// status quo: ANY authenticated human in OIDC mode can connect or
+			// disconnect the shared managed subscription every run inherits. Full
+			// per-user RBAC is still future work (see ROADMAP.md). Every
+			// connect/disconnect is audited
+			// (harness.credential.captured/disconnected).
 			if s.cfg.Secrets != nil {
-				r.Post("/setup/harness-login", s.handleHarnessLogin)
-				r.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
-				r.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
+				operatorOnly.Post("/setup/harness-login", s.handleHarnessLogin)
+				operatorOnly.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
+				operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
 			}
 
 			// Policy management (gated to authenticated humans — a valid SSO
-			// session or the admin token; dedicated admin-role gating is
-			// planned, so today ANY authenticated human in OIDC mode can CRUD
-			// policies, not just admins). Every spec is validated before it is
-			// persisted (fail closed); writes are audited.
-			r.Post("/policies", s.handleCreatePolicy)
+			// session or the admin token). WRITES are additionally operator-only:
+			// with WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that
+			// list can read policies but not CRUD them. UNSET (the default) is the
+			// disclosed status quo — ANY authenticated human in OIDC mode can CRUD
+			// policies — and full per-user RBAC remains future work (ROADMAP.md).
+			// Every spec is validated before it is persisted (fail closed);
+			// writes are audited.
+			operatorOnly.Post("/policies", s.handleCreatePolicy)
 			r.Get("/policies", s.handleListPolicies)
 			r.Get("/policies/{id}", s.handleGetPolicy)
-			r.Put("/policies/{id}", s.handleUpdatePolicy)
-			r.Delete("/policies/{id}", s.handleDeletePolicy)
+			operatorOnly.Put("/policies/{id}", s.handleUpdatePolicy)
+			operatorOnly.Delete("/policies/{id}", s.handleDeletePolicy)
 
 			// Workspace management (onboarding of local dirs + repos a run may
-			// attach), gated to authenticated humans (SSO session
-			// or admin token); dedicated admin-role gating is planned, so today
-			// ANY authenticated human in OIDC mode can CRUD workspaces, not just
-			// admins. Create/update validate the source the
+			// attach), gated to authenticated humans (SSO session or admin token);
+			// every MUTATING route here is additionally operator-only, so with
+			// WARDYN_OIDC_OPERATOR_EMAILS set a signed-in human outside that list
+			// can list/read workspaces but cannot CRUD them or widen what a run
+			// may do. UNSET (the default) is the disclosed status quo — ANY
+			// authenticated human in OIDC mode can CRUD workspaces — and full
+			// per-user RBAC remains future work (ROADMAP.md).
+			// Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
 			// repoCloneURL); writes are audited. Scan is a separate endpoint
 			// (workspaces.go handleScanWorkspace) that runs the deterministic
 			// workspacescan and persists the profile + status.
-			r.Post("/workspaces", s.handleCreateWorkspace)
+			operatorOnly.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
 			r.Get("/workspaces/{id}", s.handleGetWorkspace)
-			r.Put("/workspaces/{id}", s.handleUpdateWorkspace)
-			r.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
-			r.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
+			operatorOnly.Put("/workspaces/{id}", s.handleUpdateWorkspace)
+			operatorOnly.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
+			operatorOnly.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
-			r.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+			operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
 			// Bind (or clear) the workspace/container's model/harness creds — a run
 			// that picks it inherits them (applyWorkspaceCreds). Scoped write.
-			r.Put("/workspaces/{id}/llm-cred", s.handleSetWorkspaceLLMCred)
+			operatorOnly.Put("/workspaces/{id}/llm-cred", s.handleSetWorkspaceLLMCred)
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
 			// Operator-approved setup commands the verify run executes
 			// (promoted from the scanner's advisory profile.setup_commands).
-			r.Put("/workspaces/{id}/setup-commands", s.handleSetSetupCommands)
+			operatorOnly.Put("/workspaces/{id}/setup-commands", s.handleSetSetupCommands)
 			// Launch a governed verify run: execute the approved setup commands
 			// in the built image under confinement (see handleVerifyWorkspace).
-			r.Post("/workspaces/{id}/verify", s.handleVerifyWorkspace)
+			operatorOnly.Post("/workspaces/{id}/verify", s.handleVerifyWorkspace)
 			// Record Mode: launch one task's OPEN recording sandbox (learn what
 			// the task actually uses; see handleRecordWorkspace), then promote
 			// the observed-allowed hosts into ApprovedEgress (operator one-click).
-			r.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
-			r.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
+			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+			operatorOnly.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Finalize the import: mark ready + optionally emit committable
 			// env-as-code (devcontainer.json/AGENTS.md). The GET re-generates
 			// the same files any time, so a repo workspace's committable output
 			// does not die with the one-shot finalize response.
-			r.Post("/workspaces/{id}/finalize", s.handleFinalizeWorkspace)
+			operatorOnly.Post("/workspaces/{id}/finalize", s.handleFinalizeWorkspace)
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			// Agentic verify-fix: ask a compose backend to diagnose a failed
 			// verify and suggest a concrete fix (advisory; see handleSuggestVerifyFix).
-			r.Post("/workspaces/{id}/verify/suggest-fix", s.handleSuggestVerifyFix)
+			operatorOnly.Post("/workspaces/{id}/verify/suggest-fix", s.handleSuggestVerifyFix)
 
 			// Secret management: write/delete/list only. Values are NEVER
 			// readable through the API (read paths are the broker and the
@@ -583,14 +617,17 @@ func (s *Server) routes() chi.Router {
 			// config row; every write is validated (SSRF/injection hardening on
 			// the URL/host fields) and audited (site_config.write).
 			//
-			// RBAC caveat (same as policy/workspace above): this is in the
-			// humanOrAdminAuth group — AUTHENTICATION only, no admin-role gate yet
-			// (planned), so today ANY authenticated human in OIDC mode can CRUD it,
-			// not just admins. Blast radius is corp-wide (this baseline feeds every
-			// run's upstream proxy / artifact mirror / SCM hosts) — arguably higher
-			// than a single policy — so the missing role gate matters most here.
+			// RBAC (same as policy/workspace above): humanOrAdminAuth is
+			// AUTHENTICATION only, so the PUT is operator-only — with
+			// WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that list
+			// can read the config but not rewrite it. This is where that matters
+			// most: the blast radius is corp-wide (the baseline feeds every run's
+			// upstream proxy / artifact mirror / SCM hosts), higher than a single
+			// policy. UNSET (the default) is the disclosed status quo — ANY
+			// authenticated human in OIDC mode can rewrite it — and full per-user
+			// RBAC remains future work (ROADMAP.md).
 			r.Get("/site-config", s.handleGetSiteConfig)
-			r.Put("/site-config", s.handlePutSiteConfig)
+			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}
 			if s.cfg.RecordingStore != nil {

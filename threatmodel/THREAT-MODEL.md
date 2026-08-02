@@ -55,13 +55,16 @@ invitation, not an embarrassment.
 4. **Source code + the git push capability** — the minted GitHub installation
    token is repo-scoped and permission-clamped (max `contents:write` +
    `pull_requests:write`, 1h TTL). Bot-branch-namespace confinement
-   (`wardyn/<run-id>/*`, "PR is the only merge path") is **[v0.5+ — planned]**:
-   GitHub installation tokens cannot self-restrict to a ref prefix, so this
-   requires a push-ref-inspecting git-proxy (TLS-intercept tier) or
-   GitHub-side branch-protection rulesets. Today the broker only *records* the
-   namespace in token metadata as an advisory value; it is **not enforced**, so
-   a token can push to any branch (including the default) within its granted
-   repos.
+   (`wardyn/<run-id>/*`, "PR is the only merge path") is **[shipped, opt-in]**
+   at the git-broker proxy route: it parses the `git-receive-pack` pkt-line
+   command section and refuses every ref outside
+   `refs/heads/wardyn/<run-id>/` (including deletes) before the token is
+   minted. It is OFF unless the proxy sets
+   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, and it binds the BROKERED PATH ONLY —
+   the installation token still cannot self-restrict to a ref prefix, so a
+   token exfiltrated from the proxy, or any push that does not traverse
+   `/wardyn/gh/`, is unconstrained by it. Token-side confinement needs
+   GitHub branch-protection rulesets **[v0.5+ — planned]**.
 5. **Audit integrity** — the append-only control-plane log, eBPF ground truth,
    PTY recordings. Tampering defeats incident response. NOTE: append-only
    protects what IS written; it does not yet guarantee every control-plane
@@ -143,7 +146,7 @@ the L3 tool gateway planned at v0.5.
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; userns (`hostUsers:false`) + PSS-restricted + no hostPath are the Kubernetes path **[v0.5+ — planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
 | Host-side RCE at image-wrap time from a hostile Bring-Your-Own-Image base (`ONBUILD` triggers) | BYOI (`internal/envbuild` `FinalizeBase`) wraps an operator-named base with the runner tools via a `FROM` + `COPY` on the host daemon — outside the untrusted-build sandbox and outside every confinement tier. A `FROM` fires any `ONBUILD` triggers baked into the base, so a hostile base could run code on the host *before* any confinement exists. Docker exposes no flag to suppress triggers, so the base is preflighted (`ImageInspect`) and the wrap is **refused** if it declares any (`assertWrapSafeBase`), on both the BYOI and devcontainer paths; Wardyn also pulls the base itself rather than via the builder's `PullParent`, so the wrap builds `FROM` the exact image the preflight inspected **[shipped]**. Residual: wrapping is not vetting — base content is unscanned/unattested and digest pinning is honored but NOT enforced (see §5 residual 13). | B1 |
-| Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[v0.5+ — planned]** — the token is repo-scoped but NOT branch-scoped; the broker records the `wardyn/<run-id>/*` namespace as advisory metadata only and nothing enforces it on push yet (needs a push-ref-inspecting git-proxy or GitHub rulesets). | B4, B5, ID |
+| Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[shipped, opt-in]** on the brokered git path (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; push-ref inspection in `internal/egress/proxy/git_broker.go`) and **[v0.5+ — planned]** as a default and as a token-side/GitHub-ruleset property — the token itself is still repo-scoped but NOT branch-scoped. | B4, B5, ID |
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit, and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not to the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, which the same insider can rewrite — the control plane authenticates but does not authorize, so in an OIDC deployment the ceiling is not above them. See residual #14. | B5, ID |
@@ -309,10 +312,20 @@ hiding them would repeat the failure mode we are designed to avoid.
       better. The launch gate is a functional self-test (`agent-run --selftest`),
       which proves the image is *runnable*, never that it is *trustworthy*.
 
-14. **The control plane authenticates; it does not authorize.** Distinct from
+14. **The control plane authenticates; it barely authorizes.** Distinct from
     #9, which is about someone who already IS an admin: wherever more than one
     human can authenticate — i.e. any OIDC deployment — every authenticated
-    developer holds admin powers, because there is no role tier at all. Policy
+    developer holds admin powers by default, because there is exactly one role
+    tier and it is off unless configured. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
+    to a list of operator addresses makes every other signed-in human a
+    **viewer**: 403 on the mutating routes of four clusters — the managed
+    harness credential, policy CRUD, workspace CRUD (including the scoped
+    widening writes below) and `PUT /site-config`. Reads are never gated, the
+    admin token and local mode are always operators (one shared credential
+    carries no human to demote), and NOTHING ELSE is covered — notably `PUT`/
+    `DELETE /secrets/{name}`, `POST /runs` and `POST /runs/{id}/kill` remain open
+    to any signed-in human. Leave the list unset and the paragraph below is the
+    whole truth. Policy
     CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
     `setup-commands` writes that widen what a run may do), secret write/delete,
     `GET`/`PUT /site-config`, the managed harness credential (`POST
@@ -323,14 +336,18 @@ hiding them would repeat the failure mode we are designed to avoid.
     can raise their own ceiling rather than exceed it: `PUT` a policy with a
     wide-open allowlist, or point every run's upstream proxy at a host they
     control (site-config names a secret ref, and `PUT /secrets/{name}` is in the
-    same group). What bounds this today is attribution, not prevention — every
-    such write is audited (`policy.create`/`update`/`delete`,
+    same group). What bounds this is the operator allowlist above where it
+    applies, and otherwise attribution rather than prevention — every such write
+    is audited (`policy.create`/`update`/`delete`,
     `secret.write`/`secret.delete`, `site_config.write`,
     `harness.credential.captured`/`disconnected`) and OIDC login can be narrowed
     to a verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`, empty = any
-    verified email). In local mode and admin-token mode the only principal IS
-    the admin, so the gap collapses into #9. The fix is `ROADMAP.md`'s v1.0
-    "separation of duty on the control plane".
+    verified email). Note the allowlist matches the session's `email` claim,
+    which is only forced to be IdP-VERIFIED when `WARDYN_OIDC_EMAIL_DOMAINS` is
+    also set — set both, or trust your IdP not to emit unverified addresses. In
+    local mode and admin-token mode the only principal IS the admin, so the gap
+    collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
+    control plane".
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

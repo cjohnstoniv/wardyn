@@ -298,7 +298,10 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
 > sign-in lights up when OIDC is configured — but every signed-in user has
-> admin-equivalent powers (no per-user RBAC). `make setup` asks **containerized vs host** (Enter =
+> admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` is set, which buys
+> exactly one tier (unlisted signers-in become read-only viewers on the
+> harness-credential, policy, workspace and site-config writes) and is not RBAC.
+> `make setup` asks **containerized vs host** (Enter =
 > containerized; both single-user); team is not a selectable mode
 > (`WARDYN_SETUP_MODE=team` prints a notice and exits).
 

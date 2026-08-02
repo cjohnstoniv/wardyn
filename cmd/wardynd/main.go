@@ -238,6 +238,7 @@ func run() error {
 		ControlPlaneURL:           *f.controlURL,
 		RecordingStore:            feats.recStore,
 		OIDC:                      feats.authn,
+		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
 		AgentAnthropicModel:       *f.agentModel,
