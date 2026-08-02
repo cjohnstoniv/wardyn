@@ -360,12 +360,6 @@ type ComponentInfo struct {
 type Server struct {
 	cfg    Config
 	router chi.Router
-	// attachTix holds outstanding single-use WS attach tickets (see
-	// attach_ticket.go). Zero value is ready to use.
-	attachTix attachTickets
-	// composeResults holds in-flight compose-run proposal uploads keyed by run id
-	// (see composeresult.go). Zero value is ready to use.
-	composeResults composeResultStore
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics

@@ -7,12 +7,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -32,59 +33,41 @@ import (
 // captured from a log or referrer is stale by the time anyone reads it.
 const attachTicketTTL = 30 * time.Second
 
-// attachTicket is one outstanding single-use WS credential.
-type attachTicket struct {
-	runID     uuid.UUID
-	actorType types.ActorType
-	principal string
-	expiresAt time.Time
-}
+// The outstanding-ticket table is a Postgres row per ticket (migration 0026),
+// not process memory: a ticket minted on one control plane is redeemable on
+// another, and a restart no longer invalidates every outstanding ticket.
 
-// attachTickets is the in-memory outstanding-ticket table. In-process state is
-// correct here: a ticket is minted and redeemed against the same wardynd that
-// holds the WS (there is exactly one control plane), and a restart merely
-// invalidates outstanding tickets, which the UI handles by re-minting.
-type attachTickets struct {
-	mu sync.Mutex
-	m  map[string]attachTicket
-}
-
-// mint sweeps expired entries and issues a fresh ticket for runID.
-func (t *attachTickets) mint(runID uuid.UUID, actorType types.ActorType, principal string, now time.Time) (string, error) {
+// mintAttachTicket issues a fresh single-use ticket bound to runID and to the
+// minting principal.
+func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal string, now time.Time) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	tok := hex.EncodeToString(raw)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.m == nil {
-		t.m = make(map[string]attachTicket)
+	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal}
+	if err := st.MintAttachTicket(ctx, tok, t, now, now.Add(attachTicketTTL)); err != nil {
+		return "", err
 	}
-	for k, v := range t.m {
-		if now.After(v.expiresAt) {
-			delete(t.m, k)
-		}
-	}
-	t.m[tok] = attachTicket{runID: runID, actorType: actorType, principal: principal, expiresAt: now.Add(attachTicketTTL)}
 	return tok, nil
 }
 
-// consume redeems tok for runID exactly once. A miss, an expired entry, or a
-// run-id mismatch all fail identically (no oracle distinguishing "wrong run"
-// from "no such ticket").
-func (t *attachTickets) consume(tok string, runID uuid.UUID, now time.Time) (attachTicket, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	tk, ok := t.m[tok]
-	if !ok {
-		return attachTicket{}, false
+// consumeAttachTicket redeems tok for runID exactly once, returning the minting
+// principal for attribution. The store's DELETE ... RETURNING burns the row on
+// ANY redemption attempt, so a probe against a guessed run id spends the ticket
+// (what the in-memory map did). A miss, an expired row, and a run-id mismatch
+// all fail identically — no oracle distinguishing "wrong run" from "no such
+// ticket". A non-nil error is a store failure, NOT a rejection: the caller must
+// not report it as a bad ticket.
+func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID uuid.UUID, now time.Time) (ticketActor, bool, error) {
+	t, ok, err := st.ConsumeAttachTicket(ctx, tok, now)
+	if err != nil {
+		return ticketActor{}, false, err
 	}
-	delete(t.m, tok) // single-use: burned on any redemption attempt
-	if now.After(tk.expiresAt) || tk.runID != runID {
-		return attachTicket{}, false
+	if !ok || t.RunID != runID {
+		return ticketActor{}, false, nil
 	}
-	return tk, true
+	return ticketActor{actorType: t.ActorType, principal: t.Principal}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -129,9 +112,10 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	at, principal := actorFromRequest(r)
-	tok, err := s.attachTix.mint(id, at, principal, s.cfg.Now())
+	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, s.cfg.Now())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "mint attach ticket: "+err.Error())
+		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "mint attach ticket failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -159,11 +143,19 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		tk, ok := s.attachTix.consume(tok, id, s.cfg.Now())
+		ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, tok, id, s.cfg.Now())
+		if err != nil {
+			// A store failure is not a bad ticket: say so, and never leak the
+			// database error to an as-yet-unauthenticated caller — but DO log it,
+			// or the operator sees a bare 500 with no cause anywhere.
+			slog.ErrorContext(r.Context(), "wardynd: attach ticket lookup failed", "run_id", id, "err", err)
+			writeError(w, http.StatusInternalServerError, "attach ticket lookup failed")
+			return
+		}
 		if !ok {
 			writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ticketActor{actorType: tk.actorType, principal: tk.principal})))
+		next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ta)))
 	})
 }

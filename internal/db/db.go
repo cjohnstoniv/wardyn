@@ -38,6 +38,46 @@ var migrationFS embed.FS
 // value works.
 const migrateAdvisoryLockKey int64 = 0x5741524459_4D4947 // ASCII "WARDYMIG"; any stable value works
 
+// ReaperAdvisoryLockKey makes the lifecycle reap tick single-flight across
+// control planes. Unlike migrateAdvisoryLockKey (a BLOCKING lock — the second
+// boot must still see the migrations applied), this one is only ever taken with
+// TryAdvisoryLock: a replica that loses SKIPS the tick, because a queued second
+// reap of the same runs is pure duplicate work and a duplicate run.autostop.
+const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
+
+// TryAdvisoryLock takes session-level advisory lock key on a connection borrowed
+// from pool WITHOUT waiting, reporting ok=false when another session already
+// holds it. Call the returned release (deferred) to unlock and hand the
+// connection back — skipping it strands a pooled conn for the life of the
+// process. Only for work of BOUNDED duration: the borrowed conn is unavailable
+// to everyone else until release — which also means the caller's own queries
+// need a SECOND conn, so this requires pool_max_conns >= 2 (a 1-conn pool would
+// self-deadlock: the lock holds the only conn while the guarded work blocks on
+// Acquire; the reaper's per-tick deadline turns that into a failed tick, not a
+// hang, but the lock is still wasted).
+func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (release func(), ok bool, err error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("db: acquire advisory lock conn: %w", err)
+	}
+	var got bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
+		conn.Release()
+		return nil, false, fmt.Errorf("db: try advisory lock: %w", err)
+	}
+	if !got {
+		conn.Release()
+		return nil, false, nil
+	}
+	return func() {
+		// Unlock on a background context: ctx is typically cancelled at shutdown,
+		// exactly when releasing matters most. Best-effort — the lock also dies
+		// with the session when the conn is finally closed.
+		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck — best-effort release
+		conn.Release()
+	}, true, nil
+}
+
 // AuditDDLProtected reports whether the given (application) pool's role is
 // UNABLE to bypass the audit_events append-only triggers via DDL — i.e. it is
 // neither a superuser nor a MEMBER of the table's owner role (membership, not

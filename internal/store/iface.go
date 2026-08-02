@@ -87,6 +87,16 @@ type Store interface {
 	PutRef(ctx context.Context, ref, substrateName string) error
 	GetRef(ctx context.Context, ref string) (substrateName string, found bool, err error)
 	DeleteRef(ctx context.Context, ref string) error
+
+	// Short-lived cross-process handoff rows (see store_ephemeral.go): single-use
+	// WS attach tickets and compose-run proposal uploads. Both are consume-once,
+	// and the consumer is a single DELETE ... RETURNING, so two racing
+	// redemptions — on one control plane or two — can only have one win.
+	MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error
+	ConsumeAttachTicket(ctx context.Context, token string, now time.Time) (AttachTicket, bool, error)
+	PutComposeResult(ctx context.Context, runID uuid.UUID, payload []byte) error
+	TakeComposeResult(ctx context.Context, runID uuid.UUID) ([]byte, bool, error)
+	DiscardComposeResult(ctx context.Context, runID uuid.UUID) error
 }
 
 // PG is the Postgres-backed Store: its methods (defined in store.go) hold the

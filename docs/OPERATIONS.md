@@ -96,16 +96,28 @@ rebuilds them.
 
 ## One replica, by construction
 
-`replicas` is not a scaling knob. wardynd holds per-process state that a second
-replica does not see, so a request landing on the wrong pod fails:
+`replicas` is not a scaling knob. wardynd still holds per-process state that a
+second replica does not see, so a request landing on the wrong pod fails:
 
-- **attach tickets** — single-use WebSocket tickets live in `Server.attachTix`
-  (`internal/api/server.go`), so a ticket minted on pod A is unknown to pod B.
-- **compose results** — the in-sandbox proposal upload is parked in a `sync.Map`
-  and taken delete-on-read by the waiting launcher (`internal/api/composeresult.go`).
-  Uploaded to A, awaited on B, it is never found.
+- **run watchers** — each dispatched run leaves an in-process goroutine blocked
+  on `Runner.Wait` (`internal/api/runs_dispatch.go`); only the pod that launched
+  a run finishes it. `ReconcileOnBoot` re-attaches after a restart of that same
+  pod, not across pods.
+- **session recordings** — the default store is a local directory
+  (`internal/recording`), so a recording written on A is not readable on B.
 - **the ground-truth token rotator** — every wardynd runs one
   (`cmd/wardynd/gt_rotator.go`) and they all write the same shared token file.
+- **the audit spool** — a local append-only file per pod
+  (`internal/api/auditspool.go`). This one is per-process *by design*: it is the
+  fallback for a failed Postgres write, and each pod drains its own back into
+  the database once it recovers.
 
-Keep `replicas: 1`. Making those three shared is the prerequisite for anything
-else, and it is not on the [roadmap](../ROADMAP.md).
+Three pieces that used to be on this list are now Postgres-backed (migration
+0026, and a `pg_try_advisory_lock` around the reap tick), so they are no longer
+what stops a second replica — and they survive a crash: single-use **attach
+tickets**, delete-on-read **compose results**, and the **lifecycle reaper**,
+which now skips a tick it does not win the lock for instead of racing another
+pod to stop the same runs.
+
+Keep `replicas: 1` anyway. The list above is what remains, and closing it is not
+on the [roadmap](../ROADMAP.md).

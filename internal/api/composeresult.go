@@ -8,8 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,23 +45,11 @@ type composeRunnerSink interface {
 	SetRunClaude(sandbox.RunClaudeFunc)
 }
 
-// composeResultStore holds compose-run proposal-JSON uploads keyed by run id,
-// pending a read by the waiting RunClaudeCompose. Short-lived and low-volume:
-// each entry is written once by the in-sandbox compose PUT and taken
-// (delete-on-read) once by the launcher — a sync.Map is plenty, no iteration.
-type composeResultStore struct{ m sync.Map }
-
-func (c *composeResultStore) put(runID uuid.UUID, raw []byte) { c.m.Store(runID, raw) }
-
-func (c *composeResultStore) take(runID uuid.UUID) ([]byte, bool) {
-	v, ok := c.m.LoadAndDelete(runID)
-	if !ok {
-		return nil, false
-	}
-	return v.([]byte), true
-}
-
-func (c *composeResultStore) discard(runID uuid.UUID) { c.m.Delete(runID) }
+// Compose-run proposal uploads are parked in Postgres keyed by run id (migration
+// 0026), pending a read by the waiting RunClaudeCompose. It was a sync.Map, which
+// meant an upload landing on one control plane was invisible to the launcher
+// waiting on another (and lost outright on a restart). The store's
+// TakeComposeResult keeps the delete-on-read contract, atomically.
 
 // handleUploadComposeResult accepts a PUT /api/v1/internal/compose-results/{runID}
 // from the in-sandbox claude compose wire (maybe_exec_compose_mode). It MIRRORS
@@ -81,7 +69,11 @@ func (s *Server) handleUploadComposeResult(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	s.composeResults.put(claims.RunID, raw)
+	if err := s.cfg.Store.PutComposeResult(r.Context(), claims.RunID, raw); err != nil {
+		slog.ErrorContext(r.Context(), "wardynd: store compose result failed", "run_id", claims.RunID, "err", err)
+		writeError(w, http.StatusInternalServerError, "store compose result failed")
+		return
+	}
 	// Counts only — never the proposal content (it may echo untrusted prompt text).
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"compose.result", claims.RunID.String(), "success", mustJSON(map[string]any{"bytes": len(raw)})))
@@ -184,10 +176,13 @@ func (s *Server) RunClaudeCompose(ctx context.Context, promptJSON []byte) ([]byt
 		// Timed out / client left before the run finished: reclaim the run + its
 		// sandbox best-effort so a hung compose can't linger, and drop any partial.
 		s.reclaimComposeRun(context.WithoutCancel(ctx), runID)
-		s.composeResults.discard(runID)
+		s.cfg.Store.DiscardComposeResult(context.WithoutCancel(ctx), runID) //nolint:errcheck — best-effort drop of a partial nobody will take
 		return nil, fmt.Errorf("sandbox composer: compose run did not finish: %w", err)
 	}
-	raw, ok := s.composeResults.take(runID)
+	raw, ok, err := s.cfg.Store.TakeComposeResult(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox composer: take compose result: %w", err)
+	}
 	if !ok {
 		return nil, fmt.Errorf("sandbox composer: compose run %s finished (%s) but uploaded no proposal — the sandbox likely could not reach the control plane (check sandbox→wardynd networking)", runID, finalState)
 	}

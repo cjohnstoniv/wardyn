@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -292,6 +293,23 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 		return nil, fmt.Errorf("wardynd: iterate run summaries: %w", err)
 	}
 	return out, nil
+}
+
+// reapTickLock is the reaper's single-flight gate: a Postgres try-advisory-lock
+// so two control planes (or an old process still winding down beside a new one)
+// cannot both scan and stop the same runs on the same tick. Follows
+// lifecycleStore/lifecycleStopper — the pool stays here in wardynd and lifecycle
+// keeps its target-agnostic seams. A lock we cannot reach skips the tick: the
+// scan that follows would fail on the same database anyway.
+func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
+	return func(ctx context.Context) (func(), bool) {
+		release, ok, err := db.TryAdvisoryLock(ctx, pool, db.ReaperAdvisoryLockKey)
+		if err != nil {
+			slog.DebugContext(ctx, "wardynd: reap tick lock unavailable", slog.Any("err", err))
+			return nil, false
+		}
+		return release, ok
+	}
 }
 
 // lifecycleStopper adapts the runner + store to lifecycle.Stopper. StopRun wins

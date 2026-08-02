@@ -85,10 +85,14 @@ the final cleanup on purpose:
   host bind), non-host-local artifact delivery, published + signed images, a
   chart install test, Ingress/TLS wiring, and a K8s ground-truth correlator
   (today docker-label-based).
-- **HA.** The control plane is a documented singleton: in-process run watchers,
-  in-memory attach tickets and compose results, a local audit spool file,
-  fs-only recordings, an unguarded reaper. Leader election + durable/shared
-  variants of each before `replicas > 1` means anything.
+- **HA.** The control plane is a documented singleton. Attach tickets, compose
+  results, and the reaper tick are now Postgres-backed (migration 0026 + a
+  `pg_try_advisory_lock` on the tick), so they survive a crash and no longer
+  break under a second replica — but the residual is still fatal to
+  `replicas > 1`: in-process run watchers, fs-only recordings, and the
+  ground-truth token rotator (the local audit spool file is per-process by
+  design — it is the Postgres-write fallback each pod drains itself). Durable or
+  shared variants of those three before `replicas > 1` means anything.
 - **SPIRE identity / OpenBao secretstore** (seams + conformance suites ship).
 - **Team mode:** SAML/SCIM, per-user RBAC on the console (SSO *sign-in* shipped
   in 0.4.4; authorization did not).

@@ -146,6 +146,15 @@ type Config struct {
 	// Now overrides the wall clock. Nil means use real time.
 	// (overridable in tests, mirrors embedded.Provider's now func idiom)
 	Now func() time.Time
+	// TickLock, when non-nil, makes each tick single-flight across control
+	// planes: it must TRY to take a cluster-wide lock and return a release func,
+	// or (nil, false) when someone else holds it — in which case the tick is
+	// skipped, not queued. wardynd wires a Postgres try-advisory-lock
+	// (db.TryAdvisoryLock, key db.ReaperAdvisoryLockKey); it stays a func here so
+	// lifecycle keeps no database dependency, like Store/Stopper/Recorder.
+	//
+	// Nil = ungated, the single-process default (and what tests drive Tick with).
+	TickLock func(ctx context.Context) (release func(), ok bool)
 }
 
 // Reaper is the idle-workspace garbage collector. It runs a periodic loop
@@ -161,6 +170,7 @@ type Reaper struct {
 	recorder Recorder
 	now      func() time.Time
 	interval time.Duration
+	tickLock func(ctx context.Context) (func(), bool)
 	logger   *slog.Logger
 }
 
@@ -173,6 +183,7 @@ func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 		recorder: recorder,
 		now:      cfg.Now,
 		interval: cfg.Interval,
+		tickLock: cfg.TickLock,
 		logger:   slog.Default().With("component", "lifecycle.reaper"),
 	}
 	if r.now == nil {
@@ -201,9 +212,33 @@ func (r *Reaper) Run(ctx context.Context) {
 	}
 }
 
-// Tick is one reap scan. It is exported so that integration callers and tests
-// can drive it directly; in production code always use Run instead.
+// Tick is one reap scan, gated by Config.TickLock when one is wired. It is
+// exported so that integration callers and tests can drive it directly; in
+// production code always use Run instead.
+//
+// The whole tick runs under a one-Interval deadline: the advisory-lock
+// connection is held for the tick's duration, so a single wedged StopRun must
+// not pin the lock (and with it, reaping cluster-wide) until process restart.
 func (r *Reaper) Tick(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, r.interval)
+	defer cancel()
+	if r.tickLock != nil {
+		release, ok := r.tickLock(ctx)
+		if !ok {
+			// Another control plane is reaping this tick (or the lock could not be
+			// reached). Skipping is the point of a TRY lock: the scan is idempotent
+			// and the next tick is one Interval away, so waiting would only queue
+			// duplicate stops behind the winner.
+			r.logger.DebugContext(ctx, "lifecycle: tick skipped (reap lock held elsewhere)")
+			return
+		}
+		defer release()
+	}
+	r.reap(ctx)
+}
+
+// reap is the tick body — the scan itself, with no locking of its own.
+func (r *Reaper) reap(ctx context.Context) {
 	runs, err := r.store.ListRunningWithPolicy(ctx)
 	if err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: list running runs failed", "err", err)
