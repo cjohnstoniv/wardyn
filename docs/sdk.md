@@ -154,6 +154,11 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
   'http://localhost:8080/api/v1/audit?run_id=<id>'   # run.complete -> .data.exit_code
 ```
 
+Beyond `run_id`, the audit query accepts server-side predicates:
+`since`/`until` (RFC 3339), `action_prefix` (e.g. `egress.`), `actor_type`
+(`human|agent|system`), and `outcome` (`success|denied|failure`) — they compose,
+and the CLI mirrors them on `wardyn audit`.
+
 The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
 trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
 reach the terminal `run.complete`. Everything else here is one method on the Go

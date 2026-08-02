@@ -143,10 +143,19 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // revert of the compose-Q&A risk text (text-warning) back to text-amber-600 —
   // or any new palette-color status text — fails here instead of shipping
   // sub-AA text. (Palette border-/bg- utilities are unaffected; only text- is.)
+  //
+  // text-destructive is ALSO forbidden as text: --destructive is the button
+  // FILL token (white text goes on it), tuned for that job, and as dark-theme
+  // text it measured 3.9:1 on --popover. Error copy uses text-danger, whose
+  // both-theme text ratios the assertions above prove. The vendored shadcn
+  // primitives under components/ui/ are exempt (same vendored treatment as the
+  // coverage config): their destructive MENU variant is upstream API, and no
+  // app call site uses it for body/error copy.
   it("no raw palette text colors in src/app — use text-warning/success/danger", () => {
-    const rawText = /\btext-(amber|red|green|yellow|orange|emerald|rose|lime|teal|cyan|blue|indigo|violet|purple|pink)-[0-9]{2,3}\b/;
+    const rawText = /\btext-(amber|red|green|yellow|orange|emerald|rose|lime|teal|cyan|blue|indigo|violet|purple|pink)-[0-9]{2,3}\b|\btext-destructive\b/;
     const offenders: string[] = [];
     for (const f of walkTsx("src/app")) {
+      if (f.includes("components/ui/")) continue; // vendored shadcn primitives
       readFileSync(f, "utf8")
         .split("\n")
         .forEach((ln, i) => {

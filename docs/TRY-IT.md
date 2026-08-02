@@ -211,6 +211,13 @@ captured session. The workspace *import* flow has its own Verify step with
 different semantics: it executes the operator-approved setup commands in a
 governed sandbox to prove the environment builds.)
 
+**Workspaces from the CLI:** `wardyn workspace create|list|get|delete|scan`
+manages onboarded workspaces headlessly (`create` is what clears the run-create
+onboarding gate for `--policy-file` workspace mounts). The committable
+env-as-code a finalize emits is re-fetchable any time via
+`GET /api/v1/workspaces/{id}/env-as-code` (same `emitted_files` shape), and a
+finished session's cast downloads with `wardyn run recording <run-id> [-o file]`.
+
 **From the CLI:** `wardyn record task <workspace-id> <task-key>` records a single
 workspace-import task (the `task-key` is one of the workspace's derived
 `record_tasks` — `build`/`test`/`lint`/`setup`/`custom`) in an OPEN (allow-all

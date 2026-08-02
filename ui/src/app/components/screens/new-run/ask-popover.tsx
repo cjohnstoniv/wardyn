@@ -75,7 +75,7 @@ export function AskPopover({
             Ask
           </Button>
         </div>
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        {error && <p className="text-xs text-danger">{error}</p>}
         {answer && (
           <div className="whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-2 text-xs leading-relaxed text-foreground">
             {answer}
