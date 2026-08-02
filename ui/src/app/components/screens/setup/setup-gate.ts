@@ -43,22 +43,6 @@ export function markModelSkipped(): void {
   lsSet(MODEL_SKIPPED_KEY, "1");
 }
 
-// Pure decision helper (unit-testable, and used verbatim by App.tsx): guide the
-// operator into "Getting started" on a fresh, local, single-operator console.
-// `ready` means runs *can* launch on this host — NOT that the operator has been
-// onboarded — so a brand-new control plane with no runs yet still opens even when
-// ready (that is the whole point of first-run setup). An explicit dismissal
-// (Finish later / launch) or a first launched run stops it, and it never
-// force-opens on a hosted/SSO multi-admin control plane.
-export function shouldOpenSetup(status: SetupStatus, dismissed: boolean): boolean {
-  // A synthetic fallback status (daemon didn't answer) proves nothing about the
-  // host — never auto-open on it. Its has_runs:false would otherwise force the
-  // funnel open with danger cards built from made-up fields.
-  if (status.unreachable) return false;
-  if (dismissed || status.auth.mode !== "local") return false;
-  return !status.has_runs || !status.ready;
-}
-
 // The HARD first-run gate: while active, the app nav is hidden and every route
 // except Getting Started (and the demos that are part of it) redirects to
 // /setup, so a fresh local operator must go THROUGH setup rather than landing in

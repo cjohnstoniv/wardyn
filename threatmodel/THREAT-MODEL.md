@@ -1,11 +1,10 @@
 # Wardyn Published Threat Model
 
-**Version:** v1 (design phase)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.4.3)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** This document is forward-looking. Controls
-are tagged inline: **[shipped]** (enforced in code today), **[v0.2 — building]**
-(designed and in progress for the v0.2 Docker pilot, not yet merged), or
+are tagged inline: **[shipped]** (enforced in code today) or
 **[v0.5+ — planned]**. An untagged control is shipped. Per the project's
 anti-overclaim rule, any untagged claim not actually enforced in code is a bug,
 not prose license — report it.

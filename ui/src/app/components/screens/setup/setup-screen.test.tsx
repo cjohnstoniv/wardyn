@@ -67,12 +67,7 @@ vi.mock("../../wardyn/live-approvals", () => ({
   LiveApprovals: () => null,
 }));
 
-import {
-  SetupScreen,
-  setupDismissed,
-  dismissSetup,
-  shouldOpenSetup,
-} from "./setup-screen";
+import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
@@ -94,34 +89,6 @@ function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
     ...overrides,
   });
 }
-
-describe("shouldOpenSetup — pure decision helper", () => {
-  it("opens when not ready, not dismissed, and auth is local", () => {
-    expect(shouldOpenSetup(baseStatus(), false)).toBe(true);
-  });
-  it("opens on a fresh control plane (no runs yet) even when ready", () => {
-    expect(shouldOpenSetup(baseStatus({ ready: true, has_runs: false }), false)).toBe(true);
-  });
-  it("stays closed on an established instance (ready, with runs)", () => {
-    expect(shouldOpenSetup(baseStatus({ ready: true, has_runs: true }), false)).toBe(false);
-  });
-  it("stays closed when dismissed", () => {
-    expect(shouldOpenSetup(baseStatus(), true)).toBe(false);
-  });
-  it("stays closed on a hosted/SSO control plane (auth.mode !== local)", () => {
-    expect(shouldOpenSetup(baseStatus({ auth: { mode: "sso", local_loopback: false } }), false)).toBe(
-      false,
-    );
-  });
-  it("never auto-opens on the unreachable fallback, even with has_runs:false", () => {
-    // READY_FALLBACK shape: the daemon didn't answer, every field is synthetic.
-    // ready:true alone was NOT enough — the !has_runs branch used to force-open.
-    expect(
-      shouldOpenSetup(baseStatus({ unreachable: true, ready: true, has_runs: false }), false),
-    ).toBe(false);
-    expect(shouldOpenSetup(baseStatus({ unreachable: true, ready: false }), false)).toBe(false);
-  });
-});
 
 describe("setupDismissed()/dismissSetup() — localStorage flag", () => {
   beforeEach(() => localStorage.clear());

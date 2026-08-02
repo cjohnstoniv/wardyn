@@ -41,10 +41,10 @@ import {
 import { DEMO_STEP_IDS, STEP_ORDER, stepBadges, stepDone, type SetupStepId } from "./steps";
 import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 
-// The dismiss flag and the auto-open decision live in ./setup-gate so App.tsx
-// can import them without pulling this module's terminal-heavy graph into the
-// entry chunk. Re-exported here: this is still their public home.
-export { dismissSetup, setupDismissed, shouldOpenSetup } from "./setup-gate";
+// The dismiss flag lives in ./setup-gate so App.tsx can import it without
+// pulling this module's terminal-heavy graph into the entry chunk. Re-exported
+// here: this is still its public home.
+export { dismissSetup, setupDismissed } from "./setup-gate";
 import { dismissSetup, markModelSkipped, modelSkipped } from "./setup-gate";
 
 // Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.

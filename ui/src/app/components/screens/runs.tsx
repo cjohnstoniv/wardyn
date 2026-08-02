@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// UNIFIED RUNS — the merge of the old Runs table and the retired Fleet board.
-// One screen, two densities:
-//   - Board: the live agent-fleet card board (auto-refreshed every ~3s), grouped
+// UNIFIED RUNS — one screen, two densities:
+//   - Board: the live run card board (auto-refreshed every ~3s), grouped
 //     Needs-attention / Active / Done-by-outcome.
 //   - Table: the same runs in a dense, horizontally-scrollable table.
-// Every card / row navigates to the addressable /runs/:id detail page — the old
-// slide-over Sheet is gone. "New run" lives in the app shell top bar.
+// Every card / row navigates to the addressable /runs/:id detail page.
+// "New run" lives in the app shell top bar.
 import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -85,8 +84,8 @@ import { cn } from "../ui/utils";
 // click instead; rollup shares the chunk with the other mount sites.
 const NewRunDialog = React.lazy(() => import("./new-run/new-run-dialog").then((m) => ({ default: m.NewRunDialog })));
 
-// Live-board refresh cadence. Matches the retired Fleet board — a live board
-// shouldn't need a manual reload to feel alive.
+// Live-board refresh cadence — a live board shouldn't need a manual reload to
+// feel alive.
 const POLL_MS = 3000;
 
 // Which states need an operator's eyes — mirrors App.tsx ATTENTION_STATES (the

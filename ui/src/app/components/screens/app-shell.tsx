@@ -92,9 +92,8 @@ function initials(principal: string): string {
 // How often the readiness chip re-checks setup status, in ms.
 const READINESS_POLL_MS = 15000;
 
-// Grouped sidebar nav (redesign): OPERATE / CONFIGURE / FORENSICS, plus a
-// pinned "Getting started" entry. Fleet is intentionally NOT here — the board
-// was merged into Runs and its route removed.
+// Grouped sidebar nav: OPERATE / CONFIGURE / FORENSICS, plus a pinned
+// "Getting started" entry.
 interface NavItem {
   to: string;
   label: string;

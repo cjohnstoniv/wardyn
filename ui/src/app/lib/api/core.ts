@@ -134,7 +134,7 @@ export async function errText(res: Response): Promise<string> {
 
 // Explicit page size for the console's list polls. wardynd paginates every list
 // endpoint (default 200, hard max 1000); the console asks for the max so its
-// Fleet / Audit / Workspaces views and the attention-badge poll keep showing the
+// Runs / Audit / Workspaces views and the attention-badge poll keep showing the
 // full recent set instead of silently inheriting — and being reshaped by — a
 // change to the server default. If a deployment ever outgrows 1000 rows in one
 // view, move that view onto real ?offset= paging (the server + SDK already

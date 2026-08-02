@@ -519,8 +519,9 @@ func (s *Server) routes() chi.Router {
 			// admins. Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
-			// repoCloneURL); writes are audited. Scan is a separate, currently-stub
-			// endpoint (see workspaces.go handleScanWorkspace).
+			// repoCloneURL); writes are audited. Scan is a separate endpoint
+			// (workspaces.go handleScanWorkspace) that runs the deterministic
+			// workspacescan and persists the profile + status.
 			r.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
 			r.Get("/workspaces/{id}", s.handleGetWorkspace)

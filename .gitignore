@@ -52,6 +52,9 @@ docker-compose.override.yml
 /wardyn-runner
 /wardyn-git-helper
 /wardyn-tetragon-ingest
+/wardyn-verify
+/wardyn-scan
+/wardyn-aws-sso
 
 # playwright/screenshot artifacts
 .playwright-mcp/

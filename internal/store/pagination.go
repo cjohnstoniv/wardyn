@@ -149,7 +149,7 @@ func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, 
 // source, ref, default_target) and bumps updated_at, returning the persisted
 // row. It does NOT touch the scan-owned fields (profile, image_ref,
 // built_profile_hash, status) — those are exclusively written by the scan flow
-// (core A; handleScanWorkspace is a stub as of this wave). Returns ErrNotFound
+// (api.handleScanWorkspace). Returns ErrNotFound
 // when no workspace has the given id.
 //
 // Callers must round-trip the fetched row (handleUpdateWorkspace does, and

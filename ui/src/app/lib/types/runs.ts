@@ -49,12 +49,12 @@ export interface AgentRun {
   runner_target: string;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
-  // them via the WS PTY; the fleet board badges these as "awaiting attach".
+  // them via the WS PTY; the runs board badges these as "awaiting attach".
   // Optional so an older backend payload (or a test fixture) without the field
   // still type-checks and degrades to autonomous.
   interactive?: boolean;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
-  // on the fleet board so a workspace-directory collision is visible at a glance.
+  // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
   // The RESOLVED sandbox image the run dispatched with (convention image,
   // devcontainer build, workspace-built, or BYOI-wrapped) — provenance, shown
