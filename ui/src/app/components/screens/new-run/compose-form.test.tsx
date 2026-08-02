@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   ComposeForm,
@@ -187,15 +187,19 @@ describe("ComposeForm — file attach enforces the size cap", () => {
     renderForm({ interactive: false, onInteractiveChange });
     const autonomous = screen.getByRole("radio", { name: /Autonomous/ });
     const interactiveBtn = screen.getByRole("radio", { name: /Interactive/ });
-    // Roving tabindex: only the checked option is in the tab order.
-    expect(autonomous).toHaveAttribute("tabindex", "0");
+    // Roving tabindex: the options are never separate tab stops — Tab reaches
+    // the group once (it delegates focus to the checked option) and arrows move
+    // within it.
+    expect(screen.getByRole("radiogroup", { name: /run mode/i })).toHaveAttribute("tabindex", "0");
+    expect(autonomous).toHaveAttribute("tabindex", "-1");
     expect(interactiveBtn).toHaveAttribute("tabindex", "-1");
     // Arrow from the checked option selects the sibling (either arrow works in
-    // a two-option group).
-    const user = userEvent.setup();
+    // a two-option group). fireEvent, not userEvent: Radix defers the focus move
+    // to a macrotask and only selects while an arrow is HELD, so userEvent's
+    // immediate keyup clears that flag before the deferred focus lands.
     autonomous.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(onInteractiveChange).toHaveBeenCalledWith(true);
+    fireEvent.keyDown(autonomous, { key: "ArrowRight" });
+    await waitFor(() => expect(onInteractiveChange).toHaveBeenCalledWith(true));
   });
 
   it("offers the per-run Claude-subscription opt-in, OFF by default, and reports toggling", async () => {

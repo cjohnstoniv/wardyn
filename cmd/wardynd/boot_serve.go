@@ -21,7 +21,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // startBackgroundWorkers launches the daemon's periodic goroutines and runs the
@@ -35,11 +38,15 @@ import (
 //     unless WARDYN_GROUNDTRUTH_TOKEN_FILE is configured.
 //   - Approval expiry sweeper: transition PENDING approvals older than the
 //     cutoff to EXPIRED so the queue does not grow unbounded.
+//   - Recording retention sweeper: delete stored session recordings past the
+//     operator's retention window. Off unless WARDYN_RECORDING_RETENTION_DAYS
+//     is set, and only for fs-backed stores (object storage uses its own
+//     bucket lifecycle rules).
 //   - Boot-time reconciliation (C3): re-derive the state of any run left
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store) {
 	if run != nil && *f.autoStopInterval > 0 {
 		reaper := lifecycle.New(
 			lifecycleStore{pool: pool},
@@ -59,12 +66,20 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if *f.approvalExpiryInterval > 0 {
 		go goSafe("approval.sweeper", func() {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(rootCtx, approvalStore{pool: pool, rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter)
+			runApprovalSweeper(rootCtx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter)
 		})
 		slog.Info("wardynd: approval expiry sweeper started",
 			slog.Duration("interval", *f.approvalExpiryInterval),
 			slog.Duration("after", *f.approvalExpiryAfter),
 		)
+	}
+
+	if fs, ok := recStore.(*recording.FSStore); ok && *f.recordingRetention > 0 {
+		after := time.Duration(*f.recordingRetention) * 24 * time.Hour
+		go goSafe("recording.sweeper", func() {
+			runRecordingSweeper(rootCtx, fs, maskedRec, time.Hour, after)
+		})
+		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}
 
 	if run != nil {
@@ -97,6 +112,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		switch {
 		case posture.tlsEnabled:
 			slog.Info("wardynd: listening with built-in TLS",
+				slog.String("version", version.Version),
 				slog.String("listen", *f.listen),
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),
@@ -106,6 +122,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 			}
 		default:
 			slog.Info("wardynd: listening",
+				slog.String("version", version.Version),
 				slog.String("listen", *f.listen),
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),

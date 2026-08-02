@@ -28,7 +28,7 @@ import (
 // error itself and returns ok=false. Extracted verbatim from handleCreateRun.
 func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, types.ConfinementClass, bool) {
 	var req createRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return req, "", false
 	}
@@ -89,6 +89,97 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	return req, reqCC, true
 }
 
+// seedRequestWorkspace attaches the workspace named by req.WorkspaceID to the
+// RESOLVED spec. Without it the only way to launch against an onboarded
+// workspace is to hand-reproduce its exact source string in a policy file — the
+// console hides that by synthesizing an inline policy, the CLI and SDK could not.
+//
+// It PREPENDS, so wsRefs[0] (referencedWorkspaces) stays this workspace even when
+// the caller also passed a policy — that first ref is what drives the run's
+// model/harness cred binding and its built image. Everything downstream
+// (validateWorkspaceSources, primaryWorkspacePath, unionRunEgress,
+// resolveWorkspaceImage) then works unchanged off the spec, which is why this
+// must run BEFORE the onboarding gate rather than beside it.
+//
+// It deliberately does NOT set run.WorkspaceID: that column is the TRUSTED
+// run→workspace linkage the scan/verify/record uploads authorize on, so a user
+// run must never claim it. A CONTAINER workspace is refused rather than silently
+// becoming the image — that would bypass decodeAndValidateCreateRun's
+// image/devcontainer XOR and builder-wired checks, which already ran.
+func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (int, error) {
+	if req.WorkspaceID == nil {
+		return 0, nil
+	}
+	if s.cfg.Store == nil {
+		return http.StatusUnprocessableEntity, fmt.Errorf("workspace_id requires a store, but none is configured")
+	}
+	ws, err := s.cfg.Store.GetWorkspace(ctx, *req.WorkspaceID)
+	if err != nil {
+		return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s: %w", *req.WorkspaceID, err)
+	}
+	// The stored default_target becomes an in-container mount/clone target here,
+	// so re-validate it against the same deny-list runner.ValidateTarget applies at
+	// onboarding — a row written before that check existed must not ride straight
+	// past the gate onto a system path (e.g. /home/agent/.claude).
+	target := ws.DefaultTarget
+	if target != "" {
+		if err := runner.ValidateTarget(target); err != nil {
+			return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s default_target: %w", ws.ID, err)
+		}
+	}
+	switch ws.Kind {
+	case types.WorkspaceKindRepo:
+		spec.WorkspaceRepos = append([]types.WorkspaceRepo{{Repo: ws.Source, Target: target}}, spec.WorkspaceRepos...)
+		if req.Repo == "" {
+			req.Repo = ws.Source // run-row label only; the gate + wsRefs read WorkspaceRepos
+		}
+	case types.WorkspaceKindLocalDir:
+		// Read-only unless the operator ticked Writable on the workspace itself —
+		// the same per-workspace opt-in wireWorkspaceSource honors for import runs.
+		ro := !ws.Writable
+		if target == "" {
+			target = composerWorkspaceTarget
+		}
+		spec.WorkspaceMounts = append([]types.WorkspaceMount{
+			{Source: ws.Source, Target: target, ReadOnly: &ro},
+		}, spec.WorkspaceMounts...)
+	default:
+		return http.StatusBadRequest, fmt.Errorf(
+			"workspace %s is a %s workspace; pass its image ref as `image` instead of workspace_id", ws.ID, ws.Kind)
+	}
+	return 0, nil
+}
+
+// enforcedConfinement is the PURE confinement math both the launch path and the
+// preflight dry-run run: the requested class when set (never WEAKER than the
+// policy minimum), else the policy minimum, then the deterministic BLAST-RADIUS
+// floor.
+//
+// That floor is defense-in-depth and applies to EVERY run (manual wizard and
+// direct API callers, not just composed ones): a run holding powerful
+// credentials (write-capable, or a third-party/production api_key) MUST run in
+// the strongest sandbox so a sandbox escape can't carry those credentials out to
+// your host. A host that cannot provide CC3 then fails closed at the caller's
+// capability check rather than running the workload under-confined (invariant 5).
+//
+// It writes no HTTP so preflight can share it: the returned error's text IS the
+// 422 body both callers send (the wizard test hardcodes that string), and
+// preflight deliberately skips the caller-side gates that follow it.
+func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass) (types.ConfinementClass, error) {
+	enforced := spec.MinConfinementClass
+	if reqCC != "" {
+		if !confinementGE(reqCC, spec.MinConfinementClass) {
+			return "", fmt.Errorf("confinement_class %s is weaker than the policy minimum %s",
+				reqCC, spec.MinConfinementClass)
+		}
+		enforced = reqCC
+	}
+	if composer.RequiredConfinementFloor(spec) == types.CC3 && !confinementGE(enforced, types.CC3) {
+		enforced = types.CC3
+	}
+	return enforced, nil
+}
+
 // resolveEnforcedConfinement resolves the run's confinement class and gates it
 // against what the runner and identity provider can actually deliver (invariant
 // 5, fail closed). The request value wins when set, else the policy minimum; a
@@ -100,26 +191,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 // itself and returns ok=false on any refusal. Extracted verbatim from
 // handleCreateRun.
 func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, spec types.RunPolicySpec, reqCC types.ConfinementClass) (types.ConfinementClass, bool) {
-	enforced := spec.MinConfinementClass
-	if reqCC != "" {
-		if !confinementGE(reqCC, spec.MinConfinementClass) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
-				"confinement_class %s is weaker than the policy minimum %s",
-				reqCC, spec.MinConfinementClass))
-			return "", false
-		}
-		enforced = reqCC
-	}
-
-	// Deterministic BLAST-RADIUS floor (defense-in-depth — applies to EVERY run,
-	// including the manual wizard and direct API callers, not just composed ones):
-	// a run holding powerful credentials (write-capable, or a third-party/production
-	// api_key) MUST run in the strongest sandbox so a sandbox escape can't carry
-	// those credentials out to your host. Raise the enforced class to CC3; a host
-	// that cannot provide CC3 then fails closed at the capability check below rather
-	// than running the workload under-confined (invariant 5).
-	if composer.RequiredConfinementFloor(spec) == types.CC3 && !confinementGE(enforced, types.CC3) {
-		enforced = types.CC3
+	enforced, err := enforcedConfinement(spec, reqCC)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return "", false
 	}
 
 	// Confinement gating: refuse to schedule a run whose confinement class the

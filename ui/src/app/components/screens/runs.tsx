@@ -35,6 +35,7 @@ import { toast } from "sonner";
 import type { AgentRun, RunState } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -54,16 +55,6 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
-import {
   Table,
   TableBody,
   TableCell,
@@ -73,8 +64,9 @@ import {
 } from "../ui/table";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
+import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState } from "../wardyn/states";
+import { EmptyState, ErrorState, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { cn } from "../ui/utils";
 
@@ -312,6 +304,10 @@ export function RunsScreen() {
           </Button>
         </div>
       )}
+
+      {/* Past the cap the facets above filter only the fetched window, so a
+          "no runs match" would be a lie — say the window is a window. */}
+      <TruncatedNote count={runs.length} cap={LIST_LIMIT} />
 
       {status === "loading" ? (
         <BoardSkeleton />
@@ -773,11 +769,11 @@ function RunActions({
   onKill: (id: string) => void;
 }) {
   // fix: the board's Kill action fired with no confirmation, unlike the
-  // identical action on Run Detail (AlertDialog-gated) — one misclick here
-  // killed a run with zero chance to back out. The dialog is rendered as a
-  // SIBLING of DropdownMenuContent (not nested inside it), controlled by its
-  // own state, so it survives the menu's close/unmount.
-  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  // identical action on Run Detail — one misclick here killed a run with zero
+  // chance to back out. The dialog is rendered as a SIBLING of
+  // DropdownMenuContent (not nested inside it), controlled by its own state, so
+  // it survives the menu's close/unmount.
+  const [confirmId, setConfirmId] = React.useState<string | null>(null);
   return (
     <div onClick={(e) => e.stopPropagation()}>
       <DropdownMenu>
@@ -798,7 +794,7 @@ function RunActions({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={terminal}
-            onClick={() => setConfirmOpen(true)}
+            onClick={() => setConfirmId(run.id)}
             className="text-danger focus:text-danger"
           >
             <Skull className="size-4" /> Kill run
@@ -806,29 +802,11 @@ function RunActions({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Kill {run.id}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This terminates the agent run, tears down the sandbox, and revokes any brokered
-              credentials. Enforcement stop — it is recorded in the audit trail. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirmOpen(false);
-                onKill(run.id);
-              }}
-              className="bg-destructive text-white hover:bg-destructive/90"
-            >
-              Kill run
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <KillRunDialog
+        runId={confirmId}
+        onOpenChange={(o) => !o && setConfirmId(null)}
+        onConfirm={() => onKill(run.id)}
+      />
     </div>
   );
 }

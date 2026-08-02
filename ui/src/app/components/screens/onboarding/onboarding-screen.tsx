@@ -125,8 +125,6 @@ export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void })
     };
   }, []);
 
-  const readiness = status ? deriveReadiness(status) : null;
-
   return (
     <div className="mx-auto w-full max-w-[780px] px-6 py-12">
       <span className="inline-flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">

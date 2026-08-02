@@ -167,10 +167,10 @@ func (s *Server) RunClaudeCompose(ctx context.Context, promptJSON []byte) ([]byt
 		AutoStopAfterSec:    composeRunIdleCapSec,
 	}
 	s.dispatchRun(launchCtx, created, dispatchParams{
-		RunToken:   id.Token,
-		Image:      agentImage("claude-code", s.cfg.AgentImages),
-		Policy:     policy,
-		ExtraEnv:   composeSandboxEnv(cp),
+		RunToken: id.Token,
+		Image:    agentImage("claude-code", s.cfg.AgentImages),
+		Policy:   policy,
+		ExtraEnv: composeSandboxEnv(cp),
 	})
 
 	// Wait for the run to finish, then take its uploaded proposal. The in-sandbox
@@ -254,7 +254,7 @@ func (s *Server) reclaimComposeRun(ctx context.Context, runID uuid.UUID) {
 	if err != nil || isTerminalRunState(run.State) {
 		return
 	}
-	if applied, _ := s.cfg.Store.UpdateRunStateIf(ctx, runID, run.State, types.RunKilled); applied {
+	if applied, _ := s.casRunState(ctx, runID, run.State, types.RunKilled); applied {
 		s.finalizeRunTail(ctx, runID, run.SandboxRef, "run.compose",
 			"failure", map[string]any{"reason": "compose wait timed out; run reclaimed"})
 	}

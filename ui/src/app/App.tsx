@@ -163,10 +163,21 @@ export default function App() {
   // + hidden nav (AppShell). getSetupStatus never rejects except on 401 (routed
   // through onUnauthorized), so a rejected probe just leaves the gate as-is.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
+  // When the daemon last actually answered. getSetupStatus resolves the synthetic
+  // READY_FALLBACK (unreachable:true) rather than rejecting when it doesn't, so
+  // this poll is also the console's ONE reachability signal — every screen's
+  // background refresh swallows its own failures to keep the last-good data on
+  // screen, which without this reads exactly like a healthy quiet fleet (AppShell
+  // renders the banner). ponytail: a build whose /setup/status 404s also reads as
+  // unreachable — the same daemon serves this console, so that means a broken build.
+  const [lastOkAt, setLastOkAt] = React.useState<Date | null>(null);
   const refreshSetupStatus = React.useCallback(() => {
     setupApi
       .getSetupStatus()
-      .then(setSetupStatus)
+      .then((s) => {
+        setSetupStatus(s);
+        if (!s.unreachable) setLastOkAt(new Date());
+      })
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
       });
@@ -212,6 +223,8 @@ export default function App() {
               pendingApprovals={pendingApprovals}
               attentionCount={attentionCount}
               gated={gated}
+              unreachable={!!setupStatus?.unreachable}
+              lastOkAt={lastOkAt}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token

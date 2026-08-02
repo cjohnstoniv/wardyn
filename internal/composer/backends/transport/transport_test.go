@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -200,5 +202,30 @@ func TestNewClient_BlocksLoopbackEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "loopback") && !strings.Contains(err.Error(), "refusing") {
 		t.Errorf("error = %v, want it to come from the dial guard", err)
+	}
+}
+
+// The redirect guard is exercised through the closure directly: an httptest TLS
+// server's self-signed cert is not in the hardened client's TLSClientConfig, so
+// a real round trip would fail before ever reaching CheckRedirect.
+func TestCheckRedirect_RefusesHTTPSDowngrade(t *testing.T) {
+	c := clientForGuard(NewGuard([]string{"api.example.com"}, false, nil), 0)
+	req := func(raw string) *http.Request {
+		t.Helper()
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		return &http.Request{URL: u}
+	}
+
+	via := []*http.Request{req("https://api.example.com/v1/messages")}
+	if err := c.CheckRedirect(req("http://api.example.com/v1/messages"), via); err == nil {
+		t.Error("https->http redirect on an allowlisted host: err = nil, want a refusal")
+	}
+	// BYOM carve-out: a chain that starts on plain http stays allowed.
+	viaHTTP := []*http.Request{req("http://api.example.com/v1/messages")}
+	if err := c.CheckRedirect(req("http://api.example.com/v2/messages"), viaHTTP); err != nil {
+		t.Errorf("http->http redirect on an allowlisted host: err = %v, want nil", err)
 	}
 }

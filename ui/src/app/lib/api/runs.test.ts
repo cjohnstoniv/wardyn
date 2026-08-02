@@ -26,15 +26,13 @@ describe("runs.getGrants — grant-record projection", () => {
 
   it("compacts a grant with a scope object and reports it active", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        items: [
-          {
-            id: "g-1",
-            created_at: "2026-07-17T00:00:00Z",
-            spec: { kind: "github_token", scope: { repo: "acme/widgets" } },
-          },
-        ],
-      }),
+      jsonResponse([
+        {
+          id: "g-1",
+          created_at: "2026-07-17T00:00:00Z",
+          spec: { kind: "github_token", scope: { repo: "acme/widgets" } },
+        },
+      ]),
     );
     const [g] = await runs.getGrants("run-1");
     expect(g).toMatchObject({

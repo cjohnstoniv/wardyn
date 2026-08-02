@@ -61,6 +61,66 @@ func assertLoud(t *testing.T, out *bytes.Buffer, code *int, env, val string) {
 	}
 }
 
+// ─── FlagEnv ──
+//
+// FlagEnv has no parse step, so there is no loud/fatal contract to assert here
+// (every string is a valid value) — only the default/env/flag precedence.
+
+func TestFlagEnv_Precedence(t *testing.T) {
+	// LookupEnv distinguishes unset from empty, so each case sets the env
+	// deliberately; t.Setenv registers the restore.
+	t.Run("default when env and flag absent", func(t *testing.T) {
+		resetFlags(t)
+		t.Setenv("CLIUTIL_TEST_STR", "x")
+		os.Unsetenv("CLIUTIL_TEST_STR")
+		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
+		if err := flag.CommandLine.Parse(nil); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if *p != "compiled-default" {
+			t.Fatalf("no env, no flag = %q, want compiled-default", *p)
+		}
+	})
+
+	t.Run("env overrides default", func(t *testing.T) {
+		resetFlags(t)
+		t.Setenv("CLIUTIL_TEST_STR", "from-env")
+		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
+		if err := flag.CommandLine.Parse(nil); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if *p != "from-env" {
+			t.Fatalf("env set = %q, want from-env", *p)
+		}
+	})
+
+	t.Run("flag overrides env", func(t *testing.T) {
+		resetFlags(t)
+		t.Setenv("CLIUTIL_TEST_STR", "from-env")
+		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
+		if err := flag.CommandLine.Parse([]string{"-s=from-flag"}); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if *p != "from-flag" {
+			t.Fatalf("explicit flag = %q, want from-flag (flag must beat env)", *p)
+		}
+	})
+
+	// Unlike FlagBool, an explicitly-EMPTY string value is honoured rather than
+	// treated as unset — that is how an operator blanks a value via the env.
+	t.Run("empty env value honoured", func(t *testing.T) {
+		resetFlags(t)
+		t.Setenv("CLIUTIL_TEST_STR", "")
+		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
+		if err := flag.CommandLine.Parse(nil); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if *p != "" {
+			t.Fatalf("explicit empty env = %q, want empty string", *p)
+		}
+	})
+}
+
 // ─── FlagBool ──
 
 func TestFlagBool_UnsetKeepsDefaultQuietly(t *testing.T) {
@@ -103,7 +163,7 @@ func TestFlagBool_EmptyIsUnset(t *testing.T) {
 func TestFlagBool_ValidValuesParse(t *testing.T) {
 	cases := map[string]bool{
 		"1": true, "true": true, "TRUE": true, "  Yes ": true, "on": true,
-		"0": false, "false": false, "no": false, "OFF": false,
+		"0": false, "false": false, "no": false, "OFF": false, "off": false,
 	}
 	for val, want := range cases {
 		t.Run(val, func(t *testing.T) {

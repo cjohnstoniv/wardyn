@@ -17,12 +17,12 @@ import { Label } from "../../ui/label";
 import { cn } from "../../ui/utils";
 import { Chip, ConfinementChip } from "../../wardyn/primitives";
 import { BarrierStrengthStrip } from "../../wardyn/barrier-strength-strip";
-import { CC_META, CC_ORDER, CONFINEMENT_CONSTANT_NOTE } from "../../wardyn/cc-meta";
+import { CC_META, CONFINEMENT_CONSTANT_NOTE } from "../../wardyn/cc-meta";
 import { TierMatrixDialog } from "../../wardyn/tier-matrix";
 import { RESIDUAL_PREFIX } from "../../wardyn/copy";
 import { StatusChip } from "../../wardyn/status-chip";
 import { Field } from "./step-shell";
-import type { ConfinementClass } from "../../../lib/types";
+import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import type { Lifecycle, WizardState } from "./wizard-types";
 
 // HIGH fix (confinement labels): CC1/CC2/CC3 select ONLY the isolation
@@ -31,7 +31,7 @@ import type { Lifecycle, WizardState } from "./wizard-types";
 // single source of truth in wardyn/cc-meta.ts (shared with ConfinementChip's
 // tooltip); this step only adds the scenario-picking guidance and picker
 // chrome. Users never see the CC1/CC2/CC3 wire code outside the chip's / this
-// card's hover tooltip (operators only). CC_ORDER is cc-meta's canonical
+// card's hover tooltip (operators only). CC_ORDER is lib/types' canonical
 // weakest->strongest ladder — imported, never redeclared here.
 
 // "Pick this tier when…" guidance — leads each card, ahead of the residual-risk

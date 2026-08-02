@@ -15,7 +15,8 @@ while the agent waits.)
 - UI > Approvals tab: an entry with kind=egress_domain for example.com appears
   within a few seconds of the run starting.  The run is WAITING_FOR_CONFIRMATION
   or RUNNING depending on whether the agent is blocked.
-- UI > Audit tab: approval.create event for kind=egress_domain.
+- UI > Audit tab: egress.pending event for example.com — the held request that
+  raised the approval; its data carries the approval_id.
 
 ### Approve path
 
@@ -41,7 +42,7 @@ Then observe:
 
 1. An approval entry for example.com appears in the Approvals tab with
    kind=egress_domain and state=PENDING.
-2. Audit contains approval.create for example.com.
+2. Audit contains egress.pending for example.com, carrying the approval_id.
 3. After APPROVE: audit contains approval.decide outcome=approved AND
    egress.allow for example.com; agent receives a response.
 4. After DENY: audit contains approval.decide outcome=denied AND

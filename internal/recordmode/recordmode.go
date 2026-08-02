@@ -320,6 +320,11 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 	// forced-true; not wait_for_review, so a replay never hangs unattended.
 	spec.FirstUseApproval = types.FirstUseDenyWithReview
 	spec.AllowedMethods = nil // method capture is brittle; do not over-restrict.
+	// A recording carries no lifetime signal, and the reaper skips on <= 0 — so
+	// leaving this at its zero value would synthesize a never-reaped spec that
+	// holds its minted credentials indefinitely. Mirror the workspace-run cap.
+	spec.AutoStopAfterSec = 3600
+	warnings = append(warnings, "auto_stop_after_sec defaulted to 3600 (1h idle); the recording carries no lifetime signal — widen it, or set -1 for a deliberate never-reap session")
 
 	// ── Confinement class. ──
 	cc := run.ConfinementClass

@@ -8,6 +8,7 @@
 // server caps), optional source-URL hints, and a provider backend. "Compose"
 // calls api.compose() and hands the proposal back to the orchestrator for review.
 import * as React from "react";
+import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import { FileText, Loader2, Sparkles, Upload, X } from "lucide-react";
 import { RUN_MODE } from "../../wardyn/copy";
 import { Button } from "../../ui/button";
@@ -208,33 +209,21 @@ export function ComposeForm({
         label="Run mode"
         hint="Interactive comes up idle so you attach and drive it over a terminal; Autonomous runs the task unattended and stops when done. You can still change this on the proposal."
       >
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Run mode">
-          {[
-            { v: true, label: RUN_MODE.interactive.label, desc: RUN_MODE.interactive.blurb },
-            { v: false, label: RUN_MODE.autonomous.label, desc: RUN_MODE.autonomous.blurb },
-          ].map((opt) => {
-            const active = interactive === opt.v;
+        {/* Radix supplies the APG radiogroup keyboard behaviour (roving tabindex,
+            arrows move selection AND focus, Home/End) — the wire value is the
+            RUN_MODE key, mapped to the boolean `interactive` compose() sends. */}
+        <RadioGroupPrimitive.Root
+          className="grid grid-cols-2 gap-2"
+          aria-label="Run mode"
+          value={interactive ? "interactive" : "autonomous"}
+          onValueChange={(v) => onInteractiveChange(v === "interactive")}
+        >
+          {(["interactive", "autonomous"] as const).map((m) => {
+            const active = interactive === (m === "interactive");
             return (
-              <button
-                key={opt.label}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                tabIndex={active ? 0 : -1}
-                onClick={() => onInteractiveChange(opt.v)}
-                onKeyDown={(e) => {
-                  // APG radiogroup: arrows move selection AND focus (roving
-                  // tabindex). Two options, so any arrow selects the other;
-                  // the sibling button is the only other child of the group.
-                  if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(e.key)) {
-                    e.preventDefault();
-                    onInteractiveChange(!opt.v);
-                    const sib =
-                      e.currentTarget.nextElementSibling ??
-                      e.currentTarget.previousElementSibling;
-                    (sib as HTMLButtonElement | null)?.focus();
-                  }
-                }}
+              <RadioGroupPrimitive.Item
+                key={m}
+                value={m}
                 className={cn(
                   "flex flex-col items-start gap-0.5 rounded-lg border p-2.5 text-left transition-colors",
                   active
@@ -242,12 +231,14 @@ export function ComposeForm({
                     : "border-border hover:bg-surface-2",
                 )}
               >
-                <span className="text-sm font-medium text-foreground">{opt.label}</span>
-                <span className="text-[0.6875rem] leading-snug text-muted-foreground">{opt.desc}</span>
-              </button>
+                <span className="text-sm font-medium text-foreground">{RUN_MODE[m].label}</span>
+                <span className="text-[0.6875rem] leading-snug text-muted-foreground">
+                  {RUN_MODE[m].blurb}
+                </span>
+              </RadioGroupPrimitive.Item>
             );
           })}
-        </div>
+        </RadioGroupPrimitive.Root>
       </Field>
 
       {/* Per-run subscription opt-in. The AGENT isn't known until the proposal

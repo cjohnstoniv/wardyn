@@ -18,9 +18,11 @@
 // and any resident MCP tool, so the denylist PLUS `--strict-mcp-config` (which drops
 // every operator MCP server) is what actually closes host file-exfiltration / SSRF from
 // a prompt-injected attachment (H12). The CLI is used purely as a structured-output
-// text generator; its output is Grade+Clamped downstream. ANTHROPIC_API_KEY is
-// scrubbed from the child env for the claude tool so it uses the subscription
-// session (never an API key) and never bills/leaks one.
+// text generator; its output is Grade+Clamped downstream. Both tools' children get
+// the same scrubbed environment, built at the single exec chokepoint: no
+// ANTHROPIC_API_KEY (so claude uses the subscription session and never bills/leaks
+// one) and no WARDYN_* — wardynd's own config, including the secret-store master
+// key — see cliutil.ScrubChildEnv.
 package cli
 
 import (
@@ -34,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 )
 
@@ -228,7 +231,7 @@ func (c *cliComposer) assistClaude(ctx context.Context, system, user string) (st
 	if c.model != "" {
 		args = append(args, "--model", c.model)
 	}
-	out, err := c.exec(ctx, scrubAnthropicKey(os.Environ()), args...)
+	out, err := c.exec(ctx, args...)
 	if err != nil {
 		return "", err
 	}
@@ -278,7 +281,7 @@ func (c *cliComposer) assistCodex(ctx context.Context, system, user string) (str
 	}
 	args = append(args, prompt)
 
-	if _, err := c.exec(ctx, os.Environ(), args...); err != nil {
+	if _, err := c.exec(ctx, args...); err != nil {
 		return "", err
 	}
 	raw, err := os.ReadFile(outPath)
@@ -347,7 +350,7 @@ func (c *cliComposer) runClaude(ctx context.Context, schema map[string]any, syst
 		args = append(args, "--model", c.model)
 	}
 
-	out, err := c.exec(ctx, scrubAnthropicKey(os.Environ()), args...)
+	out, err := c.exec(ctx, args...)
 	if err != nil {
 		return nil, err // transport/process failure — returned immediately (not retried)
 	}
@@ -425,7 +428,7 @@ func (c *cliComposer) runCodex(ctx context.Context, schemaFile, system, user str
 	}
 	args = append(args, prompt)
 
-	if _, err := c.exec(ctx, os.Environ(), args...); err != nil {
+	if _, err := c.exec(ctx, args...); err != nil {
 		return nil, err
 	}
 
@@ -439,17 +442,23 @@ func (c *cliComposer) runCodex(ctx context.Context, schemaFile, system, user str
 	return raw, nil
 }
 
-// exec runs the CLI binary with the given args and environment, returning stdout.
-// A missing binary, a non-zero exit, and a timeout are each reported as a clear,
-// distinct error so the caller (and the human) knows what happened.
+// exec runs the CLI binary with the given args, returning stdout. A missing
+// binary, a non-zero exit, and a timeout are each reported as a clear, distinct
+// error so the caller (and the human) knows what happened.
+//
+// The child's environment is built HERE, at the one chokepoint every call site
+// routes through, so no call site can forget to scrub it — the codex sites used
+// to hand over os.Environ() raw, including wardynd's own WARDYN_AGE_KEY.
+// See cliutil.ScrubChildEnv for what is dropped and why (and for the honest
+// residual: same-uid children can read /proc/<ppid>/environ anyway).
 //
 // The child is started in its own process group and, on context cancel/timeout,
 // the WHOLE group is signalled — otherwise a wrapper shell's grandchildren (e.g.
 // a `sleep`) keep the stdout pipe open and Wait would block past the deadline.
 // WaitDelay bounds that wait as a backstop.
-func (c *cliComposer) exec(ctx context.Context, env []string, args ...string) ([]byte, error) {
+func (c *cliComposer) exec(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.binPath, args...) //nolint:gosec // operator-configured CLI path
-	cmd.Env = env
+	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -529,18 +538,4 @@ func tempOutputFile(pattern string) (string, func(), error) {
 		return "", func() {}, fmt.Errorf("cli composer: close output file: %w", err)
 	}
 	return path, cleanup, nil
-}
-
-// scrubAnthropicKey returns env with ANTHROPIC_API_KEY removed so the claude CLI
-// authenticates with the resident subscription session rather than an API key
-// (and never bills or leaks one). It does not mutate the input slice.
-func scrubAnthropicKey(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }

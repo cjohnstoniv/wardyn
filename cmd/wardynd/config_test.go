@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ─── validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture ──
@@ -170,174 +169,8 @@ func ensureUnset(t *testing.T, key string) {
 	})
 }
 
-func TestFlagEnv_DefaultUsedWhenEnvAndFlagAbsent(t *testing.T) {
-	resetFlags(t)
-	// LookupEnv distinguishes unset from empty; ensure the var is genuinely
-	// ABSENT so the compiled-in default is used. ensureUnset restores any prior
-	// value at test end.
-	ensureUnset(t, "WARDYN_TEST_STR")
-	p := flagEnv("teststr", "WARDYN_TEST_STR", "compiled-default", "usage")
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != "compiled-default" {
-		t.Fatalf("flagEnv with no env, no flag = %q, want compiled-default", *p)
-	}
-}
-
-func TestFlagEnv_EnvOverridesDefault(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_STR", "from-env")
-	p := flagEnv("teststr", "WARDYN_TEST_STR", "compiled-default", "usage")
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != "from-env" {
-		t.Fatalf("flagEnv with env set = %q, want from-env", *p)
-	}
-}
-
-func TestFlagEnv_FlagOverridesEnv(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_STR", "from-env")
-	p := flagEnv("teststr", "WARDYN_TEST_STR", "compiled-default", "usage")
-	// An explicit command-line value must win over the env-seeded default.
-	if err := flag.CommandLine.Parse([]string{"-teststr=from-flag"}); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != "from-flag" {
-		t.Fatalf("explicit flag = %q, want from-flag (flag must beat env)", *p)
-	}
-}
-
-// Empty env value: LookupEnv returns ok=true for an explicitly-empty var, so
-// flagEnv honours it (empty string becomes the default). This is the documented
-// behaviour — an operator can blank a value via the env.
-func TestFlagEnv_EmptyEnvValueHonoured(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_STR", "")
-	p := flagEnv("teststr", "WARDYN_TEST_STR", "compiled-default", "usage")
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != "" {
-		t.Fatalf("flagEnv with explicit empty env = %q, want empty string", *p)
-	}
-}
-
-func TestFlagBool_EnvTruthyVariants(t *testing.T) {
-	// Any of 1/true/yes/on (case-insensitive, trimmed) is true; 0/false/no/off is
-	// false; unset/empty keeps the default. This gates security-relevant toggles
-	// (WARDYN_TLS_TERMINATED, the dangerous docker-sock build), so both sets must
-	// be exact.
-	//
-	// An UNRECOGNIZED value is deliberately absent from this table: it no longer
-	// resolves to a bool at all. It used to silently become `false` — so a typo
-	// (WARDYN_ENVBUILD=treu) quietly turned a feature OFF — and cliutil.FlagBool
-	// now exits 2 naming the variable and the value instead. That contract is
-	// owned and tested where the exit can be stubbed:
-	// internal/cliutil.TestFlagBool_InvalidIsLoud. Re-adding a case here would
-	// os.Exit the whole test binary.
-	tests := []struct {
-		val  string
-		want bool
-	}{
-		{"1", true},
-		{"true", true},
-		{"TRUE", true},
-		{"  Yes ", true},
-		{"on", true},
-		{"0", false},
-		{"false", false},
-		{"no", false},
-		{"off", false},
-		{"", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.val, func(t *testing.T) {
-			resetFlags(t)
-			t.Setenv("WARDYN_TEST_BOOL", tc.val)
-			p := flagBool("testbool", "WARDYN_TEST_BOOL", false, "usage")
-			if err := flag.CommandLine.Parse(nil); err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-			if *p != tc.want {
-				t.Fatalf("flagBool(%q) = %v, want %v", tc.val, *p, tc.want)
-			}
-		})
-	}
-}
-
-// A falsey env value overrides a compiled-in default of true (the env wins, and
-// a non-truthy value resolves to false) — so an operator can turn OFF a toggle
-// that defaults on via the env.
-func TestFlagBool_EnvOverridesTrueDefault(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_BOOL", "no")
-	p := flagBool("testbool", "WARDYN_TEST_BOOL", true, "usage")
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p {
-		t.Fatal("falsey env must override a true default")
-	}
-}
-
-func TestFlagBool_FlagOverridesEnv(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_BOOL", "false")
-	p := flagBool("testbool", "WARDYN_TEST_BOOL", false, "usage")
-	if err := flag.CommandLine.Parse([]string{"-testbool"}); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if !*p {
-		t.Fatal("explicit -testbool must beat a falsey env")
-	}
-}
-
-func TestFlagDuration_EnvOverridesDefault(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_DUR", "45s")
-	p := flagDuration("testdur", "WARDYN_TEST_DUR", time.Minute, "usage")
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != 45*time.Second {
-		t.Fatalf("flagDuration env = %v, want 45s", *p)
-	}
-}
-
-// An UNSET env duration keeps the compiled default, quietly.
-//
-// An UNPARSEABLE one no longer does. This test previously asserted the opposite
-// ("fail-safe to default"), which sounded prudent and was not: silently
-// reinstating the default means an operator who typos an interval gets a
-// DIFFERENT, meaningful setting than they asked for, with nothing said. The
-// helper now exits 2 naming the variable and the value. That contract lives
-// where the exit can be stubbed: internal/cliutil.TestFlagDuration_InvalidIsLoud.
-// Asserting it here would os.Exit the test binary.
-func TestFlagDuration_UnsetKeepsDefault(t *testing.T) {
-	resetFlags(t)
-	p := flagDuration("testdur", "WARDYN_TEST_DUR", 90*time.Second, "usage")
-	if err := flag.CommandLine.Parse(nil); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != 90*time.Second {
-		t.Fatalf("unset env should keep default 90s, got %v", *p)
-	}
-}
-
-func TestFlagDuration_FlagOverridesEnv(t *testing.T) {
-	resetFlags(t)
-	t.Setenv("WARDYN_TEST_DUR", "45s")
-	p := flagDuration("testdur", "WARDYN_TEST_DUR", time.Minute, "usage")
-	if err := flag.CommandLine.Parse([]string{"-testdur=10s"}); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *p != 10*time.Second {
-		t.Fatalf("explicit flag = %v, want 10s (flag must beat env)", *p)
-	}
-}
+// flagEnv/flagBool/flagDuration are cliutil aliases (main.go); their contracts
+// are tested on the real symbols in internal/cliutil.
 
 // ─── -local-trust-forwarder bind cross-check ──
 
@@ -374,6 +207,37 @@ func TestListenBindsSpecificRoutable(t *testing.T) {
 	for _, tt := range tests {
 		if got := listenBindsSpecificRoutable(tt.listen); got != tt.want {
 			t.Errorf("listenBindsSpecificRoutable(%q) = %v, want %v", tt.listen, got, tt.want)
+		}
+	}
+}
+
+// The demo admin token is published in this repo, so it authenticates nobody:
+// refuse to boot with it on a specific routable bind. The loopback and
+// unspecified (compose) binds must still boot — they get a warning log instead,
+// and every documented demo plus CI runs on them.
+func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
+	tests := []struct {
+		listen  string
+		token   string
+		wantErr bool
+	}{
+		{"10.0.0.5:8080", demoAdminToken, true},    // LAN-reachable admin API on a published token
+		{"203.0.113.5:8080", demoAdminToken, true}, // public bind
+		{":8080", demoAdminToken, false},           // compose: unspecified bind → warn, still boots
+		{"127.0.0.1:8080", demoAdminToken, false},  // loopback demo → warn, still boots
+		{"10.0.0.5:8080", "a-real-token", false},   // the operator's own token is their business
+	}
+	for _, tt := range tests {
+		f := &bootFlags{
+			listen:        &tt.listen,
+			adminToken:    &tt.token,
+			localMode:     new(bool),
+			localOperator: new(string),
+			oidcIssuer:    new(string),
+		}
+		_, err := resolveLocalMode(f)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("resolveLocalMode(listen=%q, token=%q) error = %v, want error: %v", tt.listen, tt.token, err, tt.wantErr)
 		}
 	}
 }

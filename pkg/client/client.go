@@ -71,7 +71,7 @@ type ListOpts struct {
 	Offset int
 }
 
-// appendTo returns path with ?limit=&offset= merged in (respecting an existing
+// appendListOpts returns path with ?limit=&offset= merged in (respecting an existing
 // query string). Zero fields are omitted; an empty opts slice leaves path as-is.
 func appendListOpts(path string, opts []ListOpts) string {
 	if len(opts) == 0 {
@@ -173,6 +173,15 @@ type CreateRunRequest struct {
 	// Pair with a never-reap policy (AutoStopAfterSec < 0) or the idle reaper
 	// will stop the idle sandbox. Task is ignored for an interactive run.
 	Interactive bool `json:"interactive,omitempty"`
+	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
+	// the server prepends the workspace's stored source onto the resolved policy
+	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default
+	// workspace_mounts entry) so the run inherits its approved egress, built image
+	// and bound model/harness credentials. Composes with PolicyID / InlinePolicy /
+	// the default policy — it seeds the source those cannot name without
+	// hand-reproducing the workspace's exact path. Container-kind workspaces are
+	// rejected: pass the image ref as Image instead.
+	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty"`
 	// InlinePolicy, when set, supplies the run's full RunPolicySpec INLINE
 	// instead of referencing a stored PolicyID. It is MUTUALLY EXCLUSIVE with
 	// PolicyID (the server rejects both with 400); neither set falls back to the

@@ -42,12 +42,11 @@ describe("workspace client methods", () => {
     expect(init?.method).toBe("GET");
   });
 
-  it("listWorkspaces() unwraps an { items: [...] } envelope too", async () => {
+  it("listWorkspaces() yields [] for a null body (a nil Go slice encodes as null)", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ items: [ws] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      new Response("null", { status: 200, headers: { "Content-Type": "application/json" } }),
     );
-    const res = await workspaces.listWorkspaces();
-    expect(res).toEqual([ws]);
+    expect(await workspaces.listWorkspaces()).toEqual([]);
   });
 
   it("createWorkspace() POSTs the input body and returns the created workspace", async () => {

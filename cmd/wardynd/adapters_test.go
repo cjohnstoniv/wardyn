@@ -52,10 +52,11 @@ func TestRunMarker(t *testing.T) {
 // therefore hold an audit.Recorder (the masked+fanout one), not a concrete
 // store.Recorder, and events must flow through it MASKED.
 //
-// A fakeAuditRecorder is an audit.Recorder but NOT a store.Recorder — assigning it
-// (and a maskingRecorder) into approvalStore.rec / approvalService.rec only
-// compiles because the fields are audit.Recorder. If either regressed to
-// store.Recorder this test would fail to compile.
+// A fakeAuditRecorder is an audit.Recorder but NOT a store.Recorder — assigning
+// it (and a maskingRecorder) into approvalStore.rec only compiles because that
+// field is audit.Recorder. If it regressed to store.Recorder this test would fail
+// to compile. approvalService holds the SAME approvalStore value, so the FSM and
+// the sweeper cannot drift onto two different recorders.
 func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	runID := uuid.New()
@@ -68,9 +69,9 @@ func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 
 	// The approval FSM store + the service both carry the masked/fanout recorder.
 	as := approvalStore{rec: masked}
-	svc := &approvalService{rec: masked}
-	if svc.st().rec == nil {
-		t.Fatal("approvalService.st() dropped the recorder (approval audit would vanish)")
+	svc := &approvalService{st: as}
+	if svc.st.rec == nil {
+		t.Fatal("approvalService dropped the recorder (approval audit would vanish)")
 	}
 
 	ev := types.AuditEvent{

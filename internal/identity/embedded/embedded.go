@@ -56,7 +56,6 @@ var ErrRequiresSPIRE = errors.New("embedded identity: cloud_sts grant requires t
 // Provider is the embedded JWT-SVID identity.Provider.
 type Provider struct {
 	signKey     *ecdsa.PrivateKey
-	kid         string
 	trustDomain spiffeid.TrustDomain
 	signer      jose.Signer
 	revocations RevocationStore
@@ -108,7 +107,6 @@ func New(signKey *ecdsa.PrivateKey, trustDomain string, revocations RevocationSt
 
 	return &Provider{
 		signKey:     signKey,
-		kid:         kid,
 		trustDomain: td,
 		signer:      signer,
 		revocations: revocations,
@@ -328,7 +326,7 @@ func (p *Provider) audit(ctx context.Context, runID uuid.UUID, actor, action, jt
 	}
 }
 
-// keyID derives a stable JWKS kid from the public key: base64url of the
+// keyID derives the stable JWT header kid from the public key: base64url of the
 // SHA-256 of the marshaled EC point.
 func keyID(pub *ecdsa.PublicKey) string {
 	// Uncompressed SEC1 point bytes (0x04||X||Y) as the stable, deterministic

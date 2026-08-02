@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { Download } from "lucide-react";
 import * as AsciinemaPlayer from "asciinema-player";
 import "asciinema-player/dist/bundle/asciinema-player.css";
 import type { Recording } from "../../lib/types";
@@ -47,6 +48,23 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
     };
   }, [recording.run_id, recording.cast, recording.header.width, recording.header.height]);
 
+  // Hand the operator the .cast itself — the console could only replay it, so
+  // taking a session off-box meant curling the API by hand. Served from the
+  // bytes already in memory: /runs/{id}/recording/{id} is bearer-authed and a
+  // plain <a href> navigation can't carry the Authorization header (401).
+  const download = () => {
+    const url = URL.createObjectURL(
+      new Blob([recording.cast], { type: "application/x-asciicast" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${recording.run_id}.cast`;
+    a.click();
+    // Next tick: Safari cancels the in-flight download if the object URL is
+    // revoked synchronously after the click.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-[#0d1117]">
       <div className="flex items-center gap-1.5 border-b border-border bg-card/60 px-3 py-2">
@@ -59,6 +77,14 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
           {recording.events.length} events
         </span>
+        <button
+          type="button"
+          onClick={download}
+          aria-label="Download recording (.cast)"
+          className="inline-flex items-center text-muted-foreground hover:text-foreground"
+        >
+          <Download className="size-3.5" aria-hidden />
+        </button>
       </div>
       <div ref={ref} />
     </div>

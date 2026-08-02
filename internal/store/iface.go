@@ -65,7 +65,6 @@ type Store interface {
 
 	// CredentialGrant.
 	CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error)
-	GetGrant(ctx context.Context, id uuid.UUID) (types.CredentialGrant, error)
 	ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error)
 
 	// ApprovalRequest.

@@ -28,11 +28,13 @@ import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-// Bundle a real terminal font (same-origin, no external load). JetBrains Mono
-// has proper box-drawing (─ │ ╭) and block-element (▐ ▛ █) glyphs at the right
-// cell positions, so Claude Code's TUI renders cleanly instead of degrading to
-// "__" the way the OS monospace fallback does.
-import "@fontsource/jetbrains-mono/400.css";
+// Bundle a real terminal font (same-origin, no external load) so the TUI gets
+// true fixed-advance cells instead of whatever monospace the OS picks. Same
+// latin/latin-ext subsets as styles/index.css — the other four subsets carry no
+// glyph xterm draws (box-drawing U+2500.. and block elements U+2580.. are in
+// NONE of the fontsource subsets; those already come from the OS fallback).
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-ext-400.css";
 import { getToken } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import { Loader2, TriangleAlert, Maximize2, Minimize2 } from "lucide-react";

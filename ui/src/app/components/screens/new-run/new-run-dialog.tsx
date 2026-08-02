@@ -26,13 +26,12 @@ import type {
   ComposeResult,
   ComposerBackend,
   SetupItem,
-  Workspace,
   WorkspaceSelection,
 } from "../../../lib/types";
 import { composer as composerApi } from "../../../lib/api/compose";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { setup as setupApi } from "../../../lib/api/setup";
+import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
@@ -75,18 +74,13 @@ export function NewRunDialog({
   // proposal's raw mount source / repo string back into a WorkspaceSelection
   // (see wizardStateFromProposal). Best-effort: a failed fetch degrades to an
   // empty picker / "re-pick it in Basics", never a crash.
-  const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
-  const [workspacesLoading, setWorkspacesLoading] = React.useState(false);
+  const {
+    workspaces,
+    loading: workspacesLoading,
+    reload: reloadWorkspaces,
+    scanAndReload,
+  } = useWorkspaceList();
   const [addWorkspaceOpen, setAddWorkspaceOpen] = React.useState(false);
-
-  const loadWorkspaces = React.useCallback(() => {
-    setWorkspacesLoading(true);
-    workspacesApi
-      .listWorkspaces()
-      .then(setWorkspaces)
-      .catch(() => setWorkspaces([]))
-      .finally(() => setWorkspacesLoading(false));
-  }, []);
 
   // compose form state
   const [prompt, setPrompt] = React.useState("");
@@ -127,10 +121,6 @@ export function NewRunDialog({
 
   // wizard prefill (set when "Edit in wizard" hands off a proposal)
   const [wizardInitial, setWizardInitial] = React.useState<WizardState | undefined>(undefined);
-
-  // Per-dialog-open correlation id for the client telemetry beacon (mode
-  // transitions only — see composerApi.telemetry). Regenerated each time the dialog opens.
-  const [correlationId, setCorrelationId] = React.useState("");
 
   // Client-owned compose SESSION id (decision 1: no server-side session store) —
   // minted once on entering describe mode and resent unchanged on every compose
@@ -185,12 +175,11 @@ export function NewRunDialog({
     setAcknowledged(false);
     setLaunching(false);
     setWizardInitial(undefined);
-    setCorrelationId(crypto.randomUUID());
     setSessionId("");
     setSetupHint(null);
     setSatisfiedOverrides(new Set());
-    setWorkspaces([]);
-    loadWorkspaces();
+    // `true` = clear first: a re-opened dialog must not flash the last session's list.
+    reloadWorkspaces(true);
 
     let alive = true;
     composerApi
@@ -225,15 +214,7 @@ export function NewRunDialog({
     return () => {
       alive = false;
     };
-  }, [open, loadWorkspaces]);
-
-  // Client telemetry beacon: fires once per mode transition (choose → describe →
-  // clarify → review → wizard). Best-effort, fire-and-forget — mode + correlation
-  // id ONLY, never prompt/secret content (composerApi.telemetry swallows its own errors).
-  React.useEffect(() => {
-    if (!open || !correlationId) return;
-    void composerApi.telemetry({ mode, correlation_id: correlationId });
-  }, [open, mode, correlationId]);
+  }, [open, reloadWorkspaces]);
 
   // compose() returns EITHER clarifying questions or a final proposal; route on
   // the discriminant. `extra` carries the per-call mode/transcript/round.
@@ -373,16 +354,6 @@ export function NewRunDialog({
       void approveLaunch();
     },
   });
-
-  // scan_workspace fix (Fix.WorkspaceID): the same best-effort re-scan already
-  // wired below on AddWorkspaceDialog.onSaved — kick it off, then reload the
-  // workspace list the re-flip effect (below) watches.
-  const fixWorkspace = (workspaceId: string) => {
-    workspacesApi
-      .scanWorkspace(workspaceId)
-      .catch(() => {})
-      .finally(loadWorkspaces);
-  };
 
   // Workspace checklist items re-flip from the workspace list the dialog already
   // loads (decision 9) — once a scan lands the workspace at "ready", satisfy any
@@ -566,7 +537,7 @@ export function NewRunDialog({
               onAcknowledge={setAcknowledged}
               onApproveLaunch={approveLaunch}
               onAddSecret={(name) => (launchError ? secretFix.openFix(name) : secretFix.openManual(name))}
-              onFixWorkspace={fixWorkspace}
+              onFixWorkspace={scanAndReload}
               onEditInWizard={editInWizard}
               onCancel={() => onOpenChange(false)}
             />
@@ -591,10 +562,7 @@ export function NewRunDialog({
           // wizard's Basics step) so the operator doesn't have to re-open the
           // picker to select what they just added.
           setWorkspaceSelections((sel) => [...sel, { workspaceId: ws.id }]);
-          loadWorkspaces();
-          // Best-effort scan so the inline path isn't left stuck in pending_scan
-          // (matches the Workspaces screen). Refresh once it settles.
-          workspacesApi.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
+          void scanAndReload(ws.id);
         }}
       />
 

@@ -34,10 +34,9 @@ export interface CCMeta {
   mechanism: string;
 }
 
-// Canonical weakest -> strongest ladder — the single place the Fence < Wall <
-// Vault order is spelled out. The barrier picker, the New Run confinement step,
-// and default-confinement's strongest-available scan all consume this.
-export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
+// The weakest -> strongest ladder itself lives with the ConfinementClass type it
+// enumerates (lib/types/runs.ts's CC_ORDER) so the transport layer can share it;
+// the picker, this file's matrix, and default-confinement all import it from there.
 
 // Ordered weakest -> strongest. The Fence/Wall/Vault metaphor: a fence has holes
 // (shares your kernel), a wall closes the holes (gVisor seals the kernel path)
@@ -57,7 +56,7 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
   },
   CC2: {
     label: "Wall",
-    tagline: "Default · runs anywhere Docker does",
+    tagline: "Default · needs one-time setup",
     protects:
       "Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed).",
     doesntProtect:
@@ -65,11 +64,11 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
     metaphor:
       "A wall closes the holes — gVisor handles every system call, so nothing the agent does touches your kernel. But it's still software, not a separate machine, so a flaw in the wall is the way over or under.",
     mechanism:
-      "gVisor userspace kernel intercepts syscalls — the default; runs anywhere Docker runs.",
+      "gVisor userspace kernel intercepts syscalls — the default; needs a native Docker engine with its runsc runtime registered (a one-time setup step).",
   },
   CC3: {
     label: "Vault",
-    tagline: "Strongest · needs KVM hardware",
+    tagline: "Strongest · experimental · needs KVM hardware",
     protects:
       "Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside.",
     doesntProtect:
@@ -126,9 +125,10 @@ export const CC_MATRIX_ROWS: CCMatrixRow[] = [
 ];
 
 // Separate "where it runs" row-group — plain TEXT cells, not a protection grade,
-// so it's a distinct structure (not a CCMark row). "Needs KVM hardware" is the
-// one approved place a substrate constraint shows as visible copy.
+// so it's a distinct structure (not a CCMark row). The host CONSTRAINT (a native
+// engine with the Wall runtime set up, KVM hardware) is the one approved place a
+// substrate requirement shows as visible copy; the runtime NAMES stay out of it.
 export const CC_MATRIX_WHERE: { label: string; cells: Record<ConfinementClass, string> } = {
   label: "Where it runs",
-  cells: { CC1: "Any host", CC2: "Any Docker host", CC3: "Needs KVM hardware" },
+  cells: { CC1: "Any host", CC2: "Native Docker engine + setup", CC3: "Needs KVM hardware" },
 };

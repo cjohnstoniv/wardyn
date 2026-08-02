@@ -60,6 +60,17 @@ func (f *pagerFake) QueryRecentAuditEventsPage(_ context.Context, p store.Page) 
 	return pagerSlice(f.recentAudit, p), nil
 }
 
+// QueryAuditEventsFilteredPage models the SQL WHERE in Go via the filter's own
+// Matches, so the handler's filtered lane is exercised with the predicate applied
+// BEFORE the window — the ordering the real query gets for free.
+func (f *pagerFake) QueryAuditEventsFilteredPage(_ context.Context, runID *uuid.UUID, flt store.AuditFilter, p store.Page) ([]types.AuditEvent, error) {
+	src := f.recentAudit
+	if runID != nil {
+		src = f.auditByRun[*runID]
+	}
+	return pagerSlice(flt.Keep(src), p), nil
+}
+
 func makeRuns(n int) []types.AgentRun {
 	out := make([]types.AgentRun, n)
 	for i := range out {

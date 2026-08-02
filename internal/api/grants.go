@@ -22,11 +22,7 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	// Confirm the run exists first so an unknown run behaves like GET /runs/{id}
 	// (404) rather than silently returning an empty array.
-	if _, err := s.cfg.Store.GetRun(ctx, id); err != nil {
-		if notFoundIf(w, err, "run") {
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+	if _, ok := s.getRunOr404(w, r, id); !ok {
 		return
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, id)

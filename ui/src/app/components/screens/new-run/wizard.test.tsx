@@ -30,6 +30,7 @@ const listWorkspacesMock = vi.fn();
 const profileRunMock = vi.fn();
 const createRunMock = vi.fn();
 const createPolicyMock = vi.fn();
+const listPoliciesMock = vi.fn();
 const setSecretMock = vi.fn();
 const preflightRunMock = vi.fn();
 
@@ -50,7 +51,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 }));
 vi.mock("../../../lib/api/policies", () => ({
   policies: {
-    listPolicies: () => Promise.resolve([]),
+    listPolicies: (...a: unknown[]) => listPoliciesMock(...a),
     createPolicy: (...a: unknown[]) => createPolicyMock(...a),
   },
 }));
@@ -99,6 +100,8 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     listWorkspacesMock.mockReset();
     createRunMock.mockReset();
     createPolicyMock.mockReset();
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
     profileRunMock.mockReset();
     setSecretMock.mockReset();
     preflightRunMock.mockReset();
@@ -359,5 +362,64 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
     // not spin on "Checking…" forever nor commit before the retry runs.
     await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/no wall \(gvisor\) runtime/i)).toBeInTheDocument();
+  });
+  // The console could always WRITE policies (save-as-policy here, the Policies
+  // screen) but never RUN one: buildSpec unconditionally emitted an inline_policy,
+  // so policy_id was permanently blank for console-launched runs. Picking a saved
+  // policy on Basics must launch it BY REFERENCE (policy_id XOR inline_policy) so
+  // the server enforces the STORED spec — and any hand edit must detach, because
+  // buildSpec normalizes and does not round-trip a stored spec.
+  const savedPolicy = {
+    id: "pol-1",
+    name: "payments-strict",
+    created_at: "now",
+    updated_at: "now",
+    spec: {
+      allowed_domains: ["api.anthropic.com"],
+      first_use_approval: "always_deny" as const,
+      min_confinement_class: "CC2" as const,
+    },
+  };
+
+  it("launches under a saved policy by reference (policy_id, no inline_policy)", async () => {
+    listPoliciesMock.mockResolvedValue([savedPolicy]);
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Picking it on Basics unlocks the same "Review now" fast-track a recorded
+    // profile does, and Review shows the STORED spec, not a composed one.
+    await user.click(await screen.findByRole("radio", { name: /payments-strict/ }));
+    await user.click(await screen.findByRole("button", { name: /review now/i }));
+    expect(await screen.findByText(/sent by reference as policy_id/i)).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: /launch run/i }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    expect(createRunMock.mock.calls[0][0]).toMatchObject({ policy_id: "pol-1" });
+    expect(createRunMock.mock.calls[0][0].inline_policy).toBeUndefined();
+  });
+
+  it("detaches back to an inline policy as soon as a step is edited", async () => {
+    listPoliciesMock.mockResolvedValue([savedPolicy]);
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("radio", { name: /payments-strict/ }));
+    await user.click(await screen.findByRole("button", { name: /review now/i }));
+    // Jump back and widen egress — the run must no longer claim to be that policy.
+    await user.click(screen.getByRole("button", { name: /egress/i }));
+    await user.click(screen.getByRole("switch", { name: /allow all egress/i }));
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+
+    await user.click(await screen.findByRole("button", { name: /launch run/i }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    expect(createRunMock.mock.calls[0][0].policy_id).toBeUndefined();
+    expect(createRunMock.mock.calls[0][0].inline_policy).toMatchObject({ allow_all_egress: true });
   });
 });

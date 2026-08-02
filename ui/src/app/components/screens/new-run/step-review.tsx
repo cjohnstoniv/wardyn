@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step 5 — Review: a structured human summary, the exact composed inline_policy
-// JSON that will be sent, and the optional save-as-profile control.
+// Step 5 — Review: a structured human summary, the exact policy JSON that will be
+// enforced (the composed inline_policy, or the STORED spec when the run is
+// attached to a saved policy), and the optional save-as-profile control.
 import * as React from "react";
 import { TriangleAlert } from "lucide-react";
 import { Switch } from "../../ui/switch";
@@ -18,13 +19,14 @@ import { Field } from "./step-shell";
 import { buildSpec, type WizardState } from "./wizard-types";
 import { SetupChecklist } from "./compose-review";
 import { CC_META } from "../../wardyn/cc-meta";
-import type { PreflightResult, Workspace } from "../../../lib/types";
+import type { PreflightResult, RunPolicy, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
 
 export function StepReview({
   state,
   patch,
   workspaces = [],
+  attachedPolicy,
   preflight = null,
   preflightStatus = "idle",
   onAddSecret,
@@ -36,6 +38,10 @@ export function StepReview({
   // against — needed to render human-readable names/sources below. Optional
   // (defaults to []) so a caller that hasn't loaded it yet still renders.
   workspaces?: Workspace[];
+  // The saved policy this run is attached to (state.selectedPolicyId), if any.
+  // Present => the run launches by policy_id and the SERVER enforces this stored
+  // spec, so Review must show it rather than buildSpec's composed approximation.
+  attachedPolicy?: RunPolicy;
   // The Review preflight result (POST /runs/preflight) — the deterministic setup
   // checklist + the class the run will ACTUALLY run at. Advisory: it NEVER blocks
   // Review — while loading we show "Checking…", on error a quiet one-liner.
@@ -44,10 +50,16 @@ export function StepReview({
   onAddSecret?: (name: string) => void;
   onFixWorkspace?: (workspaceId: string) => void;
 }) {
-  const { run, inline_policy } = React.useMemo(
+  const { run, inline_policy: composed } = React.useMemo(
     () => buildSpec(state, workspaces),
     [state, workspaces],
   );
+  // buildSpec NORMALIZES (it force-adds the api_key injection host, unions the
+  // workspaces' required hosts, dedupes) and wizardStateFromProposal is an
+  // explicitly best-effort inverse — so a state loaded FROM a stored policy does
+  // not compose back to it byte-for-byte. While attached, everything below must
+  // read the stored spec, or Review would show a policy the server won't enforce.
+  const inline_policy = attachedPolicy?.spec ?? composed;
   const byId = new Map(workspaces.map((w) => [w.id, w]));
 
   const isClaude = state.agent === "claude-code";
@@ -244,7 +256,9 @@ export function StepReview({
 
       <div>
         <Label className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
-          inline_policy (sent verbatim)
+          {attachedPolicy
+            ? `policy “${attachedPolicy.name}” (sent by reference as policy_id)`
+            : "inline_policy (sent verbatim)"}
         </Label>
         <YamlBlock value={inline_policy} className="mt-1.5" />
       </div>

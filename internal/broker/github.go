@@ -192,6 +192,35 @@ func splitRepos(repos []string) (owner string, names []string, err error) {
 	return owner, names, nil
 }
 
+// ValidateGitHubScopeShape rejects a github_token grant scope that mintGitHub
+// would refuse at MINT time — repos in owner/name form sharing one owner
+// (splitRepos) and permission keys go-github recognizes
+// (toInstallationPermissions). It lives HERE, next to the two predicates it
+// runs, so a policy-write check and the mint gate can never drift apart; the api
+// package (which already imports this one) calls it from validatePolicySpec so a
+// bad key/repo is a 400 at author time instead of a run-time mint failure hours
+// later. Results are discarded — this is the shape only. The permissions CEILING
+// is a separate concern enforced by clampGitHubPermissions before minting.
+//
+// An EMPTY scope is valid: eligible_grants are TEMPLATES and the run supplies the
+// concrete repos, so every shipped example policy carries "repos": []. (A literal
+// `null` is 4 bytes, not len 0, and unmarshals into the struct as a no-op — which
+// is what keeps a scope-less github grant passing.)
+func ValidateGitHubScopeShape(scope json.RawMessage) error {
+	if len(scope) == 0 {
+		return nil
+	}
+	var sc githubScope
+	if err := json.Unmarshal(scope, &sc); err != nil {
+		return fmt.Errorf("broker: decode github scope: %w", err)
+	}
+	if _, _, err := splitRepos(sc.Repos); err != nil {
+		return err
+	}
+	_, err := toInstallationPermissions(sc.Permissions)
+	return err
+}
+
 // toInstallationPermissions maps a string->string permission map onto the typed
 // go-github InstallationPermissions struct. We round-trip through JSON so the
 // permission names track go-github's json tags exactly (e.g. pull_requests),

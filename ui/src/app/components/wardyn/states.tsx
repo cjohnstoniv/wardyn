@@ -56,6 +56,33 @@ export function ErrorState({ message, onRetry }: { message?: string; onRetry?: (
   );
 }
 
+// A list that came back with exactly as many rows as the console asked for is a
+// WINDOW, not the whole set — and every search/facet on these screens filters
+// client-side over that window, so past the cap "no matches" can be a lie. The
+// server states it exactly (X-Wardyn-Truncated), but the client decodes only the
+// body; `count >= cap` is the honest stand-in, because the fetch asks for the
+// server's own max (LIST_LIMIT) and gets it. Renders nothing below the cap.
+export function TruncatedNote({
+  count,
+  cap,
+  children,
+}: {
+  count: number;
+  cap: number;
+  // Screen-specific wording; omit for the plain list sentence.
+  children?: React.ReactNode;
+}) {
+  if (count < cap) return null;
+  return (
+    <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+      <AlertTriangle className="size-3.5 shrink-0" />
+      <span>
+        {children ?? `Showing the first ${cap} (truncated) — search and filters here cover only this window.`}
+      </span>
+    </div>
+  );
+}
+
 export function TableSkeleton({ rows = 6, cols = 6 }: { rows?: number; cols?: number }) {
   return (
     <div className="divide-y divide-border">

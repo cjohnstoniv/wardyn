@@ -35,8 +35,6 @@ type Capabilities struct {
 	StructuralEgress bool `json:"structural_egress"`
 	// NetworkPolicy reports L1 support (nftables / NetworkPolicy default-deny).
 	NetworkPolicy bool `json:"network_policy"`
-	// WarmPools reports pre-provisioned sandbox support.
-	WarmPools bool `json:"warm_pools"`
 	// SessionRecording reports wardyn-rec sidecar support.
 	SessionRecording bool `json:"session_recording"`
 }

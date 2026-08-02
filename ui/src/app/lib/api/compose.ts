@@ -4,9 +4,9 @@
  */
 
 // AI Run Composer (ADVISORY): natural-language task -> proposed run setup, plus
-// the escalation help agent, telemetry beacon, and configured-backend list. The
-// heaviest domain (SSE streaming), so keeping it in its own module lets routes
-// that never compose drop it from their chunk.
+// the escalation help agent and the configured-backend list. The heaviest domain
+// (SSE streaming), so keeping it in its own module lets routes that never
+// compose drop it from their chunk.
 import type {
   ComposeAssistRequest,
   ComposeAssistResponse,
@@ -148,20 +148,6 @@ export const composer = {
     }
     if (!result) throw new HttpError(502, "compose stream ended without a result");
     return result;
-  },
-
-  // POST /api/v1/runs/compose/telemetry — fire-and-forget client beacon for the
-  // pre-launch composer funnel (mode transitions). Feeds the same audit chokepoint
-  // as everything else (recordAudit → run.compose.client) — not a new analytics
-  // pipeline. Records the mode + a client-generated correlation id + risk level
-  // ONLY — never prompt/secret content. Best-effort: swallow all errors so a
-  // beacon never disrupts the dialog.
-  async telemetry(data: { mode: string; correlation_id?: string; risk?: string }): Promise<void> {
-    try {
-      await wfetch("/runs/compose/telemetry", { method: "POST", body: JSON.stringify(data) });
-    } catch {
-      /* best-effort beacon — never throw */
-    }
   },
 
   // POST /api/v1/runs/compose/assist — ADVISORY, escalation-only help agent. Answers

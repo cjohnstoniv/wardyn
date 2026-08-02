@@ -9,7 +9,6 @@ import {
   ScrollText,
   Search,
   ArrowRight,
-  AlertTriangle,
   Globe,
   TerminalSquare,
   KeyRound,
@@ -22,8 +21,10 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { audit as api } from "../../lib/api/audit";
+import { LIST_LIMIT } from "../../lib/api/core";
+import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
-import { absoluteTime } from "../../lib/format";
+import { absoluteTime, clockTime } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
@@ -43,25 +44,25 @@ import {
   SectionLabel,
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { NewRunDialog } from "./new-run/new-run-dialog";
 import { cn } from "../ui/utils";
 
-// The backend caps an audit page at this many events. When a response comes back
-// at exactly the cap we can't tell whether more exist, so we surface a "showing
-// first N (truncated)" indicator. Keep this in sync with the server's page cap.
-const AUDIT_PAGE_CAP = 500;
-
-// fix: a run_id-filtered query hits a DIFFERENT, higher server cap
-// (QueryAuditEvents's default limit=1000, vs QueryRecentAuditEvents's 500 for
-// the unfiltered/global view) — a long-running/chatty run's OWN trail can still
-// truncate at this cap. Keep in sync with the server's per-run page cap.
-const RUN_AUDIT_PAGE_CAP = 1000;
-
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
 const AUDIT_POLL_MS = 5000;
+
+// The four /healthz ebpf_groundtruth states. "unavailable" is the DEFAULT for
+// nearly every install (the ground-truth tier is an opt-in compose profile), so
+// it stays neutral — a permanent red chip for a feature nobody enabled trains
+// operators to ignore it. degraded/idle are the actionable ones.
+const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hint: string }> = {
+  healthy: { tone: "success", hint: "fresh sensor heartbeats and real kernel events observed" },
+  idle: { tone: "warning", hint: "sensor is beating but has observed no kernel events" },
+  degraded: { tone: "warning", hint: "sensor heartbeat is stale — the sensor has stalled or died" },
+  unavailable: { tone: "neutral", hint: "no eBPF sensor has ever reported — this tier is opt-in" },
+};
 
 // ------------------------------------------------------------------
 // Event-kind bucketing. AuditEvent.action is an open dotted-verb string the
@@ -123,7 +124,6 @@ const ACTION_VERB: Record<string, string> = {
   "run.compose": "produced a run proposal",
   "run.compose.clarify": "asked a clarifying question",
   "run.compose.assist": "answered a composer question",
-  "run.compose.client": "recorded a composer funnel event",
   "credential.mint": "minted a credential",
   "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
@@ -216,12 +216,12 @@ function groupByDay(events: AuditEvent[]): DayGroup[] {
 export function AuditScreen() {
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [truncated, setTruncated] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [runFilter, setRunFilter] = React.useState("");
   const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
   const [newRunOpen, setNewRunOpen] = React.useState(false);
+  const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
 
   // Drill-in run context (id + agent + task + repo + barrier), fetched via the
   // real GET /runs/{id} — never invented from the audit event fields, which
@@ -236,10 +236,12 @@ export function AuditScreen() {
   // events in authoritative append (seq) order; re-sorting by `time` can reorder
   // events that share a timestamp and misrepresent causality. Preserve as-is.
   const fetchEvents = React.useCallback(() => {
-    return api.listAudit(runFilter || undefined).then((r) => {
-      setEvents(r);
-      setTruncated(r.length >= (runFilter ? RUN_AUDIT_PAGE_CAP : AUDIT_PAGE_CAP));
-    });
+    // The kernel sensor's health rides along with every audit refresh (initial
+    // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
+    // events, so an event list structurally cannot show them — a dead sensor
+    // reads exactly like a quiet one. health() never rejects.
+    healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
+    return api.listAudit(runFilter || undefined).then(setEvents);
   }, [runFilter]);
 
   const load = React.useCallback(() => {
@@ -366,6 +368,7 @@ export function AuditScreen() {
         </Select>
 
         <div className="ml-auto flex items-center gap-3">
+          <GroundTruthChip value={groundTruth} />
           {status === "ready" && (
             <Chip tone="success" dot pulse title="Polling for new events">
               Live · appending
@@ -389,28 +392,18 @@ export function AuditScreen() {
       {/* MEDIUM/fix: when the window is capped, say so explicitly — otherwise
           the operator may believe they're seeing the full log when they're not.
           Filtering by a specific run pulls that run's complete trail server-side
-          (a HIGHER cap, RUN_AUDIT_PAGE_CAP, than the global page), but a long-
-          running/chatty run can still hit ITS cap — this used to be suppressed
-          unconditionally whenever runFilter was set, silently hiding that this
-          run's own trail was cut off too. Only the real page cap is stated — no
-          invented retention/pruning numbers. */}
-      {status === "ready" && truncated && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
-          <AlertTriangle className="size-3.5 shrink-0" />
-          <span>
-            {runFilter ? (
-              <>
-                Showing the first {RUN_AUDIT_PAGE_CAP} events for this run (truncated) — older events for
-                this run may have rolled off.
-              </>
-            ) : (
-              <>
-                Showing the first {AUDIT_PAGE_CAP} events (truncated) — older events may have rolled off this
-                window. Filter by a run to see that run's full trail (up to {RUN_AUDIT_PAGE_CAP} events).
-              </>
-            )}
-          </span>
-        </div>
+          (its own page, not a slice of the global one), but a long-running/chatty
+          run can still hit the cap — this used to be suppressed unconditionally
+          whenever runFilter was set, silently hiding that this run's own trail
+          was cut off too. Only the real page cap is stated — no invented
+          retention/pruning numbers. Both branches ask for LIST_LIMIT and the
+          server honors it (its own max), so one cap covers both. */}
+      {status === "ready" && (
+        <TruncatedNote count={events.length} cap={LIST_LIMIT}>
+          {runFilter
+            ? `Showing the first ${LIST_LIMIT} events for this run (truncated) — older events for this run may have rolled off.`
+            : `Showing the first ${LIST_LIMIT} events (truncated) — older events may have rolled off this window. Filter by a run to see that run's own trail.`}
+        </TruncatedNote>
       )}
 
       {status === "loading" ? (
@@ -569,6 +562,28 @@ function EventOutcome({ e }: { e: AuditEvent }) {
   return <OutcomeBadge outcome={e.outcome} />;
 }
 
+// Kernel ground-truth health. The event list itself can only ever show a LIVE
+// sensor (kernel.sensor.heartbeat rows): "unavailable" (no sensor ever) and
+// "degraded" (stale beat) are the ABSENCE of events, so they render as an empty
+// list indistinguishable from a quiet window — exactly the blindness that has to
+// stay visible. Nothing is claimed when the daemon doesn't report the field.
+function GroundTruthChip({ value }: { value?: { state?: string; reason?: string } }) {
+  const state = value?.state;
+  if (!state) return null;
+  const meta = GROUND_TRUTH[state] ?? { tone: "neutral" as const, hint: "" };
+  const hint = value?.reason ?? meta.hint;
+  return (
+    <Chip
+      tone={meta.tone}
+      dot
+      title={hint}
+      srLabel={hint ? `Kernel ground truth ${state} — ${hint}` : `Kernel ground truth ${state}`}
+    >
+      Ground truth · {state}
+    </Chip>
+  );
+}
+
 function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: string) => void }) {
   const kind = eventKind(event.action);
   const Icon = KIND_META[kind].Icon;
@@ -578,11 +593,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         className="w-[84px] shrink-0 font-mono text-xs text-muted-foreground"
         title={absoluteTime(event.time)}
       >
-        {new Date(event.time).toLocaleTimeString(undefined, {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })}
+        {clockTime(event.time)}
       </span>
       <ActorTypeChip type={event.actor_type} />
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

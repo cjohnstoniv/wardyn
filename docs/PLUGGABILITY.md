@@ -40,9 +40,11 @@ A pluggable seam in Wardyn has five parts. Four seams implement all of parts
    name→constructor map with default resolution and duplicate-name detection
    (one tested implementation, reused by every seam).
 3. **A typed `Deps` struct** per seam — the platform primitives a constructor may
-   use (a pool, a signing key, a directory) plus an `Options map[string]string`
-   from `WARDYN_<SEAM>_*` env, so an alternate reads impl-specific config without
-   changing `Deps`.
+   use (a pool, a signing key, a directory). Impl-specific config is NOT carried
+   on `Deps`: an implementation reads its own `WARDYN_*` env inside its
+   constructor, the way the docker substrate reads `WARDYN_INTERNAL_NETWORK` /
+   `WARDYN_RECORDING_MOUNT` in `internal/runner/docker/register.go` — so an
+   alternate configures itself without changing `Deps` at all.
 4. **Self-registration**: each implementation calls `Register(name, ctor)` from an
    `init()`, so a blank import (`_ "…/secretstore/pg"`) makes it selectable. The
    registered default name maps to the current built-in, so an unset selector

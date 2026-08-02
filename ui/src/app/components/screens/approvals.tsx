@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import type { ApprovalKind, ApprovalRequest } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -26,7 +27,7 @@ import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import {
@@ -257,6 +258,7 @@ function deriveBanner(kind: ApprovalKind, scope: Scope): Banner {
 export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
+  const [longestList, setLongestList] = React.useState(0);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [filter, setFilter] = React.useState<Filter>("PENDING");
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
@@ -272,6 +274,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       api.listApprovals("EXPIRED"),
     ]).then(([pending, approved, denied, expired]) => {
       setPendingItems(pending);
+      // Each state is its own capped fetch, so the truncation test is per list:
+      // the merged decidedItems length would false-positive on three large but
+      // complete lists. Decided history only grows, so this one does get hit.
+      setLongestList(Math.max(pending.length, approved.length, denied.length, expired.length));
       setDecidedItems([...approved, ...denied, ...expired].sort(
         (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
       ));
@@ -330,6 +336,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         title="Approvals"
         description="Decisions that gate what agents can do — nothing privileged happens without one. Approving a credential authorizes the broker to mint a short-lived, scoped token."
       />
+
+      <TruncatedNote count={longestList} cap={LIST_LIMIT} />
 
       <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)} className="mb-4">
         <TabsList>

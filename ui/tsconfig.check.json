@@ -1,9 +1,8 @@
 {
-  "//": "Typecheck-only config. `tsc -p tsconfig.check.json` cleanly typechecks the app sources + tests.",
+  "//": "Typecheck-only config. `tsc -p tsconfig.check.json` cleanly typechecks the app sources + tests. Inherits tsconfig.json's include (src + e2e + the root configs) — one list, so the gate cannot drift narrower than the editor's view.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
-  },
-  "include": ["src"]
+  }
 }

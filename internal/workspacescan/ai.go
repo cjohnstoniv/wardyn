@@ -39,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 )
 
@@ -234,7 +235,7 @@ func runAdvisorClaude(ctx context.Context, bin string, schema map[string]any, us
 		"--max-turns", aiMaxTurns,
 	}
 
-	out, err := execAdvisor(ctx, bin, scrubAdvisorKey(os.Environ()), args...)
+	out, err := execAdvisor(ctx, bin, cliutil.ScrubChildEnv(os.Environ()), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,19 +299,6 @@ func execAdvisor(ctx context.Context, bin string, env []string, args ...string) 
 		return nil, fmt.Errorf("workspacescan: AI advisor exited %d: %s", exitErr.ExitCode(), msg)
 	}
 	return nil, fmt.Errorf("workspacescan: AI advisor invocation failed: %w", err)
-}
-
-// scrubAdvisorKey returns env with ANTHROPIC_API_KEY removed so claude uses the
-// resident subscription session, never an API key. Does not mutate the input.
-func scrubAdvisorKey(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 // Untrusted-content fence markers (replicated thin, since composer's are

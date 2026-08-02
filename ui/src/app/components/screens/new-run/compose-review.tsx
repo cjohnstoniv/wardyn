@@ -18,6 +18,7 @@
 //     gates launch behind an explicit acknowledgment;
 //   • the real launch / adjust / cancel actions, wired to the actual proposal.
 import * as React from "react";
+import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import {
   ChevronDown,
   Code2,
@@ -552,7 +553,10 @@ function StepDots() {
 
 // Inline segmented control to choose Interactive vs Autonomous — the composer
 // ADVISES a mode, the operator DECIDES here. Labels come verbatim from RUN_MODE
-// (D3): the pair is Interactive / Autonomous, never Batch/Background.
+// (D3): the pair is Interactive / Autonomous, never Batch/Background. Radix
+// supplies the APG radiogroup keyboard behaviour (roving tabindex, arrows move
+// selection AND focus, Home/End); the primitive Item is used directly because the
+// shadcn wrapper hardcodes a dot indicator this segmented pill doesn't have.
 function ModeToggle({
   interactive,
   onChange,
@@ -562,49 +566,31 @@ function ModeToggle({
   onChange: (v: boolean) => void;
   disabled?: boolean;
 }) {
-  const options: { v: boolean; label: string; blurb: string }[] = [
-    { v: true, label: RUN_MODE.interactive.label, blurb: RUN_MODE.interactive.blurb },
-    { v: false, label: RUN_MODE.autonomous.label, blurb: RUN_MODE.autonomous.blurb },
-  ];
   return (
-    <div
-      role="radiogroup"
+    <RadioGroupPrimitive.Root
       aria-label="Run mode"
       className="inline-flex rounded-md border border-border p-0.5"
+      value={interactive ? "interactive" : "autonomous"}
+      onValueChange={(v) => onChange(v === "interactive")}
+      disabled={disabled}
     >
-      {options.map((opt) => {
-        const active = interactive === opt.v;
+      {(["interactive", "autonomous"] as const).map((m) => {
+        const active = interactive === (m === "interactive");
         return (
-          <button
-            key={opt.label}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            tabIndex={active ? 0 : -1}
-            title={opt.blurb}
-            disabled={disabled}
-            onClick={() => onChange(opt.v)}
-            onKeyDown={(e) => {
-              // APG radiogroup: arrows move selection AND focus (roving
-              // tabindex); two options, so any arrow flips to the sibling.
-              if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(e.key)) {
-                e.preventDefault();
-                onChange(!opt.v);
-                const sib =
-                  e.currentTarget.nextElementSibling ?? e.currentTarget.previousElementSibling;
-                (sib as HTMLButtonElement | null)?.focus();
-              }
-            }}
+          <RadioGroupPrimitive.Item
+            key={m}
+            value={m}
+            title={RUN_MODE[m].blurb}
             className={cn(
               "rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-50",
               active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {opt.label}
-          </button>
+            {RUN_MODE[m].label}
+          </RadioGroupPrimitive.Item>
         );
       })}
-    </div>
+    </RadioGroupPrimitive.Root>
   );
 }
 

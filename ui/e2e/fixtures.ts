@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { execFileSync } from "node:child_process";
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
@@ -67,4 +68,23 @@ export async function gotoConsole(page: Page): Promise<void> {
 // navTo clicks a sidebar entry and returns once the click is registered.
 export async function navTo(page: Page, label: NavLabel): Promise<void> {
   await sidebarLink(page, label).click();
+}
+
+// Some specs seed state the API can't create (e.g. an approval — `POST
+// /internal/approvals` needs a run-scoped token, not the admin one), so they talk
+// to the backend's own Postgres via `docker exec`, mirroring the seeding scripts.
+// Both drivers always set these env vars (scripts/run-ui-e2e.sh points at the e2e
+// DB, scripts/screenshots.sh at its own wardyn_shots so a capture never clobbers
+// it), so the defaults only matter when a spec is run by hand.
+const PG_CONTAINER = process.env.WARDYN_E2E_PG_CONTAINER || "wardyn-test-pg";
+const PG_DBNAME = process.env.WARDYN_E2E_PG_DBNAME || "wardyn_e2e";
+
+// Run one SQL statement against that Postgres. -tA gives tuple-only, unaligned
+// output so the caller can parse a single scalar trivially.
+export function sql(statement: string): string {
+  return execFileSync(
+    "docker",
+    ["exec", "-i", PG_CONTAINER, "psql", "-U", "wardyn", "-d", PG_DBNAME, "-tAc", statement],
+    { encoding: "utf8" },
+  ).trim();
 }

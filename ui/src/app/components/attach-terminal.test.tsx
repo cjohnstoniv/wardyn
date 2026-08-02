@@ -42,7 +42,8 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon };
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/400.css", () => ({}));
+vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
+vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
 vi.mock("../lib/api/core", () => ({ getToken: () => null }));
 

@@ -75,7 +75,10 @@ type Config struct {
 	// Must be <wardynd-base>/auth/callback.
 	RedirectURL string
 	// AllowedEmailDomains, when non-empty, restricts login to email addresses
-	// whose domain suffix matches one of the listed values (e.g. "example.com").
+	// whose domain — the part after the last '@' — exactly equals one of the
+	// listed values, case-insensitively. Matching is exact, not suffix-based:
+	// listing "example.com" does NOT admit "eng.example.com", which must be
+	// listed separately; wildcards are not supported.
 	// An empty list allows any verified email. Fail closed: if the IdP does not
 	// return a verified email and AllowedEmailDomains is non-empty, login is denied.
 	AllowedEmailDomains []string
@@ -185,13 +188,9 @@ func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error generating nonce", http.StatusInternalServerError)
 		return
 	}
-	// PKCE: code verifier + challenge (S256).
-	codeVerifier, err := randomToken()
-	if err != nil {
-		http.Error(w, "internal error generating pkce verifier", http.StatusInternalServerError)
-		return
-	}
-	codeChallenge := pkceS256Challenge(codeVerifier)
+	// PKCE: code verifier (32 octets => the 43-char minimum RFC 7636 §4.1
+	// mandates; a shorter verifier is rejected by conformant IdPs).
+	codeVerifier := oauth2.GenerateVerifier()
 
 	// State cookie: bound to this browser, compared in CallbackHandler.
 	http.SetCookie(w, a.loginCookie(stateCookieName, state))
@@ -202,8 +201,7 @@ func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	authURL := a.oauth2.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("nonce", nonce),
-		oauth2.SetAuthURLParam("code_challenge", codeChallenge),
-		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+		oauth2.S256ChallengeOption(codeVerifier),
 	)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -253,7 +251,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
 	token, err := a.oauth2.Exchange(exchangeCtx, code,
-		oauth2.SetAuthURLParam("code_verifier", pkceCookie.Value),
+		oauth2.VerifierOption(pkceCookie.Value),
 	)
 	if err != nil {
 		http.Error(w, "token exchange failed", http.StatusUnauthorized)
@@ -423,14 +421,6 @@ func sessionHMAC(key, payload []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(payload)
 	return h.Sum(nil)
-}
-
-// ─── PKCE ────────────────────────────────────────────────────────────────────
-
-// pkceS256Challenge returns the base64url(SHA256(verifier)) per RFC 7636.
-func pkceS256Challenge(verifier string) string {
-	h := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

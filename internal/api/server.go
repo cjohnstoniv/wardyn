@@ -13,10 +13,12 @@
 //	  GET  /api/v1/runs/{id}/grants
 //	  POST /api/v1/runs/{id}/kill
 //	  GET  /api/v1/runs/{id}/attach   (WebSocket: interactive PTY)
-//	  GET  /api/v1/approvals?state= ; POST /api/v1/approvals/{id}/approve|deny
-//	  GET  /api/v1/audit?run_id=
+//	  GET  /api/v1/approvals?state=&run_id= ; POST /api/v1/approvals/{id}/approve|deny
+//	  GET  /api/v1/audit?run_id=&since=&until=&action=&action_prefix=&actor_type=&outcome=
 //	  POST /api/v1/policies ; GET /api/v1/policies ; GET /api/v1/policies/{id}
 //	  PUT  /api/v1/policies/{id} ; DELETE /api/v1/policies/{id}
+//	  GET  /metrics                   (Prometheus text exposition)
+//	Anonymous:
 //	  GET  /healthz
 //	Internal (run-token bearer, identity.Provider.Verify aud="wardyn-internal"):
 //	  POST /api/v1/internal/decisions
@@ -49,6 +51,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
@@ -101,8 +104,8 @@ type ImageBuilder interface {
 	// ".devcontainer/devcontainer.json") rather than a repo checkout, returning
 	// the local image reference. It drives the SAME hardened envbuilder path as
 	// BuildDevcontainer. Used for an onboarded workspace WITHOUT a wired
-	// devcontainer, where core A generates a minimal one from the detected
-	// profile (plan A5). outputTag is the deterministic profile-hash-keyed tag
+	// devcontainer, where internal/workspacescan generates a minimal one from the
+	// detected profile. outputTag is the deterministic profile-hash-keyed tag
 	// the result is committed under.
 	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string) (imageRef string, err error)
 	// FinalizeBase wraps an arbitrary USER-supplied base image (Bring Your Own
@@ -362,6 +365,9 @@ type Server struct {
 	// composeResults holds in-flight compose-run proposal uploads keyed by run id
 	// (see composeresult.go). Zero value is ready to use.
 	composeResults composeResultStore
+	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
+	// ready to use.
+	metrics metrics
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -424,8 +430,14 @@ func (s *Server) routes() chi.Router {
 	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
 	// trusted proxy addresses.
 	r.Use(middleware.Recoverer)
+	r.Use(securityHeaders)
 
 	r.Get("/healthz", s.handleHealthz)
+	// Prometheus scrape surface. Admin-gated (NOT anonymous like /healthz): it
+	// reports operational volumes, and the public API fails closed without a
+	// credential — a scrape_config carries the admin token in an `authorization:`
+	// header.
+	r.With(s.humanOrAdminAuth).Get("/metrics", s.handleMetrics)
 
 	// Human SSO (OIDC): login/callback/logout. Mounted only when configured.
 	// These are unauthenticated by design (they bootstrap the session).
@@ -446,10 +458,9 @@ func (s *Server) routes() chi.Router {
 			// manual wizard fires it on the Review step (advisory, non-gating).
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Post("/runs/compose", s.handleComposeRun)
-			// Escalation-only Ask help agent + client funnel beacon (advisory only;
-			// same composer-enabled gate + hardened backend transport as compose).
+			// Escalation-only Ask help agent (advisory only; same composer-enabled
+			// gate + hardened backend transport as compose).
 			r.Post("/runs/compose/assist", s.handleComposeAssist)
-			r.Post("/runs/compose/telemetry", s.handleComposeTelemetry)
 			r.Get("/composer/backends", s.handleListComposerBackends)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
@@ -513,7 +524,7 @@ func (s *Server) routes() chi.Router {
 			r.Delete("/policies/{id}", s.handleDeletePolicy)
 
 			// Workspace management (onboarding of local dirs + repos a run may
-			// attach — plan core B1), gated to authenticated humans (SSO session
+			// attach), gated to authenticated humans (SSO session
 			// or admin token); dedicated admin-role gating is planned, so today
 			// ANY authenticated human in OIDC mode can CRUD workspaces, not just
 			// admins. Create/update validate the source the
@@ -549,8 +560,11 @@ func (s *Server) routes() chi.Router {
 			r.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
 			r.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Finalize the import: mark ready + optionally emit committable
-			// env-as-code (devcontainer.json/AGENTS.md).
+			// env-as-code (devcontainer.json/AGENTS.md). The GET re-generates
+			// the same files any time, so a repo workspace's committable output
+			// does not die with the one-shot finalize response.
 			r.Post("/workspaces/{id}/finalize", s.handleFinalizeWorkspace)
+			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			// Agentic verify-fix: ask a compose backend to diagnose a failed
 			// verify and suggest a concrete fix (advisory; see handleSuggestVerifyFix).
 			r.Post("/workspaces/{id}/verify/suggest-fix", s.handleSuggestVerifyFix)
@@ -676,6 +690,39 @@ func (s *Server) routes() chi.Router {
 	return r
 }
 
+// securityHeaders sets the console's defense-in-depth response headers on EVERY
+// response — /healthz, /auth/*, /api/v1/* and the SPA alike. The console is a
+// full-admin surface (it holds the admin bearer in web storage and drives
+// approve/deny/kill), so frame-ancestors 'none' is load-bearing: a framed click
+// originates INSIDE the wardyn origin, which means the local-mode CSRF Origin
+// guard (http.go) would pass it.
+//
+// Each CSP directive is deliberate — do not "tidy" them:
+//   - style-src allows 'unsafe-inline': xterm injects a theme <style> at
+//     runtime, Radix sets style attributes, and the no-UI-bundle fallback page
+//     (ui.go fallbackStatusPage) carries its own inline <style>.
+//   - font-src allows data:: the built console CSS embeds its woff2 inline, and
+//     data: is not covered by 'self'.
+//   - connect-src names ws:/wss: explicitly. 'self' matching a same-origin
+//     WebSocket is CSP3 behavior WebKit has historically not implemented, and
+//     the PTY attach must not silently die there.
+//
+// No HSTS: the default posture is plain http on loopback, where an HSTS header
+// would poison every other localhost port.
+func securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; " +
+		"object-src 'none'; connect-src 'self' ws: wss:; " +
+		"style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // handleHealthz reports liveness plus the identity provider name so the trust
 // boundary (embedded vs spire) is always visible to operators and the UI.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -694,7 +741,21 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":            "ok",
+		"status": "ok",
+		// version is the daemon's own build. It is a DELIBERATE disclosure on the
+		// anonymous /healthz (unlike the capability enumeration below, which is
+		// admin-gated on /setup/status): a support issue or a CLI/server skew after
+		// a rolling upgrade has to be answerable without a credential, and the
+		// sign-in screen reads /healthz before anyone is authenticated.
+		"version": version.Version,
+		// sso reports whether the OIDC login flow is mounted (/auth/login). The
+		// sign-in screen reads it BEFORE anyone is authenticated to decide whether to
+		// offer the SSO link — without it the console has no usable sign-in at all in
+		// the OIDC-configured, admin-token-empty deployment wardynd itself suggests
+		// (cmd/wardynd: "Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode").
+		// One bit, no configuration detail: it discloses nothing /auth/login's own
+		// presence does not.
+		"sso":               s.cfg.OIDC != nil,
 		"identity_provider": idp,
 		"trust_domain":      s.cfg.TrustDomain,
 		"runner":            runnerName,
@@ -748,7 +809,7 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		// ErrNotFound (no sensor ever) or any query error: report unavailable.
 		return out
 	}
-	out["last_heartbeat"] = ev.Time.UTC().Format(rfc3339)
+	out["last_heartbeat"] = ev.Time.UTC().Format(time.RFC3339)
 	// dropped_total and observed_total are published by the sensor on the
 	// heartbeat data when available; tolerate their absence.
 	var hb struct {

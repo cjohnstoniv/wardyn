@@ -16,21 +16,20 @@ import (
 // Reference: https://docs.asciinema.org/manual/asciicast/v2/
 //
 // CastWriter incrementally serializes an asciicast v2 stream. It is used to
-// record an interactive attach session: the header is written once at Start,
-// then each chunk of PTY OUTPUT (server->client bytes, already secret-masked by
-// the caller) is appended as a timed "o" event via Write. The serialized bytes
-// accumulate in the wrapped io.Writer (e.g. a bytes.Buffer) so the whole cast
-// can be persisted to the RecordingStore when the session ends.
+// record an interactive attach session: the header is written once by
+// NewCastWriter, then each chunk of PTY OUTPUT (server->client bytes, already
+// secret-masked by the caller) is appended as a timed "o" event via Write. The
+// serialized bytes accumulate in the wrapped io.Writer (e.g. a bytes.Buffer) so
+// the whole cast can be persisted to the RecordingStore when the session ends.
 //
 // CastWriter is safe for concurrent use by a single producer goroutine; callers
 // that write from one goroutine (the attach Read pump) and read the buffer from
 // another after Close need no extra locking beyond the internal mutex here.
 type CastWriter struct {
-	mu      sync.Mutex
-	dst     io.Writer
-	start   time.Time
-	now     func() time.Time
-	started bool
+	mu    sync.Mutex
+	dst   io.Writer
+	start time.Time
+	now   func() time.Time
 	// hadOutput reports whether at least one output event was written, so the
 	// caller can skip persisting an empty (header-only) cast if it wishes.
 	hadOutput bool
@@ -65,26 +64,12 @@ func NewCastWriter(dst io.Writer, width, height int, startedAt time.Time) *CastW
 	if height <= 0 {
 		height = 24
 	}
-	cw := &CastWriter{dst: dst, start: startedAt, now: time.Now}
-	_ = cw.writeHeader(width, height)
-	return cw
-}
-
-func (w *CastWriter) writeHeader(width, height int) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.started {
-		return nil
-	}
-	w.started = true
-	h := CastHeader{Version: 2, Width: width, Height: height, Timestamp: w.start.Unix()}
-	b, err := json.Marshal(h)
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	_, err = w.dst.Write(b)
-	return err
+	// Header line: a four-scalar struct cannot fail to marshal, and a header
+	// write error has nowhere to go from a constructor — the caller learns of a
+	// broken dst on the first Write.
+	b, _ := json.Marshal(CastHeader{Version: 2, Width: width, Height: height, Timestamp: startedAt.Unix()})
+	_, _ = dst.Write(append(b, '\n'))
+	return &CastWriter{dst: dst, start: startedAt, now: time.Now}
 }
 
 // Write appends p as a timed asciicast OUTPUT event ["t","o",string(p)]. The

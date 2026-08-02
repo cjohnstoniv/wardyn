@@ -488,7 +488,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 			dl.Scan = log.Scan
 			p.sink.emit(dl)
 		}
-		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "upstream error", err, http.StatusBadGateway)
 		return
 	}
 	if log != nil {
@@ -595,7 +595,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			dl := decisionLog(log.Request, egress.Deny, "builtin:dial-failed")
 			p.sink.emit(dl)
 		}
-		http.Error(w, "upstream dial failed: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "upstream dial failed", err, http.StatusBadGateway)
 		return
 	}
 	// Tunnel dial succeeded: NOW record the allow.
@@ -646,6 +646,17 @@ func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
 	}
 	// {"wardyn":"approval_pending","approval_id":...}
 	_, _ = fmt.Fprintf(w, `{"wardyn":"approval_pending","approval_id":%q}`, id)
+}
+
+// httpError writes "<msg>: <err>" to the SANDBOX with the process-global secret
+// mask applied to the error text — the same mask the decision-log path uses. A
+// proxy error routinely wraps upstream/control-plane text (see resolveInjection's
+// status echo), and the sandbox is the one party that must never observe an
+// injected credential, so error strings are masked here rather than at each site
+// — every sandbox-facing error goes through this helper, so no handler in the
+// package holds a raw err.Error().
+func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int) {
+	http.Error(w, msg+": "+string(maskDecisionBytes([]byte(err.Error()))), code)
 }
 
 // hopByHopHeaders are stripped before forwarding (RFC 7230 §6.1).
@@ -777,8 +788,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
-		time.Duration(cfg.HoldForReviewTimeoutSec)*time.Second, cfg.MaxConcurrentHolds)
+	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), 0, 0)
 
 	p := newProxy(Options{
 		RunID:           cfg.RunID,
@@ -801,11 +811,18 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 
 	srv := &http.Server{
-		Addr:         cfg.Listen,
-		Handler:      p,
-		ReadTimeout:  0, // streaming/tunnels: no whole-request deadline
-		WriteTimeout: 0,
-		IdleTimeout:  90 * time.Second,
+		Addr:    cfg.Listen,
+		Handler: p,
+		// The agent-facing listener is the untrusted side of the boundary. With
+		// ReadTimeout 0 there is NO header deadline unless this is set, so a
+		// partial-header connection would pin a goroutine forever in a 256 MiB
+		// sidecar. Independent of ReadTimeout, and cleared by the CONNECT hijack —
+		// tunnels and streaming bodies are unaffected. Matches the inner MITM
+		// server (mitm.go).
+		ReadHeaderTimeout: 30 * time.Second,
+		ReadTimeout:       0, // streaming/tunnels: no whole-request deadline
+		WriteTimeout:      0,
+		IdleTimeout:       90 * time.Second,
 	}
 	out := &Server{proxy: p, http: srv, sink: sink}
 

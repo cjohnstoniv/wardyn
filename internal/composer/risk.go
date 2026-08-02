@@ -167,14 +167,21 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
-	// ── Idle reaping. ──
-	if spec.AutoStopAfterSec < 0 {
-		if run.Interactive {
-			add("auto_stop_after_sec", fmt.Sprintf("%d", spec.AutoStopAfterSec), RiskLow,
+	// ── Idle reaping. The reaper skips on <= 0 (internal/lifecycle: "0 DISABLED"),
+	// so an omitted field — which the store COALESCEs to 0 — is just as unbounded
+	// as an explicit -1 and must grade the same. Only the rationale differs. ──
+	if spec.AutoStopAfterSec <= 0 {
+		val := fmt.Sprintf("%d", spec.AutoStopAfterSec)
+		switch {
+		case run.Interactive:
+			add("auto_stop_after_sec", val, RiskLow,
 				"Never-reap is expected for an interactive run (it comes up idle awaiting a human attach).", "")
-		} else {
-			add("auto_stop_after_sec", fmt.Sprintf("%d", spec.AutoStopAfterSec), RiskHigh,
+		case spec.AutoStopAfterSec < 0:
+			add("auto_stop_after_sec", val, RiskHigh,
 				"Never-reap on a NON-interactive run: a forgotten run holds its minted credentials indefinitely.", "6")
+		default:
+			add("auto_stop_after_sec", val, RiskHigh,
+				"Auto-stop not configured (field omitted or 0): this run is never reaped and holds its minted credentials indefinitely.", "6")
 		}
 	}
 

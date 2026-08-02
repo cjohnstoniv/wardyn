@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **An audit webhook sink configured with a `bearer_token` now requires an
+  `https://` URL.** The token is a long-lived SIEM ingest credential replayed on
+  every POST, so a plaintext endpoint leaked it continuously. wardynd refuses to
+  start instead. A tokenless `http://` collector is unaffected.
+
 ## [0.4.3] — 2026-07-29
 
 A clarity release: no new features, no API changes. A repo-wide audit rewrote the

@@ -54,16 +54,11 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 	}
 }
 
-// injectionResponse carries the FORMATTED secret value the proxy injects.
-// ExpiresAt (unix ms, 0 = never) lets the proxy re-resolve a rotating credential
-// (the subscription OAuth token) before it lapses; static api-key grants omit it.
-type injectionResponse struct {
-	Host      string `json:"host"`
-	Header    string `json:"header"`
-	Value     string `json:"value"`
-	JTI       string `json:"jti"`
-	ExpiresAt int64  `json:"expires_at,omitempty"`
-}
+// injectionResponse carries the FORMATTED secret value the proxy injects. It is
+// an ALIAS, not a copy: the wardyn-proxy decodes this exact struct, so the wire
+// contract is single-sourced and the compiler (not a parity test) enforces that
+// both sides agree — see types.ResolvedInjection for why.
+type injectionResponse = types.ResolvedInjection
 
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).

@@ -8,9 +8,9 @@ import { setup } from "./setup";
 import { HttpError } from "./core";
 import type { SetupStatus } from "../types";
 
-// setup.getSetupStatus() must be endpoint-less-build tolerant: the /setup/status
-// route is being built concurrently against the same frozen SetupStatus
-// contract, so a 404 (or any other failure) must degrade to a permissive
+// setup.getSetupStatus() must be endpoint-less-build tolerant: an older control
+// plane (or any deployment without the /setup/status route) answers 404, so a
+// 404 (or any other failure) must degrade to a permissive
 // READY_FALLBACK — ready:true — so the auto-open effect in App.tsx never opens
 // the Getting-started wizard against a control plane that can't answer it. A
 // 401 is the one exception: wfetch already routes it through onUnauthorized

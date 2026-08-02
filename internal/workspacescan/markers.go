@@ -12,7 +12,7 @@ package workspacescan
 // Fidelity notes (deliberate Wave-1 scope limits):
 //   - Tier 0 (.devcontainer.json/.devcontainer/devcontainer.json): PRESENCE
 //     only. We don't parse the JSONC body (image/build/features) — that's a
-//     later wave (A5 image generation); Wave 1 just needs HasDevcontainer.
+//     later wave (image generation, gen.go); Wave 1 just needs HasDevcontainer.
 //   - Tier 1 (Dockerfile/Containerfile/compose): presence only. Compose is
 //     intentionally matched without caring whether a `version:` key exists —
 //     Compose v2 parses version-less files fine, so we never look for one.

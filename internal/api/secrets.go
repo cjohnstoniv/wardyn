@@ -119,7 +119,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body putSecretRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Value == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil || body.Value == "" {
 		writeError(w, http.StatusBadRequest, `body must be {"value":"<non-empty secret>"}`)
 		return
 	}
@@ -190,6 +190,27 @@ func (s *Server) listUserSecretNames(ctx context.Context) ([]string, error) {
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+// presentSecretNames is listUserSecretNames as a name→present lookup: the ONE
+// map every secret-aware verdict is computed from (compose, preflight, the
+// record lane's api-key fallback), so the checklist's present/missing verdicts
+// can never disagree with the launch-time secret gate. Best-effort by design —
+// no secret store or a list error yields an empty (never nil) map, i.e. "no
+// secrets present", which fails those verdicts CLOSED.
+func (s *Server) presentSecretNames(ctx context.Context) map[string]bool {
+	present := map[string]bool{}
+	if s.cfg.Secrets == nil {
+		return present
+	}
+	names, err := s.listUserSecretNames(ctx)
+	if err != nil {
+		return present
+	}
+	for _, n := range names {
+		present[n] = true
+	}
+	return present
 }
 
 // formatInjectionValue applies an injection rule's Format ("%s"-style) to the

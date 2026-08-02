@@ -12,13 +12,14 @@ import (
 
 // Deps are the platform primitives an identity.Provider constructor may use.
 // Heterogeneous seams keep their own typed Deps; an impl ignores fields it does
-// not need (e.g. a future SPIRE provider ignores SigningKey, reads Options).
+// not need (e.g. a future SPIRE provider ignores SigningKey) and reads its own
+// impl-specific config from the env in its constructor, the way the docker
+// substrate does (internal/runner/docker/register.go).
 type Deps struct {
 	SigningKey  *ecdsa.PrivateKey // embedded signs with this; nil => generated
 	TrustDomain string
 	Revocations RevocationStore // kill-switch denylist (pg-backed in production)
 	Audit       audit.Recorder
-	Options     map[string]string // impl-specific config, from WARDYN_IDENTITY_*
 }
 
 // Constructor builds a Provider from Deps.

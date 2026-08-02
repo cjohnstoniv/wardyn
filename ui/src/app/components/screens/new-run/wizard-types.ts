@@ -83,7 +83,7 @@ export type AnthropicAuth = "subscription" | "apikey" | "bedrock";
 export const DEFAULT_CLAUDE_DIR = "";
 
 // The curated preset egress domains the chips toggle. Custom domains are added
-// separately and validated (exact host or "*.wildcard").
+// separately (see isValidDomain below for what the client does and doesn't check).
 // Kept aligned with the scanner's marker-table registries
 // (internal/workspacescan/markers.go) and the risk baseline
 // (internal/composer/risk.go safeBaselineDomains) so the three lists agree.
@@ -118,10 +118,16 @@ export interface WizardState {
   workspaces: WorkspaceSelection[];
   mode: RunMode;
   task: string;
-  // A saved profile (policy id) picked on the Basics step for the primary workspace.
-  // When set, the profile has populated steps 2-4 and the wizard offers "Review Now"
-  // to fast-track straight to Review. Cleared when the workspace selection changes.
+  // The Basics "start from" picker's current value — either a recorded profile's
+  // key or a saved policy's id. When set, that source has populated steps 2-4 and
+  // the wizard offers "Review Now" to fast-track straight to Review. Cleared when
+  // the workspace selection changes.
   selectedProfile?: string;
+  // Set ONLY when the picked source was a SAVED POLICY: the run then launches by
+  // REFERENCE (policy_id) instead of an inline_policy, so the server enforces the
+  // stored spec verbatim. Any hand edit detaches it (see the wizard's patch
+  // funnel) — buildSpec's composed spec is not a round-trip of a stored one.
+  selectedPolicyId?: string;
 
   // --- Step 2: access ---
   githubEnabled: boolean;
@@ -218,16 +224,20 @@ export function basename(path: string): string {
   return parts.length ? parts[parts.length - 1] : cleaned || "workspace";
 }
 
-// A domain entry is valid if it's an exact host (a.b.c) or a single-label
-// wildcard prefix ("*.b.c"). No scheme, no path, no port.
+// A deliberately LOOSE paste-guard — NOT a second copy of the shape rule. The
+// one canonical check is ValidDomainEntry (internal/egress/proxy/policy.go),
+// which every policy ingest point runs and which accepts a bare host, a
+// leading-"*." wildcard, either with a ":port" qualifier, and IP literals; its
+// 422 quotes the offending entry and lists the supported forms, and the wizard
+// already routes the whole spec through it at preflight. So this only has to
+// catch the obvious slip (empty, or a pasted URL). It must never be STRICTER
+// than the server: the old TLD regex + ":" rejection here is exactly what made
+// "artifactory.corp:8443", "registry:5000" and IP literals — all valid stored
+// policy — untypeable in the console.
 export function isValidDomain(d: string): boolean {
   const s = d.trim();
   if (!s) return false;
-  if (/[\s/:]/.test(s)) return false;
-  const host = s.startsWith("*.") ? s.slice(2) : s;
-  if (!host) return false;
-  // each label: alphanumerics + hyphen, not leading/trailing hyphen; >=2 labels.
-  return /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(host);
+  return !/[\s/]/.test(s);
 }
 
 // Split a free-text repo list ("org/a, org/b") into trimmed non-empty entries.

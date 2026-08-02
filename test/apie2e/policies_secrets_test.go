@@ -193,12 +193,7 @@ func TestSecrets_InjectionResolve(t *testing.T) {
 	if resp.status != http.StatusOK {
 		t.Fatalf("injection resolve status = %d, body=%s", resp.status, resp.body)
 	}
-	var inj struct {
-		Host   string `json:"host"`
-		Header string `json:"header"`
-		Value  string `json:"value"`
-		JTI    string `json:"jti"`
-	}
+	var inj types.ResolvedInjection
 	if err := json.Unmarshal([]byte(resp.body), &inj); err != nil {
 		t.Fatalf("decode injection resp: %v (body=%s)", err, resp.body)
 	}

@@ -10,9 +10,8 @@
 // and onboarding-screen read it back via resolveDefaultCc()/getDefaultCc()/
 // strongestAvailable(), treating it as a floor and never silently downgrading
 // below what's persisted.
-import type { ConfinementClass } from "../../lib/types";
+import { CC_ORDER, type ConfinementClass } from "../../lib/types";
 import { lsGet, lsSet } from "../../lib/storage";
-import { CC_ORDER } from "./cc-meta";
 
 /** The strongest class present in `available` — the last CC_ORDER member present. */
 export function strongestAvailable(available: ConfinementClass[]): ConfinementClass | undefined {

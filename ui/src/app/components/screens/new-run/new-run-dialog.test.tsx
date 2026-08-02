@@ -41,9 +41,6 @@ vi.mock("../../../lib/api/compose", () => ({
   composer: {
     listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
     compose: (...a: unknown[]) => composeMock(...a),
-    // Fire-and-forget mode-transition beacon; the dialog calls this on every
-    // mode change, so it must exist even though these tests don't assert on it.
-    telemetry: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../../../lib/api/runs", () => ({

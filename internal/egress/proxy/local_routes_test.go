@@ -145,8 +145,14 @@ func TestLocalRouteForwardsRunTokenAndBody(t *testing.T) {
 			if tc.body != "" && gotBody != tc.body {
 				t.Fatalf("forwarded body = %q, want %q", gotBody, tc.body)
 			}
-			if d := lastDecision(t, buf); d.RuleSource != tc.wantRuleSource || d.Decision != egress.Allow {
+			d := lastDecision(t, buf)
+			if d.RuleSource != tc.wantRuleSource || d.Decision != egress.Allow {
 				t.Fatalf("decision = %+v, want %s allow", d, tc.wantRuleSource)
+			}
+			// The brokered upstream is the control plane: audit records its REAL
+			// host AND port (a zero/fabricated port would be dishonest).
+			if d.Request.Host != "wardynd.test" || d.Request.Port != 8080 {
+				t.Fatalf("decision target = %s:%d, want wardynd.test:8080", d.Request.Host, d.Request.Port)
 			}
 		})
 	}

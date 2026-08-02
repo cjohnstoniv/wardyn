@@ -183,5 +183,9 @@ fi
 if ! grep -q 'Kata microVM \[experimental\]' threatmodel/THREAT-MODEL.md; then
   echo "  FAIL consistency: THREAT-MODEL ladder CC3 [experimental] tag missing/changed"; fail=1
 fi
+# …and the console's barrier picker, the screen the README screenshots.
+if ! grep -q 'Strongest · experimental' ui/src/app/components/wardyn/cc-meta.ts; then
+  echo "  FAIL consistency: console CC3 tagline lost its 'experimental' marker"; fail=1
+fi
 
 [ "$fail" -eq 0 ] && echo "diagram gate: PASS ($n blocks)" || { echo "diagram gate: FAIL"; exit 1; }

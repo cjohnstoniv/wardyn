@@ -35,7 +35,7 @@ log them.
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `WARDYN_LISTEN` | string | `:8080` | HTTP listen address (flag `-listen`) |
-| `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`). Two layers, and they differ: `wardynd`'s own default is the **empty string**, and an empty token with no OIDC issuer on a loopback bind **auto-enables no-auth LOCAL HOST MODE** (`cmd/wardynd/boot_flags.go`) — so leaving it unset does not leave the API bearer-gated, it turns the gate off. The compose stack supplies `demo-admin-token` (`deploy/compose/docker-compose.yaml`), which is why the containerized default *is* authenticated. There is no `WARDYN_TOKEN` fallback here; that variable is CLI-only |
+| `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`). Two layers, and they differ: `wardynd`'s own default is the **empty string**, and an empty token with no OIDC issuer on a loopback bind **auto-enables no-auth LOCAL HOST MODE** (`cmd/wardynd/boot_flags.go`) — so leaving it unset does not leave the API bearer-gated, it turns the gate off. The compose stack supplies `demo-admin-token` (`deploy/compose/docker-compose.yaml`), which is why the containerized default *is* authenticated — nominally: that token is published here, so wardynd warns at boot when it is in use and refuses to start outright if the listen address binds a specific non-loopback interface. There is no `WARDYN_TOKEN` fallback here; that variable is CLI-only |
 | `WARDYN_PG_DSN` 🔒 | string | (unset, required) | Postgres DSN (flag `-dsn`) |
 | `WARDYN_PG_MIGRATE_DSN` 🔒 | string | (unset) | optional owner/migrator DSN; splits migrate vs runtime pool (flag `-migrate-dsn`) |
 | `WARDYN_IDENTITY` | string | `embedded` | identity provider seam (flag `-identity`) |
@@ -43,13 +43,14 @@ log them.
 | `WARDYN_SECRET_STORE` | string | `pg` | secret store seam (flag `-secret-store`) |
 | `WARDYN_RECORDING_STORE` | string | `fs` | recording store seam (flag `-recording-store`) |
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory (flag `-recording-dir`) |
+| `WARDYN_RECORDING_RETENTION_DAYS` | int | `0` | delete stored session recordings older than N days; `0` (the default) keeps them forever. A recording is governance evidence, so nothing is deleted unless you set a window; each sweep that removes anything emits a `recording.retention.sweep` audit event. fs store only (flag `-recording-retention-days`) |
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | `1` only | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default — the gate fails closed, since an unenforceable cap is a silently-broken guarantee. **Not a `cliutil` bool**: `register.go` compares against the literal string `1`, so `true`/`yes`/`on` do **not** enable it and a garbage value is silently ignored rather than exiting 2 |
 | `WARDYN_DEFAULT_POLICY` | string | `examples/policies/default.json` | default RunPolicy spec path (flag `-default-policy`) |
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_HOST_PROXY_B64` | string (base64 JSON) | (unset) | host-side proxy detection, captured by `scripts/up.sh` on the host and consumed by the Getting-started "Host proxy" step. **Diagnostics only.** Unset ⇒ the step honestly reports it could not look at the host. See [Four variables that need more than a table cell](#four-variables-that-need-more-than-a-table-cell) |
-| `WARDYN_AUDIT_SINKS` | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`) |
+| `WARDYN_AUDIT_SINKS` | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`) |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`) |
 | `WARDYN_GEN_AGE_KEY` | bool | `false` | generate a fresh age identity and exit (flag `-gen-age-key`) |
@@ -64,7 +65,7 @@ log them.
 | `WARDYN_OIDC_CLIENT_ID` | string | (unset) | OIDC client id (flag `-oidc-client-id`) |
 | `WARDYN_OIDC_CLIENT_SECRET` 🔒 | string | (unset) | OIDC client secret (flag `-oidc-client-secret`) |
 | `WARDYN_OIDC_REDIRECT_URL` | string | (unset) | OIDC redirect URL (flag `-oidc-redirect-url`) |
-| `WARDYN_OIDC_EMAIL_DOMAINS` | CSV | (unset = any) | allowed email domains (flag `-oidc-email-domains`) |
+| `WARDYN_OIDC_EMAIL_DOMAINS` | CSV | (unset = any) | allowed email domains, exact match (list subdomains separately) (flag `-oidc-email-domains`) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire (flag `-approval-expiry-after`) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | sweep interval for stale approvals; 0 disables (flag `-approval-expiry-interval`) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |

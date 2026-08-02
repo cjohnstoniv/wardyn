@@ -126,12 +126,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, err := s.cfg.Store.GetRun(r.Context(), id)
-	if notFoundIf(w, err, "run") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+	run, ok := s.getRunOr404(w, r, id)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
@@ -164,7 +160,7 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID) (types.
 func bestClass(classes []types.ConfinementClass) types.ConfinementClass {
 	best := types.ConfinementClass("")
 	for _, c := range classes {
-		if confinementRank[c] > confinementRank[best] {
+		if c.Rank() > best.Rank() {
 			best = c
 		}
 	}

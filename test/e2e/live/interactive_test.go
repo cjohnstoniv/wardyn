@@ -101,7 +101,7 @@ func (h *harness) pollRunning(id uuid.UUID, timeout time.Duration) types.AgentRu
 	h.t.Helper()
 	run, ok := h.pollState(id, timeout, runningPred)
 	if !ok {
-		if isTerminal(run.State) {
+		if run.State.IsTerminal() {
 			h.t.Fatalf("interactive run went terminal (%s) before RUNNING; it should idle awaiting attach", run.State)
 		}
 		h.t.Fatalf("run %s did not reach RUNNING within %s (last=%s)", id, timeout, run.State)
@@ -115,7 +115,7 @@ func runningPred(s types.RunState) (done, good bool) {
 	if s == types.RunRunning {
 		return true, true
 	}
-	return isTerminal(s), false
+	return s.IsTerminal(), false
 }
 
 // dialAttach opens the attach WS-PTY as a non-browser client (no Origin header,

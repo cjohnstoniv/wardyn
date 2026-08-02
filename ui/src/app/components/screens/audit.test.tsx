@@ -13,7 +13,8 @@ import type { AuditEvent } from "../../lib/types";
 //  - run_id filter must query the SERVER with run_id (api.listAudit(runId)),
 //    not filter client-side over a truncated global window.
 //  - server append (seq) order must be preserved — no client re-sort by time.
-//  - a capped (>= 500) global window must show a "truncated" indicator.
+//  - a capped (>= LIST_LIMIT) window must show a "truncated" indicator — and a
+//    smaller page must NOT (both views ask for, and get, the server's 1000 max).
 //  - the Event facet (kind bucketing) must narrow the loaded window.
 
 const listAuditMock = vi.fn();
@@ -26,6 +27,12 @@ vi.mock("../../lib/api/audit", () => ({
 vi.mock("../../lib/api/runs", () => ({
   runs: {
     getRun: (...a: unknown[]) => getRunMock(...a),
+  },
+}));
+const healthMock = vi.fn();
+vi.mock("../../lib/api/health", () => ({
+  health: {
+    health: () => healthMock(),
   },
 }));
 
@@ -58,6 +65,8 @@ describe("AuditScreen", () => {
     listAuditMock.mockReset();
     getRunMock.mockReset();
     getRunMock.mockResolvedValue(undefined);
+    healthMock.mockReset();
+    healthMock.mockResolvedValue({});
   });
 
   it("re-queries the server with run_id when a run is selected from a row", async () => {
@@ -95,12 +104,25 @@ describe("AuditScreen", () => {
     expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("shows a truncation indicator when the global window is capped at 500", async () => {
-    const many = Array.from({ length: 500 }, (_, i) => ev({ id: `e${i}`, action: `act.${i}` }));
+  it("shows a truncation indicator when the global window is capped at 1000", async () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ev({ id: `e${i}`, action: `act.${i}` }));
     listAuditMock.mockResolvedValue(many);
     renderScreen();
 
     await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
+  });
+
+  it("does not cry truncation at the old 500 cap the console no longer asks for", async () => {
+    // listAudit sends ?limit=1000 (LIST_LIMIT) and the server honors it, so a
+    // 500-event page is COMPLETE — the old 500 threshold said "showing the first
+    // 500" for any count from 500 to 999.
+    listAuditMock.mockResolvedValue(
+      Array.from({ length: 500 }, (_, i) => ev({ id: `e${i}`, action: `act.${i}` })),
+    );
+    renderScreen();
+
+    await screen.findByText(/500 events/);
+    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
   it("does not show the truncation indicator below the cap", async () => {
@@ -111,9 +133,9 @@ describe("AuditScreen", () => {
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
-  // a run_id-filtered query hits a HIGHER server cap (1000, vs 500 for the
-  // unfiltered view) — but a long/chatty run's own trail can still hit it. This
-  // used to be suppressed unconditionally whenever a run filter was active.
+  // a run_id-filtered query gets that run's OWN page (not a slice of the global
+  // one) — but a long/chatty run's trail can still hit the cap. This used to be
+  // suppressed unconditionally whenever a run filter was active.
   it("shows the truncation indicator for a run-filtered view capped at 1000", async () => {
     listAuditMock.mockResolvedValueOnce([ev({ id: "e0", run_id: "run_111", action: "egress.allow" })]);
     const many = Array.from({ length: 1000 }, (_, i) =>
@@ -159,5 +181,23 @@ describe("AuditScreen", () => {
 
     await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
     expect(screen.getByText(/Denied egress to evil\.example\.com/)).toBeInTheDocument();
+  });
+
+  // A dead or missing kernel sensor is the ABSENCE of events, so the list can
+  // never show it — only this chip can. Nothing is claimed when the daemon
+  // doesn't report the field at all.
+  it("surfaces the eBPF ground-truth state, with its reason, and claims nothing without it", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1" })]);
+    healthMock.mockResolvedValue({
+      ebpf_groundtruth: { state: "degraded", reason: "heartbeat stale" },
+    });
+    renderScreen();
+
+    const chip = await screen.findByText(/ground truth · degraded/i);
+    expect(chip).toHaveAttribute("title", "heartbeat stale");
+
+    healthMock.mockResolvedValue({});
+    renderScreen();
+    await waitFor(() => expect(screen.getAllByText(/ground truth/i)).toHaveLength(1));
   });
 });

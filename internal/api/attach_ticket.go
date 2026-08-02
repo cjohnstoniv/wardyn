@@ -118,12 +118,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, err := s.cfg.Store.GetRun(r.Context(), id)
-	if notFoundIf(w, err, "run") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+	run, ok := s.getRunOr404(w, r, id)
+	if !ok {
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run

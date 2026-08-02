@@ -37,24 +37,20 @@ import type {
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
-import { audit as auditApi, egressFromAudit } from "../../lib/api/audit";
+import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
-import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "../ui/alert-dialog";
+import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import {
   ActorTypeChip,
@@ -67,6 +63,7 @@ import {
   RunStateBadge,
 } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
+import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { JsonBlock, Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
@@ -96,6 +93,9 @@ export function RunDetailScreen() {
   // Recording is fetched lazily the first time the Recording tab opens.
   const [recording, setRecording] = React.useState<Recording | null>(null);
   const [recState, setRecState] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
+  // Which cast to replay: the run's own (stored under the bare run id) or one
+  // interactive attach session (the composite `<run-id>~<session-uuid>` key).
+  const [recKey, setRecKey] = React.useState(id);
 
   const { copied, copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
@@ -145,24 +145,26 @@ export function RunDetailScreen() {
     // the last run id blocked the refetch entirely.
     setRecording(null);
     setRecState("idle");
+    setRecKey(id);
     load(true);
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
   usePoll(() => load(false), DETAIL_POLL_MS, terminal);
 
-  // Lazy recording load on first Recording-tab open.
+  // Lazy recording load on first Recording-tab open (and on each session pick,
+  // which resets recState to "idle").
   React.useEffect(() => {
     if (tab !== "recording" || !id || recState !== "idle") return;
     setRecState("loading");
     recordingsApi
-      .getRecording(id)
+      .getRecording(id, recKey || id)
       .then((rec) => {
         setRecording(rec ?? null);
         setRecState("ready");
       })
       .catch(() => setRecState("error"));
-  }, [tab, id, recState]);
+  }, [tab, id, recKey, recState]);
 
   const copyLink = () => {
     const url = `${window.location.origin}/runs/${encodeURIComponent(id)}`;
@@ -254,7 +256,12 @@ export function RunDetailScreen() {
         </div>
       ) : (
         <>
-          <SummaryHeader run={run} terminal={terminal} onKill={kill} />
+          <SummaryHeader
+            run={run}
+            terminal={terminal}
+            exitCode={exitCodeFromAudit(audit)}
+            onKill={kill}
+          />
 
           <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mt-5">
             <TabsList className="mb-5">
@@ -305,6 +312,13 @@ export function RunDetailScreen() {
               <RecordingTab
                 state={recState}
                 recording={recording}
+                runId={id}
+                sessions={attachSessions(audit)}
+                selected={recKey || id}
+                onSelect={(key) => {
+                  setRecKey(key);
+                  setRecState("idle");
+                }}
                 onRetry={() => setRecState("idle")}
               />
             </TabsContent>
@@ -325,18 +339,30 @@ function pendingCount(approvals: ApprovalRequest[]): number {
   return approvals.filter((a) => a.state === "PENDING").length;
 }
 
+// Every human attach session is recorded and masked, but under a COMPOSITE cast
+// key the console never asked for — so they were write-only. There is no
+// list-casts endpoint (and no Store.List to add one on): the index is the audit
+// trail we already hold, where session.recording's TARGET is that very key.
+function attachSessions(audit: AuditEvent[]): AuditEvent[] {
+  return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
+}
+
 // ---------------------------------------------------------------------------
 // Summary header
 // ---------------------------------------------------------------------------
 function SummaryHeader({
   run,
   terminal,
+  exitCode,
   onKill,
 }: {
   run: AgentRun;
   terminal: boolean;
+  // The agent's own exit code (audit-derived); undefined when none was recorded.
+  exitCode?: number;
   onKill: () => void;
 }) {
+  const [confirmId, setConfirmId] = React.useState<string | null>(null);
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="flex flex-wrap items-start gap-4">
@@ -352,6 +378,13 @@ function SummaryHeader({
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <RunStateBadge state={run.state} />
+            {/* A FAILED run said nothing about WHY anywhere in the console —
+                the agent's exit code was CLI-only (wardyn run --wait). */}
+            {exitCode !== undefined && (
+              <Chip tone={exitCode === 0 ? "neutral" : "danger"} mono>
+                agent exit {exitCode}
+              </Chip>
+            )}
             <ConfinementChip value={run.confinement_class} />
             <BarrierStrengthStrip tier={run.confinement_class} />
             {run.interactive && (
@@ -362,28 +395,20 @@ function SummaryHeader({
             )}
           </div>
         </div>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="outline" size="sm" className="text-danger hover:text-danger" disabled={terminal}>
-              <Skull className="size-4" /> Kill
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Kill {run.id}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This terminates the agent run, tears down the sandbox, and revokes any brokered
-                credentials. Enforcement stop — it is recorded in the audit trail. This cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={onKill} className="bg-destructive text-white hover:bg-destructive/90">
-                Kill run
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-danger hover:text-danger"
+          disabled={terminal}
+          onClick={() => setConfirmId(run.id)}
+        >
+          <Skull className="size-4" /> Kill
+        </Button>
+        <KillRunDialog
+          runId={confirmId}
+          onOpenChange={(o) => !o && setConfirmId(null)}
+          onConfirm={onKill}
+        />
       </div>
     </div>
   );
@@ -656,11 +681,7 @@ function Timeline({ events }: { events: AuditEvent[] }) {
                 </span>
                 <ActorTypeChip type={e.actor_type} />
                 <span className="ml-auto whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">
-                  {new Date(e.time).toLocaleTimeString(undefined, {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
+                  {clockTime(e.time)}
                 </span>
               </div>
               {e.target && (
@@ -773,11 +794,7 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
                   className="w-[68px] shrink-0 font-mono text-[0.6875rem] text-muted-foreground"
                   title={absoluteTime(e.time)}
                 >
-                  {new Date(e.time).toLocaleTimeString(undefined, {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
+                  {clockTime(e.time)}
                 </span>
                 <ActorTypeChip type={e.actor_type} />
                 <span className="w-[190px] shrink-0 truncate font-mono text-[0.75rem] text-muted-foreground" title={e.action}>
@@ -801,46 +818,71 @@ function AuditTab({ events }: { events: AuditEvent[] }) {
 function RecordingTab({
   state,
   recording,
+  runId,
+  sessions,
+  selected,
+  onSelect,
   onRetry,
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
+  runId: string;
+  // The run's interactive attach sessions (session.recording audit events).
+  sessions: AuditEvent[];
+  selected: string;
+  onSelect: (key: string) => void;
   onRetry: () => void;
 }) {
-  if (state === "loading" || state === "idle") {
-    return (
-      <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-  if (state === "error") {
-    return (
-      <div className="rounded-xl border border-border bg-card">
-        <ErrorState message="Couldn't load this run's recording." onRetry={onRetry} />
-      </div>
-    );
-  }
-  if (!recording) {
-    return (
-      <div className="rounded-xl border border-border bg-card">
-        <EmptyState
-          icon={SquareTerminal}
-          title="No recording available"
-          description="This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
-        />
-      </div>
-    );
-  }
   return (
     <div className="max-w-4xl">
-      <TerminalPlayer recording={recording} />
-      <div className="mt-2 text-xs text-muted-foreground">
-        Recorded when the run's runner supports session capture ·{" "}
-        <Link to="/recordings" className="text-primary hover:underline">
-          Recordings library
-        </Link>
-      </div>
+      {/* The picker sits ABOVE the body on purpose: a run whose OWN cast is
+          missing still has to be able to reach its attach sessions. */}
+      {sessions.length > 0 && (
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Session</span>
+          <Select value={selected} onValueChange={onSelect}>
+            <SelectTrigger size="sm" className="w-[280px]" aria-label="Recorded session">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={runId}>Agent session</SelectItem>
+              {sessions.map((e) => (
+                <SelectItem key={e.id} value={e.target!}>
+                  Attached {clockTime(e.time)} · {e.actor}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {state === "loading" || state === "idle" ? (
+        <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : state === "error" ? (
+        <div className="rounded-xl border border-border bg-card">
+          <ErrorState message="Couldn't load this run's recording." onRetry={onRetry} />
+        </div>
+      ) : !recording ? (
+        <div className="rounded-xl border border-border bg-card">
+          <EmptyState
+            icon={SquareTerminal}
+            title="No recording available"
+            description="This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+          />
+        </div>
+      ) : (
+        <>
+          <TerminalPlayer recording={recording} />
+          <div className="mt-2 text-xs text-muted-foreground">
+            Recorded when the run's runner supports session capture ·{" "}
+            <Link to="/recordings" className="text-primary hover:underline">
+              Recordings library
+            </Link>
+          </div>
+        </>
+      )}
     </div>
   );
 }

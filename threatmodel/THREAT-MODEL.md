@@ -528,14 +528,18 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 
 **Mitigations that exist:** the token is never written to `localStorage` unless
 you opt in; the console is served same-origin (no cross-origin token leak); the
-input field uses `type="password"`/`autoComplete="off"`.
+input field uses `type="password"`/`autoComplete="off"`; every response (API,
+`/healthz` and the SPA alike) carries `Content-Security-Policy`
+(`default-src 'self'`, `frame-ancestors 'none'`, `base-uri`/`object-src 'none'`),
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: no-referrer` (`securityHeaders` in `internal/api/server.go`),
+so a hostile page cannot frame the console to clickjack an approve.
 
-**Mitigations that do NOT yet exist (honest gaps):** the UI-serving path
-(`internal/api/ui.go`) sets **no** `Content-Security-Policy`, `X-Frame-Options`,
-or `X-Content-Type-Options` header, so there is no defense-in-depth against an
-XSS or clickjacking sink beyond the token-storage choice itself. Adding those
-headers is the tracked follow-up; until then, treat the admin token as a
-plaintext full-admin credential and prefer the SSO path once it ships.
+**Mitigations that do NOT yet exist (honest gaps):** no HSTS — the default
+posture is plain http on loopback, where an HSTS header would poison every other
+`localhost` port — and the CSP still permits inline **styles** (xterm injects a
+theme `<style>` at runtime). Treat the admin token as a plaintext full-admin
+credential and prefer the SSO path.
 
 ---
 

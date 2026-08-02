@@ -40,12 +40,8 @@ func (s *Server) handleUploadVerifyResult(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), wsID)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, wsID)
+	if !ok {
 		return
 	}
 

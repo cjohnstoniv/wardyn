@@ -78,14 +78,14 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	token, err := p.gitToken(r.Context(), grantID)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
-		http.Error(w, "git credential unavailable: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "git credential unavailable", err, http.StatusBadGateway)
 		return
 	}
 
 	target, err := p.vetURL("https://" + githubHost)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
-		http.Error(w, "git upstream vet failed: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "git upstream vet failed", err, http.StatusBadGateway)
 		return
 	}
 
@@ -101,7 +101,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		r.Method, upstreamURL, r.Body)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
-		http.Error(w, "build git request: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "build git request", err, http.StatusBadGateway)
 		return
 	}
 	// Stream the body straight through (no buffering) — upload-pack/receive-pack
@@ -120,7 +120,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		http.Error(w, "git upstream error: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -249,16 +249,5 @@ func (p *Proxy) emitGitDecision(r *http.Request, decision egress.Decision, ruleS
 	if p.sink == nil {
 		return
 	}
-	p.sink.emit(egress.DecisionLog{
-		Request: egress.Request{
-			RunID:  p.runID,
-			Host:   githubHost,
-			Port:   443,
-			Method: strings.ToUpper(r.Method),
-			Path:   r.URL.Path,
-			Time:   p.now(),
-		},
-		Decision:   decision,
-		RuleSource: ruleSource,
-	})
+	p.sink.emit(decisionLog(p.reqOf(r, githubHost, 443), decision, ruleSource))
 }

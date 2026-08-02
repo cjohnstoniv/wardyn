@@ -183,7 +183,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 	// the injection can never resolve (fail closed).
 	if s.cfg.Secrets == nil {
 		return http.StatusUnprocessableEntity, errors.New(
-			"inline_policy api_key grant requires a secret store, but none is configured")
+			"an api_key grant requires a secret store, but none is configured")
 	}
 
 	// Names only — never Get a value here.

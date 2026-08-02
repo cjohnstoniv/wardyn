@@ -55,7 +55,6 @@ func (noneRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 		ConfinementClasses: nil,
 		StructuralEgress:   false,
 		NetworkPolicy:      false,
-		WarmPools:          false,
 		SessionRecording:   false,
 	}, nil
 }
@@ -66,7 +65,7 @@ func (noneRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.San
 func (noneRunner) Exec(context.Context, string, []string) (string, error) {
 	return "", errNoneNotImplemented
 }
-func (noneRunner) Wait(context.Context, string) (int, error)    { return 0, errNoneNotImplemented }
+func (noneRunner) Wait(context.Context, string) (int, error) { return 0, errNoneNotImplemented }
 func (noneRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errNoneNotImplemented
 }
@@ -100,7 +99,7 @@ func (downgradingRunner) CreateSandbox(_ context.Context, _ runner.SandboxSpec) 
 	return runner.Sandbox{Ref: "wardyn-downgrade-" + uuid.NewString(), Driver: "downgrading", EnforcedClass: ""}, nil
 }
 func (downgradingRunner) Exec(context.Context, string, []string) (string, error) { return "", nil }
-func (downgradingRunner) Wait(context.Context, string) (int, error)    { return 0, nil }
+func (downgradingRunner) Wait(context.Context, string) (int, error)              { return 0, nil }
 func (downgradingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("downgrading: no attach")
 }
@@ -182,8 +181,8 @@ func (pretendingRecordingRunner) CreateSandbox(context.Context, runner.SandboxSp
 }
 func (pretendingRecordingRunner) Exec(context.Context, string, []string) (string, error) {
 	return "", nil
-} // ...but records nothing
-func (pretendingRecordingRunner) Wait(context.Context, string) (int, error)    { return 0, nil }
+}                                                                           // ...but records nothing
+func (pretendingRecordingRunner) Wait(context.Context, string) (int, error) { return 0, nil }
 func (pretendingRecordingRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
 	return nil, errors.New("pretending: no attach")
 }
@@ -250,8 +249,8 @@ func TestNoneStubCapabilitiesHonest(t *testing.T) {
 		}
 	})
 	t.Run("no other claims", func(t *testing.T) {
-		if caps.NetworkPolicy || caps.WarmPools || caps.SessionRecording {
-			t.Errorf("stub must not declare NetworkPolicy/WarmPools/SessionRecording, got %+v", caps)
+		if caps.NetworkPolicy || caps.SessionRecording {
+			t.Errorf("stub must not declare NetworkPolicy/SessionRecording, got %+v", caps)
 		}
 	})
 }

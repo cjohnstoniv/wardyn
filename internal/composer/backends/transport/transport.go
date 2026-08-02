@@ -21,7 +21,8 @@
 //     any base host the operator configured).
 //   - No ambient proxy: Proxy is nil, so an HTTP(S)_PROXY in the daemon's
 //     environment can NOT redirect these calls (nor the API keys they carry).
-//   - Redirect guard: a redirect to a non-allowlisted host is refused.
+//   - Redirect guard: a redirect to a non-allowlisted host — or one that
+//     downgrades an https chain to plain http — is refused.
 //   - Sensible timeouts bound every request.
 //
 // It deliberately does NOT import internal/egress — that would create an
@@ -232,6 +233,15 @@ func clientForGuard(g *Guard, timeout time.Duration) *http.Client {
 		Transport: tr,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Scheme downgrade: Go strips Authorization/Cookie across HOSTS only,
+			// never across schemes — and the Anthropic key travels in x-api-key,
+			// which is not on the stdlib's sensitive-header list at all — so a
+			// same-host https->http hop would put the operator's model-provider
+			// key on the wire in cleartext. An operator-configured plain-HTTP
+			// local BYOM endpoint starts on http and is unaffected.
+			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("transport: refusing redirect that downgrades https to %q (the API key would go out in cleartext)", req.URL.Scheme)
+			}
 			if !g.HostAllowed(req.URL.Hostname()) {
 				return fmt.Errorf("transport: refusing redirect to non-allowlisted host %q", req.URL.Host)
 			}

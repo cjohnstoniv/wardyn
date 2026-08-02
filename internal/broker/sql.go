@@ -214,25 +214,6 @@ func runRevoked(ctx context.Context, tx Tx, runID uuid.UUID) (bool, error) {
 	return revoked, nil
 }
 
-// mintedJTIsForRun lists minted_jti values for a run's credential approvals.
-func (b *Broker) mintedJTIsForRun(ctx context.Context, runID uuid.UUID) ([]string, error) {
-	// Single-row-at-a-time API: we iterate via a small helper query. The
-	// Querier surface is row-oriented; for the revoke cascade we accept a
-	// dedicated rows method on TxBeginner implementations that support it.
-	rb, ok := b.db.(rowsBeginner)
-	if !ok {
-		// Fakes that don't implement bulk reads return nothing to revoke.
-		return nil, nil
-	}
-	return rb.MintedJTIs(ctx, runID)
-}
-
-// rowsBeginner is the optional bulk-read surface used only by RevokeRun. The
-// pgx adapter implements it; minimal fakes may omit it.
-type rowsBeginner interface {
-	MintedJTIs(ctx context.Context, runID uuid.UUID) ([]string, error)
-}
-
 // jsonScopeEqual reports whether two JSON scopes are semantically equal,
 // independent of key ordering or insignificant whitespace. This is the
 // no-widening comparison: the minted scope must be EXACTLY the approved scope.

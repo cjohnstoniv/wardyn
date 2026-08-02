@@ -80,21 +80,6 @@ func bearerToken(r *http.Request) (string, bool) {
 	return strings.TrimSpace(h[len(prefix):]), true
 }
 
-// isLoopbackHost reports whether the request Host header names a loopback
-// destination. FIX #8: it gates the LOCAL-MODE no-auth surface (REST + the attach
-// WebSocket) against DNS rebinding. A page served from attacker.com
-// (Origin==Host==attacker.com) whose DNS is rebound to 127.0.0.1 passes the
-// browser's same-origin check but still sends Host: attacker.com — so restricting
-// the no-auth surface to a loopback Host (127.0.0.0/8, ::1, or the literal name
-// "localhost", with an optional :port) blocks the rebinding class. Anything else
-// (public name, LAN IP, empty Host) is rejected.
-//
-// Direct blind CSRF is ALSO closed: on a mutating method the local-mode gate
-// rejects a PRESENT non-loopback Origin header (see the handler below), so a
-// malicious page's no-cors POST straight at http://127.0.0.1:<port> — which carries
-// the attacker's Origin — is refused even though its Host is 127.0.0.1. CLI/API
-// clients send no Origin; the embedded UI is same-origin (loopback). Local mode is
-// still for a trusted single-dev machine — keep it loopback-published.
 // isMutatingMethod reports whether m is a state-changing HTTP method.
 func isMutatingMethod(m string) bool {
 	switch m {
@@ -134,6 +119,21 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// isLoopbackHost reports whether the request Host header names a loopback
+// destination. FIX #8: it gates the LOCAL-MODE no-auth surface (REST + the attach
+// WebSocket) against DNS rebinding. A page served from attacker.com
+// (Origin==Host==attacker.com) whose DNS is rebound to 127.0.0.1 passes the
+// browser's same-origin check but still sends Host: attacker.com — so restricting
+// the no-auth surface to a loopback Host (127.0.0.0/8, ::1, or the literal name
+// "localhost", with an optional :port) blocks the rebinding class. Anything else
+// (public name, LAN IP, empty Host) is rejected.
+//
+// Direct blind CSRF is ALSO closed: on a mutating method the local-mode gate
+// rejects a PRESENT non-loopback Origin header (see the handler below), so a
+// malicious page's no-cors POST straight at http://127.0.0.1:<port> — which carries
+// the attacker's Origin — is refused even though its Host is 127.0.0.1. CLI/API
+// clients send no Origin; the embedded UI is same-origin (loopback). Local mode is
+// still for a trusted single-dev machine — keep it loopback-published.
 func isLoopbackHost(host string) bool {
 	h := host
 	// Strip an optional :port. SplitHostPort also removes IPv6 brackets; it errors

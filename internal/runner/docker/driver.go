@@ -105,14 +105,6 @@ const (
 	waitMaxProbeErrors = 300
 )
 
-// recordingSourceProbeTarget is a known-allowed workspace target used ONLY to
-// exercise runner.ValidateMount's host-SOURCE deny-list against a host-bind
-// RecordingMount. The real in-container target is RecordingMountTarget, a fixed
-// Wardyn-owned path (never attacker-chosen), so the workspace target-prefix rule
-// ValidateMount also enforces is not the relevant control here — the host source
-// deny-list (/, /proc, docker.sock, symlink escapes, ...) is.
-const recordingSourceProbeTarget = "/work"
-
 func (c *Config) withDefaults() {
 	if c.InternalNetwork == "" {
 		c.InternalNetwork = "wardyn-internal"
@@ -585,8 +577,10 @@ func (d *Driver) agentMounts(specMounts []runner.Mount) ([]mount.Mount, error) {
 			// the same deny-list as workspace binds and FAIL CLOSED (a source that
 			// is/traverses /, /proc, docker.sock, ... must never be bound in). Only
 			// binds are validated — a named volume is Docker-managed, not a host path
-			// (mirrors how the workspace-bind loop treats host paths).
-			if err := runner.ValidateMount(runner.Mount{Source: d.cfg.RecordingMount, Target: recordingSourceProbeTarget}); err != nil {
+			// (mirrors how the workspace-bind loop treats host paths). Source half
+			// only: the target is RecordingMountTarget, a fixed Wardyn-owned path
+			// (never attacker-chosen), not a workspace-prefix target.
+			if err := runner.ValidateMountSource(d.cfg.RecordingMount); err != nil {
 				return nil, fmt.Errorf("docker: denied recording mount %q -> %q: %w", d.cfg.RecordingMount, RecordingMountTarget, err)
 			}
 		}

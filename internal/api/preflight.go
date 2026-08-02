@@ -44,7 +44,7 @@ type preflightResponse struct {
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req createRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -65,39 +65,24 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which secrets actually exist (names only) — the SAME map compose builds
-	// (compose.go), so the checklist's present/missing verdicts can never disagree
-	// with the launch-time secret gate.
-	presentSecrets := map[string]bool{}
-	if s.cfg.Secrets != nil {
-		if names, err := s.listUserSecretNames(ctx); err == nil {
-			for _, n := range names {
-				presentSecrets[n] = true
-			}
-		}
-	}
+	// Which secrets actually exist (names only) — the SAME map compose builds.
+	presentSecrets := s.presentSecretNames(ctx)
 
-	// Enforced confinement class — mirror runs.go's create path (runs.go:190-215):
-	// the requested class when set (never weaker than the policy floor), else the
-	// floor, then the deterministic blast-radius raise to CC3 for a write-capable /
-	// third-party production credential. The runner-capability check is NOT repeated
-	// (see the doc comment) — the backend checklist row covers it.
+	// Enforced confinement class — the SAME math launch runs, shared rather than
+	// hand-copied (enforcedConfinement, called by resolveEnforcedConfinement in
+	// runs_create.go), so preflight cannot drift from the launch gate. The tail
+	// gates resolveEnforcedConfinement adds — the runner-capability check and the
+	// cloud_sts grantChecker — are deliberately NOT repeated (see the doc comment);
+	// the backend checklist row covers the first.
 	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
 	if !ccOK {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
 		return
 	}
-	enforced := spec.MinConfinementClass
-	if reqCC != "" {
-		if !confinementGE(reqCC, spec.MinConfinementClass) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
-				"confinement_class %s is weaker than the policy minimum %s", reqCC, spec.MinConfinementClass))
-			return
-		}
-		enforced = reqCC
-	}
-	if composer.RequiredConfinementFloor(spec) == types.CC3 && !confinementGE(enforced, types.CC3) {
-		enforced = types.CC3
+	enforced, err := enforcedConfinement(spec, reqCC)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
 	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with

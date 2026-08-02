@@ -9,6 +9,7 @@
 // token store, and one 401 handler across the whole client. Split out of the
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
+import { CC_ORDER, type ConfinementClass } from "../types";
 
 const BASE = "/api/v1";
 const TOKEN_KEY = "wardyn_admin_token";
@@ -58,10 +59,11 @@ export class HttpError extends Error {
   }
 }
 
-// Confinement tiers weakest→strongest, for clamping a run's requested class up to
-// its policy floor before create (a weaker request 422s server-side).
-export const ccRank = (cc: string): number =>
-  ({ CC1: 1, CC2: 2, CC3: 3 })[cc as "CC1" | "CC2" | "CC3"] ?? 0;
+// Rank on the canonical weakest→strongest ladder, for clamping a run's requested
+// class up to its policy floor before create (a weaker request 422s server-side).
+// Derived from CC_ORDER, never a local copy: an unknown class ranks 0 (below CC1),
+// so the clamp stays fail-closed.
+export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as ConfinementClass) + 1;
 
 // Central fetch wrapper:
 //  (a) attaches Bearer token when a wardyn_admin_token is set,
@@ -90,33 +92,16 @@ export async function wfetch(path: string, init: RequestInit = {}): Promise<Resp
 }
 
 export async function asJson<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.text();
-      if (body) {
-        // The control plane returns `{"error": "<human message>"}` on failures.
-        // Surface that message verbatim (readable in a toast / inline error) and
-        // fall back to the raw body only when it is not that shape.
-        try {
-          const j = JSON.parse(body) as { error?: unknown };
-          detail = typeof j.error === "string" && j.error ? j.error : body;
-        } catch {
-          detail = body;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    throw new HttpError(res.status, detail);
-  }
+  if (!res.ok) throw new HttpError(res.status, await errText(res));
   return (await res.json()) as T;
 }
 
-// Read an error/response body as a human string WITHOUT throwing (unlike asJson):
-// prefer the control plane's `{"error":"…"}` message, fall back to the raw body,
-// then the status text. Used where a non-2xx is an EXPECTED, actionable outcome
-// the caller renders inline (e.g. verifyWorkspace's 422/503/409).
+// The ONE parser for the control plane's `{"error":"<human message>"}` envelope:
+// surface that message verbatim (readable in a toast / inline error), fall back to
+// the raw body, then the status text. It returns rather than throws, so it serves
+// both the paths where a non-2xx is an EXPECTED, actionable outcome the caller
+// renders inline (e.g. verifyWorkspace's 422/503/409) and asJson, which wraps it
+// in an HttpError. Change the envelope here and both follow.
 export async function errText(res: Response): Promise<string> {
   try {
     const body = await res.text();
@@ -147,16 +132,11 @@ export function withLimit(path: string, limit: number = LIST_LIMIT): string {
   return `${path}${path.includes("?") ? "&" : "?"}limit=${limit}`;
 }
 
-// Some backends wrap collections as { items: [...] }; tolerate both.
+// A nil Go slice encodes as JSON null, not [] — coerce so list callers always get
+// an array to map over. ponytail: one backend, no envelope; if a wrapped shape ever
+// ships, read its named key at that call site (see secrets.ts's `{names: […]}`).
 export function unwrapList<T>(payload: unknown): T[] {
-  if (Array.isArray(payload)) return payload as T[];
-  if (payload && typeof payload === "object") {
-    const obj = payload as Record<string, unknown>;
-    for (const key of ["items", "data", "results"]) {
-      if (Array.isArray(obj[key])) return obj[key] as T[];
-    }
-  }
-  return [];
+  return Array.isArray(payload) ? (payload as T[]) : [];
 }
 
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the

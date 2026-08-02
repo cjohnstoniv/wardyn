@@ -86,10 +86,6 @@ const (
 	claudeCredJSONTarget = "/home/agent/.claude.json"
 )
 
-// ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude
-// credential mount (a WorkspaceMount targeting /home/agent/.claude). Only the
-// operator authors ceiling mounts, so this is the control-plane-level half of the
-// subscription consent; the per-run half is composeRequest.UseSubscription.
 // modelProviderEgress returns the LLM MODEL-PROVIDER hosts the operator ceiling
 // blesses (api.anthropic.com / *.anthropic.com / api.openai.com). These are the
 // HARNESS's egress — needed by any agent session to reach the model — distinct from
@@ -108,6 +104,10 @@ func modelProviderEgress(ceiling types.RunPolicySpec) []string {
 	return out
 }
 
+// ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude
+// credential mount (a WorkspaceMount targeting /home/agent/.claude). Only the
+// operator authors ceiling mounts, so this is the control-plane-level half of the
+// subscription consent; the per-run half is composeRequest.UseSubscription.
 func ceilingBlessesClaudeCreds(ceiling types.RunPolicySpec) bool {
 	return specHasMountTarget(&ceiling, claudeCredTarget)
 }
@@ -191,36 +191,6 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 	return injected, warns
 }
 
-// ensureLLMGrant gives a COMPOSED run for an LLM-backed agent a path to its model.
-// A composed run defaults to api-key mode: model calls go through the proxy's
-// brokered /wardyn/llm route, which returns 404 "no_llm_credential" unless an
-// auto-mint api_key grant injects the provider key. The analyzer reasons about
-// the TASK's egress, not the agent's OWN model channel, so it routinely omits
-// this (observed: a "no network needed" static-site task proposed zero grants and
-// the agent silently produced nothing).
-//
-// When the operator explicitly opted into SUBSCRIPTION mode for this request
-// (subscribed=true: use_subscription + a ceiling-blessed cred mount + Claude), it
-// instead proposes the subscription egress entries (*.anthropic.com + the exact
-// host) pre-clamp — the ceiling must list them verbatim to keep them (the clamp's
-// allowlist intersection is exact-string) — and adds NO api_key grant: the
-// explicit human choice of transport is respected, not silently doubled up. The
-// cred mounts themselves are injected post-clamp by applyLLMCredMount.
-//
-// It adds BOTH the api_key grant AND its provider host as an EXACT allowlist entry:
-// the proxy's injector fails CLOSED at startup unless the injected host is exactly
-// allowlisted (buildInjector -> AllowedExactHost), so a grant without its egress
-// entry would hard-FAIL the run. The two are a coupled unit.
-//
-// SECRET-AWARE and non-breaking: an auto-mint api_key grant whose secret is absent
-// ALSO fails the proxy at startup (resolveInjection), so the grant is added ONLY
-// when the provider secret is stored. It runs BEFORE the clamp (the operator ceiling
-// still governs grant AND domain), and never overrides a grant already proposed for
-// the same host.
-//
-// It emits NO warning: whether the run actually ENDS UP with model access is decided
-// after the clamp (which may strip the grant or the domain), so reconcileLLMAccess
-// reports the truthful FINAL state — never a pre-clamp promise the clamp revokes.
 // applyWorkspaceCreds folds the PRIMARY workspace/container's operator-owned
 // model/harness cred BINDING (types.WorkspaceLLMCred) into the run's policy at
 // create — the credential analogue of unionWorkspaceEgress. A run that picks a
@@ -332,6 +302,36 @@ func (s *Server) secretPresent(ctx context.Context, name string) bool {
 	return slices.Contains(names, name)
 }
 
+// ensureLLMGrant gives a COMPOSED run for an LLM-backed agent a path to its model.
+// A composed run defaults to api-key mode: model calls go through the proxy's
+// brokered /wardyn/llm route, which returns 404 "no_llm_credential" unless an
+// auto-mint api_key grant injects the provider key. The analyzer reasons about
+// the TASK's egress, not the agent's OWN model channel, so it routinely omits
+// this (observed: a "no network needed" static-site task proposed zero grants and
+// the agent silently produced nothing).
+//
+// When the operator explicitly opted into SUBSCRIPTION mode for this request
+// (subscribed=true: use_subscription + a ceiling-blessed cred mount + Claude), it
+// instead proposes the subscription egress entries (*.anthropic.com + the exact
+// host) pre-clamp — the ceiling must list them verbatim to keep them (the clamp's
+// allowlist intersection is exact-string) — and adds NO api_key grant: the
+// explicit human choice of transport is respected, not silently doubled up. The
+// cred mounts themselves are injected post-clamp by applyLLMCredMount.
+//
+// It adds BOTH the api_key grant AND its provider host as an EXACT allowlist entry:
+// the proxy's injector fails CLOSED at startup unless the injected host is exactly
+// allowlisted (buildInjector -> AllowedExactHost), so a grant without its egress
+// entry would hard-FAIL the run. The two are a coupled unit.
+//
+// SECRET-AWARE and non-breaking: an auto-mint api_key grant whose secret is absent
+// ALSO fails the proxy at startup (resolveInjection), so the grant is added ONLY
+// when the provider secret is stored. It runs BEFORE the clamp (the operator ceiling
+// still governs grant AND domain), and never overrides a grant already proposed for
+// the same host.
+//
+// It emits NO warning: whether the run actually ENDS UP with model access is decided
+// after the clamp (which may strip the grant or the domain), so reconcileLLMAccess
+// reports the truthful FINAL state — never a pre-clamp promise the clamp revokes.
 func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscribed bool) {
 	p, ok := agentLLMProvider(agent)
 	if !ok {
@@ -366,6 +366,14 @@ func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[s
 	}
 }
 
+// subscriptionInjectEnabled reports whether subscription runs will inject the
+// operator's LIVE OAuth token proxy-side (the safe default: MITM auto-enabled,
+// sandbox holds an inert sentinel) vs. fall back to the resident-copy behavior
+// (no token provider wired, or the WARDYN_SUBSCRIPTION_INJECT=off escape hatch).
+func (s *Server) subscriptionInjectEnabled() bool {
+	return s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
+}
+
 // reconcileLLMAccess inspects the FINAL (post-clamp) spec and returns ONE
 // authoritative, deterministic statement of the composed LLM run's model access —
 // either a positive "provisioned" note or an honest "no model access" warning
@@ -391,14 +399,7 @@ func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[s
 // (the subscription tunnel is opaque). That exact predicate — and only that
 // predicate; the default require_inspectable_llm=false merely degrades visibly —
 // is surfaced as a warning so the human learns at review time, not at launch.
-// subscriptionInjectEnabled reports whether subscription runs will inject the
-// operator's LIVE OAuth token proxy-side (the safe default: MITM auto-enabled,
-// sandbox holds an inert sentinel) vs. fall back to the resident-copy behavior
-// (no token provider wired, or the WARDYN_SUBSCRIPTION_INJECT=off escape hatch).
-func (s *Server) subscriptionInjectEnabled() bool {
-	return s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
-}
-
+//
 // Returns (note, provisioned): note is the human sentence ("" for a non-LLM agent,
 // where there is nothing to verify); provisioned is the STRUCTURED verdict — true
 // when the run will reach its model, false when it will launch but 404 on the first

@@ -65,16 +65,6 @@ type Config struct {
 	// direct CONNECT to Anthropic/OpenAI it was never asked to. Empty/false => the
 	// LLM hosts stay opaque passthrough even when a CA is present for artifact hosts.
 	MITMLLM bool `json:"mitm_llm,omitempty"`
-	// HoldForReviewTimeoutSec bounds how long the proxy holds a connection open in
-	// wait_for_review mode before failing closed (403, with the approval left
-	// pending so a later retry can still be approved). Deliberately under common
-	// client timeouts. <=0 uses the default (30s).
-	HoldForReviewTimeoutSec int `json:"hold_for_review_timeout_sec,omitempty"`
-	// MaxConcurrentHolds caps simultaneous wait_for_review holds for this run; past
-	// the cap a new unknown host falls back to fail-fast pending (deny_with_review)
-	// instead of parking another goroutine — a bound on held-connection resource
-	// exhaustion. <=0 uses the default (16).
-	MaxConcurrentHolds int `json:"max_concurrent_holds,omitempty"`
 	// UpstreamProxyURL is the OPTIONAL corporate parent/upstream proxy that this
 	// sidecar chains its egress through (http[s]://[user:pass@]host[:port]). In a
 	// locked-down corporate network the sandbox host has NO direct internet route
@@ -85,9 +75,14 @@ type Config struct {
 	// RunToken) and masked from all decision-log/stdout output. Empty => direct
 	// dial (backward-compatible).
 	//
-	// TODO(site-config): sourced operator-wide from the persisted site-config
-	// (upstream_proxy_secret_ref) once that store lands; today it is threaded
-	// from the run's ProxyConfig at dispatch.
+	// SOURCE vs TRANSPORT: the only source is the persisted site-config
+	// (upstream_proxy_secret_ref, admin-authored via PUT /api/v1/site-config).
+	// It is resolved per dispatch by resolveRunUpstreamProxy
+	// (internal/api/runs_dispatch.go) through resolveUpstreamProxyURL (which
+	// lives in internal/api/runs_bedrock.go), audited as
+	// run.upstream_proxy.resolve on resolve success/failure, and merely
+	// TRANSPORTED here by the run's ProxyConfig (WARDYN_PROXY_CONFIG_JSON,
+	// internal/runner/docker/driver.go).
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
 }
 

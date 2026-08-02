@@ -63,15 +63,23 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 }
 
 // AddGlobal registers value as a process-global secret applied on every run.
-// Values shorter than MinLen are ignored.
+// Values shorter than MinLen are ignored. Re-registering the same value is a
+// no-op: per-run call sites (Bedrock SSO auth resolution, subscription inject)
+// re-add the same blob on every dispatch and every preflight, and duplicates
+// would grow globals without bound — Snapshot clones and NewMasker sorts the
+// whole set on every masked chunk, so the masking hot path pays for each one.
 func (r *Registry) AddGlobal(value []byte) {
 	if r == nil || len(value) < MinLen {
 		return
 	}
-	cp := bytes.Clone(value)
 	r.mu.Lock()
-	r.globals = append(r.globals, cp)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	for _, g := range r.globals {
+		if bytes.Equal(g, value) {
+			return
+		}
+	}
+	r.globals = append(r.globals, bytes.Clone(value))
 }
 
 // Snapshot returns the combined set of secrets for runID (per-run + global).

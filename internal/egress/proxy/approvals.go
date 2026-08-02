@@ -97,9 +97,10 @@ func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client 
 	}
 }
 
-// configureHold sets the wait_for_review mode + limits from the run's config.
-// timeout<=0 / maxHolds<=0 keep the defaults. Called once at NewServer before
-// the proxy serves.
+// configureHold sets the wait_for_review mode + hold limits. Called once at
+// NewServer before the proxy serves. timeout<=0 / maxHolds<=0 keep the defaults
+// — which is what production always passes; only tests set the limits, to hold
+// briefly and to saturate the cap without 16 sends.
 func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Duration, maxHolds int) {
 	a.firstUseMode = mode
 	if timeout > 0 {

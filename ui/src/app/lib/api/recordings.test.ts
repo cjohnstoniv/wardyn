@@ -66,6 +66,20 @@ describe("recordings.getRecording — asciicast v2 parsing", () => {
     expect(rec!.events).toEqual([[0.1, "o", "no header here"]]);
   });
 
+  // An attach session's cast lives under the composite `<run-id>~<session-uuid>`
+  // key; only the RUN segment is the run id. `~` is unreserved, so it must reach
+  // the handler intact rather than percent-encoded into a different key.
+  it("addresses the run's own cast by default and an attach session by its composite key", async () => {
+    // A fresh Response per call — a Response body can only be read once.
+    fetchMock.mockImplementation(async () => textResponse(JSON.stringify([0, "o", "x"])));
+
+    await recordings.getRecording("run-7");
+    expect(fetchMock.mock.calls[0][0]).toContain("/runs/run-7/recording/run-7");
+
+    await recordings.getRecording("run-7", "run-7~9f2c");
+    expect(fetchMock.mock.calls[1][0]).toContain("/runs/run-7/recording/run-7~9f2c");
+  });
+
   it("returns undefined for a 404 (no recording captured)", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
     expect(await recordings.getRecording("run-4")).toBeUndefined();

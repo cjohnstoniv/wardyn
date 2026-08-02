@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"maps"
 	neturl "net/url"
 	"slices"
@@ -296,7 +295,8 @@ func verifyEgressDomains(ws types.Workspace) []string {
 // base any pre-dispatch status write must build on so it preserves the claim)
 // and the release compensator EVERY pre-dispatch failure path must return
 // through — it fails the persisted-but-undispatched run and frees the slot, so a
-// failed launch never bricks the next step (failPendingRun no-ops pre-CreateRun).
+// failed launch never bricks the next step (failAndRevoke's CAS is conditional
+// on PENDING, so it no-ops pre-CreateRun).
 func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID uuid.UUID) (types.Workspace, func(error) error, error) {
 	claimed, ok, err := s.cfg.Store.ClaimWorkspaceActiveRun(ctx, ws.ID, runID, ws.ActiveRunID)
 	if err != nil {
@@ -306,7 +306,7 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 		return types.Workspace{}, nil, errImportStepBusy
 	}
 	return claimed, func(e error) error {
-		s.failPendingRun(ctx, runID)
+		s.failAndRevoke(ctx, runID, types.RunPending)
 		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
 		return e
 	}, nil
@@ -592,15 +592,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// provider secret exists (ensureLLMGrant is a no-op otherwise). Then build
 		// the injection from that grant — mirrors handleCreateRun's api_key branch —
 		// and hand it to dispatch (record otherwise passes no injections).
-		presentSecrets := map[string]bool{}
-		if s.cfg.Secrets != nil {
-			if names, nerr := s.listUserSecretNames(ctx); nerr == nil {
-				for _, n := range names {
-					presentSecrets[n] = true
-				}
-			}
-		}
-		ensureLLMGrant(&policy, "claude-code", presentSecrets, false)
+		ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
 		for _, g := range policy.EligibleGrants {
 			if g.Kind != types.GrantAPIKey || g.RequiresApproval {
 				continue
@@ -643,31 +635,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		Interactive:        interactive,
 		VerifyPlan:         plan,
 	}), weakCC, nil
-}
-
-// failPendingRun finalizes a run that was persisted but never dispatched: CAS
-// RunPending→RunFailed and run the revoke cascade, so an aborted launch leaves
-// no orphaned run holding a live minted token / eligible grants. Mirrors
-// reconcileFinalize minus the sandbox teardown (dispatch has not run yet).
-// Conditional on RunPending, so a call from a pre-CreateRun failure (claim /
-// mint) cleanly no-ops.
-func (s *Server) failPendingRun(ctx context.Context, runID uuid.UUID) {
-	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, types.RunPending, types.RunFailed)
-	if err != nil {
-		// "The compensator itself failed" is categorically different from
-		// applied==false (a concurrent transition legitimately won): nobody else
-		// will finalize this run, so it strands PENDING holding a live minted token
-		// and eligible grants until the next boot reconciles it. Log + audit loudly
-		// (mirrors failAndRevoke) rather than swallowing the store error.
-		slog.ErrorContext(ctx, "wardynd: failPendingRun CAS failed, run may be stranded PENDING with an un-revoked token",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
-			runID.String(), "failure", mustJSON(map[string]any{"from": string(types.RunPending), "error": err.Error()})))
-		return
-	}
-	if applied {
-		s.revokeRunCascade(ctx, runID)
-	}
 }
 
 // wireWorkspaceSource points run+policy at the workspace source: a repo

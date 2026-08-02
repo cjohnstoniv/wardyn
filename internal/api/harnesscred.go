@@ -43,12 +43,11 @@ import (
 // and re-auth is re-running the flow.
 
 const (
-	// harnessLoginTask / harnessRefreshTask discriminate a managed-harness run
-	// from ordinary runs (precedent: "workspace record" / "workspace verify").
-	// They are set SERVER-SIDE, never from client input, and gate the credential
+	// harnessLoginTask discriminates a managed-harness run from ordinary runs
+	// (precedent: "workspace record" / "workspace verify"). It is set
+	// SERVER-SIDE, never from client input, and gates the credential
 	// upload/seed endpoints.
-	harnessLoginTask   = "harness login"
-	harnessRefreshTask = "harness refresh" // reserved for the deferred auto-refresh path
+	harnessLoginTask = "harness login"
 
 	// harnessLoginIdleCap bounds an abandoned login sandbox (self-terminates +
 	// revokes rather than living forever).
@@ -498,6 +497,7 @@ func validateSSOStartURL(raw string) error {
 	}
 	return nil
 }
+
 type harnessLoginResponse struct {
 	RunID string `json:"run_id"`
 }

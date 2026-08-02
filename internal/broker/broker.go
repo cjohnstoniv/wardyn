@@ -154,10 +154,17 @@ type Row interface {
 	Scan(dest ...any) error
 }
 
-// TxBeginner opens a transaction exposing a Querier. *pgxAdapter wraps a real
-// *pgxpool.Pool; tests provide a fake. Commit/Rollback bound the mint tx.
+// TxBeginner opens a transaction exposing a Querier, and answers the one
+// non-transactional bulk read the broker needs (MintedJTIs, for RevokeRun's
+// audit cascade). *pgxAdapter wraps a real *pgxpool.Pool; tests provide a fake.
+// Commit/Rollback bound the mint tx.
+//
+// MintedJTIs is on the interface, not an optional type assertion: an
+// implementation that silently answered "nothing minted" would make RevokeRun
+// emit ZERO credential.revoke events with a nil error. The compiler must ask.
 type TxBeginner interface {
 	Begin(ctx context.Context) (Tx, error)
+	MintedJTIs(ctx context.Context, runID uuid.UUID) ([]string, error)
 }
 
 // Tx is a Querier with commit/rollback. Rollback after Commit is a no-op.
@@ -671,7 +678,7 @@ func (b *Broker) mintSSHKey(ctx context.Context, spec types.GrantSpec) (Minted, 
 // revocation (identity.Provider.RevokeRun, called by the kill cascade) to deny
 // any further mints for the run. Returns the count attempted.
 func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
-	jtis, err := b.mintedJTIsForRun(ctx, runID)
+	jtis, err := b.db.MintedJTIs(ctx, runID)
 	if err != nil {
 		return err
 	}

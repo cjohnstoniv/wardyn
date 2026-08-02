@@ -37,7 +37,7 @@ func mintServer(t *testing.T, token string) *httptest.Server {
 			return
 		}
 		gid := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-		_ = json.NewEncoder(w).Encode(resolvedInjection{
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
 			Host:   "api.test",
 			Header: "Authorization",
 			Value:  "Bearer minted-" + gid[:8],
@@ -96,7 +96,7 @@ func TestInjectorReResolvesNearExpiry(t *testing.T) {
 		if atomic.AddInt32(&calls, 1) > 1 {
 			val, exp = "Bearer token-2", farExp
 		}
-		_ = json.NewEncoder(w).Encode(resolvedInjection{
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
 			Host: "api.test", Header: "Authorization", Value: val, JTI: uuid.NewString(), ExpiresAt: exp,
 		})
 	}))

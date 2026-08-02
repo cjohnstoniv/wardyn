@@ -31,7 +31,20 @@ export const health = {
 
   // GET /healthz — liveness + trust boundary (unauthenticated; surfaced in the
   // shell so the real trust domain / identity provider are always visible).
-  async health(): Promise<{ trust_domain?: string; identity_provider?: string; runner?: string; confinement_classes?: string[] }> {
+  // ebpf_groundtruth is the kernel ground-truth stream's honest health
+  // (server.go ebpfGroundtruthStatus): unavailable = no sensor has ever beaten,
+  // degraded = stale heartbeat, idle = beating but blind, healthy = fresh beats
+  // AND real kernel events. Absent on an older daemon.
+  async health(): Promise<{
+    trust_domain?: string;
+    identity_provider?: string;
+    runner?: string;
+    confinement_classes?: string[];
+    ebpf_groundtruth?: { state?: string; reason?: string };
+    // OIDC is configured, so GET /auth/login exists — the sign-in screen only
+    // offers the SSO link when the server says the flow is actually mounted.
+    sso?: boolean;
+  }> {
     try {
       const res = await fetch("/healthz", { credentials: "include" });
       if (!res.ok) return {};

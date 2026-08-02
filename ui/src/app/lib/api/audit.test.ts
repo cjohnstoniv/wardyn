@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { egressFromAudit } from "./audit";
+import { egressFromAudit, exitCodeFromAudit } from "./audit";
 import type { AuditEvent } from "../types";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
@@ -69,5 +69,30 @@ describe("egressFromAudit", () => {
     ]);
     expect(withBytes.bytes).toBe(4096);
     expect(noBytes.bytes).toBeUndefined();
+  });
+});
+
+describe("exitCodeFromAudit", () => {
+  it("reads the code off run.complete, including a legitimate exit 0", () => {
+    expect(exitCodeFromAudit([ev({ action: "run.complete", data: { exit_code: 137 } })])).toBe(137);
+    expect(exitCodeFromAudit([ev({ action: "run.complete", data: { exit_code: 0 } })])).toBe(0);
+  });
+
+  it("is undefined when no run.complete recorded a numeric code", () => {
+    expect(exitCodeFromAudit([ev({ action: "run.kill" })])).toBeUndefined();
+    expect(exitCodeFromAudit([ev({ action: "run.reconcile", data: { reason: "daemon restart" } })]))
+      .toBeUndefined();
+  });
+
+  // The forensics variants (Wait error / panic recover) emit run.complete with
+  // NO exit_code, and the deferred one fires LAST — taking "the last
+  // run.complete" would blank a code that was actually recorded.
+  it("keeps the last DEFINED code, not the last run.complete event", () => {
+    expect(
+      exitCodeFromAudit([
+        ev({ action: "run.complete", data: { exit_code: 1 } }),
+        ev({ action: "run.complete", data: { panic: "boom" } }),
+      ]),
+    ).toBe(1);
   });
 });

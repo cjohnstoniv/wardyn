@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -112,18 +113,24 @@ func (s *Server) authSandboxRunUpload(w http.ResponseWriter, r *http.Request, no
 
 // unionAllowedDomains appends any of add not already in spec.AllowedDomains
 // (deduped, in-place, empty entries skipped) and returns what was actually
-// added.
+// added. Dedupe is case/space-insensitive — the same key composer.Clamp and
+// domainAllowedExact already use, and what the proxy concludes (CompilePolicy
+// lowercases before matching). Keying on raw bytes instead let an operator's
+// `API.Anthropic.com` re-add a second, semantically identical entry AND report
+// it to the operator as a widening that had not happened. Stored spelling is
+// the operator's own; only the equality test is normalized.
 func unionAllowedDomains(spec *types.RunPolicySpec, add []string) []string {
+	key := func(d string) string { return strings.ToLower(strings.TrimSpace(d)) }
 	have := map[string]bool{}
 	for _, d := range spec.AllowedDomains {
-		have[d] = true
+		have[key(d)] = true
 	}
 	var added []string
 	for _, d := range add {
-		if d == "" || have[d] {
+		if d == "" || have[key(d)] {
 			continue
 		}
-		have[d] = true
+		have[key(d)] = true
 		spec.AllowedDomains = append(spec.AllowedDomains, d)
 		added = append(added, d)
 	}
@@ -153,6 +160,21 @@ func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uu
 		return types.Workspace{}, false
 	}
 	return ws, true
+}
+
+// getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and
+// returning ok=false on failure — the run-noun twin of getWorkspaceOr404.
+// Callers must return immediately when ok is false.
+func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.AgentRun, bool) {
+	run, err := s.cfg.Store.GetRun(r.Context(), id)
+	if notFoundIf(w, err, "run") {
+		return types.AgentRun{}, false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+		return types.AgentRun{}, false
+	}
+	return run, true
 }
 
 // scopedWorkspaceWrite is the shared body of the operator-owned single-column
@@ -194,13 +216,33 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// decodeStrict strict-decodes the request body into dst (unknown fields
-// rejected), writing a 400 and returning false on failure.
-func decodeStrict(w http.ResponseWriter, r *http.Request, dst any) bool {
-	dec := json.NewDecoder(r.Body)
+// maxJSONBody caps a control-plane JSON request body. Nothing this package
+// decodes as JSON is anywhere near it; the uploads that legitimately are (raw
+// recording, scan/verify/compose results, composer input, the ground-truth
+// batch) carry their own larger, named cap at their own handler.
+const maxJSONBody = 1 << 20 // 1 MiB
+
+// decodeStrictMsg strict-decodes the request body into dst (unknown fields
+// rejected) under maxJSONBody, returning a human-readable message on failure
+// and "" on success. This is the package's single JSON-body decode primitive —
+// decode somewhere else and the cap is silently lost. An over-cap body surfaces
+// as the 400 below ("... request body too large"), not a labeled 413; use
+// readCappedBody where the 413 matters.
+func decodeStrictMsg(w http.ResponseWriter, r *http.Request, dst any) string {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return "invalid JSON body: " + err.Error()
+	}
+	return ""
+}
+
+// decodeStrict is decodeStrictMsg with the 400 written for the caller, for the
+// handlers that have no further validation message of their own. Callers must
+// return immediately when it reports false.
+func decodeStrict(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if msg := decodeStrictMsg(w, r, dst); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return false
 	}
 	return true

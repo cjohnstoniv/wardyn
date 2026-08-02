@@ -15,12 +15,10 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/spf13/cobra"
 )
-
-// version is surfaced via `wardyn --version`; kept in step with CHANGELOG.md.
-const version = "0.4.3"
 
 // exitError carries a specific process exit code through the cobra error
 // return (run --wait maps run outcomes to codes CI can branch on).
@@ -98,7 +96,7 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "wardyn",
 		Short:         "Wardyn control-plane CLI",
-		Version:       version,
+		Version:       version.Version,
 		SilenceErrors: true,
 		// SilenceUsage is deferred to PersistentPreRun so a structural USAGE
 		// error (unknown flag, unknown command, wrong arg count — all raised

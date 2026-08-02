@@ -10,7 +10,9 @@ import (
 
 // Deps are the platform primitives a Substrate constructor may use. Heterogeneous
 // seams keep their own typed Deps; an impl ignores fields it does not need (a
-// non-OCI VMM ignores ProxyImage-as-OCI-ref semantics, reads Options).
+// non-OCI VMM ignores ProxyImage-as-OCI-ref semantics) and reads its own
+// impl-specific config from the env in its constructor — see the docker impl's
+// WARDYN_RECORDING_MOUNT / WARDYN_INTERNAL_NETWORK reads in register.go.
 type Deps struct {
 	// ProxyImage is the wardyn-proxy sidecar image the substrate launches beside
 	// each agent (the sole egress path — L0).
@@ -18,8 +20,6 @@ type Deps struct {
 	// ConfinementRuntimes are the operator's fail-closed per-class runtime pins
 	// (WARDYN_CONFINEMENT_MAP); nil = the substrate's built-in defaults.
 	ConfinementRuntimes map[types.ConfinementClass]string
-	// Options is impl-specific config, from WARDYN_RUNNER_* env.
-	Options map[string]string
 }
 
 // Constructor builds a Substrate from Deps.

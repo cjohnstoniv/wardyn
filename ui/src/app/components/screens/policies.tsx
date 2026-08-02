@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { RunPolicy, RunPolicySpec } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -57,7 +58,7 @@ import {
 } from "../ui/sheet";
 import { ConfinementChip, Chip, SectionLabel } from "../wardyn/primitives";
 import { Mono, YamlBlock } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { RESIDUAL_PREFIX } from "../wardyn/copy";
@@ -166,6 +167,9 @@ export function PoliciesScreen() {
           <RotateCw className="size-4" />
         </Button>
       </div>
+
+      {/* Past the cap the count and search above cover only the fetched window. */}
+      <TruncatedNote count={policies.length} cap={LIST_LIMIT} />
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {status === "loading" ? (

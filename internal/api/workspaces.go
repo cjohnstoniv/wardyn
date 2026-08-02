@@ -22,14 +22,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
-// workspaceValidateMountTarget is a fixed, always-valid in-container target
-// used ONLY to satisfy runner.ValidateMount's target-shape check when
-// onboarding a local_dir workspace. Onboarding validates the reusable host
-// SOURCE (the point of "onboarded" is a pre-reviewed, reusable path) — the
-// per-run mount target is chosen later, per-attach (WorkspaceMount.Target /
-// Workspace.DefaultTarget), which is out of scope for create-time validation.
-const workspaceValidateMountTarget = "/home/agent/work"
-
 // workspaceRequest is the POST/PUT body for a workspace: a human-readable name
 // plus the source description. Unknown JSON fields are rejected (mirrors
 // decodePolicyRequest's typo-safety); the spec is validated before any store
@@ -95,19 +87,18 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 // decodeWorkspaceRequest decodes and validates a workspace request body. It
 // requires a non-empty name/source, a recognized kind, and runs the SAME
 // safety checks the run-creation path already enforces on the equivalent
-// free-text field: local_dir reuses runner.ValidateMount's host bind-mount
-// deny-list (Target fixed to workspaceValidateMountTarget — only the Source
-// half is under test here); repo reuses repoFieldSafe + repoCloneURL
+// free-text field: local_dir reuses runner.ValidateMountSource, the host
+// bind-mount deny-list (onboarding vets the reusable host SOURCE; the
+// per-run target is chosen later, per-attach — WorkspaceMount.Target /
+// Workspace.DefaultTarget); repo reuses repoFieldSafe + repoCloneURL
 // (runs.go), the same pair that gates AgentRun.Repo today. An optional
 // DefaultTarget is validated via runner.ValidateTarget for either kind, since
 // it becomes an in-container mount/clone target once a run attaches this
 // workspace.
-func decodeWorkspaceRequest(r *http.Request) (workspaceRequest, string) {
+func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRequest, string) {
 	var req workspaceRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		return workspaceRequest{}, "invalid JSON body: " + err.Error()
+	if msg := decodeStrictMsg(w, r, &req); msg != "" {
+		return workspaceRequest{}, msg
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
@@ -119,9 +110,7 @@ func decodeWorkspaceRequest(r *http.Request) (workspaceRequest, string) {
 	}
 	switch req.Kind {
 	case types.WorkspaceKindLocalDir:
-		if err := runner.ValidateMount(runner.Mount{
-			Source: req.Source, Target: workspaceValidateMountTarget, ReadOnly: true,
-		}); err != nil {
+		if err := runner.ValidateMountSource(req.Source); err != nil {
 			return workspaceRequest{}, "invalid source: " + err.Error()
 		}
 	case types.WorkspaceKindRepo:
@@ -221,11 +210,11 @@ func (s *Server) sshWorkspaceSourceReady(ctx context.Context, req workspaceReque
 
 // handleCreateWorkspace validates the request and onboards a new workspace in
 // pending_scan status. Returns 201 with the created row, or 400 on an invalid
-// body/source. The real scan (populating Profile/ImageRef, flipping status to
-// ready/error) happens via the separate POST /workspaces/{id}/scan endpoint,
-// currently a stub (see handleScanWorkspace) — creation never scans inline.
+// body/source. The real scan (populating Profile, flipping status to
+// scanned/scanning/error) happens via the separate POST /workspaces/{id}/scan
+// endpoint (see handleScanWorkspace) — creation never scans inline.
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	req, msg := decodeWorkspaceRequest(r)
+	req, msg := decodeWorkspaceRequest(w, r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -277,7 +266,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, msg := decodeWorkspaceRequest(r)
+	req, msg := decodeWorkspaceRequest(w, r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -310,10 +299,13 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ws.ApprovedEgress = nil
 		// Operator approvals and recorded evidence were reviewed against the OLD
 		// content too: stale setup commands must not auto-run against new source,
-		// and stale verify/record results must not read as proof for it.
+		// and stale verify/record results — including the verified_* "this image
+		// was PROVEN to install/build/test" stamp — must not read as proof for it.
 		ws.SetupCommands = nil
 		ws.VerifyResult = nil
 		ws.RecordResults = nil
+		ws.VerifiedProfileHash = ""
+		ws.VerifiedAt = nil
 		ws.Status = types.WorkspacePendingScan
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws)
@@ -616,25 +608,8 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 
 	emitted := map[string]string{}
 	if req.EmitEnvAsCode {
-		profile, ok := workspaceProfile(ws)
+		files, ok := s.envAsCodeFor(w, r, ws)
 		if !ok {
-			writeError(w, http.StatusUnprocessableEntity, "workspace has no scanned profile to emit from")
-			return
-		}
-		var approved []workspacescan.SetupCommand
-		_ = json.Unmarshal(ws.SetupCommands, &approved)
-		// Fold the operator-wide artifact-registry redirects (URL-only) into the
-		// committable output so an exported workspace pulls from the corp mirror.
-		// Best-effort: a store error / no site-config just omits them.
-		var artifactBases map[string]string
-		if s.cfg.Store != nil {
-			if sc, scErr := s.cfg.Store.GetSiteConfig(r.Context()); scErr == nil {
-				artifactBases = artifactBaseURLs(sc)
-			}
-		}
-		files, gerr := workspacescan.EmitEnvAsCode(profile, approved, artifactBases)
-		if gerr != nil {
-			writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
 			return
 		}
 		if ws.Kind == types.WorkspaceKindLocalDir {
@@ -644,7 +619,8 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 			}
 		} else {
 			// Repo: return content for the operator to commit (a broker-driven
-			// branch-commit is a follow-up).
+			// branch-commit is a follow-up). Dismissing the dialog does not lose
+			// it — GET /workspaces/{id}/env-as-code regenerates the same files.
 			emitted = files
 		}
 	}
@@ -672,6 +648,59 @@ func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request)
 			"emitted": req.EmitEnvAsCode, "files": len(emitted),
 		})))
 	writeJSON(w, http.StatusOK, map[string]any{"workspace": updated, "emitted_files": emitted})
+}
+
+// envAsCodeFor generates the committable env-as-code for a workspace from its
+// CURRENT reviewed profile + approved setup commands. Shared by finalize and
+// handleGetEnvAsCode so the two generations can never drift. It writes its own
+// error response (422 when the workspace has no scanned profile, 500 when the
+// generator fails) and returns ok=false, mirroring getWorkspaceOr404.
+func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.Workspace) (map[string]string, bool) {
+	profile, ok := workspaceProfile(ws)
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, "workspace has no scanned profile to emit from")
+		return nil, false
+	}
+	var approved []workspacescan.SetupCommand
+	_ = json.Unmarshal(ws.SetupCommands, &approved)
+	// Fold the operator-wide artifact-registry redirects (URL-only) into the
+	// committable output so an exported workspace pulls from the corp mirror.
+	// Best-effort: a store error / no site-config just omits them.
+	var artifactBases map[string]string
+	if s.cfg.Store != nil {
+		if sc, scErr := s.cfg.Store.GetSiteConfig(r.Context()); scErr == nil {
+			artifactBases = artifactBaseURLs(sc)
+		}
+	}
+	files, gerr := workspacescan.EmitEnvAsCode(profile, approved, artifactBases)
+	if gerr != nil {
+		writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
+		return nil, false
+	}
+	return files, true
+}
+
+// handleGetEnvAsCode re-generates the committable env-as-code for a workspace.
+// Finalize hands these files back exactly once, in its response body, and a repo
+// workspace has nowhere on the host to write them — so without this the content
+// the operator is meant to COMMIT dies with the import dialog. Nothing is
+// persisted: the files are deterministic from stored state, so this reflects a
+// later re-scan or setup-command edit rather than a finalize-time snapshot.
+func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "workspace")
+	if !ok {
+		return
+	}
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
+		return
+	}
+	files, ok := s.envAsCodeFor(w, r, ws)
+	if !ok {
+		return
+	}
+	// Same key finalize returns, so a client renders either response identically.
+	writeJSON(w, http.StatusOK, map[string]any{"emitted_files": files})
 }
 
 // writeEnvAsCode writes generated env-as-code files under root. Paths are the
@@ -742,12 +771,16 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 //
 //   - local_dir: scanned HOST-SIDE inline via workspacescan.Scan (bounded,
 //     read-only, no subprocess — the host control plane can read the reusable
-//     onboarded path directly). The derived profile is persisted and status
-//     flips to ready; the profile is returned (200).
+//     onboarded path directly). The derived profile is persisted, status flips
+//     to scanned (NOT ready — `ready` means the import was finalized/verified)
+//     and the profile is returned (200). An onboarded path that is gone or is
+//     not a directory persists status=error and 422s instead, so a typo never
+//     reads as green.
 //   - repo: a repo is NOT on the host — it scans as a governed throwaway run
 //     whose ScanFacts return over the brokered scan-result route
-//     (handleUploadScanResult). Launching that run is Wave 3, so this still 501s
-//     with a clear message and does NOT launch anything here.
+//     (handleUploadScanResult). Launching it returns 202 with the scan_run_id
+//     (503 with no runner configured, 409 when an import step already holds the
+//     workspace's slot); the profile lands asynchronously.
 func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -824,7 +857,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 				"kind": ws.Kind, "scan_run_id": run.ID.String(),
 			})))
 		// 202: the profile is populated asynchronously when the scan run uploads its
-		// ScanFacts (the workspace flips to status=ready then).
+		// ScanFacts (SetWorkspaceScanResult flips the workspace to status=scanned).
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"scan_run_id": run.ID, "workspace_id": ws.ID, "state": run.State,
 			"detail": "governed scan run launched; the workspace profile updates when the scan completes",

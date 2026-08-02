@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -81,31 +82,20 @@ func (r *pgRevocations) RevokeJTI(ctx context.Context, jti string, runID uuid.UU
 	return nil
 }
 
-// approvalStore adapts the function-style internal/store API + audit Recorder to
-// the narrow approval.Store interface (one value implementing all five methods).
+// approvalStore satisfies the narrow approval.Store interface: the embedded
+// store.PG carries the four CRUD methods verbatim, and only Record is adapted.
 //
 // FIX #5: rec is an audit.Recorder (the masked + SIEM-fanout recorder, maskedRec),
 // NOT a plain store.Recorder. The approval FSM used to record decide/expire events
 // straight to Postgres via store.Recorder, bypassing masking and the file/webhook/
 // syslog sinks. Holding the interface here lets main.go inject maskedRec so those
-// events fan out to SIEM exactly like idp/broker events.
+// events fan out to SIEM exactly like idp/broker events. (store.PG has no Record
+// method, so this one can never be shadowed back to the plain store recorder.)
 type approvalStore struct {
-	pool *pgxpool.Pool
-	rec  audit.Recorder
+	store.PG
+	rec audit.Recorder
 }
 
-func (a approvalStore) CreateApproval(ctx context.Context, ar types.ApprovalRequest) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).CreateApproval(ctx, ar)
-}
-func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).GetApproval(ctx, id)
-}
-func (a approvalStore) ListApprovals(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).ListApprovals(ctx, state)
-}
-func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).DecideApproval(ctx, id, state, decidedBy, reason)
-}
 func (a approvalStore) Record(ctx context.Context, ev types.AuditEvent) error {
 	return a.rec.Record(ctx, ev)
 }
@@ -113,26 +103,23 @@ func (a approvalStore) Record(ctx context.Context, ev types.AuditEvent) error {
 var _ approval.Store = approvalStore{}
 
 // approvalService implements api.ApprovalService over the approval FSM package.
-// FIX #5: rec is the masked+fanout audit.Recorder (maskedRec), so decide events
-// recorded by the FSM reach SIEM sinks, not just Postgres.
+// FIX #5: st.rec is the masked+fanout audit.Recorder (maskedRec), so decide
+// events recorded by the FSM reach SIEM sinks, not just Postgres.
 type approvalService struct {
-	pool *pgxpool.Pool
-	rec  audit.Recorder
+	st approvalStore
 }
-
-func (s *approvalService) st() approvalStore { return approvalStore{pool: s.pool, rec: s.rec} }
 
 func (s *approvalService) Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
-	return approval.RequestApproval(ctx, s.st(), req)
+	return approval.RequestApproval(ctx, s.st, req)
 }
 func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, approve bool, decidedByType types.ActorType, decidedBy, reason string) (types.ApprovalRequest, error) {
-	return approval.Decide(ctx, s.st(), id, approve, decidedByType, decidedBy, reason)
+	return approval.Decide(ctx, s.st, id, approve, decidedByType, decidedBy, reason)
 }
 func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.NewPG(s.pool).GetApproval(ctx, id)
+	return s.st.GetApproval(ctx, id)
 }
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.NewPG(s.pool).ListApprovals(ctx, state)
+	return s.st.ListApprovals(ctx, state)
 }
 
 // ─── audit fanout ─────────────────────────────────────────────────────────────
@@ -404,6 +391,49 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 				slog.InfoContext(ctx, "wardynd: approval sweep expired stale PENDING approvals",
 					slog.Int("expired", n),
 				)
+			}
+		}
+	}
+}
+
+// runRecordingSweeper periodically unlinks stored session recordings older than
+// `after`, until ctx is cancelled. Only started when the operator sets a
+// retention window (WARDYN_RECORDING_RETENTION_DAYS); unset = keep forever,
+// because a recording is governance evidence and deleting one is an operator
+// decision, not a default.
+//
+// Deletions are audited: a sweep that removed anything emits one
+// recording.retention.sweep event, so the disappearance of evidence is itself
+// evidence. The first sweep runs after one tick, mirroring the other sweepers.
+func runRecordingSweeper(ctx context.Context, s *recording.FSStore, rec audit.Recorder, interval, after time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := s.Sweep(after)
+			if err != nil {
+				slog.ErrorContext(ctx, "wardynd: recording sweep error", slog.Any("err", err))
+			}
+			if n == 0 {
+				continue
+			}
+			slog.InfoContext(ctx, "wardynd: recording sweep deleted expired recordings", slog.Int("deleted", n))
+			data, _ := json.Marshal(map[string]any{"deleted": n, "retention_sec": int64(after.Seconds())})
+			ev := types.AuditEvent{
+				ID:        uuid.New(),
+				Time:      time.Now().UTC(),
+				ActorType: types.ActorSystem,
+				Actor:     "wardyn/recording-sweeper",
+				Action:    "recording.retention.sweep",
+				Target:    "recordings",
+				Outcome:   "success",
+				Data:      json.RawMessage(data),
+			}
+			if rerr := rec.Record(ctx, ev); rerr != nil {
+				audit.LogWriteFailure(ctx, ev, rerr)
 			}
 		}
 	}

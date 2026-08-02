@@ -23,7 +23,6 @@ var reg = component.NewRegistry[Constructor]("fs")
 // Register adds a recording-store implementation; call it from an init().
 func Register(name string, c Constructor) { reg.Register(name, c) }
 
-
 // Names returns the registered store names (for /healthz and error messages).
 func Names() []string { return reg.Names() }
 

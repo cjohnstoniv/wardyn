@@ -183,10 +183,9 @@ const awsSSOProfileName = "wardyn"
 // awsSSOConfigEnvVar carries the generated ~/.aws files (config + SSO token
 // cache) into the sandbox: same shape as WARDYN_ARTIFACT_CONFIG_B64 —
 // newline-delimited "<home-relative-path>\t<base64(content)>" records (see
-// encodeArtifactConfig, reused here as-is). agent-run-lib.sh must materialize
-// it before claude/aws-sdk runs; that function does not exist yet (owned by
-// another agent) — see the snippet in resolveBedrockAuth's doc comment above
-// the ssoInject branch.
+// encodeArtifactConfig, reused here as-is). agent-run-lib.sh materializes it
+// before claude/aws-sdk runs (materialize_aws_sso_config, in
+// deploy/images/common/agent-run-lib.sh).
 const awsSSOConfigEnvVar = "WARDYN_AWS_SSO_CONFIG_B64"
 
 // awsSSOCacheFileName is the AWS CLI/SDK's cache-filename convention for an
@@ -342,35 +341,6 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// Bedrock bearer path above. Until Phase B ships, this is an accepted,
 	// documented tradeoff (same class as the resident-SigV4 fallback), not an
 	// oversight.
-	//
-	// agent-run-lib.sh needs a materialization function for awsSSOConfigEnvVar
-	// (does not exist yet — owned by another agent), mirroring
-	// install_artifact_config:
-	//
-	//   materialize_aws_sso_config() {
-	//       [[ -n "${WARDYN_AWS_SSO_CONFIG_B64:-}" ]] || return 0
-	//       local relpath b64 dst
-	//       while IFS=$'\t' read -r relpath b64; do
-	//           [[ -n "$relpath" ]] || continue
-	//           case "$relpath" in
-	//               /*|*..*) echo "agent-run: skipping unsafe aws-sso-config path: $relpath" >&2; continue ;;
-	//           esac
-	//           dst="${HOME}/${relpath}"
-	//           mkdir -p "$(dirname "$dst")"
-	//           if printf '%s' "$b64" | base64 -d > "$dst" 2>/dev/null; then
-	//               chmod 0600 "$dst"
-	//           else
-	//               echo "agent-run: WARNING failed to write aws-sso-config ${relpath}" >&2
-	//           fi
-	//       done <<< "$WARDYN_AWS_SSO_CONFIG_B64"
-	//   }
-	//
-	// (install_artifact_config's own `-n "$b64"` guard would silently DROP an
-	// empty-content record; this variant drops that guard since it never emits
-	// one — AWS_SHARED_CREDENTIALS_FILE deliberately points at a path nothing
-	// creates, see below.) Call it alongside prepare_claude_config_dir /
-	// materialize_managed_claude_config / install_artifact_config, before any
-	// aws/claude invocation.
 	if blob, found, berr := s.readAWSSSOBlob(ctx); berr == nil && found {
 		if blob.expired(s.cfg.Now()) {
 			// Observable so the UI can tell the operator to re-login (setup status

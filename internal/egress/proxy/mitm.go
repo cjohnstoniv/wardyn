@@ -267,7 +267,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		target, verr = p.vetURL("https://" + host)
 		if verr != nil {
 			p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
-			http.Error(w, "llm upstream vet failed: "+verr.Error(), http.StatusBadGateway)
+			p.httpError(w, "llm upstream vet failed", verr, http.StatusBadGateway)
 			return
 		}
 	}
@@ -285,7 +285,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	hdr, ok, ierr := p.inject.resolve(host)
 	if ierr != nil {
 		p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
-		http.Error(w, "llm credential refresh failed: "+ierr.Error(), http.StatusBadGateway)
+		p.httpError(w, "llm credential refresh failed", ierr, http.StatusBadGateway)
 		return
 	}
 	var injectHdr *injectedHeader

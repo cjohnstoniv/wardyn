@@ -35,6 +35,24 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
     });
 }
 
+// The agent's real exit code is only ever recorded in run.complete's
+// data.exit_code — nothing on AgentRun carries it, so the console reads it off
+// the same audit trail the run-detail screen already holds. Mirrors the CLI's
+// agentExitCode fold (cmd/wardyn/commands.go): keep the LAST event that
+// actually carries a numeric code, because a later run.complete can be pure
+// forensics ({"error":…}/{"panic":…}) with no code, and "the last run.complete"
+// would then hide a code that WAS recorded. undefined = never recorded (killed,
+// or finalized by the boot reconciler, which emits run.reconcile instead).
+export function exitCodeFromAudit(events: AuditEvent[]): number | undefined {
+  let code: number | undefined;
+  for (const e of events) {
+    if (e.action !== "run.complete") continue;
+    const c = num(e.data?.exit_code);
+    if (c !== undefined) code = c;
+  }
+  return code;
+}
+
 export const audit = {
   // GET /api/v1/audit?run_id=   (run_id optional)
   async listAudit(runId?: string): Promise<AuditEvent[]> {

@@ -71,10 +71,6 @@ export const BTN = {
   recheck: "Re-check",
   installGuide: "Install guide →",
   recheckLogin: "Re-check login",
-  finishLater: "Finish later",
-  // Names the real behavior: Finish later PERMANENTLY stops the auto-open
-  // (unlike the welcome hero's "Skip for now", which only hides the hero).
-  finishLaterHint: "Stops the auto-open — come back anytime from Getting started in the sidebar.",
 } as const;
 
 // Capability-grant wording (D2 + honesty). Grants render amber, never as a

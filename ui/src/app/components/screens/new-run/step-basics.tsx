@@ -20,7 +20,7 @@ import { Label } from "../../ui/label";
 import { Field } from "./step-shell";
 import { Loader2 } from "lucide-react";
 import { WorkspacePicker } from "./workspace-picker";
-import type { Workspace } from "../../../lib/types";
+import type { RunPolicy, Workspace } from "../../../lib/types";
 import {
   workspaceProfileOptions,
   type RunMode,
@@ -34,8 +34,10 @@ export function StepBasics({
   patch,
   workspaces,
   workspacesLoading,
+  policies = [],
   profileLoading,
   onSelectProfile,
+  onSelectPolicy,
   onClearProfile,
   onAddWorkspace,
 }: {
@@ -43,10 +45,15 @@ export function StepBasics({
   patch: (p: Partial<WizardState>) => void;
   workspaces: Workspace[];
   workspacesLoading: boolean;
+  // The operator's saved policies (any workspace) — offered alongside the
+  // recordings so a policy authored in the console can actually be RUN from it.
+  policies?: RunPolicy[];
   // A recorded profile is being synthesized/applied (disables the picker briefly).
   profileLoading: boolean;
   // Apply a recorded profile (a workspace recording) — loads its synthesized spec.
   onSelectProfile: (runId: string, key: string) => void;
+  // Apply a saved policy — loads its stored spec AND launches by reference.
+  onSelectPolicy?: (policy: RunPolicy) => void;
   // Back to manual configuration (clears the fast-track selection).
   onClearProfile: () => void;
   onAddWorkspace: () => void;
@@ -58,6 +65,7 @@ export function StepBasics({
     ? workspaces.find((w) => w.id === state.workspaces[0].workspaceId)
     : undefined;
   const profiles = workspaceProfileOptions(primary);
+  const savedPolicies = onSelectPolicy ? policies : [];
 
   return (
     <div className="space-y-5">
@@ -134,18 +142,19 @@ export function StepBasics({
         />
       </Field>
 
-      {/* Recorded profiles for the primary workspace — its own recordings, a fast-
-          track for already-set-up runs. Picking one loads that recording's access,
-          egress & confinement and lets you skip straight to Review. Only shown when
-          the workspace has recordings. */}
-      {profiles.length > 0 && (
+      {/* Start from something already set up: this workspace's own recordings, or
+          a saved policy. Picking either loads its access, egress & confinement and
+          lets you skip straight to Review; a saved policy additionally launches BY
+          REFERENCE (policy_id), so the server enforces the stored spec verbatim.
+          Hidden when there is neither. */}
+      {(profiles.length > 0 || savedPolicies.length > 0) && (
         <Field
           label={
             <span className="inline-flex items-center gap-1.5">
-              Profile {profileLoading && <Loader2 className="size-3.5 animate-spin" />}
+              Start from {profileLoading && <Loader2 className="size-3.5 animate-spin" />}
             </span>
           }
-          hint="Reuse a session you recorded on this workspace — it fills in access, egress, and confinement so you can review and launch straight away. Choose “Configure manually” to set them by hand."
+          hint="Reuse a session you recorded on this workspace, or a saved policy — either fills in access, egress, and confinement so you can review and launch straight away. Choose “Configure manually” to set them by hand."
         >
           <RadioGroup
             value={state.selectedProfile ?? "__manual__"}
@@ -155,7 +164,12 @@ export function StepBasics({
                 return;
               }
               const p = profiles.find((x) => x.key === v);
-              if (p) onSelectProfile(p.runId, p.key);
+              if (p) {
+                onSelectProfile(p.runId, p.key);
+                return;
+              }
+              const pol = savedPolicies.find((x) => x.id === v);
+              if (pol) onSelectPolicy?.(pol);
             }}
             className="space-y-2"
             data-testid="basics-profiles"
@@ -173,6 +187,24 @@ export function StepBasics({
                   </Label>
                   <p className="text-[0.6875rem] leading-snug text-muted-foreground">
                     Recorded on this workspace — loads its access, egress &amp; confinement.
+                  </p>
+                </div>
+              </label>
+            ))}
+            {savedPolicies.map((p) => (
+              <label
+                key={p.id}
+                className="flex items-start gap-2 rounded-lg border border-border p-2.5"
+                data-testid={`basics-policy-${p.id}`}
+              >
+                <RadioGroupItem value={p.id} id={`policy-${p.id}`} className="mt-0.5" disabled={profileLoading} />
+                <div className="min-w-0">
+                  <Label htmlFor={`policy-${p.id}`} className="cursor-pointer">
+                    {p.name}
+                  </Label>
+                  <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                    Saved policy — the run launches under it by reference; editing any step
+                    switches back to a one-off inline policy.
                   </p>
                 </div>
               </label>

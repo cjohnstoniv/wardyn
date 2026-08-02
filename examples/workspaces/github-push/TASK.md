@@ -19,21 +19,21 @@ push to any branch in the granted repo.)
 
 - UI > Approvals tab: a credential approval request (kind=credential) appears
   when wardyn-git-helper calls the mint route.  The scope shows the requested
-  GitHub permissions.
+  GitHub permissions.  (Raising it is not itself an audit event — the decision
+  and the mint are.)
 - UI > Audit tab: events in order --
-    run.exec        success     (agent started)
-    approval.create kind=credential   (git helper raised the request)
+    run.exec        success           (agent started)
     approval.decide outcome=approved  (after you approve)
-    credential.mint success           (token minted, repo-scoped)
+    credential.mint outcome=success   (token minted, repo-scoped)
       -- OR --
-    credential.mint.fail              (no GitHub App configured -- expected for demo)
+    credential.mint outcome=failure   (no GitHub App configured -- expected for demo)
 
 ### Demo (no GitHub App): approve path still shows fail-closed
 
     wardyn approve <approval-id>
 
 After approval, wardynd attempts the mint but finds no GitHub App credentials.
-The audit event `credential.mint.fail` is emitted and the push fails.  This is
+A `credential.mint` event with `outcome=failure` is emitted and the push fails.  This is
 the correct fail-closed behavior documented in docs/TRY-IT.md.
 
 ### Real GitHub App path
@@ -54,9 +54,10 @@ branch, and the PR is opened.
 ## PASS criteria
 
 Stock demo (no GitHub App configured):
-1. Audit contains approval.create with kind=credential.
+1. A PENDING kind=credential approval appears in the Approvals tab.
 2. After approving: audit contains approval.decide outcome=approved.
-3. Audit contains credential.mint.fail (broker could not mint without a GitHub App).
+3. Audit contains credential.mint with outcome=failure (broker could not mint
+   without a GitHub App).
 4. The agent reports a push error (authentication failed or similar).
 5. No GitHub token appears in docker exec env output (verify: docker exec <sandbox> env | grep -i token is empty).
 

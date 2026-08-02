@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // procRegistry is the proxy-process-global secret mask registry. Formatted
@@ -185,47 +186,38 @@ func (i *injector) headerFor(host string) (injectedHeader, bool) {
 	return h, ok
 }
 
-// resolvedInjection is the control plane's injection-resolve result: the
-// header name and the FORMATTED secret value (format applied server-side).
-// ExpiresAt (unix ms, 0 = never) marks a rotating credential the proxy must
-// re-resolve before it lapses (the subscription OAuth token); a static api-key
-// grant leaves it 0.
-type resolvedInjection struct {
-	Host      string `json:"host"`
-	Header    string `json:"header"`
-	Value     string `json:"value"`
-	JTI       string `json:"jti"`
-	ExpiresAt int64  `json:"expires_at,omitempty"`
-}
-
 // resolveInjection calls GET /api/v1/internal/injection/{grantID} with the run
 // token. This endpoint is the ONLY place the proxy obtains secret values; it
 // is structurally unreachable from the sandbox (no brokered local route
 // forwards it). Any non-200 (approval pending, missing secret, wrong kind) is
 // a hard startup failure: we fail closed rather than start a proxy that
 // silently forwards uncredentialed requests.
-func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID, client *http.Client) (resolvedInjection, error) {
+func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID, client *http.Client) (types.ResolvedInjection, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		base+"/api/v1/internal/injection/"+grantID.String(), nil)
 	if err != nil {
-		return resolvedInjection{}, err
+		return types.ResolvedInjection{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return resolvedInjection{}, fmt.Errorf("injection request: %w", err)
+		return types.ResolvedInjection{}, fmt.Errorf("injection request: %w", err)
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<12))
-		return resolvedInjection{}, fmt.Errorf("injection status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		// Echo only a short slice of the upstream body: this error reaches the
+		// SANDBOX on the MITM refresh-failure path (serveMITMRequest), so it is an
+		// amplifier for control-plane text. Enough to diagnose a fail-closed
+		// startup, not a 4 KiB relay. (The mask still covers it — see httpError.)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return types.ResolvedInjection{}, fmt.Errorf("injection status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	var ri resolvedInjection
+	var ri types.ResolvedInjection
 	if err := json.NewDecoder(resp.Body).Decode(&ri); err != nil {
-		return resolvedInjection{}, fmt.Errorf("decode injection: %w", err)
+		return types.ResolvedInjection{}, fmt.Errorf("decode injection: %w", err)
 	}
 	if ri.Header == "" || ri.Value == "" {
-		return resolvedInjection{}, fmt.Errorf("injection resolve returned empty header/value")
+		return types.ResolvedInjection{}, fmt.Errorf("injection resolve returned empty header/value")
 	}
 	return ri, nil
 }

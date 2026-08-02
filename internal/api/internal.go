@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -31,12 +32,25 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var dl egress.DecisionLog
-	if err := json.NewDecoder(r.Body).Decode(&dl); err != nil {
+	// Capped generously (maxJSONBody, 1 MiB): a decision log is a host/port/path
+	// plus an optional scan summary, so nothing legitimate comes near it, and a
+	// too-tight cap here would DROP an egress audit record behind a 413.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&dl); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid decision log")
 		return
 	}
 
 	runID := claims.RunID
+
+	// An egress decision means the agent actually did something, so it resets the
+	// idle clock the reaper reads (agent_runs.updated_at) — the seam
+	// internal/lifecycle documents. Best-effort like the attach keepalive; a nil
+	// Store (test harness) and an unknown run id are both non-events.
+	// ponytail: only runs that make egress calls stay alive — a pure-local-compute
+	// run is still wall-clocked. Runner-reported liveness is the upgrade path.
+	if s.cfg.Store != nil {
+		_ = s.cfg.Store.TouchRun(r.Context(), runID)
+	}
 
 	// A synthetic "blind" decision is PURELY an LLM-inspection coverage signal
 	// (an opaque CONNECT to a model host that could not be inspected). Emit only
@@ -61,6 +75,9 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
+	if dl.Decision == egress.Deny {
+		s.metrics.egressDenied()
+	}
 
 	// Optional outbound content-inspection summary rides the same decision. When
 	// present it becomes a SEPARATE, content-free llm.scan.* audit event so the
@@ -72,6 +89,12 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, nil)
 }
 
+// maxAuditFindings bounds how many per-finding records one llm.scan.* audit
+// event embeds. finding_count stays the honest total, so truncation costs
+// detail, never the signal — and one pathological scan cannot turn an
+// append-only row (fanned to every SIEM sink) into a megabyte.
+const maxAuditFindings = 100
+
 // recordLLMScanAudit records a CONTENT-FREE llm.scan.* audit event for an
 // outbound content-inspection pass. The Data payload carries detector names,
 // field paths, offsets, counts and MASKED samples only — never the matched
@@ -80,6 +103,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor, sourceIP string, sc *egress.ScanSummary, host string) {
 	if sc == nil {
 		return
+	}
+	findings := sc.Findings
+	if len(findings) > maxAuditFindings {
+		findings = findings[:maxAuditFindings]
 	}
 	outcome := "success"
 	switch sc.Action {
@@ -97,7 +124,7 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 		"skipped":       sc.Skipped,
 		"skip_reason":   sc.SkipReason,
 		"finding_count": len(sc.Findings),
-		"findings":      sc.Findings,
+		"findings":      findings,
 	})
 	ev := s.auditEvent(&runID, types.ActorAgent, actor,
 		"llm.scan."+sc.Action, host, outcome, data)
@@ -110,6 +137,15 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 type groundtruthBatch struct {
 	Events []types.AuditEvent `json:"events"`
 }
+
+// maxGroundtruthBatchBytes caps the sensor's batch POST, and maxSidecarBody the
+// two tiny sidecar-authored bodies (approval request, mint). Both are DoS
+// ceilings on a compromised sidecar/sensor, not shape checks — the real bounds
+// are maxBatch below and the request structs themselves.
+const (
+	maxGroundtruthBatchBytes = 8 << 20  // 8 MiB
+	maxSidecarBody           = 64 << 10 // 64 KiB
+)
 
 // handleGroundtruthEvents ingests a batch of eBPF/Tetragon kernel events from
 // the host-scoped sensor and persists each as an append-only audit event — the
@@ -141,7 +177,10 @@ type groundtruthBatch struct {
 //   - run_id NULL is allowed (unmapped events + heartbeat + blind events).
 func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request) {
 	var batch groundtruthBatch
-	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+	// Byte ceiling under maxBatch below: 1000 kernel events legitimately exceed
+	// maxJSONBody, so this stream gets its own larger cap rather than 413ing a
+	// full sensor batch.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGroundtruthBatchBytes)).Decode(&batch); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid ground-truth batch")
 		return
 	}
@@ -287,7 +326,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var body internalApprovalRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid approval request")
 		return
 	}
@@ -383,7 +422,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body mintRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.GrantID == uuid.Nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil || body.GrantID == uuid.Nil {
 		writeError(w, http.StatusBadRequest, "grant_id is required")
 		return
 	}
@@ -393,12 +432,13 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		s.writeMintError(w, err)
 		return
 	}
+	s.metrics.credentialMinted()
 	writeJSON(w, http.StatusOK, mintResponse{
 		Kind:       minted.Kind,
 		Token:      minted.Token,
 		Username:   minted.Username,
 		JTI:        minted.JTI,
-		ExpiresAt:  minted.ExpiresAt.UTC().Format(rfc3339),
+		ExpiresAt:  minted.ExpiresAt.UTC().Format(time.RFC3339),
 		Injection:  minted.Injection,
 		KnownHosts: minted.KnownHosts,
 	})
@@ -526,7 +566,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"identity.renew", id.JTI, "success", mustJSON(map[string]any{
 			"prev_jti":   claims.JTI,
-			"expires_at": id.Expiry.UTC().Format(rfc3339),
+			"expires_at": id.Expiry.UTC().Format(time.RFC3339),
 			"run_state":  run.State,
 		}))
 	ev.SourceIP = r.RemoteAddr
@@ -534,7 +574,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 
 	writeJSON(w, http.StatusOK, tokenRenewResponse{
 		Token:     id.Token,
-		ExpiresAt: id.Expiry.UTC().Format(rfc3339),
+		ExpiresAt: id.Expiry.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -547,9 +587,6 @@ func (s *Server) auditRenewDenied(r *http.Request, claims *identity.Claims, reas
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 }
-
-// rfc3339 is the timestamp format used in mint responses.
-const rfc3339 = "2006-01-02T15:04:05Z07:00"
 
 // decisionOutcome maps an egress decision to an audit outcome.
 func decisionOutcome(d egress.Decision) string {

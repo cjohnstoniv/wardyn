@@ -56,6 +56,20 @@ func TestRegistry_AddGlobal_AppearsInAllSnapshots(t *testing.T) {
 	}
 }
 
+func TestRegistry_AddGlobal_Idempotent(t *testing.T) {
+	r := secretmask.NewRegistry()
+	global := []byte("global-secret-val")
+
+	// Per-run call sites re-add the same blob on every dispatch/preflight.
+	r.AddGlobal(global)
+	r.AddGlobal(bytes.Clone(global))
+	r.AddGlobal(global)
+
+	if snap := r.Snapshot(uuid.New()); len(snap) != 1 {
+		t.Fatalf("Snapshot len = %d, want 1 (duplicate globals collapsed)", len(snap))
+	}
+}
+
 func TestRegistry_MinLen_Floor(t *testing.T) {
 	r := secretmask.NewRegistry()
 	runID := uuid.New()

@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,8 +30,9 @@ import (
 )
 
 // ErrAlreadyDecided is re-exported here for callers that import only this
-// package. The underlying store returns the same sentinel.
-var ErrAlreadyDecided = errors.New("approval: already decided")
+// package. It IS the store's sentinel — one value, defined in internal/types —
+// so errors.Is matches whichever layer raised it.
+var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 
 // Store is the narrow persistence interface the approval FSM needs.
 // The real implementation is internal/store; tests supply a fake.
@@ -79,7 +79,7 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 		// credential) rejects the loser, surfacing as store.ErrDuplicatePending.
 		// Tolerate it as a dedup signal — re-read and return the winner's row —
 		// exactly as if the pre-insert scan had seen it.
-		if isDuplicatePending(err) {
+		if errors.Is(err, types.ErrDuplicatePendingApproval) {
 			if existing, found, rerr := findPendingDup(ctx, st, req, hash); rerr != nil || found {
 				return existing, rerr
 			}
@@ -106,13 +106,6 @@ func findPendingDup(ctx context.Context, st Store, req types.ApprovalRequest, ha
 	return types.ApprovalRequest{}, false, nil
 }
 
-// isDuplicatePending detects store.ErrDuplicatePending across the package
-// boundary by message (the store package cannot be imported here without a
-// cycle — same reason isAlreadyDecided matches by string).
-func isDuplicatePending(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "duplicate pending approval")
-}
-
 // Decide approves or denies an existing approval request. decidedBy is the
 // principal that decided and decidedByType is its actor type (human for an OIDC
 // session or a LocalMode operator; system for a bare admin-token caller). The
@@ -126,8 +119,8 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, approve bool, decidedBy
 
 	result, err := st.DecideApproval(ctx, id, newState, decidedBy, reason)
 	if err != nil {
-		// Translate store sentinel so callers only need to import this package.
-		if isAlreadyDecided(err) {
+		// Return the bare sentinel so callers only need to import this package.
+		if errors.Is(err, ErrAlreadyDecided) {
 			return types.ApprovalRequest{}, ErrAlreadyDecided
 		}
 		return types.ApprovalRequest{}, fmt.Errorf("approval: decide: %w", err)
@@ -179,7 +172,7 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 			continue
 		}
 		if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalExpired, "system", "stale"); err != nil {
-			if isAlreadyDecided(err) {
+			if errors.Is(err, ErrAlreadyDecided) {
 				// Race with a concurrent Decide — not an error.
 				continue
 			}
@@ -229,13 +222,4 @@ func scopeHash(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) 
 	h.Write([]byte("|"))
 	h.Write(norm)
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// isAlreadyDecided detects the ErrAlreadyDecided sentinel from the store layer
-// without importing the store package (avoids an import cycle since the store
-// also uses approval types). We match by message string as the two error
-// values are defined in separate packages.
-func isAlreadyDecided(err error) bool {
-	return err != nil && (errors.Is(err, ErrAlreadyDecided) ||
-		err.Error() == "store: approval already decided")
 }

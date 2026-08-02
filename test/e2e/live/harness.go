@@ -478,14 +478,6 @@ func (h *harness) bestInstalledClass(ctx context.Context) string {
 
 // ── poll to terminal ────────────────────────────────────────────────────────
 
-func isTerminal(s types.RunState) bool {
-	switch s {
-	case types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived:
-		return true
-	}
-	return false
-}
-
 // pollState is the shared 2s-tick GetRun loop behind pollTerminal/pollRunning/
 // pollRunningSoft. pred inspects each observed state and reports (done, good):
 // done stops the loop early with ok=good; running out the clock returns
@@ -512,7 +504,7 @@ func (h *harness) pollState(id uuid.UUID, timeout time.Duration, pred func(types
 // pollTerminal polls GetRun until the run reaches a terminal state or timeout.
 func (h *harness) pollTerminal(id uuid.UUID, timeout time.Duration) types.AgentRun {
 	h.t.Helper()
-	run, ok := h.pollState(id, timeout, func(s types.RunState) (bool, bool) { return isTerminal(s), true })
+	run, ok := h.pollState(id, timeout, func(s types.RunState) (bool, bool) { return s.IsTerminal(), true })
 	if !ok {
 		h.t.Fatalf("run %s did not reach a terminal state within %s (last=%s)", id, timeout, run.State)
 	}

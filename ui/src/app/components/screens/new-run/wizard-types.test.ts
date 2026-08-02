@@ -4,7 +4,13 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildSpec, initialWizardState, validateStep, wizardStateFromProposal } from "./wizard-types";
+import {
+  buildSpec,
+  initialWizardState,
+  isValidDomain,
+  validateStep,
+  wizardStateFromProposal,
+} from "./wizard-types";
 import type { WizardState } from "./wizard-types";
 import type { ComposeRunProposal, RunPolicySpec } from "../../../lib/types";
 import { SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
@@ -199,5 +205,34 @@ describe("buildSpec — runType (agent run vs governed command)", () => {
     const { run } = buildSpec({ ...initialWizardState(), runType: "command", task: "npm test" });
     expect(run.task_mode).toBe("exec");
     expect(run.task).toBe("npm test");
+  });
+});
+
+// isValidDomain is a paste-guard, not a shape rule: ValidDomainEntry
+// (internal/egress/proxy/policy.go) is the single source of truth, and the
+// client being STRICTER than it is what made port-qualified and single-label
+// corp hosts untypeable in the wizard. Pin the forms domain_entry_test.go
+// accepts so that can't regress.
+describe("isValidDomain — never stricter than the server's ValidDomainEntry", () => {
+  it("accepts every form the server accepts", () => {
+    for (const d of [
+      "api.anthropic.com",
+      "*.amazonaws.com",
+      "example.com:443",
+      "*.example.com:443",
+      "artifactory.corp:8443",
+      "registry:5000",
+      "127.0.0.1",
+      "::1",
+    ]) {
+      expect(isValidDomain(d), d).toBe(true);
+    }
+  });
+
+  it("still catches the obvious slip (empty entry, pasted URL)", () => {
+    expect(isValidDomain("")).toBe(false);
+    expect(isValidDomain("   ")).toBe(false);
+    expect(isValidDomain("https://example.com/api")).toBe(false);
+    expect(isValidDomain("example.com /etc")).toBe(false);
   });
 });

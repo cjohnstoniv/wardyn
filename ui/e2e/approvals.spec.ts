@@ -3,21 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole } from "./fixtures";
+import { test, expect, gotoConsole, sql } from "./fixtures";
 
 // ---------------------------------------------------------------------------
-// Approvals screen e2e (lane: approvals, port 8104, db wardyn_e2e_4).
+// Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
 //
 // The shared seed (scripts/e2e-backend.sh) does NOT create approvals, so this
 // lane seeds its own approval fixtures directly via SQL (the backend exposes no
 // admin-token endpoint to *create* an approval — `POST /internal/approvals`
-// requires a run-scoped token). We talk to the same Postgres the backend uses
-// via `docker exec <container> psql`, mirroring the script's own SQL-seeding
-// pattern, and we hold the container/db names in env-overridable constants so
-// the verifier (which re-runs this spec against the same backend) stays portable.
+// requires a run-scoped token), through the shared `sql` helper in fixtures.ts.
 //
 // Redesign invariants covered (see approvals.tsx + wardyn/copy.ts):
 //   * every pending card gets a per-kind BLAST-RADIUS banner ("What you're
@@ -32,24 +28,11 @@ import { test, expect, gotoConsole } from "./fixtures";
 //   * deny requires a reason; approve does not.
 // ---------------------------------------------------------------------------
 
-const PG_CONTAINER = process.env.WARDYN_E2E_PG_CONTAINER || "wardyn-test-pg";
-const PG_DBNAME = process.env.WARDYN_E2E_PG_DBNAME || "wardyn_e2e_4";
-
 // Every test in this file mutates / reads the SAME shared backend (one wardynd +
 // one Postgres). Force the whole file to run sequentially in a single worker so
 // backend state is deterministic (a mutating test can't yank the pending queue
 // out from under a read-only assertion).
 test.describe.configure({ mode: "serial" });
-
-// Run one SQL statement against the lane's Postgres. -tA gives tuple-only,
-// unaligned output so the caller can parse a single scalar trivially.
-function sql(statement: string): string {
-  return execFileSync(
-    "docker",
-    ["exec", "-i", PG_CONTAINER, "psql", "-U", "wardyn", "-d", PG_DBNAME, "-tAc", statement],
-    { encoding: "utf8" },
-  ).trim();
-}
 
 // A run id to bind seeded approvals to (FK approvals.run_id -> agent_runs.id).
 function anyRunId(): string {

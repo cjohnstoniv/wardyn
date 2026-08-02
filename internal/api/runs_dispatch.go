@@ -97,7 +97,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// boot and execute despite the 202 kill. So if the claim does not apply, the run
 	// is no longer PENDING (killed/stopped) — abort without dispatching. Every
 	// dispatch caller passes a freshly-created PENDING run.
-	claimed, cerr := s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunPending, types.RunStarting)
+	claimed, cerr := s.casRunState(ctx, run.ID, types.RunPending, types.RunStarting)
 	if cerr != nil || !claimed {
 		data := map[string]any{"note": "run left PENDING by a concurrent kill/stop before dispatch; dispatch aborted"}
 		if cerr != nil {
@@ -283,6 +283,21 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		},
 	}
 
+	// AUTHORIZATION ENVELOPE — the append-only answer to "what was this agent
+	// actually allowed to do?". The run row cannot answer it: agent_runs.policy_id
+	// has no FK and no spec column, run_policies.spec is overwritten in place, and
+	// an inline/default policy has no stored row at all. Recorded HERE, at the one
+	// funnel every dispatch flavour (agent/scan/verify/record/compose/exec) passes
+	// through, and AFTER every widening phase above (artifact substitution, LLM
+	// transport, subscription/Bedrock injection, the inspection gate) — so this is
+	// the envelope the proxy really enforces (ProxyConfig.Policy below), never a
+	// pre-union guess. One snapshot covers egress + first_use_approval +
+	// LLMInspection + mount read-only flags + resource caps. The spec carries
+	// secret NAMES/refs only, never values (types.GrantSpec.Scope), so this leaks
+	// nothing the audit log does not already hold.
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
+		run.ID.String(), "success", mustJSON(policy)))
+
 	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
@@ -313,7 +328,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// tear the sandbox we just created back down and stop — never running Exec or
 	// the completion watcher. The kill path already revoked identity/broker; we
 	// must not undo its work.
-	applied, uerr := s.cfg.Store.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunRunning)
+	applied, uerr := s.casRunState(ctx, run.ID, types.RunStarting, types.RunRunning)
 	if uerr != nil || !applied {
 		// Killed/stopped mid-dispatch (or a store error). Free the orphaned
 		// sandbox and bail without resurrecting the run. The note states only what
@@ -331,6 +346,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			run.ID.String(), "failure", mustJSON(data)))
 		return
 	}
+
+	// The run is live: record how long creation -> RUNNING took (image pull,
+	// devcontainer build, sandbox create). This is the one operational number the
+	// audit stream does not carry.
+	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
 	s.startAgentOrIdle(ctx, run, sb.Ref, image, interactive)

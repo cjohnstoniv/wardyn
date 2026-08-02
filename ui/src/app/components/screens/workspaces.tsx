@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { workspaces as api } from "../../lib/api/workspaces";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import type {
   Workspace,
@@ -53,8 +54,9 @@ import {
 import { Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { ImportWorkspaceDialog } from "./import-workspace/import-panel";
 import { WorkspaceNeedsPanel } from "./workspace-needs-panel";
 import {
   LLMCredFields,
@@ -106,6 +108,11 @@ export function WorkspacesScreen() {
   const [profileTarget, setProfileTarget] = React.useState<Workspace | null>(null);
   const [credTarget, setCredTarget] = React.useState<Workspace | null>(null);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
+  // Row whose guided import is open. The statuses this table renders past
+  // `scanned` (building/build_error/verifying/verify_failed) are produced only by
+  // that pipeline, so without this the screen shows import state it can't act on —
+  // a "Verify failed" row had no remediation outside the Getting Started funnel.
+  const [importWsId, setImportWsId] = React.useState<string | null>(null);
   // Rows with a scan in flight — scoped to workspace id so multiple scans (or a
   // scan alongside other list activity) never fight over one flag.
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
@@ -190,6 +197,10 @@ export function WorkspacesScreen() {
         </div>
       )}
 
+      {/* Past the cap the count above ("N of M") and the search below both cover
+          only the fetched window, not every onboarded workspace. */}
+      <TruncatedNote count={workspaces.length} cap={LIST_LIMIT} />
+
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={5} />
@@ -273,6 +284,9 @@ export function WorkspacesScreen() {
                           <DropdownMenuItem onClick={() => triggerScan(w)} disabled={scanning.has(w.id)}>
                             <ScanSearch className="size-4" /> Scan now
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setImportWsId(w.id)}>
+                            Set up / Resume import
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setEditTarget(w)}>Edit</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setCredTarget(w)}>
                             <KeyRound className="size-4" /> Model access
@@ -298,6 +312,15 @@ export function WorkspacesScreen() {
       </div>
 
       <AddWorkspaceDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} />
+
+      {/* Same guided overlay the setup funnel mounts (Source → Scan → Configure →
+          Verify → Finalize), resumed on the picked row. */}
+      <ImportWorkspaceDialog
+        open={!!importWsId}
+        onOpenChange={(o) => !o && setImportWsId(null)}
+        workspaceId={importWsId ?? undefined}
+        onReload={load}
+      />
 
       <AddWorkspaceDialog
         open={!!editTarget}

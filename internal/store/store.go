@@ -36,15 +36,15 @@ var ErrNotFound = errors.New("store: not found")
 // ErrAlreadyDecided is returned when DecideApproval is called on an approval
 // that has already left the PENDING state. Fail closed: never allow a second
 // decision to silently overwrite the first.
-var ErrAlreadyDecided = errors.New("store: approval already decided")
+var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 
 // ErrDuplicatePending is returned by CreateApproval when a partial unique index
 // (approvals_pending_credential_uniq / approvals_pending_noncred_uniq) rejects a
 // second open PENDING approval for the same dedup key — i.e. a concurrent raise
 // lost the race. Callers treat it as a dedup signal (re-read the existing PENDING
-// row and return it), NOT a hard failure. The message string is matched by
-// approval.RequestApproval, which cannot import this package (import cycle).
-var ErrDuplicatePending = errors.New("store: duplicate pending approval")
+// row and return it), NOT a hard failure. approval.RequestApproval errors.Is-es
+// this exact value; both names alias the one sentinel in internal/types.
+var ErrDuplicatePending = types.ErrDuplicatePendingApproval
 
 // ─── AgentRun ────────────────────────────────────────────────────────────────
 
@@ -81,6 +81,14 @@ func (s PG) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
 	return s.ListRunsPage(ctx, Page{})
 }
 
+// UpdateRunStateIf conditionally transitions a run from fromState to toState in
+// a single UPDATE ... WHERE id=$ AND state=$from, returning whether the update
+// applied. It is the optimistic guard the completion watcher uses: it only
+// transitions a run that is STILL in fromState (e.g. RUNNING), so a concurrent
+// kill/stop that already moved the run to a terminal state is never clobbered
+// (TOCTOU-safe, like DecideApproval). A false return with a nil error means the
+// run existed but was no longer in fromState (or did not exist) — the caller
+// treats this as "someone else won the transition" and does nothing.
 func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2 AND state=$3`,
@@ -198,24 +206,6 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	return r, nil
 }
 
-func collectRuns(rows pgx.Rows) ([]types.AgentRun, error) {
-	var out []types.AgentRun
-	for rows.Next() {
-		r, err := scanRun(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate runs: %w", err)
-	}
-	if out == nil {
-		out = []types.AgentRun{}
-	}
-	return out, nil
-}
-
 // ─── RunPolicy ───────────────────────────────────────────────────────────────
 
 // CreatePolicy inserts a policy and returns the persisted row.
@@ -243,6 +233,10 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 	return s.ListPoliciesPage(ctx, Page{})
 }
 
+// UpdatePolicy replaces a policy's name and spec and bumps updated_at, returning
+// the persisted row. Returns ErrNotFound when no policy has the given id. The
+// caller is responsible for validating the spec before calling (policies are
+// admin-gated config; the API validates every spec before it reaches the store).
 func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
@@ -256,8 +250,10 @@ func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec ty
 }
 
 // DeletePolicy removes a policy by id. Returns ErrNotFound when no row matched.
-// Note: a foreign-key reference from agent_runs.policy_id can make this fail at
-// the DB level if runs still reference the policy; the wrapped error surfaces.
+// Note: agent_runs.policy_id has NO foreign key, so a delete always succeeds even
+// while runs still reference the policy — those runs keep a dangling policy_id.
+// The run's authorization envelope survives regardless: dispatch records the
+// fully-widened spec as a run.policy.effective event in the append-only audit log.
 func (s PG) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_policies WHERE id=$1`, id)
 	if err != nil {
@@ -332,7 +328,8 @@ const wsCols = `id, name, kind, source, ref, default_target, profile, image_ref,
 	`record_results, writable, llm_cred`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
-// row. Profile is core A's opaque WorkspaceProfile blob (nil until scanned).
+// row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
+// until scanned).
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
@@ -367,6 +364,16 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 	return s.ListWorkspacesPage(ctx, Page{})
 }
 
+// UpdateWorkspace replaces a workspace's editable identity fields (name, kind,
+// source, ref, default_target) and bumps updated_at, returning the persisted
+// row. It is a FULL-column write (it also sets profile, image_ref,
+// built_profile_hash, status and the other scan-owned columns), which is why
+// callers must round-trip the fetched row. Returns ErrNotFound when no
+// workspace has the given id.
+//
+// handleUpdateWorkspace does round-trip, and resets the scan-owned fields +
+// ApprovedEgress itself when source/kind changed — the persisted profile and
+// egress approvals were reviewed against the OLD source.
 func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
@@ -636,44 +643,18 @@ func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.Cre
 	return scanGrant(s.Pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON))
 }
 
-// GetGrant returns the grant for id, or ErrNotFound.
-func (s PG) GetGrant(ctx context.Context, id uuid.UUID) (types.CredentialGrant, error) {
-	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE id = $1`
-	return scanGrant(s.Pool.QueryRow(ctx, q, id))
-}
-
 // ListGrantsByRun returns all grants for a run.
 func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
 	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at`
-	rows, err := s.Pool.Query(ctx, q, runID)
-	if err != nil {
-		return nil, fmt.Errorf("store: list grants: %w", err)
-	}
-	defer rows.Close()
-	var out []types.CredentialGrant
-	for rows.Next() {
-		g, err := scanGrant(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, g)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate grants: %w", err)
-	}
-	if out == nil {
-		out = []types.CredentialGrant{}
-	}
-	return out, nil
+	return collect(ctx, s.Pool, "list", "grants", q, []any{runID}, scanGrant)
 }
 
 func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 	var g types.CredentialGrant
 	var specRaw []byte
+	// No ErrNoRows mapping: the only callers are CreateGrant (INSERT ...
+	// RETURNING always yields a row) and the ListGrantsByRun iteration.
 	err := row.Scan(&g.ID, &g.RunID, &g.CreatedAt, &specRaw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return types.CredentialGrant{}, ErrNotFound
-	}
 	if err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: scan grant: %w", err)
 	}
@@ -730,6 +711,9 @@ func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) 
 	return s.ListApprovalsPage(ctx, stateFilter, Page{})
 }
 
+// DecideApproval transitions an approval from PENDING to the given state.
+// Returns ErrAlreadyDecided if the approval is not PENDING (fail-closed).
+// Uses a single UPDATE with WHERE state='PENDING' to prevent TOCTOU races.
 func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, state types.ApprovalState, decidedBy, reason string) (types.ApprovalRequest, error) {
 	now := time.Now().UTC()
 	const q = `
@@ -803,6 +787,10 @@ func (s PG) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([
 	return s.QueryAuditEventsPage(ctx, runID, Page{Limit: limit})
 }
 
+// QueryRecentAuditEvents returns the most-recent audit events across ALL runs,
+// newest first — the global SIEM-style feed the Audit view renders. Per-run
+// queries (QueryAuditEvents) stay chronological; this global tail is reverse-
+// chronological and bounded by limit.
 func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.AuditEvent, error) {
 	if limit <= 0 {
 		limit = 500
@@ -810,6 +798,10 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 	return s.QueryRecentAuditEventsPage(ctx, Page{Limit: limit})
 }
 
+// LatestAuditEventByAction returns the most recent audit event whose action
+// equals the given action, or ErrNotFound when none exists. Used by /healthz to
+// find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
+// health state (so the stream reports healthy only while beats are arriving).
 func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
 	const q = `
 		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data

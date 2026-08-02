@@ -12,14 +12,14 @@
 //
 // Read-only against GET /api/v1/setup/status (the FROZEN SetupStatus contract in
 // lib/types.ts) except for the setSecret()/putSiteConfig() writes each step body
-// owns. Never traps the operator: "Finish later" and launching both dismiss it,
-// and every AppShell nav item stays reachable while it's open.
+// owns. It is the MANDATORY first-run gate — there is no early escape; see
+// App.tsx's RequireSetupComplete for everything that clears it.
 import * as React from "react";
-import type { ConfinementClass, SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
+import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
 import { AddSecretDialog } from "../secrets";
 import { NewRunDialog } from "../new-run/new-run-dialog";
@@ -75,8 +75,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // supersedes it.
   const [skippedModel, setSkippedModel] = React.useState(modelSkipped());
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
-  const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
-  const [wsLoading, setWsLoading] = React.useState(true);
+  const { workspaces, loading: wsLoading, reload: loadWorkspaces } = useWorkspaceList();
   // Site config powers the corporate-baseline step badges: the backend's own
   // host_proxy/scm/artifact checks stay hardcoded "info" forever, so the rail badge
   // must read the actual SiteConfig fields those steps edit, not the check status.
@@ -125,15 +124,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
 
   const loadSecrets = React.useCallback(() => {
     secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
-  }, []);
-
-  const loadWorkspaces = React.useCallback(() => {
-    setWsLoading(true);
-    workspacesApi
-      .listWorkspaces()
-      .then(setWorkspaces)
-      .catch(() => setWorkspaces([]))
-      .finally(() => setWsLoading(false));
   }, []);
 
   React.useEffect(() => {

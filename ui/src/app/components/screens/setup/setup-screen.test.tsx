@@ -44,7 +44,6 @@ vi.mock("../../../lib/api/health", () => ({
 vi.mock("../../../lib/api/compose", () => ({
   composer: {
     listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
-    telemetry: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../../../lib/api/workspaces", () => ({
@@ -146,9 +145,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     render(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
-    // The Back button is disambiguated as /^back$/i so it doesn't collide with the
-    // "Finish later — Come back anytime…" verb. STEP_ORDER: essentials → demos (the
-    // four demo sub-steps) → corporate network → your work → finish.
+    // The Back button is anchored as /^back$/i so it can't collide with another
+    // Back-ish verb. STEP_ORDER: essentials → demos (the four demo sub-steps) →
+    // corporate network → your work → finish.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).

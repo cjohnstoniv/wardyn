@@ -33,6 +33,17 @@ if (typeof Element !== "undefined") {
   }
 }
 
+// Same gap: Radix's useSize (Checkbox/Radio inside a <form>) constructs a
+// ResizeObserver, which jsdom doesn't implement — without this, rendering a form
+// that contains one throws before any assertion runs. Sizes are irrelevant here.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+
 // jsdom's Blob/File does not implement async text()/arrayBuffer(). The compose
 // form reads attachment files via file.text(); polyfill it from the underlying
 // parts so component tests can exercise the real read path. (Real browsers ship

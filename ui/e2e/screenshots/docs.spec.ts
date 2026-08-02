@@ -26,12 +26,11 @@
  * runner-backed capture backend ever exists.
  */
 
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, ADMIN_TOKEN } from "../fixtures";
+import { test, expect, gotoConsole, sql, ADMIN_TOKEN } from "../fixtures";
 
 // Self-skip unless driven by scripts/screenshots.sh: a bare `pnpm e2e` runs ALL
 // projects, and without this guard it would overwrite the tracked docs/img PNGs
@@ -44,22 +43,6 @@ test.skip(
 // docs/img resolved from this file (ui/e2e/screenshots/) so the output path is
 // independent of the process cwd: ../../../docs/img == <repo>/docs/img.
 const DOCS_IMG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../docs/img");
-
-// Same daemon/db knobs as the sibling SQL-seeding spec (approvals.spec.ts): we
-// talk to the backend's Postgres via `docker exec`. Defaults match the values
-// scripts/screenshots.sh exports (its own DB so it never clobbers the e2e DB).
-const PG_CONTAINER = process.env.WARDYN_E2E_PG_CONTAINER || "wardyn-test-pg";
-const PG_DBNAME = process.env.WARDYN_E2E_PG_DBNAME || "wardyn_shots";
-
-// Run one SQL statement against the backend's Postgres (-tA: tuple-only,
-// unaligned — the caller parses a single scalar trivially).
-function sql(statement: string): string {
-  return execFileSync(
-    "docker",
-    ["exec", "-i", PG_CONTAINER, "psql", "-U", "wardyn", "-d", PG_DBNAME, "-tAc", statement],
-    { encoding: "utf8" },
-  ).trim();
-}
 
 // Presentable runs for the board shot — realistic tasks, a spread of agents and
 // repos. Order matters: the state UPDATE below keys off created (POST) order.
@@ -139,8 +122,8 @@ test.describe("Docs screenshots", () => {
         localStorage.setItem("wardyn-theme", "dark");
         // /setup renders the WELCOME hero ("Run anything. Keep your keys.") until
         // this flag is set — the funnel only replaces it once the operator clicks
-        // "Get started" (onboarding-screen.tsx GettingStarted). Same pre-seed as
-        // e2e/live/live-fixtures.ts, so the capture lands straight on the funnel.
+        // "Get started" (onboarding-screen.tsx GettingStarted). Pre-seeding it
+        // lands the capture straight on the funnel.
         localStorage.setItem("wardyn-onboarding-seen", "1");
       } catch {
         /* private mode — ignore */

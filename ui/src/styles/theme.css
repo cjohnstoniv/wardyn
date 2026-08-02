@@ -62,7 +62,9 @@
   /* agent brand accent — Claude Code monogram avatar (same hue both modes) */
   --agent-claude: #d97757;
 
-  --destructive: #ef4444;
+  /* same value as --danger: destructive buttons/dialogs put WHITE text on this
+     fill, and the red-500 the C004 pass left here is 3.76:1 — below AA. */
+  --destructive: #b91c1c;
 
   /* barrier tiers — Fence/Wall/Vault metal ramp (bronze/silver/gold).
      Teal (--primary) is the action color (buttons, links, active nav,

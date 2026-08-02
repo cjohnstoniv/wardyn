@@ -38,10 +38,15 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   // fails): we never assert a specific trust domain / provider that isn't real.
   const [trustDomain, setTrustDomain] = React.useState("");
   const [identityProvider, setIdentityProvider] = React.useState("");
+  // Whether this control plane has OIDC configured (so GET /auth/login exists).
+  // Defaults false: without the flow mounted the link would 404, and an older
+  // server simply omits the field.
+  const [sso, setSso] = React.useState(false);
   React.useEffect(() => {
     health.health().then((h) => {
       if (h.trust_domain) setTrustDomain(h.trust_domain);
       if (h.identity_provider) setIdentityProvider(h.identity_provider);
+      setSso(!!h.sso);
     });
   }, []);
 
@@ -191,16 +196,43 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
             <div className="h-px flex-1 bg-border" />
           </div>
 
-          {/* SSO / team sign-in (the multi-user service: SSO logins, per-user
-              identity/RBAC) is a coming-soon feature — disabled for now. The
-              admin-token form above is the supported path in this version. */}
-          <Button variant="outline" className="w-full" disabled title="SSO / team sign-in is not available in this release">
-            <Building2 className="size-4" />
-            Sign in with SSO
-          </Button>
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            SSO / team sign-in (multi-user) is not available in this release — use an admin token.
-          </p>
+          {/* SSO sign-in. The server-side OIDC flow (PKCE; GET /auth/login) ships
+              whenever WARDYN_OIDC_* is configured, and its session cookie
+              authenticates the whole API — so when /healthz reports sso we link
+              straight to it (a plain GET redirect, no JS handshake). Without OIDC
+              configured there is nothing to link to; the button stays disabled and
+              the admin token is the supported path. What is still missing is per-user
+              RBAC, not the login — hence the caveat below, kept in the enabled state
+              rather than dropped along with the disabled attribute. */}
+          {sso ? (
+            <>
+              <Button asChild variant="outline" className="w-full">
+                <a href="/auth/login">
+                  <Building2 className="size-4" />
+                  Sign in with SSO
+                </a>
+              </Button>
+              <p className="mt-2 text-center text-xs text-muted-foreground">
+                No per-user roles yet — anyone who signs in this way has the same powers as
+                the admin token.
+              </p>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled
+                title="SSO sign-in needs OIDC configured on this control plane (WARDYN_OIDC_*)"
+              >
+                <Building2 className="size-4" />
+                Sign in with SSO
+              </Button>
+              <p className="mt-2 text-center text-xs text-muted-foreground">
+                SSO sign-in isn&apos;t configured on this control plane — use an admin token.
+              </p>
+            </>
+          )}
         </div>
 
         <p className="mt-5 text-center text-xs text-muted-foreground">

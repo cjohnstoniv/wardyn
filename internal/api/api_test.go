@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 const adminToken = "test-admin-token"
@@ -216,6 +217,11 @@ func TestHealthz(t *testing.T) {
 	}
 	if body["identity_provider"] != "embedded" {
 		t.Errorf("identity_provider = %v, want embedded", body["identity_provider"])
+	}
+	// The daemon's build must be answerable without a credential (support issues,
+	// CLI/server skew after a rolling upgrade).
+	if body["version"] != version.Version {
+		t.Errorf("version = %v, want %s", body["version"], version.Version)
 	}
 }
 

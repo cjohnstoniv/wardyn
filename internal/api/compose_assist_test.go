@@ -87,30 +87,12 @@ func TestComposeAssist_RejectsEmptyQuestion(t *testing.T) {
 	}
 }
 
-func TestComposeTelemetry_RecordsBeaconOnly(t *testing.T) {
-	h := trackCAssistHarness(t, &trackCAssistBackend{answer: "x"})
-
-	body := `{"mode":"review","correlation_id":"corr-123","risk":"low"}`
-	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose/telemetry", adminToken, body)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("telemetry code = %d, want 204; body=%s", w.Code, w.Body.String())
-	}
-	ev := lastAuditEvent(t, h.audit.events, "run.compose.client")
-	s := string(ev.Data)
-	if !strings.Contains(s, `"mode":"review"`) || !strings.Contains(s, `"risk":"low"`) || !strings.Contains(s, `"correlation_id":"corr-123"`) {
-		t.Errorf("telemetry audit missing mode/risk/correlation_id: %s", s)
-	}
-}
-
-// TestComposeAssist_404WhenDisabled confirms both new routes share the compose
+// TestComposeAssist_404WhenDisabled confirms the route shares the compose
 // composer-enabled 404 gate (newHarness sets no Composer).
 func TestComposeAssist_404WhenDisabled(t *testing.T) {
 	h := newHarness(t)
 	body := `{"question":"anything","workspace":{"kind":"ephemeral"},"prompt":"p"}`
 	if w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose/assist", adminToken, body); w.Code != http.StatusNotFound {
 		t.Errorf("assist disabled code = %d, want 404", w.Code)
-	}
-	if w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose/telemetry", adminToken, `{"mode":"describe"}`); w.Code != http.StatusNotFound {
-		t.Errorf("telemetry disabled code = %d, want 404", w.Code)
 	}
 }

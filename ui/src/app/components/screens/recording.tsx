@@ -40,14 +40,15 @@ import { EmptyState, ErrorState } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 
-// The backend has no "list all recordings" endpoint — a recording only exists
-// at GET /runs/{id}/recording/{id} (see internal/api/server.go:349-351, which
-// mounts the recording sub-router under /runs/{id}/recording and looks the
-// cast up by that SAME id again; internal/recording/handler.go's {runID} param
-// really is the run id, there's no separate recording id). So "has a
-// recording" is NOT a field on AgentRun — the only honest signal is whether
-// api.getRecording(run.id) actually resolves with one. We synthesize the
-// library client-side: list every run, then check each one.
+// The backend has no "list all recordings" endpoint — a recording is only
+// fetchable at GET /runs/{id}/recording/{key}, and the store has no List. The
+// run's OWN cast is stored under the bare run id (which is what this library
+// probes); an interactive attach session lands under a composite
+// `<run-id>~<session-uuid>` key, discoverable only from that run's audit trail,
+// so those are surfaced on Run Detail instead. So "has a recording" is NOT a
+// field on AgentRun — the only honest signal is whether api.getRecording(run.id)
+// actually resolves with one. We synthesize the library client-side: list every
+// run, then check each one.
 interface RecordedRun {
   run: AgentRun;
   recording: Recording;

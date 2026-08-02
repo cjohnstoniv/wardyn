@@ -36,12 +36,11 @@ import {
   CC_MATRIX_ROWS,
   CC_MATRIX_WHERE,
   CC_META,
-  CC_ORDER,
   CONFINEMENT_CONSTANT_NOTE,
   type CCMark,
 } from "./cc-meta";
 import { RESIDUAL_PREFIX } from "./copy";
-import type { ConfinementClass } from "../../lib/types";
+import { CC_ORDER, type ConfinementClass } from "../../lib/types";
 
 // The exact CircleCheck/CircleAlert/CircleX + success/warning/danger trio the
 // audit-outcome badge uses (primitives.tsx), so "protected / caveat / not" reads

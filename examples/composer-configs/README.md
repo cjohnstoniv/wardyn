@@ -36,7 +36,7 @@ WARDYN_COMPOSER_CONFIG='{"default":"dev","backends":[{"name":"dev","wire":"fake"
     {
       "name": "claude",           // shown in the UI provider picker
       "wire": "cli",              // "anthropic" | "openai" | "cli" | "sandbox" | "fake"
-      "transport": "claude",      // anthropic: api|bedrock · openai: api|azure|compatible · cli: claude|codex · sandbox: (none)
+      "transport": "claude",      // anthropic: api|bedrock · openai: api|azure|compatible · cli: claude|codex · fake: high|interview · sandbox: (none)
       "model": "claude-opus-4-8", // any model the provider accepts (e.g. "opus" alias also works for the CLI)
       "api_key_secret": "...",    // secret-store name for http key backends (anthropic/openai api)
       "enabled": true,            // cli backends default OFF (subscription ToS) — opt in explicitly

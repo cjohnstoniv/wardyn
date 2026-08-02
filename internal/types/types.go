@@ -10,6 +10,7 @@ package types
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,8 @@ type ConfinementClass string
 const (
 	// CC1: hardened shared-kernel runc (userns, seccomp, AppArmor, cap-drop).
 	CC1 ConfinementClass = "CC1"
-	// CC2: gVisor userspace kernel (default — runs anywhere Docker runs).
+	// CC2: gVisor userspace kernel (the default — needs a native Docker engine
+	// with the runsc runtime registered; see `wardyn setup wall`).
 	CC2 ConfinementClass = "CC2"
 	// CC3: Kata microVM (requires /dev/kvm).
 	CC3 ConfinementClass = "CC3"
@@ -71,6 +73,22 @@ const (
 	// watcher (see internal/api/runs.go dispatch) sets this from RunRunning.
 	RunCompleted RunState = "COMPLETED"
 )
+
+// IsTerminal reports whether the run has already ended — it can no longer be
+// killed, stopped or dispatched. This is the SINGLE source of the terminal set:
+// the API's terminal guards, the CLI's `run --wait` exit codes and the e2e polls
+// all read it here (pkg/client aliases RunState, so SDK consumers get it too),
+// because a hand-copied set drifts — omitting COMPLETED once already shipped a
+// live Kill button on finished runs. The UI keeps the only other copy
+// (ui/src/app/lib/types/runs.ts); TestTerminalRunStates_UIParity fails if the
+// two ever disagree.
+func (s RunState) IsTerminal() bool {
+	switch s {
+	case RunCompleted, RunFailed, RunKilled, RunStopped, RunArchived:
+		return true
+	}
+	return false
+}
 
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
@@ -283,13 +301,13 @@ type RunPolicySpec struct {
 	WorkspaceMounts []WorkspaceMount `json:"workspace_mounts,omitempty"`
 	// WorkspaceRepos are additional git repos attached to a run, paralleling
 	// WorkspaceMounts for git-cloned (rather than bind-mounted) sources — the
-	// multi-workspace run model (plan core B3). Same admin/inline authoring
+	// multi-workspace run model. Same admin/inline authoring
 	// surface and trust boundary as WorkspaceMounts: never agent-chosen.
 	// validatePolicySpec validates each set Target via runner.ValidateTarget and
 	// enforces a unique-target invariant across ALL WorkspaceMounts +
 	// WorkspaceRepos dests, so a clone can never land on a bind target (or
 	// shadow another repo's checkout). Rejecting a repo whose Source is not an
-	// ONBOARDED workspace (core B2) is a later, security-critical wave — this
+	// ONBOARDED workspace is a later, security-critical wave — this
 	// type only adds the structural shape.
 	WorkspaceRepos []WorkspaceRepo `json:"workspace_repos,omitempty"`
 	// LLMInspection optionally enables OUTBOUND content inspection at the proxy
@@ -436,7 +454,7 @@ func (m WorkspaceMount) ReadOnlyOrDefault() bool {
 
 // WorkspaceRepo is one operator/policy-controlled git repo attached to a run,
 // paralleling WorkspaceMount for git-cloned (rather than bind-mounted)
-// sources (plan core B3, multi-workspace run model). Repo is a slug/URL
+// sources (the multi-workspace run model). Repo is a slug/URL
 // validated the same way the legacy single-repo AgentRun.Repo field is
 // (repoFieldSafe + repoCloneURL, runs.go). Target is an optional in-container
 // clone destination; an empty Target defers to the ~/work/<name> convention a
@@ -524,14 +542,14 @@ const (
 )
 
 // Workspace is an onboarded, admin-reviewed local dir or repo a run may
-// attach (plan core B1). Import scans/reviews the source ONCE and persists a
+// attach. Import scans/reviews the source ONCE and persists a
 // profile; runs thereafter reference the workspace by id instead of a
 // free-text host path or repo slug. Repos are re-cloned fresh per run but
 // reuse the scan-once Profile.
 //
-// Profile is core A's WorkspaceProfile (internal/workspacescan) serialized
-// opaquely: core B (this type) never interprets it, only persists/returns it
-// — core A owns the shape and BuiltProfileHash cache-keying. Both are empty
+// Profile is internal/workspacescan's WorkspaceProfile serialized opaquely:
+// this type never interprets it, only persists/returns it — internal/workspacescan
+// owns the shape and BuiltProfileHash cache-keying. Both are empty
 // until Status transitions out of pending_scan.
 type Workspace struct {
 	ID   uuid.UUID     `json:"id"`
@@ -557,12 +575,13 @@ type Workspace struct {
 	//
 	// When true, a sandboxed agent's changes PERSIST to the host directory.
 	Writable bool `json:"writable,omitempty"`
-	// Profile is core A's WorkspaceProfile, opaque here. Nil/empty until scanned.
+	// Profile is internal/workspacescan's WorkspaceProfile, opaque here. Nil/empty
+	// until scanned.
 	Profile json.RawMessage `json:"profile,omitempty"`
 	// ImageRef is the resolved/generated image for this workspace's profile
-	// (core A, A5); empty until scanned/built.
+	// empty until scanned/built.
 	ImageRef string `json:"image_ref,omitempty"`
-	// BuiltProfileHash is the profile hash ImageRef was built from — core A's
+	// BuiltProfileHash is the profile hash ImageRef was built from — the
 	// build-once/reuse-many cache key (rebuild only when the profile hash changes).
 	BuiltProfileHash string `json:"built_profile_hash,omitempty"`
 	// ApprovedEgress is the OPERATOR-owned list of egress hosts explicitly
@@ -737,6 +756,27 @@ type CredentialGrant struct {
 	Spec      GrantSpec `json:"spec"`
 }
 
+// ResolvedInjection is the ONE wire contract of GET
+// /api/v1/internal/injection/{grantID}: the control plane's injection-resolve
+// result, carrying the header name and the FORMATTED secret value (formatting
+// applied server-side). ExpiresAt (unix ms, 0 = never) marks a rotating
+// credential the proxy must re-resolve before it lapses (the subscription OAuth
+// token); a static api-key grant leaves it 0.
+//
+// It lives here, in the neutral package both sides already import, because the
+// api server (encoder) and the wardyn-proxy (decoder) previously each kept a
+// hand-copied struct. Nothing pinned the two together, so a one-sided rename of
+// expires_at would have silently made the proxy read 0 = "static credential,
+// never re-resolve" and let a live OAuth token lapse mid-run. Sharing the type
+// makes the compiler, not a parity test, the thing that keeps them equal.
+type ResolvedInjection struct {
+	Host      string `json:"host"`
+	Header    string `json:"header"`
+	Value     string `json:"value"`
+	JTI       string `json:"jti"`
+	ExpiresAt int64  `json:"expires_at,omitempty"`
+}
+
 // ApprovalKind enumerates what a human is being asked to approve.
 type ApprovalKind string
 
@@ -754,6 +794,22 @@ const (
 	ApprovalApproved ApprovalState = "APPROVED"
 	ApprovalDenied   ApprovalState = "DENIED"
 	ApprovalExpired  ApprovalState = "EXPIRED"
+)
+
+// The approval sentinels live here, in the one package both internal/store and
+// internal/approval already import, so the FSM can errors.Is a store error
+// instead of matching its message text (which it used to do, silently breaking
+// the moment either message was reworded or wrapped). store.ErrAlreadyDecided /
+// approval.ErrAlreadyDecided and store.ErrDuplicatePending are aliases of these.
+var (
+	// ErrApprovalAlreadyDecided: a decision was attempted on an approval that
+	// has already left PENDING. Fail closed — never let a second decision
+	// silently overwrite the first.
+	ErrApprovalAlreadyDecided = errors.New("approval already decided")
+	// ErrDuplicatePendingApproval: a partial unique index rejected a second open
+	// PENDING approval for the same dedup key, i.e. a concurrent raise lost the
+	// race. It is a dedup signal (re-read the winner), NOT a hard failure.
+	ErrDuplicatePendingApproval = errors.New("duplicate pending approval")
 )
 
 // ApprovalRequest is a blocking human-in-the-loop gate. RequestedScope is

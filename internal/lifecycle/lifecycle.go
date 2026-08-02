@@ -6,25 +6,22 @@
 // AutoStopAfterSec threshold and stops them, emitting a "run.autostop" audit
 // event for each.
 //
-// # Idleness definition (v0) — KNOWN LIMITATION
+// # Idleness definition — PARTIAL, and honestly so
 //
-// "Idleness" here is NOT activity-based: it is wall-clock age of
-// agent_runs.updated_at. The clock resets only when something writes that row
-// through the store — state transitions, sandbox_ref updates, or an explicit
-// store.TouchRun keepalive (which the interactive-attach handler calls). It does
-// NOT reset on genuine in-sandbox agent activity (CPU, proxied egress, file
-// writes) that never touches the store row. Consequently a run that is busy but
-// whose store row is otherwise unchanged will be stopped once updated_at ages
-// past its policy threshold.
+// "Idleness" here is wall-clock age of agent_runs.updated_at. The clock resets
+// only when something writes that row through the store — state transitions,
+// sandbox_ref updates, or an explicit store.TouchRun keepalive. Two callers
+// touch it today: the interactive-attach handler (a human is watching) and the
+// proxy's decision ingest (the agent made an egress call), so a run doing
+// either is measured on real activity and this package needed no change for it.
 //
-// This is a deliberate v0 simplification. The seam to do better already exists:
-// store.TouchRun bumps updated_at without other side effects, so once the
-// wardyn-proxy bumps updated_at on every proxied request (or the runner reports
-// liveness), genuine activity will keep the workspace alive automatically — no
-// change to this package is required. Until then, operators who need an
-// unbounded session should use the never-reap escape hatch (policy
-// AutoStopAfterSec < 0). This residual risk is documented here and should be
-// mirrored in threatmodel/ if appropriate.
+// What still does NOT reset the clock is activity that never leaves the sandbox
+// — CPU, file writes, a long local build. Such a run is stopped once updated_at
+// ages past its policy threshold even while busy. The remaining upgrade is
+// runner-reported liveness; until then, operators who need an unbounded session
+// should use the never-reap escape hatch (policy AutoStopAfterSec < 0). This
+// residual risk is documented here and should be mirrored in threatmodel/ if
+// appropriate.
 //
 // # AutoStopAfterSec semantics (policy auto_stop_after_sec)
 //

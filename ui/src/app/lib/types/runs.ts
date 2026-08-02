@@ -20,6 +20,14 @@ export type Agent =
 
 export type ConfinementClass = "CC1" | "CC2" | "CC3";
 
+// Canonical weakest -> strongest ladder — the single place the Fence < Wall <
+// Vault order is spelled out. It lives beside the type it enumerates because both
+// layers need it: the barrier UI (cc-meta.ts's picker, matrix, and default-
+// confinement's strongest-available scan) and the transport (api/core.ts's
+// ccRank, which clamps a run's requested class up to its policy floor). lib/ may
+// not import from components/, so a home under components/ forced a second copy.
+export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
+
 export type RunState =
   | "PENDING"
   | "STARTING"

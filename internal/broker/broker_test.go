@@ -64,7 +64,7 @@ func (db *fakeDB) Begin(_ context.Context) (Tx, error) {
 	return &fakeTx{db: db}, nil
 }
 
-// MintedJTIs implements rowsBeginner for RevokeRun tests.
+// MintedJTIs is the TxBeginner bulk read RevokeRun's audit cascade uses.
 func (db *fakeDB) MintedJTIs(_ context.Context, runID uuid.UUID) ([]string, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()

@@ -26,16 +26,6 @@ const maxScanResultUploadBytes = 8 << 20 // 8 MiB
 // (cross-run pollution guard, exactly like handleUploadRecording). The body is
 // the raw ScanFacts JSON — untrusted evidence, re-derived into a WorkspaceProfile
 // control-plane-side (facts-out, not profile-out).
-//
-// Run→workspace linkage: which workspace a run scans is established by the
-// scan-run launcher, which is a LATER wave (A4/Wave-3). For now the target
-// workspace is taken from a ?workspace_id= query param.
-//
-// TODO(Wave-3 launcher): replace the query param with a TRUSTED server-side
-// run→workspace lookup (e.g. keyed on claims.RunID). The proxy's brokered route
-// deliberately does NOT forward the sandbox's query string, so the sandbox
-// cannot target an arbitrary workspace today; the launcher must supply the id
-// from trusted state, NOT from sandbox input.
 func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) {
 	// Cross-run guard + TRUSTED run→workspace linkage: the caller must hold the
 	// scan run's OWN token, and the run must be a governed scan run (nil
@@ -67,12 +57,8 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ws, err := s.cfg.Store.GetWorkspace(r.Context(), wsID)
-	if notFoundIf(w, err, "workspace") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+	ws, ok := s.getWorkspaceOr404(w, r, wsID)
+	if !ok {
 		return
 	}
 

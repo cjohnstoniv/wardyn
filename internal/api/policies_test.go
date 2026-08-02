@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -59,6 +60,26 @@ func TestCreatePolicyValidation(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("create %q: code = %d, want 400; body=%s", c.name, w.Code, w.Body.String())
 		}
+	}
+}
+
+// TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime pins the author-time
+// fail-fast for validateWorkspaceSources' sibling reference. A typo'd api_key
+// secret name used to save GREEN and then 422 at every launch that referenced the
+// policy — the exact failure mode the workspace check was added to prevent, on
+// the other referenced resource. Advisory, not the load-bearing gate: the secret
+// can be deleted afterwards, so run-create still re-checks.
+func TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("k")}}
+	const body = `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"anthropic-api-kye"}}]}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken, body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code = %d, want 422 (unknown secret must fail at author time); body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "secret: ") {
+		t.Errorf("error must carry the \"secret: \" prefix, mirroring \"workspace: \": %s", w.Body.String())
 	}
 }
 

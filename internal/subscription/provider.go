@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 )
 
 const (
@@ -181,7 +183,7 @@ func (p *provider) delegateRefresh() error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p.claudeBin, //nolint:gosec // operator-configured CLI path
 		"-p", "ok", "--permission-mode", "plan", "--max-turns", "1", "--output-format", "json")
-	cmd.Env = scrubAPIKey(os.Environ())
+	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -196,19 +198,6 @@ func (p *provider) delegateRefresh() error {
 		return fmt.Errorf("delegated refresh via %q failed: %w (%s)", p.claudeBin, err, truncate(msg, 200))
 	}
 	return nil
-}
-
-// scrubAPIKey returns env with ANTHROPIC_API_KEY removed so the resident claude
-// authenticates with the subscription session (mirrors the composer backend).
-func scrubAPIKey(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 func truncate(s string, n int) string {

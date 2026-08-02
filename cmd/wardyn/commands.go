@@ -34,11 +34,28 @@ func parseID(what, s string) (uuid.UUID, error) {
 	return id, nil
 }
 
+// setOptionalID parses an optional UUID-valued flag into a wire *uuid.UUID
+// field. The server-side fields are pointers, so a malformed value could only
+// ever come back as an opaque "invalid JSON body" 400 — parse client-side to
+// fail fast with the flag's own name in the error. Empty (flag unset) is a
+// no-op.
+func setOptionalID(flag, s string, dst **uuid.UUID) error {
+	if s == "" {
+		return nil
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return fmt.Errorf("parse %s %q: %w", flag, s, err)
+	}
+	*dst = &id
+	return nil
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // list/get/kill subcommands inspect and stop runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
-	var repo, agent, task, policyID, confinement, policyFile, image, taskMode string
+	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
 	var interactive, wait, createJSON bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
@@ -57,16 +74,13 @@ func runCmd(client clientFn) *cobra.Command {
 				ConfinementClass: confinement, Interactive: interactive,
 				Image: image, TaskMode: taskMode,
 			}
-			// --policy is a policy UUID. The server's policy_id is a *uuid.UUID,
-			// so a malformed value could only ever have come back as an opaque
-			// "invalid JSON body" 400 — parse it here to fail fast with a clear
-			// message instead, exactly like --policy-file below.
-			if policyID != "" {
-				id, err := uuid.Parse(policyID)
-				if err != nil {
-					return fmt.Errorf("parse --policy %q: %w", policyID, err)
-				}
-				body.PolicyID = &id
+			// --policy is a policy UUID; --workspace attaches an onboarded
+			// workspace by id (see setOptionalID for the parse-here rationale).
+			if err := setOptionalID("--policy", policyID, &body.PolicyID); err != nil {
+				return err
+			}
+			if err := setOptionalID("--workspace", workspaceID, &body.WorkspaceID); err != nil {
+				return err
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we
@@ -114,6 +128,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
+	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for 'wardyn attach'; use a never-reap policy (auto_stop_after_sec < 0)")

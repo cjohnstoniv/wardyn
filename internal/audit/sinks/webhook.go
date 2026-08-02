@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +24,7 @@ type WebhookConfig struct {
 	// URL is the HTTP endpoint that receives JSON-lines batches (required).
 	URL string `json:"url"`
 	// BearerToken is included as "Authorization: Bearer <token>" when non-empty.
+	// Setting it requires an https:// URL (see NewWebhookSink).
 	BearerToken string `json:"bearer_token,omitempty"`
 	// BatchSize is the maximum number of events per HTTP POST (default 100).
 	BatchSize int `json:"batch_size,omitempty"`
@@ -81,11 +84,27 @@ type WebhookSink struct {
 }
 
 // NewWebhookSink creates a WebhookSink from cfg. Returns an error if cfg.URL
-// is empty or durations cannot be parsed.
+// is empty, durations cannot be parsed, or a bearer_token is configured on a
+// non-https URL.
 func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	cfg = cfg.withDefaults()
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("sinks.webhook: URL is required")
+	}
+	// The bearer is a long-lived, replayable SIEM ingest credential, and every
+	// POST resends it — so a plaintext URL leaks it continuously. The gate is on
+	// the CREDENTIAL, not the scheme: a tokenless http:// collector still boots,
+	// matching the sibling syslog sink, which ships the same event stream over
+	// plaintext udp/tcp.
+	if cfg.BearerToken != "" {
+		u, err := url.Parse(cfg.URL)
+		if err != nil {
+			// Do NOT echo the raw URL — it may carry user:pass credentials.
+			return nil, fmt.Errorf("sinks.webhook: malformed url (redacted)")
+		}
+		if !strings.EqualFold(u.Scheme, "https") {
+			return nil, fmt.Errorf("sinks.webhook: bearer_token requires an https:// url (scheme %q would send the SIEM credential in cleartext)", u.Scheme)
+		}
 	}
 	interval, err := time.ParseDuration(cfg.FlushInterval)
 	if err != nil {

@@ -305,7 +305,6 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 		StructuralEgress: true,
 		// L1 nftables default-deny is v0.5 — be honest, do not claim it.
 		NetworkPolicy: false,
-		WarmPools:     false,
 		// wardyn-rec sidecar is supported by Exec.
 		SessionRecording: true,
 	}
@@ -511,20 +510,6 @@ func hostSupportsAppArmor(info system.Info) bool {
 	return false
 }
 
-// resourcesFromSpec converts Wardyn resource caps to Docker cgroup limits,
-// applying conservative platform defaults for any zero field so the returned
-// Resources ALWAYS carries a CPU, memory and PID cap — every sandbox is capped
-// even when policy sets nothing. A non-zero spec value always overrides its
-// default.
-//
-//   - CPUMillis -> NanoCPUs (1000 millis == 1 CPU == 1e9 nanos).
-//   - MemoryMiB -> Memory (bytes), AND MemorySwap pinned EQUAL to Memory so
-//     Docker does not silently allow ~2x the cap via swap (an unset MemorySwap
-//     defaults to twice Memory). The agent gets the memory cap it was given,
-//     not double it.
-//   - PidsLimit set UNCONDITIONALLY (the fork-bomb guard): a non-nil *int64 so
-//     a fork bomb cannot exhaust the host PID space.
-//
 // proxyResources is the wardyn-proxy sidecar's cgroup envelope: a tight PID cap
 // (fork-bomb guard) and a modest memory cap (MemorySwap pinned so swap cannot
 // silently double it). The proxy only relays HTTP, so this leaves ample
@@ -540,6 +525,20 @@ func proxyResources() container.Resources {
 	}
 }
 
+// resourcesFromSpec converts Wardyn resource caps to Docker cgroup limits,
+// applying conservative platform defaults for any zero field so the returned
+// Resources ALWAYS carries a CPU, memory and PID cap — every sandbox is capped
+// even when policy sets nothing. A non-zero spec value always overrides its
+// default.
+//
+//   - CPUMillis -> NanoCPUs (1000 millis == 1 CPU == 1e9 nanos).
+//   - MemoryMiB -> Memory (bytes), AND MemorySwap pinned EQUAL to Memory so
+//     Docker does not silently allow ~2x the cap via swap (an unset MemorySwap
+//     defaults to twice Memory). The agent gets the memory cap it was given,
+//     not double it.
+//   - PidsLimit set UNCONDITIONALLY (the fork-bomb guard): a non-nil *int64 so
+//     a fork bomb cannot exhaust the host PID space.
+//
 // DiskMiB is handled separately via StorageOpt (applyDiskQuota) because it is a
 // HostConfig field, not a cgroup Resources field, and is backend-gated.
 func resourcesFromSpec(res runner.Resources) container.Resources {

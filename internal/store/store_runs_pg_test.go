@@ -456,10 +456,10 @@ func TestPG_TouchRun_Keepalive(t *testing.T) {
 }
 
 // TestPG_GrantPersistence_RoundTrip covers the credential-grant store: a created
-// grant round-trips through GetGrant with its JSON spec intact, and appears in
-// ListGrantsByRun scoped to its run (and not to a sibling run). Grants are the
-// eligibility records the broker checks before minting, so a spec that did not
-// survive the JSONB round-trip would silently widen or lose scope.
+// grant round-trips through ListGrantsByRun with its JSON spec intact, scoped to
+// its run (and not to a sibling run). Grants are the eligibility records the
+// broker checks before minting, so a spec that did not survive the JSONB
+// round-trip would silently widen or lose scope.
 func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -482,9 +482,19 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 		t.Fatalf("create grant: %v", err)
 	}
 
-	got, err := store.NewPG(pool).GetGrant(ctx, g.ID)
+	// Scoped listing: present for its run, absent from a sibling run.
+	mine, err := store.NewPG(pool).ListGrantsByRun(ctx, owner.ID)
 	if err != nil {
-		t.Fatalf("get grant: %v", err)
+		t.Fatalf("list grants for owner: %v", err)
+	}
+	var got types.CredentialGrant
+	for _, lg := range mine {
+		if lg.ID == g.ID {
+			got = lg
+		}
+	}
+	if got.ID != g.ID {
+		t.Fatalf("grant %s not in ListGrantsByRun(%s)", g.ID, owner.ID)
 	}
 	if got.RunID != owner.ID {
 		t.Errorf("grant run_id = %s, want %s", got.RunID, owner.ID)
@@ -510,21 +520,6 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 		t.Errorf("grant scope repos = %v, want [octocat/Hello-World]", gotScope["repos"])
 	}
 
-	// Scoped listing: present for its run, absent from a sibling run.
-	mine, err := store.NewPG(pool).ListGrantsByRun(ctx, owner.ID)
-	if err != nil {
-		t.Fatalf("list grants for owner: %v", err)
-	}
-	var found bool
-	for _, lg := range mine {
-		if lg.ID == g.ID {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("grant %s not in ListGrantsByRun(%s)", g.ID, owner.ID)
-	}
-
 	otherGrants, err := store.NewPG(pool).ListGrantsByRun(ctx, other.ID)
 	if err != nil {
 		t.Fatalf("list grants for other: %v", err)
@@ -535,9 +530,15 @@ func TestPG_GrantPersistence_RoundTrip(t *testing.T) {
 		}
 	}
 
-	// Unknown grant id => ErrNotFound.
-	if _, err := store.NewPG(pool).GetGrant(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("get unknown grant err = %v, want ErrNotFound", err)
+	// A run with no grants lists EMPTY, never nil — the store's "empty, never
+	// nil" List* contract, which is what keeps the API's JSON `[]` and not
+	// `null`. Pins the one behaviour the shared collect helper carries.
+	none, err := store.NewPG(pool).ListGrantsByRun(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("list grants for a run with none: %v", err)
+	}
+	if none == nil {
+		t.Error("ListGrantsByRun with no matching rows = nil, want empty slice")
 	}
 }
 

@@ -10,7 +10,7 @@
 // checklist (SetupItem) + preflight result the composer Review and wizard share.
 import type { Agent, ConfinementClass } from "./runs";
 import type { RunPolicySpec } from "./policy";
-import type { Workspace, WorkspaceSelection } from "./workspaces";
+import type { WorkspaceSelection } from "./workspaces";
 
 // The graded risk level for one config choice / the overall proposal.
 export type RiskLevel = "low" | "medium" | "high";

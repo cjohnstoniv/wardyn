@@ -49,7 +49,7 @@ export function StepEgress({
   const addCustom = () => {
     const d = customDraft.trim();
     if (!isValidDomain(d)) {
-      setCustomError("Use an exact host (a.b.c) or a wildcard (*.b.c).");
+      setCustomError("Use a bare host, not a URL — e.g. example.com, *.example.com, example.com:443.");
       return;
     }
     if (allowed.has(d)) {
@@ -68,7 +68,7 @@ export function StepEgress({
   const addDenied = () => {
     const d = denyDraft.trim();
     if (!isValidDomain(d)) {
-      setDenyError("Use an exact host (a.b.c) or a wildcard (*.b.c).");
+      setDenyError("Use a bare host, not a URL — e.g. example.com, *.example.com, example.com:443.");
       return;
     }
     if (state.deniedDomains.includes(d)) {
@@ -133,7 +133,10 @@ export function StepEgress({
       )}
 
       {!allowAll && (
-        <Field label="Add a custom domain" hint="Exact host or a single-label wildcard (*.example.com).">
+        <Field
+          label="Add a custom domain"
+          hint="A bare host, optionally with a leading *. wildcard and/or a :port — example.com, *.example.com, example.com:443, registry:5000."
+        >
           <div className="flex items-center gap-2">
             <Input
               placeholder="api.internal.acme.com"

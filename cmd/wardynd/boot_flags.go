@@ -43,9 +43,10 @@ type bootFlags struct {
 	ageKey         *string
 	proxyImage     *string
 
-	recordingDir *string
-	auditSinks   *string
-	auditSpool   *string
+	recordingDir       *string
+	recordingRetention *int
+	auditSinks         *string
+	auditSpool         *string
 
 	oidcIssuer       *string
 	oidcInternalIss  *string
@@ -108,8 +109,12 @@ func parseBootFlags() *bootFlags {
 		proxyImage:     flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", "directory for stored PTY session recordings (asciicast); empty disables replay"),
-		auditSinks:   flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
-		auditSpool:   flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails (durability so a security event is never lost); empty disables"),
+		// OFF by default (0 = keep forever): a session recording is the governance
+		// evidence this product exists to produce, so nothing deletes one unless
+		// the operator asks for a retention window.
+		recordingRetention: flagIntEnv("recording-retention-days", "WARDYN_RECORDING_RETENTION_DAYS", 0, "delete stored session recordings older than N days (0 = keep forever, the default)"),
+		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
+		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails (durability so a security event is never lost); empty disables"),
 
 		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL — browser-facing, matches the id_token iss (enables human SSO when set)"),
 		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls (e.g. http://dex:5556); defaults to the public issuer"),
@@ -194,6 +199,11 @@ func parseBootFlags() *bootFlags {
 	return f
 }
 
+// demoAdminToken is the admin bearer the compose stack and the docs ship
+// (deploy/compose/docker-compose.yaml, docs/TRY-IT.md, docs/SDK.md, docs/ENV.md).
+// It is published, therefore not a secret — the analogue of knownPublicAgeKeys.
+const demoAdminToken = "demo-admin-token"
+
 // localModeState is the resolved LOCAL HOST MODE posture: whether the no-auth
 // bypass is in effect, the operator principal to stamp, and whether the bind is
 // loopback (also feeds /setup/status readiness).
@@ -218,6 +228,24 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	lm := localModeState{loopback: listenIsLoopback(*f.listen)}
 	lm.enabled = *f.localMode || (*f.adminToken == "" && *f.oidcIssuer == "" && lm.loopback)
 	lm.operator = strings.TrimSpace(*f.localOperator)
+	// The demo admin token is published in this repo (compose + docs) and nothing
+	// mints a random one, so "auth configured" with THAT value is a full-admin API
+	// anyone who read the README can drive. This check sits ABOVE the !lm.enabled
+	// return on purpose: setting an admin token is exactly what turns local mode
+	// off. Same refuse-vs-warn split as -local-trust-forwarder below — refuse on a
+	// specific routable bind, warn on the unspecified one, which from inside a
+	// container is indistinguishable from the safe compose 127.0.0.1-publish. Honest
+	// ceiling: an operator who republishes compose's port on 0.0.0.0 still has
+	// WARDYN_LISTEN=":8080" in the container, so the refusal cannot fire for that
+	// (most realistic) exposure path — this is a backstop, not full coverage.
+	if strings.TrimSpace(*f.adminToken) == demoAdminToken {
+		if listenBindsSpecificRoutable(*f.listen) {
+			return lm, fmt.Errorf("refusing to start: WARDYN_ADMIN_TOKEN is the demo token published in this repo (deploy/compose + docs) but the listen address %q binds a specific non-loopback interface — that is an effectively-unauthenticated admin API; set a secret token (e.g. `openssl rand -hex 32`) or bind loopback", *f.listen)
+		}
+		slog.Warn("wardynd: WARDYN_ADMIN_TOKEN is the demo token published in this repo — anyone who read the docs has full admin. Fine for the loopback-published demo stack; set a secret token before exposing this port.",
+			slog.String("listen", *f.listen),
+		)
+	}
 	if !lm.enabled {
 		return lm, nil
 	}

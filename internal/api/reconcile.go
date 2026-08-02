@@ -137,7 +137,7 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if isTerminalRunState(cur.State) {
 		return // already finalized (e.g. a concurrent kill won)
 	}
-	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, cur.State, to)
+	applied, err := s.casRunState(ctx, runID, cur.State, to)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: reconcile finalize failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))

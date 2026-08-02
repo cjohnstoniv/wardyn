@@ -41,7 +41,7 @@ func parseConfinementClass(s string) (types.ConfinementClass, bool) {
 		return "", true
 	}
 	cc := types.ConfinementClass(s)
-	if _, known := confinementRank[cc]; !known {
+	if cc.Rank() == 0 { // unrecognised values rank 0 — see ConfinementClass.Rank
 		return "", false
 	}
 	return cc, true
@@ -65,6 +65,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// inline spec, missing/reserved inline secret ref, …) so we just stop.
 	spec, policyID, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
 	if !ok {
+		return
+	}
+	// workspace_id: seed the named onboarded workspace's source onto the resolved
+	// spec (prepended, so it is the PRIMARY) before anything reads it. This is what
+	// lets a CLI/SDK caller launch against a workspace without hand-reproducing its
+	// exact source path in a policy file — see seedRequestWorkspace.
+	if code, err := s.seedRequestWorkspace(ctx, &spec, &req); err != nil {
+		writeError(w, code, "workspace_id: "+err.Error())
 		return
 	}
 	// ONBOARDING GATE (un-bypassable): every user-workspace mount source and repo on

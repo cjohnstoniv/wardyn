@@ -65,6 +65,12 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(ratio(WHITE, token("danger"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // --destructive was missed by the C004 darkening pass and stayed red-500
+  // (3.76:1), under white button text and as error text on --popover.
+  it("white text on --destructive (destructive buttons/dialogs) is >= 4.5:1", () => {
+    expect(ratio(WHITE, token("destructive"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   for (const t of ["success", "warning", "danger"]) {
     it(`--${t} text is >= 4.5:1 on white and on its own -subtle tint`, () => {
       expect(ratio(token(t), WHITE)).toBeGreaterThanOrEqual(4.5);

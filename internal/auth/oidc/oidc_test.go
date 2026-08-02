@@ -147,6 +147,11 @@ func TestLoginHandlerSetsStateCookies(t *testing.T) {
 		if c.Value == "" {
 			t.Errorf("cookie %q: empty value", name)
 		}
+		// RFC 7636 §4.1 floors the PKCE code_verifier at 43 characters;
+		// conformant IdPs reject a shorter one at the token endpoint.
+		if name == "wardyn_oidc_pkce" && len(c.Value) < 43 {
+			t.Errorf("cookie %q: verifier is %d chars, want >= 43 (RFC 7636 §4.1)", name, len(c.Value))
+		}
 	}
 
 	// Redirect must include state and code_challenge.
@@ -431,6 +436,11 @@ func TestDomainCheckAllowedEmail(t *testing.T) {
 
 func TestDomainCheckDeniedEmail(t *testing.T) {
 	checkDomainFilter(t, "evil@attacker.com", []string{"example.com"}, false)
+}
+
+// Matching is exact, not suffix-based: a subdomain must be listed separately.
+func TestDomainCheckDeniedSubdomain(t *testing.T) {
+	checkDomainFilter(t, "alice@eng.example.com", []string{"example.com"}, false)
 }
 
 func TestDomainCheckEmptyAllowed(t *testing.T) {

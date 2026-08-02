@@ -5,11 +5,15 @@ package recording_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -39,6 +43,45 @@ func TestFSStore_TraversalRejection(t *testing.T) {
 		if _, err := store.OpenCast(ctx, id); err == nil {
 			t.Errorf("OpenCast(%q) should have been rejected", id)
 		}
+	}
+}
+
+func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
+	root := t.TempDir()
+	store, err := recording.NewFSStore(root)
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	ctx := context.Background()
+	for _, id := range []string{"old-run", "fresh-run"} {
+		if err := store.SaveCast(ctx, id, strings.NewReader("{}\n")); err != nil {
+			t.Fatalf("SaveCast(%s): %v", id, err)
+		}
+	}
+	// An orphaned atomic-write temp file (crash between CreateTemp and Rename).
+	orphan := filepath.Join(root, ".tmp-cast-orphan")
+	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+	aged := time.Now().Add(-48 * time.Hour)
+	for _, p := range []string{filepath.Join(root, "old-run.cast"), orphan} {
+		if err := os.Chtimes(p, aged, aged); err != nil {
+			t.Fatalf("Chtimes(%s): %v", p, err)
+		}
+	}
+
+	n, err := store.Sweep(24 * time.Hour)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Sweep removed %d, want 2 (aged cast + orphaned temp)", n)
+	}
+	if _, err := store.OpenCast(ctx, "fresh-run"); err != nil {
+		t.Fatalf("fresh cast must survive: %v", err)
+	}
+	if _, err := store.OpenCast(ctx, "old-run"); !errors.Is(err, recording.ErrNotFound) {
+		t.Fatalf("aged cast should be gone, got err %v", err)
 	}
 }
 

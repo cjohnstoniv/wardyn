@@ -182,6 +182,13 @@ func TestGrade_NeverReap_HighOnNonInteractive_LowOnInteractive(t *testing.T) {
 	if it, _ := find(Grade(RunInput{Interactive: true}, spec), "auto_stop_after_sec"); it.Level != RiskLow {
 		t.Errorf("never-reap interactive should be LOW, got %s", it.Level)
 	}
+
+	// 0 (the value an omitted field COALESCEs to) is never-reaped too — the
+	// reaper skips on <= 0, so it must grade the same as an explicit -1.
+	omitted := types.RunPolicySpec{MinConfinementClass: types.CC2}
+	if it, ok := find(Grade(RunInput{Interactive: false}, omitted), "auto_stop_after_sec"); !ok || it.Level != RiskHigh {
+		t.Fatalf("auto_stop_after_sec=0 non-interactive should be HIGH, got %+v ok=%v", it, ok)
+	}
 }
 
 // The headline security property: the grade is a pure function of the SPEC, so
@@ -226,7 +233,8 @@ func TestGrade_SortedRiskiestFirst(t *testing.T) {
 }
 
 func TestOverallLevel_AllLow(t *testing.T) {
-	spec := types.RunPolicySpec{MinConfinementClass: types.CC3} // all low
+	// A lifetime bound is part of "all low": auto_stop_after_sec <= 0 is never-reap.
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC3, AutoStopAfterSec: 3600} // all low
 	if OverallLevel(Grade(RunInput{}, spec)) != RiskLow {
 		t.Errorf("CC3-only spec should be overall LOW")
 	}

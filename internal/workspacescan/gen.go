@@ -3,7 +3,7 @@
 
 package workspacescan
 
-// Image generation (A5): turn a derived WorkspaceProfile into a minimal
+// Image generation: turn a derived WorkspaceProfile into a minimal
 // .devcontainer/devcontainer.json that a later envbuilder pass can build into a
 // per-workspace image. This file is PURE + DETERMINISTIC — the same profile
 // always produces byte-identical output — so its result can be profile-hashed

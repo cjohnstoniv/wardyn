@@ -10,10 +10,10 @@ import {
   CC_MATRIX_ROWS,
   CC_MATRIX_WHERE,
   CC_META,
-  CC_ORDER,
   CONFINEMENT_CONSTANT_NOTE,
 } from "./cc-meta";
 import { RESIDUAL_PREFIX } from "./copy";
+import { CC_ORDER } from "../../lib/types";
 
 // TierMatrix is a rendering of CC_MATRIX_ROWS, so this file is BOTH the drift
 // guard (every row label + every graded cell must render, from the data) AND the

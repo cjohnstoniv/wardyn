@@ -42,10 +42,16 @@ function parseRecording(runId: string, text: string): Recording {
 }
 
 export const recordings = {
-  // GET /api/v1/runs/{id}/recording/{id}  (asciicast text)
-  async getRecording(runId: string): Promise<Recording | undefined> {
+  // GET /api/v1/runs/{id}/recording/{key}  (asciicast text)
+  //
+  // key defaults to the run id — the agent's own session, stored under the bare
+  // run id. An interactive ATTACH session is stored under the COMPOSITE key
+  // `<run-id>~<session-uuid>` (recording.CastKey), which the run's audit trail
+  // carries as session.recording's target; those casts were unreachable while
+  // this only ever asked for the bare id.
+  async getRecording(runId: string, key: string = runId): Promise<Recording | undefined> {
     const res = await wfetch(
-      `/runs/${encodeURIComponent(runId)}/recording/${encodeURIComponent(runId)}`,
+      `/runs/${encodeURIComponent(runId)}/recording/${encodeURIComponent(key)}`,
       { method: "GET", headers: { Accept: "text/plain, application/json" } },
     );
     if (res.status === 404) return undefined;

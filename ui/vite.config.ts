@@ -4,7 +4,6 @@
  */
 
 import { defineConfig } from 'vite'
-import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
@@ -12,23 +11,15 @@ export default defineConfig({
   // Served same-origin behind the Wardyn control plane at the site root.
   base: '/',
   plugins: [
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
+    // react(): JSX transform + fast refresh. tailwindcss(): the entire Tailwind v4
+    // pipeline — src/styles/index.css does `@import 'tailwindcss'` and theme.css
+    // declares the token set, so without it the console renders unstyled.
     react(),
     tailwindcss(),
   ],
-  resolve: {
-    alias: {
-      // Alias @ to the src directory
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
 
   build: {
     outDir: 'dist',
     emptyOutDir: true,
   },
-
-  // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
-  assetsInclude: ['**/*.svg', '**/*.csv'],
 })

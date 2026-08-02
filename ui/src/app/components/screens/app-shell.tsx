@@ -7,6 +7,7 @@ import * as React from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
+  AlertTriangle,
   ChevronsUpDown,
   Fingerprint,
   FolderOpen,
@@ -26,7 +27,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";
 import { useTheme } from "../wardyn/theme-provider";
-import { deriveReadiness } from "./onboarding/intro";
+import { deriveReadiness, lastCheckedLabel } from "./onboarding/intro";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -260,6 +261,8 @@ export function AppShell({
   attentionCount,
   onSignOut,
   gated,
+  unreachable,
+  lastOkAt,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -267,6 +270,11 @@ export function AppShell({
   // First-run setup gate (computed in App.tsx from the same setup status): hides
   // the nav groups; App.tsx also redirects gated routes to /setup.
   gated?: boolean;
+  // The daemon didn't answer App.tsx's setup-status poll, and when it last did.
+  // Every screen's background refresh keeps its last-good data on failure, so
+  // this banner is the ONLY thing that tells a quiet board from a dead one.
+  unreachable?: boolean;
+  lastOkAt?: Date | null;
 }) {
   const meta = useMeta();
   const location = useLocation();
@@ -281,6 +289,11 @@ export function AppShell({
     setupApi
       .getSetupStatus()
       .then((s) => {
+        // An unreachable daemon resolves to the synthetic READY_FALLBACK, whose
+        // empty providers/runner would read as "Needs setup" — a dead control
+        // plane misdiagnosed as an unfinished one. Keep the last verdict; the
+        // unreachable banner says what actually happened.
+        if (s.unreachable) return;
         // Agree with the funnel's essentials verdict (barrier AND model) —
         // backend `ready` alone is barrier-only and would overclaim here.
         const r = deriveReadiness(s);
@@ -315,6 +328,15 @@ export function AppShell({
           setNewRunOpen(true);
         }}
       />
+      {unreachable && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+        >
+          <AlertTriangle className="size-4 shrink-0" />
+          <span>Control plane unreachable — showing the last data received. {lastCheckedLabel(lastOkAt ?? null)}</span>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
           <SidebarNav

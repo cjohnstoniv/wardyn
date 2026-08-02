@@ -80,7 +80,18 @@ var deniedSourcePrefixes = []string{
 //  4. Target must be a non-empty, absolute, cleaned path under one of
 //     allowedTargetPrefixes.
 func ValidateMount(m Mount) error {
-	src := m.Source
+	if err := ValidateMountSource(m.Source); err != nil {
+		return err
+	}
+	return ValidateTarget(m.Target)
+}
+
+// ValidateMountSource enforces rules 1-3 above — the SOURCE half of
+// ValidateMount, extracted so a surface that only vets a reusable host path
+// (workspace onboarding, the driver's recording-mount probe) can run the same
+// deny-list without inventing a placeholder target. Source half ONLY: any
+// surface that actually BINDS the path must call ValidateMount.
+func ValidateMountSource(src string) error {
 	if src == "" {
 		return fmt.Errorf("mount source is empty")
 	}
@@ -121,7 +132,7 @@ func ValidateMount(m Mount) error {
 	// fails daemon-side — but the resolve here is defense-in-depth, not a
 	// race-free guarantee.
 
-	return ValidateTarget(m.Target)
+	return nil
 }
 
 // ValidateTarget enforces the in-container mount/clone target shape: a

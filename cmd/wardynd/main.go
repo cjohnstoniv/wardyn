@@ -187,7 +187,7 @@ func run() error {
 	// Approval FSM service (adapter over internal/approval + internal/store).
 	// FIX #5: wired with maskedRec (masked + SIEM fanout), matching idp/broker —
 	// approval.decide events now reach file/webhook/syslog sinks, not just Postgres.
-	approvals := &approvalService{pool: pool, rec: maskedRec}
+	approvals := &approvalService{st: approvalStore{PG: store.NewPG(pool), rec: maskedRec}}
 
 	// Runner (optional): "none" or a self-registered substrate (the docker
 	// substrate registers itself only under the "docker" build tag), with
@@ -268,7 +268,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
 	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
@@ -669,12 +669,14 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 	return gh
 }
 
-// flagEnv/flagBool/flagDuration/splitCSV are shared with cmd/wardyn-tetragon-ingest
-// via internal/cliutil (mirrored duplicates there previously).
+// flagEnv/flagBool/flagDuration/flagIntEnv/splitCSV are shared with
+// cmd/wardyn-tetragon-ingest via internal/cliutil (mirrored duplicates there
+// previously).
 var (
 	flagEnv      = cliutil.FlagEnv
 	envOr        = cliutil.EnvOr
 	flagBool     = cliutil.FlagBool
 	flagDuration = cliutil.FlagDuration
+	flagIntEnv   = cliutil.FlagIntEnv
 	splitCSV     = cliutil.SplitCSV
 )

@@ -7,6 +7,8 @@ import (
 	"os"
 	"regexp"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // releaseHeading matches a released CHANGELOG section heading — "## [0.4.0] — …".
@@ -26,13 +28,13 @@ func TestVersionMatchesChangelog(t *testing.T) {
 	if m == nil {
 		t.Fatal("no `## [x.y.z]` release heading found in CHANGELOG.md")
 	}
-	if got, want := version, string(m[1]); got != want {
-		t.Fatalf("version = %q but the newest CHANGELOG section is [%s] — bump cmd/wardyn/main.go or add the section", got, want)
+	if got, want := version.Version, string(m[1]); got != want {
+		t.Fatalf("version = %q but the newest CHANGELOG section is [%s] — bump internal/version or add the section", got, want)
 	}
 }
 
 // TestShippedVersionStringsAgree extends the same guarantee to the version
-// strings no compiler and no other test touches. cmd/wardyn/main.go is now
+// strings no compiler and no other test touches. internal/version is now
 // pinned above, but the Helm chart and the UI package manifest drift silently:
 // values.yaml's comment claimed AppVersion was "0.0.1" while Chart.yaml said
 // 0.3.1, and RELEASING.md's steps never mention bumping any of them.
@@ -52,8 +54,8 @@ func TestShippedVersionStringsAgree(t *testing.T) {
 		if m == nil {
 			t.Fatalf("%s: no version matching %s", tc.file, tc.pattern)
 		}
-		if got := string(m[1]); got != version {
-			t.Errorf("%s has %q, want %q (keep every shipped version string in step with cmd/wardyn/main.go)", tc.file, got, version)
+		if got := string(m[1]); got != version.Version {
+			t.Errorf("%s has %q, want %q (keep every shipped version string in step with internal/version)", tc.file, got, version.Version)
 		}
 	}
 }

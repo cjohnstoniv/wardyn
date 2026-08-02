@@ -12,12 +12,12 @@ import (
 
 // Deps are the platform primitives a secretstore.Store constructor may use. The
 // age identity is parsed (and the demo-key guard applied) by the control plane
-// before construction; an alternate (OpenBao/Vault/KMS) reads its address/role
-// from Options and ignores the pg-specific fields.
+// before construction; an alternate (OpenBao/Vault/KMS) ignores the pg-specific
+// fields and reads its address/role from the env in its own constructor, the way
+// the docker substrate does (internal/runner/docker/register.go).
 type Deps struct {
 	Pool        *pgxpool.Pool
 	AgeIdentity age.Identity
-	Options     map[string]string // impl-specific config, from WARDYN_SECRET_STORE_*
 }
 
 // Constructor builds a Store from Deps.

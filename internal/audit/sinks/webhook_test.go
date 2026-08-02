@@ -97,43 +97,33 @@ func TestWebhookSink_Batching(t *testing.T) {
 	}
 }
 
-func TestWebhookSink_AuthHeader(t *testing.T) {
+// The bearer is a replayable SIEM credential resent on every POST, so it is
+// refused on a plaintext URL. Tokenless http:// keeps working. (This replaces a
+// round-trip assertion on the Authorization header: with the gate in place a
+// token can no longer be pointed at an httptest plaintext server at all.)
+func TestWebhookSink_BearerRequiresHTTPS(t *testing.T) {
 	t.Parallel()
 
 	const token = "s3cr3t-b34r3r"
-	var gotAuth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-
-	sink, err := sinks.NewWebhookSink(sinks.WebhookConfig{
-		URL:           srv.URL,
-		BearerToken:   token,
-		BatchSize:     1,
-		FlushInterval: "50ms",
-		MaxRetries:    1,
-	})
-	if err != nil {
-		t.Fatalf("NewWebhookSink: %v", err)
+	tests := []struct {
+		name    string
+		url     string
+		token   string
+		wantErr bool
+	}{
+		{"http with bearer refused", "http://siem.internal/ingest", token, true},
+		{"schemeless with bearer refused", "siem.internal/ingest", token, true},
+		{"https with bearer ok", "https://siem.internal/ingest", token, false},
+		{"http without bearer ok", "http://siem.internal/ingest", "", false},
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		sink.Run(ctx)
-		close(done)
-	}()
-
-	_ = sink.Emit(ctx, makeEvent("auth.test"))
-	time.Sleep(200 * time.Millisecond)
-	cancel()
-	<-done
-
-	want := "Bearer " + token
-	if gotAuth != want {
-		t.Errorf("Authorization header: got %q, want %q", gotAuth, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := sinks.NewWebhookSink(sinks.WebhookConfig{URL: tt.url, BearerToken: tt.token})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("NewWebhookSink(%q, token set: %v) error = %v, want error: %v",
+					tt.url, tt.token != "", err, tt.wantErr)
+			}
+		})
 	}
 }
 

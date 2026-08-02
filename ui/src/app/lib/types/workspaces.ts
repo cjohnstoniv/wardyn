@@ -66,15 +66,6 @@ export interface VerifyResult {
   failure_hint?: string;
 }
 
-// POST /api/v1/workspaces/{id}/verify/suggest-fix response (internal/api/verify_fix.go).
-// The AGENTIC half of the verify-fix loop: a single free-text diagnosis (2-3
-// sentences) a composer backend proposes for a FAILED verify. ADVISORY — the
-// operator applies it via the existing approve-host / add-secret / edit-command
-// affordances; it is never auto-applied.
-export interface VerifyFixSuggestion {
-  suggestion: string;
-}
-
 // One secret a workspace's own committed files declare a NEED for — NAMES ONLY,
 // values are never read (part of WorkspaceProfile.required_secrets). `kind` is an
 // advisory category ("postgres"|"stripe"|"aws"|…); `optional` marks a deploy-time
@@ -193,7 +184,7 @@ export interface Workspace {
   // Record/Verify runs. Omitted/false => read-only (the safe default). When true,
   // a sandboxed agent's changes PERSIST to the host directory.
   writable?: boolean;
-  // Opaque to the UI — core A (internal/workspacescan) owns the shape
+  // Opaque to the UI — internal/workspacescan owns the shape
   // (WorkspaceProfile: languages, package managers, egress domains, …).
   // Kept loosely typed; the needs panel does a typed cast-read (WorkspaceProfile).
   profile?: Record<string, unknown> | null;

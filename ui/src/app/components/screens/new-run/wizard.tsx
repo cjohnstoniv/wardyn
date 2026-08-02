@@ -12,14 +12,14 @@ import type {
   AgentRun,
   ConfinementClass,
   PreflightResult,
-  Workspace,
+  RunPolicy,
   WorkspaceProfile,
 } from "../../../lib/types";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { health as healthApi } from "../../../lib/api/health";
-import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
+import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getErrorMessage as msg } from "../../../lib/format";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
 import { parseMissingSecret, surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
@@ -72,8 +72,16 @@ export function PermissionWizard({
   const [availableClasses, setAvailableClasses] = React.useState<string[] | null>(null);
   const [secrets, setSecrets] = React.useState<string[]>([]);
   const [secretsLoading, setSecretsLoading] = React.useState(false);
-  const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
-  const [workspacesLoading, setWorkspacesLoading] = React.useState(false);
+  // Saved policies the operator can start from on Basics — the console can WRITE
+  // these (save-as-policy below, the Policies screen) so it must be able to run
+  // under one too. Best-effort: a failed list just hides the option.
+  const [savedPolicies, setSavedPolicies] = React.useState<RunPolicy[]>([]);
+  const {
+    workspaces,
+    loading: workspacesLoading,
+    reload: reloadWorkspaces,
+    scanAndReload,
+  } = useWorkspaceList();
   // Workspaces whose recorded egress has already been merged into the Egress step,
   // so re-merging never fights the operator trimming a host. Reset per dialog-open.
   const mergedWs = React.useRef<Set<string>>(new Set());
@@ -93,8 +101,17 @@ export function PermissionWizard({
   const missingSecret = React.useMemo(() => parseMissingSecret(error), [error]);
 
   const step = WIZARD_STEPS[stepIdx];
+  // The single state funnel — so DETACHING an attached saved policy needs one
+  // rule, not per-step wiring. Any hand edit means the composed spec no longer
+  // equals the stored one (buildSpec normalizes and doesn't round-trip), so the
+  // run must stop launching by policy_id and fall back to its inline policy.
   const patch = React.useCallback(
-    (p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })),
+    (p: Partial<WizardState>) =>
+      setState((s) =>
+        s.selectedPolicyId && !("selectedPolicyId" in p)
+          ? { ...s, ...p, selectedPolicyId: undefined, selectedProfile: undefined }
+          : { ...s, ...p },
+      ),
     [],
   );
 
@@ -105,15 +122,6 @@ export function PermissionWizard({
       .then(setSecrets)
       .catch(() => setSecrets([]))
       .finally(() => setSecretsLoading(false));
-  }, []);
-
-  const loadWorkspaces = React.useCallback(() => {
-    setWorkspacesLoading(true);
-    workspacesApi
-      .listWorkspaces()
-      .then(setWorkspaces)
-      .catch(() => setWorkspaces([]))
-      .finally(() => setWorkspacesLoading(false));
   }, []);
 
   // Recorded-profile fast-track: selecting a profile (a workspace recording) loads
@@ -132,6 +140,16 @@ export function PermissionWizard({
       setProfileLoading(false);
     }
   };
+
+  // Saved-policy fast-track: the SAME state load as a recorded profile (so steps
+  // 2-4, the Review-now fast-track and the save-as-policy suppression all behave
+  // identically), plus selectedPolicyId so launch sends policy_id and the server
+  // enforces the STORED spec rather than a re-composed approximation of it.
+  const applyPolicy = (p: RunPolicy) => {
+    setError(null);
+    patch({ ...applyProfileSpecToState(state, p.spec, workspaces, p.id), selectedPolicyId: p.id });
+  };
+  const attachedPolicy = savedPolicies.find((p) => p.id === state.selectedPolicyId);
 
   // On open: probe runner capabilities (confinement gating) + load secret names.
   // With no prefilled initialState, reset to a clean state whose default barrier is
@@ -179,11 +197,12 @@ export function PermissionWizard({
     };
     probe();
     loadSecrets();
-    loadWorkspaces();
+    reloadWorkspaces();
+    policiesApi.listPolicies().then(setSavedPolicies).catch(() => setSavedPolicies([]));
     return () => {
       alive = false;
     };
-  }, [open, loadSecrets, loadWorkspaces, initialState]);
+  }, [open, loadSecrets, reloadWorkspaces, initialState]);
 
   // When a workspace is selected, load its recorded profile's egress (approved_egress
   // ∪ scanned registries) into the Egress step so a new run VISIBLY inherits the
@@ -240,6 +259,17 @@ export function PermissionWizard({
     }
   };
 
+  // The POST body — one function so preflight and launch can never send different
+  // ones. policy_id and inline_policy are XOR on the wire (internal/api/
+  // inline_policy.go): an ATTACHED saved policy launches by REFERENCE so the
+  // server enforces the stored spec; everything else sends the composed one.
+  const runRequest = React.useCallback(() => {
+    const { run, inline_policy } = buildSpec(state, workspaces);
+    return state.selectedPolicyId
+      ? { ...run, policy_id: state.selectedPolicyId }
+      : { ...run, inline_policy };
+  }, [state, workspaces]);
+
   // A DRY-RUN of launch with the SAME body createRun would send: it resolves the
   // policy through the real chokepoint (real 4xx errors), returns the setup
   // checklist + the enforced confinement class, and mints/persists nothing. Any
@@ -247,14 +277,13 @@ export function PermissionWizard({
   const runPreflight = React.useCallback(async () => {
     setPreflightStatus("loading");
     try {
-      const { run, inline_policy } = buildSpec(state, workspaces);
-      setPreflight(await runsApi.preflightRun({ ...run, inline_policy }));
+      setPreflight(await runsApi.preflightRun(runRequest()));
       setPreflightStatus("idle");
     } catch {
       setPreflight(null);
       setPreflightStatus("error");
     }
-  }, [state, workspaces]);
+  }, [runRequest]);
   // A ref so the enter-Review effect fires ONCE per entry with the latest spec —
   // never re-firing on unrelated Review-step edits (e.g. typing a profile name).
   const runPreflightRef = React.useRef(runPreflight);
@@ -276,8 +305,7 @@ export function PermissionWizard({
     setError(null);
     setLaunching(true);
     try {
-      const { run, inline_policy } = buildSpec(state, workspaces);
-      const created = await runsApi.createRun({ ...run, inline_policy });
+      const created = await runsApi.createRun(runRequest());
       if (state.saveAsProfile && state.profileName.trim()) {
         // fix: persist the named policy AFTER the run launches, not before.
         // createPolicy used to run first, so a failed launch (e.g. the
@@ -288,7 +316,10 @@ export function PermissionWizard({
         // save-as-profile failure here (e.g. reusing an existing name) must
         // not undo a run that already launched successfully.
         try {
-          await policiesApi.createPolicy(state.profileName.trim(), inline_policy);
+          await policiesApi.createPolicy(
+            state.profileName.trim(),
+            buildSpec(state, workspaces).inline_policy,
+          );
         } catch {
           /* best-effort — the run already launched */
         }
@@ -343,9 +374,13 @@ export function PermissionWizard({
                 patch={patch}
                 workspaces={workspaces}
                 workspacesLoading={workspacesLoading}
+                policies={savedPolicies}
                 profileLoading={profileLoading}
                 onSelectProfile={applyProfile}
-                onClearProfile={() => patch({ selectedProfile: undefined })}
+                onSelectPolicy={applyPolicy}
+                onClearProfile={() =>
+                  patch({ selectedProfile: undefined, selectedPolicyId: undefined })
+                }
                 onAddWorkspace={() => setAddWorkspaceOpen(true)}
               />
             )}
@@ -372,19 +407,14 @@ export function PermissionWizard({
                 state={state}
                 patch={patch}
                 workspaces={workspaces}
+                attachedPolicy={attachedPolicy}
                 preflight={preflight}
                 preflightStatus={preflightStatus}
                 onAddSecret={(name) => secretFix.openManual(name)}
                 onFixWorkspace={(id) => {
-                  // Same scan-and-refresh pattern AddWorkspaceDialog uses, then
-                  // re-run preflight so the checklist reflects the new scan status.
-                  workspacesApi
-                    .scanWorkspace(id)
-                    .catch(() => {})
-                    .finally(() => {
-                      loadWorkspaces();
-                      void runPreflightRef.current();
-                    });
+                  // Re-run preflight once the scan settles so the checklist
+                  // reflects the new scan status.
+                  void scanAndReload(id).then(() => runPreflightRef.current());
                 }}
               />
             )}
@@ -450,11 +480,7 @@ export function PermissionWizard({
           // Auto-attach the newly onboarded workspace so the operator doesn't
           // have to re-open the picker to select what they just added.
           patch({ workspaces: [...state.workspaces, { workspaceId: ws.id }] });
-          loadWorkspaces();
-          // Best-effort scan (matches the Workspaces screen): a local dir reaches
-          // "ready" inline, a repo launches its governed scan run — so the inline
-          // path isn't left stuck in pending_scan. Refresh once it settles.
-          workspacesApi.scanWorkspace(ws.id).catch(() => {}).finally(loadWorkspaces);
+          void scanAndReload(ws.id);
         }}
       />
     </>

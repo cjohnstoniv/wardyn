@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is returned by OpenCast when no recording exists for the run.
@@ -115,6 +116,46 @@ func (s *FSStore) SaveCast(_ context.Context, runID string, r io.Reader) error {
 		return err
 	}
 	return os.Rename(tmpName, dst)
+}
+
+// Sweep unlinks every cast (and every orphaned atomic-write temp file) directly
+// under root whose mtime is older than olderThan, returning how many files it
+// removed. It is deliberately NOT on the Store interface: retention is an
+// fs-storage concern, and an object-storage Store would use its bucket's own
+// lifecycle rules. Callers type-assert for it, so a store without retention is
+// visibly without retention rather than silently swept.
+//
+// Age is measured on ModTime, not birth time: the recordings directory is also
+// mounted into agent containers for wardyn-rec's -out-dir fallback, so a cast
+// may still be being appended to. mtime advances on every write, which is what
+// makes unlinking-by-age safe against an in-flight session — do not "improve"
+// this to birth time.
+func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
+	ents, err := os.ReadDir(s.root)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().Add(-olderThan)
+	removed := 0
+	var errs []error
+	for _, e := range ents {
+		name := e.Name()
+		if e.IsDir() || (!strings.HasSuffix(name, ".cast") && !strings.HasPrefix(name, ".tmp-cast-")) {
+			continue
+		}
+		// A stat error means the entry vanished under us (a concurrent sweep or
+		// an atomic rename); nothing to remove either way.
+		info, ierr := e.Info()
+		if ierr != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if rerr := os.Remove(filepath.Join(s.root, name)); rerr != nil {
+			errs = append(errs, rerr)
+			continue
+		}
+		removed++
+	}
+	return removed, errors.Join(errs...)
 }
 
 // OpenCast opens <root>/<runID>.cast for reading. Returns ErrNotFound when the

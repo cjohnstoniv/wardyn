@@ -4,12 +4,19 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // These tests exercise the admin-gated workspace routes WITHOUT a Postgres
@@ -29,6 +36,7 @@ func TestWorkspaceRoutesRequireAdminAuth(t *testing.T) {
 		{http.MethodPut, "/api/v1/workspaces/" + uuid.New().String()},
 		{http.MethodDelete, "/api/v1/workspaces/" + uuid.New().String()},
 		{http.MethodPost, "/api/v1/workspaces/" + uuid.New().String() + "/scan"},
+		{http.MethodGet, "/api/v1/workspaces/" + uuid.New().String() + "/env-as-code"},
 	}
 	for _, c := range cases {
 		if w := do(t, h.srv, c.method, c.path, "", ""); w.Code != http.StatusUnauthorized {
@@ -89,6 +97,95 @@ func TestGetDeleteScanWorkspaceBadID(t *testing.T) {
 	}
 	if w := do(t, h.srv, http.MethodPost, "/api/v1/workspaces/not-a-uuid/scan", adminToken, ""); w.Code != http.StatusBadRequest {
 		t.Errorf("scan bad id: code = %d, want 400", w.Code)
+	}
+}
+
+// ─── single-workspace store fake ─────────────────────────────────────────────
+
+// workspaceStoreFake serves one workspace and captures the row written back.
+// GetSiteConfig must be implemented: the env-as-code generator folds in the
+// operator's artifact-registry redirects, and the embedded nil store.Store
+// would panic there.
+type workspaceStoreFake struct {
+	store.Store
+	ws      types.Workspace
+	updated types.Workspace
+}
+
+func (s *workspaceStoreFake) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	return s.ws, nil
+}
+func (s *workspaceStoreFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+func (s *workspaceStoreFake) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+	s.updated = ws
+	return ws, nil
+}
+
+// TestUpdateWorkspace_ContentChangeClearsEveryReviewedField pins the reset a new
+// field is easy to forget (this is exactly how the verified_* stamp survived it):
+// everything reviewed against the OLD source — profile, image, approvals,
+// recorded evidence and the "PROVEN to install/build/test" stamp — must be gone
+// when source/kind/ref changes, since the store UPDATE rewrites every column.
+func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	at := time.Now().UTC()
+	fake := &workspaceStoreFake{ws: types.Workspace{
+		ID: id, Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/home/u/old",
+		Status: types.WorkspaceReady, Profile: mustJSON(workspacescan.WorkspaceProfile{Confidence: "high"}),
+		ImageRef: "wardyn/ws:abc", BuiltProfileHash: "abc", ApprovedEgress: []string{"example.com"},
+		SetupCommands: mustJSON([]workspacescan.SetupCommand{{Stage: "install", Command: "npm ci"}}),
+		VerifyResult:  mustJSON(map[string]any{"ok": true}), RecordResults: mustJSON(map[string]any{"t": 1}),
+		VerifiedProfileHash: "abc", VerifiedAt: &at,
+	}}
+	srv := New(baseTestConfig(h, fake))
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String(), adminToken,
+		`{"name":"w","kind":"local_dir","source":"/home/u/new"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := fake.updated
+	if got.Profile != nil || got.ImageRef != "" || got.BuiltProfileHash != "" || got.ApprovedEgress != nil ||
+		got.SetupCommands != nil || got.VerifyResult != nil || got.RecordResults != nil ||
+		got.VerifiedProfileHash != "" || got.VerifiedAt != nil || got.Status != types.WorkspacePendingScan {
+		t.Errorf("source change must clear every field reviewed against the old source; got %+v", got)
+	}
+}
+
+// ─── env-as-code re-fetch ────────────────────────────────────────────────────
+
+// TestGetEnvAsCode_RegeneratesFromProfile pins the re-fetch path: finalize hands
+// a repo workspace's committable files back exactly once and writes them
+// nowhere, so the GET must reproduce them from stored state (422 while there is
+// no profile to generate from).
+func TestGetEnvAsCode_RegeneratesFromProfile(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	fake := &workspaceStoreFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindRepo, Source: "org/repo"}}
+	srv := New(baseTestConfig(h, fake))
+	path := "/api/v1/workspaces/" + wsID.String() + "/env-as-code"
+
+	if w := do(t, srv, http.MethodGet, path, adminToken, ""); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unscanned: code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+
+	fake.ws.Profile = mustJSON(workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, PackageManagers: []string{"go"}, Confidence: "high",
+	})
+	w := do(t, srv, http.MethodGet, path, adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		EmittedFiles map[string]string `json:"emitted_files"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.EmittedFiles[".devcontainer/devcontainer.json"] == "" {
+		t.Errorf("no devcontainer.json regenerated; got %v", got.EmittedFiles)
 	}
 }
 

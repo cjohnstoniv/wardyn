@@ -14,7 +14,6 @@ import (
 
 // PgxStore adapts a *pgxpool.Pool to the broker's TxBeginner/Tx surface so the
 // transaction logic stays testable behind an interface (no pgxmock dependency).
-// It also implements rowsBeginner for the RevokeRun bulk read.
 type PgxStore struct {
 	Pool *pgxpool.Pool
 }

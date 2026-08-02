@@ -41,7 +41,6 @@ vi.mock("../../../lib/api/health", () => ({
 vi.mock("../../../lib/api/compose", () => ({
   composer: {
     listComposerBackends: (...a: unknown[]) => listComposerBackendsMock(...a),
-    telemetry: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../../../lib/api/workspaces", () => ({

@@ -3,14 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* Self-hosted fonts — no external font CDN request (governed-egress product). */
-@import "@fontsource/inter/400.css";
-@import "@fontsource/inter/500.css";
-@import "@fontsource/inter/600.css";
-@import "@fontsource/inter/700.css";
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/600.css";
+/* Self-hosted fonts — no external font CDN request (governed-egress product).
+ * latin + latin-ext subsets only: the full-family entrypoints also ship cyrillic,
+ * greek and vietnamese, ~1.18 MB of woff/woff2 baked into the wardynd image for
+ * glyphs nothing renders. latin-ext stays because the console displays operator-
+ * and agent-supplied strings (workspace paths, branch names, audit fields), not
+ * just English UI copy. All 7 weights are live — see theme.css. */
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-ext-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-ext-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-ext-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/inter/latin-ext-700.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-ext-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+@import "@fontsource/jetbrains-mono/latin-ext-500.css";
+@import "@fontsource/jetbrains-mono/latin-600.css";
+@import "@fontsource/jetbrains-mono/latin-ext-600.css";
 
 @import 'tailwindcss' source(none);
 @source '../**/*.{js,ts,jsx,tsx}';

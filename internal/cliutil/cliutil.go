@@ -3,7 +3,8 @@
 
 // Package cliutil holds tiny env/flag helpers shared by Wardyn's cmd/* main
 // packages (each cmd is its own `main` package, so these can't just live in
-// one of them without the others importing "main").
+// one of them without the others importing "main"), plus ScrubChildEnv, the
+// one env denylist shared by every host-exec'd third-party CLI child.
 package cliutil
 
 import (
@@ -135,6 +136,33 @@ func EnvDuration(name string, def time.Duration) time.Duration {
 		return d
 	}
 	return def
+}
+
+// ScrubChildEnv returns env with the variables a third-party CLI child must
+// never receive removed, without mutating the input: ANTHROPIC_API_KEY, so a
+// resident `claude` authenticates with the subscription session rather than
+// billing or leaking an API key, and every WARDYN_* variable, which is the
+// daemon's own configuration — WARDYN_AGE_KEY is the secret-store MASTER key,
+// WARDYN_ADMIN_TOKEN the API bearer, WARDYN_PG_DSN the database URL.
+//
+// Denylist, not allowlist, deliberately: these children are resident operator
+// CLIs invoked on the control-plane host, and they legitimately need whatever
+// HTTPS_PROXY / NO_PROXY / NODE_EXTRA_CA_CERTS / AWS_* the operator's shell
+// carries to work on a corp network or against Bedrock. A prefix also covers
+// every future WARDYN_* secret for free, which an enumerated allowlist cannot.
+//
+// HONEST RESIDUAL: this is defense-in-depth and consistency, NOT containment. A
+// host-exec'd child runs as the same uid as wardynd and can read
+// /proc/<ppid>/environ regardless. Containment is the sandbox composer wire.
+func ScrubChildEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") || strings.HasPrefix(kv, "WARDYN_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // SplitCSV splits a comma-separated list, trimming whitespace and dropping

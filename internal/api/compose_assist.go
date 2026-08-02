@@ -120,38 +120,3 @@ func assistQuestion(req composeAssistRequest) string {
 	}
 	return "Context: " + strings.Join(ctx, "; ") + ".\n" + q
 }
-
-// composeTelemetryRequest is the POST /api/v1/runs/compose/telemetry body: a
-// client-side funnel beacon. It records mode transitions + risk levels ONLY — never
-// prompt/secret content — funneled into the same audit chokepoint as an event.
-type composeTelemetryRequest struct {
-	Mode          string `json:"mode"`
-	CorrelationID string `json:"correlation_id"`
-	Risk          string `json:"risk"`
-}
-
-// handleComposeTelemetry records a client-funnel beacon (mode transition / risk) so
-// the pre-first-call funnel is capturable. It leaks nothing: mode + risk +
-// correlation_id only. Same composer-enabled gate; returns 204.
-func (s *Server) handleComposeTelemetry(w http.ResponseWriter, r *http.Request) {
-	if s.composerEnabledOrNotFound(w) {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
-	var req composeTelemetryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "compose telemetry body too large")
-			return
-		}
-		// Lenient: a malformed beacon must never break the funnel; drop it quietly.
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	auditData, _ := json.Marshal(map[string]string{
-		"mode": req.Mode, "risk": req.Risk, "correlation_id": req.CorrelationID})
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"run.compose.client", "compose", "success", auditData))
-	w.WriteHeader(http.StatusNoContent)
-}

@@ -10,24 +10,19 @@ import (
 	"os"
 	"strings"
 
-	gh "github.com/google/go-github/v88/github"
-
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// confinementRank orders Confinement Classes so policy gating can compare a
-// policy's MinConfinementClass against what a runner declares. Unrecognised
-// values rank 0 (below CC1) so they never satisfy a real minimum (fail closed).
-var confinementRank = map[types.ConfinementClass]int{
-	types.CC1: types.CC1.Rank(),
-	types.CC2: types.CC2.Rank(),
-	types.CC3: types.CC3.Rank(),
-}
-
+// confinementGE compares a run's class against a policy's MinConfinementClass.
+// types.ConfinementClass.Rank is the single source of the ordering (it already
+// ranks unrecognised values 0, so a gate on a real minimum fails closed); this
+// stays a named helper because runs_create.go's "Membership, not rank (M8)"
+// rationale points at it by name.
 func confinementGE(have, want types.ConfinementClass) bool {
-	return confinementRank[have] >= confinementRank[want]
+	return have.Rank() >= want.Rank()
 }
 
 // LoadPolicySpec reads and validates a RunPolicySpec from a JSON file. Used by
@@ -55,7 +50,7 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if spec.MinConfinementClass == "" {
 		return fmt.Errorf("min_confinement_class is required")
 	}
-	if _, ok := confinementRank[spec.MinConfinementClass]; !ok {
+	if spec.MinConfinementClass.Rank() == 0 {
 		return fmt.Errorf("unknown min_confinement_class %q", spec.MinConfinementClass)
 	}
 	if !spec.FirstUseApproval.Valid() {
@@ -111,13 +106,12 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		return fmt.Errorf("eligible_grants[%d]: negative ttl_seconds", i)
 	}
 	// A github_token grant's scope ({repos, permissions}) is otherwise only
-	// checked at MINT time inside the broker (internal/broker/github.go), so a
-	// malformed permission key surfaces as a run-time mint failure instead of an
-	// immediate 400. Validate the shape here at WRITE time (mirrors the broker's
-	// splitRepos + toInstallationPermissions), so a bad key/repo is rejected the
-	// same way api_key/git_pat/ssh_key already are.
+	// checked at MINT time inside the broker, so a malformed permission key
+	// surfaces as a run-time mint failure instead of an immediate 400. Run the
+	// broker's OWN write-time predicate here — one implementation, so tightening
+	// splitRepos can never leave policy-write accepting what mint now refuses.
 	if g.Kind == types.GrantGitHubToken {
-		if err := validateGitHubTokenScope(g.Scope); err != nil {
+		if err := broker.ValidateGitHubScopeShape(g.Scope); err != nil {
 			return fmt.Errorf("eligible_grants[%d]: github_token scope invalid: %w", i, err)
 		}
 	}
@@ -228,57 +222,6 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 	}
 	if err := validateLLMInspection(spec.LLMInspection); err != nil {
 		return err
-	}
-	return nil
-}
-
-// validateGitHubTokenScope checks a github_token grant's scope shape at
-// policy-write time so a malformed permission key or repo string is rejected
-// with a 400 here, rather than surfacing only later as a run-time mint failure
-// inside the broker (internal/broker/github.go). It mirrors the broker's
-// mint-time checks: repos (if any) must be in owner/name form and share one
-// owner (splitRepos), and every permission key must be one go-github recognizes
-// (toInstallationPermissions). An EMPTY repos list is valid — eligible_grants
-// are templates and the run supplies the concrete repos, so every shipped
-// example policy carries "repos": [].
-func validateGitHubTokenScope(scope json.RawMessage) error {
-	if len(scope) == 0 {
-		return nil
-	}
-	var sc struct {
-		Repos       []string          `json:"repos"`
-		Permissions map[string]string `json:"permissions"`
-	}
-	if err := json.Unmarshal(scope, &sc); err != nil {
-		return fmt.Errorf("scope must be a JSON object: %w", err)
-	}
-	owner := ""
-	for _, r := range sc.Repos {
-		parts := strings.SplitN(r, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("repo %q is not in owner/name form", r)
-		}
-		if owner == "" {
-			owner = parts[0]
-		} else if owner != parts[0] {
-			return fmt.Errorf("all repos in one grant must share an owner (got %q and %q)", owner, parts[0])
-		}
-	}
-	if len(sc.Permissions) > 0 {
-		// Reject a permission key GitHub would not recognize (fail closed), reusing
-		// go-github's typed struct via a DisallowUnknownFields round-trip so we
-		// never hand-maintain the ~100 permission field names — the same technique
-		// the broker's toInstallationPermissions uses.
-		b, err := json.Marshal(sc.Permissions)
-		if err != nil {
-			return fmt.Errorf("encode permissions: %w", err)
-		}
-		dec := json.NewDecoder(bytes.NewReader(b))
-		dec.DisallowUnknownFields()
-		var ip gh.InstallationPermissions
-		if err := dec.Decode(&ip); err != nil {
-			return fmt.Errorf("unknown github permission in scope: %w", err)
-		}
 	}
 	return nil
 }

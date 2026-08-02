@@ -29,6 +29,15 @@ export function absoluteTime(iso: string): string {
   });
 }
 
+/** HH:MM:SS clock column for the audit streams (run detail + the Audit screen). */
+export function clockTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 /** Best-effort human message for a caught value — an Error's message, or its String(). */
 export function getErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

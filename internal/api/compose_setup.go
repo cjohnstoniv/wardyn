@@ -17,14 +17,14 @@ import (
 
 // SetupItem is a per-requirement readiness verdict for a composed run, computed
 // DETERMINISTICALLY from the FINAL post-clamp spec (never LLM self-assessment) —
-// the same trust rule composer.Grade uses (risk.go:72). It generalizes the
-// composeLLMAccess pattern (compose.go:121-127) to every setup requirement a
-// proposal implies: secrets, onboarded workspaces, repo credentials, egress.
+// the same trust rule composer.Grade uses (composer/risk.go). It generalizes the
+// composeLLMAccess pattern (compose.go) to every setup requirement a proposal
+// implies: secrets, onboarded workspaces, repo credentials, egress.
 //
-// NOT SetupCheck (setup.go:72) — that type's Fix is free-text prose for
-// a human to read; SetupItem's Fix is a structured action a UI button can drive
-// directly (add_secret/scan_workspace), so it needs its own shape rather than
-// reusing SetupCheck's.
+// NOT SetupCheck (setup.go) — that type's Fix is free-text prose for a human to
+// read; SetupItem's Fix is a structured action a UI button can drive directly
+// (add_secret/scan_workspace), so it needs its own shape rather than reusing
+// SetupCheck's.
 type SetupItem struct {
 	Kind       string    `json:"kind"` // "llm_access" | "secret" | "workspace" | "workspace_secret" | "repo_credential" | "egress" | "backend" | "config_pair"
 	ID         string    `json:"id"`   // stable "<kind>:<key>", e.g. "secret:anthropic-api-key"
@@ -218,11 +218,11 @@ func setupSubscriptionMountItem(sub composeSubscriptionState) (SetupItem, bool) 
 }
 
 // setupSecretItems walks the FINAL spec's api_key/git_pat grants — the SAME
-// scope-decode validateInlineSecretRefs uses (inline_policy.go:87) — against
-// presentSecrets (the map compose.go already built via listUserSecretNames), so
-// this can never disagree with the H1 422 check that gates create-run. One row
-// per DISTINCT secret name: an api_key grant and a git_pat grant can name the
-// same stored secret without duplicating the row.
+// scope-decode validateInlineSecretRefs uses (injectionRuleFromScope,
+// inline_policy.go) — against presentSecrets (s.presentSecretNames), so this can
+// never disagree with the H1 422 check that gates create-run. One row per
+// DISTINCT secret name: an api_key grant and a git_pat grant can name the same
+// stored secret without duplicating the row.
 func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) []SetupItem {
 	var items []SetupItem
 	seen := map[string]bool{}
@@ -463,11 +463,11 @@ func setupEgressDroppedItems(droppedDomains []string) []SetupItem {
 
 // setupEgressWorkspaceItem is informational only: it reports the egress domains
 // the referenced workspaces' scanned profiles would add at LAUNCH (the real
-// union happens for real in unionWorkspaceEgress, runs.go:308) — computed here
-// on a COPY of AllowedDomains, since unionWorkspaceEgress mutates its spec
-// argument IN PLACE (workspace_run.go:72-92) and this proposal's spec must not
-// be touched before the operator approves it. ok=false when there are no
-// referenced workspaces (nothing to union).
+// union happens on the create path, in unionWorkspaceEgress) — computed here on
+// a COPY of AllowedDomains, since unionWorkspaceEgress mutates its spec argument
+// IN PLACE (workspace_run.go) and this proposal's spec must not be touched
+// before the operator approves it. ok=false when there are no referenced
+// workspaces (nothing to union).
 func setupEgressWorkspaceItem(spec types.RunPolicySpec, workspaces []types.Workspace) (SetupItem, bool) {
 	if len(workspaces) == 0 {
 		return SetupItem{}, false

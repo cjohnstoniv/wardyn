@@ -95,7 +95,7 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
-		applied, uerr := s.cfg.Store.UpdateRunStateIf(base, runID, types.RunRunning, terminal)
+		applied, uerr := s.casRunState(base, runID, types.RunRunning, terminal)
 		if uerr != nil {
 			s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{
@@ -124,14 +124,24 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 
 // isTerminalRunState reports whether a run is in a terminal (already-ended)
 // state. The kill-switch must not re-kill or clobber a run that already ended
-// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier).
-func isTerminalRunState(st types.RunState) bool {
-	switch st {
-	case types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived:
-		return true
-	default:
-		return false
+// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier). The set
+// itself lives on types.RunState so the CLI and SDK share one definition.
+func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
+
+// casRunState is the ONE place a run's state CAS is issued: it delegates to
+// Store.UpdateRunStateIf and, when the transition BOTH won and NEWLY landed
+// terminal, counts it for /metrics. Every state change (dispatch claim,
+// completion watcher, kill, failAndRevoke, boot reconcile, compose reclaim)
+// routes through here, so the counter cannot drift the way a per-call-site
+// increment would — add new transitions here, not around it. The !from guard
+// keeps handleKillRun's supported KILLED→KILLED re-kill retry from counting
+// the same run twice.
+func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
+	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+	if applied && to.IsTerminal() && !from.IsTerminal() {
+		s.metrics.runTerminal(to)
 	}
+	return applied, err
 }
 
 // stopSandboxOrAudit tears a dispatch-created sandbox down and RECORDS a failed
@@ -231,7 +241,7 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // (C003). Revoke runs only when THIS transition won, so a concurrent kill that
 // already moved the run is not double-handled.
 func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState) {
-	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, types.RunFailed)
+	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
 		// applied==false ("a concurrent kill legitimately won") and must not collapse
@@ -270,12 +280,8 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, err := s.cfg.Store.GetRun(ctx, id)
-	if notFoundIf(w, err, "run") {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+	run, ok := s.getRunOr404(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -306,7 +312,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// from the (non-terminal) state we read, so a completion watcher winning
 	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
 	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
-	applied, serr := s.cfg.Store.UpdateRunStateIf(cascadeCtx, id, run.State, types.RunKilled)
+	applied, serr := s.casRunState(cascadeCtx, id, run.State, types.RunKilled)
 	if serr != nil {
 		writeError(w, http.StatusInternalServerError, "update run state: "+serr.Error())
 		return

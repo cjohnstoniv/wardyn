@@ -4,7 +4,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -28,12 +27,10 @@ type policyRequest struct {
 // It rejects unknown fields (fail closed against typos), requires a non-empty
 // name, and runs validatePolicySpec over the spec. Any problem is returned as a
 // human-readable message the handler surfaces with HTTP 400.
-func decodePolicyRequest(r *http.Request) (policyRequest, string) {
+func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest, string) {
 	var req policyRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		return policyRequest{}, "invalid JSON body: " + err.Error()
+	if msg := decodeStrictMsg(w, r, &req); msg != "" {
+		return policyRequest{}, msg
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
@@ -79,7 +76,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
 // with the created policy, or 400 on an invalid body/spec.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	req, msg := decodePolicyRequest(r)
+	req, msg := decodePolicyRequest(w, r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -89,6 +86,13 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// at author time instead of at launch).
 	if code, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
+		return
+	}
+	// Same fail-fast for the sibling reference: an api_key/git_pat/ssh_key grant
+	// naming a secret that does not exist. Advisory at author time (the secret can
+	// be deleted afterwards) — run-create stays the load-bearing gate.
+	if code, err := s.validateInlineSecretRefs(r.Context(), req.Spec); err != nil {
+		writeError(w, code, "secret: "+err.Error())
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -119,13 +123,17 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, msg := decodePolicyRequest(r)
+	req, msg := decodePolicyRequest(w, r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if code, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
+		return
+	}
+	if code, err := s.validateInlineSecretRefs(r.Context(), req.Spec); err != nil {
+		writeError(w, code, "secret: "+err.Error())
 		return
 	}
 	updated, err := s.cfg.Store.UpdatePolicy(r.Context(), id, req.Name, req.Spec)

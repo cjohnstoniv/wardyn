@@ -73,8 +73,9 @@ disclose them — but a *more severe than documented* instance is in scope):
 Two disclosures that used to be restated here — the unreachable
 `golang.org/x/crypto/openpgp` advisory (GO-2026-5932, no fix available, 0 called
 symbols, `govulncheck` in CI on every push) and the console admin token's at-rest
-posture (`sessionStorage` by default, `localStorage` only if you opt in, no CSP /
-`X-Frame-Options` / `X-Content-Type-Options` on the UI-serving path yet) — are
+posture (`sessionStorage` by default, `localStorage` only if you opt in — script
+that runs in the page can read it, which the response headers bound but do not
+eliminate) — are
 residual-risk disclosures, so they live with the others in
 [`threatmodel/THREAT-MODEL.md` §5](threatmodel/THREAT-MODEL.md). They are
 published, not hidden; they are out of scope for this process as written, and a

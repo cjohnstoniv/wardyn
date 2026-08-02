@@ -41,7 +41,6 @@ const (
 	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
 	// scan/verify/compose result uploads.
 	routeSSOToken = "/wardyn/v1/sso-token/"
-	routeLLM      = "/wardyn/llm/"
 
 	// llmAnthropicPrefix selects the Anthropic LLM passthrough. The remainder
 	// after this prefix is appended to the Anthropic API base.
@@ -137,7 +136,7 @@ func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 		"/api/v1/internal/credentials/mint", body, r.Header.Get("Content-Type"))
 	if err != nil {
 		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
-		http.Error(w, "control plane error: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "control plane error", err, http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -170,7 +169,7 @@ func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 		"/api/v1/internal/approvals/"+id, nil, "")
 	if err != nil {
 		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
-		http.Error(w, "control plane error: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "control plane error", err, http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -212,7 +211,7 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, pr
 		cpPathPrefix+id, body, r.Header.Get("Content-Type"))
 	if err != nil {
 		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
-		http.Error(w, "control plane error: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "control plane error", err, http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -337,7 +336,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host, re
 	target, err := p.vetURL("https://" + host)
 	if err != nil {
 		p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLM, nil)
-		http.Error(w, "llm upstream vet failed: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
 		return
 	}
 
@@ -374,7 +373,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		r.Method, upstreamURL, bodyReader)
 	if err != nil {
 		p.emitLLMDecision(r, host, egress.Deny, ruleSource, nil)
-		http.Error(w, "build llm request: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "build llm request", err, http.StatusBadGateway)
 		return
 	}
 	copyHeader(outReq.Header, r.Header)
@@ -393,7 +392,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		http.Error(w, "llm upstream error: "+err.Error(), http.StatusBadGateway)
+		p.httpError(w, "llm upstream error", err, http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -661,6 +660,20 @@ func isLLMHost(host string) bool {
 	return strings.HasPrefix(h, "bedrock-runtime.") || strings.HasPrefix(h, "bedrock.")
 }
 
+// reqOf builds the egress.Request every handler-side emitter records: the run,
+// the upstream host/port actually contacted, and the sandbox request's method +
+// path. Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
+func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
+	return egress.Request{
+		RunID:  p.runID,
+		Host:   host,
+		Port:   port,
+		Method: strings.ToUpper(r.Method),
+		Path:   r.URL.Path,
+		Time:   p.now(),
+	}
+}
+
 // emitLLMDecision emits a decision log for an LLM route (port 443) carrying a
 // content-free scan summary. host is the upstream model host.
 func (p *Proxy) emitLLMDecision(r *http.Request, host string, decision egress.Decision, ruleSource string, scan *egress.ScanSummary) {
@@ -674,19 +687,8 @@ func (p *Proxy) emitLLMDecisionPort(r *http.Request, host string, port int, deci
 	if p.sink == nil {
 		return
 	}
-	log := egress.DecisionLog{
-		Request: egress.Request{
-			RunID:  p.runID,
-			Host:   host,
-			Port:   port,
-			Method: strings.ToUpper(r.Method),
-			Path:   r.URL.Path,
-			Time:   p.now(),
-		},
-		Decision:   decision,
-		RuleSource: ruleSource,
-		Scan:       scan,
-	}
+	log := decisionLog(p.reqOf(r, host, port), decision, ruleSource)
+	log.Scan = scan
 	p.sink.emit(log)
 }
 
@@ -854,33 +856,15 @@ func extractApprovalID(body []byte) *uuid.UUID {
 }
 
 // emitLocalDecision records a DecisionLog for a brokered local route so it
-// lands in audit via the existing decisions pipeline. The host recorded is the
-// brokered upstream target (control plane host for mint/approvals, the
-// Anthropic host for the LLM route).
+// lands in audit via the existing decisions pipeline. Every brokered local route
+// forwards to the control plane, so its host AND port are the recorded upstream
+// (an unparseable URL leaves both zero rather than fabricating a port).
 func (p *Proxy) emitLocalDecision(r *http.Request, decision egress.Decision, ruleSource string, approvalID *uuid.UUID) {
 	if p.sink == nil {
 		return
 	}
-	host := ""
-	switch ruleSource {
-	case ruleSourceLLM:
-		host = anthropicHost
-	default:
-		if h, _, err := hostPortFromURL(p.controlPlaneURL); err == nil {
-			host = h
-		}
-	}
-	log := egress.DecisionLog{
-		Request: egress.Request{
-			RunID:  p.runID,
-			Host:   host,
-			Method: strings.ToUpper(r.Method),
-			Path:   r.URL.Path,
-			Time:   p.now(),
-		},
-		Decision:   decision,
-		RuleSource: ruleSource,
-		ApprovalID: approvalID,
-	}
+	host, port, _ := hostPortFromURL(p.controlPlaneURL)
+	log := decisionLog(p.reqOf(r, host, port), decision, ruleSource)
+	log.ApprovalID = approvalID
 	p.sink.emit(log)
 }

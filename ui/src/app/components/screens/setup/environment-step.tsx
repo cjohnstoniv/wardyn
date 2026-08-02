@@ -14,8 +14,9 @@
 // `recheckToken`. This component only renders and reports clicks.
 //
 // Copy/data are REUSED, never re-authored:
-//   - cc-meta.ts:  CC_META (label/tagline/mechanism/doesntProtect), CC_ORDER,
+//   - cc-meta.ts:  CC_META (label/tagline/mechanism/doesntProtect),
 //     CC_MATRIX_ROWS, CC_MATRIX_WHERE, CONFINEMENT_CONSTANT_NOTE
+//   - lib/types:   CC_ORDER (the canonical weakest->strongest ladder)
 //   - copy.ts:     RESIDUAL_PREFIX ("Doesn't stop:"), BTN.showSetupCommand
 //   - setup-guide.ts: TIER_GUIDES (the `wardyn setup <tier>` commands)
 //   - primitives / status-chip / barrier-strength-strip / tier-illustration
@@ -32,7 +33,6 @@ import { BarrierStrengthStrip } from "../../wardyn/barrier-strength-strip";
 import { TierIllustration } from "../../wardyn/tier-illustration";
 import {
   CC_META,
-  CC_ORDER,
   CC_MATRIX_ROWS,
   CC_MATRIX_WHERE,
   CONFINEMENT_CONSTANT_NOTE,
@@ -42,7 +42,7 @@ import { RESIDUAL_PREFIX, BTN, type StatusKind } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
 import { TIER_GUIDES } from "./setup-guide";
 import { CopyButton } from "../../wardyn/copy-button";
-import type { ConfinementClass, SetupStatus } from "../../../lib/types";
+import { CC_ORDER, type ConfinementClass, type SetupStatus } from "../../../lib/types";
 
 type TierState = "ready" | "todo" | "incompatible";
 

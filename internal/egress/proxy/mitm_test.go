@@ -225,3 +225,39 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 		t.Fatal("blocked MITM request must not reach the upstream")
 	}
 }
+
+// A credential refresh that fails must fail CLOSED and must not relay the
+// control plane's response text verbatim: the error is written into the SANDBOX,
+// so any registered secret it carries is masked (httpError) before it leaves.
+func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
+	const secret = "sk-ant-oat-LEAKED-0123456789"
+	procRegistry.AddGlobal([]byte(secret))
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "resolve failed for "+secret, http.StatusInternalServerError)
+	}))
+	defer cp.Close()
+
+	// A DYNAMIC entry already past expiry forces a re-resolve, which the stub
+	// control plane fails with a secret-bearing body.
+	inj := &injector{
+		byHost: map[string]*injEntry{"api.test": {grantID: uuid.New(), expiresAt: time.Now().Add(-time.Hour).UnixMilli()}},
+		base:   cp.URL,
+		token:  newTokenSource("tok"),
+		client: cp.Client(),
+	}
+	p, _ := newLocalRouteProxy(t, cp.URL, "RUNTOK", upstreamAddr(cp), inj, nil)
+
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://api.test/v1/messages", nil), "api.test")
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (fail closed on refresh failure)", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("registered secret reached the sandbox: %q", rec.Body.String())
+	}
+	// …and the secret really was in the error text (else the test is vacuous).
+	if !strings.Contains(rec.Body.String(), "<secret-hidden>") {
+		t.Fatalf("expected the masked placeholder in the error, got %q", rec.Body.String())
+	}
+}

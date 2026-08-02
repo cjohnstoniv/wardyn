@@ -429,14 +429,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// so an LLM-backed agent needs a brokered api_key grant for its provider or it
 	// reaches no model. Add it BEFORE the clamp (secret-aware + non-breaking); the
 	// truthful "did model access survive?" warning is emitted AFTER the clamp below.
-	presentSecrets := map[string]bool{}
-	if s.cfg.Secrets != nil {
-		if names, err := s.listUserSecretNames(ctx); err == nil {
-			for _, n := range names {
-				presentSecrets[n] = true
-			}
-		}
-	}
+	presentSecrets := s.presentSecretNames(ctx)
 	// Subscription transport engages only on the EXPLICIT per-run opt-in AND a
 	// ceiling-blessed cred mount AND a Claude agent; otherwise api-key (the more
 	// governed default: key never resident, proxy-injected, 1h TTL).

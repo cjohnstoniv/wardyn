@@ -5,16 +5,12 @@
 
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
-import path from "node:path";
 
-// Vitest config for component/unit tests. Reuses the same `@` alias as
-// vite.config.ts. jsdom environment for React Testing Library. Coverage via v8
-// with JUnit + HTML reporters so results land under ../test/reports/ui.
+// Vitest config for component/unit tests. jsdom environment for React Testing
+// Library. Coverage via v8 with JUnit + HTML reporters so results land under
+// ../test/reports/ui.
 export default defineConfig({
   plugins: [react()],
-  resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
-  },
   test: {
     globals: true,
     environment: "jsdom",
@@ -28,7 +24,15 @@ export default defineConfig({
       reportsDirectory: "../test/reports/ui/coverage",
       reporter: ["text-summary", "html", "lcov"],
       include: ["src/app/**/*.{ts,tsx}"],
-      exclude: ["src/app/components/ui/**", "**/*.test.{ts,tsx}", "src/test/**"],
+      // test-fixtures.ts is test-only but lives beside the screens it seeds, so
+      // it matches `include` and none of the name/path excludes — leave it in and
+      // 30 fully-covered lines that ship in no bundle pad the denominator.
+      exclude: [
+        "src/app/components/ui/**",
+        "**/*.test.{ts,tsx}",
+        "**/test-fixtures.ts",
+        "src/test/**",
+      ],
     },
   },
 });

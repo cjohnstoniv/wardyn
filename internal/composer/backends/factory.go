@@ -27,8 +27,8 @@ import (
 // itself carries no secret value.
 type BackendSpec struct {
 	Name      string `json:"name"`
-	Wire      string `json:"wire"`      // "anthropic" | "openai" | "cli" | "fake"
-	Transport string `json:"transport"` // anthropic: api|bedrock; openai: api|azure|compatible; cli: claude|codex
+	Wire      string `json:"wire"`      // "anthropic" | "openai" | "cli" | "sandbox" | "fake"
+	Transport string `json:"transport"` // anthropic: api|bedrock; openai: api|azure|compatible; cli: claude|codex; fake: high|interview; sandbox: (none)
 	Model     string `json:"model"`
 
 	BaseURL string `json:"base_url,omitempty"` // openai azure/compatible

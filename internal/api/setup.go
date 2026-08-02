@@ -34,11 +34,6 @@ const (
 // capability of THIS control plane. The struct types below are the SINGLE
 // FROZEN CONTRACT shared with the UI (ui/src/app/lib/types.ts SetupStatus) —
 // keep the two in exact sync (snake_case wire fields).
-//
-// The handler (handleSetupStatus), its route registration inside the
-// humanOrAdminAuth group, provider/platform detection (internal/setup), and the
-// ready computation are implemented in Workstream B. This file (Task 0) only
-// freezes the wire types so B and the UI build against one shape.
 
 // SetupStatus is the aggregate readiness snapshot for GET /api/v1/setup/status.
 type SetupStatus struct {

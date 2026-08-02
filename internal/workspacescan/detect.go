@@ -50,7 +50,6 @@ const (
 	maxServices     = 32
 	maxSuggested    = 64
 	maxSecretFiles  = 32
-	maxNeedNameLen  = 64
 	maxSecretPathLn = 256
 	maxLeakFindings = 64
 	maxBuildMemMiB  = 262144 // 256 GiB sanity ceiling for a detected build heap

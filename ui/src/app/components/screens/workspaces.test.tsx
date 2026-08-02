@@ -18,12 +18,14 @@ const setApprovedEgressMock = vi.fn();
 const getObservedEgressMock = vi.fn();
 const createWorkspaceMock = vi.fn();
 const setWorkspaceLLMCredMock = vi.fn();
+const listWorkspacesMock = vi.fn();
 vi.mock("../../lib/api/workspaces", () => ({
   workspaces: {
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
     getObservedEgress: (...a: unknown[]) => getObservedEgressMock(...a),
     createWorkspace: (...a: unknown[]) => createWorkspaceMock(...a),
     setWorkspaceLLMCred: (...a: unknown[]) => setWorkspaceLLMCredMock(...a),
+    listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
   },
 }));
 const listSecretsMock = vi.fn();
@@ -34,7 +36,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { AddWorkspaceDialog } from "./workspaces";
+import { AddWorkspaceDialog, WorkspacesScreen } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 import { WorkspaceNeedsPanel } from "./workspace-needs-panel";
 
@@ -256,6 +258,21 @@ describe("WorkspaceNeedsPanel — observed-but-denied egress", () => {
 
     expect(await screen.findByText(/no denied egress observed/i)).toBeInTheDocument();
     expect(setApprovedEgressMock).not.toHaveBeenCalled();
+  });
+});
+
+// The table renders statuses only the guided import can produce (building /
+// build_error / verifying / verify_failed), so the row menu has to reach that
+// pipeline — otherwise a failed row's only remediation is the setup funnel.
+describe("WorkspacesScreen — the row menu reaches the guided import", () => {
+  it("offers 'Set up / Resume import' on a verify_failed row", async () => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { status: "verify_failed" })]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(<WorkspacesScreen />);
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+
+    expect(screen.getByRole("menuitem", { name: /set up \/ resume import/i })).toBeInTheDocument();
   });
 });
 

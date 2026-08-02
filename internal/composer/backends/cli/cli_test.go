@@ -231,35 +231,52 @@ func TestClaude_ToolAndMCPLockdown(t *testing.T) {
 	}
 }
 
-func TestClaude_ScrubsAnthropicAPIKey(t *testing.T) {
-	// The fake records its environment so we can assert ANTHROPIC_API_KEY is gone
-	// (subscription auth) while an unrelated var survives.
-	dir := t.TempDir()
-	envLog := filepath.Join(dir, "env.log")
-	fake := writeFakeCLI(t, "claude",
-		`env > "`+envLog+`"; printf '%s' '{"is_error":false,"structured_output":`+composertest.ValidProposalJSON+`}'`)
+// Both tools' children get the same scrubbed environment: the env is built at
+// the single exec chokepoint, so codex cannot regress to a raw os.Environ()
+// while claude stays scrubbed (it used to).
+func TestExec_ScrubsChildEnv(t *testing.T) {
+	for _, tool := range []string{ToolClaude, ToolCodex} {
+		t.Run(tool, func(t *testing.T) {
+			// The fake records its environment so we can assert ANTHROPIC_API_KEY
+			// (subscription auth) and wardynd's own WARDYN_* config are gone while
+			// an unrelated var survives.
+			dir := t.TempDir()
+			envLog := filepath.Join(dir, "env.log")
+			body := `env > "` + envLog + `"
+printf '%s' '{"is_error":false,"structured_output":` + composertest.ValidProposalJSON + `}'`
+			if tool == ToolCodex {
+				// codex writes its proposal to the -o file rather than stdout.
+				body = `env > "` + envLog + `"
+` + codexWriteOutBody(composertest.ValidProposalJSON)
+			}
+			fake := writeFakeCLI(t, tool, body)
 
-	t.Setenv("ANTHROPIC_API_KEY", "sk-should-be-scrubbed")
-	t.Setenv("WARDYN_FAKE_MARKER", "kept")
+			t.Setenv("ANTHROPIC_API_KEY", "sk-should-be-scrubbed")
+			t.Setenv("WARDYN_AGE_KEY", "AGE-SECRET-KEY-should-be-scrubbed")
+			t.Setenv("FAKE_MARKER", "kept")
 
-	c, err := NewComposer(Config{Tool: ToolClaude, BinPath: fake.bin})
-	if err != nil {
-		t.Fatalf("NewComposer: %v", err)
-	}
-	if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err != nil {
-		t.Fatalf("Propose: %v", err)
-	}
+			c, err := NewComposer(Config{Tool: tool, BinPath: fake.bin})
+			if err != nil {
+				t.Fatalf("NewComposer: %v", err)
+			}
+			if _, err := c.Propose(context.Background(), composertest.SampleRequest()); err != nil {
+				t.Fatalf("Propose: %v", err)
+			}
 
-	b, err := os.ReadFile(envLog)
-	if err != nil {
-		t.Fatalf("read env log: %v", err)
-	}
-	childEnv := string(b)
-	if strings.Contains(childEnv, "ANTHROPIC_API_KEY=") {
-		t.Errorf("child env still contains ANTHROPIC_API_KEY:\n%s", childEnv)
-	}
-	if !strings.Contains(childEnv, "WARDYN_FAKE_MARKER=kept") {
-		t.Errorf("child env lost unrelated var WARDYN_FAKE_MARKER:\n%s", childEnv)
+			b, err := os.ReadFile(envLog)
+			if err != nil {
+				t.Fatalf("read env log: %v", err)
+			}
+			childEnv := string(b)
+			for _, banned := range []string{"ANTHROPIC_API_KEY=", "WARDYN_AGE_KEY="} {
+				if strings.Contains(childEnv, banned) {
+					t.Errorf("child env still contains %s:\n%s", banned, childEnv)
+				}
+			}
+			if !strings.Contains(childEnv, "FAKE_MARKER=kept") {
+				t.Errorf("child env lost unrelated var FAKE_MARKER:\n%s", childEnv)
+			}
+		})
 	}
 }
 
