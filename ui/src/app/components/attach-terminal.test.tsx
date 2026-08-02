@@ -14,10 +14,16 @@ import { render, act } from "@testing-library/react";
 
 // --- Mock xterm so we don't need real DOM measurement in jsdom -------------
 const writeln = vi.fn();
+const resizeCalls: Array<[number, number]> = [];
 vi.mock("@xterm/xterm", () => {
   class Terminal {
     cols = 80;
     rows = 24;
+    resize(cols: number, rows: number) {
+      this.cols = cols;
+      this.rows = rows;
+      resizeCalls.push([cols, rows]);
+    }
     loadAddon() {}
     open() {}
     write() {}
@@ -38,6 +44,9 @@ vi.mock("@xterm/xterm", () => {
 vi.mock("@xterm/addon-fit", () => {
   class FitAddon {
     fit() {}
+    proposeDimensions() {
+      return { cols: 92, rows: 30 };
+    }
   }
   return { FitAddon };
 });
@@ -70,7 +79,10 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.CLOSED;
     this.onclose?.({ code, reason });
   }
-  send() {}
+  sent: string[] = [];
+  send(data: string) {
+    this.sent.push(data);
+  }
   close() {
     this.readyState = FakeWebSocket.CLOSED;
   }
@@ -154,5 +166,31 @@ describe("AttachTerminal reconnect", () => {
     // Bounded: never more than 1 + MAX_RECONNECT_ATTEMPTS (4) = 5 sockets.
     expect(FakeWebSocket.instances.length).toBeLessThanOrEqual(5);
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // ptyCols pins the VISUAL grid to the forced width (rows still fit): the login
+  // CLI is a full-screen TUI that cursor-addresses whatever grid it is told, so
+  // PTY and xterm must agree — the old decoupled mode (wide PTY, container-fit
+  // view) interleaved redraw frames into garbage on screen.
+  it("ptyCols pins the xterm grid AND the PTY resize message to the same width", async () => {
+    resizeCalls.length = 0;
+    render(<AttachTerminal runId="run_1" ptyCols={512} />);
+    act(() => FakeWebSocket.instances[0].open());
+    await act(() => vi.advanceTimersByTimeAsync(100));
+
+    // The visual grid was resized to the pinned width, rows from the fit proposal.
+    expect(resizeCalls).toContainEqual([512, 30]);
+    // And the PTY resize frame agrees with the visual grid — no decoupling.
+    const resizeFrames = FakeWebSocket.instances[0].sent
+      .map((s: string) => {
+        try {
+          return JSON.parse(s);
+        } catch {
+          return null;
+        }
+      })
+      .filter((m: { type?: string } | null) => m?.type === "resize");
+    expect(resizeFrames.length).toBeGreaterThan(0);
+    expect(resizeFrames[resizeFrames.length - 1]).toMatchObject({ cols: 512, rows: 30 });
   });
 });

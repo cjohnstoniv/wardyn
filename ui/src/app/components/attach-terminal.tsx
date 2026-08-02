@@ -84,12 +84,14 @@ export interface AttachTerminalProps {
    */
   onOutput?: (chunk: string) => void;
   /**
-   * Override the COLUMN count reported to the PTY (the resize message), decoupled
-   * from the visual xterm width. The terminal still fits its container for display
-   * (long lines soft-wrap), but the program sees this width — used by the login
-   * flow to force a wide PTY so `claude setup-token` prints the OAuth URL/token on
-   * single lines instead of hard-wrapping them mid-string. Omit for a normal
-   * interactive terminal (PTY width follows the visible size).
+   * Force the terminal to this COLUMN count — both the PTY and the VISUAL xterm
+   * grid — instead of fitting the container's width (rows still fit the
+   * container; the pane scrolls horizontally). Used by the login flow so
+   * `claude setup-token` prints the OAuth URL/token on single lines for the
+   * stream extractors. The grids must MATCH: the CLI is a full-screen TUI that
+   * cursor-addresses the grid it is told, so the old decoupled mode (wide PTY,
+   * container-fit xterm) interleaved its redraw frames into garbage. Omit for a
+   * normal interactive terminal (width follows the visible size).
    */
   ptyCols?: number;
 }
@@ -162,23 +164,27 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // (the browser cannot put the bearer on the handshake itself).
   const tokenOnlyMode = React.useMemo(() => isAdminTokenOnlyMode(), []);
 
-  // Refit the terminal to its (current) container size and tell the PTY.
+  // Refit the terminal to its (current) container size and tell the PTY. With
+  // ptyCols set, the visual grid is pinned to that width (rows still follow the
+  // container) so the PTY and xterm always agree — see the ptyCols doc.
   const refit = React.useCallback(() => {
     const fit = fitAddonRef.current;
     const term = termRef.current;
     const ws = wsRef.current;
     if (!fit || !term) return;
     try {
-      fit.fit();
+      if (ptyColsRef.current) {
+        const dims = fit.proposeDimensions();
+        term.resize(ptyColsRef.current, dims && dims.rows > 0 ? dims.rows : term.rows);
+      } else {
+        fit.fit();
+      }
     } catch {
       /* container not measurable yet — a later observer/raf will refit */
       return;
     }
     if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
-      // ptyCols (when set) widens what the PROGRAM sees without changing the visual
-      // fit — the login flow forces this so claude setup-token doesn't wrap the URL.
-      const cols = ptyColsRef.current && ptyColsRef.current > term.cols ? ptyColsRef.current : term.cols;
-      ws.send(JSON.stringify({ type: "resize", cols, rows: term.rows }));
+      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     }
   }, []);
 
@@ -502,10 +508,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         </div>
       )}
 
-      {/* xterm container — flex-grows to fill the panel / fullscreen viewport */}
+      {/* xterm container — flex-grows to fill the panel / fullscreen viewport.
+          A pinned-width grid (ptyCols) renders wider than the pane; scroll it
+          horizontally rather than clipping the right edge. */}
       <div
         ref={containerRef}
-        className="min-h-0 flex-1 p-1"
+        className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
         // Keep clicks on the terminal from bubbling to the outer shell (focus).
         onMouseDown={(e) => e.stopPropagation()}
       />

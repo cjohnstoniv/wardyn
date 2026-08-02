@@ -110,19 +110,20 @@ function loginFlow(provider: string): LoginFlow {
   return LOGIN_FLOWS[provider] ?? LOGIN_FLOWS.anthropic;
 }
 
-// Force the login PTY wide so `claude setup-token` never hard-wraps the OAuth URL
-// (~200 chars) or the token across lines — a narrow PTY wrap mid-URL dropped
-// response_type=code and produced "Invalid OAuth Request" on the opened tab. The
-// visual xterm still fits its pane (long lines soft-wrap for display, stay
-// copyable); only the width claude sees is widened, so the byte stream the
-// extractors read has each value on one line.
+// Force the login terminal wide so `claude setup-token` never hard-wraps the
+// OAuth URL (~250 chars) or the token across lines — a narrow PTY wrap mid-URL
+// dropped response_type=code and produced "Invalid OAuth Request" on the opened
+// tab. AttachTerminal pins BOTH the PTY and the visual xterm grid to this width
+// (the pane scrolls horizontally): the CLI is a full-screen TUI that
+// cursor-addresses whatever grid it is told, so a decoupled wide-PTY/narrow-view
+// split interleaved its redraw frames into garbage on screen. Wrap-proofing the
+// extractors instead is a dead end — rejoining a wrapped URL cannot tell where
+// the URL ends and the next word begins, and a fused tail corrupts &state=.
 const LOGIN_PTY_COLS = 512;
 
-// The login PTY is forced WIDE (LOGIN_PTY_COLS below) so `claude setup-token`
-// prints the OAuth URL and the sk-ant-oat token each on a SINGLE line — the earlier
-// "Invalid OAuth Request" bug was a narrow PTY hard-wrapping the URL mid-string
-// (dropping response_type=code). With no wrap in the byte stream, these two
-// single-line extractors are correct and need no reassembly.
+// With the single wide grid above, `claude setup-token` prints the OAuth URL and
+// the sk-ant-oat token each on a SINGLE line, so these two single-line
+// extractors are correct and need no reassembly.
 
 // extractSetupToken pulls a COMPLETE `claude setup-token` token out of a chunk of
 // terminal output. Shape: `sk-ant-oat<2 digits>-<long url-safe body>`. We only
