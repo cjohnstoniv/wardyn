@@ -129,8 +129,13 @@ COPY --from=builder /out/wardyn /usr/local/bin/wardyn
 # Host-native build of the same CLI, for scripts/up.sh to extract and run ON THE
 # HOST (host-side proxy detection). Never executed inside this image.
 COPY --from=builder /out/wardyn-host /host/wardyn
-# Ship the example policies so -default-policy resolves inside the image.
+# Ship the example policies AND point -default-policy at them: the Go default
+# is the RELATIVE examples/policies/default.json (correct for `go run` from the
+# repo root) which does not resolve from this distroless image's WorkingDir —
+# without this ENV every bare `docker run`/Helm install crash-loops on ENOENT.
+# Explicit env (compose's demo.json, a chart --set) still wins.
 COPY --from=builder /build/examples/policies /examples/policies
+ENV WARDYN_DEFAULT_POLICY=/examples/policies/default.json
 # Ship the built UI and serve it by default (overridable via WARDYN_UI_DIR).
 COPY --from=ui /ui/dist /srv/ui
 ENV WARDYN_UI_DIR=/srv/ui

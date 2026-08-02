@@ -231,6 +231,40 @@ jobs:
       - name: helm lint + template (must render load-bearing objects)
         run: make helm-lint
 
+  # ── deploy: kind Helm install-test (proves the chart actually boots) ──────
+  # `helm` above only proves the chart RENDERS (`helm template`); it has
+  # never proven an install actually CONVERGES to a running, healthy control
+  # plane. Builds the image locally (no registry — ghcr publishing is
+  # publish-image.yml, a separate push-triggered workflow with no PR
+  # trigger), loads it straight into a throwaway kind cluster (`kind load
+  # docker-image` — no pull), then `make helm-install-test` does the
+  # in-cluster kubectl/helm work: a plain-manifest Postgres, `helm install`
+  # against the loaded image, a bounded rollout wait, and a real /healthz
+  # assertion through the Service via `kubectl port-forward` (see the
+  # Makefile target for two install-time overrides real validation forced,
+  # and why — neither is a chart DEFAULTS change). The kind cluster's
+  # create + automatic post-job delete (helm/kind-action) is the only piece
+  # that stays in the workflow — repo convention keeps the actual gate logic
+  # single-sourced in `make`.
+  helm-install-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - name: Build wardynd image (local only — publishing is publish-image.yml)
+        run: docker build -f deploy/compose/Dockerfile.wardynd -t wardyn/wardynd:kind-test .
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          cluster_name: wardyn-test
+          wait: 90s
+      - name: Load the image into kind (no registry pull)
+        run: kind load docker-image wardyn/wardynd:kind-test --name wardyn-test
+      - name: helm install + boot proof (make target — postgres, install, rollout wait, /healthz)
+        run: make helm-install-test
+
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
     runs-on: ubuntu-latest

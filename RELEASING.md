@@ -12,11 +12,13 @@ document is that process, written down.
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
   `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
-  `helm`, `compose`, `conformance`, `envbuild-integration`, `test-pg`,
-  `screenshots-fresh` (PR-only), `gates` (a matrix job: `govulncheck`,
-  `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco` (plus
-  `sbom-stub`, which runs **only** on push to `main` — see "Repo settings"
-  below).
+  `helm`, `helm-install-test`, `compose`, `conformance`,
+  `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
+  (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
+  `license-headers`, `gitleaks`), `dco` (plus `sbom-stub`, which runs
+  **only** on push to `main` — see "Repo settings" below, and
+  `publish-image` in the separate `.github/workflows/publish-image.yml`,
+  which runs on push to `main`/a release tag and is not part of this file).
 
 Run the local gate first:
 
@@ -107,7 +109,12 @@ for status to be reported" and cannot be merged.
 
 ## Container images
 
-No wardynd container image is published to any registry yet (see
-[docs/CI.md](docs/CI.md)). The Helm chart and compose stack build from source;
-operators must build and push their own image (see `deploy/helm/wardyn/values.yaml`).
-When image publishing lands, add the push + digest-pin steps here.
+`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` automatically —
+`.github/workflows/publish-image.yml` builds and pushes on every push to
+`main` (`:latest`, `:sha-<commit>`) and on every `vX.Y.Z` release tag (the
+bare semver, e.g. `0.4.4`, matching `Chart.yaml`'s `appVersion`); step 4's
+pushes are what trigger it. The compose stack still always builds from
+source (see [docs/CI.md](docs/CI.md)). Nothing else (the `wardyn-proxy`
+sidecar, agent images) is published yet, and there is no digest-pinning or
+signing of the published image — that is still the v0.5 release-pipeline
+task (see `sbom-stub` in `.github/workflows/ci.yml`).

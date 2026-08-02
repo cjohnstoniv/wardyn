@@ -2,15 +2,19 @@
 
 This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connecting to a Postgres database for state persistence and audit logging.
 
-> **YOU MUST BUILD AND PUSH THE IMAGE FIRST — no wardynd image is published
-> anywhere.** No workflow in this repo pushes to a registry (see
-> [docs/CI.md](../../../docs/CI.md)), so the chart's default
-> `image.repository` (`ghcr.io/cjohnstoniv/wardynd`) and its default tag
-> (`.Chart.AppVersion`) resolve to an image **that does not exist**.
-> `helm install` with the defaults renders fine and then `ImagePullBackOff`s
-> forever. Build + push your own and point `image.*` at it — see
-> [Build and push wardynd](#build-and-push-wardynd) below, which every
-> `helm install` example here assumes you have done.
+> **Published automatically — but only for a released version.** CI
+> ([.github/workflows/publish-image.yml](../../../.github/workflows/publish-image.yml))
+> builds and pushes `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+> (`:latest`, `:sha-<commit>`) and on every `vX.Y.Z` release tag (the bare
+> semver, e.g. `0.4.4` — matching this chart's default `image.tag`,
+> `.Chart.AppVersion`; see [RELEASING.md](../../../RELEASING.md)). The
+> chart's defaults resolve to a real image once the version in
+> `Chart.yaml`'s `appVersion` has actually been released; for an
+> unreleased/main-tip build, override `image.tag` to `latest` or
+> `sha-<commit>`. Building your own (below) is still useful for a fork, a
+> private registry, or a local change CI has not published yet — a wrong or
+> stale `image.*` still renders fine and then `ImagePullBackOff`s forever,
+> so double-check it either way.
 
 > **[v0.5+ — planned] Kubernetes data plane.** There is no Kubernetes runner
 > driver yet. This chart stands up `wardynd` and its dependencies, but
@@ -39,14 +43,17 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 - Kubernetes 1.20+ with a CNI that enforces NetworkPolicy (the chart renders a
   portable `networking.k8s.io/v1` policy — no specific CNI required)
 - Postgres 12+ (external or managed)
-- **A wardynd image you built and pushed yourself** (see below), plus a
-  registry your cluster can pull from.
+- A wardynd image: the chart's default pulls the CI-published one for a
+  released version (see the callout at the top), or **build and push your
+  own** (see below) for a fork, a private registry, or an unreleased change.
 
 ## Build and push wardynd
 
-Nothing publishes this image for you. From the repo root, with `REGISTRY` set to
-a registry your cluster can pull from (`ghcr.io/<you>`, an ECR/GAR host, a local
-registry — anything):
+CI publishes `ghcr.io/cjohnstoniv/wardynd` for you on `main` and release tags
+(see the callout above) — this section is only for a fork, a private
+registry, or a local/unreleased change. From the repo root, with `REGISTRY`
+set to a registry your cluster can pull from (`ghcr.io/<you>`, an ECR/GAR
+host, a local registry — anything):
 
 ```bash
 REGISTRY=ghcr.io/<you>          # your registry, not this repo's
@@ -71,8 +78,9 @@ kubectl create secret docker-registry regcred -n wardyn \
 
 ## Installation
 
-Point `image.repository`/`image.tag` at what you just pushed — the chart's
-defaults resolve to an image that does not exist:
+If you built your own image above, point `image.repository`/`image.tag` at
+what you just pushed (omit both to use the chart's defaults, which resolve
+for a released version — see the callout at the top):
 
 ```bash
 kubectl create secret generic wardyn-auth -n wardyn \
@@ -86,6 +94,14 @@ helm install wardyn ./deploy/helm/wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
+
+The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json`
+(baked into `Dockerfile.wardynd` — images older than that fix crash-loop on
+boot with `open examples/policies/default.json: no such file or directory`;
+on one of those, add
+`--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`). To use a
+different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
+`/examples/policies/` (`demo.json`, ...).
 
 The chart **refuses to render** without an admin token or an OIDC issuer: an
 install with neither brings up a pod that passes its `/healthz` probe and 401s
@@ -133,9 +149,10 @@ helm install wardyn ./deploy/helm/wardyn -n wardyn \
 
 See `values.yaml` for all options. Key settings:
 
-- `image.repository` / `image.tag`: wardynd container image. **Required in
-  practice** — the defaults name an unpublished image (see the warning at the
-  top). `image.tag` empty => `.Chart.AppVersion`, which no registry carries.
+- `image.repository` / `image.tag`: wardynd container image. The defaults
+  resolve to a real image once `Chart.yaml`'s `appVersion` has been released
+  (see the callout at the top) — override both for a locally built image or
+  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`.
 - `image.pullSecrets`: list of `{name: ...}` pull secrets for a private registry
 - `postgres.dsn.secretRef.name`: existing Secret holding the DSN under `postgres.dsn.key` (empty => inline mode)
 - `postgres.dsn.value`: inline DSN (inline mode only)
@@ -145,8 +162,16 @@ See `values.yaml` for all options. Key settings:
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty
   => wardynd self-generates an ephemeral key). `ageKey` is inline-mode only;
   with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.
+  **Set one of these against any real (non-inline) Postgres**, even for a quick
+  trial: an ephemeral key does not survive a pod restart, and wardynd's own
+  first-boot secret-store entries (e.g. its internal signing key) are written
+  under whatever key that first boot generated — the NEXT boot generates a
+  different one, can no longer decrypt them, and the pod crash-loops forever.
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
-  literal in the pod spec — **not for secrets**.
+  literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` in
+  particular is **required in practice**: the image's own default is a
+  relative path that does not resolve inside it (see
+  [Installation](#installation)).
 - `extraEnv`: raw `EnvVar` entries (so `valueFrom.secretKeyRef` works) for the
   secret-bearing variables docs/ENV.md marks 🔒: `WARDYN_OIDC_CLIENT_SECRET`,
   `WARDYN_COMPOSER_API_KEY`, and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM

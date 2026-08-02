@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -358,6 +358,92 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
+
+# ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
+# helm-lint above only proves the chart RENDERS; this proves an install
+# actually CONVERGES to a booting, healthy control plane — not just valid
+# YAML. Only the in-cluster kubectl/helm steps live here (repo convention:
+# gate logic single-sourced in make); the kind cluster's own create/delete
+# lifecycle is the CALLER's job (ci.yml's helm-install-test job, via
+# helm/kind-action) — this target only needs a current kubeconfig context
+# already pointed at a kind cluster with the target image already
+# `kind load docker-image`-ed.
+#
+# Two install-time overrides below exist ONLY because real validation (a
+# live kind install, not just `helm template`) surfaced two gaps helm-lint's
+# render-only check cannot see — NEITHER is a chart DEFAULTS change
+# (values.yaml itself is untouched):
+#   - secrets.ageKeyFromSecret=true: the chart's own default (an ephemeral
+#     age identity regenerated every boot) cannot survive ANY pod restart
+#     once paired with a real (non-inline) Postgres — boot N encrypts
+#     "wardyn-signing-key" under ephemeral key N, boot N+1 generates a
+#     brand-new unrelated key and can never decrypt it again ("age decrypt:
+#     no identity matched any of the recipients"), so the pod crash-loops
+#     forever after its first restart. A stable key riding in the SAME
+#     external Secret as the DSN (the chart's own documented mechanism for
+#     exactly this case — see values.yaml) fixes it.
+#   - (fixed at the image layer, deliberately NOT overridden here): the Go
+#     -default-policy default is a RELATIVE path that never resolved from the
+#     distroless image's WorkingDir — every default install crash-looped on
+#     ENOENT until Dockerfile.wardynd gained
+#     ENV WARDYN_DEFAULT_POLICY=/examples/policies/default.json. This target
+#     installs WITHOUT a policy override precisely so it keeps proving the
+#     default path boots.
+#
+# Two honest limits of this gate: (1) if the -gen-age-key docker run ever
+# fails, the age-key literal degrades to "" (ephemeral identity) and the
+# install still passes without proving key persistence; (2) kind's default
+# CNI does not enforce NetworkPolicy, so the chart's default-deny NP is
+# rendered but never exercised here.
+HELM_TEST_NAMESPACE  ?= wardyn-test
+HELM_TEST_RELEASE    ?= wardyn-test
+HELM_TEST_IMAGE_REPO ?= wardyn/wardynd
+HELM_TEST_IMAGE_TAG  ?= kind-test
+
+helm-install-test: ## kind: postgres + helm install the loaded image + prove /healthz (needs a kind cluster up, see ci.yml)
+	@echo "==> Postgres ($(HELM_TEST_NAMESPACE))"
+	kubectl delete namespace $(HELM_TEST_NAMESPACE) --ignore-not-found --wait
+	kubectl create namespace $(HELM_TEST_NAMESPACE)
+	kubectl -n $(HELM_TEST_NAMESPACE) create secret generic wardyn-postgres-dsn \
+		--from-literal=dsn="postgres://wardyn:wardyn@postgres:5432/wardyn?sslmode=disable" \
+		--from-literal=age-key="$$(docker run --rm $(HELM_TEST_IMAGE_REPO):$(HELM_TEST_IMAGE_TAG) -gen-age-key)"
+	kubectl -n $(HELM_TEST_NAMESPACE) create deployment postgres --image=postgres:16
+	kubectl -n $(HELM_TEST_NAMESPACE) set env deployment/postgres POSTGRES_USER=wardyn POSTGRES_PASSWORD=wardyn POSTGRES_DB=wardyn
+	kubectl -n $(HELM_TEST_NAMESPACE) expose deployment postgres --port=5432
+	kubectl -n $(HELM_TEST_NAMESPACE) rollout status deployment/postgres --timeout=120s
+	@echo "==> helm install $(HELM_TEST_RELEASE) (image $(HELM_TEST_IMAGE_REPO):$(HELM_TEST_IMAGE_TAG), already kind-loaded — no registry pull)"
+	helm install $(HELM_TEST_RELEASE) ./deploy/helm/wardyn \
+		--namespace $(HELM_TEST_NAMESPACE) \
+		--set image.repository=$(HELM_TEST_IMAGE_REPO) \
+		--set image.tag=$(HELM_TEST_IMAGE_TAG) \
+		--set secrets.ageKeyFromSecret=true \
+		--set auth.adminToken.value="$$(openssl rand -hex 20)"
+	kubectl -n $(HELM_TEST_NAMESPACE) rollout status deployment/$(HELM_TEST_RELEASE) --timeout=180s || { \
+		echo "FAIL: wardynd rollout never converged — pod state + logs follow"; \
+		kubectl -n $(HELM_TEST_NAMESPACE) describe pod -l app.kubernetes.io/name=wardyn; \
+		kubectl -n $(HELM_TEST_NAMESPACE) logs -l app.kubernetes.io/name=wardyn --tail=100 --all-containers || true; \
+		exit 1; \
+	}
+	@echo "==> asserting /healthz through the Service (kubectl port-forward + curl)"
+	@set -eu; \
+	kubectl -n $(HELM_TEST_NAMESPACE) port-forward svc/$(HELM_TEST_RELEASE) 18080:8080 >/tmp/wardyn-kind-test-portforward.log 2>&1 & \
+	pf_pid=$$!; \
+	trap 'kill $$pf_pid 2>/dev/null || true' EXIT; \
+	ok=0; \
+	for i in $$(seq 1 15); do \
+		code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/healthz || true); \
+		if [ "$$code" = "200" ]; then ok=1; break; fi; \
+		sleep 1; \
+	done; \
+	if [ "$$ok" != "1" ]; then \
+		echo "FAIL: /healthz never returned 200 (last code: $$code)"; \
+		cat /tmp/wardyn-kind-test-portforward.log; \
+		exit 1; \
+	fi; \
+	echo "/healthz OK (200) via kubectl port-forward -> Service -> Pod"
+	@echo "==> teardown"
+	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
+	kubectl delete namespace $(HELM_TEST_NAMESPACE) --wait=false
 
 # Validate the compose files parse (does NOT need a running daemon).
 # Both invocations, since scripts/ci-run.sh runs the base + the CI overlay together.

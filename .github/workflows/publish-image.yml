@@ -1,0 +1,89 @@
+name: Publish wardynd image
+
+# Publishes the wardynd control-plane image to GHCR — the lane that makes the
+# Helm chart's default image ref (deploy/helm/wardyn/values.yaml:
+# ghcr.io/cjohnstoniv/wardynd, tag empty => Chart.yaml's appVersion) resolve
+# to a real, pullable image instead of a placeholder that ImagePullBackOffs
+# forever (see RELEASING.md "Container images" and
+# deploy/helm/wardyn/README.md).
+#
+# Runs on push to main (":latest" + ":sha-<short-sha>") and on release tags
+# (v* — RELEASING.md's tagging convention; published as the BARE semver, e.g.
+# v0.4.5 -> "0.4.5", matching Chart.yaml's appVersion so the chart default
+# resolves for that release once it is cut). A release tag that predates this
+# workflow (v0.4.4 and older) can NOT be re-run at its own ref — the workflow
+# file doesn't exist there — so workflow_dispatch takes an extra_tag input:
+# dispatch on main with extra_tag=0.4.4 to publish main's HEAD under that tag
+# (acceptable for the backfill: 0.4.4 is main's lineage; from v0.4.5 onward the
+# tag push publishes the exact tagged commit automatically).
+#
+# Deliberately its OWN workflow file, not a job on ci.yml: ci.yml's push
+# trigger only ever matched branches (main/master), never tags, and widening
+# it to tags would re-run the ENTIRE PR/push job matrix (build, ui-e2e,
+# envbuild-integration, test-pg, ...) on every release-tag push for no
+# reason — that matrix already ran (and had to pass) on the commit before it
+# was tagged. Never runs on pull_request: a PR must never publish.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      extra_tag:
+        description: "Additional bare tag to publish (e.g. 0.4.4 to backfill a pre-workflow release)"
+        required: false
+        default: ""
+
+# packages: write is the only elevation over ci.yml's read-only default —
+# GHCR push needs it; GITHUB_TOKEN carries it once granted here, so this
+# needs no PAT secret to configure.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Tags: always a short-sha; "latest" added on main; the bare semver
+      # (v-prefix stripped, matching Chart.yaml's appVersion) added on a
+      # vX.Y.Z tag. Hand-rolled in a few lines rather than pulling in
+      # docker/metadata-action for three strings. Via env, not `${{ }}`
+      # inside the script body (ci.yml's screenshots-fresh job sets this
+      # precedent).
+      - name: Compute image tags
+        id: tags
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          EXTRA_TAG: ${{ inputs.extra_tag }}
+        run: |
+          tags=("ghcr.io/cjohnstoniv/wardynd:sha-${GITHUB_SHA::7}")
+          if [ "$REF_TYPE" = "branch" ] && [ "$REF_NAME" = "main" ]; then
+            tags+=("ghcr.io/cjohnstoniv/wardynd:latest")
+          fi
+          if [ "$REF_TYPE" = "tag" ]; then
+            tags+=("ghcr.io/cjohnstoniv/wardynd:${REF_NAME#v}")
+          fi
+          if [ -n "${EXTRA_TAG:-}" ]; then
+            tags+=("ghcr.io/cjohnstoniv/wardynd:${EXTRA_TAG}")
+          fi
+          {
+            echo "tags<<TAGEOF"
+            printf '%s\n' "${tags[@]}"
+            echo "TAGEOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/compose/Dockerfile.wardynd
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
