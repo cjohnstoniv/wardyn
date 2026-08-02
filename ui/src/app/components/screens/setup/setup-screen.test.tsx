@@ -295,6 +295,58 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(within(artifactBtn).getByText("Optional")).toBeInTheDocument();
   });
 
+  // A4 — "Skipped" state: an optional step the operator navigated past without
+  // configuring it reads "Skipped" in the rail instead of a perpetual "Optional".
+  describe("A4 — Skipped state", () => {
+    it("navigating past an optional step without configuring it marks its rail badge Skipped", async () => {
+      render(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+
+      // Leave host_proxy via Next without touching its SiteConfig (unconfigured
+      // by beforeEach's getSiteConfigMock default of {}).
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
+      await screen.findByRole("heading", { name: /corporate host proxy/i });
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> artifact_repo, leaves host_proxy
+
+      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      const hostProxyBtn = within(nav).getByRole("button", { name: /host proxy/i });
+      expect(within(hostProxyBtn).getByText("Skipped")).toBeInTheDocument();
+      expect(within(hostProxyBtn).queryByText("Optional")).not.toBeInTheDocument();
+    });
+
+    it("a configured optional step never shows Skipped, even after navigating past it", async () => {
+      getSiteConfigMock.mockReset().mockResolvedValue({ upstream_proxy_secret_ref: "corp-proxy" });
+      render(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
+      await screen.findByRole("heading", { name: /corporate host proxy/i });
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> artifact_repo, leaves host_proxy
+
+      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      const hostProxyBtn = within(nav).getByRole("button", { name: /host proxy/i });
+      expect(within(hostProxyBtn).getByText("Configured")).toBeInTheDocument();
+      expect(within(hostProxyBtn).queryByText("Skipped")).not.toBeInTheDocument();
+    });
+
+    it("visited-step tracking round-trips through localStorage across a remount", async () => {
+      const { unmount } = render(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> host_proxy
+      await screen.findByRole("heading", { name: /corporate host proxy/i });
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> artifact_repo, leaves host_proxy
+      unmount();
+
+      // A fresh mount reads the persisted visited-set back — this must be real
+      // localStorage, not in-memory React state that a remount would lose.
+      render(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      const hostProxyBtn = within(nav).getByRole("button", { name: /host proxy/i });
+      expect(within(hostProxyBtn).getByText("Skipped")).toBeInTheDocument();
+    });
+  });
+
   it("'Finish setup' at the end of the flow dismisses setup and calls onDone (no early exit)", async () => {
     const onDone = vi.fn();
     render(<SetupScreen onDone={onDone} />);

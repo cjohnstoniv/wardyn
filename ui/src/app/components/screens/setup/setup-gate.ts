@@ -13,6 +13,7 @@
 // setup-screen re-exports both, so existing importers/tests are unaffected.
 import { lsGet, lsSet } from "../../../lib/storage";
 import type { SetupStatus } from "../../../lib/types";
+import type { SetupStepId } from "./steps";
 
 // ------------------------------------------------------------
 // Dismiss flag — via lib/storage's private-mode-tolerant lsGet/lsSet.
@@ -41,6 +42,32 @@ export function modelSkipped(): boolean {
 
 export function markModelSkipped(): void {
   lsSet(MODEL_SKIPPED_KEY, "1");
+}
+
+// Visited-step set (A4) — steps the operator has navigated AWAY from at least
+// once (per browser), regardless of direction (Next, Back, a rail jump, or an
+// in-step jump all count — leaving a step backward still means you've seen it).
+// Powers the rail's neutral "Skipped" chip + muted dot for an OPTIONAL step left
+// unconfigured, so it stops reading as a perpetual, un-acted-on "Optional". Same
+// JSON-array-over-lsGet/lsSet shape as loadLaunchedDemos/markDemoLaunched
+// (../demos/demo-catalog.ts) — this is a Set of ids, not a single flag.
+const VISITED_KEY = "wardyn-setup-visited";
+
+export function loadVisitedSteps(): SetupStepId[] {
+  try {
+    const parsed = JSON.parse(lsGet(VISITED_KEY) ?? "[]");
+    return Array.isArray(parsed) ? (parsed as SetupStepId[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markStepVisited(stepId: SetupStepId): void {
+  const set = new Set(loadVisitedSteps());
+  if (!set.has(stepId)) {
+    set.add(stepId);
+    lsSet(VISITED_KEY, JSON.stringify([...set]));
+  }
 }
 
 // The HARD first-run gate: while active, the app nav is hidden and every route

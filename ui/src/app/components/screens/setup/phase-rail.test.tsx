@@ -117,4 +117,32 @@ describe("PhaseRail", () => {
       expect(btn).not.toHaveAttribute("aria-pressed");
     }
   });
+
+  // A4 — "Skipped" state: the rail dot for a visited-but-unconfigured optional
+  // step is a muted "visited" marker, never the green done checkmark. PhaseRail
+  // stays pure/prop-shape-unchanged — it derives this straight from the badge
+  // the orchestrator already computed (badge.text === "Skipped"), the same
+  // signal the chip itself renders.
+  it("renders a muted visited dot (not a done checkmark) for a step whose badge reads Skipped", () => {
+    const badges = { ...BADGES, credentials: { text: "Skipped", tone: "neutral" } as StepBadge };
+    render(<PhaseRail current="environment" badges={badges} done={DONE} onSelect={vi.fn()} />);
+    const nav = within(screen.getByRole("navigation", { name: /setup steps/i }));
+    const btn = nav.getByRole("button", { name: /credentials/i });
+    expect(within(btn).getByText("Skipped")).toBeInTheDocument();
+    const dot = btn.querySelector("[data-visited]");
+    expect(dot).toHaveAttribute("data-visited", "true");
+  });
+
+  it("a done step never carries the visited marker, even if its badge text were Skipped", () => {
+    // Belt-and-suspenders on the "done always wins" rule: force the contradiction
+    // (shouldn't occur in practice — stepDone/the orchestrator never pair
+    // done:true with badge text "Skipped" outside the explicit model-skip case,
+    // which itself renders the green checkmark) and confirm isDone still wins.
+    const badges = { ...BADGES, credentials: { text: "Skipped", tone: "neutral" } as StepBadge };
+    const done = { ...DONE, credentials: true };
+    render(<PhaseRail current="environment" badges={badges} done={done} onSelect={vi.fn()} />);
+    const nav = within(screen.getByRole("navigation", { name: /setup steps/i }));
+    const btn = nav.getByRole("button", { name: /credentials/i });
+    expect(btn.querySelector("[data-visited]")).toBeNull();
+  });
 });

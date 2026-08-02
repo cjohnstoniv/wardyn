@@ -48,6 +48,11 @@ export function PhaseRail({
         {STEP_ORDER.map((stepId) => {
           const badge = badges[stepId];
           const isDone = done[stepId];
+          // A4: visited-without-configuring (see setup-screen's Skipped override)
+          // reads as a muted dot — distinct from both the untouched tone-outline
+          // ring and the green done checkmark. isDone still wins outright (an
+          // explicitly-skipped model step earns its checkmark elsewhere).
+          const isVisited = !isDone && badge.text === "Skipped";
           const active = current === stepId;
           const label = `${STEP_LABEL[stepId]} — ${badge.text}`;
           return (
@@ -62,11 +67,14 @@ export function PhaseRail({
               )}
             >
               <span
+                data-visited={isVisited || undefined}
                 className={cn(
                   "flex size-4 shrink-0 items-center justify-center rounded-full border",
                   isDone
                     ? "border-success bg-success text-white"
-                    : cn("border-border-strong", TONE_DOT[badge.tone]),
+                    : isVisited
+                      ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
+                      : cn("border-border-strong", TONE_DOT[badge.tone]),
                 )}
               >
                 {isDone && <Check className="size-3" aria-hidden />}
@@ -120,6 +128,8 @@ export function PhaseRail({
                   {phase.steps.map((stepId) => {
                     const badge = badges[stepId];
                     const isDone = done[stepId];
+                    // A4: see the compact rail above for what this means.
+                    const isVisited = !isDone && badge.text === "Skipped";
                     const active = current === stepId;
                     return (
                       <li key={stepId}>
@@ -134,11 +144,14 @@ export function PhaseRail({
                           )}
                         >
                           <span
+                            data-visited={isVisited || undefined}
                             className={cn(
                               "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
                               isDone
                                 ? "border-success bg-success text-white"
-                                : cn("border-border-strong", TONE_DOT[badge.tone]),
+                                : isVisited
+                                  ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
+                                  : cn("border-border-strong", TONE_DOT[badge.tone]),
                             )}
                           >
                             {isDone && <Check className="size-3" aria-hidden />}

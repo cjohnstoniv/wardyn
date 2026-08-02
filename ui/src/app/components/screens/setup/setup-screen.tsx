@@ -38,14 +38,20 @@ import {
   ScmProviderStep,
   WorkspacesStep,
 } from "./step-bodies";
-import { DEMO_STEP_IDS, STEP_ORDER, stepBadges, stepDone, type SetupStepId } from "./steps";
+import { DEMO_STEP_IDS, OPTIONAL_STEPS, STEP_ORDER, stepBadges, stepDone, type SetupStepId } from "./steps";
 import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 
 // The dismiss flag lives in ./setup-gate so App.tsx can import it without
 // pulling this module's terminal-heavy graph into the entry chunk. Re-exported
 // here: this is still its public home.
 export { dismissSetup, setupDismissed } from "./setup-gate";
-import { dismissSetup, markModelSkipped, modelSkipped } from "./setup-gate";
+import {
+  dismissSetup,
+  loadVisitedSteps,
+  markModelSkipped,
+  markStepVisited,
+  modelSkipped,
+} from "./setup-gate";
 
 // Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.
 // Lazy-load it so that terminal-heavy graph stays out of the setup chunk until
@@ -74,6 +80,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // checkmark without a connected model. Per-browser (setup-gate); a real model
   // supersedes it.
   const [skippedModel, setSkippedModel] = React.useState(modelSkipped());
+  // Steps navigated AWAY from at least once (per browser) — feeds the rail's
+  // "Skipped" badge override below. See selectStep for what counts as leaving.
+  const [visitedSteps, setVisitedSteps] = React.useState<Set<SetupStepId>>(
+    () => new Set(loadVisitedSteps()),
+  );
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const { workspaces, loading: wsLoading, reload: loadWorkspaces } = useWorkspaceList();
   // Site config powers the corporate-baseline step badges: the backend's own
@@ -92,6 +103,23 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     setCcOverride(cc);
     setDefaultCc(cc);
   }, []);
+
+  // THE single navigation funnel (A4): every Next/Back/rail-jump/in-step-jump
+  // goes through this instead of raw setStepId, so leaving a step can be
+  // recorded exactly once. "Leaving" counts in every direction — going Back off
+  // a step still means you've seen it — simplest honest rule, no special-casing.
+  // Never touches `done`: a visited-but-unconfigured optional step reads
+  // "Skipped" (below), never a false checkmark.
+  const selectStep = React.useCallback(
+    (next: SetupStepId) => {
+      if (next !== stepId) {
+        markStepVisited(stepId);
+        setVisitedSteps((s) => (s.has(stepId) ? s : new Set(s).add(stepId)));
+      }
+      setStepId(next);
+    },
+    [stepId],
+  );
 
   // Sole SiteConfig owner (V2): the orchestrator holds the one fetched copy and
   // hands the three corp steps a reload + save pair instead of each keeping its
@@ -214,16 +242,35 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     done.provider = true;
     badges.provider = { text: "Skipped", tone: "neutral" };
   }
+  // A4: an optional step the operator navigated away from without configuring it
+  // reads "Skipped" instead of a perpetual, un-acted-on "Optional" — a neutral
+  // "you saw this and moved on" marker. Scoped to the exact still-default badge
+  // (neutral "Optional") so anything the two overrides above (or stepBadges/
+  // stepDone themselves) already upgraded — Done · demo run, a connected
+  // model's Ready, workspaces' In progress, a Configured corporate step — wins
+  // outright and is left alone. Never sets `done`: Skipped is a visited marker,
+  // not a checkmark (credentials, honesty-pinned done:false forever, is the
+  // clearest case — it can only ever go Optional -> Skipped, never Configured).
+  for (const id of OPTIONAL_STEPS) {
+    if (
+      visitedSteps.has(id) &&
+      !done[id] &&
+      badges[id].tone === "neutral" &&
+      badges[id].text === "Optional"
+    ) {
+      badges[id] = { text: "Skipped", tone: "neutral" };
+    }
+  }
 
   return (
     <>
       <SetupLayout
         current={stepId}
-        rail={<PhaseRail current={stepId} badges={badges} done={done} onSelect={setStepId} />}
+        rail={<PhaseRail current={stepId} badges={badges} done={done} onSelect={selectStep} />}
         checking={rechecking}
         lastCheckedLabel={lastCheckedLabel(lastCheckedAt)}
         onRecheck={recheck}
-        onSelect={setStepId}
+        onSelect={selectStep}
         onFinish={finish}
         onLaunch={() => setNewRunOpen(true)}
         // A barrier is enough to launch (an interactive run works with no model —
@@ -254,7 +301,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
               // Advance past the (now-decided) optional step.
               const i = STEP_ORDER.indexOf("provider");
               const nextStep = STEP_ORDER[i + 1];
-              if (nextStep) setStepId(nextStep);
+              if (nextStep) selectStep(nextStep);
             }}
           />
         )}
@@ -265,7 +312,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             <DemoDetail
               demo={DEMOS.find((d) => d.id === stepId)!}
               barrierReady={readiness.barrierReady}
-              onJump={setStepId}
+              onJump={selectStep}
               onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}
             />
           </React.Suspense>
@@ -288,7 +335,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             reloadSiteConfig={reloadSiteConfig}
             saveSiteConfig={saveSiteConfig}
             onAddSecret={openAddSecret}
-            onJump={setStepId}
+            onJump={selectStep}
             onRecheck={recheck}
             rechecking={rechecking}
           />
@@ -321,7 +368,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onRecheck={recheck}
             rechecking={rechecking}
             lastCheckedAt={lastCheckedAt}
-            onJump={setStepId}
+            onJump={selectStep}
           />
         )}
         {stepId === "launch" && (
