@@ -149,10 +149,13 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
 	// can break: the unique in-container target across workspace_mounts +
-	// workspace_repos (policy.go — "a clone can never land on a bind target").
-	// Without this, a workspace whose target collides with a policy mount reaches
-	// the driver as a duplicate mount point (opaque dispatch failure) — or, worse,
-	// a repo clone lands on top of a writable bind.
+	// workspace_repos (policy.go). Without this, a workspace whose target
+	// collides with a policy mount reaches the driver as a duplicate mount point
+	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
+	// writable bind. Exact-target only, like the invariant itself: a repo target
+	// nested INSIDE a writable mount still clones into the host bind — permitted,
+	// since clone-into-mounted-workspace is how the legacy default dest
+	// ~/work/<name> already behaves when ~/work is a mounted dir.
 	if err := validatePolicyWorkspaces(*spec); err != nil {
 		return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, err)
 	}

@@ -8,12 +8,90 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-08-02
+
+The final solidification release before the K8s/corporate extension work: a
+full-repo verified sweep (159 adversarially-confirmed findings applied across
+backend, console, CLI/SDK, gates, deploy and docs) that fills the parity gaps,
+hardens the defaults, and makes the remaining claims true.
+
+**Operators upgrading:** no schema changes. Three deliberate breaking changes
+below (CLI flag removal, SDK return type, Helm chart defaults) — each has a
+one-line migration.
+
+### Added
+
+- **`/metrics`** — first observability surface: Prometheus text exposition
+  (stdlib-only), admin-gated beside `/healthz`; runs by terminal state,
+  approval decisions, egress denies, credential mints, sandbox launch latency.
+- **`wardyn workspace` command family** (`create|list|get|delete|scan`) —
+  `create` clears the run-create onboarding gate that previously made
+  workspace-mount policies unusable from the CLI alone.
+- **`wardyn run --dry-run`** (launch-parity preflight incl. `--workspace`
+  seeding), **`run grants`**, **`run recording`** (download a session cast),
+  `run --workspace <id>`, `--devcontainer-repo/-ref`, and POST /runs advisory
+  warnings surfaced on stderr (SDK: `CreateRunResult.Warnings`).
+- **Console:** guided workspace import reachable from `/workspaces` (no more
+  walking back into Getting Started), env-as-code regeneration dialog,
+  recording download, run exit codes, attach-session recordings listed on run
+  detail, eBPF ground-truth health chip on Audit, kill-run dialog unified,
+  SSO sign-in button live when OIDC is configured, truncation banners, poll
+  failure escalation to an unreachable banner.
+- **wardynd version identity** (`internal/version`, surfaced on `/healthz`) and
+  a `GET /workspaces/{id}/env-as-code` endpoint (finalize's committable files,
+  re-fetchable any time).
+- **Server-side audit query predicates** (`since`/`until`/`action_prefix`/
+  `actor_type`/`outcome`) and a `run_id` filter on `GET /approvals`.
+- **Security hardening:** response security headers (CSP et al.) on the
+  console; OIDC PKCE verifier lengthened to the RFC 7636 floor; the composer
+  LLM transport refuses HTTPS→HTTP redirects and no longer inherits wardynd's
+  full environment; proxy listener header caps; sandbox-facing request-body
+  caps on every /internal route; MITM error strings masked; boot refusal on
+  the published demo admin token bound to a routable address; opt-in
+  recordings retention (`WARDYN_RECORDING_RETENTION_DAYS`, off by default).
+- **Gates:** `tidy-check` and a pnpm-audit UI vulnerability gate joined
+  `make ci`; helm-lint renders a non-default value matrix; image-pin and
+  compose-config gates cover every compose file; the SPDX gate covers shell;
+  UI `noUnusedLocals`/`noUnusedParameters` + `ui/e2e` typechecking; a
+  stale-citation guard over Go comments; a RunPolicySpec field reference
+  (docs/POLICIES.md) gated against the struct.
+- **Docs:** `docs/OPERATIONS.md` (the four state stores, backup/restore,
+  forward-only migrations, rotation honesty, the single-replica constraint),
+  git credential routing matrix in ARCHITECTURE.md, threat-model
+  authorization-gap section, WARDYN_AUDIT_SINKS schema.
+
 ### Changed
 
+- **BREAKING — `pkg/client.CreateRun` returns `(CreateRunResult, error)`**
+  (the run plus server advisory warnings). Migration: `res.AgentRun` is the
+  old value.
+- **BREAKING — the Helm chart refuses to render without auth** (set
+  `auth.adminToken.secretRef.name` or `env.WARDYN_OIDC_ISSUER`) and its
+  **NetworkPolicy ingress default tightened from all-namespaces to
+  same-namespace** (cross-namespace clients now need an explicit
+  `networkPolicy.ingress.from`). The chart also stopped crash-looping on its
+  own defaults (recordings dir), sources the admin token and age key from
+  Secrets, and pins `automountServiceAccountToken: false`.
 - **An audit webhook sink configured with a `bearer_token` now requires an
   `https://` URL.** The token is a long-lived SIEM ingest credential replayed on
   every POST, so a plaintext endpoint leaked it continuously. wardynd refuses to
   start instead. A tokenless `http://` collector is unaffected.
+- The compose wardynd healthcheck, decision-ingest idle touches (debounced),
+  and preflight/launch workspace parity were all tightened; `ci-run.sh`'s
+  preflight preview now rides `wardyn run --dry-run`.
+
+### Removed
+
+- **BREAKING — `wardyn secret set --value`.** Values are stdin-only (argv
+  leaked into shell history and `ps`). Migration:
+  `printf '%s' "$VALUE" | wardyn secret set <name>`.
+- **`POST /api/v1/runs/compose/telemetry`** (vendor-style funnel beacon in a
+  self-hosted product; the compose session id already threads the audit
+  trail) — now 404, and the console no longer calls it.
+- The unreachable `ui/e2e/live` suite, `scripts/run-local.sh`, the runner
+  capabilities `warm_pools` field, and a set of dead symbols
+  (`store.Store.GetGrant`, proxy hold-for-review knobs, `shouldOpenSetup`,
+  Fleet-era comments).
 
 ## [0.4.3] — 2026-07-29
 

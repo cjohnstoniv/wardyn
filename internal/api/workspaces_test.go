@@ -115,6 +115,15 @@ type workspaceStoreFake struct {
 func (s *workspaceStoreFake) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
 	return s.ws, nil
 }
+func (s *workspaceStoreFake) GetWorkspaceBySource(_ context.Context, kind types.WorkspaceKind, source string) (types.Workspace, error) {
+	if kind == s.ws.Kind && source == s.ws.Source {
+		return s.ws, nil
+	}
+	return types.Workspace{}, store.ErrNotFound
+}
+func (s *workspaceStoreFake) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return []types.Workspace{s.ws}, nil
+}
 func (s *workspaceStoreFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }

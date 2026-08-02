@@ -37,7 +37,9 @@ type preflightResponse struct {
 // here: deriveSetupItems' backend row reports that honestly instead, so a host
 // that can't yet enforce the class shows a fixable checklist row on Review
 // rather than a fatal error that blanks the panel. Reproduced launch gates:
-// resolveRunPolicy's 4xx set, the onboarded-workspace gate, and the confinement
+// resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (container-kind
+// refusal, unknown workspace, target collision), the onboarded-workspace gate,
+// the workspace credential-binding fold, and the confinement
 // floor check below. Not reproduced (unreachable via the wizard body this
 // endpoint serves): the agent-required 400, the BYOI image/devcontainer 400s,
 // and the cloud_sts identity-provider 422 — launch still enforces all of them.
@@ -92,6 +94,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	}
+
+	// Fold the primary workspace's credential binding into the spec exactly as
+	// launch does AFTER enforcement (runs.go), so the model-access and egress
+	// checklist rows below see the creds the run will really hold. No audit
+	// event — preflight persists nothing (that is applyPrimaryWorkspaceCreds's
+	// launch-only half).
+	if primary := s.primaryWorkspace(ctx, req, s.referencedWorkspaces(ctx, spec)); primary != nil {
+		s.applyWorkspaceCreds(ctx, &spec, primary, req.Agent)
 	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with

@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -604,9 +605,10 @@ func decisionOutcome(d egress.Decision) string {
 }
 
 // touchDebounce bounds how often the decision ingest refreshes a run's
-// updated_at. The idle-reaper thresholds are minutes, so per-decision precision
-// buys nothing — this turns a chatty agent's burst into one UPDATE per window.
-const touchDebounce = 30 * time.Second
+// updated_at, turning a chatty agent's burst into one UPDATE per window. The
+// reaper adds the same constant as threshold slack (lifecycle.TouchDebounce),
+// so the debounce can never make an active run look idle.
+const touchDebounce = lifecycle.TouchDebounce
 
 // shouldTouch reports whether runID's last touch is older than touchDebounce,
 // recording now when it is. The map is pruned wholesale past a bound instead of

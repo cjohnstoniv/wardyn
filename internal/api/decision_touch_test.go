@@ -55,13 +55,14 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 		t.Fatalf("TouchRun calls = %v, want exactly one (debounced) for %s", st.touched, runID)
 	}
 
-	// Aging the run's entry past the window touches again — and a DIFFERENT run
-	// is never debounced by this one's entry.
+	// Aging the run's entry past the window touches again — via the BLIND
+	// payload, proving the touch happens before that path's early return — and a
+	// DIFFERENT run is never debounced by this one's entry.
 	srv.lastTouchMu.Lock()
 	srv.lastTouch[runID] = srv.lastTouch[runID].Add(-2 * touchDebounce)
 	srv.lastTouchMu.Unlock()
-	if w := do(t, srv, http.MethodPost, path, tok, body); w.Code != http.StatusAccepted {
-		t.Fatalf("aged decision code = %d, want 202", w.Code)
+	if w := do(t, srv, http.MethodPost, path, tok, blind); w.Code != http.StatusAccepted {
+		t.Fatalf("aged blind decision code = %d, want 202", w.Code)
 	}
 	otherID := uuid.New()
 	otherTok := h.mintRunToken(t, otherID)

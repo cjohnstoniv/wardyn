@@ -187,8 +187,11 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 	// WorkspaceRepos parallel WorkspaceMounts (multi-workspace run model): same
 	// in-container-target shape check (runner.ValidateTarget, the extracted
 	// target-prefix half of ValidateMount), and the two lists share ONE
-	// unique-target invariant below so a clone can never land on a bind target
-	// (or shadow another repo's checkout). Repo.Repo itself is not validated as
+	// unique-target invariant below so a clone can never land AT a bind
+	// target's exact path (or shadow another repo's checkout). Exact equality
+	// only: a repo target nested inside a mount target is allowed, and derived
+	// default dests are never seen here (buildRepoRecords computes those).
+	// Repo.Repo itself is not validated as
 	// an onboarded source here — gating a run to only ONBOARDED workspaces is a
 	// later, security-critical wave (validateWorkspaceSources); this stays the
 	// PURE structural check (no store access).

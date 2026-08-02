@@ -56,6 +56,13 @@ const (
 	defaultStopTimeout = 2 * time.Minute
 )
 
+// TouchDebounce is how stale a run's activity signal may legitimately be: the
+// decision-ingest touch (internal/api) coalesces bursts to one updated_at
+// UPDATE per window, so an ACTIVE run's row can lag real activity by up to
+// this much. thresholdFor adds it as slack, so the debounce can never make an
+// active run look idle — a genuinely idle run stops at most this much later.
+const TouchDebounce = 30 * time.Second
+
 // RunSummary is the minimal projection a Store must return for idle detection.
 // It carries everything the Reaper needs without leaking the full run row.
 type RunSummary struct {
@@ -270,9 +277,9 @@ func (r *Reaper) Tick(ctx context.Context) {
 //
 // Tick filters out every run with AutoStopAfterSec <= 0 (DISABLED / never-reap)
 // BEFORE calling this, so thresholdFor is only ever invoked with a positive
-// value.
+// value. TouchDebounce rides on top as slack (see its doc).
 func (r *Reaper) thresholdFor(run RunSummary) time.Duration {
-	return time.Duration(run.PolicyAutoStopAfterSec) * time.Second
+	return time.Duration(run.PolicyAutoStopAfterSec)*time.Second + TouchDebounce
 }
 
 // emitAutoStop writes a "run.autostop" audit event. Failures are logged and

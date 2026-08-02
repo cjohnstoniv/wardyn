@@ -263,15 +263,7 @@ func (s *Server) applyWorkspaceCreds(ctx context.Context, spec *types.RunPolicyS
 // binding was applied, for dispatch to resolve region/model against
 // (dispatchParams.BedrockRef); nil means "use the global Bedrock config".
 func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) *types.WorkspaceBedrockRef {
-	var primary *types.Workspace
-	switch {
-	case len(wsRefs) > 0:
-		primary = &wsRefs[0]
-	case req.Image != "" && s.cfg.Store != nil:
-		if cw, err := s.cfg.Store.GetWorkspaceBySource(ctx, types.WorkspaceKindContainer, req.Image); err == nil {
-			primary = &cw
-		}
-	}
+	primary := s.primaryWorkspace(ctx, req, wsRefs)
 	if primary == nil {
 		return nil
 	}
@@ -283,6 +275,22 @@ func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID
 		runID.String(), "success", mustJSON(map[string]any{"mode": string(mode)})))
 	if mode == types.WorkspaceLLMCredBedrock {
 		return primary.LLMCred.Bedrock
+	}
+	return nil
+}
+
+// primaryWorkspace resolves the run's PRIMARY workspace — wsRefs[0] when the
+// spec references any, else the container workspace matching req.Image. Shared
+// by launch (applyPrimaryWorkspaceCreds) and preflight so the two cannot
+// disagree about whose credential binding a run inherits.
+func (s *Server) primaryWorkspace(ctx context.Context, req createRunRequest, wsRefs []types.Workspace) *types.Workspace {
+	switch {
+	case len(wsRefs) > 0:
+		return &wsRefs[0]
+	case req.Image != "" && s.cfg.Store != nil:
+		if cw, err := s.cfg.Store.GetWorkspaceBySource(ctx, types.WorkspaceKindContainer, req.Image); err == nil {
+			return &cw
+		}
 	}
 	return nil
 }

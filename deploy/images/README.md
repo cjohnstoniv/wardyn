@@ -10,8 +10,9 @@ actually enforces them: `internal/envbuild/builder.go`'s `requiredTools` plus a
 fail-closed per-run `agent-run --selftest` for wrapped/BYOI images
 (`internal/api/runs_dispatch.go`, `make test-e2e-byoi`), and the live e2e suite
 for the images its task corpus actually launches — `claude-code` and `oracle`
-(`test/e2e/live/live_test.go`); `codex-cli` and `aws-sso` rely on their own
-`--selftest` plus manual runs, not a nightly launch.
+(`test/e2e/live/live_test.go`); `codex-cli`, `full`, and `aws-sso` rely on their
+own `--selftest` (full's is inherited from the claude-code base) plus manual
+runs, not a nightly launch.
 
 `oracle/` is the ONE deliberate exception: it is the e2e stand-in, never brokers
 git, and satisfies neither §4 nor §6 (its `--selftest` checks only `sh`, `curl`,

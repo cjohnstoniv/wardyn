@@ -374,17 +374,21 @@ func TestPolicyThresholdBoundary(t *testing.T) {
 	safeRunID := uuid.New()
 	expiredRunID := uuid.New()
 
-	// safeRun is idle for exactly policyStop - 1s: must NOT be stopped.
-	// expiredRun is idle for exactly policyStop: must be stopped (>= threshold).
+	// The effective threshold is the policy value PLUS TouchDebounce: the
+	// decision-ingest touch coalesces an active run's updated_at bumps to one
+	// per debounce window, so the reaper must absorb that lag or an active run
+	// could be reaped as idle. safeRun is idle for exactly effective - 1s: must
+	// NOT be stopped. expiredRun is idle for exactly effective: must be stopped.
+	effective := policyStop + lifecycle.TouchDebounce
 	store.rows = []lifecycle.RunSummary{
 		{
 			ID:                     safeRunID,
-			UpdatedAt:              base.Add(-(policyStop - time.Second)),
+			UpdatedAt:              base.Add(-(effective - time.Second)),
 			PolicyAutoStopAfterSec: int(policyStop.Seconds()),
 		},
 		{
 			ID:                     expiredRunID,
-			UpdatedAt:              base.Add(-policyStop),
+			UpdatedAt:              base.Add(-effective),
 			PolicyAutoStopAfterSec: int(policyStop.Seconds()),
 		},
 	}

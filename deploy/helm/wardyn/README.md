@@ -112,7 +112,6 @@ the chart at it (the default `postgres.dsn.secretRef.name` is `wardyn-postgres-d
 kubectl create secret generic wardyn-pg \
   --from-literal=dsn="postgres://user:pass@postgres-host:5432/wardyn?sslmode=require" \
   -n wardyn
-kubectl create secret generic wardyn-auth --from-literal=token="$(openssl rand -hex 32)" -n wardyn
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name=wardyn-pg \
   --set auth.adminToken.secretRef.name=wardyn-auth

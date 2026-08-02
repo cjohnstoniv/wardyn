@@ -11,4 +11,4 @@ package version
 // Version is the shipped release. cmd/wardyn/version_test.go pins it to the
 // newest CHANGELOG.md section and to the other shipped version strings
 // (deploy/helm/wardyn/Chart.yaml, ui/package.json) — bump them together.
-const Version = "0.4.3"
+const Version = "0.4.4"

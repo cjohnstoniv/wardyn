@@ -357,9 +357,6 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 
 // LLMInspectionSpec configures optional outbound LLM prompt inspection for a
 // run. The zero value (or a nil *LLMInspectionSpec on the policy) means OFF.
-//
-// v1 ships only the known-secret detector (exact match against operator-declared
-// WorkspaceSecretValues); DetectEntropy/DetectPII are reserved for later phases.
 type LLMInspectionSpec struct {
 	// Mode is "off" (default), "alert" (scan + audit, forward unchanged), or
 	// "block" (a qualifying finding refuses the request). "" == "off".

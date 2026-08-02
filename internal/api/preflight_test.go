@@ -69,6 +69,27 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "workspace_id:") {
 		t.Errorf("error must carry the launch path's workspace_id prefix; body=%s", w.Body.String())
 	}
+
+	// The other half of parity: a workspace launch WOULD accept must surface on
+	// the checklist — the seeded mount resolves back through referencedWorkspaces
+	// to a "workspace" setup row, exactly what the pre-fix code silently dropped.
+	h.srv.cfg.Store = &workspaceStoreFake{
+		Store: h.srv.cfg.Store,
+		ws:    types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app", Status: types.WorkspaceReady},
+	}
+	body = `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
+		`"inline_policy":{"min_confinement_class":"CC1"}}`
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight with an onboarded local_dir workspace: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := findItem(resp.SetupItems, "workspace:"+wsID.String()); !ok {
+		t.Errorf("checklist must carry the seeded workspace's row; items=%+v", resp.SetupItems)
+	}
 }
 
 // TestPreflight_BlastRadiusRaisesToCC3 asserts the enforced class mirrors
