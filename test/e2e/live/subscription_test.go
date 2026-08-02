@@ -235,7 +235,7 @@ func (h *harness) launchSubscriptionInteractive(ctx context.Context, label strin
 		}
 		h.t.Fatalf("CreateRun(subscription %s): %v", label, err)
 	}
-	return run, class, ""
+	return run.AgentRun, class, ""
 }
 
 // awaitAudit polls the run's audit stream until an event with the given action +

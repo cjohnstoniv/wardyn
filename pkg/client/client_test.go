@@ -67,7 +67,13 @@ func TestCreateRun_Success(t *testing.T) {
 		if body["agent"] != "claude-code" || body["repo"] != "org/repo" {
 			t.Errorf("unexpected body: %v", body)
 		}
-		writeJSON(w, http.StatusCreated, want)
+		// The server puts the run's fields at the TOP LEVEL alongside warnings
+		// (internal/api.createRunResponse), which is why CreateRunResult embeds
+		// AgentRun rather than nesting it.
+		writeJSON(w, http.StatusCreated, struct {
+			types.AgentRun
+			Warnings []string `json:"warnings,omitempty"`
+		}{want, []string{"workspace dir already in use by run x"}})
 	}))
 	defer srv.Close()
 
@@ -84,6 +90,11 @@ func TestCreateRun_Success(t *testing.T) {
 	}
 	if got.Agent != want.Agent {
 		t.Errorf("got Agent %q, want %q", got.Agent, want.Agent)
+	}
+	// Advisory warnings must survive the decode: dropping them silently ships a
+	// degraded run (the gap this result type closed).
+	if len(got.Warnings) != 1 || got.Warnings[0] != "workspace dir already in use by run x" {
+		t.Errorf("got Warnings %v, want the server's advisory warning", got.Warnings)
 	}
 }
 

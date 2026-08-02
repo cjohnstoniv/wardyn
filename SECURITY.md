@@ -22,9 +22,9 @@ fix is released.
 
 In your report, please include:
 
-- The affected component(s): `wardynd` (control plane), `wardyn-runner`,
-  `wardyn-proxy`, `wardyn-rec`, `wardyn-git-helper`, the `wardyn` CLI, or a
-  deployment artifact (`deploy/compose`, `deploy/helm`).
+- The affected component(s): `wardynd` (control plane, which is also where the
+  docker runner driver runs), `wardyn-proxy`, `wardyn-rec`, `wardyn-git-helper`,
+  the `wardyn` CLI, or a deployment artifact (`deploy/compose`, `deploy/helm`).
 - The version / commit, deployment surface (Docker Compose), and Confinement
   Class in use (CC1/CC2/CC3 — CC3/Vault is experimental; see `ARCHITECTURE.md`
   "Security invariants" #5).

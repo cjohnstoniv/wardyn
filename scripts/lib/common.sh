@@ -1,7 +1,10 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # scripts/lib/common.sh — small shell helpers shared across scripts/*.sh.
 #
 # wait_healthy/wait_down cover the plain "poll /healthz in a loop" shape used
-# by run-local.sh, e2e-backend.sh, run-e2e-subscription.sh and run-e2e-live.sh.
+# by e2e-backend.sh, run-e2e-subscription.sh and run-e2e-live.sh.
 # Scripts with extra gating on top of the plain poll (up.sh's docker-inspect
 # container health, demo.sh's compose-health check, test-drive.sh's stack
 # health) keep their own bespoke loop — those are not the same shape.
@@ -50,17 +53,44 @@ image_missing() { ! docker image inspect "$1" >/dev/null 2>&1; }
 # (*.gen.go/_gen.go/zz_generated), vendored (ui/node_modules, ui/dist), and the
 # MIT-origin shadcn primitives (ui/src/app/components/ui/). Run from the repo
 # root (both callers `cd` there first). Emits one path per line.
+#
+# `*.sh` is in scope: shell is where the setup/gate/e2e logic lives, so an
+# Apache-2.0 repo that skipped it left its largest first-party scripts unmarked.
+# YAML/Dockerfiles/.mjs remain out — widen here, not in a second list.
 license_scope_files() {
-  git ls-files '*.go' '*.ts' '*.tsx' '*.css' \
+  git ls-files '*.go' '*.ts' '*.tsx' '*.css' '*.sh' \
     | grep -vE '^ui/(node_modules|dist)/' \
     | grep -vE '\.gen\.go$|_gen\.go$|zz_generated' \
     | grep -vE '^ui/src/app/components/ui/'
 }
 
+# os_kind -> windows | wsl | linux | darwin | unknown. The single source of
+# truth for host detection in shell (up.sh's tier/browser hints, setup.sh's
+# WSL/native-Windows guard); it matches internal/setup/detect.go's "microsoft"
+# /proc/version marker, so shell and Go agree on what WSL is.
+os_kind() {
+  _ok_u=$(uname -s 2>/dev/null || echo unknown)
+  _ok_proc=""
+  [ -r /proc/version ] && _ok_proc=$(cat /proc/version 2>/dev/null || true)
+  # WSL must be checked before the generic Linux case: WSL's own `uname -s`
+  # reports "Linux".
+  case "${_ok_proc}" in *[Mm]icrosoft*) echo wsl; return ;; esac
+  if [ -n "${WSL_DISTRO_NAME:-}" ]; then echo wsl; return; fi
+  case "${_ok_u}" in
+    MINGW*|MSYS*|CYGWIN*) echo windows; return ;;
+  esac
+  if [ "${OS:-}" = "Windows_NT" ]; then echo windows; return; fi
+  case "${_ok_u}" in
+    Linux)  echo linux ;;
+    Darwin) echo darwin ;;
+    *)      echo unknown ;;
+  esac
+}
+
 # wardyn_pick_docker_host — export the same daemon preference as
 # scripts/setup.sh's pick_daemon: honor an explicit DOCKER_HOST, else the
 # dedicated tier-capable native dockerd if present, else the default socket.
-# Provisioners (up.sh pg) and consumers (e2e-backend.sh, run-local.sh) must
+# Provisioners (up.sh pg) and consumers (e2e-backend.sh, run-ui-e2e.sh) must
 # agree on the daemon, or `docker exec wardyn-test-pg` hits a different store
 # than the one that created the container (real failure on dual-daemon boxes).
 #

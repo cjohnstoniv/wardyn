@@ -9,13 +9,26 @@ issue, and the observable PASS criteria.
 ## How to use this catalog
 
 **Option A — point a run at a git host.**
-Push a workspace subdirectory to any public (or private, with a configured
-GitHub App) repository, then pass it as `--repo`.  The dispatcher records the
-slug as audit metadata **and** the agent launcher shallow-clones it into the
-sandbox workspace (`~/work/<name>`) through the governed egress proxy before
-the task runs — public GitHub repos clone with no credentials (github.com is
-allowlisted in the demo policy); private repos authenticate via the brokered
-`wardyn-git-helper` (no token ever enters the sandbox env).
+Push a workspace subdirectory to a repository, then pass it as `--repo`.  The
+dispatcher records the slug as audit metadata **and** the agent launcher
+shallow-clones it into the sandbox workspace (`~/work/<name>`) through the
+governed egress proxy before the task runs.
+
+Under the demo policy that clone is **brokered, not direct**: the policy carries
+a `github_token` grant, so `agent-run` rewrites `https://github.com/<org>/<repo>`
+to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (git `insteadOf`) and the
+proxy mints the repo-scoped installation token server-side.  The repo, not the
+domain, is the unit of trust — which is why `github.com` is deliberately absent
+from `demo.json`'s `allowed_domains`.  A stock demo therefore needs **both** an
+approval (the grant is `requires_approval: true`) and a configured GitHub App;
+without them the broker 403s/502s, the clone fails non-fatally, and the run
+proceeds with an empty `~/work`.  Use Option B or C for a walkthrough that needs
+neither.
+
+> Re-adding `github.com` to `demo.json` would not help: the `insteadOf` rewrite
+> happens before the egress allowlist is ever consulted, so the request never
+> reaches `github.com`.  Only a policy with **no** `github_token` grant dials it
+> directly — see scenario 6's inline policy, which is keyless on purpose.
 
 **Option B — supply the task text directly.**
 The exact task text in each `TASK.md` is crafted so that even an empty
@@ -37,9 +50,11 @@ make agent-images
 export WARDYN_URL=http://localhost:8080
 ```
 
-The demo policy (`examples/policies/demo.json`) allowlists `github.com` and
-`*.githubusercontent.com` and sets `first_use_approval: "deny_with_review"`.
-That is the policy in force for all scenarios below unless noted otherwise.
+The demo policy (`examples/policies/demo.json`) allowlists exactly one domain —
+`proxy.golang.org` — plus an approval-gated read-only `github_token` grant, and
+sets `first_use_approval: "deny_with_review"`.  Git egress goes through the
+broker as described above.  That is the policy in force for all scenarios below
+unless noted otherwise (scenario 6 supplies its own inline policy).
 
 ## Running a scenario
 

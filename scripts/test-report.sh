@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Run a Go test suite and emit detailed reports under test/reports/go/<suite>/:
 #   - test-output.json  : raw go test -json event stream
 #   - cover.out         : coverage profile

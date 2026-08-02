@@ -52,6 +52,30 @@ type (
 
 	// AuditEvent is one append-only audit record. Returned by AuditEvents.
 	AuditEvent = types.AuditEvent
+
+	// Workspace is an onboarded local dir / repo / container. Returned by
+	// ListWorkspaces, GetWorkspace, CreateWorkspace, and UpdateWorkspace.
+	Workspace = types.Workspace
+
+	// WorkspaceLLMCred is the operator-owned model/harness credential binding
+	// carried in WorkspaceRequest.LLMCred (Mode is "" / "managed" / "api_key" /
+	// "bedrock"; the server 400s an unknown mode).
+	WorkspaceLLMCred = types.WorkspaceLLMCred
+
+	// WorkspaceBedrockRef is the per-workspace Bedrock selection carried in
+	// WorkspaceLLMCred.Bedrock. Aliased because it is a POINTER field: without a
+	// nameable type a caller cannot build a bedrock binding at all.
+	WorkspaceBedrockRef = types.WorkspaceBedrockRef
+
+	// SiteConfig is the operator-wide site config. Returned by GetSiteConfig and
+	// accepted by PutSiteConfig.
+	SiteConfig = types.SiteConfig
+
+	// ArtifactOverride is one ecosystem's artifact-registry redirect, carried in
+	// SiteConfig.ArtifactOverrides. Aliased for the same reason as
+	// WorkspaceBedrockRef: GetSiteConfig returns a NIL map when unconfigured, so
+	// without a nameable element type the redirects cannot be written at all.
+	ArtifactOverride = types.ArtifactOverride
 )
 
 // Enumerated string types named in exported signatures and struct fields.
@@ -78,6 +102,10 @@ type (
 	// ApprovalKind enumerates what a human is being asked to approve
 	// (ApprovalRequest.Kind).
 	ApprovalKind = types.ApprovalKind
+
+	// WorkspaceKind is what a workspace onboards (Workspace.Kind,
+	// WorkspaceRequest.Kind).
+	WorkspaceKind = types.WorkspaceKind
 )
 
 // ApprovalState values. ListApprovals accepts one of these (or "" for all
@@ -128,4 +156,11 @@ const (
 	ActorHuman  = types.ActorHuman
 	ActorAgent  = types.ActorAgent
 	ActorSystem = types.ActorSystem
+)
+
+// WorkspaceKind values (WorkspaceRequest.Kind).
+const (
+	WorkspaceKindLocalDir  = types.WorkspaceKindLocalDir
+	WorkspaceKindRepo      = types.WorkspaceKindRepo
+	WorkspaceKindContainer = types.WorkspaceKindContainer
 )

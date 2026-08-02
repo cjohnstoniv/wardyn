@@ -31,7 +31,7 @@ import (
 //     Runner.Wait and the watcher before the agent ever finishes. BaseCtx lives
 //     for the daemon's lifetime (cancelled on shutdown).
 //   - KILLED-RACE GUARD: the terminal transition is a conditional store update
-//     from RUNNING only (UpdateRunStateIf). A user may `wardyn kill` mid-run,
+//     from RUNNING only (UpdateRunStateIf). A user may `wardyn run kill` mid-run,
 //     moving the run to KILLED and tearing the sandbox down; the watcher must
 //     NOT clobber that. If the conditional update does not apply (the run is no
 //     longer RUNNING), the watcher does nothing further — in particular it does

@@ -21,24 +21,22 @@ func secretCmd(client clientFn) *cobra.Command {
 		Short: "Manage platform secrets (write-only; values are never readable back)",
 	}
 
-	var value string
 	set := &cobra.Command{
 		Use:   "set <name>",
-		Short: "Store a secret (value from --value, or stdin when omitted)",
+		Short: "Store a secret (value read from stdin)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v := value
-			if v == "" {
-				// Read from stdin: piped input or a single prompted line. The
-				// value never appears in argv/process listings this way.
-				if isTerminal(os.Stdin) {
-					fmt.Fprintf(os.Stderr, "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
-				}
-				var err error
-				v, err = readSecretValue(os.Stdin)
-				if err != nil {
-					return fmt.Errorf("read value from stdin: %w", err)
-				}
+			// Stdin is the ONLY input: piped, redirected from a file, or a
+			// prompted line. There is deliberately no --value flag — argv is
+			// world-readable in `ps` / /proc/<pid>/cmdline, and this is the write
+			// path for every platform secret (SSH private keys, git PATs, LLM API
+			// keys, Bedrock credentials). Same call `subscription connect` makes.
+			if isTerminal(os.Stdin) {
+				fmt.Fprintf(os.Stderr, "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
+			}
+			v, err := readSecretValue(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("read value from stdin: %w", err)
 			}
 			if v == "" {
 				return fmt.Errorf("empty secret value")
@@ -50,7 +48,6 @@ func secretCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	set.Flags().StringVar(&value, "value", "", "secret value (prefer stdin to keep it out of shell history)")
 
 	var asJSON bool
 	list := &cobra.Command{

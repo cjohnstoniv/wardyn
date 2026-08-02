@@ -22,6 +22,7 @@ image:
   # Names of imagePullSecrets for a private registry (list of {name: ...}).
   pullSecrets: []
 
+# Leave at 1 — wardynd holds per-process state (see README / docs/OPERATIONS.md).
 replicas: 1
 
 service:
@@ -35,7 +36,9 @@ serviceAccount:
   name: ""
   annotations: {}
   # wardynd does not call the API server in v0.x, so the projected token is
-  # unnecessary attack surface — do not auto-mount it by default.
+  # unnecessary attack surface — do not auto-mount it by default. Applied on the
+  # POD spec too, so the posture also holds when create=false and you bring your
+  # own ServiceAccount (whose own automount default is true).
   automount: false
 
 postgres:
@@ -55,10 +58,28 @@ postgres:
     # Inline DSN, used only when secretRef.name is empty.
     value: ""
 
+auth:
+  # Admin bearer token gating the ENTIRE public API. Without it (and without
+  # OIDC) wardynd 401s every route while /healthz still reports Ready, so the
+  # chart REFUSES TO RENDER until one of these is set (templates/secret.yaml).
+  # Two modes, mirroring postgres.dsn and chosen independently of it:
+  #   1. External Secret (recommended): set adminToken.secretRef.name to a
+  #      Secret you created out-of-band carrying the token under `key`.
+  #   2. Inline demo: leave secretRef.name empty and set adminToken.value; the
+  #      chart creates "<fullname>-auth" (token lands in the release history).
+  # Running OIDC instead? Set env.WARDYN_OIDC_ISSUER and leave both empty.
+  adminToken:
+    key: admin-token
+    secretRef:
+      name: ""
+    value: ""
+
 secrets:
   # age X25519 identity (AGE-SECRET-KEY-...) for the secret store. Empty =>
   # wardynd generates an ephemeral key at boot (secrets do not persist a restart).
-  # Used only by the chart-created Secret (inline mode).
+  # INLINE MODE ONLY: it both fills the chart-created Secret and is what injects
+  # WARDYN_AGE_KEY, so with an external postgres.dsn.secretRef the chart fails
+  # the render rather than silently dropping it — use ageKeyFromSecret there.
   ageKey: ""
   # Set true when your EXTERNAL Secret (postgres.dsn.secretRef) ALSO carries an
   # "age-key" entry you want injected as WARDYN_AGE_KEY.
@@ -67,7 +88,19 @@ secrets:
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
 # policy (WARDYN_DEFAULT_POLICY), etc. See cmd/wardynd/main.go for the full list.
+# Values render INLINE in the pod spec — anything secret belongs in extraEnv.
 env: {}
+
+# Raw EnvVar entries appended to the container, for the WARDYN_* variables that
+# must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):
+# WARDYN_OIDC_CLIENT_SECRET, WARDYN_COMPOSER_API_KEY, and WARDYN_AUDIT_SINKS
+# (its inline JSON carries the SIEM bearer_token). Full EnvVar schema, so
+# valueFrom.secretKeyRef / configMapKeyRef / fieldRef all work:
+#   extraEnv:
+#     - name: WARDYN_OIDC_CLIENT_SECRET
+#       valueFrom:
+#         secretKeyRef: {name: wardyn-oidc, key: client-secret}
+extraEnv: []
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 networkPolicy:
@@ -77,7 +110,9 @@ networkPolicy:
     port: 5432
   ingress:
     # List of NetworkPolicyPeer entries allowed to reach the HTTP port.
-    # Empty => allow from any pod in the namespace (narrow this in production).
+    # Empty => `podSelector: {}`, i.e. all pods in THIS namespace only; add peers
+    # (e.g. your ingress controller's namespace) to widen. Do NOT widen with a
+    # bare `namespaceSelector: {}` — that means ALL namespaces, not this one.
     from: []
   egress:
     # Additional NetworkPolicy egress rules (e.g. OIDC issuer, SIEM webhooks).
@@ -112,8 +147,10 @@ resources:
     memory: 128Mi
 
 # Persistent recording/audit spool. Off by default (Postgres is the source of
-# truth; file sinks are optional). When enabled, point WARDYN_RECORDING_DIR (via
-# .env) inside mountPath.
+# truth; file sinks are optional). This switch also decides WARDYN_RECORDING_DIR:
+# enabled => "<mountPath>/recordings", off => empty, i.e. replay disabled. It
+# cannot default to wardynd's own ./data/recordings — that lands on the
+# read-only root FS and boot fails. Override via env.WARDYN_RECORDING_DIR.
 persistence:
   enabled: false
   mountPath: /data
@@ -123,9 +160,3 @@ persistence:
 nodeSelector: {}
 affinity: {}
 tolerations: []
-
-# Cilium NetworkPolicy note:
-# When using Cilium on Kubernetes, egress policies are enforced at L3/L4 using
-# toFQDN rules for domain-based egress. These integrate with the wardyn-proxy
-# sidecar's L2 allowlist to provide defense in depth. Ensure Cilium is configured
-# with DNS proxy enabled for FQDN policies to function correctly.

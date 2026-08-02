@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Stage a native agent CLI binary on the HOST for an offline / strict-allowlist
 # corp image build (CLAUDE_INSTALL=native / CODEX_INSTALL=native). Downloads and
 # CHECKSUM-VERIFIES the binary, then writes it where the agent Dockerfile's

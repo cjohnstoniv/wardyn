@@ -1,0 +1,88 @@
+# The other side of every switch, in ONE render.
+#
+# `<chart>/ci/*-values.yaml` is the chart-testing convention, so this is the
+# native place for it. `make helm-lint` renders the chart twice: once on the
+# defaults (external DSN Secret, persistence off, created ServiceAccount, no
+# extras) and once with this file, which flips each of those the other way.
+# Without it CI only ever exercised the default branch of every `{{ if }}` in
+# templates/ — the chart's one prior failure mode was shipping with no
+# templates/ at all, rendering zero objects (see templates/_helpers.tpl).
+#
+# The values are structurally valid but deliberately fake: nothing here is ever
+# installed, only rendered.
+image:
+  pullSecrets:
+    - name: regcred
+
+# Inline (demo) DSN mode => the chart renders its own Secret, and secrets.ageKey
+# is injectable (it is inline-mode only; see templates/secret.yaml's fail guard).
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+    value: postgres://wardyn:wardyn@db:5432/wardyn?sslmode=disable
+
+auth:
+  adminToken:
+    value: not-a-real-token
+
+secrets:
+  # Deliberately NOT bech32-shaped: the chart never parses it, and a realistic
+  # AGE-SECRET-KEY-1... would need its own gitleaks fingerprint forever.
+  ageKey: not-a-real-age-identity
+
+env:
+  WARDYN_OIDC_ISSUER: https://issuer.example
+
+extraEnv:
+  - name: WARDYN_OIDC_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: wardyn-oidc
+        key: client-secret
+
+networkPolicy:
+  ingress:
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    extra:
+      - to:
+          - ipBlock:
+              cidr: 10.0.0.0/8
+
+# On => a PersistentVolumeClaim plus WARDYN_RECORDING_DIR=/data/recordings.
+persistence:
+  enabled: true
+  storageClass: fast
+
+# Bring-your-own ServiceAccount: the chart renders NO ServiceAccount here, so
+# the automountServiceAccountToken the gate counts can only come from the pod
+# spec. Leave this false — flipping it to true silently weakens that assertion
+# (the gate pins the count at 1 to catch exactly that).
+serviceAccount:
+  create: false
+  name: wardyn-byo
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+
+nodeSelector:
+  kubernetes.io/os: linux
+
+tolerations:
+  - key: dedicated
+    operator: Exists
+    effect: NoSchedule
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/arch
+              operator: In
+              values:
+                - amd64

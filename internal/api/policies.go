@@ -11,22 +11,19 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// policyRequest is the POST/PUT body for a policy: a human-readable name plus
-// the RunPolicySpec. The spec is validated (validatePolicySpec) before any
-// store write — policies are admin-gated config and a bad spec must never be
-// persisted (fail closed). Unknown JSON fields are rejected so a typo cannot
-// silently widen behaviour (mirrors LoadPolicySpec discipline).
-type policyRequest struct {
-	Name string              `json:"name"`
-	Spec types.RunPolicySpec `json:"spec"`
-}
+// policyRequest is the POST/PUT body for a policy. It is an ALIAS of the public
+// SDK type, not a copy, so server and SDK cannot drift.
+type policyRequest = client.PolicyRequest
 
 // decodePolicyRequest decodes and structurally validates a policy request body.
-// It rejects unknown fields (fail closed against typos), requires a non-empty
-// name, and runs validatePolicySpec over the spec. Any problem is returned as a
-// human-readable message the handler surfaces with HTTP 400.
+// It rejects unknown fields so a typo cannot silently widen behaviour (fail
+// closed, mirroring LoadPolicySpec discipline), requires a non-empty name, and
+// runs validatePolicySpec over the spec before any store write — policies are
+// admin-gated config and a bad spec must never be persisted. Any problem is
+// returned as a human-readable message the handler surfaces with HTTP 400.
 func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest, string) {
 	var req policyRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {

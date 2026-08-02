@@ -50,7 +50,7 @@ log them.
 | `WARDYN_DEFAULT_POLICY` | string | `examples/policies/default.json` | default RunPolicy spec path (flag `-default-policy`) |
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_HOST_PROXY_B64` | string (base64 JSON) | (unset) | host-side proxy detection, captured by `scripts/up.sh` on the host and consumed by the Getting-started "Host proxy" step. **Diagnostics only.** Unset ⇒ the step honestly reports it could not look at the host. See [Four variables that need more than a table cell](#four-variables-that-need-more-than-a-table-cell) |
-| `WARDYN_AUDIT_SINKS` | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST |
+| `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`) |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`) |
 | `WARDYN_GEN_AGE_KEY` | bool | `false` | generate a fresh age identity and exit (flag `-gen-age-key`) |
@@ -104,6 +104,27 @@ only these selectors.
 | `AWS_DEFAULT_REGION` | string | `WARDYN_BEDROCK_REGION` | used only when `AWS_REGION` is absent |
 | `AWS_PROFILE` | string | `WARDYN_BEDROCK_AWS_PROFILE` | selects a profile from the mounted `~/.aws` |
 
+### Audit sinks (`WARDYN_AUDIT_SINKS`)
+
+The value is the JSON blob itself, not a path to one — so a webhook
+`bearer_token` lands in the process environment. Omitting a top-level key
+disables that sink; the whole variable unset disables fanout entirely (Postgres
+stays the source of truth either way).
+
+```json
+{
+  "syslog":  {"network": "udp", "addr": "localhost:514"},
+  "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
+  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3}
+}
+```
+
+Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping
+`keep` 5; `webhook` also takes `flush_interval` (`5s`), `buffer_size` (`4096`),
+`max_retries` (`3`) and `retry_base_delay` (`200ms`) — see
+`internal/audit/sinks/webhook.go`. The compose stack ships the `file` sink
+pointed at `/data/audit/audit.log`.
+
 ## `wardyn-proxy` (egress sidecar)
 
 | Variable | Type | Default | Notes |
@@ -144,6 +165,7 @@ only these selectors.
 | `WARDYN_ADMIN_TOKEN` 🔒 | string | (unset) | admin bearer for CLI calls |
 | `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer (`cmd/wardyn/main.go`) — read by the CLI only, never by `wardynd` |
 | `WARDYN_WORKSPACE_DIR` | string | `defaultWorkspaceDir` | workspace directory for local commands |
+| `WARDYN_ALLOW_PLAINTEXT` | bool | `false` | silence the warning the CLI prints when the admin token would travel in cleartext (`http://` to a non-loopback wardynd). Advisory only — the call is never refused; set it when TLS terminates in front of the control plane |
 
 ## `wardyn-rec` (recording uploader)
 

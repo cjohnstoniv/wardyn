@@ -26,7 +26,7 @@
 // # AutoStopAfterSec semantics (policy auto_stop_after_sec)
 //
 //	> 0  idle timeout in seconds (stop after this much wall-clock idleness)
-//	  0  DISABLED — the run is never reaped (matches docs/policies; this is the
+//	  0  DISABLED — the run is never reaped (matches docs/POLICIES.md; this is the
 //	     default for a run with no auto-stop configured, since the store COALESCEs
 //	     an absent policy field to 0)
 //	< 0  never reaped (explicit interactive escape hatch; equivalent to 0 for the

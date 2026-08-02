@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Fail closed on a copyleft license in a SHIPPED (prod) UI dependency. GPL/AGPL/
 # LGPL/MPL/EPL require source disclosure / relicensing on distribution; a
 # dual-licensed "X OR Apache-2.0" still fails closed here — we don't assume the

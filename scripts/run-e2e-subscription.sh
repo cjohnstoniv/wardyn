@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Run the SUBSCRIPTION proxy-side token-injection live e2e lanes (test/e2e/live):
 #
 #   - TestLive_SubscriptionInject      — the safe default. Launching a subscription
@@ -68,12 +71,14 @@ if [[ "${WARDYN_E2E_REAL_MODEL:-}" == "1" ]]; then
 fi
 
 # ── wardynd lifecycle (this driver owns it for the duration) ─────────────────
-STARTED_PID=""
-
+# ponytail: teardown is PATTERN-based, not PID-based, on purpose — it must also
+# reap a wardynd this script did not start (see start_wardynd below). Do not
+# "improve" it by remembering the nohup'd PID; that reintroduces the false-green
+# this guards against. (run-e2e-live.sh reads its own PID because it has the
+# opposite policy: kill only what it started.)
 stop_wardynd() {
   pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
   wait_down "${BASE}" || warn "a wardynd is still answering ${BASE} after stop"
-  STARTED_PID=""
 }
 
 start_wardynd() {  # $1 = on|off
@@ -86,7 +91,6 @@ start_wardynd() {  # $1 = on|off
   # run-host.sh reproduces the rest of the host-mode env (runner=docker, the
   # subscription ceiling policy, model pin); we only pin the inject mode + socket.
   WARDYN_SUBSCRIPTION_INJECT="${mode}" nohup ./scripts/run-host.sh >>"${WARDYND_LOG}" 2>&1 &
-  STARTED_PID=$!
   if ! wait_healthy "${BASE}"; then
     tail -25 "${WARDYND_LOG}" >&2
     die "wardynd (inject=${mode}) did not become healthy at ${BASE}"

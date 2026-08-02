@@ -24,3 +24,15 @@ func TestCreateRunRequest_IsClientDTOAlias(t *testing.T) {
 	var _ createRunRequest = client.CreateRunRequest{}
 	var _ client.CreateRunRequest = createRunRequest{}
 }
+
+// TestRequestDTOs_AreClientDTOAliases pins the same property for the other two
+// server bodies whose SDK twin is exported. workspaceRequest is the one that
+// bit: as a copy it lacked llm_cred, and decodeWorkspaceRequest rejects unknown
+// fields, so an SDK caller could neither set the model binding nor smuggle it
+// through while the console could.
+func TestRequestDTOs_AreClientDTOAliases(t *testing.T) {
+	var _ policyRequest = client.PolicyRequest{}
+	var _ client.PolicyRequest = policyRequest{}
+	var _ workspaceRequest = client.WorkspaceRequest{}
+	var _ client.WorkspaceRequest = workspaceRequest{}
+}

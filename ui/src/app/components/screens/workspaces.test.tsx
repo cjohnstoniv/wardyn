@@ -19,6 +19,7 @@ const getObservedEgressMock = vi.fn();
 const createWorkspaceMock = vi.fn();
 const setWorkspaceLLMCredMock = vi.fn();
 const listWorkspacesMock = vi.fn();
+const getEnvAsCodeMock = vi.fn();
 vi.mock("../../lib/api/workspaces", () => ({
   workspaces: {
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
@@ -26,6 +27,7 @@ vi.mock("../../lib/api/workspaces", () => ({
     createWorkspace: (...a: unknown[]) => createWorkspaceMock(...a),
     setWorkspaceLLMCred: (...a: unknown[]) => setWorkspaceLLMCredMock(...a),
     listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
+    getEnvAsCode: (...a: unknown[]) => getEnvAsCodeMock(...a),
   },
 }));
 const listSecretsMock = vi.fn();
@@ -273,6 +275,21 @@ describe("WorkspacesScreen — the row menu reaches the guided import", () => {
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
 
     expect(screen.getByRole("menuitem", { name: /set up \/ resume import/i })).toBeInTheDocument();
+  });
+
+  it("'Env as code' fetches the regenerated files and renders them per filename", async () => {
+    const row = ws({});
+    listWorkspacesMock.mockReset().mockResolvedValue([row]);
+    getEnvAsCodeMock.mockReset().mockResolvedValue({ "AGENTS.md": "# env" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(<WorkspacesScreen />);
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /env as code/i }));
+
+    expect(await screen.findByText("AGENTS.md")).toBeInTheDocument();
+    expect(screen.getByText("# env")).toBeInTheDocument();
+    expect(getEnvAsCodeMock).toHaveBeenCalledWith(row.id);
   });
 });
 

@@ -9,8 +9,8 @@ task's pass/fail.
 
 This is a **BYOA (bring your own agent/container)** surface: you supply the
 image — an agent harness, your test container, or any stock image — and Wardyn
-supplies the governed sandbox around it (default-deny egress at a TLS-MITM
-proxy, brokered never-resident credentials, confinement classes, an
+supplies the governed sandbox around it (default-deny egress at the
+`wardyn-proxy` sidecar, brokered never-resident credentials, confinement classes, an
 append-only audit trail). It doesn't have to be an agent at all:
 `task_mode=exec` runs a plain shell command under the same governance.
 
@@ -230,14 +230,18 @@ directly — it is fully non-interactive with `WARDYN_URL` +
 
 ```sh
 wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+  --task 'make test' --policy-file ci.json --dry-run   # resolve + check, launch nothing
+wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --wait --timeout 30m
-wardyn run get <id> --json    # final state, resolved image
+wardyn run get <id> --json     # final state, resolved image
+wardyn run grants <id>         # what the run was ELIGIBLE for
 wardyn audit <id> --json
 ```
 
-`POST /api/v1/runs/preflight` (same body as create) is a dry-run of launch
-resolution — `ci-run.sh` calls it before launching and prints the
-`setup_items` blockers.
+`--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of
+launch resolution that mints nothing and prints the `setup_items` blockers plus
+the confinement class that would be enforced. `ci-run.sh` calls the same
+endpoint before launching.
 
 ## Images
 

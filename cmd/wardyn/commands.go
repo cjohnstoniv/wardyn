@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -52,16 +53,17 @@ func setOptionalID(flag, s string, dst **uuid.UUID) error {
 }
 
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
-// list/get/kill subcommands inspect and stop runs. "runs" stays as an alias so
+// subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var interactive, wait, createJSON bool
+	var devcontainerRepo, devcontainerRef string
+	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
-		Short:   "Create a governed agent run (subcommands list/get/kill inspect and stop runs)",
+		Short:   "Create a governed agent run (subcommands list/get/grants/recording/kill inspect and stop runs)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// --repo is optional: a run with no repo comes up in an ephemeral
@@ -69,10 +71,14 @@ func runCmd(client clientFn) *cobra.Command {
 			if wait && interactive {
 				return fmt.Errorf("--wait and --interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
+			if dryRun && wait {
+				return fmt.Errorf("--dry-run and --wait are mutually exclusive (a dry run launches nothing to wait for)")
+			}
 			body := sdk.CreateRunRequest{
 				Agent: agent, Repo: repo, Task: task,
 				ConfinementClass: confinement, Interactive: interactive,
 				Image: image, TaskMode: taskMode,
+				DevcontainerRepo: devcontainerRepo, DevcontainerRef: devcontainerRef,
 			}
 			// --policy is a policy UUID; --workspace attaches an onboarded
 			// workspace by id (see setOptionalID for the parse-here rationale).
@@ -101,22 +107,41 @@ func runCmd(client clientFn) *cobra.Command {
 				}
 				body.InlinePolicy = &spec
 			}
+			// --dry-run posts the SAME body to the preflight endpoint instead of
+			// launching: it resolves the policy through the launch chokepoint (so
+			// an XOR violation / unknown secret / non-onboarded workspace fails
+			// here exactly as it would at create) and mints nothing.
+			if dryRun {
+				return printPreflight(cmd.Context(), client(), body, createJSON)
+			}
 			run, err := client().CreateRun(cmd.Context(), body)
 			if err != nil {
 				return err
 			}
 			if createJSON {
-				// waitForRun prints go to stderr, so stdout stays exactly one
-				// JSON object (the created run) for scripts to parse.
-				if err := emitJSON(run); err != nil {
+				// waitForRun prints and warnings go to stderr, so stdout stays
+				// exactly one JSON object (the created run) for scripts to parse.
+				if err := emitJSON(run.AgentRun); err != nil {
 					return err
 				}
 			} else {
 				fmt.Printf("created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
 				fmt.Printf("  spiffe id: %s\n", run.SPIFFEID)
+				// The resolved image is the only signal that a --devcontainer-repo
+				// build actually happened: with no image builder wired the server
+				// silently falls back to the convention image (a 201 either way).
+				if run.Image != "" {
+					fmt.Printf("  image: %s\n", run.Image)
+				}
 				if interactive {
 					fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
 				}
+			}
+			// Advisory server warnings (workspace collision, dropped ssh grant):
+			// the run is live either way, so silence here is a degraded run no
+			// CI artifact records.
+			for _, w := range run.Warnings {
+				fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
 			}
 			if wait {
 				return waitForRun(cmd.Context(), client(), run.ID, timeout)
@@ -133,12 +158,85 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3; optional, inherits the policy minimum if unset)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle (no agent task) for 'wardyn attach'; use a never-reap policy (auto_stop_after_sec < 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side)")
+	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check the printed image; mutually exclusive with --image)")
+	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, no LLM credentials)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124)")
-	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run as JSON (progress goes to stderr)")
+	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 	_ = cmd.MarkFlagRequired("agent")
 
+	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
+		runGrantsCmd(client), runRecordingCmd(client))
+	return cmd
+}
+
+// runRecordingCmd downloads a run's terminal recording. It lives under the
+// `run` noun, NOT under `wardyn record` — that noun is Recording MODE (learning
+// a least-privilege policy from a run's activity), an unrelated concept the
+// name would fuse with this one.
+func runRecordingCmd(client clientFn) *cobra.Command {
+	var outPath string
+	rec := &cobra.Command{
+		Use:   "recording <run-id>",
+		Short: "Download a run's terminal recording as an asciicast (stdout unless -o)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("run", args[0])
+			if err != nil {
+				return err
+			}
+			rc, err := client().GetRecording(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			if outPath == "" {
+				_, err = io.Copy(os.Stdout, rc)
+				return err
+			}
+			f, err := os.Create(outPath)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, rc); err != nil {
+				f.Close()
+				return err
+			}
+			// Close is checked: a swallowed flush error writes a truncated cast
+			// that only fails much later, in a player.
+			if err := f.Close(); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "wrote %s\n", outPath)
+			return nil
+		},
+	}
+	rec.Flags().StringVarP(&outPath, "output", "o", "", "write the .cast here instead of stdout")
+	return rec
+}
+
+// printPreflight renders the --dry-run checklist: one row per setup item plus
+// the confinement class the run would actually enforce.
+func printPreflight(ctx context.Context, c *sdk.Client, body sdk.CreateRunRequest, asJSON bool) error {
+	pf, err := c.Preflight(ctx, body)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return emitJSON(pf)
+	}
+	fmt.Printf("dry run: not launched (enforced confinement %s)\n", pf.EnforcedConfinementClass)
+	tw := newTab()
+	fmt.Fprintln(tw, "STATUS\tKIND\tREQUIRED_BY\tDETAIL")
+	for _, it := range pf.SetupItems {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", it.Status, it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
+	}
+	return tw.Flush()
+}
+
+func runListCmd(client clientFn) *cobra.Command {
 	var listJSON bool
 	var listLimit int
 	list := &cobra.Command{
@@ -165,7 +263,10 @@ func runCmd(client clientFn) *cobra.Command {
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
+	return list
+}
 
+func runGetCmd(client clientFn) *cobra.Command {
 	var getJSON bool
 	get := &cobra.Command{
 		Use:   "get <run-id>",
@@ -192,8 +293,11 @@ func runCmd(client clientFn) *cobra.Command {
 		},
 	}
 	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON")
+	return get
+}
 
-	kill := &cobra.Command{
+func runKillCmd(client clientFn) *cobra.Command {
+	return &cobra.Command{
 		Use:   "kill <run-id>",
 		Short: "Kill a run (tears down sandbox, revokes identity + credentials)",
 		Args:  cobra.ExactArgs(1),
@@ -209,23 +313,49 @@ func runCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
+}
 
-	cmd.AddCommand(list, get, kill)
-	return cmd
+func runGrantsCmd(client clientFn) *cobra.Command {
+	var grantsJSON bool
+	grants := &cobra.Command{
+		Use:   "grants <run-id>",
+		Short: "List a run's credential-grant eligibility records (what it MAY request, not what was minted)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("run", args[0])
+			if err != nil {
+				return err
+			}
+			gs, err := client().ListGrants(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			if grantsJSON {
+				return emitJSON(gs)
+			}
+			tw := newTab()
+			// Full grant id, not short(): this is the row's own identity, not a
+			// context column. APPROVAL is the load-bearing column — these are
+			// ELIGIBILITY records, and a requires-approval grant mints nothing
+			// until a human decides it.
+			fmt.Fprintln(tw, "ID\tKIND\tAPPROVAL\tTTL\tSCOPE")
+			for _, g := range gs {
+				approval := "auto"
+				if g.Spec.RequiresApproval {
+					approval = "required"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%ds\t%s\n",
+					g.ID, g.Spec.Kind, approval, g.Spec.TTLSeconds, orDash(string(g.Spec.Scope)))
+			}
+			return tw.Flush()
+		},
+	}
+	grants.Flags().BoolVar(&grantsJSON, "json", false, "emit raw JSON")
+	return grants
 }
 
 // waitPollInterval is how often --wait polls the run state (var for tests).
 var waitPollInterval = 2 * time.Second
-
-// terminalRunState mirrors internal/api.isTerminalRunState.
-// 5 constants, not worth exporting the server's helper for.
-func terminalRunState(s types.RunState) bool {
-	switch s {
-	case types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived:
-		return true
-	}
-	return false
-}
 
 // waitForRun polls the run until it is terminal and maps the outcome to the
 // CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
@@ -248,7 +378,7 @@ func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout tim
 		} else {
 			consecutiveErrs = 0
 			lastState = run.State
-			if terminalRunState(run.State) {
+			if run.State.IsTerminal() {
 				code := agentExitCode(ctx, c, runID)
 				if run.State == types.RunFailed && code == 0 {
 					// The terminal state commits just before the run.complete
@@ -341,41 +471,25 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-func approveCmd(client clientFn) *cobra.Command {
+// approvalDecisionCmd builds the approve/deny command. The two decisions are
+// one operation with a different verb (the domain layer already models it that
+// way: approval.Decide takes an approve bool), so they share one body. decide is
+// an unbound method expression — client() must resolve INSIDE RunE, after the
+// persistent --url/--token flags are parsed.
+func approvalDecisionCmd(client clientFn, verb, short string,
+	decide func(*sdk.Client, context.Context, uuid.UUID, string) (types.ApprovalRequest, error),
+) *cobra.Command {
 	var reason string
 	cmd := &cobra.Command{
-		Use:   "approve <approval-id>",
-		Short: "Approve a pending approval request",
+		Use:   verb + " <approval-id>",
+		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("approval", args[0])
 			if err != nil {
 				return err
 			}
-			ap, err := client().Approve(cmd.Context(), id, reason)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("approval %s -> %s\n", ap.ID, ap.State)
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&reason, "reason", "", "reason recorded in the audit trail")
-	return cmd
-}
-
-func denyCmd(client clientFn) *cobra.Command {
-	var reason string
-	cmd := &cobra.Command{
-		Use:   "deny <approval-id>",
-		Short: "Deny a pending approval request",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := parseID("approval", args[0])
-			if err != nil {
-				return err
-			}
-			ap, err := client().Deny(cmd.Context(), id, reason)
+			ap, err := decide(client(), cmd.Context(), id, reason)
 			if err != nil {
 				return err
 			}

@@ -93,9 +93,19 @@ func run() error {
 	}
 	if derr := sidecar.Upload(url, body); derr != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-aws-sso: sso-token upload failed (non-fatal):", derr)
+		return nil
 	}
+	// SUCCESS-ONLY marker, and a byte-for-byte contract: the setup UI's login pane
+	// scrapes the attach PTY for exactly this line to end the login
+	// (ui/.../harness-login-pane.tsx doneMarker). Printing it on a failed upload
+	// would report a credential that was never stored.
+	fmt.Println(successMarker)
 	return nil
 }
+
+// successMarker is the PTY line the UI waits for. Keep it in sync with
+// harness-login-pane.tsx's LOGIN_FLOWS.aws doneMarker.
+const successMarker = "wardyn: aws sso credential captured"
 
 // proxyURL mirrors sidecar.ProxyRunURL's env validation, but targets the
 // plain-noun sso-token route (like /wardyn/v1/recordings/) rather than the

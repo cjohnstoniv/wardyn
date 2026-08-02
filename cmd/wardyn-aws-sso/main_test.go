@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -137,4 +138,24 @@ func write(t *testing.T, dir, name, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestSuccessMarker_UIParity pins the PTY handshake between this helper and the
+// setup UI's login pane: the pane ends the login only when it sees doneMarker in
+// the attach stream, so a one-character drift here leaves the operator watching
+// a spinner forever with a credential already captured. Both sides are read from
+// source (Go and TypeScript cannot share the constant).
+func TestSuccessMarker_UIParity(t *testing.T) {
+	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "setup", "harness-login-pane.tsx")
+	ts, err := os.ReadFile(uiPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", uiPath, err)
+	}
+	m := regexp.MustCompile(`doneMarker:\s*"([^"]+)"`).FindStringSubmatch(string(ts))
+	if m == nil {
+		t.Fatalf("no doneMarker in %s", uiPath)
+	}
+	if m[1] != successMarker {
+		t.Errorf("marker drift: UI doneMarker %q != wardyn-aws-sso successMarker %q", m[1], successMarker)
+	}
 }

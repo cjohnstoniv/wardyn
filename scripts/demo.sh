@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Wardyn compose demo: build the stack, bring it up, wait until healthy, create
 # a governed run against a public fixture repo, and print its audit trail.
 #

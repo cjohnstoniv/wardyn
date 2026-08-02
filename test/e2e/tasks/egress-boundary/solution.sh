@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # ORACLE solution for egress-boundary — this script IS the task.
 #
 # Runs INSIDE the agent sandbox, cwd = the mounted workspace ($PWD). The sandbox

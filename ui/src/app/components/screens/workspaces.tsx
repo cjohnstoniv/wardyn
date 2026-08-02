@@ -6,6 +6,7 @@
 import * as React from "react";
 import {
   Box,
+  FileCode2,
   FolderGit2,
   FolderOpen,
   KeyRound,
@@ -51,7 +52,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { Mono } from "../wardyn/code-block";
+import { CodeBlock, Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
@@ -113,6 +114,19 @@ export function WorkspacesScreen() {
   // that pipeline, so without this the screen shows import state it can't act on —
   // a "Verify failed" row had no remediation outside the Getting Started funnel.
   const [importWsId, setImportWsId] = React.useState<string | null>(null);
+  // Row whose regenerated env-as-code is open. Fetched on open (the GET
+  // regenerates from the stored profile), keyed by workspace so the dialog
+  // title stays right while the fetch is in flight; null string map = loading,
+  // error text rendered from the server's own 422/500 message.
+  const [envTarget, setEnvTarget] = React.useState<Workspace | null>(null);
+  const [envFiles, setEnvFiles] = React.useState<Record<string, string> | null>(null);
+  const [envError, setEnvError] = React.useState<string | null>(null);
+  const openEnvAsCode = (w: Workspace) => {
+    setEnvTarget(w);
+    setEnvFiles(null);
+    setEnvError(null);
+    api.getEnvAsCode(w.id).then(setEnvFiles, (e) => setEnvError(getErrorMessage(e)));
+  };
   // Rows with a scan in flight — scoped to workspace id so multiple scans (or a
   // scan alongside other list activity) never fight over one flag.
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
@@ -294,6 +308,9 @@ export function WorkspacesScreen() {
                           <DropdownMenuItem onClick={() => setProfileTarget(w)} disabled={!w.profile}>
                             View profile
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openEnvAsCode(w)} disabled={!w.profile}>
+                            <FileCode2 className="size-4" /> Env as code
+                          </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => setToDelete(w)}
                             className="text-danger focus:text-danger"
@@ -358,6 +375,38 @@ export function WorkspacesScreen() {
                 setWorkspaces((list) => list.map((x) => (x.id === w.id ? w : x)));
               }}
             />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!envTarget} onOpenChange={(o) => !o && setEnvTarget(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Env as code — {envTarget?.name}</DialogTitle>
+            <DialogDescription>
+              Committable files regenerated from the scanned profile — commit these to keep the
+              environment reproducible. Same output finalize emits; fetch it here any time.
+            </DialogDescription>
+          </DialogHeader>
+          {envError ? (
+            <p className="text-sm text-danger">{envError}</p>
+          ) : envFiles == null ? (
+            <p className="text-sm text-muted-foreground">Generating…</p>
+          ) : Object.keys(envFiles).length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing to emit — this workspace's profile produces no env-as-code files.
+            </p>
+          ) : (
+            <div className="max-h-[60vh] space-y-3 overflow-y-auto">
+              {Object.entries(envFiles).map(([name, content]) => (
+                <div key={name} className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                    <FileCode2 className="size-3.5 text-cyan" /> {name}
+                  </div>
+                  <CodeBlock text={content} />
+                </div>
+              ))}
+            </div>
           )}
         </DialogContent>
       </Dialog>

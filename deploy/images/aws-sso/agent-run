@@ -33,14 +33,10 @@ source /usr/local/bin/agent-run-lib.sh
 if [[ "${1:-}" == "--selftest" ]]; then
     echo "=== wardyn agent-run selftest (aws-sso) ==="
     ok=1
-    for bin in wardyn-rec wardyn-git-helper git aws; do
-        if command -v "$bin" >/dev/null 2>&1; then
-            echo "  FOUND   $bin ($(command -v "$bin"))"
-        else
-            echo "  MISSING $bin"
-            ok=0
-        fi
-    done
+    # wardyn-aws-sso is REQUIRED, not a nicety: `aws sso login` only writes the
+    # token to ~/.aws/sso/cache — this helper is what uploads it, so an image
+    # missing it completes a login that captures nothing.
+    selftest_check_bins aws wardyn-aws-sso || ok=0
     echo "--- env wiring ---"
     echo "  HTTP_PROXY=${HTTP_PROXY:-<unset>}"
     echo "  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
@@ -79,7 +75,10 @@ if [[ "${1:-}" == "--idle" ]]; then
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
     : > "$HOME/.wardyn/prep-done"
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
-    echo "agent-run: run 'aws sso login --sso-session wardyn --no-browser --use-device-code' in the attached shell" >&2
+    # BOTH commands: the login alone leaves the token in ~/.aws/sso/cache, where it
+    # dies with the container. wardyn-aws-sso uploads it (the setup UI types this
+    # same chained form into the attach PTY).
+    echo "agent-run: run 'aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso' in the attached shell" >&2
     exec sleep infinity
 fi
 

@@ -165,8 +165,9 @@ needs the browser.
 ## AI Run Composer (optional)
 
 The New Run wizard's "Describe your task" flow proposes a confined run from a plain-
-English prompt. It's **off by default** — set `WARDYN_COMPOSER_CONFIG` (via
-`deploy/compose/.env`; copy `.env.example`) to enable it. Ready-made configs live in
+English prompt. `.env.example` seeds the no-key `fake` backend, so copying it (what
+`make setup` does) leaves the composer **on**; point `WARDYN_COMPOSER_CONFIG` at a real
+backend for real proposals. Ready-made configs live in
 [`../../examples/composer-configs/`](../../examples/composer-configs/): `fake.json` (no
 key, deterministic demo), `claude-cli-opus.json` (host-mode + Claude subscription), and
 `anthropic-api` / `openai-api` templates (need a key via `wardyn secret set`). Empty

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -412,5 +413,37 @@ func TestDeletePolicy_Success(t *testing.T) {
 
 	if err := newTestClient(srv).DeletePolicy(context.Background(), id); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// GetRecording streams raw asciicast bytes (not JSON) and must still carry the
+// bearer, since do()'s JSON path is bypassed.
+func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
+	id := uuid.New()
+	want := "{\"version\":2}\n[0.1,\"o\",\"hi\"]\n"
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/x-asciicast")
+		_, _ = io.WriteString(w, want)
+	}))
+	defer srv.Close()
+
+	rc, err := newTestClient(srv).GetRecording(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetRecording: %v", err)
+	}
+	defer rc.Close()
+	got, _ := io.ReadAll(rc)
+	if string(got) != want {
+		t.Errorf("cast = %q, want %q", got, want)
+	}
+	// The doubled id is the real route shape (mounted per-run, handler takes the
+	// recording id) — the SDK hides it, so pin it.
+	if wantPath := "/api/v1/runs/" + id.String() + "/recording/" + id.String(); gotPath != wantPath {
+		t.Errorf("path = %q, want %q", gotPath, wantPath)
+	}
+	if gotAuth == "" {
+		t.Error("Authorization header missing on the raw-stream path")
 	}
 }

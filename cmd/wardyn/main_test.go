@@ -128,3 +128,27 @@ func TestErrorLine_SinglePrefix(t *testing.T) {
 		}
 	}
 }
+
+// The admin bearer over plain http:// to a remote host is a cleartext
+// fleet-wide credential; loopback and https are the normal, silent cases.
+func TestWarnPlaintextToken(t *testing.T) {
+	for _, tc := range []struct {
+		url, token string
+		wantWarn   bool
+	}{
+		{"http://wardyn.corp.example:8080", "tok", true},
+		{"http://10.1.2.3:8080", "tok", true},
+		{"http://localhost:8080", "tok", false},
+		{"http://127.0.0.1:8080", "tok", false},
+		{"http://[::1]:8080", "tok", false},
+		{"https://wardyn.corp.example", "tok", false},
+		{"http://wardyn.corp.example", "", false}, // no token, nothing to leak
+	} {
+		var b strings.Builder
+		warnPlaintextToken(&b, tc.url, tc.token)
+		if got := b.Len() > 0; got != tc.wantWarn {
+			t.Errorf("warnPlaintextToken(%q, token=%q) warned=%v, want %v (got %q)",
+				tc.url, tc.token, got, tc.wantWarn, b.String())
+		}
+	}
+}

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Diagram gate: every fenced ```mermaid block in the public docs must (a) parse
 # (rendered via mermaid-cli), (b) pass the label-truth manifest — each
 # load-bearing label string must exist BOTH at its cited source and in a
@@ -95,16 +98,26 @@ MANIFEST
 # ── prose manifest: same both-sides rule for strings the docs name in TEXT ───
 # Format: <needle>\t<source file>\t<doc>. These are not diagram labels, so they
 # would fail the .mmd half above; they still pin doc prose to the code.
+# The doc must also NAME the source path: symbol-only pinning let a file split
+# (`runs.go` -> `runs_dispatch.go`/`runs_lifecycle.go`) leave the doc citing a
+# file the symbol had left, with the gate still green.
 while IFS=$'\t' read -r needle src doc; do
   [ -z "$needle" ] && continue
   case "$needle" in \#*) continue;; esac
   for f in "$src" "$doc"; do
     grep -qF -- "$needle" "$f" || { echo "  FAIL prose-truth: '$needle' not found in $f"; fail=1; }
   done
+  grep -qF -- "$src" "$doc" || { echo "  FAIL prose-truth: $doc does not name $src"; fail=1; }
 done <<'PROSE'
 WAITING_FOR_CONFIRMATION	internal/types/types.go	ARCHITECTURE.md
 UpdateRunStateIf	internal/api/runs_lifecycle.go	ARCHITECTURE.md
 wait_for_review	internal/types/types.go	ARCHITECTURE.md
+Internal: true	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
+agent-run --idle	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
+wardyn-proxy:	internal/runner/docker/driver.go	threatmodel/THREAT-MODEL.md
+HTTP_PROXY	internal/api/runs_dispatch.go	threatmodel/THREAT-MODEL.md
+# doc half only: the code half is pinned harder by TestRequiredTools_CanonicalUnion.
+agent-run-lib.sh	internal/envbuild/builder.go	docs/ENVBUILD.md
 PROSE
 
 # ── style rules: a diagram nobody can read is worse than the table it replaced ─

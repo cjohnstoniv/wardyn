@@ -94,6 +94,12 @@ jobs:
   # the one that got skipped for 40 UI commits. Deliberately a PATH-PAIR check,
   # never a pixel diff — ui/e2e/screenshots/docs.spec.ts rejects pixel gates on
   # purpose (they flake), so this runs no browser and has no flake surface.
+  # It watches the WHOLE rendered UI tree, not a named-screen allowlist: both
+  # shots photograph the app shell, the nav rail, the design tokens and a dozen
+  # shared components, so any hand-maintained list is incomplete the day it lands
+  # (the one this replaced watched screens/new-run/, which feeds NO tracked PNG,
+  # and missed app-shell.tsx, which is in 100% of tracked pixels). Over-firing is
+  # what the `no-screenshots` label below is for.
   # fetch-depth: 0 is required — the default shallow checkout cannot resolve
   # origin/<base_ref>.
   # Escape hatch: label the PR `no-screenshots`, THEN PUSH. The label alone does
@@ -109,17 +115,16 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - name: UI screens changed without docs/img
-        # Via env, not `${{ }}` inside the script body — same idiom as the dco
-        # job below, so the pattern that gets copy-pasted is the safe one.
+      - name: UI changed without docs/img
+        # Via env, not `${{ }}` inside the script body.
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
-          screens="$(printf '%s\n' "$changed" | grep -E '^ui/src/app/components/screens/(setup|new-run)/|^ui/src/app/components/screens/runs\.tsx$' || true)"
+          screens="$(printf '%s\n' "$changed" | grep -E '^ui/src/(app|styles)/' | grep -v '\.test\.' || true)"
           if [ -n "$screens" ] && ! printf '%s\n' "$changed" | grep -q '^docs/img/'; then
             printf '%s\n' "$screens"
-            echo "UI screens changed - run make screenshots or say why not"
+            echo "UI changed - run make screenshots or label the PR no-screenshots"
             exit 1
           fi
 
@@ -147,6 +152,11 @@ jobs:
       # and are excluded by --prod, so they do not trip this gate.
       - name: Check UI production dependency licenses (no copyleft)
         run: make npm-license
+      # The npm half of the `gates` matrix below (which is Go-only): fail closed
+      # on a high/critical advisory in a SHIPPED dependency. Lives here, not in
+      # that matrix, because it needs pnpm/node and the matrix is uniform setup-go.
+      - name: Audit UI production dependencies (advisories)
+        run: make npm-audit
       # Routed through make so the gate is single-sourced (make = CI reality).
       # The ui-* targets bundle an idempotent `pnpm install --frozen-lockfile`;
       # against the already-installed tree above it is a no-op, so behavior is
@@ -185,14 +195,12 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
+      # Routed through make so the dev loop and CI stand up the SAME Postgres:
+      # the inline `docker run` this replaced had drifted a major version away
+      # from scripts/up.sh (17 here, 16 there) for a month. `make dev-pg` also
+      # creates the wardyn_e2e database the seeder expects.
       - name: Start Postgres (named container so the seeder can psql into it)
-        run: |
-          docker run -d --name wardyn-test-pg \
-            -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
-            -p 55432:5432 postgres:17
-          for i in $(seq 1 30); do
-            docker exec wardyn-test-pg pg_isready -U wardyn && break || sleep 1
-          done
+        run: make dev-pg
       - name: Install UI deps
         working-directory: ui
         run: pnpm install --frozen-lockfile

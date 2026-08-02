@@ -1,7 +1,9 @@
 # Example policies
 
-`RunPolicySpec` JSON has no comment field (`LoadPolicySpec` uses
-`DisallowUnknownFields`), so notes on the shipped policies live here instead.
+Every field these files can set is listed in
+[docs/POLICIES.md](../../docs/POLICIES.md). This page is the notes on the shipped
+examples — `RunPolicySpec` JSON has no comment field (`LoadPolicySpec` uses
+`DisallowUnknownFields`), so they live here instead.
 
 **JSON or YAML.** `wardyn run --policy-file` and `wardyn policy create/update -f`
 accept either — YAML is decoded to the same schema, so it also lets you keep
@@ -21,7 +23,9 @@ falls through to the managed Claude subscription (injected proxy-side; the sandb
 holds only an inert sentinel). `sandbox-workspace.yaml` is the "give it real
 code" step: the same keyless subscription path plus one operator-authored
 `workspace_mounts` entry, so the agent edits REAL files in the one host
-directory you name — edit `source` before you run it.  All three are commented.
+directory you name — edit `source`, then onboard it once with `wardyn workspace
+create --kind local_dir --source <path>` (a run may only mount an ONBOARDED
+source; the gate is un-bypassable). All three are commented.
 
 ## default.json
 
@@ -47,9 +51,11 @@ model provider is scanned and alerts are logged without blocking.
 ## demo.json
 
 The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs
-anywhere Docker runs, no gVisor needed): GitHub + Go-proxy egress only,
+anywhere Docker runs, no gVisor needed): `proxy.golang.org` egress only,
 `first_use_approval: "deny_with_review"`, one approval-gated read-only
-`github_token` grant. The compose launcher auto-picks it when gVisor/`runsc`
+`github_token` grant. `github.com` is deliberately **not** allowlisted — that
+grant routes git through the repo-scoped git-broker instead, so the sandbox
+never dials GitHub directly. The compose launcher auto-picks it when gVisor/`runsc`
 is absent (see the `deploy/compose/.env.example` header for the pick order).
 
 ## ci.json

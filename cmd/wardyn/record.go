@@ -143,7 +143,9 @@ func printProfile(p sdk.ProfileResult) {
 }
 
 func orDash(s string) string {
-	if s == "" {
+	// "null" is the raw json.RawMessage null literal — a grant scope decodes to
+	// it when unset, and printing it as a value would read as a real scope.
+	if s == "" || s == "null" {
 		return "-"
 	}
 	return s

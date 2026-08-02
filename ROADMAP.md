@@ -52,9 +52,11 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   so one job's teardown no longer wipes another's stack (`make test-e2e-concurrent`).
   Bounded to one trusted operator (e.g. a CI fleet under one service account).
 - **The resource-cap gate is authoritative and pre-launch.** A host that cannot
-  enforce CPU/memory/pid caps never starts the sandbox — the gate reads the
+  enforce CPU/memory/pid caps does not start the sandbox — the gate reads the
   `ContainerCreate` warnings between create and start, which also removed a
-  false-positive refusal on rootless Podman.
+  false-positive refusal on rootless Podman. It fails closed by default; the one
+  way past it is the explicit `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` opt-out, which
+  downgrades the refusal to a warning on a trusted host.
 - **Rootless Podman is probed, not assumed.** `scripts/test-podman.sh` was run
   against rootless Podman 4.9.3: the runner-critical primitives hold at CC1;
   CC2/CC3 are refused fail-closed (gVisor and Kata need what rootless does not give).
@@ -81,9 +83,27 @@ shipped behavior; none is scheduled.
 - **Proxy-side injection of the Bedrock SSO bearer.** Would make the SSO token
   never-resident; the derived role credentials stay resident regardless, because
   SigV4 signs in-process.
+- **No grant delivers a secret as a sandbox env var.** The five grant kinds wire
+  git's credential helper, inject proxy-side, or write a key file — none puts a
+  value in the sandbox environment, so a PAT-authenticated CLI or REST tool
+  cannot be brokered at all. Pasting the token into an interactive terminal is
+  the only workaround, which does not survive an autonomous run.
+  ([field report](docs/adoption/corp-network-onboarding-findings.md))
+- **A `git_pat` approval is single-use, so there is no approve-once-per-sandbox.**
+  The helper is standing but the mint is not: an approval-gated pull-then-push
+  raises two approvals, while `requires_approval: false` auto-issues a real
+  personal credential for the whole session. There is no per-run lease in
+  between. ([field report](docs/adoption/corp-network-onboarding-findings.md))
+- **The `ssh_key` grant is clone-only and does not fit a bind-mounted workspace.**
+  The key is written just before the clone and wiped right after, so a `local_dir`
+  workspace — which has no clone step — leaves interactive SSH pull/push
+  unauthenticated. Rewrite the remote to HTTPS, or accept clone-only SSH.
+  ([field report](docs/adoption/corp-network-onboarding-findings.md))
 - **Team mode (multi-user SSO/RBAC).** Speculative — no design in the tree. The
-  console's "Sign in with SSO" button is disabled; single-operator admin-token auth
-  is what exists. The `/auth/login` flow works server-side.
+  console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is configured
+  (`/healthz` reports `sso`), and the session it mints authenticates the whole API —
+  but there are no per-user roles: anyone who signs in has the same powers as the
+  admin token.
 
 ## What is not on the roadmap
 

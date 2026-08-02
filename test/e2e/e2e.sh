@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Wardyn end-to-end validator.
 #
 # Stands up the real compose stack (postgres + dex + wardynd built with the

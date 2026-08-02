@@ -219,6 +219,16 @@ export const workspaces = {
     return { workspace: body.workspace, emitted_files: body.emitted_files ?? {} };
   },
 
+  // GET /api/v1/workspaces/{id}/env-as-code -> { emitted_files } (same key as
+  // finalize) — regenerates the committable files any time, so a repo
+  // workspace's env-as-code does not die with the one-shot finalize response.
+  // 422 (no scanned profile yet) surfaces via HttpError with the server's text.
+  async getEnvAsCode(id: string): Promise<Record<string, string>> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/env-as-code`);
+    const body = await asJson<{ emitted_files?: Record<string, string> }>(res);
+    return body.emitted_files ?? {};
+  },
+
   // DELETE /api/v1/workspaces/{id} -> 204.
   async deleteWorkspace(id: string): Promise<void> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });

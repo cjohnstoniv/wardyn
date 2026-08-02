@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Wardyn unified setup — ONE command that detects your host and, for every piece of
 # host state it could use (your Claude login, AWS/Bedrock creds, git credentials),
 # shows you WHAT it found and WHAT it would do with it, then asks before acting. It
@@ -37,33 +40,34 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Shared shell helpers (os_kind, wardyn_pick_docker_host, image_missing, …).
+# Sourced FIRST so the host guard below runs off the canonical os_kind() rather
+# than a second, drift-prone copy of the same ladder.
+. "$ROOT/scripts/lib/common.sh"
+
 # WSL2 must be detected BEFORE any native-Windows guard: some WSL2 shells (e.g.
 # via WSLENV/interop) inherit $OS=Windows_NT from Windows even though this is a
 # real Linux distro — checking that env var first would wrongly hard-exit a
-# working WSL2 box. Same signal order as up.sh's canonical os_kind() (WSL
-# indicators checked first): /proc/version, then $WSL_DISTRO_NAME. Computed
-# once here and reused below — no second, divergent check later in the file.
-IS_WSL=false
-grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=true
-[ -n "${WSL_DISTRO_NAME:-}" ] && IS_WSL=true
+# working WSL2 box. os_kind() checks the WSL indicators first and so returns
+# `windows` only on a shell that really is native Windows. Computed once here
+# and reused below — no second, divergent check later in the file.
+OS_KIND="$(os_kind)"
+IS_WSL=false; [ "$OS_KIND" = wsl ] && IS_WSL=true
 
 # Fail fast on a native-Windows shell (cmd.exe/PowerShell/git-bash) — every
 # docker/socket assumption below is POSIX and would otherwise fail later with a
-# cryptic error. Gated on `! $IS_WSL` so it never fires on a real WSL2 box.
-if ! $IS_WSL; then
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*)
-      printf 'native Windows shell detected. Install WSL2 + Docker Desktop (enable WSL integration), then run `make setup` INSIDE your WSL distro — not from cmd.exe/PowerShell.\n' >&2
-      exit 1 ;;
-  esac
-  [ "${OS:-}" = "Windows_NT" ] && { printf 'native Windows detected — run `make setup` inside WSL2, not cmd.exe/PowerShell.\n' >&2; exit 1; }
-fi
+# cryptic error.
+[ "$OS_KIND" = windows ] && {
+  printf 'native Windows shell detected. Install WSL2 + Docker Desktop (enable WSL integration), then run `make setup` INSIDE your WSL distro — not from cmd.exe/PowerShell.\n' >&2
+  exit 1; }
 
 # ── tiny UI helpers ──────────────────────────────────────────────────────────
-if [ -t 1 ]; then B="\033[1m"; G="\033[32m"; Y="\033[33m"; C="\033[36m"; R="\033[0m"; else B=""; G=""; Y=""; C=""; R=""; fi
+# warn() deliberately is NOT defined here: common.sh's `[warn] …` has always won
+# (it was sourced after this block), so keeping it is what preserves the console
+# output operators see today.
+if [ -t 1 ]; then B="\033[1m"; G="\033[32m"; C="\033[36m"; R="\033[0m"; else B=""; G=""; C=""; R=""; fi
 say()  { printf "%b\n" "$*"; }
 ok()   { printf "  ${G}✓${R} %s\n" "$*"; }
-warn() { printf "  ${Y}!${R} %s\n" "$*"; }
 info() { printf "  ${C}·${R} %s\n" "$*"; }
 hd()   { printf "\n${B}%s${R}\n" "$*"; }
 
@@ -92,13 +96,12 @@ ask_yn() {
 # A dedicated native dockerd (own data-root) can register runsc/kata; Docker Desktop's
 # managed engine resets custom runtimes on restart, so it's Fence-only. Honor an
 # explicit DOCKER_HOST (any scheme, UNMANGLED); else pick the wardyn socket if it
-# exists — via the shared picker up.sh/e2e-backend.sh/run-local.sh/ci-run.sh already
+# exists — via the shared picker up.sh/e2e-backend.sh/ci-run.sh already
 # use. The picker also peeks at the active docker context to special-case Rancher
 # Desktop, whose host ~/.rd/docker.sock is not bind-mountable (remaps the compose
 # bind to the in-VM /var/run/docker.sock). (The old hand-rolled pick_daemon
 # re-wrapped a tcp://ssh:// DOCKER_HOST as unix://tcp://… and hardcoded
 # /var/run/docker.sock, bypassing docker-context resolution.)
-. "$ROOT/scripts/lib/common.sh"
 wardyn_pick_docker_host
 DSOCK="${DOCKER_HOST:-unix:///var/run/docker.sock}"; DSOCK="${DSOCK#unix://}"
 
@@ -553,12 +556,26 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; the
 fi
 
 # Guard: if Wardyn already answers on :8080 (started elsewhere, no pidfile), don't
-# launch a doomed second wardynd that just logs "address already in use".
+# launch a doomed second wardynd that just logs "address already in use". Ask WHO
+# is answering before advising a stopper: on the DEFAULT (containerized) install
+# the responder is the compose stack, which `make stop-host` cannot touch — it
+# only kills a pidfile this installer wrote — and which never reads the host-mode
+# subscription ceiling staging just wrote either. Every path into the host branch
+# routes through here, so this is also the guard for the headless
+# `WARDYN_SETUP_MODE=local ./scripts/setup.sh` / `make stage-claude` form.
 if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ]; then
-  if [ "${MODEL_CONFIG_APPLIED:-false}" = true ]; then
-    warn "Wardyn is already running but was NOT started by this installer (no pidfile), so I can't safely restart it to apply the new model config. Stop it and re-run: make stop-host && make setup"
+  if [ -n "$(docker compose -f deploy/compose/docker-compose.yaml ps -q wardynd 2>/dev/null)" ]; then
+    warn "${URL} is served by the CONTAINERIZED (compose) stack, not host mode — leaving it as-is."
+    if [ "${MODEL_CONFIG_APPLIED:-false}" = true ]; then
+      warn "Host-mode staging does NOT apply to it: the compose wardynd never reads ~/.wardyn/composer-dev-subscription.json."
+    fi
+    warn "Set up model access there with:  claude setup-token | wardyn subscription connect"
+    warn "  (or, for the resident-copy mount:  WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh)"
+    warn "Really want host mode? Stop the stack first:  make compose-down"
+  elif [ "${MODEL_CONFIG_APPLIED:-false}" = true ]; then
+    warn "Wardyn is already running but was NOT started by this installer (no pidfile), so I can't safely restart it to apply the new model config. Stop whatever is holding :${WARDYN_UP_PORT:-8080}, then re-run make setup."
   else
-    ok "Wardyn is already responding at ${URL} — leaving it as-is. (Stop: make stop-host)"
+    ok "Wardyn is already responding at ${URL} — leaving it as-is. (Not started by this installer, so it has no pidfile: stop whatever launched it.)"
   fi
   exit 0
 fi

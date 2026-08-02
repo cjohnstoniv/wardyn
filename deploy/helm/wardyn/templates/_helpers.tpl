@@ -74,3 +74,34 @@ inline (demo-grade) values.
 {{- printf "%s-secrets" (include "wardyn.fullname" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Name of the Secret that holds the admin bearer token. Deliberately SEPARATE
+from wardyn.secretName: the DSN defaults to an external Secret, so sharing the
+name would emit a secretKeyRef for an "admin-token" key the operator's Postgres
+Secret does not carry — CreateContainerConfigError. The two credentials pick
+their mode independently.
+*/}}
+{{- define "wardyn.authSecretName" -}}
+{{- if .Values.auth.adminToken.secretRef.name -}}
+{{- .Values.auth.adminToken.secretRef.name -}}
+{{- else -}}
+{{- printf "%s-auth" (include "wardyn.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Non-empty when SOME authentication is wired. Without one, internal/api/http.go
+adminAuth 401s every API route ("admin token not configured; public API
+disabled") while /healthz keeps reporting Ready — a pod that looks healthy and
+serves nothing. templates/secret.yaml turns that into a render-time failure.
+Every escape hatch counts: the chart's two adminToken modes, and an
+operator-supplied token/issuer in .Values.env or .Values.extraEnv.
+*/}}
+{{- define "wardyn.authConfigured" -}}
+{{- $ok := or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value (hasKey .Values.env "WARDYN_ADMIN_TOKEN") (hasKey .Values.env "WARDYN_OIDC_ISSUER") -}}
+{{- range .Values.extraEnv -}}
+{{- if has (.name | default "") (list "WARDYN_ADMIN_TOKEN" "WARDYN_OIDC_ISSUER") -}}{{- $ok = true -}}{{- end -}}
+{{- end -}}
+{{- if $ok }}true{{ end -}}
+{{- end -}}

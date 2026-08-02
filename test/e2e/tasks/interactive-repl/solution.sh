@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # ORACLE "solution" for interactive-repl — DOCUMENTATION ONLY, NOT EXECUTED.
 #
 # This task is interactive: the sandbox idles (Cmd=sleep infinity) and the

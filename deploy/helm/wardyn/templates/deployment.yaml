@@ -1,12 +1,14 @@
 {{/*
 wardynd Deployment — the core object the chart was missing.
 
-Honors values.yaml: image.*, replicas, resources, persistence, and the
-postgres.dsn secret wiring. Env mirrors the compose demo (cmd/wardynd/main.go
-flagEnv names): WARDYN_LISTEN sets the bind address, WARDYN_PG_DSN comes from a
-Secret (external or chart-created), and WARDYN_AGE_KEY is sourced from the same
-Secret only when present (otherwise wardynd generates an ephemeral key at boot —
-the documented fail-closed default).
+Honors values.yaml: image.*, replicas, resources, persistence, and the secret
+wiring. The bind address is the -listen arg; env uses cmd/wardynd/main.go's
+flagEnv names. WARDYN_PG_DSN and WARDYN_ADMIN_TOKEN come from Secrets (external
+or chart-created, chosen independently), WARDYN_AGE_KEY only when the referenced
+Secret is known to carry it (otherwise wardynd generates an ephemeral key at
+boot), and WARDYN_RECORDING_DIR follows persistence so the chart's own defaults
+boot on a read-only root FS. Secret-bearing extras go through .Values.extraEnv;
+.Values.env renders inline.
 
 Hardening (defense in depth alongside the per-run sandbox envelope):
   - runs as a non-root user (the wardynd image is distroless:nonroot, uid 65532)
@@ -21,8 +23,11 @@ metadata:
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 spec:
-  # wardynd is a single-writer control plane (Postgres is the source of truth);
-  # the README documents replicas as the scaling knob.
+  # wardynd is single-writer BY CONSTRUCTION, not just by convention: attach
+  # tickets, compose-result uploads and the ground-truth token rotator are all
+  # per-process state, so >1 drops requests that land on the wrong pod. The
+  # value stays templated for a future leader-elected build; the README and
+  # docs/OPERATIONS.md say to leave it at 1.
   replicas: {{ .Values.replicas }}
   selector:
     matchLabels:
@@ -37,6 +42,10 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "wardyn.serviceAccountName" . }}
+      # Set on the POD, not just on the ServiceAccount we may not be creating:
+      # serviceAccount.create=false points at an SA whose own automount default
+      # is true, and the pod-level field wins over the SA-level one.
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.image.pullSecrets }}
@@ -57,18 +66,45 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: {{ .Values.postgres.dsn.key }}
-            {{- if .Values.secrets.ageKeyFromSecret }}
-            # age secret-store identity (optional). Present only when the Secret
-            # carries an "age-key" entry; otherwise wardynd self-generates one.
+            {{- if or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value }}
+            # Admin bearer token. Unset (and no OIDC) => every API route 401s
+            # while /healthz still reports Ready, so secret.yaml fails the render
+            # instead of shipping a control plane that serves nothing.
+            - name: WARDYN_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wardyn.authSecretName" . }}
+                  key: {{ .Values.auth.adminToken.key }}
+            {{- end }}
+            {{- if or .Values.secrets.ageKeyFromSecret (and .Values.secrets.ageKey (not .Values.postgres.dsn.secretRef.name)) }}
+            # age secret-store identity (optional). Injected only when the Secret
+            # we reference is KNOWN to carry an "age-key" entry — the chart wrote
+            # it (inline mode) or the operator says so (ageKeyFromSecret).
+            # Otherwise wardynd self-generates an ephemeral one.
             - name: WARDYN_AGE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
             {{- end }}
+            {{- if not (hasKey .Values.env "WARDYN_RECORDING_DIR") }}
+            # wardynd's own default (./data/recordings) lands on the read-only
+            # root FS, and NewFSStore's MkdirAll failure is a hard boot error —
+            # the chart's defaults would CrashLoopBackOff. Point it at the
+            # persistent mount, else empty = replay off (the documented no-op in
+            # internal/recording/registry.go). An .Values.env entry overrides.
+            - name: WARDYN_RECORDING_DIR
+              value: {{ if .Values.persistence.enabled }}{{ printf "%s/recordings" .Values.persistence.mountPath | quote }}{{ else }}""{{ end }}
+            {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
+            # composer API key, audit-sink JSON) ride a secretKeyRef instead of
+            # rendering as a literal in the Deployment object like .Values.env.
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
             - name: http
@@ -107,9 +143,8 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- if .Values.persistence.enabled }}
-            # Recording/audit spool when persistence is enabled. wardynd defaults
-            # WARDYN_RECORDING_DIR to ./data/recordings; set it via .Values.env to
-            # point inside this mount if you enable persistence.
+            # Recording/audit spool. The env block above already points
+            # WARDYN_RECORDING_DIR at <mountPath>/recordings.
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
             {{- end }}

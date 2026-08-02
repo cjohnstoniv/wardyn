@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # scripts/up.sh — one-command launcher + doctor/preflight for local Wardyn,
 # via the Docker COMPOSE path (deploy/compose/docker-compose.yaml). This is
 # what `make setup` / `make doctor` / `make dev-pg` call.
@@ -75,26 +78,6 @@ composer_wants_llm() {
   [ -n "${ANTHROPIC_API_KEY:-}" ] && { echo 1; return; }
   [ -n "${OPENAI_API_KEY:-}" ]    && { echo 1; return; }
   echo ""
-}
-
-# os_kind -> windows | wsl | linux | darwin | unknown
-os_kind() {
-  _ok_u=$(uname -s 2>/dev/null || echo unknown)
-  _ok_proc=""
-  [ -r /proc/version ] && _ok_proc=$(cat /proc/version 2>/dev/null || true)
-  # WSL must be checked before the generic Linux case: WSL's own `uname -s`
-  # reports "Linux".
-  case "${_ok_proc}" in *[Mm]icrosoft*) echo wsl; return ;; esac
-  if [ -n "${WSL_DISTRO_NAME:-}" ]; then echo wsl; return; fi
-  case "${_ok_u}" in
-    MINGW*|MSYS*|CYGWIN*) echo windows; return ;;
-  esac
-  if [ "${OS:-}" = "Windows_NT" ]; then echo windows; return; fi
-  case "${_ok_u}" in
-    Linux)  echo linux ;;
-    Darwin) echo darwin ;;
-    *)      echo unknown ;;
-  esac
 }
 
 # port_in_use PORT — best-effort; tries whatever's on PATH, defaults to "free"
@@ -568,7 +551,7 @@ cmd_up() {
   fi
 
   # Sandbox → control-plane reachability CONFIRMATION (the inverse of the
-  # host-mode run-local warning). In this compose path wardynd runs as a
+  # host-mode warning setup.sh prints). In this compose path wardynd runs as a
   # container on wardyn-internal, so a run's proxy sidecar reaches it at
   # http://wardynd:8080 over Docker DNS with NO host/NAT hop — which is what
   # lets workspace VERIFY report its result (the exact thing that can't work on
@@ -876,10 +859,13 @@ cmd_reset_all() {
 }
 
 cmd_pg() {
-  # The exact CI incantation (.github/workflows/ci.yml "Start Postgres" step),
-  # reused verbatim as the single source of truth — plus idempotent reuse and
-  # the wardyn_e2e database e2e-backend.sh/run-ui-e2e.sh expect, so the dev/e2e
-  # loop can self-provision instead of dying on a missing container.
+  # THE dev/e2e Postgres bring-up: .github/workflows/ci.yml's "Start Postgres"
+  # step runs `make dev-pg`, i.e. this function, so CI and the dev loop cannot
+  # drift (they did — 16 here vs 17 there — for a month). Keep the image at the
+  # bare `postgres:17` deploy/compose ships; this container is a throwaway
+  # (`reset-all` rm -f's it), so it does not carry compose's digest pin.
+  # Adds idempotent reuse and the wardyn_e2e database e2e-backend.sh expects, so
+  # the dev/e2e loop can self-provision instead of dying on a missing container.
   if docker inspect wardyn-test-pg >/dev/null 2>&1; then
     log "wardyn-test-pg already exists — ensuring it's running"
     docker start wardyn-test-pg >/dev/null 2>&1 || true
@@ -887,7 +873,7 @@ cmd_pg() {
     log "Starting wardyn-test-pg (dev/e2e Postgres) on :55432"
     docker run -d --name wardyn-test-pg \
       -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
-      -p 55432:5432 postgres:16-alpine
+      -p 55432:5432 postgres:17
   fi
 
   _tries=0
@@ -897,8 +883,9 @@ cmd_pg() {
     sleep 1
   done
 
-  # scripts/e2e-backend.sh's default DB (run-local.sh creates/drops its own
-  # wardyn_local on demand, so it needs nothing precreated here).
+  # scripts/e2e-backend.sh's default DB, precreated so `make dev-pg` alone is
+  # enough for CI's seeder. A non-default WARDYN_E2E_PG_DBNAME is created by
+  # e2e-backend.sh cmd_up itself.
   docker exec wardyn-test-pg psql -U wardyn -d wardyn -c "CREATE DATABASE wardyn_e2e" >/dev/null 2>&1 || true
   log "wardyn-test-pg ready on :55432 (databases: wardyn, wardyn_e2e)"
 }

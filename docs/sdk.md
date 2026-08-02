@@ -28,9 +28,10 @@ func main() {
     // 1. Create a client. Token is the AdminToken configured in wardynd.
     c := client.New("https://wardyn.example.com", "my-admin-token")
 
-    // 2. Submit a run. Returns client.AgentRun (state PENDING or RUNNING).
-    var run client.AgentRun
-    run, err := c.CreateRun(ctx, client.CreateRunRequest{
+    // 2. Submit a run. Returns client.CreateRunResult: the created
+    //    client.AgentRun (state PENDING or RUNNING), embedded, plus any
+    //    ADVISORY warnings — the run is live either way, so surface them.
+    created, err := c.CreateRun(ctx, client.CreateRunRequest{
         Agent: "claude-code",
         Repo:  "org/repo",
         Task:  "fix issue #42",
@@ -38,10 +39,13 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Println("run id:", run.ID, "state:", run.State)
+    fmt.Println("run id:", created.ID, "state:", created.State)
+    for _, w := range created.Warnings {
+        fmt.Println("warning:", w)
+    }
 
     // 3. Poll or fetch later.
-    run, _ = c.GetRun(ctx, run.ID)
+    run, _ := c.GetRun(ctx, created.ID)
 
     // 4. Approve a pending credential or egress request.
     pending, _ := c.ListApprovals(ctx, client.ApprovalPending)
@@ -75,7 +79,7 @@ importing from another module anyway). The aliases are identical types — a
 
 ```go
 var (
-    r   client.AgentRun        // CreateRun / GetRun / ListRuns
+    r   client.AgentRun        // GetRun / ListRuns (embedded in CreateRunResult)
     g   client.CredentialGrant // ListGrants
     a   client.ApprovalRequest // ListApprovals / Approve / Deny
     p   client.RunPolicy       // ListPolicies / GetPolicy / Create / Update
@@ -112,13 +116,20 @@ if errors.As(err, &apiErr) {
 }
 ```
 
-## Multi-user dev: principal override
+## Local dev: principal override
 
-`X-Wardyn-Principal` overrides the server-side principal attribution (dev only):
+`X-Wardyn-Principal` overrides the server-side principal attribution:
 
 ```go
 c.Principal = "alice@example.com"
 ```
+
+It is honored **only when wardynd runs in local (no-auth) mode** — it simulates
+different principals on one trusted dev machine. Under admin-token auth the
+header is ignored and the action is recorded as `actor_type=system`, principal
+`admin-token`; under OIDC the verified `sub` wins. Use OIDC for real per-human
+attribution — a shared dev server on an admin token is exactly where this header
+stops working.
 
 ## Raw HTTP (curl)
 

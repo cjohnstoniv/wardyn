@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Grader for fix-failing-test.
 #
 #   docker run --rm -v <run-workspace>:/ws:ro -v <task-dir>:/task:ro \

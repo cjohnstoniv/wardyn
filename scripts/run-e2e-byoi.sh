@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Live end-to-end proof for Bring Your Own Image (BYOI): an operator-supplied
 # base image is WRAPPED with Wardyn's runner tools and every sandbox control
 # holds regardless of image contents.

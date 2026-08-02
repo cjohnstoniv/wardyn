@@ -17,6 +17,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// Compile-time surface guard: every type an exported method returns or accepts
+// must be nameable through client.*, or the SDK is documented-but-unusable from
+// outside the module (Go forbids importing internal/types). This file is
+// package client_test, so each name below must resolve from OUTSIDE — dropping
+// an alias in types.go fails the BUILD here. Reflect cannot replace this: `=`
+// aliases are type-identical, so PkgPath reports internal/types either way.
+var (
+	_ []client.Workspace
+	_ client.WorkspaceKind
+	_ client.WorkspaceLLMCred
+	_ client.WorkspaceBedrockRef
+	_ client.SiteConfig
+	_ map[string]client.ArtifactOverride
+)
+
 func TestClientCoversRouteFamilies(t *testing.T) {
 	// family -> a representative method the package doc claims. Keep in sync with
 	// the "# Coverage" block in client.go's package doc.

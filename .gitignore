@@ -77,7 +77,8 @@ test/reports/coverage/
 ui/test-results/
 ui/playwright-report/
 
-# Local hands-on instance artifacts (scripts/run-local.sh)
+# Stale local-instance artifacts (the run-local.sh that wrote these is gone;
+# kept ignored so old checkouts stay clean)
 /.local-bin/
 
 # real (non-.example) local composer configs must never be committed

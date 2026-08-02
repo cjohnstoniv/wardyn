@@ -1,3 +1,6 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Wardyn agent ~/.bashrc — sourced by the interactive `wardyn attach` shell
 # (tmux→bash / bash -i). Its ONE job: never drop the operator into a workspace
 # that isn't ready yet.

@@ -19,14 +19,14 @@ the governance target.
 | Binary | Role |
 |---|---|
 | `wardynd` | Control plane: REST API, embedded web UI (served by the same process from a built `ui/dist` — `WARDYN_UI_DIR` — not compiled in via `go:embed`), policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
-| `wardyn-runner` | Data plane: implements `internal/runner.Runner` with the `docker/` driver **[shipped]** and `k8s/` driver **[v0.5+ — planned]**. |
+| `wardyn-runner` *(dev-only)* | Data plane. The driver that ships is the **library** `internal/runner/docker`, compiled into `wardynd` (blank import, `-tags docker`) **[shipped]**; the `k8s/` driver is **[v0.5+ — planned]**. `cmd/wardyn-runner` is only a standalone harness for manual/conformance testing — no Dockerfile, Makefile target, script or CI job builds it. |
 | `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection. Opt-in per-run TLS interception (`intercept_tls`) of operator-listed MITM-eligible hosts (LLM endpoints, artifact registries) with outbound content inspection (`internal/contentscan`; per-proxy kill-switch `WARDYN_LLM_SCAN`) — claims-contract in `threatmodel/THREAT-MODEL.md` §5.1a. Same binary on both targets. |
 | `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
 | `wardyn-verify` | In-sandbox verify runner: executes the workspace's operator-approved setup commands (install/build/test/lint) in the built devcontainer image under confinement and reports the result — it does NOT replay a recorded PTY session. |
-| `wardyn` | CLI: `wardyn run` (create/list/get/kill), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn setup wall\|vault`. |
+| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
 
@@ -80,7 +80,7 @@ audit streams".
 - **Bring Your Own Image (BYOI)** — a run may name an arbitrary base image;
   the control plane wraps it with the runner tools via `internal/envbuild`
   (opt-in, `WARDYN_ENVBUILD`) and gates launch on an in-sandbox
-  `agent-run --selftest`, fail-closed (`internal/api/runs.go`). Operator docs:
+  `agent-run --selftest`, fail-closed (`internal/api/runs_dispatch.go`). Operator docs:
   `deploy/images/README.md`, "Bring your own image".
 - **Managed harness credential** — a containerized control plane (no host
   `~/.claude`) connects a Claude subscription via an interactive login sandbox
@@ -102,9 +102,11 @@ audit streams".
 On Kubernetes these surface as CRDs; on Docker they are the same
 Postgres-backed objects. One vocabulary everywhere.
 
-An `AgentRun` moves through these states (`internal/types/types.go`,
-transitions in `internal/api/runs.go` — state changes are compare-and-swap
-via `UpdateRunStateIf`, so a kill can never resurrect a finished run):
+An `AgentRun` moves through these states (`internal/types/types.go`; transitions
+are issued from `internal/api/runs_dispatch.go` for the launch edges and
+`internal/api/runs_lifecycle.go` for the terminal ones, all funnelled through the
+one compare-and-swap there — `casRunState` → `UpdateRunStateIf` — so a kill can
+never resurrect a finished run):
 
 ```mermaid
 stateDiagram-v2
@@ -232,6 +234,27 @@ the approved scope and a grant can never mint twice. `api_key` grants are then
 injected proxy-side (the agent never sees them); git tokens reach `git` via
 `wardyn-git-helper` stdout only.
 
+### Git egress: two mechanisms, disjoint host sets
+
+Git has TWO credential lanes and they are not duplicates — which serves a clone
+is decided by grant kind and host, and neither can cover the other's set:
+
+| Grant / transport | Mechanism | Where the credential lives |
+|---|---|---|
+| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; with github.com off the run's allowlist an un-brokered GitHub URL is denied, so the repo is the unit of trust |
+| `git_pat` (Azure DevOps / GitLab / a plain GitHub PAT), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git` |
+| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1) |
+
+The broker is structurally github.com-only and App-token-only: it has no host
+parameter and no username plumbing, and authenticates as
+`x-access-token`. An ADO/GitLab PAT cannot traverse it. Conversely `git_pat` and
+`ssh_key` cannot be proxy-injected at all — git-over-HTTPS to those hosts is an
+opaque CONNECT tunnel, and git's SSH transport has no credential-helper seam
+(`internal/types/types.go`, `GrantGitPAT`/`GrantSSHKey`). Deleting either lane
+drops a supported SCM. (The helper also carries a GitHub-App branch —
+`WARDYN_GITHUB_GRANT_ID` — that the `insteadOf` rewrite makes unreachable for a
+granted repo; it is the fallback for a GitHub host the rewrite did not cover.)
+
 ## Layered egress (identical semantics on both targets)
 
 L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftables
@@ -250,7 +273,8 @@ L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftabl
 
 Exactly TWO paths: `deploy/compose` (config-validated in CI; exercised
 end-to-end by the nightly full-stack e2e) and ONE blessed Helm chart
-`deploy/helm/wardyn` (`helm lint` + `helm template` render-checked in CI). No
+`deploy/helm/wardyn` (`helm lint` + `helm template` render-checked in CI on both
+the default values and `ci/all-on-values.yaml`, plus its refusals). No
 "your arbitrary K8s".
 
 The compose stack (`deploy/compose/docker-compose.yaml`):

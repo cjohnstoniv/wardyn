@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# SPDX header gate + fixer: every tracked source file (excluding generated,
-# vendored, and the MIT-origin shadcn ui/ primitives) must carry the
-# SPDX/copyright header.
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPDX header gate + fixer: every tracked .go/.ts/.tsx/.css/.sh file (excluding
+# generated, vendored, and the MIT-origin shadcn ui/ primitives) must carry the
+# SPDX/copyright header — the exact scope is license_scope_files() in
+# scripts/lib/common.sh. YAML, Dockerfiles and .mjs are outside this gate, so a
+# green run does not mean "every tracked file is marked".
+#
+# The header above is HAND-maintained: addlicense's has-a-license test is a
+# substring scan for "copyright" over the first 1000 bytes, which this file's own
+# prose trips, so --fix silently skips it and -check silently passes it.
 #
 #   scripts/license-headers.sh          # CHECK — what `make license-headers` / CI runs
 #   scripts/license-headers.sh --fix    # APPLY — `make license-headers ARGS=fix`

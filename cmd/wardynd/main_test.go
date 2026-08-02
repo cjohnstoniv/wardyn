@@ -218,8 +218,8 @@ func TestGenAndPrintAgeKey_ParseableNotPublic(t *testing.T) {
 
 // buildSecretStore MUST refuse EVERY published age identity, not just the first
 // one we happened to find. Each entry in knownPublicAgeKeys was once a committed
-// default (a Compose baked-in, and the scripts/run-local.sh + scripts/e2e-backend.sh
-// default), so booting under one encrypts the secret store with a key anyone can
+// default (a Compose baked-in, and the scripts/e2e-backend.sh default), so
+// booting under one encrypts the secret store with a key anyone can
 // read out of git history. Table-driven over the list so a newly-published key
 // added to knownPublicAgeKeys is covered automatically.
 func TestBuildSecretStore_RefusesEveryKnownPublicAgeKey(t *testing.T) {
@@ -244,9 +244,9 @@ func TestBuildSecretStore_RefusesEveryKnownPublicAgeKey(t *testing.T) {
 
 // The dev/e2e scripts must not re-introduce a committed age key: a hard-coded one
 // is published the moment it is pushed, and wardynd would then have to denylist it
-// too. Both scripts mint an ephemeral identity per boot via `wardynd -gen-age-key`.
+// too. The script mints an ephemeral identity per boot via `wardynd -gen-age-key`.
 func TestDevScriptsMintAgeKeyInsteadOfCommittingOne(t *testing.T) {
-	for _, script := range []string{"../../scripts/run-local.sh", "../../scripts/e2e-backend.sh"} {
+	for _, script := range []string{"../../scripts/e2e-backend.sh"} {
 		b, err := os.ReadFile(script)
 		if err != nil {
 			t.Fatalf("read %s: %v", script, err)

@@ -51,10 +51,14 @@ prove the recorder captured a live session — use the Replay tab for that.
 `ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to
 poke at.
 
-By hand against the same stack (the UI is at http://localhost:8080 — there is no
-human SSO login: the "Sign in with SSO" button is disabled, though the
-`/auth/login` flow still works server-side; multi-user auth is unscheduled, see
-[ROADMAP.md](../ROADMAP.md)):
+The UI is at http://localhost:8080. The demo stack configures no OIDC, so the
+"Sign in with SSO" button is disabled and the admin token below is the way in;
+set `WARDYN_OIDC_*` and the button lights up (the local Dex recipe is in
+[`deploy/compose/README.md`](../deploy/compose/README.md)). There are still no
+per-user roles either way — anyone who signs in has the same powers as the admin
+token, and multi-user RBAC is unscheduled ([ROADMAP.md](../ROADMAP.md)).
+
+By hand against the same stack:
 
 ```sh
 export WARDYN_URL=http://localhost:8080 WARDYN_ADMIN_TOKEN=demo-admin-token
@@ -70,15 +74,18 @@ wardyn run --agent claude-code --interactive --policy-file examples/policies/san
 wardyn attach <id>
 ```
 
-Prefer clicking? The UI's **/demos** screen (<http://localhost:8080/demos>, or
-"Try a 2-minute demo sandbox" on the Welcome hero) launches four interactive
-sandboxes with an embedded terminal and live approvals — no repo, no keys, only
-the sandbox barrier itself: **the sealed box** (`always_deny` — `curl` fails
-instantly with a 403), **fail then approve** (`deny_with_review` — approve, retry,
-it succeeds), **held at the door** (`wait_for_review` — `curl` *hangs* at the
-proxy until you approve, then the same in-flight command completes), and **lines
-that can't be crossed** (allow-all policy, yet `169.254.169.254` and private-IP
-probes stay denied — no policy can grant them).
+Prefer clicking? The UI's **/demos** screen (<http://localhost:8080/demos>)
+launches throwaway sandboxes with an embedded terminal and live approvals — no
+repo, no workspace. Four need no model at all, only the sandbox barrier itself:
+**the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
+then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the
+door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then
+the same in-flight command completes), and **lines that can't be crossed**
+(allow-all policy, yet `169.254.169.254` and private-IP probes stay denied — no
+policy can grant them). A fifth card, **the agent in the box**, appears once you
+connect a model (Level 2 below): it runs a real Claude Code agent under the same
+policy primitives, its model injected proxy-side, with `api.anthropic.com` the
+only host it can reach.
 
 ![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
 
@@ -212,20 +219,14 @@ The session idles for `wardyn attach`; when it ends, the capture lands on the
 workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
 profile (or promote the observed egress from the console's import panel).
 
-## Level 3 — enable the AI Composer (describe a task, get a proposed run)
+## Level 3 — the AI Composer (describe a task, get a proposed run)
 
 The **AI Run Composer** turns a plain-English task into a *proposed* confined run
 (agent, repo, confinement, egress, grants) that Wardyn grades for you to review
-before launch. It's off by default; set a backend via `WARDYN_COMPOSER_CONFIG` to
-enable it. The Describe surface then appears automatically in the New Run dialog —
+before launch. `make setup` already seeded the no-API-key `fake` backend into
+`deploy/compose/.env`, so the Describe surface is live in the New Run dialog with
+deterministic demo proposals. Clear `WARDYN_COMPOSER_CONFIG` there to turn it off —
 with no backend configured, the dialog falls back to the manual wizard.
-
-No API key — deterministic demo:
-
-```sh
-echo 'WARDYN_COMPOSER_CONFIG={"default":"dev","backends":[{"name":"dev","wire":"fake","model":"demo"}]}' >> deploy/compose/.env
-docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
-```
 
 Real prompt-driven proposals — Anthropic API + Opus:
 

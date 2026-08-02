@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Stage Claude subscription credentials for Wardyn's composer subscription mode.
 #
 # What this does (and why):

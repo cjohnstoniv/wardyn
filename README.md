@@ -130,8 +130,9 @@ checks it.
   egress preloaded — [TRY-IT Level 2.5](docs/TRY-IT.md). **[shipped]**
 
 - **AI Run Composer (optional).** Describe a task in plain English and Wardyn
-  proposes a confined run and grades it deterministically — advisory, **off by
-  default** — [TRY-IT Level 3](docs/TRY-IT.md). **[shipped]**
+  proposes a confined run and grades it deterministically — advisory; the binary
+  ships with no backend, and `make setup` seeds a no-API-key `fake` one so the
+  flow works out of the box — [TRY-IT Level 3](docs/TRY-IT.md). **[shipped]**
 
 ---
 

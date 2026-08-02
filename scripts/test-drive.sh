@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # scripts/test-drive.sh — Wardyn governance test-drive.
 #
 # Walks an operator through every major governance feature against a RUNNING
@@ -28,7 +31,7 @@
 #     fail-closed mint error (no GitHub App configured in the demo); assert no
 #     token in sandbox env (invariant 1).
 #
-# (6) Kill cascade             wardyn kill -> container gone + run token 401 +
+# (6) Kill cascade             wardyn run kill -> container gone + run token 401 +
 #     run.kill audit event.
 #
 # (7) Recording                GET the asciicast artifact for the run -> 200.
@@ -601,7 +604,7 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 6: Kill cascade
-# wardyn kill -> container gone + run token 401 + run state KILLED + run.kill
+# wardyn run kill -> container gone + run token 401 + run state KILLED + run.kill
 # audit event (actor_type=human).
 # ─────────────────────────────────────────────────────────────────────────────
 if run_section 6; then

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Run the LIVE end-to-end task orchestrator (test/e2e/live) against a real
 # host-mode wardynd with the docker runner: real sandboxes, real graders.
 #

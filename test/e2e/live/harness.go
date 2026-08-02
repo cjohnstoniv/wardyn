@@ -364,7 +364,7 @@ func (h *harness) launchManual(ctx context.Context, agent, task, class string, s
 	if err != nil {
 		h.t.Fatalf("CreateRun(agent=%s class=%s): %v", agent, class, err)
 	}
-	return run
+	return run.AgentRun
 }
 
 // composeProposal is the subset of POST /runs/compose we consume.
@@ -441,7 +441,7 @@ func (h *harness) launchComposer(ctx context.Context, task Task, wsPath, bestCla
 		runClass = bestClass
 		spec.MinConfinementClass = types.ConfinementClass(bestClass)
 	}
-	run, err = h.sdk.CreateRun(ctx, client.CreateRunRequest{
+	created, err := h.sdk.CreateRun(ctx, client.CreateRunRequest{
 		Agent:            p.Proposed.Run.Agent,
 		Repo:             p.Proposed.Run.Repo,
 		Task:             p.Proposed.Run.Task,
@@ -452,6 +452,7 @@ func (h *harness) launchComposer(ctx context.Context, task Task, wsPath, bestCla
 	if err != nil {
 		h.t.Fatalf("CreateRun(composed %s): %v", task.Name, err)
 	}
+	run = created.AgentRun
 	return run, p, ""
 }
 

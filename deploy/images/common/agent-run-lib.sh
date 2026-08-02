@@ -1,3 +1,6 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # deploy/images/common/agent-run-lib.sh — shared shell functions sourced by
 # every agent image's /usr/local/bin/agent-run (claude-code, codex-cli, ...).
 # Installed at /usr/local/bin/agent-run-lib.sh in each image (see the Dockerfile
@@ -349,7 +352,40 @@ maybe_exec_compose_mode() {
     exit 0
 }
 
-# ── selftest report blocks ────────────────────────────────────────────────────
+# ── selftest blocks ───────────────────────────────────────────────────────────
+# selftest_check_bins <image-bin>... — the required-binary loop every image's
+# --selftest runs, with <image-bin>... the image's own tools (claude / codex /
+# aws + wardyn-aws-sso). RETURNS nonzero when a REQUIRED binary is missing;
+# callers write `selftest_check_bins claude || ok=0`, keeping the PASS/FAIL
+# decision with them.
+#
+# exec task mode (BYOA/CI) runs the task as a plain shell command: no agent
+# harness, so the image bins are informational, and git gates only when the run
+# actually clones a repo. Harness mode requires them all. This relaxation is the
+# documented image contract (deploy/images/README.md), which is exactly why it
+# lives here — hand-copied per image, aws-sso silently shipped without it.
+selftest_check_bins() {
+    local rc=0 bin
+    local imagebins=("$@")
+    local required=(wardyn-rec wardyn-git-helper git "${imagebins[@]}")
+    if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
+        required=(wardyn-rec wardyn-git-helper)
+        [[ -n "${WARDYN_REPO_URL:-}${WARDYN_REPOS:-}" ]] && required+=(git)
+        echo "  (task_mode=exec: ${imagebins[*]} optional; git required only with repo wiring)"
+    fi
+    for bin in wardyn-rec wardyn-git-helper git "${imagebins[@]}"; do
+        if command -v "$bin" >/dev/null 2>&1; then
+            echo "  FOUND   $bin ($(command -v "$bin"))"
+        else
+            case " ${required[*]} " in
+                *" $bin "*) echo "  MISSING $bin"; rc=1 ;;
+                *) echo "  ABSENT  $bin (not required for this task mode)" ;;
+            esac
+        fi
+    done
+    return $rc
+}
+
 # Shared, report-only selftest output: these echo/inspect, never mutate $ok and
 # never exit — the PASS/FAIL decision stays with the caller. Split in two
 # because claude-code prints its anthropic-auth section between them, so the

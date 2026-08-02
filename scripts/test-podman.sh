@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Rootless Podman divergence probe.
 #
 # The docker runner speaks the Docker Engine API via client.FromEnv; Podman's

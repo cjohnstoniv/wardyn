@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.
 #
 # Same shape as run-ui-e2e.sh; dedicated :8098/wardyn_shots so it can't collide.
@@ -7,8 +10,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# One daemon everywhere: CREATE DATABASE and the spec's `docker exec` must hit
-# the daemon e2e-backend.sh provisions on.
+# One daemon everywhere: `up.sh pg` and the spec's `docker exec` must hit the
+# daemon e2e-backend.sh provisions on.
 . "${REPO_ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
@@ -29,11 +32,9 @@ export WARDYN_SCREENSHOTS=1
 cleanup() { "${REPO_ROOT}/scripts/e2e-backend.sh" down >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-# Ensure the dockerized test Postgres EXISTS before creating our dedicated DB —
-# on a fresh box the exec below would silently no-op and wardynd would then fail
-# to connect to wardyn_shots (up.sh pg is idempotent).
+# Ensure the dockerized test Postgres EXISTS on a fresh box (idempotent).
+# e2e-backend.sh's `up` then creates the dedicated wardyn_shots database itself.
 ./scripts/up.sh pg || { echo "test postgres provisioning failed"; exit 1; }
-docker exec "${WARDYN_E2E_PG_CONTAINER}" psql -U wardyn -d wardyn -c "CREATE DATABASE wardyn_shots" >/dev/null 2>&1 || true
 log "Building backend + UI bundle"
 ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
 export WARDYN_E2E_SKIP_BUILD=1

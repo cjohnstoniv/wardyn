@@ -84,8 +84,17 @@ func newCmdServer(t *testing.T, respStatus int, respBody any) *cmdServer {
 // It returns the error Execute() would return (which main() maps to exit 1).
 func execCmd(t *testing.T, args ...string) error {
 	t.Helper()
+	return execCmdStdin(t, "", args...)
+}
+
+// execCmdStdin is execCmd with `in` as the command's stdin — what
+// cmd.InOrStdin() reads, so a stdin-only command (secret set) is drivable
+// without swapping the process's os.Stdin.
+func execCmdStdin(t *testing.T, in string, args ...string) error {
+	t.Helper()
 	root := rootCmd()
 	root.SetArgs(args)
+	root.SetIn(strings.NewReader(in))
 	root.SetOut(&strings.Builder{})
 	root.SetErr(&strings.Builder{})
 	return root.Execute()
@@ -130,6 +139,55 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	}
 	if body["policy_id"] != policyID.String() || body["confinement_class"] != "CC2" || body["interactive"] != true {
 		t.Errorf("run body policy/confinement/interactive wrong: %v", body)
+	}
+}
+
+// --dry-run posts the SAME body to the preflight endpoint and launches nothing.
+// The devcontainer flags ride along here because they are part of that body: a
+// dry run that checked a different body than launch would post is worthless.
+func TestRunCmd_DryRunPreflightsInsteadOfLaunching(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, map[string]any{
+		"enforced_confinement_class": "CC3",
+		"setup_items":                []map[string]string{{"kind": "secret", "status": "missing", "required_by": "claude-code"}},
+	})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--dry-run",
+		"--devcontainer-repo", "org/env", "--devcontainer-ref", "v2")
+	if err != nil {
+		t.Fatalf("run --dry-run returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/runs/preflight" {
+		t.Errorf("got %s %s, want POST /api/v1/runs/preflight", got.method, got.path)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if body["devcontainer_repo"] != "org/env" || body["devcontainer_ref"] != "v2" {
+		t.Errorf("devcontainer fields missing from the preflight body: %v", body)
+	}
+	srv.mu.Lock()
+	n := len(srv.reqs)
+	srv.mu.Unlock()
+	if n != 1 {
+		t.Errorf("server saw %d requests, want exactly 1 (a dry run must never POST /runs)", n)
+	}
+}
+
+// run grants reaches the SDK's ListGrants route (the eligibility records the
+// console shows and the CLI previously could not reach at all).
+func TestRunCmd_Grants(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, []types.CredentialGrant{
+		{ID: uuid.New(), RunID: id, Spec: types.GrantSpec{Kind: types.GrantGitHubToken, RequiresApproval: true}},
+	})
+
+	if err := execCmd(t, "run", "grants", id.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("run grants returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/runs/"+id.String()+"/grants" {
+		t.Errorf("got %s %s, want GET /api/v1/runs/{id}/grants", got.method, got.path)
 	}
 }
 
@@ -598,13 +656,16 @@ func TestKillCmd_RejectsNonUUID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// secret commands (set via --value, ls, rm)
+// secret commands (set from stdin, ls, rm)
 // --------------------------------------------------------------------------
 
-func TestSecretSetCmd_WithValueFlag(t *testing.T) {
+// The value comes from stdin and ONLY stdin — there is no --value flag, because
+// argv is world-readable in `ps` and this is the write path for every platform
+// secret.
+func TestSecretSetCmd_ReadsStdin(t *testing.T) {
 	srv := newCmdServer(t, http.StatusNoContent, nil)
 
-	err := execCmd(t, "secret", "set", "gh-token", "--value", "s3cr3t", "--url", srv.URL, "--token", "tok")
+	err := execCmdStdin(t, "s3cr3t", "secret", "set", "gh-token", "--url", srv.URL, "--token", "tok")
 	if err != nil {
 		t.Fatalf("secret set returned error: %v", err)
 	}
@@ -619,11 +680,8 @@ func TestSecretSetCmd_WithValueFlag(t *testing.T) {
 	}
 }
 
-// An empty value (no --value, nothing on stdin) is rejected without a request.
-// We force the empty-stdin path by providing --value="" explicitly is not
-// possible (it is the zero value), so we rely on the set command reading stdin;
-// here we exercise the ls/rm requests which do not need stdin, and cover the
-// empty-value guard at the helper level in secret_test.go.
+// An empty stdin is rejected client-side; the empty-value guard is covered at
+// the helper level in secret_test.go.
 
 func TestSecretLsCmd(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, map[string][]string{"names": {"alpha", "beta"}})
@@ -1075,5 +1133,35 @@ func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 					tc.name, tc.notWant, out)
 			}
 		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// workspace commands
+// --------------------------------------------------------------------------
+
+// `workspace create` is what clears the run-create onboarding gate, so its body
+// must carry the fields the server gates on. The name defaults to the source.
+func TestWorkspaceCreateCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.Workspace{
+		ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/home/you/svc",
+	})
+
+	err := execCmd(t, "workspace", "create", "--url", srv.URL, "--token", "tok",
+		"--kind", "local_dir", "--source", "/home/you/svc", "--writable")
+	if err != nil {
+		t.Fatalf("workspace create returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodPost || got.path != "/api/v1/workspaces" {
+		t.Errorf("got %s %s, want POST /api/v1/workspaces", got.method, got.path)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(got.body, &body)
+	if body["kind"] != "local_dir" || body["source"] != "/home/you/svc" || body["writable"] != true {
+		t.Errorf("workspace body kind/source/writable wrong: %v", body)
+	}
+	if body["name"] != "/home/you/svc" {
+		t.Errorf("name = %v, want it defaulted to --source", body["name"])
 	}
 }

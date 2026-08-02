@@ -9,6 +9,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -88,6 +90,32 @@ func exitCodeFor(err error) int {
 	return 1
 }
 
+// warnPlaintextToken warns when the admin bearer is about to travel in
+// cleartext: plain http:// to a NON-loopback wardynd puts the fleet-wide
+// credential on the wire on every request (and on the attach WebSocket, which
+// inherits the same --url). Advisory only, never a refusal — a TLS-terminating
+// reverse proxy or a CI-internal topology is legitimate; WARDYN_ALLOW_PLAINTEXT
+// silences it.
+//
+// ponytail: fourth inline loopback predicate in the tree (internal/api/http.go,
+// cmd/wardynd/main.go, internal/egress/proxy/policy.go) — all unexported and
+// server-side. Consolidate only if a fifth appears.
+func warnPlaintextToken(w io.Writer, rawURL, token string) {
+	if token == "" || cliutil.EnvBool("WARDYN_ALLOW_PLAINTEXT", false) {
+		return
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" {
+		return
+	}
+	host := u.Hostname()
+	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+		return
+	}
+	fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
+		"use https://, or set WARDYN_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+}
+
 func rootCmd() *cobra.Command {
 	var (
 		serverURL string
@@ -105,7 +133,10 @@ func rootCmd() *cobra.Command {
 		// required-flag errors are validated by cobra AFTER pre-run,
 		// so they surface as a concise "required flag(s) X not set" without the
 		// full usage block — acceptable; the message is already actionable.
-		PersistentPreRun: func(cmd *cobra.Command, _ []string) { cmd.SilenceUsage = true },
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			cmd.SilenceUsage = true
+			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
+		},
 	}
 	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"),
 		"control plane base URL (env WARDYN_URL)")
@@ -126,10 +157,11 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(
 		runCmd(client),
 		approvalsCmd(client),
-		approveCmd(client),
-		denyCmd(client),
+		approvalDecisionCmd(client, "approve", "Approve a pending approval request", (*sdk.Client).Approve),
+		approvalDecisionCmd(client, "deny", "Deny a pending approval request", (*sdk.Client).Deny),
 		auditCmd(client),
 		policyCmd(client),
+		workspaceCmd(client),
 		secretCmd(client),
 		attachCmd(client),
 		recordCmd(client),

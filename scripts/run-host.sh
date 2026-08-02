@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Run wardynd on the HOST (outside compose) so the Claude CLI composer backend can exec
 # the resident `claude` binary (your subscription) and so the docker runner can launch
 # sandboxes against the host daemon.

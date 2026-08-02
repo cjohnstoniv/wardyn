@@ -1,13 +1,19 @@
 # Wardyn agent images
 
 This directory contains the OCI image definitions for coding-agent sandboxes
-governed by Wardyn.  Each subdirectory is one agent image.  All images conform
-to the **Wardyn agent image contract** described below.
+governed by Wardyn.  Each subdirectory is one agent image.
 
 ## Image contract
 
-Every Wardyn agent image MUST satisfy the following invariants.  The docker
-driver (`internal/runner/docker/driver.go`) and the e2e suite enforce them.
+Every image that runs a real agent task MUST satisfy the invariants below.  What
+actually enforces them: `internal/envbuild/builder.go`'s `requiredTools` (the
+build-time authority for a wrapped/BYOI image), each image's own `agent-run
+--selftest`, and the live e2e suite, which launches every image and fails the run
+if the contract does not hold (`test/e2e/live/live_test.go`).
+
+`oracle/` is the ONE deliberate exception: it is the e2e stand-in, never brokers
+git, and satisfies neither §4 nor §6 (its `--selftest` checks only `sh`, `curl`,
+`python3`).  Its own Dockerfile header states the reduced contract it does keep.
 
 ### 1. No ENTRYPOINT
 
@@ -50,7 +56,7 @@ directly when recording is enabled.
 The Git credential helper binary, built from `cmd/wardyn-git-helper`.  It
 speaks the [Git credential protocol][cred-proto] and obtains tokens by calling
 `POST /wardyn/v1/credentials/mint` on the proxy (see credential flow below).
-The system `gitconfig` wires it for `https://github.com`.
+The system `gitconfig` wires it GLOBALLY (all hosts, not just GitHub) — see §6.
 
 ### 5. USER agent (uid 1000)
 
@@ -59,14 +65,27 @@ workspace `/home/agent/work`.  All agent activity runs as this user.
 
 ### 6. System gitconfig
 
-```ini
-[credential "https://github.com"]
-    helper = /usr/local/bin/wardyn-git-helper
+Set during the image build, verbatim:
+
+```dockerfile
+RUN git config --system credential.helper \
+        '/usr/local/bin/wardyn-git-helper --secret-file /home/agent/.wardyn/git-helper.secret'
 ```
 
-This is set via `git config --system` during the image build so every `git`
-invocation inside the sandbox uses the brokered credential helper without any
-per-user configuration.
+Two details are load-bearing, and copying a shortened form silently drops them:
+
+- **No host scoping.** The helper is wired for ALL hosts, not just
+  `https://github.com`, because grants may name any host
+  (`WARDYN_GIT_PAT_GRANTS`).  A host with no matching grant is safe: the helper
+  emits nothing and git falls through to its normal behavior.
+- **`--secret-file`.** This is the per-run caller-auth gate — `agent-run`
+  provisions a 0400 secret at task time, so only the brokered helper invocation
+  can mint.  The config lives in the ROOT-owned system gitconfig precisely so
+  the agent cannot rewrite the path.
+
+`--system` (not `--global`) also means every `git` invocation in the sandbox is
+covered with no per-user configuration.  `agent-run --selftest` reports what it
+finds (`agent-run-lib.sh`'s `selftest_report_repo_and_git`).
 
 ---
 
@@ -135,7 +154,7 @@ it and injects it only when forwarding internal API calls.
 |-----------------|------------------------------|------------|
 | `claude-code/`  | `wardyn/agent-claude-code:local` | `claude` (`@anthropic-ai/claude-code`) |
 | `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
-| `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in) |
+| `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in; §4/§6 exempt — no git broker) |
 | `full/`         | `wardyn/agent-full:local`    | `claude` (inherited) |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
@@ -227,8 +246,14 @@ below, register it under an agent name in `WARDYN_AGENT_IMAGES` (a JSON
    COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
    ```
 3. Add `deploy/images/<name>/agent-run` implementing the `--selftest` and task
-   modes (see existing scripts for the pattern).
-4. Set the system gitconfig credential helper (required for git brokering).
+   modes. Source `/usr/local/bin/agent-run-lib.sh` and use its helpers rather
+   than hand-copying a sibling image's script — in particular
+   `selftest_check_bins <your-cli> || ok=0` for the required-binary block, which
+   is what carries the `WARDYN_TASK_MODE=exec` relaxation described in §2 (the
+   hand-copied version drifted and one image shipped without it).
+4. Set the system gitconfig credential helper — copy the exact `RUN git config
+   --system ...` line from §6, `--secret-file` included (required for git
+   brokering).
 5. Create user `agent` uid 1000, home `/home/agent`, work `/home/agent/work`.
 6. Do NOT add an ENTRYPOINT.
 7. Add a `profiles: [build-only]` stanza to `deploy/compose/docker-compose.yaml`

@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Grader for build-static-site.
 #
 # Runs in a FRESH container over the FINAL workspace state (never a transcript):

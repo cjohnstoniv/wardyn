@@ -1,5 +1,10 @@
 # sandbox-workspace.yaml — let a governed agent work on REAL code on your machine.
 #
+#   # 1. Onboard the directory ONCE. A run may only mount an onboarded source —
+#   #    the gate is un-bypassable, so without this the launch below 422s.
+#   wardyn workspace create --kind local_dir --source /home/you/projects/my-service
+#
+#   # 2. Launch.
 #   wardyn run --agent claude-code \
 #     --task 'Add a /healthz endpoint returning {"status":"ok"} and a unit test; run the tests' \
 #     --policy-file examples/policies/sandbox-workspace.yaml --wait

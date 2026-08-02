@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Wardyn CI one-shot: bring up a fresh control plane from nothing, launch ONE
 # governed sandboxed run, wait for its outcome, collect artifacts, tear down,
 # and exit with the run's exit code. Designed for CI runners (GitHub Actions,
@@ -177,35 +180,23 @@ if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
   printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | wardyn subscription connect --token-stdin || die "subscription connect (token from 'claude setup-token', starts with sk-ant-oat)"
 fi
 
-# ── preflight (best-effort; a dry-run of launch resolution, mints nothing) ───
-if command -v jq >/dev/null 2>&1 && curl -sf "${BASE_URL}/healthz" >/dev/null 2>&1; then
-  preflight_body="$(jq -n \
-    --arg agent "${AGENT}" --arg repo "${CI_REPO}" --arg image "${IMAGE}" \
-    --arg task "${TASK}" --arg task_mode "${TASK_MODE}" \
-    --slurpfile policy "${POLICY_FILE}" \
-    '{agent:$agent, task:$task, inline_policy:$policy[0]}
-     + (if $repo != "" then {repo:$repo} else {} end)
-     + (if $image != "" then {image:$image} else {} end)
-     + (if $task_mode != "" then {task_mode:$task_mode} else {} end)')"
-  if preflight="$(curl -sf -X POST -H "Authorization: Bearer ${WARDYN_ADMIN_TOKEN}" \
-      -H "Content-Type: application/json" -d "${preflight_body}" \
-      "${BASE_URL}/api/v1/runs/preflight" 2>/dev/null)"; then
-    log "Preflight: $(jq -c '{enforced_confinement_class, setup_items: [.setup_items[]? | .title // .]}' <<<"${preflight}")"
-  else
-    warn "preflight call failed (continuing — launch will fail closed on real blockers)"
-  fi
-else
-  warn "jq or host->wardynd reachability missing; skipping preflight preview"
-fi
-
-# ── launch + wait ────────────────────────────────────────────────────────────
+# ── launch args (shared by the preflight preview and the real launch) ────────
 mkdir -p "${OUT_DIR}"
 "${COMPOSE[@]}" cp "${POLICY_FILE}" wardynd:/tmp/wardyn-ci-policy.json >/dev/null || die "copy policy into wardynd"
 
-run_args=(run --agent "${AGENT}" --task "${TASK}" --policy-file /tmp/wardyn-ci-policy.json --wait --timeout "${TIMEOUT}" --json)
-[[ -n "${CI_REPO}" ]] && run_args+=(--repo "${CI_REPO}")
-[[ -n "${IMAGE}" ]] && run_args+=(--image "${IMAGE}")
-[[ -n "${TASK_MODE}" ]] && run_args+=(--task-mode "${TASK_MODE}")
+base_args=(run --agent "${AGENT}" --task "${TASK}" --policy-file /tmp/wardyn-ci-policy.json)
+[[ -n "${CI_REPO}" ]] && base_args+=(--repo "${CI_REPO}")
+[[ -n "${IMAGE}" ]] && base_args+=(--image "${IMAGE}")
+[[ -n "${TASK_MODE}" ]] && base_args+=(--task-mode "${TASK_MODE}")
+
+# ── preflight (best-effort; a dry-run of launch resolution, mints nothing) ───
+# Same body the launch posts — the CLI builds it, so this can never drift from
+# the real run the way the old hand-curled jq body could.
+wardyn "${base_args[@]}" --dry-run 2>&1 | sed 's/^/  preflight: /' ||
+  warn "preflight failed (continuing — launch will fail closed on real blockers)"
+
+# ── launch + wait ────────────────────────────────────────────────────────────
+run_args=("${base_args[@]}" --wait --timeout "${TIMEOUT}" --json)
 
 log "Launching governed run: wardyn ${run_args[*]}"
 run_json="${OUT_DIR}/run.json"

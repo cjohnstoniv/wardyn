@@ -336,11 +336,7 @@ services:
       timeout: 5s
       retries: 10
     networks:
-      wardyn:
-        # Browser-facing issuer is http://dex:5556; this alias lets the demo work
-        # when the operator maps `dex` -> 127.0.0.1 in /etc/hosts for UI login.
-        aliases:
-          - wardynd
+      - wardyn
 
   # ───────────────────────────────────────────────────────────────────────────
   # eBPF GROUND-TRUTH TIER (the SECOND of Wardyn's three audit streams).

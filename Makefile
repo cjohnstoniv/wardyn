@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license ci
+.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -314,20 +314,52 @@ licenses: ## Forbid copyleft/non-permissive Go dependencies (both tag sets)
 	GOFLAGS=-tags=docker go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
 
 # Helm chart lint + template-render (must render the load-bearing objects).
-helm-lint: ## Lint + template-render the Helm chart (must render the key objects)
+#
+# FIVE renders, because ONE render only ever exercises the default branch of
+# every {{ if }} in templates/ — and every hardening switch this chart has is
+# off/other-side by default:
+#   1. defaults (+ an admin token, which the chart now requires): the
+#      external-Secret / persistence-off / created-ServiceAccount side;
+#   2. ci/all-on-values.yaml — the other side of each of those in one go;
+#   3-5. the three refusals, asserted BY MESSAGE: a render that fails for the
+#      wrong reason is a false green, which is the whole point of these guards.
+# No kubeconform: it resolves schemas at runtime from an unpinned upstream ref,
+# which would trade a network-free gate for a flaky one and break the pinning
+# discipline scripts/check-image-pins.sh exists to enforce.
+helm-lint: ## Lint + template-render the Helm chart (default + all-on values + the refusals)
 	@echo "Linting + rendering the Helm chart..."
-	helm lint ./deploy/helm/wardyn
-	@out=$$(helm template wardyn ./deploy/helm/wardyn); \
+	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
 	echo "$$out" | grep -q "kind: Service" || { echo "chart rendered no Service"; exit 1; }; \
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
 	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
-	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }
+	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" || { echo "chart rendered no WARDYN_ADMIN_TOKEN — the API would 401 every request"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" || { echo "chart left WARDYN_RECORDING_DIR unset — wardynd's default writes to the read-only root FS and the pod crash-loops"; exit 1; }; \
+	echo "$$out" | grep -q "podSelector: {}" || { echo "chart ingress default is not same-namespace"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
+	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" || { echo "inline secrets.ageKey is not injected — every stored secret dies on restart"; exit 1; }; \
+	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \
+	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
+	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
+	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "1" ] || { echo "pod spec does not opt out of SA token auto-mount on the bring-your-own-SA path"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
 
-# Validate the docker-compose file parses (does NOT need a running daemon).
-compose-config: ## Validate the docker-compose file parses (no daemon needed)
+# Validate the compose files parse (does NOT need a running daemon).
+# Both invocations, since scripts/ci-run.sh runs the base + the CI overlay together.
+# The overlay interpolates ${WARDYN_CI_TOOLS_DIR:?...}; a dummy value is enough to
+# parse (compose does not stat the bind-mount source at `config` time).
+compose-config: ## Validate the compose files parse (no daemon needed)
 	@echo "Validating docker-compose config..."
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
+	WARDYN_CI_TOOLS_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.ci.yaml config >/dev/null
 
 # DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
@@ -361,13 +393,35 @@ npm-license: ## Fail closed on copyleft in a SHIPPED (prod) UI dependency
 	@echo "Checking UI production dependency licenses (no copyleft)..."
 	./scripts/check-ui-licenses.sh
 
+# The npm half of govulncheck: every Go dep was blocked on advisories at merge
+# while the browser-delivered bundle had no CVE gate at all (dependabot opens
+# PRs, it never fails a build). --prod scopes it to what actually ships, so
+# vitest/playwright/puppeteer devDependency noise never gates a merge. Resolves
+# straight from ui/pnpm-lock.yaml — no node_modules needed, hence no install.
+# Deliberately NO --ignore-registry-errors: a registry blip must fail red, not
+# silently pass (security invariant 5, fail-closed).
+#
+# One advisory is suppressed, by id, in ui/package.json's pnpm.auditConfig
+# (pnpm's native mechanism — the same shape as .gitleaksignore's per-fingerprint
+# allowlist; package.json is JSON so the reason has to live here):
+#   GHSA-qwww-vcr4-c8h2  react-router <8.3.0 — "RSC Mode CSRF Bypass". NOT
+#     APPLICABLE: this console is a client-only SPA (ui/src/main.tsx mounts
+#     <BrowserRouter>) on react 18.3.1, and React Router's RSC mode needs React
+#     19 plus a server runtime, so the vulnerable code path cannot be reached.
+#     Only fix is the 7.x -> 8.x major bump; DELETE this entry when that lands.
+# A different advisory on the same package still fails the gate — the ignore is
+# per-id, never per-package.
+npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dependency
+	@echo "Auditing UI production dependencies for advisories (high+)..."
+	cd ui && pnpm audit --prod --audit-level=high
+
 # ── daemon-free merge gate ───────────────────────────────────────────────────
 # green `make ci` != CI is green. This runs the merge-gating checks
 # that need NO Docker daemon and NO live service — it deliberately EXCLUDES
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
+ci: build build-docker tidy-check lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
@@ -409,11 +463,14 @@ setup: ## One-command Wardyn: containerized (default) or host; builds, ups, open
 	@echo "Wardyn setup — asks containerized (default) vs host, then launches + opens the UI..."
 	./scripts/setup.sh
 
-# Stage the resident Claude login for per-run subscription mounts, even headless.
-# Re-runs setup with staging forced; a running wardynd is restarted so it loads
-# the just-generated subscription ceiling. Idempotent — safe to re-run anytime
-# (e.g. after a headless `make setup` skipped the staging prompt).
-stage-claude: ## Stage your Claude login for per-run subscription mounts (restarts wardynd)
+# HOST MODE ONLY — it pins WARDYN_SETUP_MODE=local, and the ceiling it writes
+# (~/.wardyn/composer-dev-subscription.json) is read by scripts/run-host.sh, never
+# by the containerized wardynd. Re-runs setup with staging forced; a running HOST
+# wardynd is restarted so it loads the just-generated ceiling. Idempotent — safe to
+# re-run anytime (e.g. after a headless `make setup` skipped the staging prompt).
+# Containerized (the default) stages model access at the CLI instead:
+# `claude setup-token | wardyn subscription connect`.
+stage-claude: ## Stage your Claude login for HOST-mode subscription mounts (restarts the host wardynd)
 	WARDYN_STAGE_CLAUDE=1 WARDYN_SETUP_MODE=local ./scripts/setup.sh
 
 # Stop the background host-mode wardynd started by `make setup`.
@@ -473,14 +530,17 @@ test-drive: ## Guided governance test-drive (ARGS defaults to --up: brings the s
 	@echo "Running the Wardyn governance test-drive (brings the stack up; override with ARGS=...)..."
 	./scripts/test-drive.sh $(if $(ARGS),$(ARGS),--up)
 
-# Every place a build actually lands: bin/ (make build), .e2e-bin/ and .local-bin/
-# (the e2e + local backend scripts), ui/dist, and the repo-root binaries
-# .gitignore already anticipates. The old recipe removed bin/* plus a `dist/`
-# that has never existed at the repo root, leaving ~74 MB of stale root binaries
-# behind — precisely the state where a re-run of setup uses old code.
+# Every place a build actually lands: bin/ (scripts/setup.sh and the e2e scripts
+# build there with an explicit -o; `make build` is `go build ./...`, which writes
+# no executables at all), .e2e-bin/ (the e2e scripts) and .local-bin/ (stale —
+# nothing writes it anymore), ui/dist, and the repo-root binaries a bare `go build ./cmd/<name>`
+# drops. That root list is DERIVED from cmd/ — the directory names ARE the binary
+# names — so it can never drift from the package set again: the hand-typed list it
+# replaced named 6 of the 10 and left ~74 MB of stale root binaries behind,
+# precisely the state where a re-run of setup uses old code.
 clean: ## Remove built binaries, the e2e/local bin dirs and the UI bundle
 	@echo "Cleaning built binaries and generated output..."
-	rm -rf bin .e2e-bin .local-bin ui/dist wardynd wardyn-proxy wardyn-rec wardyn-verify wardyn-git-helper wardyn-tetragon-ingest wardyn-sbom.cdx.json
+	rm -rf bin .e2e-bin .local-bin ui/dist wardyn-sbom.cdx.json $(patsubst cmd/%/,%,$(wildcard cmd/*/))
 
 # Validate every fenced mermaid diagram in the public docs: parses/renders via
 # mermaid-cli and each load-bearing label still exists at its cited source.

@@ -45,8 +45,8 @@ Features are not done until they pass the conformance suite (`test/conformance`)
 - Conformance tests: Docker + the driver-agnostic stub (both blocking in CI)
 - UI: `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
 - Docs: the mermaid diagram + label-truth gate (`make diagrams`)
-- Deploy: `helm lint` + `helm template` render assertions, and
-  `docker compose config` validation
+- Deploy: `helm lint` + `helm template` render assertions over the default AND
+  `ci/all-on-values.yaml` value sets, and `docker compose config` validation
 - Supply chain: `govulncheck`, `staticcheck`, `gitleaks` (secret scan),
   `go-licenses` (dependency license check), and SPDX license headers
   (`make license-headers`)

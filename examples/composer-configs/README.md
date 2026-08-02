@@ -5,7 +5,9 @@ least-privilege sandbox spec (run + inline policy) that Wardyn grades determinis
 and a human reviews before launch. It is **advisory** — the composer backend never
 receives the run's credentials.
 
-The composer is **off by default**. You enable it by pointing `WARDYN_COMPOSER_CONFIG`
+`wardynd` ships with **no backend** (empty `WARDYN_COMPOSER_CONFIG` disables the
+composer), but the compose demo's `deploy/compose/.env.example` seeds the `fake` one,
+so `make setup` leaves it on. You point `WARDYN_COMPOSER_CONFIG`
 at one of these files (a path) or at inline JSON. Restart `wardynd` after changing it;
 on boot it logs `AI Run Composer enabled (backends=[...] default="...")`.
 

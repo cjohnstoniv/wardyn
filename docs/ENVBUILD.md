@@ -6,6 +6,28 @@ workspace image by driving the coder/envbuilder container as a Docker container
 module's dependency tree. This page is the operator-facing detail; the package
 comment on `internal/envbuild/builder.go` carries the short version.
 
+## How to trigger a build
+
+The server must be started with an image builder wired (`-tags docker` +
+`WARDYN_ENVBUILD`, see [ENV.md](ENV.md)). Then:
+
+```sh
+wardyn run --agent claude-code --task "…" \
+  --devcontainer-repo org/env-repo --devcontainer-ref main
+```
+
+The equivalent API body (POST `/api/v1/runs`):
+
+```json
+{"agent":"claude-code","devcontainer_repo":"org/env-repo","devcontainer_ref":"main"}
+```
+
+`--devcontainer-repo` is mutually exclusive with `--image` (BYOI), which the
+server enforces with a 400. **With NO builder wired the run does not fail — it
+silently falls back to the convention image.** Check the `image:` line the CLI
+prints on create: a real build is tagged `wardyn-devcontainer/<run-id>:latest`.
+`wardyn run --dry-run` checks the same body without launching.
+
 ## Two-stage build
 
 A build is two stages:
@@ -19,11 +41,15 @@ A build is two stages:
   "sleep infinity", and runs forever — the wait-for-exit would hang until
   the build timeout).
 2. FINALIZE (a host-daemon build: FROM the pushed image + COPY, no untrusted
-  RUN) layers Wardyn's runner tool binaries (agent-run, wardyn-verify,
-  wardyn-git-helper, plus anything else in the tools dir) onto PATH and
-  clears ENTRYPOINT, producing the local image tag the runner
-  exec's/verifies/records into. Without this the built image lacks Wardyn's
-  binaries and the runner cannot drive it (H5). Build returns this local tag.
+  RUN) layers Wardyn's runner tools onto PATH and clears ENTRYPOINT, producing
+  the local image tag the runner exec's/verifies/records into. The finalize
+  stage COPYs everything in the tools dir, so extra tools (e.g. wardyn-scan) may
+  ride along; only these five are contractually required — agent-run,
+  agent-run-lib.sh, wardyn-rec, wardyn-verify, wardyn-git-helper — and a tools
+  dir missing any of them fails the build closed (requiredTools /
+  validateToolsDir in `internal/envbuild/builder.go`). Without this the built
+  image lacks Wardyn's binaries and the runner cannot drive it (H5). Build
+  returns this local tag.
 
 The same FINALIZE stage is exposed on its own as FinalizeBase — the
 Bring-Your-Own-Image (BYOI) path, which wraps an operator-named base image with
@@ -138,4 +164,3 @@ of the residual.
   If LogSink is nil, build output is discarded.
 - The build container itself is always removed on completion or timeout,
   regardless of success or failure (fail closed on orphaned containers).
-package envbuild

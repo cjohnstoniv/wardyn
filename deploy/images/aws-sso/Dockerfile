@@ -56,7 +56,8 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec        ./cmd/wardyn-rec \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-aws-sso    ./cmd/wardyn-aws-sso
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
@@ -192,6 +193,12 @@ RUN groupadd -g 1000 agent \
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec
 COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
+# wardyn-aws-sso: reads the ~/.aws/sso/cache file `aws sso login` just wrote and
+# uploads it through the proxy's brokered sso-token route. The login is only half
+# the flow — without this binary the captured token dies with the throwaway
+# container, and the UI login pane (which types `aws sso login … && wardyn-aws-sso`
+# into the attach PTY) waits forever for its success marker.
+COPY --from=builder /out/wardyn-aws-sso    /usr/local/bin/wardyn-aws-sso
 
 # agent-run: the thin shell wrapper the Wardyn driver uses to launch/attach.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
@@ -202,6 +209,7 @@ COPY deploy/images/aws-sso/agent-run /usr/local/bin/agent-run
 COPY --chown=agent:agent deploy/images/common/attach-bashrc.sh /home/agent/.bashrc
 RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
+           /usr/local/bin/wardyn-aws-sso \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts) — same wiring as the

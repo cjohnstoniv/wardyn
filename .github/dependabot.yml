@@ -24,14 +24,16 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
   # Base-image CVE bumps: the pinned production Dockerfiles (golang/node/alpine/
-  # distroless/postgres/tetragon/dex) got no automated updates before.
+  # debian/distroless/postgres/tetragon/dex) got no automated updates before.
+  # GLOB, not a per-image list: the list missed /deploy/images/aws-sso — the one
+  # image with an external debian base and a full AWS CLI — so its pins were
+  # frozen forever while its identically-pinned siblings moved. Expansion only
+  # matches directories that hold a manifest, so common/ (no Dockerfile) is
+  # skipped for free and the next agent image is covered on arrival.
   - package-ecosystem: docker
     directories:
       - /deploy/compose
-      - /deploy/images/claude-code
-      - /deploy/images/codex-cli
-      - /deploy/images/full
-      - /deploy/images/oracle
+      - /deploy/images/*
     schedule:
       interval: weekly
     groups:

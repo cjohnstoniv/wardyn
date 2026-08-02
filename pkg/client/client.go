@@ -13,7 +13,8 @@
 // The SDK covers these wardynd public route families (the ones external tooling
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
-//   - runs:        CreateRun, GetRun, ListRuns, ListGrants, KillRun, SynthesizeProfile
+//   - runs:        CreateRun, Preflight, GetRun, ListRuns, ListGrants, KillRun,
+//     SynthesizeProfile, GetRecording
 //   - approvals:   ListApprovals, Approve, Deny
 //   - policies:    CreatePolicy, GetPolicy, ListPolicies, UpdatePolicy, DeletePolicy
 //   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
@@ -26,8 +27,8 @@
 //   - health:      Healthz
 //
 // NOT covered (drive these with the CLI or raw HTTP): the AI Run Composer
-// (/runs/compose*), preflight, attach WebSocket / attach-ticket, harness-login
-// device flow, and the agent-facing /internal/* mint & decision endpoints.
+// (/runs/compose*), attach WebSocket / attach-ticket, harness-login device
+// flow, and the agent-facing /internal/* mint & decision endpoints.
 // TestClientCoversRouteFamilies pins that every family listed above has a method.
 //
 // # Pagination
@@ -111,9 +112,13 @@ type Client struct {
 	// HTTPClient, when non-nil, is used instead of http.DefaultClient.
 	HTTPClient *http.Client
 
-	// Principal, when non-empty, is sent as the X-Wardyn-Principal header.
-	// This overrides the server-side principal attribution for multi-user dev;
-	// in production the token's subject is used instead.
+	// Principal, when non-empty, is sent as the X-Wardyn-Principal header — a
+	// DEV-ONLY override for simulating different principals against a local
+	// wardynd. The server honors it ONLY in local (no-auth) mode. Under
+	// admin-token auth it is ignored and the action is attributed to
+	// actor_type=system / principal "admin-token" (the token is an opaque shared
+	// bearer, not a JWT — there is no subject to extract); under OIDC the
+	// verified subject wins. Use OIDC for real per-human attribution.
 	Principal string
 }
 
@@ -216,13 +221,59 @@ type CreateRunRequest struct {
 	ComposeSessionID string `json:"compose_session_id,omitempty"`
 }
 
+// CreateRunResult is the decoded POST /api/v1/runs 201 reply. AgentRun is
+// EMBEDDED (the server puts the run's fields at the top level), so .ID/.State
+// read straight off the result.
+type CreateRunResult struct {
+	types.AgentRun
+	// Warnings are ADVISORY notices the server raised while resolving the run —
+	// discouraged, never blocking: a workspace-directory collision with another
+	// active run, or an ssh_key grant dropped because the agent has no SSH clone
+	// lane. Surface them: the run is live either way, so a dropped warning is a
+	// silently degraded run.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
 // CreateRun submits a new agent run to the control plane.
-// Returns the created AgentRun (state PENDING or RUNNING) on success.
+// Returns the created run (state PENDING or RUNNING) plus any advisory warnings.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
-func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (types.AgentRun, error) {
-	var out types.AgentRun
+func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
+	var out CreateRunResult
 	err := c.do(ctx, http.MethodPost, "/api/v1/runs", req, &out)
+	return out, err
+}
+
+// PreflightItem is one row of the preflight setup checklist: something the run
+// needs, and whether it is already satisfied. Only the fields callers render are
+// modeled — the full server row additionally carries a structured UI "fix"
+// action and a credential-residency label.
+type PreflightItem struct {
+	Kind       string `json:"kind"`
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	RequiredBy string `json:"required_by"`
+	Status     string `json:"status"` // "satisfied" | "missing" | "unverified"
+	Detail     string `json:"detail,omitempty"`
+}
+
+// PreflightResult is the decoded POST /api/v1/runs/preflight reply: the setup
+// checklist plus the confinement class the run would ACTUALLY enforce after the
+// policy floor and blast-radius raise.
+type PreflightResult struct {
+	SetupItems               []PreflightItem        `json:"setup_items"`
+	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+}
+
+// Preflight DRY-RUNs a create-run request: the server resolves the policy
+// through the same chokepoint launch uses (so an XOR violation, an unknown
+// secret, or a non-onboarded workspace surface as the REAL launch error) and
+// returns the setup checklist plus the enforced confinement class. It mints
+// nothing, persists nothing, dispatches nothing. Pass the exact CreateRunRequest
+// you would launch with. POST /api/v1/runs/preflight.
+func (c *Client) Preflight(ctx context.Context, req CreateRunRequest) (PreflightResult, error) {
+	var out PreflightResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/preflight", req, &out)
 	return out, err
 }
 
@@ -455,19 +506,78 @@ func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKe
 	return out, err
 }
 
+// maxErrBody caps an ERROR response body for diagnostic display so a hostile or
+// runaway server cannot exhaust memory via an error response. It is for error
+// bodies ONLY — applying it to success bodies truncated any response > 2 KiB and
+// broke JSON decoding (the original finding).
+const maxErrBody = 2048
+
+// newRequest builds an authenticated request against the control plane. Every
+// method routes through it, so the auth/principal headers have ONE owner (the
+// raw-stream methods must not hand-copy them).
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader, hasBody bool) (*http.Request, error) {
+	// Build the URL: strip trailing slash from BaseURL, then append path.
+	base := c.BaseURL
+	for len(base) > 0 && base[len(base)-1] == '/' {
+		base = base[:len(base)-1]
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	if hasBody {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// Omit rather than send a bare "Bearer " for an empty token: a LOCAL HOST
+	// MODE wardynd bypasses public-API auth on a loopback bind (no token
+	// needed), and an auth-gated server still returns a clean 401 either way.
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.Principal != "" {
+		req.Header.Set("X-Wardyn-Principal", c.Principal)
+	}
+	return req, nil
+}
+
+func (c *Client) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return http.DefaultClient
+}
+
+// GetRecording streams a run's terminal recording as raw asciicast bytes (the
+// .cast a player consumes). The caller MUST Close the returned reader.
+// GET /api/v1/runs/{id}/recording/{id} — the id really does appear twice: the
+// route is mounted per-run and its handler takes the recording's own id, which
+// for a run recording is the run id.
+// Returns 404/APIError when the run has no recording.
+func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID) (io.ReadCloser, error) {
+	path := "/api/v1/runs/" + runID.String() + "/recording/" + runID.String()
+	req, err := c.newRequest(ctx, http.MethodGet, path, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/x-asciicast")
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
+		return nil, &APIError{Status: resp.StatusCode, Body: string(raw)}
+	}
+	return resp.Body, nil
+}
+
 // do executes one HTTP request against the control plane.
 //
 // body (if non-nil) is JSON-encoded as the request body.
 // out (if non-nil) is JSON-decoded from a 2xx response body.
 // Any non-2xx response is returned as *APIError.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	// Build the URL: strip trailing slash from BaseURL, then append path.
-	base := c.BaseURL
-	for len(base) > 0 && base[len(base)-1] == '/' {
-		base = base[:len(base)-1]
-	}
-	rawURL := base + path
-
 	// Encode the request body.
 	var reqBody io.Reader
 	if body != nil {
@@ -478,42 +588,19 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		reqBody = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, reqBody)
+	req, err := c.newRequest(ctx, method, path, reqBody, body != nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// Omit rather than send a bare "Bearer " for an empty token: a LOCAL HOST
-	// MODE wardynd bypasses public-API auth on a loopback bind (no token
-	// needed), and an auth-gated server still returns a clean 401 either way.
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.Principal != "" {
-		req.Header.Set("X-Wardyn-Principal", c.Principal)
-	}
 
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-
-	resp, err := hc.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Error path: cap the body at 2 KiB for diagnostic display so a hostile or
-	// runaway server cannot exhaust memory via an error response. The cap is
-	// for ERROR bodies ONLY — applying it to success bodies truncated any
-	// response > 2 KiB and broke JSON decoding (the original finding).
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		const maxErrBody = 2048
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
 		return &APIError{Status: resp.StatusCode, Body: string(raw)}
 	}

@@ -146,7 +146,7 @@ the L3 tool gateway planned at v0.5.
 | Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[v0.5+ — planned]** — the token is repo-scoped but NOT branch-scoped; the broker records the `wardyn/<run-id>/*` namespace as advisory metadata only and nothing enforces it on push yet (needs a push-ref-inspecting git-proxy or GitHub rulesets). | B4, B5, ID |
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit, and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
-| Insider exceeding own access via agent | Minted credentials are scoped to the task, not to the human's full access; the agent never inherits developer credentials. | B5, ID |
+| Insider exceeding own access via agent | Minted credentials are scoped to the task, not to the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, which the same insider can rewrite — the control plane authenticates but does not authorize, so in an OIDC deployment the ceiling is not above them. See residual #14. | B5, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) + PTY replay **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` -> `kernel.*` events via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. Detection-only (the `ld-linux`/`mmap` loader bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable` without a sensor); host eBPF is blind inside CC3/Kata guests (emits `kernel.sensor.blind`). | AU |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research area; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
@@ -178,7 +178,7 @@ hiding them would repeat the failure mode we are designed to avoid.
    **shipped**, off by default, opt-in per policy (`intercept_tls`) — see §5.1a
    for the exact contract — but its coverage is bounded: only operator-listed
    MITM-eligible hosts (LLM hosts plus any operator-configured corp artifact
-   hosts today — `internal/egress/proxy/mitm.go:145-151`) are intercepted, the
+   hosts today — `isMITMHost`, `internal/egress/proxy/mitm.go`) are intercepted, the
    full container path is not yet live-validated (proven so far by an
    in-process test only), and per-workspace ephemeral-CA injection into
    arbitrary agent images, plus QUIC/UDP/raw-TCP coverage, remain
@@ -309,6 +309,29 @@ hiding them would repeat the failure mode we are designed to avoid.
       better. The launch gate is a functional self-test (`agent-run --selftest`),
       which proves the image is *runnable*, never that it is *trustworthy*.
 
+14. **The control plane authenticates; it does not authorize.** Distinct from
+    #9, which is about someone who already IS an admin: wherever more than one
+    human can authenticate — i.e. any OIDC deployment — every authenticated
+    developer holds admin powers, because there is no role tier at all. Policy
+    CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
+    `setup-commands` writes that widen what a run may do), secret write/delete,
+    `GET`/`PUT /site-config`, the managed harness credential (`POST
+    /setup/harness-login` and `PUT`/`DELETE /setup/harness-credential/{provider}`
+    — connects/disconnects the shared subscription EVERY run inherits) and
+    `POST /runs/{id}/kill` all sit in one `humanOrAdminAuth` group
+    (`internal/api/server.go`, which says so at each site). So the §1 insider
+    can raise their own ceiling rather than exceed it: `PUT` a policy with a
+    wide-open allowlist, or point every run's upstream proxy at a host they
+    control (site-config names a secret ref, and `PUT /secrets/{name}` is in the
+    same group). What bounds this today is attribution, not prevention — every
+    such write is audited (`policy.create`/`update`/`delete`,
+    `secret.write`/`secret.delete`, `site_config.write`,
+    `harness.credential.captured`/`disconnected`) and OIDC login can be narrowed
+    to a verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`, empty = any
+    verified email). In local mode and admin-token mode the only principal IS
+    the admin, so the gap collapses into #9. The fix is `ROADMAP.md`'s v1.0
+    "separation of duty on the control plane".
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +
@@ -406,7 +429,7 @@ corp-artifact-host trust boundary in `isMITMHost`).
   flag proprietary-content egress. But an **HTTPS** connector tunnels via opaque
   CONNECT and is **uninspected** unless its host is MITM-eligible — the LLM hosts
   plus any operator-configured corp artifact hosts are MITM'd today
-  (`internal/egress/proxy/mitm.go:145-151`), so most non-LLM HTTPS egress remains
+  (`isMITMHost`, `internal/egress/proxy/mitm.go`), so most non-LLM HTTPS egress remains
   opaque (a `MITM-all-egress` mode is a deliberate future option, gated on the
   cert-pinning/non-HTTP-over-443 risks). DNS-tunnel/domain-fronting residuals
   (§5 #2, #3) are unchanged.
@@ -420,7 +443,8 @@ corp-artifact-host trust boundary in `isMITMHost`).
   HOSTNAME rather than a proxy-resolved-and-pinned IP, so `VetHost`'s resolved-IP
   re-check is skipped for that hop (the corp proxy performs its own outbound
   DNS+dial, and the sandbox host frequently cannot resolve external names at all —
-  `internal/egress/proxy/proxy.go:370-382`). **Bounds, stated exactly so operators
+  the `p.upstream` branch of step 4 in `evaluate`,
+  `internal/egress/proxy/proxy.go`). **Bounds, stated exactly so operators
   don't over- or under-read it:** this does NOT make private IPs reachable. Reaching
   an internal-IP-resolving hostname still requires ALL of — (1) an operator
   configured the upstream proxy, (2) the run's own egress **policy** allows that
@@ -450,14 +474,14 @@ corp-artifact-host trust boundary in `isMITMHost`).
   subscription handshake through the proxy — is NOT yet live-validated (same posture
   as the eBPF ground-truth residual #12). **Interactive** runs now install the
   per-run CA too: the container's main process is `agent-run --idle`
-  (`internal/runner/docker/driver.go:431-434`), which calls the same
+  (the `idleCmd` in `internal/runner/docker/driver.go`), which calls the same
   `install_mitm_ca` batch runs use before holding the container open for attach
-  (`deploy/images/claude-code/agent-run:373-394`, `deploy/images/common/agent-run-lib.sh:25-47`)
+  (`deploy/images/claude-code/agent-run`, `deploy/images/common/agent-run-lib.sh`)
   — so a human driving `claude` in the attach shell trusts the proxy's TLS
   termination exactly as a batch run does. SDK certificate pinning would break
   MITM (none today); the reverse-proxy API-key route remains the robust default.
 - **JVM (keystore) and Deno (`DENO_CERT`) trust stores are not wired.**
-  `install_mitm_ca` (`deploy/images/common/agent-run-lib.sh:25-47`) writes the
+  `install_mitm_ca` (`deploy/images/common/agent-run-lib.sh`) writes the
   per-run CA for OpenSSL-shaped clients (`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/
   `CURL_CA_BUNDLE`) and Node (`NODE_EXTRA_CA_CERTS`) — it never imports the CA
   into a JVM's `cacerts` keystore or sets `DENO_CERT`. A run whose task trusts a
@@ -469,7 +493,7 @@ corp-artifact-host trust boundary in `isMITMHost`).
   Deno workloads):** MITM content-inspection is **not** mandatory for any egress
   class — only the LLM hosts (`api.anthropic.com`/`api.openai.com`) and any
   operator-configured corp artifact hosts (`MITMHosts`) are intercepted
-  (`internal/egress/proxy/mitm.go:145-151`); **every other host, including internal
+  (`isMITMHost`, `internal/egress/proxy/mitm.go`); **every other host, including internal
   endpoints reached via the upstream corp-proxy lane, is an opaque CONNECT tunnel
   that is never TLS-terminated by Wardyn.** So a JVM/Deno client reaching an
   internal API or corp SaaS is unaffected — the trust-store gap only bites when such
@@ -805,18 +829,25 @@ driver to confirm the "egress enforced outside the sandbox" / "env-var proxy
 bypass defended" rows above are not, in fact, an iptables `REDIRECT`/TPROXY NAT
 rule — which would crash-loop under gVisor's netstack (no `nat` table). They
 are not: `grep -rn "REDIRECT\|TPROXY\|iptables"` across the Go tree returns no
-hits. The actual mechanism is structural and tier-independent:
+hits. Citations below name SYMBOLS, not line ranges — an earlier pass pinned
+line numbers and six of nine had rotted onto unrelated code (one past EOF) once
+the files were split. The actual mechanism is structural and tier-independent:
+
 1. The per-run Docker network is created with `Internal: true` (no gateway),
    so the agent container has no default route regardless of confinement
-   class — `internal/runner/docker/driver.go:255-259`.
-2. The agent joins ONLY that network (`internal/runner/docker/driver.go:355-377`);
-   `HTTP_PROXY`/`HTTPS_PROXY` (`internal/api/runs.go:432-437`) are set for
-   proxy-aware clients as a convenience, not the enforcement boundary.
+   class — the `NetworkCreate` in `CreateSandbox`
+   (`internal/runner/docker/driver.go`).
+2. The agent joins ONLY that network — `CreateSandbox` step (3) attaches it at
+   create time via `NetworkMode` + `NetworkingConfig`, never the host bridge
+   (same file); `HTTP_PROXY`/`HTTPS_PROXY` (`buildBaseSandboxEnv`,
+   `internal/api/runs_dispatch.go`) are set for proxy-aware clients as a
+   convenience, not the enforcement boundary.
 3. Under gVisor (CC2/`runsc`), Docker's embedded DNS resolver (127.0.0.11) is
    not reachable from the sandbox's netstack, so the `wardyn-proxy` alias is
-   pinned via a static `ExtraHosts` entry instead
-   (`internal/runner/docker/driver.go:334-341,378-381`) — the one place CC2
-   needs a real adaptation, and it is a hosts-file entry, not a NAT rule.
+   pinned via a static `ExtraHosts` entry instead — `agentHost.ExtraHosts` gets
+   `wardyn-proxy:<proxy IP>` and nothing else
+   (`internal/runner/docker/driver.go`) — the one place CC2 needs a real
+   adaptation, and it is a hosts-file entry, not a NAT rule.
 
 No fix was needed (there is no REDIRECT path to fix). Regression guard added:
 `TestCreateSandbox_TopologyPreservesL0UnderGVisor`

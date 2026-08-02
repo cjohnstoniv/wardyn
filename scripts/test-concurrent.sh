@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Two-job shared-host concurrency acceptance test.
 #
 # Proves the compose control plane is concurrency-safe on a shared, multi-job

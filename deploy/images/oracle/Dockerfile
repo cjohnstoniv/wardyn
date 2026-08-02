@@ -6,7 +6,8 @@
 # final workspace state as PASS. It is also the agent for tasks that ARE a script
 # (e.g. egress-boundary), where the "solution" is the probe itself.
 #
-# IMAGE CONTRACT (mirrors deploy/images/README.md — the docker driver enforces it):
+# IMAGE CONTRACT — the REDUCED set this image keeps. It is the documented §4/§6
+# exception in deploy/images/README.md (no wardyn-git-helper, no git brokering):
 #   - NO ENTRYPOINT: the Wardyn docker driver sets Cmd=["sleep","infinity"] at
 #     create and launches the agent later via Exec. An ENTRYPOINT would wrap that
 #     Cmd as arguments, so an entrypoint that exits would tear the sandbox down
@@ -24,7 +25,7 @@
 # source), so build with:
 #   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local .
 
-# ── Stage 1: Go builder (wardyn-rec + wardyn-scan) ────────────────────────────
+# ── Stage 1: Go builder (wardyn-rec) ──────────────────────────────────────────
 FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
 WORKDIR /build
 
@@ -45,8 +46,7 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-scan ./cmd/wardyn-scan
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec
 
 # ── Stage 2: oracle runtime ───────────────────────────────────────────────────
 FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
@@ -66,12 +66,10 @@ RUN addgroup -g 1000 agent \
 # The session recorder the driver wraps the agent argv with. No asciinema in this
 # image, so wardyn-rec falls back to a plain .log capture (see cmd/wardyn-rec).
 COPY --from=builder /out/wardyn-rec /usr/local/bin/wardyn-rec
-# wardyn-scan: in-sandbox workspace scanner run by a governed scan run.
-COPY --from=builder /out/wardyn-scan /usr/local/bin/wardyn-scan
 
 # agent-run launcher (repo-root context now, so COPY the full path).
 COPY deploy/images/oracle/agent-run /usr/local/bin/agent-run
-RUN chmod +x /usr/local/bin/agent-run /usr/local/bin/wardyn-rec /usr/local/bin/wardyn-scan
+RUN chmod +x /usr/local/bin/agent-run /usr/local/bin/wardyn-rec
 
 WORKDIR /home/agent/work
 USER agent

@@ -9,7 +9,8 @@
 # `wardyn policy render -f examples/policies/sandbox.yaml` prints the canonical JSON.
 
 # Egress allowlist. Empty = the sandbox can reach NOTHING (default-deny at the
-# TLS-MITM proxy). Add exact hosts ("registry.npmjs.org") or "*." wildcards.
+# egress proxy, enforced at CONNECT — no TLS interception involved). Add exact
+# hosts ("registry.npmjs.org") or "*." wildcards.
 allowed_domains: []
 
 # How an off-allowlist host is handled. always_deny = hard 403, no human, nothing

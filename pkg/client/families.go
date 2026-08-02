@@ -16,6 +16,10 @@ import (
 // WorkspaceRequest is the body for POST/PUT /api/v1/workspaces. Name/Kind/Source
 // are required; the server validates Source with the same deny-list the run path
 // uses (local_dir bind-mount safety, repo slug/URL shape) before persisting.
+//
+// internal/api aliases this type (`type workspaceRequest = client.WorkspaceRequest`)
+// so server and SDK cannot drift; the server rejects unknown JSON fields, so a
+// field missing here is unreachable from the SDK rather than merely undocumented.
 type WorkspaceRequest struct {
 	Name          string              `json:"name"`
 	Kind          types.WorkspaceKind `json:"kind"`
@@ -23,8 +27,15 @@ type WorkspaceRequest struct {
 	Ref           string              `json:"ref,omitempty"`
 	DefaultTarget string              `json:"default_target,omitempty"`
 	// Writable opts the workspace into a READ-WRITE mount for import Record/Verify
-	// runs; omitted/false is read-only (the safe default).
+	// runs; omitted/false is read-only (the safe default). A sandboxed agent's
+	// changes then PERSIST to the host directory.
 	Writable bool `json:"writable,omitempty"`
+	// LLMCred is the operator-owned model/harness credential BINDING for this
+	// workspace/container (refs/names only). A run that picks the workspace
+	// inherits this model access. Nil => no binding. CREATE-ONLY: the update
+	// handler ignores it, so changing a binding needs the standalone
+	// PUT /workspaces/{id}/llm-cred route (not covered by this SDK).
+	LLMCred *types.WorkspaceLLMCred `json:"llm_cred,omitempty"`
 }
 
 // ListWorkspaces returns onboarded workspaces in reverse creation order. Pass a

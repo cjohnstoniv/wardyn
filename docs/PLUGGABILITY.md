@@ -34,8 +34,8 @@ A pluggable seam in Wardyn has five parts. Four seams implement all of parts
 1. **An interface** (`identity.Provider`, `secretstore.Store`, `recording.Store`,
    `runner.Runner`/`substrate.Substrate`, …) — the contract the control plane talks
    to. Most carry a `Name()` method so the running impl is self-describing. (Some
-   extension points — audit sinks, the LLM gateway forwarder, content detection —
-   are interfaces too but are wired through config, not a registry; see §3.)
+   extension points — audit sinks, content detection — are interfaces too but are
+   wired through config, not a registry; see §3.)
 2. **A registry** built on the shared `internal/component.Registry[C]`: a
    name→constructor map with default resolution and duplicate-name detection
    (one tested implementation, reused by every seam).
@@ -106,9 +106,10 @@ when a demanded class cannot be enforced.
 standard Wardyn recommends for hostile-multi-tenant production (may differ from
 shipped — see the honesty rule). `Seam status`: **shipped** = the interface +
 registry + conformance exist today; **planned** = interface lands on the roadmap.
-Every **planned** entry below — and what it is planned *for* — is enumerated in
-[`../ROADMAP.md`](../ROADMAP.md); this table is the per-seam view, not a second
-roadmap.
+Planned entries that carry a MILESTONE — and what they are planned *for* — are
+enumerated in [`../ROADMAP.md`](../ROADMAP.md) (SPIRE, OpenBao); the rest are
+seam-ready candidates with no scheduled work. This table is the per-seam view,
+not a second roadmap.
 
 | Subsystem | Interface | Shipped out-of-box default | Recommended (prod) | Registered alternates | Conformance | Seam status |
 |---|---|---|---|---|---|---|
@@ -117,10 +118,10 @@ roadmap.
 | Secret store | `secretstore.Store` | `pg` (age-encrypted Postgres) | **OpenBao** (LF, Vault-compatible) | `openbao` / `vault` / cloud KMS (planned) | `secretstore/secretstoretest` | shipped |
 | Recording | `recording.Store` | `fs` | `fs` (object storage optional) | S3/GCS object store (planned) | `recording/recordingtest` | shipped |
 | Egress policy | `egress.Evaluator` | `builtin` (RunPolicySpec) | **OPA/Rego** | `opa` / `cedar` (planned) | `egress/evaluatortest` | shipped (seam); evaluator alternates planned |
-| LLM gateway | `proxy.Forwarder` | `direct` (pinned-IP RoundTrip) | LiteLLM / Portkey / Envoy AI GW behind wardyn-proxy | external gateway (planned) | — | shipped (seam); external gateway planned |
+| LLM gateway | none — the route is hard-wired in `internal/egress/proxy/local_routes.go` (no swap point) | `direct` (pinned-IP RoundTrip) | LiteLLM / Portkey / Envoy AI GW behind wardyn-proxy | external gateway (planned) | — (nothing to conform to) | no seam yet; external gateway planned |
 | Content detection | `contentscan.Detector` | builtin (known-secret / regex / entropy / PII) + sidecar | builtin + **LLM Guard / Presidio** sidecar | `DetectorSidecarURL` (shipped) | — | shipped (detector seam) |
 | Audit sinks | `audit.Sink` | none (Postgres recorder always) | OpenTelemetry → SIEM | `file` / `webhook` / `syslog` (shipped) via `WARDYN_AUDIT_SINKS` | — | shipped (non-registry: struct-field JSON parse, `internal/audit/sinks/config.go` — not a `/healthz` component) |
-| Composer backends | `composer.Registry` | none (opt-in) | — | `anthropic` / `openai` / `cli` / `sandbox` / `fake` via `WARDYN_COMPOSER_CONFIG` | — | shipped |
+| Composer backends | `composer.Registry` | none in the binary; the compose demo's `.env.example` seeds a `fake` backend | — | `anthropic` / `openai` / `cli` / `sandbox` / `fake` via `WARDYN_COMPOSER_CONFIG` | — | shipped |
 | eBPF ground-truth | host sensor ingest | none (honest-degraded `/healthz`) | **Tetragon** (enforcement) | Falco / Tracee (ingest-compatible) | — | shipped (ingest seam) |
 
 All recommended-prod candidates are Apache-2.0 / permissive, self-hostable, and

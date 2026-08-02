@@ -8,10 +8,6 @@ re-open only what wardynd needs:
   - egress to Postgres on .Values.networkPolicy.postgres.port
   - ingress to the HTTP port from the configured sources (default: same
     namespace, e.g. an ingress controller / the UI)
-
-This is the L3/L4 complement to the wardyn-proxy sidecar's L2 allowlist noted in
-values.yaml. On Cilium, layer a CiliumNetworkPolicy with toFQDN rules on top for
-egress-by-domain; this plain NetworkPolicy is the portable baseline.
 */}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
@@ -32,15 +28,18 @@ spec:
         {{- if .Values.networkPolicy.ingress.from }}
         {{- toYaml .Values.networkPolicy.ingress.from | nindent 8 }}
         {{- else }}
-        # Default: allow ingress from any pod in the release namespace. Narrow
-        # this to your ingress controller's namespace/pod selector in production.
-        - namespaceSelector: {}
+        # Default: every pod in THIS namespace. A bare podSelector is what means
+        # "the policy's own namespace" — an empty namespaceSelector would mean
+        # ALL namespaces. Narrow to your ingress controller in production.
+        - podSelector: {}
         {{- end }}
       ports:
         - protocol: TCP
           port: http
   egress:
-    # DNS resolution (kube-dns / CoreDNS).
+    # DNS resolution (kube-dns / CoreDNS). The ONLY rule in this chart that may
+    # be cluster-wide: an empty namespaceSelector means all namespaces, which is
+    # required because CoreDNS lives in kube-system. helm-lint pins the count.
     - to:
         - namespaceSelector: {}
       ports:

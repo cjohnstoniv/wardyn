@@ -445,7 +445,7 @@ func TestConditionalStopDoesNotEmitAutostopWhenTerminal(t *testing.T) {
 // run with no policy override... is also 0, so it too is disabled. (The platform
 // default now applies only when the reaper is given a positive default for runs
 // whose policy is genuinely unset is out of scope here — 0 is unambiguously
-// disabled per docs/policies.)
+// disabled per docs/POLICIES.md.)
 func TestAutoStopZeroMeansDisabled(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	store := &fakeStore{}

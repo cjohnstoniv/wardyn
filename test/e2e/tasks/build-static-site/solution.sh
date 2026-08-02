@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # ORACLE solution for build-static-site.
 #
 # Runs INSIDE the sandbox as the agent, cwd = the mounted workspace ($PWD).

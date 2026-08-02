@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Seeded test backend for the Playwright UI e2e suite (task #8).
 #
 # Boots a fast, hermetic control plane — real wardynd + real Postgres + the `none`
@@ -112,6 +115,12 @@ cmd_up() {
       die "Postgres container '${PG_CONTAINER}' not ready on :55432. Start it (docker run ... postgres), or unset WARDYN_E2E_PG_CONTAINER to let 'scripts/up.sh pg' self-provision the default."
     fi
   fi
+  # THE one place the e2e database gets created (callers used to each hand-copy
+  # this line). up.sh pg only precreates the default wardyn_e2e, so a custom
+  # WARDYN_E2E_PG_DBNAME — screenshots.sh's wardyn_shots, the per-screen fanout —
+  # would otherwise never exist and wardynd would fail to connect. Idempotent:
+  # "already exists" is the expected no-op on every run after the first.
+  docker exec "${PG_CONTAINER}" psql -U wardyn -d wardyn -c "CREATE DATABASE \"${PG_DBNAME}\"" >/dev/null 2>&1 || true
   cmd_build
   # Mint the per-boot age identity (see AGE_KEY above). Must follow cmd_build:
   # it runs the binary we just built.

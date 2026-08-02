@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # probes.sh -- Wardyn governance probe library.
 #
 # Drives each governance control directly inside a live sandbox using
@@ -15,7 +18,7 @@
 #   egress_deny         -- curl an unlisted domain; expect 403 or connection refused
 #   metadata_deny       -- curl 169.254.169.254; expect deny from builtin guard
 #   git_credential      -- invoke wardyn-git-helper; expect credential approval request
-#   kill_switch         -- demonstrate wardyn kill (requires WARDYN_RUN_ID env var)
+#   kill_switch         -- demonstrate wardyn run kill (requires WARDYN_RUN_ID env var)
 #
 # Prerequisites:
 #   - A RUNNING wardyn sandbox: wardyn run ... (any task, even with no API key)
@@ -198,7 +201,7 @@ probe_git_credential() {
 
 # ── probe: kill_switch ─────────────────────────────────────────────────────────
 #
-# Demonstrates the kill switch cascade: wardyn kill <run-id> tears down the
+# Demonstrates the kill switch cascade: wardyn run kill <run-id> tears down the
 # sandbox, revokes the identity, revokes any brokered credentials, and emits
 # a run.kill audit event.
 #
@@ -213,10 +216,19 @@ probe_kill_switch() {
         info "To run: WARDYN_RUN_ID=<uuid> SANDBOX_REF=<container> bash probes.sh kill_switch"
         return 0
     fi
+    # Without this, an unset SANDBOX_REF makes the `docker inspect ""` below fail
+    # and the probe reports PASS "container removed" having verified nothing.
+    require_sandbox
 
     info "Killing run $RUN_ID via wardyn CLI"
-    kill_output=$(WARDYN_URL="$WARDYN_URL" WARDYN_ADMIN_TOKEN="$WARDYN_ADMIN_TOKEN" \
-        wardyn kill "$RUN_ID" 2>&1 || true)
+    # `kill` is a subcommand of the `run` noun, and the error is NOT swallowed:
+    # a swallowed "unknown command" used to surface as the far more confusing
+    # "Container still running after kill" below.
+    if ! kill_output=$(WARDYN_URL="$WARDYN_URL" WARDYN_ADMIN_TOKEN="$WARDYN_ADMIN_TOKEN" \
+        wardyn run kill "$RUN_ID" 2>&1); then
+        fail "wardyn run kill failed: $kill_output"
+        return 1
+    fi
     printf "Kill output: %s\n" "$kill_output"
 
     info "Checking container is gone..."

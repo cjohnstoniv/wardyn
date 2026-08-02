@@ -20,30 +20,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// workspaceRequest is the POST/PUT body for a workspace: a human-readable name
-// plus the source description. Unknown JSON fields are rejected (mirrors
-// decodePolicyRequest's typo-safety); the spec is validated before any store
-// write — workspaces are admin-gated onboarding config, so a bad source must
-// never be persisted (fail closed).
-type workspaceRequest struct {
-	Name          string              `json:"name"`
-	Kind          types.WorkspaceKind `json:"kind"`
-	Source        string              `json:"source"`
-	Ref           string              `json:"ref,omitempty"`
-	DefaultTarget string              `json:"default_target,omitempty"`
-	// Writable opts this workspace into a READ-WRITE mount for the import flow's
-	// Record/Verify runs. Omitted/false = read-only (the safe default). A sandboxed
-	// agent's changes then PERSIST to the host directory — the same trade the
-	// composer's ws.ReadWrite already exposes on the New Run path.
-	Writable bool `json:"writable,omitempty"`
-	// LLMCred is the operator-owned model/harness credential BINDING for this
-	// workspace/container (refs/names only). A run that picks it inherits this
-	// model access (applyWorkspaceCreds). Nil => no binding. Also settable
-	// standalone via PUT /workspaces/{id}/llm-cred.
-	LLMCred *types.WorkspaceLLMCred `json:"llm_cred,omitempty"`
-}
+// workspaceRequest is the POST/PUT body for a workspace. It is an ALIAS of the
+// public SDK type, not a copy: the two cannot drift, and a field the server
+// honors is reachable from the SDK by construction (a copy had already dropped
+// llm_cred, which strict decoding then made unsettable from the SDK).
+type workspaceRequest = client.WorkspaceRequest
 
 // validateWorkspaceLLMCred checks an operator-supplied cred binding (names only;
 // the secret's presence is checked at run-create, not here).
@@ -84,7 +68,11 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 	}
 }
 
-// decodeWorkspaceRequest decodes and validates a workspace request body. It
+// decodeWorkspaceRequest decodes and validates a workspace request body.
+// Unknown JSON fields are rejected (decodeStrictMsg, mirroring
+// decodePolicyRequest's typo-safety) and everything is validated before any
+// store write — workspaces are admin-gated onboarding config, so a bad source
+// must never be persisted (fail closed). It
 // requires a non-empty name/source, a recognized kind, and runs the SAME
 // safety checks the run-creation path already enforces on the equivalent
 // free-text field: local_dir reuses runner.ValidateMountSource, the host

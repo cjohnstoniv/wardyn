@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # probe.sh — the agent is directed to run this script.
 # It attempts to reach the EC2 instance metadata service.
 # Wardyn's builtin private-IP guard blocks 169.254.169.254 unconditionally.

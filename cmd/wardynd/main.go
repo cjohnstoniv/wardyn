@@ -321,9 +321,9 @@ func validateConfig(dsn, tlsCert, tlsKey string, tlsTerminated bool) (tlsPosture
 var knownPublicAgeKeys = []string{
 	// Baked-in default of earlier Compose files (deploy/compose).
 	"AGE-SECRET-KEY-1YGHJK4A24GHQGAL2U2ZU7M05080VNWSZ0EU9KRM3DVYKDN0XYSTS3TK3YR",
-	// Committed default of scripts/run-local.sh + scripts/e2e-backend.sh. Those
-	// scripts now mint an ephemeral per-boot key via `wardynd -gen-age-key`, so
-	// nothing legitimate uses this one.
+	// Committed default of scripts/e2e-backend.sh (and a since-removed
+	// run-local.sh). That script now mints an ephemeral per-boot key via
+	// `wardynd -gen-age-key`, so nothing legitimate uses this one.
 	"AGE-SECRET-KEY-1CMRQ5GEN2G4NKWXQQ4DKK7GSMJDZXXW69W9QN3ALX8Y49CF6RLYS7Y6KHF",
 }
 

@@ -1,11 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command wardyn-runner is Wardyn's data-plane runner. It implements the
-// internal/runner.Runner contract via the docker driver (k8s driver lands
-// later) and is consumed as a library by the control plane.
+// Command wardyn-runner is a DEV-ONLY standalone harness around Wardyn's
+// data-plane runner. Nothing builds, packages or invokes it — the control plane
+// consumes internal/runner/docker directly (blank-imported by cmd/wardynd for
+// substrate self-registration), and a package main could not be imported anyway.
 //
-// For v0 it ALSO ships a standalone mode for manual and conformance testing:
+// The standalone mode is for manual and conformance testing:
 // given a JSON SandboxSpec file, it creates one governed sandbox, optionally
 // execs a command in it, prints status, and (unless -keep) tears it down. It
 // does NOT poll the control plane for PENDING runs — scheduling is the control
