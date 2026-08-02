@@ -32,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -368,6 +369,10 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
+	// shouldTouch in internal.go). Zero value is ready to use.
+	lastTouchMu sync.Mutex
+	lastTouch   map[uuid.UUID]time.Time
 }
 
 // New constructs a Server and builds its router. It does not start listening.

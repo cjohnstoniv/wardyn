@@ -69,4 +69,16 @@ func TestSeedRequestWorkspace(t *testing.T) {
 			t.Error("a refused container workspace must seed nothing")
 		}
 	})
+
+	t.Run("a target collision with the policy's own mounts is 422, not a driver failure", func(t *testing.T) {
+		// The policy already binds composerWorkspaceTarget; the workspace (no
+		// default_target) would seed a second mount at the same in-container path.
+		// The unique-target invariant must catch the seed's own output.
+		spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/from-policy", Target: composerWorkspaceTarget}}}
+		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
+		code, err := seed(types.Workspace{ID: id, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app"}, &spec, &req)
+		if err == nil || code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, err = %v; want 422 on the duplicate in-container target", code, err)
+		}
+	})
 }

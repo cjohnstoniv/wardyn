@@ -147,6 +147,15 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		return http.StatusBadRequest, fmt.Errorf(
 			"workspace %s is a %s workspace; pass its image ref as `image` instead of workspace_id", ws.ID, ws.Kind)
 	}
+	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
+	// can break: the unique in-container target across workspace_mounts +
+	// workspace_repos (policy.go — "a clone can never land on a bind target").
+	// Without this, a workspace whose target collides with a policy mount reaches
+	// the driver as a duplicate mount point (opaque dispatch failure) — or, worse,
+	// a repo clone lands on top of a writable bind.
+	if err := validatePolicyWorkspaces(*spec); err != nil {
+		return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, err)
+	}
 	return 0, nil
 }
 

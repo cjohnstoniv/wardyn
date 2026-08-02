@@ -6,7 +6,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -42,6 +45,29 @@ func TestPreflight_HappyPath(t *testing.T) {
 	}
 	if it, ok := findItem(resp.SetupItems, "secret:anthropic-api-key"); !ok || it.Status != "satisfied" {
 		t.Errorf("secret row = %+v (ok=%v), want satisfied", it, ok)
+	}
+}
+
+// TestPreflight_WorkspaceIDSeeded pins launch parity for --workspace: preflight
+// must run the SAME seedRequestWorkspace launch runs, so a workspace_id that
+// launch would refuse (here: a container-kind workspace) fails the dry run with
+// the identical error instead of passing a rosier preflight (the false-green
+// this endpoint exists to prevent).
+func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	h.srv.cfg.Store = &workspaceStoreFake{
+		Store: h.srv.cfg.Store,
+		ws:    types.Workspace{ID: wsID, Kind: types.WorkspaceKindContainer, Source: "ghcr.io/acme/base:1"},
+	}
+	body := `{"agent":"claude-code","repo":"ephemeral","workspace_id":"` + wsID.String() + `",` +
+		`"inline_policy":{"min_confinement_class":"CC1"}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("preflight with a container workspace_id: code=%d, want 400 (same refusal as launch); body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "workspace_id:") {
+		t.Errorf("error must carry the launch path's workspace_id prefix; body=%s", w.Body.String())
 	}
 }
 

@@ -112,7 +112,10 @@ the chart at it (the default `postgres.dsn.secretRef.name` is `wardyn-postgres-d
 kubectl create secret generic wardyn-pg \
   --from-literal=dsn="postgres://user:pass@postgres-host:5432/wardyn?sslmode=require" \
   -n wardyn
-helm install wardyn ./deploy/helm/wardyn -n wardyn --set postgres.dsn.secretRef.name=wardyn-pg
+kubectl create secret generic wardyn-auth --from-literal=token="$(openssl rand -hex 32)" -n wardyn
+helm install wardyn ./deploy/helm/wardyn -n wardyn \
+  --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
 The DSN never appears in the rendered manifests or Helm release history.
@@ -123,7 +126,8 @@ creates `<release>-secrets`. The DSN lands base64'd in the release — laptop de
 ```bash
 helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set postgres.dsn.secretRef.name="" \
-  --set postgres.dsn.value="postgres://wardyn:wardyn-dev@db:5432/wardyn?sslmode=disable"
+  --set postgres.dsn.value="postgres://wardyn:wardyn-dev@db:5432/wardyn?sslmode=disable" \
+  --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
 ## Values

@@ -58,6 +58,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same workspace_id seeding launch runs (runs.go): an unknown or
+	// container-kind workspace fails here exactly as it would at create, and the
+	// checklist below sees the attached workspace (seedRequestWorkspace prepends
+	// it, so deriveSetupItems' workspace rows match launch).
+	if code, err := s.seedRequestWorkspace(ctx, &spec, &req); err != nil {
+		writeError(w, code, "workspace_id: "+err.Error())
+		return
+	}
+
 	// Same un-bypassable onboarding gate launch runs (runs.go): a non-onboarded
 	// mount source or repo 422s here exactly as it would at create.
 	if code, err := s.validateWorkspaceSources(ctx, spec); err != nil {

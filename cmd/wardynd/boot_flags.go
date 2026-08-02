@@ -200,7 +200,7 @@ func parseBootFlags() *bootFlags {
 }
 
 // demoAdminToken is the admin bearer the compose stack and the docs ship
-// (deploy/compose/docker-compose.yaml, docs/TRY-IT.md, docs/SDK.md, docs/ENV.md).
+// (deploy/compose/docker-compose.yaml, docs/TRY-IT.md, docs/sdk.md, docs/ENV.md).
 // It is published, therefore not a secret — the analogue of knownPublicAgeKeys.
 const demoAdminToken = "demo-admin-token"
 

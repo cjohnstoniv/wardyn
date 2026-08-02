@@ -67,7 +67,6 @@ POLICY_FILE="${WARDYN_CI_POLICY_FILE:-${REPO_ROOT}/examples/policies/ci.json}"
 TIMEOUT="${WARDYN_CI_TIMEOUT:-30m}"
 OUT_DIR="${WARDYN_CI_OUT:-./ci-artifacts}"
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
-BASE_URL="http://localhost:${WARDYN_UP_PORT:-8080}"
 
 [[ -n "${TASK}" ]] || die "WARDYN_CI_TASK is required (the task / command to run)"
 [[ -f "${POLICY_FILE}" ]] || die "policy file not found: ${POLICY_FILE}"
@@ -168,7 +167,7 @@ if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
     name="${pair%%=*}"; value="${pair#*=}"
     [[ -n "${name}" && "${pair}" == *"="* ]] || die "WARDYN_CI_SECRETS entry '${pair}' is not name=value"
     log "Seeding secret ${name}"
-    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name} (check wardynd is healthy at ${BASE_URL} and WARDYN_ADMIN_TOKEN is correct)"
+    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name} (check wardynd health: '${COMPOSE[*]} ps wardynd' / '${COMPOSE[*]} logs wardynd', and that WARDYN_ADMIN_TOKEN is correct)"
   done
 fi
 

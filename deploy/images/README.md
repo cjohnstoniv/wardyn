@@ -6,10 +6,12 @@ governed by Wardyn.  Each subdirectory is one agent image.
 ## Image contract
 
 Every image that runs a real agent task MUST satisfy the invariants below.  What
-actually enforces them: `internal/envbuild/builder.go`'s `requiredTools` (the
-build-time authority for a wrapped/BYOI image), each image's own `agent-run
---selftest`, and the live e2e suite, which launches every image and fails the run
-if the contract does not hold (`test/e2e/live/live_test.go`).
+actually enforces them: `internal/envbuild/builder.go`'s `requiredTools` plus a
+fail-closed per-run `agent-run --selftest` for wrapped/BYOI images
+(`internal/api/runs_dispatch.go`, `make test-e2e-byoi`), and the live e2e suite
+for the images its task corpus actually launches — `claude-code` and `oracle`
+(`test/e2e/live/live_test.go`); `codex-cli` and `aws-sso` rely on their own
+`--selftest` plus manual runs, not a nightly launch.
 
 `oracle/` is the ONE deliberate exception: it is the e2e stand-in, never brokers
 git, and satisfies neither §4 nor §6 (its `--selftest` checks only `sh`, `curl`,
@@ -78,10 +80,13 @@ Two details are load-bearing, and copying a shortened form silently drops them:
   `https://github.com`, because grants may name any host
   (`WARDYN_GIT_PAT_GRANTS`).  A host with no matching grant is safe: the helper
   emits nothing and git falls through to its normal behavior.
-- **`--secret-file`.** This is the per-run caller-auth gate — `agent-run`
-  provisions a 0400 secret at task time, so only the brokered helper invocation
-  can mint.  The config lives in the ROOT-owned system gitconfig precisely so
-  the agent cannot rewrite the path.
+- **`--secret-file`.** The per-run caller-auth gate — `agent-run` provisions a
+  0400 secret at task time and the helper mints only when the caller presents
+  it, raising the bar from "any in-sandbox process" to "code running as the
+  agent uid". When no secret is provisioned (e.g. interactive runs) the helper
+  falls back to run-token-only auth — a bound the helper's own doc states. The
+  config lives in the ROOT-owned system gitconfig precisely so the agent cannot
+  rewrite the path.
 
 `--system` (not `--global`) also means every `git` invocation in the sandbox is
 covered with no per-user configuration.  `agent-run --selftest` reports what it

@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. **Team mode** (multi-user SSO/RBAC) does not exist yet and is not scheduled — see [ROADMAP.md](../../ROADMAP.md); the UI's SSO button is disabled, so use the admin-token path or the CLI. |
+| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. Either way every signed-in user has admin-equivalent powers — **team mode** (per-user RBAC) does not exist yet and is not scheduled; see [ROADMAP.md](../../ROADMAP.md). |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner

@@ -228,9 +228,6 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 
 // validateLLMInspection enforces the structural invariants of the optional
 // outbound content-inspection block. A nil spec (the default) is valid (off).
-// v1 implements only the known-secret detector; entropy/PII toggles are rejected
-// until their later-phase detectors land, so a policy can never silently request
-// a detector that does not run.
 func validateLLMInspection(li *types.LLMInspectionSpec) error {
 	if li == nil {
 		return nil

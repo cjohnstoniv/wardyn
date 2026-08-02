@@ -43,12 +43,32 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	if w := do(t, srv, http.MethodPost, path, tok, body); w.Code != http.StatusAccepted {
 		t.Fatalf("decision code = %d, want 202", w.Code)
 	}
+	// The blind case must also route through the touch (it returns early, before
+	// the egress audit write) — but a burst inside touchDebounce coalesces to ONE
+	// UPDATE on the hot agent_runs row, so the second decision here is debounced.
 	blind := `{"request":{"host":"api.anthropic.com","method":"CONNECT"},"decision":"allow",` +
 		`"scan":{"scanned":false,"coverage":"tunneled-opaque","action":"blind"}}`
 	if w := do(t, srv, http.MethodPost, path, tok, blind); w.Code != http.StatusAccepted {
 		t.Fatalf("blind decision code = %d, want 202", w.Code)
 	}
-	if len(st.touched) != 2 || st.touched[0] != runID || st.touched[1] != runID {
-		t.Fatalf("TouchRun calls = %v, want two for %s", st.touched, runID)
+	if len(st.touched) != 1 || st.touched[0] != runID {
+		t.Fatalf("TouchRun calls = %v, want exactly one (debounced) for %s", st.touched, runID)
+	}
+
+	// Aging the run's entry past the window touches again — and a DIFFERENT run
+	// is never debounced by this one's entry.
+	srv.lastTouchMu.Lock()
+	srv.lastTouch[runID] = srv.lastTouch[runID].Add(-2 * touchDebounce)
+	srv.lastTouchMu.Unlock()
+	if w := do(t, srv, http.MethodPost, path, tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("aged decision code = %d, want 202", w.Code)
+	}
+	otherID := uuid.New()
+	otherTok := h.mintRunToken(t, otherID)
+	if w := do(t, srv, http.MethodPost, path, otherTok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("other-run decision code = %d, want 202", w.Code)
+	}
+	if len(st.touched) != 3 || st.touched[1] != runID || st.touched[2] != otherID {
+		t.Fatalf("TouchRun calls = %v, want aged re-touch then the other run", st.touched)
 	}
 }
