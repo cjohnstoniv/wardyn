@@ -90,7 +90,11 @@ const createdRun: AgentRun = {
   runner_target: "docker",
 };
 
-describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", () => {
+// 15s suite default, not vitest's 5s: these tests mount the full wizard and
+// walk it with real user-event clicks through lazily-resolved steps — ~1s in
+// isolation, but they flake at the 5s ceiling when the whole suite runs
+// parallel on a loaded box (same rationale as setup-screen/audit's timeouts).
+describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeout: 15_000 }, () => {
   beforeEach(() => {
     toastError.mockReset();
     toastSuccess.mockReset();

@@ -60,7 +60,11 @@ function renderScreen() {
   );
 }
 
-describe("AuditScreen", () => {
+// 15s suite default, not vitest's 5s: the truncation tests render 1000-event
+// feeds through the day-grouping pipeline — ~1-2s alone, but they sit right at
+// the 5s ceiling when the full suite runs parallel on a loaded box (same
+// rationale as setup-screen.test.tsx's suite timeout).
+describe("AuditScreen", { timeout: 15_000 }, () => {
   beforeEach(() => {
     listAuditMock.mockReset();
     getRunMock.mockReset();
