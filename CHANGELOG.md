@@ -76,9 +76,21 @@ one-line migration.
   `https://` URL.** The token is a long-lived SIEM ingest credential replayed on
   every POST, so a plaintext endpoint leaked it continuously. wardynd refuses to
   start instead. A tokenless `http://` collector is unaffected.
-- The compose wardynd healthcheck, decision-ingest idle touches (debounced),
-  and preflight/launch workspace parity were all tightened; `ci-run.sh`'s
+- The compose wardynd healthcheck, decision-ingest idle touches (debounced —
+  the reaper adds the same 30s as threshold slack, so `run.autostop`'s
+  `threshold_sec` records configured + 30), and preflight/launch workspace
+  parity (workspace_id seeding, credential-binding fold keyed on the grant's
+  own secret, target-collision 422) were all tightened; `ci-run.sh`'s
   preflight preview now rides `wardyn run --dry-run`.
+- Semantic status text now clears WCAG AA in BOTH themes (light info/cyan to
+  the 700 family; dark danger/info to the 400 family with dark text on the
+  danger fill), and the contrast gate proves the dark theme too.
+- Approvals reads scale: a `(grant_id, requested_at DESC)` index serves the
+  broker's per-mint lookup, and the console's unfiltered approvals list pages
+  at the database instead of transferring the full decided history per poll.
+- The missing-test inventory is back — `make test-gaps` regenerates
+  `docs/TEST-GAPS.md` from the coverage artifacts (the prior copy was deleted
+  as stale generated output; the regeneration wiring is the fix).
 
 ### Removed
 
