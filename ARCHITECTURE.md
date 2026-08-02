@@ -296,8 +296,9 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > A first-class **team** deployment — the compose control plane running as a
 > sealed, multi-user shared service with human SSO — **does not exist yet and is
 > not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
-> (SSO) profile and OIDC backend exist and are CI-tested, but the UI's SSO login
-> is disabled for now. `make setup` asks **containerized vs host** (Enter =
+> (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
+> sign-in lights up when OIDC is configured — but every signed-in user has
+> admin-equivalent powers (no per-user RBAC). `make setup` asks **containerized vs host** (Enter =
 > containerized; both single-user); team is not a selectable mode
 > (`WARDYN_SETUP_MODE=team` prints a notice and exits).
 

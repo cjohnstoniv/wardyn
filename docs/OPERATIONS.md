@@ -1,7 +1,7 @@
 # Operating Wardyn
 
-Backup, upgrade, rotation, and the scaling constraint — the questions that arrive
-after the stack is up.
+Backup, upgrade, rotation, monitoring, and the scaling constraint — the questions
+that arrive after the stack is up.
 
 **Scope: the Compose stack.** Everything here is written against
 [`deploy/compose/`](../deploy/compose/). The Helm chart deploys the control plane
@@ -50,6 +50,18 @@ fresh volume, untar into the recordings volume, put `WARDYN_AGE_KEY` back in
 > (`scripts/up.sh` `cmd_reset`): Postgres, recordings and the audit sink all go,
 > with no backup counterpart. It leaves `.env` — and so the age key — alone.
 > `make compose-down` stops the stack and keeps the volumes.
+
+## Monitoring
+
+`GET /metrics` (admin bearer required, next to the unauthenticated `/healthz`)
+serves Prometheus text exposition — stdlib-only, no client library. Counters:
+runs by terminal state, approval decisions by outcome, egress denies, credential
+mints; plus sandbox launch-latency sum/count. Scrape it with any Prometheus
+`authorization` config carrying the admin token. `/healthz` stays the
+liveness/component surface (identity, runner classes, eBPF ground-truth state);
+`/metrics` is the trend surface. Audit sinks (`WARDYN_AUDIT_SINKS`,
+[ENV.md](ENV.md)) are the event stream for SIEMs — metrics deliberately carry no
+per-run detail.
 
 ## The age key has no rotation path
 

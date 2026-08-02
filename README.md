@@ -50,10 +50,14 @@ wardyn setup status   # what's configured, with the exact next command per unmet
 (or JSON) policy and hand it to a single `wardyn run` — interactive or unattended:
 
 ```sh
-wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
+wardyn run --agent claude-code --task-mode exec \
   --task 'echo hello from a governed sandbox' \
   --policy-file examples/policies/sandbox.yaml --wait
 ```
+
+(Add `--image ubuntu:24.04` to bring your own base image — that path is opt-in:
+it needs `WARDYN_ENVBUILD=true` on wardynd, which the default `make setup` stack
+leaves off. See the BYOI bullet below and [docs/ENVBUILD.md](docs/ENVBUILD.md).)
 
 The commented [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml)
 is a sealed floor you can edit at a glance; `wardyn policy render -f <file>`

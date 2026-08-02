@@ -122,6 +122,15 @@ func (s *approvalService) List(ctx context.Context, state types.ApprovalState) (
 	return s.st.ListApprovals(ctx, state)
 }
 
+// ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts
+// for (same pattern as store.Pager): the console polls four single-state lists
+// every 10s and decided approvals are never deleted, so the unpaged read grew
+// with deployment age. Promoted from the embedded store.PG; pure delegation,
+// like List — the approval FSM owns decisions, not reads.
+func (s *approvalService) ListApprovalsPage(ctx context.Context, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	return s.st.ListApprovalsPage(ctx, state, p)
+}
+
 // ─── audit fanout ─────────────────────────────────────────────────────────────
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts

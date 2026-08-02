@@ -13,7 +13,9 @@
 // sandbox_ref updates, or an explicit store.TouchRun keepalive. Two callers
 // touch it today: the interactive-attach handler (a human is watching) and the
 // proxy's decision ingest (the agent made an egress call), so a run doing
-// either is measured on real activity and this package needed no change for it.
+// either is measured on real activity. The ingest touch is coalesced to one
+// UPDATE per TouchDebounce window, so thresholdFor adds TouchDebounce as
+// slack — a run stops once idle past policy + TouchDebounce, never earlier.
 //
 // What still does NOT reset the clock is activity that never leaves the sandbox
 // — CPU, file writes, a long local build. Such a run is stopped once updated_at
@@ -285,6 +287,9 @@ func (r *Reaper) thresholdFor(run RunSummary) time.Duration {
 // emitAutoStop writes a "run.autostop" audit event. Failures are logged and
 // swallowed: audit must never gate the stop path. The append-only audit
 // invariant is upheld by the store layer (Postgres trigger).
+// threshold here is the EFFECTIVE value (policy + TouchDebounce) — deliberately
+// what the reaper compared idleFor against, not the raw policy number;
+// docs/POLICIES.md documents the delta.
 func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, threshold time.Duration) {
 	data, _ := json.Marshal(map[string]any{
 		"idle_for_sec":  int64(idleFor.Seconds()),

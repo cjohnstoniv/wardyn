@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,22 +24,18 @@ type decisionRequest struct {
 // handleListApprovals returns approvals filtered by ?state= (empty = all) and
 // ?run_id= (empty = every run), paginated by ?limit=&offset= (see parseListPage).
 //
-// the store's ListApprovalsPage applies LIMIT/OFFSET at the DB, but the
-// approvals list here routes through the cfg.Approvals lister (an interface owned
-// by the approval package, not a store.Pager), so this endpoint bounds the
-// PAYLOAD in Go via servePage's fetch-all fallback rather than the query. The
-// approvals_requested_at / approvals_state_requested_at indexes keep the
-// underlying sort cheap; thread Page through the Approvals interface if the
-// full-table read itself ever bites.
+// When the lister also implements the OPTIONAL approvalPageLister (the wardynd
+// adapter does, promoting store.PG's ListApprovalsPage), the un-filtered list
+// applies LIMIT/OFFSET at the DB — the console polls four single-state lists
+// every 10s and decided rows are never deleted, so the unpaged read grew with
+// deployment age. A lister without it (test fakes) keeps servePage's fetch-all
+// fallback.
 //
-// ?run_id= therefore filters INSIDE the fetch-all closure, i.e. before servePage
-// windows the result. That ordering is the whole point: the list is requested_at
-// DESC and capped at maxListLimit, so filtering after the window would drop a run
-// older than the newest 1000 approvals from its own detail page — silently, with
-// a PENDING badge of 0. Every first-use egress prompt files a row and nothing
-// deletes them, so a long-lived deployment reaches that cap.
-// ponytail: an in-Go filter over the full read, matching what this endpoint
-// already does for ?state=; the upgrade path is the same threaded Page above.
+// ?run_id= stays on the fetch-all path and filters INSIDE the closure, i.e.
+// before servePage windows the result. That ordering is the whole point: the
+// list is requested_at DESC and capped at maxListLimit, so filtering after the
+// window would drop a run older than the newest 1000 approvals from its own
+// detail page — silently, with a PENDING badge of 0.
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
@@ -59,7 +56,13 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	servePage(w, page, nil, func() ([]types.ApprovalRequest, error) {
+	var pageFn func(store.Page) ([]types.ApprovalRequest, error)
+	if pl, ok := s.cfg.Approvals.(approvalPageLister); ok && runID == uuid.Nil {
+		pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+			return pl.ListApprovalsPage(r.Context(), state, p)
+		}
+	}
+	servePage(w, page, pageFn, func() ([]types.ApprovalRequest, error) {
 		all, err := s.cfg.Approvals.List(r.Context(), state)
 		if err != nil || runID == uuid.Nil {
 			return all, err
@@ -72,6 +75,14 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		}
 		return out, nil
 	})
+}
+
+// approvalPageLister is the optional DB-paged read surface an ApprovalService
+// may additionally implement (see handleListApprovals). Deliberately NOT part
+// of ApprovalService: test doubles embedding the interface keep compiling, the
+// exact rationale store.Pager documents.
+type approvalPageLister interface {
+	ListApprovalsPage(ctx context.Context, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error)
 }
 
 // handleApproveApproval transitions an approval to APPROVED. For credential

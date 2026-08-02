@@ -53,11 +53,13 @@
   --danger: #b91c1c;
   --danger-foreground: #ffffff;
   --danger-subtle: rgba(239, 68, 68, 0.13);
-  --info: #3b82f6;
+  /* info/cyan carry 12px chip text — AA 4.5:1 on white AND on their own
+     -subtle tint (blue-700 / cyan-700; the 500s measured 3.68:1 / 2.43:1). */
+  --info: #1d4ed8;
   --info-foreground: #ffffff;
-  --info-subtle: rgba(59, 130, 246, 0.13);
-  --cyan: #06b6d4;
-  --cyan-subtle: rgba(6, 182, 212, 0.1);
+  --info-subtle: rgba(29, 78, 216, 0.13);
+  --cyan: #0e7490;
+  --cyan-subtle: rgba(14, 116, 144, 0.1);
 
   /* agent brand accent — Claude Code monogram avatar (same hue both modes) */
   --agent-claude: #d97757;
@@ -125,12 +127,16 @@
   --success-subtle: rgba(16, 185, 129, 0.13);
   --warning: #f59e0b;
   --warning-subtle: rgba(245, 158, 11, 0.13);
-  --danger: #dc2626;
-  --danger-foreground: #ffffff;
-  --danger-subtle: rgba(220, 38, 38, 0.13);
-  --info: #3b82f6;
-  --info-foreground: #ffffff;
-  --info-subtle: rgba(59, 130, 246, 0.13);
+  /* red-400 for AA on the near-black grounds (600 measured 4.10:1 on the bg,
+     3.59:1 on subtle-over-card); the fill therefore takes DARK text, the same
+     inversion the dark teal --primary already uses. */
+  --danger: #f87171;
+  --danger-foreground: #0a0a0a;
+  --danger-subtle: rgba(248, 113, 113, 0.13);
+  /* blue-400: the 500 measured 4.45:1 on subtle-over-card, a hair under AA. */
+  --info: #60a5fa;
+  --info-foreground: #0a0a0a;
+  --info-subtle: rgba(96, 165, 250, 0.13);
   --cyan: #06b6d4;
   --cyan-subtle: rgba(6, 182, 212, 0.1);
 

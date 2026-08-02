@@ -1,4 +1,4 @@
-.PHONY: license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -119,6 +119,13 @@ test-docker: ## Run all Go tests with -tags docker
 	go test -tags docker ./...
 
 # ── detailed test reports (JSON event stream + coverage) ────────────────────
+# Regenerates docs/TEST-GAPS.md (the triaged untested-exported-func inventory)
+# from the union coverage profile. Run after cover-check when the inventory
+# should track a change; the doc states its own regeneration command, which is
+# the wiring whose absence got the last copy deleted as unmaintainable.
+test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
+	./scripts/test-gaps.sh
+
 # Emits per-suite artifacts under test/reports/go/<suite>/. See
 # scripts/test-report.sh.
 test-report: ## Go unit suite with per-suite JSON + coverage artifacts

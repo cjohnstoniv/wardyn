@@ -47,6 +47,18 @@ func apiKeyGrantScopeHost(scope json.RawMessage) string {
 	return strings.TrimSpace(sc.Host)
 }
 
+// apiKeyGrantScopeSecret returns the secret_name an api_key grant's scope
+// carries. A grant may name a NON-convention secret (a workspace credential
+// binding does — applyWorkspaceCreds writes the workspace's own APIKeySecret),
+// so verdict code must key on the grant's secret, not the provider default.
+func apiKeyGrantScopeSecret(scope json.RawMessage) string {
+	var sc struct {
+		SecretName string `json:"secret_name"`
+	}
+	_ = json.Unmarshal(scope, &sc)
+	return strings.TrimSpace(sc.SecretName)
+}
+
 // apiKeyGrantForHost returns the api_key grant in spec whose scope.host == host.
 func apiKeyGrantForHost(spec *types.RunPolicySpec, host string) (types.GrantSpec, bool) {
 	for _, g := range spec.EligibleGrants {
@@ -465,11 +477,22 @@ func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent m
 	g, has := apiKeyGrantForHost(spec, p.host)
 	hostAllowed := spec.AllowAllEgress || domainAllowedExact(spec.AllowedDomains, p.host)
 
-	if has && !g.RequiresApproval && secretPresent[p.secret] && hostAllowed {
+	// The verdict keys on the GRANT's own secret when one exists — a workspace
+	// credential binding folds in a grant naming the workspace's secret, which
+	// need not be the provider convention name. Falling back to p.secret keeps
+	// the no-grant CTA pointing at the name a composed run would use.
+	secret := p.secret
+	if has {
+		if s := apiKeyGrantScopeSecret(g.Scope); s != "" {
+			secret = s
+		}
+	}
+
+	if has && !g.RequiresApproval && secretPresent[secret] && hostAllowed {
 		// Authoritative positive note (overrides any stale analyzer caution).
 		return fmt.Sprintf(
 			"model access provisioned for agent %q: an auto-mint api_key grant for %s (via the %q secret) is injected proxy-side — the key is never resident in the sandbox.",
-			agent, p.host, p.secret), true
+			agent, p.host, secret), true
 	}
 	// A surviving grant whose host is NOT egress-allowed would fail the proxy at
 	// startup — drop it so the run degrades instead of hard-failing.
@@ -482,7 +505,7 @@ func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent m
 		subHint = ", or launch this proposal from the wizard with your Claude subscription mounted (the composer cannot mount host credentials)"
 	}
 	switch {
-	case !secretPresent[p.secret]:
+	case !secretPresent[secret]:
 		// Drop a surviving grant whose secret is absent: an auto-mint injection
 		// grant with no resolvable secret fails the proxy CLOSED at startup
 		// (injection.go), hard-killing the launch — degrade to honest
@@ -493,7 +516,7 @@ func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent m
 		}
 		return fmt.Sprintf(
 			"no model access for agent %q: a composed run brokers its model key from the %q secret, which is not stored. Add it under Secrets and re-compose%s.",
-			agent, p.secret, subHint), false
+			agent, secret, subHint), false
 	case has && g.RequiresApproval:
 		return fmt.Sprintf(
 			"no model access for agent %q: the operator policy forces approval on the api_key grant, so it is not auto-injected and the model call 404s. Use a policy with an auto-mint api_key grant%s.",

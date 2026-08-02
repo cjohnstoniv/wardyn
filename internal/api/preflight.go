@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -120,11 +121,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// LLM-access verdict on a COPY: reconcileLLMAccess drops orphaned grants in
 	// place, but the manual-wizard launch (handleCreateRun) persists every grant on
 	// the resolved spec, so the checklist must see the FULL spec — mutating a copy
-	// keeps deriveSetupItems' view faithful to what launch stores. managed mirrors
+	// keeps deriveSetupItems' view faithful to what launch stores. The grants
+	// slice is CLONED because a struct copy shares the backing array, and
+	// slices.DeleteFunc's drop zeroes the vacated tail in place — a shallow copy
+	// would clobber the very spec the copy exists to protect. managed mirrors
 	// dispatch's precedence (runs.go): a compose-mode managed token credentials a
 	// claude run that has no resident subscription mount and no anthropic api-key
 	// grant, so reflect that instead of a false "no model access".
 	llmSpec := spec
+	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
 	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, "api.anthropic.com")
 	subscriptionActive := specHasMountTarget(&llmSpec, claudeCredTarget)
 	managed := req.Agent == "claude-code" && !subscriptionActive &&

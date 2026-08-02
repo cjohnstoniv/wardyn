@@ -7,11 +7,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-// C004: the light-theme (:root) semantic tokens are used as button/badge text
-// (white on them) and as text/dot colors on white + their own -subtle tint, so each
-// must clear WCAG AA 4.5:1 for normal text. This test reads theme.css and re-proves
-// it, so a revert to the teal-500-family brights (success 2.25:1, warning 1.94:1)
-// fails here. The dark theme already passes (6-8:1) and is out of scope.
+// C004: the semantic tokens are used as button/badge text (white on them) and
+// as text/dot colors on their grounds + their own -subtle tint, so each must
+// clear WCAG AA 4.5:1 for normal text. This test reads theme.css and re-proves
+// it for BOTH themes, so a revert to the 500-family brights (light success
+// 2.25:1, dark danger 4.10:1) fails here instead of shipping sub-AA text.
 
 function lum(hex: string): number {
   const ch = (i: number) => parseInt(hex.slice(i, i + 2), 16) / 255;
@@ -71,7 +71,9 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(ratio(WHITE, token("destructive"))).toBeGreaterThanOrEqual(4.5);
   });
 
-  for (const t of ["success", "warning", "danger"]) {
+  // info + cyan joined the guarded set when their 500-family values measured
+  // 3.68:1 / 2.43:1 as 12px chip text (Starting badge, egress-domain chip).
+  for (const t of ["success", "warning", "danger", "info", "cyan"]) {
     it(`--${t} text is >= 4.5:1 on white and on its own -subtle tint`, () => {
       expect(ratio(token(t), WHITE)).toBeGreaterThanOrEqual(4.5);
       expect(ratio(token(t), subtleBg(t))).toBeGreaterThanOrEqual(4.5);
@@ -80,6 +82,43 @@ describe("light-theme WCAG AA contrast (C004)", () => {
 
   it("--muted-foreground text is >= 4.5:1 on white (the borderline body/caption token)", () => {
     expect(ratio(token("muted-foreground"), WHITE)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // The DARK theme is the default (theme-provider is dark-first), so its status
+  // text needs the same guard — the old header claim "dark already passes"
+  // measured false for danger (4.10:1 on the bg, 3.59:1 on subtle-over-card).
+  // Text sits on --background and on -subtle composited over --card; fills
+  // (--danger + --danger-foreground) invert to dark text like dark --primary.
+  describe("dark-theme WCAG AA contrast", () => {
+    const darkStart = css.indexOf(".dark {");
+    const dark = css.slice(darkStart, css.indexOf("\n}", darkStart));
+    const dtoken = (name: string): string => {
+      const m = dark.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+      if (!m) throw new Error(`--${name} not found in .dark`);
+      return m[1];
+    };
+    const dsubtleOverCard = (name: string): string => {
+      const m = dark.match(
+        new RegExp(`--${name}-subtle:\\s*rgba\\((\\d+),\\s*(\\d+),\\s*(\\d+),\\s*([\\d.]+)\\)`),
+      );
+      if (!m) throw new Error(`--${name}-subtle not found in .dark`);
+      const card = dtoken("card");
+      const cch = (i: number) => parseInt(card.slice(i, i + 2), 16);
+      const [r, g, b, a] = [+m[1], +m[2], +m[3], +m[4]];
+      const over = (v: number, w: number) => Math.round(a * v + (1 - a) * w);
+      const hex = (v: number) => v.toString(16).padStart(2, "0");
+      return "#" + hex(over(r, cch(1))) + hex(over(g, cch(3))) + hex(over(b, cch(5)));
+    };
+
+    for (const t of ["success", "warning", "danger", "info", "cyan"]) {
+      it(`dark --${t} text is >= 4.5:1 on --background and on -subtle over --card`, () => {
+        expect(ratio(dtoken(t), dtoken("background"))).toBeGreaterThanOrEqual(4.5);
+        expect(ratio(dtoken(t), dsubtleOverCard(t))).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+    it("dark --danger-foreground on the --danger fill is >= 4.5:1 (kill/delete buttons)", () => {
+      expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
+    });
   });
 
   // --muted-foreground clears AA at full strength but NOT diluted — a

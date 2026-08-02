@@ -12,6 +12,7 @@ wizard and `/demos` are the first-run path. Everything here is the next question
 | Build against the API in Go, or with curl | [sdk.md](sdk.md) |
 | Understand or debug a devcontainer / BYOI image build | [ENVBUILD.md](ENVBUILD.md) |
 | Back up, restore, or upgrade a running deployment | [OPERATIONS.md](OPERATIONS.md) |
+| See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Know what Wardyn does *not* defend against | [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) |

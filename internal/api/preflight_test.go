@@ -92,6 +92,56 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	}
 }
 
+// TestPreflight_WorkspaceAPIKeyCredFold pins the credential half of launch
+// parity: a workspace bound to an api_key secret with a NON-convention name
+// (the whole point of per-workspace bindings) must yield a SATISFIED
+// llm_access row naming that secret — not the false "add anthropic-api-key"
+// red the pre-fix verdict produced by keying on the provider convention name.
+func TestPreflight_WorkspaceAPIKeyCredFold(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	delete(sec.m, "anthropic-api-key")
+	sec.m["acme-anthropic-key"] = []byte("sk-ant-workspace")
+	wsID := uuid.New()
+	h.srv.cfg.Store = &workspaceStoreFake{
+		Store: h.srv.cfg.Store,
+		ws: types.Workspace{
+			ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app", Status: types.WorkspaceReady,
+			LLMCred: &types.WorkspaceLLMCred{Mode: types.WorkspaceLLMCredAPIKey, APIKeySecret: "acme-anthropic-key"},
+		},
+	}
+	body := `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
+		`"inline_policy":{"min_confinement_class":"CC1"}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	it, ok := findItem(resp.SetupItems, "llm_access:claude-code")
+	if !ok || it.Status != "satisfied" {
+		t.Fatalf("llm_access row = %+v (ok=%v), want satisfied via the workspace-bound secret", it, ok)
+	}
+	if !strings.Contains(it.Detail, "acme-anthropic-key") {
+		t.Errorf("detail must name the workspace's own secret, got %q", it.Detail)
+	}
+
+	// Inverse: the bound secret absent -> missing. applyWorkspaceCreds folds no
+	// grant for an absent secret (same at launch), so the CTA falls back to the
+	// convention name a composed run would use — the honest no-binding message.
+	delete(sec.m, "acme-anthropic-key")
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	var resp2 preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	it2, ok2 := findItem(resp2.SetupItems, "llm_access:claude-code")
+	if !ok2 || it2.Status == "satisfied" {
+		t.Fatalf("llm_access row = %+v (ok=%v), want missing when the bound secret is absent", it2, ok2)
+	}
+}
+
 // TestPreflight_BlastRadiusRaisesToCC3 asserts the enforced class mirrors
 // handleCreateRun's deterministic blast-radius floor: a write-capable github_token
 // grant raises the run to Vault (CC3) even though the operator requested CC2 and

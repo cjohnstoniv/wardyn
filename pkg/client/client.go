@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package client is the public Go SDK for the Wardyn control plane. It uses
-// internal/types as the shared JSON source of truth and adds zero non-stdlib
-// dependencies so it can be embedded in external tooling without friction. The
+// internal/types as the shared JSON source of truth and adds exactly one
+// non-stdlib dependency (github.com/google/uuid, for typed ids) so it can be
+// embedded in external tooling without friction. The
 // in-repo `wardyn` CLI uses THIS client directly (there is no second transport);
 // it maps APIError to process exit codes and prints APIError.Error(), which
 // unwraps the server's {"error":...} envelope into a human-readable message.
