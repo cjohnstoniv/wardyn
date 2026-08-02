@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,7 @@ type gitBrokerUpstream struct {
 	gitPath   string
 	gitQuery  string
 	gitProto  string
+	gitBody   []byte // body github received (proves byte-for-byte forwarding)
 	gitHits   int
 }
 
@@ -54,6 +56,7 @@ func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 		u.gitPath = r.URL.Path
 		u.gitQuery = r.URL.RawQuery
 		u.gitProto = r.Header.Get("Git-Protocol")
+		u.gitBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
 		_, _ = io.WriteString(w, "git-pack-data")
 	}))
@@ -188,5 +191,229 @@ func TestGitBrokerRejectsBadRequests(t *testing.T) {
 				t.Fatalf("%s: github upstream was hit for a rejected request", tc.name)
 			}
 		})
+	}
+}
+
+// ── push branch-namespace confinement ────────────────────────────────────────
+
+// pkt frames one git pkt-line: 4 hex length digits that count themselves.
+func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+
+const (
+	zeroOID  = "0000000000000000000000000000000000000000"
+	someOID  = "1111111111111111111111111111111111111111"
+	otherOID = "2222222222222222222222222222222222222222"
+	// firstCaps is the "\0<capability-list>" suffix git puts on the FIRST command.
+	firstCaps = "\x00report-status side-band-64k agent=git/2.45.0\n"
+)
+
+// TestReceivePackCommandParser: the pkt-line command-section parser accepts ONLY
+// ref updates inside the run's namespace and fails closed on everything else.
+func TestReceivePackCommandParser(t *testing.T) {
+	const prefix = "refs/heads/wardyn/run-1/"
+	inNS := prefix + "feature"
+
+	var oversized strings.Builder
+	for i := 0; i < 600; i++ { // ~136 B/command => well past the 64 KiB cap
+		oversized.WriteString(pkt(fmt.Sprintf("%s %s %sb%03d\n", someOID, otherOID, prefix, i)))
+	}
+
+	cases := []struct {
+		name    string
+		section string
+		wantErr string // "" == must be accepted
+	}{
+		{"in-namespace", pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + "0000", ""},
+		{"caps-suffix-stripped-not-treated-as-ref",
+			pkt(zeroOID+" "+otherOID+" "+inNS+"\x00report-status refs/heads/main\n") + "0000", ""},
+		{"delete-inside-namespace", pkt(someOID+" "+zeroOID+" "+inNS+firstCaps) + "0000", ""},
+		{"shallow-line-then-command",
+			pkt("shallow "+someOID+"\n") + pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + "0000", ""},
+		{"multi-ref-all-inside",
+			pkt(someOID+" "+otherOID+" "+prefix+"a"+firstCaps) + pkt(someOID+" "+otherOID+" "+prefix+"b\n") + "0000", ""},
+
+		{"default-branch", pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000", "outside this run's branch namespace"},
+		{"other-run-namespace", pkt(someOID+" "+otherOID+" refs/heads/wardyn/run-2/x"+firstCaps) + "0000", "outside this run's branch namespace"},
+		{"tag", pkt(someOID+" "+otherOID+" refs/tags/v1"+firstCaps) + "0000", "outside this run's branch namespace"},
+		{"pull-ref", pkt(someOID+" "+otherOID+" refs/pull/1/head"+firstCaps) + "0000", "outside this run's branch namespace"},
+		{"namespace-root-has-no-branch", pkt(someOID+" "+otherOID+" "+prefix+firstCaps) + "0000", "outside this run's branch namespace"},
+		{"multi-ref-mixed-rejects-whole-push",
+			pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + pkt(someOID+" "+otherOID+" refs/heads/main\n") + "0000",
+			"outside this run's branch namespace"},
+		{"delete-outside-namespace",
+			pkt(someOID+" "+zeroOID+" refs/heads/main"+firstCaps) + "0000", "outside this run's branch namespace"},
+		{"traversal-refname",
+			pkt(someOID+" "+otherOID+" "+prefix+"../../heads/main"+firstCaps) + "0000", "malformed refname"},
+		{"embedded-second-ref",
+			pkt(someOID+" "+otherOID+" "+inNS+" refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		{"push-cert", pkt("push-cert"+firstCaps) + "0000", "unsupported receive-pack command"},
+		{"malformed-length", "zzzz" + "0000", "malformed pkt-line length"},
+		{"delim-pkt", "0001" + "0000", "unexpected pkt-line length"},
+		{"truncated-payload", "0040" + someOID, "truncated pkt-line"},
+		{"no-flush-pkt", pkt(someOID + " " + otherOID + " " + inNS + firstCaps), "unreadable pkt-line length"},
+		{"oversized-command-section", oversized.String() + "0000", "exceeds"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			head, err := readReceivePackCommands(strings.NewReader(tc.section), prefix)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("readReceivePackCommands: unexpected error %v", err)
+				}
+				if string(head) != tc.section {
+					t.Fatalf("buffered section = %q, want the input verbatim", head)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("readReceivePackCommands: want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestReceivePackParserStopsAtFlushPkt: the parser consumes the command section
+// and NOT one byte more — the packfile is left on the reader for streaming, and
+// the buffered head + the remainder reassemble the original body byte-for-byte.
+func TestReceivePackParserStopsAtFlushPkt(t *testing.T) {
+	const prefix = "refs/heads/wardyn/run-1/"
+	section := pkt(someOID+" "+otherOID+" "+prefix+"feature"+firstCaps) + "0000"
+	pack := "PACK\x00\x02\x00\x00\x00\x01\xff\xfe binary bytes \x00\x00"
+
+	body := strings.NewReader(section + pack)
+	head, err := readReceivePackCommands(body, prefix)
+	if err != nil {
+		t.Fatalf("readReceivePackCommands: %v", err)
+	}
+	if string(head) != section {
+		t.Fatalf("buffered head = %q, want the command section verbatim", head)
+	}
+	rest, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("read remainder: %v", err)
+	}
+	if string(rest) != pack {
+		t.Fatalf("remainder = %q, want the packfile untouched", rest)
+	}
+}
+
+// TestBranchNSEnforcedEnv: the opt-in env parses loudly — off by default and on
+// explicit disable words, on for enable words, and FAIL CLOSED (on) for garbage.
+func TestBranchNSEnforcedEnv(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		want bool
+	}{
+		{"", false}, {"off", false}, {"0", false}, {"false", false}, {"disabled", false},
+		{"1", true}, {"true", true}, {"on", true}, {"enforce", true},
+		{"maybe", true}, // garbage => enforce, never silently off
+	} {
+		t.Run("val="+tc.val, func(t *testing.T) {
+			t.Setenv(envEnforceBranchNS, tc.val)
+			if got := branchNSEnforced(); got != tc.want {
+				t.Fatalf("branchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGitBrokerDeniesOutOfNamespacePush: with enforcement on, a push to a branch
+// outside `wardyn/<run-id>/*` is 403'd BEFORE the token is minted and before any
+// byte reaches github; audit gets a brokered:git:branch-ns deny row.
+func TestGitBrokerDeniesOutOfNamespacePush(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "1")
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, sink := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "refs/heads/main") ||
+		!strings.Contains(rec.Body.String(), "refs/heads/wardyn/"+p.runID.String()+"/") {
+		t.Fatalf("body = %q, want it to name the offending ref and the allowed namespace", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "gh-inst-token") {
+		t.Fatal("the installation token leaked into the denial body")
+	}
+	if up.gitHits != 0 {
+		t.Fatalf("github upstream was hit %d times for a denied push", up.gitHits)
+	}
+	if up.mintCalls != 0 {
+		t.Fatalf("mint was called %d times for a denied push (deny must precede the mint)", up.mintCalls)
+	}
+	if !strings.Contains(sink.String(), ruleSourceGitRef) || !strings.Contains(sink.String(), `"decision":"deny"`) {
+		t.Fatalf("decision log = %q, want a %s deny row", sink.String(), ruleSourceGitRef)
+	}
+}
+
+// TestGitBrokerForwardsInNamespacePush: an in-namespace push is forwarded, and the
+// buffered command section + streamed packfile arrive byte-for-byte identical.
+func TestGitBrokerForwardsInNamespacePush(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "on")
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	ref := "refs/heads/wardyn/" + p.runID.String() + "/feature"
+	body := pkt(someOID+" "+otherOID+" "+ref+firstCaps) + "0000" +
+		"PACK\x00\x02\x00\x00\x00\x01\xff\xfe\x00 binary"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if string(up.gitBody) != body {
+		t.Fatalf("upstream body = %q, want the request forwarded byte-for-byte (%q)", up.gitBody, body)
+	}
+}
+
+// TestGitBrokerRejectsEncodedPushWhenEnforcing: a content-encoded push body cannot
+// be ref-checked, so it is refused rather than waved through unparsed.
+func TestGitBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "1")
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	req := mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader("gzipped-bytes"))
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415", rec.Code)
+	}
+	if up.gitHits != 0 {
+		t.Fatalf("github upstream was hit for an unparseable push body")
+	}
+}
+
+// TestGitBrokerPushUnenforcedByDefault: confinement is OPT-IN — with the env unset
+// an out-of-namespace push still forwards (fetch/clone are never touched at all).
+// This pins the honest default; flip it when agent-run names branches itself.
+func TestGitBrokerPushUnenforcedByDefault(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "") // never inherit an operator's setting
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (enforcement is off by default)", rec.Code)
+	}
+	if string(up.gitBody) != body {
+		t.Fatalf("upstream body = %q, want the unenforced push streamed through unchanged", up.gitBody)
 	}
 }

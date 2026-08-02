@@ -11,9 +11,11 @@ that includes a github_token grant.
       --repo your-org/your-repo \
       --task "In this repository, create a new branch named wardyn/demo-push, add a file named GREETING.md containing the line \"Hello from Wardyn\", commit it with message \"demo: add GREETING.md\", and push the branch to origin. Then attempt to open a pull request titled \"Demo push\" using the GitHub CLI (gh pr create) or the git push --set-upstream command. Report each step's output including any errors."
 
-(The `wardyn/<run-id>/*` branch namespace the broker records is advisory
-metadata only — it is NOT enforced yet ([v0.5+ — planned]); a minted token can
-push to any branch in the granted repo.)
+(The `wardyn/<run-id>/*` branch namespace the broker records is enforced only
+when the proxy sets `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=1`; this scenario runs
+with it OFF, which is the default. To exercise enforcement, set it and change
+the branch in the task to `wardyn/$WARDYN_RUN_ID/demo-push` —
+`wardyn/demo-push` is outside the namespace and will be refused with 403.)
 
 ## What to watch
 

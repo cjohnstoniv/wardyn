@@ -4,11 +4,15 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +40,22 @@ const (
 	routeGitBroker = "/wardyn/gh/"
 	ruleSourceGit  = "brokered:git"
 	githubHost     = "github.com"
+	// ruleSourceGitRef marks a decision-log row denied by push branch-namespace
+	// confinement (as opposed to the per-repo allowlist), so audit says WHICH gate
+	// closed. The offending ref goes to slog, never to the decision log (which has
+	// no free-text field and is SIEM-fanned).
+	ruleSourceGitRef = "brokered:git:branch-ns"
+	// ruleSourceGitEnc marks the refusal of a push body this proxy could not
+	// INSPECT (non-identity Content-Encoding) while enforcement is on — a
+	// distinct row so audit never reads an unparseable body as a ref violation.
+	ruleSourceGitEnc = "brokered:git:branch-ns-encoding"
+	// envEnforceBranchNS opts THIS proxy process into push branch-namespace
+	// confinement. See branchNSEnforced for why it is off by default.
+	envEnforceBranchNS = "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"
+	// maxReceivePackCmds caps the pkt-line COMMAND SECTION buffered ahead of the
+	// (still-streamed) packfile. Hundreds of ref updates fit in 64 KiB; anything
+	// larger is pathological and is refused rather than buffered.
+	maxReceivePackCmds = 64 << 10
 )
 
 // gitServices is the closed set of valid ?service= values / smart-HTTP verbs.
@@ -75,6 +95,43 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Push confinement (opt-in). A receive-pack POST carries its ref updates in a
+	// small pkt-line command section AHEAD of the packfile, so buffer only that
+	// section, validate every ref against this run's branch namespace, then forward
+	// the buffered bytes followed by the still-streaming pack. Fetch/clone
+	// (info/refs, upload-pack) never enter this branch: pure streaming, zero added
+	// latency. A denial happens BEFORE gitToken, so a refused push never mints.
+	var reqBody io.Reader = r.Body
+	if rest == "git-receive-pack" && branchNSEnforced() {
+		// git does not gzip receive-pack bodies (remote-curl only sets
+		// gzip_request for fetch), but a compressed body must never be waved
+		// through unparsed — that would be a silent bypass.
+		if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
+			(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
+			p.emitGitDecision(r, egress.Deny, ruleSourceGitEnc)
+			http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
+				strings.Join(encs, ",")+"-encoded push body", http.StatusUnsupportedMediaType)
+			return
+		}
+		prefix := BranchNSPrefix(p.runID)
+		head, err := readReceivePackCommands(r.Body, prefix)
+		if err != nil {
+			p.emitGitDecision(r, egress.Deny, ruleSourceGitRef)
+			slog.WarnContext(r.Context(), "wardyn-proxy: git push denied by branch-namespace confinement",
+				slog.String("run_id", p.runID.String()),
+				slog.String("repo", orgRepo),
+				slog.String("reason", err.Error()))
+			// ponytail: plain 403 + text/plain body (git surfaces it as "remote:"
+			// on the paths that show server messages, and always shows the 403).
+			// A sideband report-status would read better but means claiming
+			// "unpack ok" for a pack we never forwarded.
+			http.Error(w, "wardyn: "+err.Error()+
+				"\nthis run may push only to "+prefix+"*", http.StatusForbidden)
+			return
+		}
+		reqBody = io.MultiReader(bytes.NewReader(head), r.Body)
+	}
+
 	token, err := p.gitToken(r.Context(), grantID)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
@@ -98,13 +155,14 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	outReq, err := http.NewRequestWithContext(
 		context.WithValue(r.Context(), vettedIPKey{}, target),
-		r.Method, upstreamURL, r.Body)
+		r.Method, upstreamURL, reqBody)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		p.httpError(w, "build git request", err, http.StatusBadGateway)
 		return
 	}
-	// Stream the body straight through (no buffering) — upload-pack/receive-pack
+	// Stream the body straight through (the only buffered part is a validated
+	// receive-pack command section, re-prepended above) — upload-pack/receive-pack
 	// packs can be large. Preserve the client's declared length; unknown => chunked.
 	outReq.ContentLength = r.ContentLength
 	copyHeader(outReq.Header, r.Header)
@@ -241,6 +299,124 @@ func validGitRest(method, rest, service string) bool {
 	default:
 		return false
 	}
+}
+
+// BranchNSPrefix is the ONLY ref prefix a governed run may push to: the branch
+// namespace the broker records in github_token grant metadata, `wardyn/<run-id>/*`,
+// rooted under refs/heads/. It is a pure function of the run id (which this proxy
+// already holds), so enforcement needs no extra plumbing — but it MUST stay in
+// lockstep with internal/broker.branchNamespaceFormat; that constant's comment
+// points back here and broker's TestBranchNamespaceLockstepWithProxy fails on
+// drift (the reason this is exported). Everything else (other branches, the
+// default branch, tags, refs/pull/*, refs/notes/*) is outside the namespace.
+func BranchNSPrefix(runID uuid.UUID) string {
+	return "refs/heads/wardyn/" + runID.String() + "/"
+}
+
+// branchNSEnforced reports whether push branch-namespace confinement is ON for
+// THIS proxy process (env, like the WARDYN_LLM_SCAN kill-switch).
+//
+// OFF by default, honestly: nothing in Wardyn tells an agent to name its branch
+// `wardyn/<run-id>/...` — agent-run creates no branches (deploy/images/common/
+// agent-run-lib.sh only clones), the branch name comes from the operator's task
+// text, and the shipped push scenario asks for `wardyn/demo-push`. Enforcing by
+// default would deny most real pushes with no in-product way to comply. Operators
+// who DO pin the convention in their task text turn this on.
+//
+// Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
+// silently disabling a security control on a typo.
+func branchNSEnforced() bool {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envEnforceBranchNS))); v {
+	case "":
+		return false
+	case "0", "false", "no", "off", "disable", "disabled", "none":
+		return false
+	case "1", "true", "yes", "on", "enable", "enabled", "enforce":
+		return true
+	default:
+		// Once per process, not per push: the misconfiguration is boot-level
+		// state and per-request ERROR spam would bury the signal.
+		branchNSWarnOnce.Do(func() {
+			slog.Error("wardyn-proxy: unrecognized "+envEnforceBranchNS+
+				" value; ENFORCING push branch-namespace confinement (fail closed)",
+				slog.String("value", v))
+		})
+		return true
+	}
+}
+
+var branchNSWarnOnce sync.Once
+
+// readReceivePackCommands consumes the pkt-line COMMAND SECTION of a
+// git-receive-pack request body — everything up to and INCLUDING the flush-pkt —
+// validating every ref update against prefix, and returns those bytes VERBATIM so
+// the caller can forward them ahead of the still-streaming packfile.
+//
+// Wire shape (protocol v2 leaves push unchanged): every pkt-line starts with 4 hex
+// length digits that COUNT THEMSELVES; "0000" is the flush-pkt ending the section;
+// the first command carries "\0<capability-list>" after the refname; optional
+// "shallow <oid>" lines may precede the commands. A delete (new-oid all zeros) is a
+// mutation like any other, so it is checked identically — a delete outside the
+// namespace is refused. Anything not understood — a signed push-cert, a bad length,
+// a section over maxReceivePackCmds — is refused: fail closed.
+func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
+	var buf bytes.Buffer
+	hdr := make([]byte, 4)
+	for {
+		if _, err := io.ReadFull(body, hdr); err != nil {
+			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
+		}
+		buf.Write(hdr)
+		n, err := strconv.ParseUint(string(hdr), 16, 32)
+		if err != nil {
+			return nil, fmt.Errorf("malformed pkt-line length %q", hdr)
+		}
+		if n == 0 { // flush-pkt: command section done, the packfile follows.
+			return buf.Bytes(), nil
+		}
+		// 0001/0002 (delim / response-end) and empty 0004 lines are not part of a
+		// receive-pack command section.
+		if n < 5 {
+			return nil, fmt.Errorf("unexpected pkt-line length %d in receive-pack command section", n)
+		}
+		if buf.Len()+int(n)-4 > maxReceivePackCmds {
+			return nil, fmt.Errorf("receive-pack command section exceeds %d bytes", maxReceivePackCmds)
+		}
+		payload := make([]byte, n-4)
+		if _, err := io.ReadFull(body, payload); err != nil {
+			return nil, fmt.Errorf("truncated pkt-line: %w", err)
+		}
+		buf.Write(payload)
+		if err := checkPushCommand(string(payload), prefix); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// checkPushCommand validates ONE command-section pkt-line payload:
+// "<old-oid> SP <new-oid> SP <refname>", with "\0<capabilities>" on the first and
+// an optional trailing LF, or a "shallow <oid>" line (no ref to check).
+func checkPushCommand(line, prefix string) error {
+	line, _, _ = strings.Cut(line, "\x00") // capabilities ride the FIRST command only
+	line = strings.TrimSuffix(line, "\n")
+	if strings.HasPrefix(line, "shallow ") {
+		return nil
+	}
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) != 3 || parts[2] == "" {
+		return fmt.Errorf("unsupported receive-pack command %q (only <old> <new> <ref> updates are allowed)", line)
+	}
+	ref := parts[2]
+	// Defense in depth: receive-pack refuses funny refnames server-side, but a
+	// prefix test must never be the only thing between "wardyn/<id>/x" and a
+	// traversal or an embedded second ref.
+	if strings.Contains(ref, "..") || strings.ContainsAny(ref, " \t\\^~:?*[") {
+		return fmt.Errorf("refusing malformed refname %q", ref)
+	}
+	if !strings.HasPrefix(ref, prefix) || len(ref) <= len(prefix) {
+		return fmt.Errorf("push to %q is outside this run's branch namespace", ref)
+	}
+	return nil
 }
 
 // emitGitDecision records a brokered:git decision-log row (host github.com, port

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -14,9 +15,23 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// TestBranchNamespaceLockstepWithProxy fails on DRIFT between the namespace the
+// broker STAMPS into github_token metadata (branchNamespaceFormat) and the
+// prefix the git-broker proxy ENFORCES (proxy.BranchNSPrefix): changing one
+// without the other would leave enforcement silently diverged from the
+// documented metadata. Neither package imports the other outside this test.
+func TestBranchNamespaceLockstepWithProxy(t *testing.T) {
+	id := uuid.New()
+	want := "refs/heads/" + strings.TrimSuffix(fmt.Sprintf(branchNamespaceFormat, id.String()), "*")
+	if got := proxy.BranchNSPrefix(id); got != want {
+		t.Fatalf("proxy enforces %q, broker stamps %q — lockstep broken", got, want)
+	}
+}
 
 // ---- fakes (no Postgres) -------------------------------------------------
 

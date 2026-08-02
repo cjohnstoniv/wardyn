@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -1159,11 +1160,20 @@ func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
 		UpstreamProxyURL: pc.UpstreamProxyURL,
 	}
 	cfgJSON, _ := json.Marshal(cfg)
-	return []string{
+	env := []string{
 		"WARDYN_PROXY_CONFIG_JSON=" + string(cfgJSON),
 		"WARDYN_RUN_ID=" + runID.String(),
 		"WARDYN_CONTROL_PLANE_URL=" + pc.ControlPlaneURL,
 	}
+	// Operator knobs the sidecar reads from ITS environment: forward them from
+	// wardynd's environment when set, else they are dead on the docker runner
+	// (host-run and custom-image proxies read their own env directly).
+	for _, k := range []string{"WARDYN_LLM_SCAN", "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }
 
 // parseRunID parses a run-id label back to a UUID.

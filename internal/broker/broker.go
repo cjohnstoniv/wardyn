@@ -47,14 +47,22 @@ const defaultMaxTTL = time.Hour
 // branchNamespaceFormat is the push-branch confinement convention recorded in
 // minted github_token metadata.
 //
-// IMPORTANT (honesty): this is ADVISORY METADATA ONLY and is NOT enforced today.
-// A GitHub installation token cannot self-restrict to a ref prefix, so the
-// minted token can push to ANY branch (including the default) within its granted
-// repos. Real enforcement is [v0.5 — planned] and requires a push-ref-inspecting
-// git-proxy (TLS-intercept tier) or GitHub-side branch-protection rulesets; the
-// broker records the namespace now so that future layer has an authoritative
-// value to clamp against. Do not represent branch confinement as enforced until
-// that layer ships. See threatmodel/THREAT-MODEL.md asset #4.
+// IMPORTANT (honesty): the TOKEN itself is not branch-scoped — a GitHub
+// installation token cannot self-restrict to a ref prefix, so it can push to ANY
+// branch (including the default) in its granted repos. Enforcement lives one layer
+// out, in the git-broker proxy route (internal/egress/proxy/git_broker.go), which
+// parses the pkt-line command section of a POST git-receive-pack and refuses any
+// ref outside refs/heads/wardyn/<run-id>/. That enforcement is OPT-IN
+// (WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS on the proxy) and OFF by default, because
+// nothing in Wardyn yet tells an agent to name its branch that way — so on a
+// default run this metadata is still advisory. Represent it as enforced only for
+// runs whose proxy has the env set (and whose task text pins the convention);
+// making it default-on is [v0.5 — planned], as is a GitHub-side ruleset that would
+// hold even for a leaked token. See threatmodel/THREAT-MODEL.md asset #4.
+//
+// LOCKSTEP: proxy.BranchNSPrefix rebuilds this same prefix from the run id (the
+// namespace does not travel to the proxy — it is a pure function of the run id).
+// Change one, change the other.
 const branchNamespaceFormat = "wardyn/%s/*"
 
 // Sentinel and typed errors. All map to fail-closed REST responses.
