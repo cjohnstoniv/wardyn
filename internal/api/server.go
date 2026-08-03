@@ -478,6 +478,10 @@ func (s *Server) routes() chi.Router {
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
 			// later-added Use applies to r's routes but silently NOT to these 24.
+			// These 24 are not the whole operator surface: the attach WebSocket
+			// (GET /runs/{id}/attach) is gated too, via ticketOrHumanAuth in its
+			// own group below, because it also accepts a ?ticket=. Count 25 when
+			// asking "what does a viewer get 403 on".
 			operatorOnly := r.With(s.requireOperator)
 			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy

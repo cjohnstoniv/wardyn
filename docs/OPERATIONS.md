@@ -73,7 +73,8 @@ authentication. Authorization is one optional list:
 
 | `WARDYN_OIDC_OPERATOR_EMAILS` | Signed-in humans | Admin token / local mode |
 |---|---|---|
-| unset (default) | all admin-equivalent | admin-equivalent |
+| unset, no OIDC | all admin-equivalent | admin-equivalent |
+| unset, OIDC configured | **refuses to boot** (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` ⇒ all admin-equivalent) | admin-equivalent |
 | set | listed = **operator**; everyone else = **viewer** | always operator |
 
 A viewer reads everything and is refused (403) on the writes with the widest
@@ -83,8 +84,11 @@ every mutating `/workspaces` route (including the `approved-egress`, `llm-cred`
 and `setup-commands` writes that widen what a run may do), `PUT /site-config`,
 secret write/delete (`PUT`/`DELETE /secrets/{name}` — the name-only list stays
 readable), deciding an approval (`POST /approvals/{id}/approve|deny` — the
-queue stays readable), and minting an attach ticket (`POST
-/runs/{id}/attach-ticket`, a live PTY into a running sandbox). Worth stating
+queue stays readable), and attaching to a running sandbox — BOTH lanes to a
+live PTY, the ticket mint (`POST /runs/{id}/attach-ticket`) and the WebSocket
+itself (`GET /runs/{id}/attach`). Gating only the mint would buy nothing: the
+socket falls back to session-cookie auth when no ticket is presented, and a
+browser sends that cookie on a same-origin handshake automatically. Worth stating
 plainly: a viewer's own run that trips an approval blocks until an operator
 decides it — that is the tier working as intended, not a bug.
 

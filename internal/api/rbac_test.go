@@ -175,8 +175,13 @@ var gatedRoutes = []struct{ method, path string }{
 	// the queue stays a viewer act (see readRoutes).
 	{http.MethodPost, "/api/v1/approvals/a1/approve"},
 	{http.MethodPost, "/api/v1/approvals/a1/deny"},
-	// 7. attach ticket — mints a live interactive PTY into a running sandbox.
+	// 7. attach — both lanes to a live interactive PTY. Gating only the ticket
+	// mint would buy nothing: the WS route falls through to cookie auth when no
+	// ?ticket= is presented, and a browser attaches a same-origin session cookie
+	// to a WebSocket handshake automatically, so a viewer would simply omit the
+	// ticket and get the same PTY. Both are listed because both must refuse.
 	{http.MethodPost, "/api/v1/runs/r1/attach-ticket"},
+	{http.MethodGet, "/api/v1/runs/r1/attach"},
 }
 
 // readRoutes are the reads in those same clusters. A viewer keeps all of them —

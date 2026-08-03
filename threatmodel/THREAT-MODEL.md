@@ -324,15 +324,21 @@ hiding them would repeat the failure mode we are designed to avoid.
 14. **The control plane authenticates; it barely authorizes.** Distinct from
     #9, which is about someone who already IS an admin: wherever more than one
     human can authenticate — i.e. any OIDC deployment — every authenticated
-    developer holds admin powers by default, because there is exactly one role
-    tier and it is off unless configured. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
+    developer would hold admin powers, because there is exactly one role tier.
+    That state is no longer reachable by accident: OIDC configured with an empty
+    `WARDYN_OIDC_OPERATOR_EMAILS` REFUSES TO BOOT unless
+    `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` is set, so an operator either names the
+    operators or explicitly accepts all-admin. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
     to a list of operator addresses makes every other signed-in human a
     **viewer**: 403 on the mutating routes of seven clusters — the managed
     harness credential, policy CRUD, workspace CRUD (including the scoped
     widening writes below), `PUT /site-config`, secret write/delete, deciding
-    an approval (`POST /approvals/{id}/approve|deny`), and minting an attach
-    ticket (`POST /runs/{id}/attach-ticket` — a live PTY into a running
-    sandbox). Reads are never gated, the admin token and local mode are always
+    an approval (`POST /approvals/{id}/approve|deny`), and attaching to a
+    running sandbox — both the ticket mint (`POST /runs/{id}/attach-ticket`) and
+    the WebSocket itself (`GET /runs/{id}/attach`), since the socket falls back
+    to session-cookie auth when no ticket is presented and a browser attaches
+    that cookie to a same-origin handshake on its own; gating only the mint
+    would leave the PTY reachable. Reads are never gated, the admin token and local mode are always
     operators (one shared credential carries no human to demote), and NOTHING
     ELSE is covered — notably `POST /runs` and `POST /runs/{id}/kill` remain
     open to any signed-in human: launching and stopping a run is a viewer act

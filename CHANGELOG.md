@@ -51,11 +51,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate** (flag
   `-oidc-operator-emails`), the first authorization tier on the control plane,
-  now covering 24 routes. List the operators and every other signed-in human
+  now covering 25 routes. List the operators and every other signed-in human
   becomes a **viewer**: reads everything and can launch/kill runs, but is
   403'd on configuring the deployment (managed harness credential, policies,
   workspaces, `PUT /site-config`), writing/deleting secrets, deciding an
-  approval, and minting an attach ticket. Additive — unset (the default) keeps
+  approval, and attaching to a running sandbox — both the ticket mint and the
+  WebSocket itself, since the socket falls back to session-cookie auth when no
+  ticket is presented. Additive — unset (the default) keeps
   today's behavior exactly, and the admin token and local mode are always
   operators (one shared credential, no human to key a role off). Configuring
   OIDC SSO with the operator list left empty now **refuses to boot** (flag

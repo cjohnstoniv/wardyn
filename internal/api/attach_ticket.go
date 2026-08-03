@@ -128,11 +128,20 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // unexpired, bound to this run id) authenticates on its own and stamps the
 // minting principal for attribution; anything else falls through to the
 // standard humanOrAdminAuth middleware (OIDC session / admin token / local
-// mode) exactly as before. A PRESENT-but-invalid ticket fails closed with 403
-// rather than falling through — a caller that chose ticket auth gets a crisp
-// answer, never a silent downgrade to cookie auth.
+// mode). A PRESENT-but-invalid ticket fails closed with 403 rather than
+// falling through — a caller that chose ticket auth gets a crisp answer, never
+// a silent downgrade to cookie auth.
+//
+// BOTH lanes are operator-only, and they get there differently. The ticket lane
+// is already proof of authorization: POST /runs/{id}/attach-ticket is itself
+// operator-gated, so holding a ticket means an operator minted it. The
+// fall-through lane has no such proof — humanOrAdminAuth only AUTHENTICATES —
+// so it must check the role itself. Without that check the operator gate on the
+// mint route bought nothing: a viewer would simply omit ?ticket= and get the
+// same live PTY straight from their session cookie, which browsers attach to a
+// same-origin WebSocket handshake automatically.
 func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
-	human := s.humanOrAdminAuth(next)
+	human := s.humanOrAdminAuth(s.requireOperator(next))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok := r.URL.Query().Get("ticket")
 		if tok == "" {
