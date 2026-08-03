@@ -790,7 +790,20 @@ cmd_reset_all() {
   # up looking healthy and sandbox egress is silently unconfigured.
   if [ -n "${_ra_volumes}" ]; then
     printf '  [destroy] site-config + secrets (upstream proxy, artifact mirrors, SCM hosts) — they live in the Postgres volume.\n'
-    printf '            Capture first if this host needs them back:  wardyn site-config get > corp-baseline.json\n'
+    # Name a command that EXISTS on the flagship path: containerized setup ships
+    # no host-side wardyn binary (it lives in the wardynd image), and nothing in
+    # the Makefile builds bin/. Telling operators to run a bare `wardyn` sends
+    # them looking for a binary they never installed.
+    # Name a command that EXISTS and RESOLVES on the flagship path. Two traps:
+    # containerized setup ships no host-side wardyn binary (it lives in the
+    # wardynd image, and nothing in the Makefile builds bin/), and this box may
+    # run a second dockerd — wardyn_pick_docker_host already resolved which one,
+    # so echo it into the hint rather than let a bare `docker compose` hit the
+    # default socket and report the stack as not running.
+    printf '            Capture first if this host needs them back:\n'
+    printf '              %sdocker compose -f %s exec -T wardynd wardyn site-config get > corp-baseline.json\n' \
+      "${DOCKER_HOST:+DOCKER_HOST=${DOCKER_HOST} }" "${COMPOSE_FILE#"${REPO_ROOT}/"}"
+    printf '            (host mode / built CLI:  wardyn site-config get > corp-baseline.json)\n'
   fi
   if [ "${_ra_net}" = 1 ]; then
     _ra_mark 1 "docker network wardyn-internal (${_ra_net_attached} attached — removed only if 0 remain after teardown)"
