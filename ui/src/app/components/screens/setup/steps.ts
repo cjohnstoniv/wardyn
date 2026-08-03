@@ -150,8 +150,14 @@ export interface CorpNetworkState {
   redirectCount: number;
   /** Last real test-proxy probe this session (T.TEST_*, never cached/inferred) — undefined until the operator runs one. */
   proxyProbe?: ProxyTestResult;
-  /** The operator opened the Egress redirection tab at least once this time through the step — the explicit "I looked, there's nothing to redirect" acknowledgement corpNetworkGate requires at zero redirects. */
-  egressVisited: boolean;
+  /** A connectivity probe is in flight right now — the gate renders "Probe in
+   *  flight" and offers nothing else while the sandbox is out. */
+  probeRunning: boolean;
+  /** What's typed in "Test against a URL of your own" — the gate's probe
+   *  action relabels to "Test this URL" the moment this is non-empty, so the
+   *  one launch point always names what it is about to try. Transient, never
+   *  persisted. */
+  customDraft: string;
   /** Each configured redirect's last test result this session, keyed by its `from` (a redirect has no server id) — a missing key means untested. Stale keys from a since-removed/edited redirect are harmless: corpNetworkGate only ever looks up a `from` from the CURRENT list. */
   redirectProbes: Record<string, ProxyTestResult>;
 }
@@ -159,7 +165,8 @@ const CORP_NETWORK_UNSET: CorpNetworkState = {
   proxyConfigured: false,
   proxyDetected: false,
   redirectCount: 0,
-  egressVisited: false,
+  probeRunning: false,
+  customDraft: "",
   redirectProbes: {},
 };
 
@@ -174,10 +181,20 @@ const CORP_NETWORK_UNSET: CorpNetworkState = {
 // Also the single source of truth corpNetworkBadge and stepDone's
 // corp_network line both read, so the rail badge, the checkmark, and the
 // Next button can never disagree about what this step actually proved.
+// The fix-it button the footer offers IN PLACE of a disabled Next while the
+// gate is locked (the mock's corpFoot `action`): the gate row is the one
+// place a probe is launched from, and it names what it will do. `kind` is
+// dispatched by the orchestrator to the step's registered handlers
+// (setup-screen.tsx) — the pure layer only decides WHICH action applies.
+export type CorpGateActionKind = "probe" | "probe_custom" | "open_egress" | "test_redirects";
+
 export interface CorpNetworkGate {
   on: boolean;
+  /** Bold one-line state headline (T.GATE_HEAD_*), rendered above `reason`. */
+  head?: string;
   reason?: string;
   tone?: "warning" | "neutral";
+  action?: { label: string; kind: CorpGateActionKind };
 }
 
 // "a", "a and b", "a, b and c" — the mock's own join for naming every failing
@@ -187,20 +204,29 @@ function listJoin(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-// Ladder (order matters, and is the mock's): no_runner bypass -> intercepted
-// (a blocked flavor with its own instruction — different person to call) ->
-// blocked -> untested -> the Egress tab must be OPENED once regardless of row
-// count (an empty list is an answer, but only after it's been seen; rows
-// derived from legacy config can exist without a visit) -> failing rows named
-// all at once -> untested rows -> a custom pass unlocks with its standing note.
+// Ladder (order matters, and is the mock's): probe in flight -> no_runner
+// bypass -> intercepted (a blocked flavor with its own instruction — a
+// different person to call) -> blocked -> untested -> failing rows named all
+// at once -> untested rows -> a custom pass unlocks with its standing note.
+// What is required is the PROOF, not configuration: no rung demands a visit
+// to Egress redirection — a host with no proxy and no redirects passes this
+// step with one click of Test connectivity. Anything configured must still
+// prove itself.
 export function corpNetworkGate(c: CorpNetworkState, redirects: EgressRedirect[]): CorpNetworkGate {
   const p = c.proxyProbe;
-  if (p?.state === "no_runner") return { on: true, reason: T.NORUNNER_NOTE, tone: "neutral" };
+  if (c.probeRunning) return { on: false, head: T.GATE_HEAD_RUNNING, reason: T.GATE_RUNNING, tone: "neutral" };
+  if (p?.state === "no_runner") return { on: true, head: T.GATE_HEAD_NORUNNER, reason: T.NORUNNER_NOTE, tone: "neutral" };
+  // Once the operator has typed a URL of their own, the gate probes THAT —
+  // the one launch point relabels so it always says which endpoint it will try.
+  const probe: CorpNetworkGate["action"] = c.customDraft.trim()
+    ? { label: "Test this URL", kind: "probe_custom" }
+    : { label: "Test connectivity", kind: "probe" };
   if (p?.state === "blocked") {
-    return { on: false, reason: p.intercepted ? T.GATE_INTERCEPTED : T.GATE_BLOCKED, tone: "warning" };
+    return p.intercepted
+      ? { on: false, head: T.GATE_HEAD_INTERCEPTED, reason: T.GATE_INTERCEPTED, tone: "warning", action: probe }
+      : { on: false, head: T.GATE_HEAD_BLOCKED, reason: T.GATE_BLOCKED, tone: "warning", action: probe };
   }
-  if (p?.state !== "reached") return { on: false, reason: T.GATE_UNTESTED, tone: "warning" };
-  if (!c.egressVisited) return { on: false, reason: T.GATE_EGRESS_UNSEEN, tone: "warning" };
+  if (p?.state !== "reached") return { on: false, head: T.GATE_HEAD_UNTESTED, reason: T.GATE_UNTESTED, tone: "warning", action: probe };
   const bad = redirects.filter((red) => {
     const s = c.redirectProbes[red.from]?.state;
     return s === "blocked" || s === "bypass";
@@ -208,14 +234,23 @@ export function corpNetworkGate(c: CorpNetworkState, redirects: EgressRedirect[]
   if (bad.length > 0) {
     return {
       on: false,
+      head: T.GATE_HEAD_EGRESS_FAILING,
       reason: `Fix ${listJoin(bad.map((red) => red.from))} above — every configured redirect must prove reached before this step hands off. Or remove the rows.`,
       tone: "warning",
+      action: { label: "Open Egress redirection", kind: "open_egress" },
     };
   }
-  if (redirects.some((red) => c.redirectProbes[red.from]?.state !== "reached")) {
-    return { on: false, reason: T.GATE_EGRESS_UNTESTED, tone: "warning" };
+  const untested = redirects.filter((red) => c.redirectProbes[red.from]?.state !== "reached");
+  if (untested.length > 0) {
+    return {
+      on: false,
+      head: T.GATE_HEAD_EGRESS_UNTESTED,
+      reason: T.GATE_EGRESS_UNTESTED,
+      tone: "warning",
+      action: { label: untested.length > 1 ? "Test all redirects" : "Test the redirect", kind: "test_redirects" },
+    };
   }
-  if (p.custom) return { on: true, reason: T.GATE_CUSTOM_ON, tone: "neutral" };
+  if (p.custom) return { on: true, head: T.GATE_HEAD_CUSTOM_ON, reason: T.GATE_CUSTOM_ON, tone: "neutral" };
   return { on: true };
 }
 
@@ -226,6 +261,7 @@ export function corpNetworkGate(c: CorpNetworkState, redirects: EgressRedirect[]
 // until proven, never green for anything unproven, counts always DERIVED.
 function corpNetworkBadge(c: CorpNetworkState): StepBadge {
   const p = c.proxyProbe;
+  if (c.probeRunning) return { text: "Testing…", tone: "info" };
   if (p?.state === "no_runner") return { text: "Untested · no runner", tone: "neutral" };
   if (p?.state === "blocked") {
     return { text: p.intercepted ? "Blocked · intercepted" : "Blocked", tone: "warning" };

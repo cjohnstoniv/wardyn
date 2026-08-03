@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as React from "react";
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { HostProxyDetection, SiteConfig } from "../../../lib/types";
@@ -18,6 +19,7 @@ import {
   hasUserinfo,
   isProxyConfigured,
   proxyDetected,
+  type CorpStepActions,
 } from "./corp-network-step";
 import type { CorpNetworkState } from "./steps";
 import { baseStatus } from "./test-fixtures";
@@ -36,11 +38,35 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) },
 }));
 
-// The zero-value gate: nothing probed, tab never visited. Most tests don't
-// care about gate reporting, so this keeps their props terse; the tests that
-// DO care pass their own gate/onGateChange override.
-function unsetGate(): Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes"> {
-  return { egressVisited: false, redirectProbes: {} };
+// The zero-value gate: nothing probed yet. Most tests don't care about gate
+// reporting, so this keeps their props terse; the tests that DO care pass
+// their own gate/onGateChange override.
+type GateSlice = Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">;
+function unsetGate(): GateSlice {
+  return { probeRunning: false, customDraft: "", redirectProbes: {} };
+}
+
+// Stateful mini-orchestrator: customDraft (and the rest of the gate slice) is
+// CONTROLLED from setup-screen in the real app — typing in the custom field
+// only works when onGateChange patches loop back into `gate`. Every patch is
+// also forwarded to the test's own spy when one was passed.
+function Harness(props: Partial<ComponentProps<typeof CorpNetworkStep>>) {
+  const { gate: initial, onGateChange: spy, ...rest } = props;
+  const [gate, setGate] = React.useState<GateSlice>({ ...unsetGate(), ...initial });
+  return (
+    <CorpNetworkStep
+      status={baseStatus()}
+      siteConfig={null}
+      reloadSiteConfig={vi.fn().mockResolvedValue(undefined)}
+      saveSiteConfig={vi.fn().mockResolvedValue(undefined)}
+      {...rest}
+      gate={gate}
+      onGateChange={(patch) => {
+        spy?.(patch);
+        setGate((g) => ({ ...g, ...patch }));
+      }}
+    />
+  );
 }
 
 function renderStep(props: Partial<ComponentProps<typeof CorpNetworkStep>> = {}) {
@@ -49,15 +75,7 @@ function renderStep(props: Partial<ComponentProps<typeof CorpNetworkStep>> = {})
   const utils = render(
     <MemoryRouter>
       <OperatorProvider operator>
-        <CorpNetworkStep
-          status={baseStatus()}
-          siteConfig={null}
-          reloadSiteConfig={reloadSiteConfig}
-          saveSiteConfig={saveSiteConfig}
-          gate={unsetGate()}
-          onGateChange={vi.fn()}
-          {...props}
-        />
+        <Harness saveSiteConfig={saveSiteConfig} reloadSiteConfig={reloadSiteConfig} {...props} />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -321,12 +339,12 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     return utils;
   }
 
-  it("zero redirects renders the explicit-answer box (being on the tab IS the look the gate demands), EGRESS_DESC always", async () => {
+  it("zero redirects renders the quiet empty-state line — no box, no check icon dressed as an answer (no rung demands a visit)", async () => {
     renderStep();
     await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
     expect(screen.getByText(T.EGRESS_DESC)).toBeInTheDocument();
-    expect(screen.getByText("No redirects on this network")).toBeInTheDocument();
     expect(screen.getByText(T.EGRESS_SEEN_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByText("No redirects on this network")).not.toBeInTheDocument();
   });
 
   it("a long endpoint's row elides the middle, and the row's title carries the FULL from/to values", async () => {
@@ -445,44 +463,41 @@ describe("No skip control, no Integrations cross-link — this step is mandatory
 // seeding back from a prior visit's gate (the whole point of lifting this
 // state: CorpNetworkStep unmounts when the operator navigates away).
 // ------------------------------------------------------------
-describe("Gate reporting — proxy test, egress visit, and redirect tests all report upward", () => {
-  it("a reached proxy test calls onGateChange with the full result", async () => {
+describe("Gate reporting — proxy test and redirect tests report upward (no visit tracking: no rung demands one)", () => {
+  it("a reached proxy test calls onGateChange with the full result (probeRunning batched off in the same patch)", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
     const onGateChange = vi.fn();
     renderStep({ onGateChange });
     await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText("Reached · via proxy");
-    expect(onGateChange).toHaveBeenCalledWith({ proxyProbe: { state: "reached", detail: "reached in 42ms" } });
+    expect(onGateChange).toHaveBeenCalledWith({ proxyProbe: { state: "reached", detail: "reached in 42ms" }, probeRunning: false });
+    // ...and it announced the in-flight window first, so the gate can render
+    // "Probe in flight" instead of a stale block reason.
+    expect(onGateChange).toHaveBeenCalledWith({ probeRunning: true });
   });
 
-  it("a FAILED REQUEST never reports a gate update — no verdict was actually observed", async () => {
+  it("a FAILED REQUEST never reports a probe VERDICT — only the running window opens and closes", async () => {
     testProxyMock.mockRejectedValueOnce(new Error("403 operator role required"));
     const onGateChange = vi.fn();
     renderStep({ onGateChange });
     await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText("Not tested");
-    expect(onGateChange).not.toHaveBeenCalled();
+    for (const call of onGateChange.mock.calls) {
+      expect(call[0]).not.toHaveProperty("proxyProbe");
+    }
   });
 
   it("re-entering the step seeds the proxy panel from gate.proxyProbe instead of a false 'Not tested'", () => {
     renderStep({ gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: "reached in 42ms" } } });
     expect(screen.getByText("Reached · via proxy")).toBeInTheDocument();
     expect(screen.getByText("reached in 42ms")).toBeInTheDocument();
-    // No re-test needed to see it — the button is idle, not mid-run.
-    expect(screen.getByRole("button", { name: /^test connectivity$/i })).toBeEnabled();
+    // No re-test needed to see it — the button is idle, offering a re-test.
+    expect(screen.getByRole("button", { name: /^test again$/i })).toBeEnabled();
   });
 
-  it("switching to the Egress redirection tab reports egressVisited", async () => {
+  it("switching tabs reports NOTHING — the gate has no visit rung to feed", async () => {
     const onGateChange = vi.fn();
     renderStep({ onGateChange });
-    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
-    expect(onGateChange).toHaveBeenCalledWith({ egressVisited: true });
-    expect(onGateChange).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not report egressVisited again when the gate already has it (re-entering an already-visited step)", async () => {
-    const onGateChange = vi.fn();
-    renderStep({ gate: { ...unsetGate(), egressVisited: true }, onGateChange });
     await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
     expect(onGateChange).not.toHaveBeenCalled();
   });
@@ -592,8 +607,11 @@ describe("Custom-URL block — only after a blocked result, weaker claim on a pa
     // operator is mid-recovery, not starting over.
     expect(screen.getByText("Blocked")).toBeInTheDocument();
     expect(screen.getByText(T.TEST_BLOCKED)).toBeInTheDocument();
-    // No verdict was observed, so nothing reports upward.
-    expect(onGateChange).not.toHaveBeenCalled();
+    // No verdict was observed, so no proxyProbe patch ever reports upward
+    // (customDraft keystrokes and the probeRunning window do, and should).
+    for (const call of onGateChange.mock.calls) {
+      expect(call[0]).not.toHaveProperty("proxyProbe");
+    }
   });
 
   it("an intercepted blocked renders apart — its own chip, the what-it-means box, and the custom escape", async () => {
@@ -605,5 +623,86 @@ describe("Custom-URL block — only after a blocked result, weaker claim on a pa
     expect(screen.getByText(T.PROBE_ENDPOINTS)).toBeInTheDocument();
     // Intercepted is a blocked flavor: the custom-URL escape applies to it too.
     expect(screen.getByText("No public endpoint will answer here?")).toBeInTheDocument();
+  });
+});
+
+// ------------------------------------------------------------
+// One Test button per screen + the footer's fix-it actions. While the
+// orchestrator's gate (gateResult) is offering an action, the panel's own
+// button — and the custom block's — is suppressed: the gate row is the one
+// launch point. The actions the step registers are what that row dispatches.
+// ------------------------------------------------------------
+describe("One launch point — gateResult hides the panel button; registered actions drive the step", () => {
+  const offWithProbe = { on: false, head: "x", reason: "y", tone: "warning", action: { label: "Test connectivity", kind: "probe" } } as const;
+
+  it("hides the panel's Test button while the gate row carries the action, and shows it again once the gate is on", () => {
+    renderStep({ gateResult: offWithProbe });
+    expect(screen.queryByRole("button", { name: /^test connectivity$/i })).not.toBeInTheDocument();
+    // The hint/result column still renders — the block loses only the button.
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
+
+    cleanup();
+    renderStep({
+      gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: "ok", via: "proxy" } },
+      gateResult: { on: true },
+    });
+    expect(screen.getByRole("button", { name: /^test again$/i })).toBeInTheDocument();
+  });
+
+  it("suppresses the custom block's own button too — Enter in the field fires the probe instead", async () => {
+    // Seeded straight into blocked: the custom block is visible, buttonless.
+    renderStep({
+      gate: { ...unsetGate(), proxyProbe: { state: "blocked", detail: T.TEST_BLOCKED } },
+      gateResult: offWithProbe,
+    });
+    expect(screen.getByText("No public endpoint will answer here?")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^test this url$/i })).not.toBeInTheDocument();
+
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: T.TEST_OK_CUSTOM, custom: true });
+    await userEvent.type(screen.getByPlaceholderText(/nexus\.corp\.internal/i), "https://intranet.example.com{Enter}");
+    expect(await screen.findByText("Request completed")).toBeInTheDocument();
+    expect(testProxyMock).toHaveBeenLastCalledWith("https://intranet.example.com");
+  });
+
+  it("registers probe/probeCustom/openEgress/testRedirects, and they drive the real machinery", async () => {
+    let actions: CorpStepActions | null = null;
+    testProxyMock.mockResolvedValue({ state: "blocked", detail: T.TEST_BLOCKED });
+    testRedirectMock.mockResolvedValue({ state: "reached", detail: "reachable via the mirror" });
+    renderStep({
+      siteConfig: {
+        egress_redirects: [
+          { from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" },
+          { from: "https://pypi.org/simple", to: "https://artifactory.corp.internal/api/pypi/simple" },
+        ],
+      },
+      gateResult: offWithProbe,
+      registerActions: (a) => {
+        actions = a;
+      },
+    });
+    expect(actions).not.toBeNull();
+
+    // probe(): the builtin check, no argument.
+    await act(async () => actions!.probe());
+    await screen.findByText("Blocked");
+    expect(testProxyMock).toHaveBeenLastCalledWith(undefined);
+
+    // probeCustom(): probes what's typed (the harness loops customDraft back).
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: T.TEST_OK_CUSTOM, custom: true });
+    await userEvent.type(screen.getByPlaceholderText(/nexus\.corp\.internal/i), "https://intranet.example.com");
+    await act(async () => actions!.probeCustom());
+    await screen.findByText("Request completed");
+    expect(testProxyMock).toHaveBeenLastCalledWith("https://intranet.example.com");
+
+    // testRedirects(): switches to the egress tab and fires EVERY row's probe.
+    await act(async () => actions!.testRedirects());
+    expect(await screen.findAllByText("Reached")).toHaveLength(2);
+    expect(testRedirectMock).toHaveBeenCalledTimes(2);
+
+    // openEgress(): just the tab switch (already there from the sweep above —
+    // prove it works from the proxy tab too).
+    await userEvent.click(screen.getByRole("tab", { name: /host proxy/i }));
+    await act(async () => actions!.openEgress());
+    expect(await screen.findByRole("button", { name: /\+ add redirect/i })).toBeInTheDocument();
   });
 });

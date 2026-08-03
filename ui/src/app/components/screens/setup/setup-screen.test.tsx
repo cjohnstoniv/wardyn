@@ -247,34 +247,36 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // corp-network-step.test.tsx (the step body reporting upward); this proves
   // setup-screen.tsx actually connects them.
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
-    it("Next is disabled with a reason until the test passes, unlocks once egress is reviewed too", async () => {
+    it("the footer's button IS the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^corporate network$/i });
 
-      const next = screen.getByRole("button", { name: /^next: integrations$/i });
-      expect(next).toBeDisabled();
-      // The gate's own sentence (T.GATE_UNTESTED), not the lede — "first"
-      // disambiguates from the Test connectivity button's own label.
-      expect(screen.getByText(/test connectivity first/i)).toBeInTheDocument();
+      // Blocked gate with an action: there IS no Next button — the fix-it
+      // action stands in its place, under the state's own headline.
+      expect(screen.queryByRole("button", { name: /^next: integrations$/i })).not.toBeInTheDocument();
+      expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
+      // …and exactly ONE launch point on the whole screen: the footer's (the
+      // panel's own button is suppressed while the gate row carries it).
+      expect(screen.getAllByRole("button", { name: /^test connectivity$/i })).toHaveLength(1);
 
-      testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+      testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms", via: "proxy" });
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
       await screen.findByText("Reached · via proxy");
-      // Reached but the Egress tab hasn't been looked at yet — still blocked.
-      expect(next).toBeDisabled();
-      expect(screen.getByText(/open the egress redirection tab once/i)).toBeInTheDocument();
 
-      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+      // Zero redirects + reached = DONE outright. No egress detour — nothing
+      // here must be configured (round E: the proof is the only required thing).
+      const next = await screen.findByRole("button", { name: /^next: integrations$/i });
       expect(next).toBeEnabled();
-      expect(screen.queryByText(/open the egress redirection tab once/i)).not.toBeInTheDocument();
+      // The panel's button is back — re-testing stays reachable.
+      expect(screen.getByRole("button", { name: /^test again$/i })).toBeInTheDocument();
 
       await user.click(next);
       expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
     });
 
-    it("no_runner unlocks Next immediately — the one honest bypass, no egress visit required", async () => {
+    it("no_runner unlocks Next immediately with its standing note — nothing was proven, and the note keeps saying so", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
@@ -282,9 +284,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       await clearCorpNetworkGate();
       expect(screen.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+      expect(screen.getByText("Nothing to test with")).toBeInTheDocument();
+      expect(screen.getByText(/nothing was proven here/i)).toBeInTheDocument();
     });
 
-    it("a redirect that hasn't tested reached blocks Next and names the row", async () => {
+    it("configured redirects hold the gate with their own footer action — 'Test the redirect' fires the sweep end to end", async () => {
       getSiteConfigMock.mockResolvedValue({
         egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
       });
@@ -293,21 +297,22 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^corporate network$/i });
 
-      testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+      testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms", via: "proxy" });
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
       await screen.findByText("Reached · via proxy");
 
-      const next = screen.getByRole("button", { name: /^next: integrations$/i });
-      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
-      // Egress was visited, but the configured redirect itself is untested —
-      // that must still block with the prove-them sentence (T.GATE_EGRESS_UNTESTED).
-      expect(next).toBeDisabled();
+      // Reached, but the configured redirect is untested — the gate holds
+      // with its own head/sentence, and the footer's action is the fix.
+      expect(screen.queryByRole("button", { name: /^next: integrations$/i })).not.toBeInTheDocument();
+      expect(screen.getByText("Redirects aren't proven yet")).toBeInTheDocument();
       expect(screen.getByText(/every configured redirect has to prove reached/i)).toBeInTheDocument();
 
+      // Clicking it dispatches into the step: switches to the egress tab and
+      // fires every row's real probe — the full footer→step wiring, proven.
       testRedirectMock.mockResolvedValueOnce({ state: "reached", detail: "reachable via the mirror" });
-      await user.click(await screen.findByRole("button", { name: /^test$/i }));
+      await user.click(screen.getByRole("button", { name: /^test the redirect$/i }));
       await screen.findByText("Reached");
-      expect(next).toBeEnabled();
+      expect(await screen.findByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
     });
 
     it("the gate survives leaving and re-entering the step — no re-test needed", async () => {

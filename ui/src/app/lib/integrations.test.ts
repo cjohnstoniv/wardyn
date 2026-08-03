@@ -53,9 +53,12 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.FOOTNOTE).toBe(
       "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
     );
+    // Round E: the step must never CLAIM to be required — the proof is the
+    // only required thing, and most hosts pass it in one click.
     expect(T.CORP_LEDE).toBe(
-      "Required, and first for a reason. Every step after this one assumes a sandbox on this host can reach the internet — a model provider or a git host you add first will look broken when it's the network that's blocked. Test it here, through a corporate proxy or an internal mirror if there is one, and the rest of setup can trust the answer.",
+      "First, and usually ten seconds: prove a sandbox on this host can reach the internet, and every step after this one can trust the answer. On most hosts that's one click — Test connectivity, see Reached, keep moving. Configure something here only if this machine reaches the internet through a corporate proxy, or has to fetch through internal mirrors — the proof then runs through that same path, exactly as a run would.",
     );
+    expect(T.CORP_LEDE).not.toContain("Required");
     expect(T.EMBED_SCOPE_NOTE).toBe(
       "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
     );
@@ -99,11 +102,23 @@ describe("integrations — T canon sentinel pins", () => {
   // never collapse into a generic failure.
   it("pins the gate ladder + custom-URL + intercepted copy verbatim", () => {
     expect(T.GATE_UNTESTED).toBe(
-      "Test connectivity first — everything after this step assumes the network works. One probe now saves a fake credential failure two steps later.",
+      "One probe, and this step is done — everything after it assumes the network works. A minute now instead of a fake credential failure two steps later.",
     );
-    expect(T.GATE_EGRESS_UNSEEN).toBe(
-      "Open the Egress redirection tab once before moving on — leaving it empty is an answer, but only after you've seen what it's for.",
+    // The forced egress-tab visit died with round E — the mechanic that made
+    // the least-common feature feel mandatory. Pinned deleted.
+    expect("GATE_EGRESS_UNSEEN" in T).toBe(false);
+    // Every gate state's bold headline (the footer's two-line treatment).
+    expect(T.GATE_HEAD_UNTESTED).toBe("Connectivity isn't proven yet");
+    expect(T.GATE_HEAD_RUNNING).toBe("Probe in flight");
+    expect(T.GATE_RUNNING).toBe(
+      "A throwaway sandbox is reaching for the connectivity endpoints right now. The result decides whether this step can hand off.",
     );
+    expect(T.GATE_HEAD_BLOCKED).toBe("The probe came back blocked");
+    expect(T.GATE_HEAD_INTERCEPTED).toBe("Something intercepted the probe");
+    expect(T.GATE_HEAD_EGRESS_UNTESTED).toBe("Redirects aren't proven yet");
+    expect(T.GATE_HEAD_EGRESS_FAILING).toBe("A redirect isn't being enforced");
+    expect(T.GATE_HEAD_NORUNNER).toBe("Nothing to test with");
+    expect(T.GATE_HEAD_CUSTOM_ON).toBe("Passing on a weaker proof");
     expect(T.GATE_EGRESS_UNTESTED).toBe(
       "Every configured redirect has to prove reached before this step hands off — test the rows above, or remove them.",
     );
@@ -126,8 +141,9 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.PROBE_ENDPOINTS).toContain("api.anthropic.com and github.com are deliberately not among them");
     expect(T.INTERCEPT_MEANS).toContain("the request left the host and something replied");
     expect(T.EGRESS_SEEN_EMPTY).toBe(
-      "An explicit answer, not an oversight. Runs fetch from the public endpoints; add a redirect above if that ever changes.",
+      "Nothing redirected on this host — add one above if a run ever has to fetch through a mirror.",
     );
+    expect(T.EGRESS_DESC).toContain("The least-common thing in setup");
     expect(T.NET_ONLY_TIP).toContain("no tool config file is generated");
     // The one-string hint the custom block replaced — pinned deleted.
     expect("TEST_CUSTOM_HINT" in T).toBe(false);

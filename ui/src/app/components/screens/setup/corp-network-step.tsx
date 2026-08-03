@@ -56,7 +56,7 @@ import { EgressTab, useElapsedTimer, type ProbeUiState } from "./corp-network-eg
 // compactEndpoint moved with the egress family; re-exported so its tests and
 // any caller keep one import path for this step's helpers.
 export { compactEndpoint } from "./corp-network-egress";
-import type { CorpNetworkState } from "./steps";
+import type { CorpNetworkGate, CorpNetworkState } from "./steps";
 
 // ------------------------------------------------------------
 // Pure helpers — exported so setup-screen.tsx's badge/done derivation reads
@@ -241,35 +241,57 @@ function ProxyVerdict({ result }: { result: ProxyTestResult }) {
 function ProxyTestBlock({
   state,
   onTest,
+  onTestCustom,
   operator,
   probeLine,
   customReject,
+  customDraft,
+  onCustomDraftChange,
+  hideButton,
 }: {
   state: ProbeUiState;
-  /** No arg runs the default multi-target check; a url retries against it instead (T.CUSTOM_URL_WHY). */
-  onTest: (url?: string) => void;
+  /** The default multi-target check ("Test connectivity" / "Test again"). */
+  onTest: () => void;
+  /** The custom-endpoint probe — fired by Enter in the custom field here; the
+   *  gate row's relabeled button is the primary launch point (steps.ts). */
+  onTestCustom: () => void;
   operator: boolean;
   /** What the builtin probe is about to do, endpoints and chain named — shown while running. */
   probeLine: string;
   /** A rejected custom URL's server message, rendered inline in the custom block (never a toast — T.CUSTOM_REJECT_WHY). */
   customReject: string | null;
+  /** Lifted to the orchestrator (CorpNetworkState.customDraft): the gate's
+   *  action label derives from it ("Test this URL" once non-empty). */
+  customDraft: string;
+  onCustomDraftChange: (v: string) => void;
+  /** One Test button per screen (the mock's stepTest): while the gate row
+   *  below carries the action, the panel's own button is suppressed and this
+   *  block shows only the result/hint. Once the gate has moved on to Next,
+   *  the button returns here — as "Test again" — so re-testing stays
+   *  reachable. */
+  hideButton: boolean;
 }) {
   const running = state.kind === "running";
-  const [customUrl, setCustomUrl] = React.useState("");
+  const hasResult = state.kind === "done";
   const customPass = state.kind === "done" && state.result.state === "reached" && state.result.custom;
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-lg border p-3",
+        // overflow-wrap inherits: probe results name real endpoints
+        // (www.msftconnecttest.com/connecttest.txt) — unbreakable tokens whose
+        // min-content width exceeds any narrow container.
+        "flex items-start gap-3 rounded-lg border p-3 [overflow-wrap:anywhere]",
         // The mock's okcustom container: a dashed info frame, so even the box
         // around a custom pass reads differently from a verified one.
         customPass ? "border-dashed border-info/40" : "border-border",
       )}
     >
-      <Button size="sm" variant="outline" className="shrink-0" disabled={running || !operator} title={!operator ? T.VIEWER_HINT : undefined} onClick={() => onTest()}>
-        {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
-        {running ? "Testing…" : "Test connectivity"}
-      </Button>
+      {!hideButton && (
+        <Button size="sm" variant="outline" className="shrink-0" disabled={running || !operator} title={!operator ? T.VIEWER_HINT : undefined} onClick={onTest}>
+          {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
+          {running ? "Testing…" : hasResult ? "Test again" : "Test connectivity"}
+        </Button>
+      )}
       <div className="min-w-0 flex-1 space-y-1">
         {state.kind === "idle" && (
           <>
@@ -310,7 +332,10 @@ function ProxyTestBlock({
             {/* Revealed ONLY after a failure — never on arrival, or everyone
                 reaches for it instead of fixing the proxy and the gate goes
                 decorative. A recovery affordance, not configuration. Covers
-                intercepted too (it is a blocked flavor). */}
+                intercepted too (it is a blocked flavor). No button of its own
+                while the gate row owns the action: the gate relabels itself
+                to "Test this URL" the moment this field is non-empty; Enter
+                here fires the same probe. */}
             {state.result.state === "blocked" && (
               <div className="mt-1.5 space-y-2.5 rounded-lg border border-dashed border-border-strong p-3">
                 <div className="space-y-1">
@@ -321,21 +346,26 @@ function ProxyTestBlock({
                   <Field label="Test against a URL of your own" htmlFor="corp-custom-url" hint={T.CUSTOM_URL_HINT} className="min-w-0 flex-1">
                     <Input
                       id="corp-custom-url"
-                      value={customUrl}
-                      onChange={(e) => setCustomUrl(e.target.value)}
+                      value={customDraft}
+                      onChange={(e) => onCustomDraftChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && customDraft.trim() && operator) onTestCustom();
+                      }}
                       placeholder="https://nexus.corp.internal/repository/health"
                       className="font-mono"
                     />
                   </Field>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="shrink-0"
-                    disabled={!operator || !customUrl.trim()}
-                    onClick={() => onTest(customUrl.trim())}
-                  >
-                    Test this URL
-                  </Button>
+                  {!hideButton && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={!operator || !customDraft.trim()}
+                      onClick={onTestCustom}
+                    >
+                      Test this URL
+                    </Button>
+                  )}
                 </div>
                 {customReject && (
                   <div className="space-y-1.5">
@@ -354,6 +384,20 @@ function ProxyTestBlock({
   );
 }
 
+// Everything ProxyTestBlock needs, owned by CorpNetworkStep (NOT this tab):
+// the probe can be fired from the step's gate row while EITHER tab is up, and
+// its state must survive switching tabs — so the tab only renders it.
+export interface ProxyProbeBundle {
+  state: ProbeUiState;
+  onTest: () => void;
+  onTestCustom: () => void;
+  probeLine: string;
+  customReject: string | null;
+  customDraft: string;
+  onCustomDraftChange: (v: string) => void;
+  hideButton: boolean;
+}
+
 function HostProxyTab({
   siteConfig,
   detection,
@@ -361,8 +405,7 @@ function HostProxyTab({
   saving,
   operator,
   onRecheck,
-  initialProbe,
-  onProbeResult,
+  probe,
 }: {
   siteConfig: SiteConfig | null;
   detection: HostProxyDetection | undefined;
@@ -370,10 +413,7 @@ function HostProxyTab({
   saving: boolean;
   operator: boolean;
   onRecheck: () => void;
-  /** The last real result the orchestrator remembers from a PRIOR visit to this step (see setup-screen.tsx's corpGate) — seeds the panel back to what it last observed instead of a false "Not tested" the operator would have to redo. */
-  initialProbe?: ProxyTestResult;
-  /** Reports every terminal probe result upward so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkGate). Never called for a failed REQUEST (no verdict to report) — see runTest's catch below. */
-  onProbeResult: (result: ProxyTestResult) => void;
+  probe: ProxyProbeBundle;
 }) {
   const [url, setUrl] = React.useState("");
   const [useSecret, setUseSecret] = React.useState(false);
@@ -381,7 +421,6 @@ function HostProxyTab({
   const [secretName, setSecretName] = React.useState("upstream-proxy-url");
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
   const [selected, setSelected] = React.useState(0);
-  const [test, setTest] = React.useState<ProbeUiState>(() => (initialProbe ? { kind: "done", result: initialProbe } : { kind: "idle" }));
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
   // never stomp an in-progress edit (matches HostProxyStep's own seededRef).
@@ -437,46 +476,6 @@ function HostProxyTab({
       toast.success("Upstream proxy saved");
     }
   };
-
-  const [customReject, setCustomReject] = React.useState<string | null>(null);
-  const runTest = async (customUrl?: string) => {
-    const before = test;
-    setCustomReject(null);
-    setTest({ kind: "running", elapsedSec: 0, custom: !!customUrl });
-    try {
-      const result = await healthApi.testProxy(customUrl);
-      setTest({ kind: "done", result });
-      onProbeResult(result);
-    } catch (e) {
-      // A request that never produced a probe result is NOT a probe verdict. Rendering
-      // it as "blocked" would blame the corporate network for a 403, a restarted
-      // wardynd, or a bad payload — sending the operator to debug a firewall that is
-      // working fine.
-      if (customUrl && e instanceof HttpError && e.status === 400) {
-        // A rejected custom URL renders INLINE in the block that asked for it,
-        // the server's own message verbatim (T.CUSTOM_REJECT_WHY), and the
-        // failed result that revealed the block stays on screen — a toast
-        // would vanish with the reason while the operator is mid-recovery.
-        setCustomReject(`Rejected: “${customUrl}” — ${getErrorMessage(e)}. Nothing was launched.`);
-        setTest(before);
-        return;
-      }
-      // Anything else: report the request failure as itself and stay untested.
-      toast.error("Could not run the proxy test", { description: getErrorMessage(e) });
-      setTest({ kind: "idle" });
-    }
-  };
-  const elapsed = useElapsedTimer(test.kind === "running");
-  const liveTest: ProbeUiState = test.kind === "running" ? { ...test, elapsedSec: elapsed } : test;
-
-  // What the builtin probe is about to traverse, named up front (the mock's
-  // probeLine) — endpoints mirror internal/api/site_config_probe.go's targets.
-  const upstreamLabel =
-    siteConfig?.upstream_proxy_url ||
-    (siteConfig?.upstream_proxy_secret_ref ? `the upstream in secret ${siteConfig.upstream_proxy_secret_ref}` : "");
-  const probeLine = `The probe will try www.msftconnecttest.com and detectportal.firefox.com ${
-    upstreamLabel ? `through wardyn-proxy → ${upstreamLabel}` : "directly"
-  }, match their published payloads, and report what actually happened.`;
 
   const draftHasCreds = !useSecret && hasUserinfo(url);
 
@@ -643,7 +642,7 @@ function HostProxyTab({
         )}
       </div>
 
-      <ProxyTestBlock state={liveTest} onTest={runTest} operator={operator} probeLine={probeLine} customReject={customReject} />
+      <ProxyTestBlock {...probe} operator={operator} />
 
       <AddSecretDialog
         open={addSecretOpen}
@@ -662,6 +661,19 @@ function HostProxyTab({
 // ------------------------------------------------------------
 // Top-level step
 // ------------------------------------------------------------
+
+// The step's imperative fix-it handlers, registered up to the orchestrator
+// (setup-screen.tsx) so the footer's gate action — rendered by SetupLayout,
+// far outside this tree — can reach in: run the probe, open the egress tab,
+// fire the redirect tests. The gate row is the ONE place a probe is launched
+// from while the gate is locked (the mock's corpFoot `action`).
+export interface CorpStepActions {
+  probe: () => void;
+  probeCustom: () => void;
+  openEgress: () => void;
+  testRedirects: () => void;
+}
+
 export function CorpNetworkStep({
   status,
   siteConfig,
@@ -669,6 +681,8 @@ export function CorpNetworkStep({
   saveSiteConfig,
   gate,
   onGateChange,
+  gateResult,
+  registerActions,
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
@@ -677,37 +691,115 @@ export function CorpNetworkStep({
   /** The proof-of-connectivity facts that gate Next — held by the orchestrator
    *  (setup-screen.tsx), not here, because this component unmounts on
    *  navigation and the proof must survive leaving and re-entering the step. */
-  gate: Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes">;
-  onGateChange: (patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes">>) => void;
+  gate: Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">;
+  onGateChange: (
+    patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">>,
+  ) => void;
+  /** The orchestrator's computed gate (the SAME corpNetworkGate call that
+   *  drives the footer) — this step only READS on/action from it, to suppress
+   *  the panel's own Test button while the gate row carries the action. One
+   *  derivation, no recompute drift. Absent in standalone renders (tests),
+   *  where the panel keeps its button. */
+  gateResult?: CorpNetworkGate;
+  registerActions?: (a: CorpStepActions | null) => void;
 }) {
   const operator = useOperator();
   const [tab, setTab] = React.useState<"proxy" | "egress">("proxy");
   const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
-  // The mock's egressDot: connectivity is proven but the egress side still
-  // holds Next (tab never opened, or a configured row not yet proven) — a
-  // quiet pointer at WHERE the remaining work is, mirroring corpNetworkGate's
-  // own ladder (steps.ts) without re-deriving its sentences.
+  // ---- The probe, owned HERE (not in HostProxyTab): the gate row can fire it
+  // from either tab, and its UI state must survive tab switches. ----
+  const [test, setTest] = React.useState<ProbeUiState>(() =>
+    gate.proxyProbe ? { kind: "done", result: gate.proxyProbe } : { kind: "idle" },
+  );
+  const [customReject, setCustomReject] = React.useState<string | null>(null);
+  const runTest = async (customUrl?: string) => {
+    const before = test;
+    setCustomReject(null);
+    setTest({ kind: "running", elapsedSec: 0, custom: !!customUrl });
+    onGateChange({ probeRunning: true });
+    try {
+      const result = await healthApi.testProxy(customUrl);
+      setTest({ kind: "done", result });
+      onGateChange({ proxyProbe: result, probeRunning: false });
+    } catch (e) {
+      // A request that never produced a probe result is NOT a probe verdict. Rendering
+      // it as "blocked" would blame the corporate network for a 403, a restarted
+      // wardynd, or a bad payload — sending the operator to debug a firewall that is
+      // working fine.
+      if (customUrl && e instanceof HttpError && e.status === 400) {
+        // A rejected custom URL renders INLINE in the block that asked for it,
+        // the server's own message verbatim (T.CUSTOM_REJECT_WHY), and the
+        // failed result that revealed the block stays on screen — a toast
+        // would vanish with the reason while the operator is mid-recovery.
+        setCustomReject(`Rejected: “${customUrl}” — ${getErrorMessage(e)}. Nothing was launched.`);
+        setTest(before);
+        onGateChange({ probeRunning: false });
+        return;
+      }
+      // Anything else: report the request failure as itself and stay untested.
+      toast.error("Could not run the proxy test", { description: getErrorMessage(e) });
+      setTest({ kind: "idle" });
+      onGateChange({ probeRunning: false });
+    }
+  };
+  const elapsed = useElapsedTimer(test.kind === "running");
+  const liveTest: ProbeUiState = test.kind === "running" ? { ...test, elapsedSec: elapsed } : test;
+
+  // What the builtin probe is about to traverse, named up front (the mock's
+  // probeLine) — endpoints mirror internal/api/site_config_probe.go's targets.
+  const upstreamLabel =
+    siteConfig?.upstream_proxy_url ||
+    (siteConfig?.upstream_proxy_secret_ref ? `the upstream in secret ${siteConfig.upstream_proxy_secret_ref}` : "");
+  const probeLine = `The probe will try www.msftconnecttest.com and detectportal.firefox.com ${
+    upstreamLabel ? `through wardyn-proxy → ${upstreamLabel}` : "directly"
+  }, match their published payloads, and report what actually happened.`;
+
+  // Fired by the footer's "Test all redirects" action: switching to the egress
+  // tab mounts EgressTab, and the bumped signal fires its testAll once up.
+  const [testAllSignal, setTestAllSignal] = React.useState(0);
+
+  // Registered once; the handlers read the LATEST runTest/draft through refs,
+  // so a keystroke in the custom field never re-registers anything.
+  const runTestRef = React.useRef(runTest);
+  runTestRef.current = runTest;
+  const draftRef = React.useRef(gate.customDraft);
+  draftRef.current = gate.customDraft;
+  React.useEffect(() => {
+    if (!registerActions) return;
+    registerActions({
+      probe: () => {
+        setTab("proxy");
+        runTestRef.current();
+      },
+      probeCustom: () => {
+        setTab("proxy");
+        const draft = draftRef.current.trim();
+        if (draft) runTestRef.current(draft);
+      },
+      openEgress: () => setTab("egress"),
+      testRedirects: () => {
+        setTab("egress");
+        setTestAllSignal((n) => n + 1);
+      },
+    });
+    return () => registerActions(null);
+  }, [registerActions]);
+
+  // One Test button per screen (the mock's stepTest): while the gate row
+  // below is offering the action, the panel's own button is suppressed.
+  const hideProbeButton = !!gateResult && !gateResult.on && !!gateResult.action;
+
+  // The dot means only "configured rows not yet proven" — never "you haven't
+  // looked" (no rung demands a visit any more; see steps.ts).
   const redirectRows = siteConfig?.egress_redirects ?? [];
-  const egressDot =
-    gate.proxyProbe?.state === "reached" &&
-    (!gate.egressVisited || redirectRows.some((r) => gate.redirectProbes[r.from]?.state !== "reached"));
+  const egressDot = redirectRows.some((r) => gate.redirectProbes[r.from]?.state !== "reached");
 
   return (
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">{T.CORP_LEDE}</p>
 
-      <Tabs
-        value={tab}
-        onValueChange={(v) => {
-          const next = v as typeof tab;
-          setTab(next);
-          // The explicit "I looked" acknowledgement corpNetworkGate requires
-          // regardless of row count — an empty list needs a deliberate look,
-          // same as a configured one (see steps.ts).
-          if (next === "egress" && !gate.egressVisited) onGateChange({ egressVisited: true });
-        }}
-      >
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
         <TabsList>
           <TabsTrigger value="proxy">Host proxy</TabsTrigger>
           <TabsTrigger value="egress">
@@ -725,8 +817,19 @@ export function CorpNetworkStep({
           saving={saving}
           operator={operator}
           onRecheck={reloadSiteConfig}
-          initialProbe={gate.proxyProbe}
-          onProbeResult={(result) => onGateChange({ proxyProbe: result })}
+          probe={{
+            state: liveTest,
+            onTest: () => runTest(),
+            onTestCustom: () => {
+              const draft = gate.customDraft.trim();
+              if (draft) runTest(draft);
+            },
+            probeLine,
+            customReject,
+            customDraft: gate.customDraft,
+            onCustomDraftChange: (v) => onGateChange({ customDraft: v }),
+            hideButton: hideProbeButton,
+          }}
         />
       ) : (
         <EgressTab
@@ -735,6 +838,7 @@ export function CorpNetworkStep({
           operator={operator}
           initialProbes={gate.redirectProbes}
           onProbeResult={(from, result) => onGateChange({ redirectProbes: { ...gate.redirectProbes, [from]: result } })}
+          testAllSignal={testAllSignal}
         />
       )}
     </div>

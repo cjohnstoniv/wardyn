@@ -33,7 +33,7 @@ export const T = {
   PROXY_BANNER:
     "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
   CORP_LEDE:
-    "Required, and first for a reason. Every step after this one assumes a sandbox on this host can reach the internet — a model provider or a git host you add first will look broken when it's the network that's blocked. Test it here, through a corporate proxy or an internal mirror if there is one, and the rest of setup can trust the answer.",
+    "First, and usually ten seconds: prove a sandbox on this host can reach the internet, and every step after this one can trust the answer. On most hosts that's one click — Test connectivity, see Reached, keep moving. Configure something here only if this machine reaches the internet through a corporate proxy, or has to fetch through internal mirrors — the proof then runs through that same path, exactly as a run would.",
   EMBED_SCOPE_NOTE:
     "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
   EVIDENCE_HEAD: "What Wardyn found on this host",
@@ -50,7 +50,7 @@ export const T = {
   SECRET_INSTEAD_HINT:
     "For a URL already in the store, or when policy requires it. The store is write-only — the value can't be read back here.",
   EGRESS_DESC:
-    "Point outbound traffic at an internal mirror or appliance instead of the public endpoint. Anything a run fetches — registries, container images, a specific host — can be redirected.",
+    "The least-common thing in setup — most networks need nothing here. It exists for hosts that must fetch through an internal mirror or appliance: point outbound traffic — registries, container images, a specific host — somewhere else. Anything you do configure has to prove it works before this step hands off.",
   // TEST_OK / TEST_BLOCKED / TEST_OK_CUSTOM are FIXTURE mirrors of the
   // backend's own detail wording (classifyProxyProbe, site_config_probe.go) —
   // the real app renders whatever the server said; these exist so tests and
@@ -70,10 +70,21 @@ export const T = {
   // The gate's own sentences (steps.ts's corpNetworkGate): a block reason
   // while Next is locked, a neutral standing note for the two states that
   // unlock it without the full builtin proof (no_runner / a custom pass).
+  // Each state also carries a HEADLINE (GATE_HEAD_*) the footer renders bold
+  // above the sentence. What is required is the PROOF, not configuration — no
+  // rung demands a visit to Egress redirection.
   GATE_UNTESTED:
-    "Test connectivity first — everything after this step assumes the network works. One probe now saves a fake credential failure two steps later.",
-  GATE_EGRESS_UNSEEN:
-    "Open the Egress redirection tab once before moving on — leaving it empty is an answer, but only after you've seen what it's for.",
+    "One probe, and this step is done — everything after it assumes the network works. A minute now instead of a fake credential failure two steps later.",
+  GATE_HEAD_UNTESTED: "Connectivity isn't proven yet",
+  GATE_HEAD_RUNNING: "Probe in flight",
+  GATE_RUNNING:
+    "A throwaway sandbox is reaching for the connectivity endpoints right now. The result decides whether this step can hand off.",
+  GATE_HEAD_BLOCKED: "The probe came back blocked",
+  GATE_HEAD_INTERCEPTED: "Something intercepted the probe",
+  GATE_HEAD_EGRESS_UNTESTED: "Redirects aren't proven yet",
+  GATE_HEAD_EGRESS_FAILING: "A redirect isn't being enforced",
+  GATE_HEAD_NORUNNER: "Nothing to test with",
+  GATE_HEAD_CUSTOM_ON: "Passing on a weaker proof",
   GATE_EGRESS_UNTESTED:
     "Every configured redirect has to prove reached before this step hands off — test the rows above, or remove them.",
   GATE_BLOCKED:
@@ -103,7 +114,7 @@ export const T = {
   CUSTOM_REJECT_WHY:
     "Checked server-side before any sandbox starts — schemes, malformed hosts and shell metacharacters are refused there, and the server's own message is what you see.",
   EGRESS_SEEN_EMPTY:
-    "An explicit answer, not an oversight. Runs fetch from the public endpoints; add a redirect above if that ever changes.",
+    "Nothing redirected on this host — add one above if a run ever has to fetch through a mirror.",
   NET_ONLY_TIP:
     "Redirected at the network layer only — no tool config file is generated. An npm or pip row also gets a .npmrc / pip.conf written at run start; a container registry or bare host has no such file, and needs none: anything fetching this endpoint is rerouted.",
   X_KEY_CODEX: "Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.",

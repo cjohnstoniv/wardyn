@@ -12,6 +12,7 @@
 import { type ReactNode, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, Rocket, X } from "lucide-react";
 import { Button } from "../../ui/button";
+import { cn } from "../../ui/utils";
 import { HostStatusBar } from "./host-status-bar";
 import {
   nextPhaseFirstStep,
@@ -35,8 +36,7 @@ export function SetupLayout({
   onFinish,
   onLaunch,
   canLaunch,
-  nextBlockedReason,
-  nextNote,
+  nextGate,
   children,
 }: {
   current: SetupStepId;
@@ -51,15 +51,22 @@ export function SetupLayout({
   onFinish: () => void;
   onLaunch: () => void;
   canLaunch: boolean;
-  // When set, Next is disabled and this reason renders beside it instead of a
-  // bare disabled button (e.g. Corporate network's connectivity gate — see
-  // steps.ts's corpNetworkGate). Generic on purpose: this is shared layout,
-  // not corp-network-specific — it has no idea which step or why.
-  nextBlockedReason?: string;
-  // A NEUTRAL standing note beside an ENABLED Next (corpNetworkGate's
-  // no_runner / custom-pass states): the operator may continue, and the
-  // weaker footing stays said. Ignored whenever nextBlockedReason is set.
-  nextNote?: string;
+  // The current step's Next-gate, if it has one (only Corporate network
+  // today — steps.ts's corpNetworkGate, mapped by setup-screen.tsx). Generic
+  // on purpose: this shared layout has no idea which step or why.
+  //  - blocked: Next is disabled (title = reason).
+  //  - head/reason: the state, rendered as a bold headline over its sentence,
+  //    with the gate dot — present on some ENABLED states too (no_runner, a
+  //    custom-endpoint pass), where it is a neutral standing note.
+  //  - action: a fix-it button rendered IN PLACE of the disabled Next (the
+  //    gate row is the one launch point, and it names what it will do).
+  nextGate?: {
+    blocked: boolean;
+    head?: string;
+    reason?: string;
+    tone?: "warning" | "neutral";
+    action?: { label: string; onClick: () => void };
+  };
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -143,19 +150,43 @@ export function SetupLayout({
             </Button>
             {next ? (
               <>
-                {nextBlockedReason ? (
-                  <p className="max-w-xs text-right text-xs text-warning">{nextBlockedReason}</p>
-                ) : nextNote ? (
-                  <p className="max-w-xs text-right text-xs text-muted-foreground">{nextNote}</p>
-                ) : null}
-                <Button
-                  onClick={() => onSelect(next)}
-                  disabled={!!nextBlockedReason}
-                  title={nextBlockedReason || undefined}
-                >
-                  Next: {STEP_LABEL[next]}
-                  <ArrowRight className="size-4" aria-hidden />
-                </Button>
+                {nextGate && (nextGate.head || nextGate.reason) && (
+                  <div className="min-w-0 max-w-md space-y-0.5">
+                    {nextGate.head && (
+                      <p
+                        className={cn(
+                          "flex items-start gap-1.5 text-[0.8125rem] font-medium leading-snug",
+                          nextGate.tone === "neutral" ? "text-foreground" : "text-warning",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "mt-1.5 size-1.5 shrink-0 rounded-full",
+                            nextGate.tone === "neutral" ? "bg-border-strong" : "bg-warning",
+                          )}
+                        />
+                        {nextGate.head}
+                      </p>
+                    )}
+                    {nextGate.reason && (
+                      <p className={cn("text-xs leading-snug text-muted-foreground", nextGate.head && "pl-3.5")}>
+                        {nextGate.reason}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {nextGate?.blocked && nextGate.action ? (
+                  <Button onClick={nextGate.action.onClick}>{nextGate.action.label}</Button>
+                ) : (
+                  <Button
+                    onClick={() => onSelect(next)}
+                    disabled={!!nextGate?.blocked}
+                    title={nextGate?.blocked ? nextGate.reason : undefined}
+                  >
+                    Next: {STEP_LABEL[next]}
+                    <ArrowRight className="size-4" aria-hidden />
+                  </Button>
+                )}
               </>
             ) : (
               <>

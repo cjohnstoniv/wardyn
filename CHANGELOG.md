@@ -62,17 +62,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   redirection**, with the same compact `from → to` rows, the `network only`
   chip, and per-row Test as the Corporate network step.
 
-- **The Corporate network step is a proof, not a form.** It is no longer
-  optional and no longer skippable: `Next: Integrations` unlocks only once a
+- **The Corporate network step is a proof, not a form — and only the proof is
+  required.** It is not skippable: `Next: Integrations` unlocks only once a
   probe has shown a sandbox on this host can actually reach the internet, and
-  once the Egress redirection tab has been opened — left explicitly empty, or
-  filled in with every redirect testing clean. A redirect in `bypass` blocks
-  too; every failing row is named at once ("Fix a and b above…"), and rows
-  merely untested get their own instruction rather than a generic "a redirect
-  failed".
+  every *configured* redirect has tested clean. But nothing here has to be
+  configured, and the copy stops claiming otherwise: a corporate proxy matters
+  only on hosts behind one, egress redirection is rarer still, and on most
+  hosts the whole step is one click — Test connectivity, `Reached · direct`,
+  Next. The forced look at the Egress redirection tab is gone; it was the one
+  mechanic that made the least-common feature feel mandatory. A redirect in
+  `bypass` still blocks; every failing row is named at once ("Fix a and b
+  above…"), and rows merely untested get their own instruction rather than a
+  generic "a redirect failed".
   The step already explained that a model provider or git host added first
   looks broken when it's really the network that's blocked; it now prevents
   that instead of only warning about it.
+  - **While the gate is locked, the footer's button IS the fix** — "Test
+    connectivity" (or "Test this URL" once you've typed one, or "Test the
+    redirect(s)" when configured rows are what's left) renders in place of a
+    disabled Next, under a bold one-line state headline. One launch point per
+    screen: the panel's own button is suppressed while the gate row carries
+    the action, and returns as "Test again" once the step is satisfied.
   - `no_runner` is the one thing that never blocks. With no runner configured
     Wardyn cannot launch a probe at all, and demanding proof it is structurally
     incapable of collecting would trap an operator in setup with no way out.

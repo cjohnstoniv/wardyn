@@ -65,52 +65,71 @@ describe("SetupLayout", () => {
 
   // Generic gate — SetupLayout has no idea which step set this or why (see
   // steps.ts's corpNetworkGate, the current sole producer of one).
-  describe("nextBlockedReason — a generic Next-button gate", () => {
-    it("Next is enabled and no reason renders when nextBlockedReason is absent", () => {
+  describe("nextGate — the footer's generic Next gate (head/reason/action)", () => {
+    it("Next is enabled and nothing extra renders when nextGate is absent", () => {
       renderLayout({ current: "environment" });
       expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeEnabled();
     });
 
-    it("disables Next and renders the reason text when nextBlockedReason is set", () => {
-      renderLayout({ current: "environment", nextBlockedReason: "Prove this host can reach the internet first." });
+    it("blocked without an action: Next is disabled, the head and reason render", () => {
+      renderLayout({
+        current: "environment",
+        nextGate: { blocked: true, head: "Connectivity isn't proven yet", reason: "One probe, and this step is done.", tone: "warning" },
+      });
       expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeDisabled();
-      expect(screen.getByText("Prove this host can reach the internet first.")).toBeInTheDocument();
+      expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
+      expect(screen.getByText("One probe, and this step is done.")).toBeInTheDocument();
     });
 
-    it("clicking a disabled Next never calls onSelect", async () => {
+    it("blocked WITH an action: the action button renders IN PLACE of Next and fires its handler", async () => {
+      const onAction = vi.fn();
       const onSelect = vi.fn();
-      renderLayout({ current: "environment", onSelect, nextBlockedReason: "Still blocked." });
-      await user.click(screen.getByRole("button", { name: /^next: corporate network$/i }));
+      renderLayout({
+        current: "environment",
+        onSelect,
+        nextGate: {
+          blocked: true,
+          head: "Connectivity isn't proven yet",
+          reason: "One probe.",
+          action: { label: "Test connectivity", onClick: onAction },
+        },
+      });
+      expect(screen.queryByRole("button", { name: /^next: corporate network$/i })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+      expect(onAction).toHaveBeenCalled();
       expect(onSelect).not.toHaveBeenCalled();
     });
 
-    it("the reason never renders on the LAST step (there is no Next to gate)", () => {
-      renderLayout({ current: "launch", nextBlockedReason: "Should never appear here." });
-      expect(screen.queryByText("Should never appear here.")).not.toBeInTheDocument();
-    });
-
-    // The gate's other half: a standing NOTE beside an ENABLED Next
-    // (corpNetworkGate's no_runner / custom-pass states) — the operator may
-    // continue, and the weaker footing stays said.
-    it("nextNote renders beside an ENABLED Next — a note, not a blocker", async () => {
+    it("an ENABLED gate with a head/reason renders them as a neutral standing note beside a working Next", async () => {
       const onSelect = vi.fn();
-      renderLayout({ current: "environment", onSelect, nextNote: "Nothing was proven here." });
+      renderLayout({
+        current: "environment",
+        onSelect,
+        nextGate: { blocked: false, head: "Nothing to test with", reason: "Nothing was proven here.", tone: "neutral" },
+      });
       const next = screen.getByRole("button", { name: /^next: corporate network$/i });
       expect(next).toBeEnabled();
+      expect(screen.getByText("Nothing to test with")).toBeInTheDocument();
       expect(screen.getByText("Nothing was proven here.")).toBeInTheDocument();
       await user.click(next);
       expect(onSelect).toHaveBeenCalled();
     });
 
-    it("a blocked reason wins outright over a note — never both at once", () => {
+    it("an enabled gate's action is IGNORED — the fix-it button exists only while blocked", () => {
       renderLayout({
         current: "environment",
-        nextBlockedReason: "Still blocked.",
-        nextNote: "Should never appear beside a blocker.",
+        nextGate: { blocked: false, action: { label: "Should not render", onClick: vi.fn() } },
       });
-      expect(screen.getByText("Still blocked.")).toBeInTheDocument();
-      expect(screen.queryByText("Should never appear beside a blocker.")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: /should not render/i })).not.toBeInTheDocument();
+    });
+
+    it("the gate never renders on the LAST step (there is no Next to gate)", () => {
+      renderLayout({
+        current: "launch",
+        nextGate: { blocked: true, head: "Should never appear here.", reason: "Nor this." },
+      });
+      expect(screen.queryByText("Should never appear here.")).not.toBeInTheDocument();
     });
   });
 

@@ -28,7 +28,7 @@ import { deriveReadiness, lastCheckedLabel } from "../onboarding/intro";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
-import { CorpNetworkStep, isProxyConfigured, proxyDetected } from "./corp-network-step";
+import { CorpNetworkStep, isProxyConfigured, proxyDetected, type CorpStepActions } from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
 import { LaunchStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
@@ -38,6 +38,7 @@ import {
   corpNetworkGate,
   stepBadges,
   stepDone,
+  type CorpGateActionKind,
   type CorpNetworkState,
   type SetupStepId,
 } from "./steps";
@@ -89,16 +90,24 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // step (see steps.ts's CorpNetworkState doc). Deliberately in-memory only,
   // never persisted: a stale "reached" surviving a reload would be exactly the
   // false reassurance this whole feature exists to prevent.
-  const [corpGate, setCorpGate] = React.useState<Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes">>({
-    egressVisited: false,
+  const [corpGate, setCorpGate] = React.useState<
+    Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">
+  >({
+    probeRunning: false,
+    customDraft: "",
     redirectProbes: {},
   });
   const onCorpGateChange = React.useCallback(
-    (patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes">>) => {
+    (patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">>) => {
       setCorpGate((g) => ({ ...g, ...patch }));
     },
     [],
   );
+  // The step's imperative fix-it handlers (run the probe, open the egress tab,
+  // fire the redirect tests) — registered by CorpNetworkStep while mounted, so
+  // the footer's gate action (rendered by SetupLayout, dispatched here) can
+  // reach INTO the step. A ref, not state: nothing re-renders on registration.
+  const corpActionsRef = React.useRef<CorpStepActions | null>(null);
   // Steps navigated AWAY from at least once (per browser) — feeds the rail's
   // "Skipped" badge override below. See selectStep for what counts as leaving.
   const [visitedSteps, setVisitedSteps] = React.useState<Set<SetupStepId>>(
@@ -305,11 +314,30 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // The Next-button gate — only Corporate network produces one today. Computed
   // fresh from the SAME corpNetwork/corpRedirects stepDone.corp_network above
   // already read, so the badge, the checkmark, and this can never disagree.
-  // While the gate is OFF its reason blocks Next; while it is ON a reason can
-  // still be present (no_runner / a custom-endpoint pass) and renders as a
-  // neutral standing note beside the ENABLED button — the operator continues,
-  // and the weaker footing stays said (the mock's corpFoot).
+  // While the gate is OFF, its ACTION is the footer's button (in place of a
+  // disabled Next — one launch point that names what it will do); while it is
+  // ON a head/reason can still be present (no_runner / a custom-endpoint
+  // pass) and renders as a neutral standing note beside the ENABLED button.
   const corpGateResult = stepId === "corp_network" ? corpNetworkGate(corpNetwork, corpRedirects) : null;
+  const dispatchCorpAction = (kind: CorpGateActionKind) => {
+    const a = corpActionsRef.current;
+    if (!a) return;
+    if (kind === "probe") a.probe();
+    else if (kind === "probe_custom") a.probeCustom();
+    else if (kind === "open_egress") a.openEgress();
+    else a.testRedirects();
+  };
+  const nextGate = corpGateResult
+    ? {
+        blocked: !corpGateResult.on,
+        head: corpGateResult.head,
+        reason: corpGateResult.reason,
+        tone: corpGateResult.tone,
+        action: corpGateResult.action
+          ? { label: corpGateResult.action.label, onClick: () => dispatchCorpAction(corpGateResult.action!.kind) }
+          : undefined,
+      }
+    : undefined;
 
   return (
     <>
@@ -325,8 +353,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // A barrier is enough to launch (an interactive run works with no model —
         // the operator drives it over an attached terminal).
         canLaunch={readiness.ready}
-        nextBlockedReason={corpGateResult && !corpGateResult.on ? corpGateResult.reason : undefined}
-        nextNote={corpGateResult?.on ? corpGateResult.reason : undefined}
+        nextGate={nextGate}
       >
         {stepId === "environment" && (
           <EnvironmentStep
@@ -345,6 +372,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             saveSiteConfig={saveSiteConfig}
             gate={corpGate}
             onGateChange={onCorpGateChange}
+            gateResult={corpGateResult ?? undefined}
+            registerActions={(a) => {
+              corpActionsRef.current = a;
+            }}
           />
         )}
         {stepId === "integrations" && (

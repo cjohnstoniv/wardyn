@@ -160,14 +160,16 @@ test.describe("Corporate network step", () => {
     );
 
     const m = await openCorpNetworkStep(page);
-    const testBtn = m.getByRole("button", { name: /^test connectivity$/i });
 
-    await testBtn.click();
+    // While unproven the ONE launch point is the footer's gate button.
+    await m.getByRole("button", { name: /^test connectivity$/i }).click();
     await expect(m.getByText("Reached · via proxy", { exact: true })).toBeVisible();
     await expect(m.getByText(/42ms round trip/)).toBeVisible();
 
+    // Gate satisfied: the footer moved on to Next, and the panel's own button
+    // returned as "Test again" — that is where a re-test lives now.
     state = "blocked";
-    await testBtn.click();
+    await m.getByRole("button", { name: /^test again$/i }).click();
     await expect(m.getByText("Blocked", { exact: true })).toBeVisible();
     await expect(m.getByText(/connection refused/i)).toBeVisible();
     // Proves the chip actually re-rendered rather than just appending.
@@ -181,16 +183,16 @@ test.describe("Corporate network step", () => {
   // none of those prove is that the REAL app — this bundle, this backend —
   // agrees. That's all this test is for, so it stays to the one thing an e2e
   // uniquely proves rather than re-walking every rung.
-  test("Next stays disabled with a visible reason until the connectivity probe passes, then enables", async ({ page }) => {
+  test("the gate's action REPLACES Next until the probe passes, then Next appears with the honest note", async ({ page }) => {
     const m = await openCorpNetworkStep(page);
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
 
-    // Nothing proven yet: Next is disabled and names why, not just a bare
-    // disabled button. The gate sentence (T.GATE_UNTESTED) starts with the
-    // same words as the button's own label, so "first" is the disambiguator —
-    // same as setup-screen.test.tsx does.
-    await expect(nextBtn).toBeDisabled();
-    await expect(m.getByText(/test connectivity first/i)).toBeVisible();
+    // Nothing proven yet: there is NO Next button at all — the footer's
+    // fix-it action stands in its place, under the state's own headline.
+    await expect(nextBtn).toHaveCount(0);
+    await expect(m.getByText(/connectivity isn't proven yet/i)).toBeVisible();
+    // Exactly one launch point on the whole screen.
+    await expect(m.getByRole("button", { name: /^test connectivity$/i })).toHaveCount(1);
 
     await passGate(m);
 
@@ -198,7 +200,8 @@ test.describe("Corporate network step", () => {
     // (no Egress-tab detour), with its standing note in place of the blocker
     // (T.NORUNNER_NOTE: nothing was PROVEN, and the note keeps saying so).
     await expect(nextBtn).toBeEnabled();
-    await expect(m.getByText(/test connectivity first/i)).toHaveCount(0);
+    await expect(m.getByText(/connectivity isn't proven yet/i)).toHaveCount(0);
+    await expect(page.getByText(/nothing to test with/i)).toBeVisible();
     await expect(page.getByText(/nothing was proven here/i)).toBeVisible();
 
     await nextBtn.click();

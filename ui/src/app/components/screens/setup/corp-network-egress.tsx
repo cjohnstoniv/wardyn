@@ -327,6 +327,7 @@ export function EgressTab({
   operator,
   initialProbes,
   onProbeResult,
+  testAllSignal = 0,
 }: {
   siteConfig: SiteConfig | null;
   mutate: (next: SiteConfig, errorMessage: string) => Promise<boolean>;
@@ -335,6 +336,8 @@ export function EgressTab({
   initialProbes: Record<string, ProxyTestResult>;
   /** Reports a redirect's terminal probe result upward, by `from`, so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkGate). */
   onProbeResult: (from: string, result: ProxyTestResult) => void;
+  /** Bumped by the footer's "Test all redirects" gate action (corp-network-step.tsx) — each increment fires testAll once this tab is mounted. */
+  testAllSignal?: number;
 }) {
   const redirects = siteConfig?.egress_redirects ?? [];
   const [expandedIdx, setExpandedIdx] = React.useState<number | null>(null);
@@ -365,6 +368,16 @@ export function EgressTab({
     }
   };
   const testAll = () => redirects.forEach((r, i) => runTest(i, r));
+  // The footer's gate action lands as a bumped counter: the step switches to
+  // this tab and increments, and the freshly-mounted tab fires the sweep.
+  const firedSignal = React.useRef(0);
+  React.useEffect(() => {
+    if (testAllSignal > 0 && testAllSignal !== firedSignal.current) {
+      firedSignal.current = testAllSignal;
+      testAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- testAll is re-created per render; the signal is the trigger
+  }, [testAllSignal]);
 
   return (
     <div className="space-y-3.5">
@@ -413,14 +426,10 @@ export function EgressTab({
           </div>
         </>
       )}
+      {/* No forced visit any more (steps.ts), so no check icon dressed as an
+          answer the operator never gave — just the quiet fact. */}
       {redirects.length === 0 && (
-        <div className="flex items-start gap-2.5 rounded-lg border border-border px-3 py-2.5">
-          <Check aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0 space-y-0.5">
-            <p className="text-[0.8125rem] text-foreground">No redirects on this network</p>
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EGRESS_SEEN_EMPTY}</p>
-          </div>
-        </div>
+        <p className="max-w-[560px] text-[0.8125rem] leading-snug text-muted-foreground">{T.EGRESS_SEEN_EMPTY}</p>
       )}
       <AddRedirectForm operator={operator} onAdd={(r) => setRedirects([...redirects, r])} />
     </div>
