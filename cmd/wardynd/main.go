@@ -323,6 +323,32 @@ func validateConfig(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPla
 	}, nil
 }
 
+// validateOperatorPosture is the second boot-time fail-closed rule, kept beside
+// validateConfig (and pure, for the same reason) but applied later: OIDC is not
+// built until boot_deps.go, well after validateConfig runs at the top of run().
+//
+// Configuring SSO IS the declaration that more than one human exists, so an
+// empty operator allowlist is not a default — it is an ambiguity in which every
+// person the IdP lets in silently holds the admin token's power. Refuse, with
+// WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST as the explicit override (the
+// WARDYN_ALLOW_PLAINTEXT_LISTEN precedent). UNCONDITIONAL — not conditioned on
+// the bind address the way the plaintext rule is: a loopback bind bounds who can
+// reach the port, not who the IdP authenticates.
+//
+// No OIDC => nothing to decide: the admin token and local mode are a single
+// shared credential with no human identity to key a role off, so they are always
+// operators and this rule never fires.
+func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allowNoOperatorList bool) error {
+	if !oidcConfigured || len(operatorEmails) > 0 || allowNoOperatorList {
+		return nil
+	}
+	return errors.New("refusing to start: OIDC SSO is configured but the operator allowlist is empty — " +
+		"EVERY human the IdP signs in would be admin-equivalent (rewrite policies/workspaces/site-config, connect the shared harness credential, " +
+		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox); " +
+		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a viewer who can still read everything and launch runs — " +
+		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
+}
+
 // knownPublicAgeKeys are age identities this repository has published — each was
 // once a committed default, so it lives in git history forever and any secret
 // encrypted under one is effectively public. wardynd refuses to start with ANY of

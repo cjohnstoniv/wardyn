@@ -177,10 +177,21 @@ else bad "metadata IP REACHABLE (http_code=${MD}) — invariant 3 violated"; fi
 # domain yields a PENDING decision + a raised egress_domain ApprovalRequest
 # rather than a hard deny; the metadata IP is an unconditional builtin deny.
 log "(c/d) probing allow/pending/metadata through the auto-launched sidecar"
-ALLOW="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_code}' \
-          -x http://wardyn-proxy:3128 https://github.com/ 2>&1)"
-if [[ "${ALLOW}" =~ ^(200|301|302)$ ]]; then ok "(d) allowed github.com passed via proxy (http_code=${ALLOW})";
-else bad "(d) allowed github.com did NOT pass (got '${ALLOW}')"; fi
+# github.com is BROKER-MANAGED for this run: it declares --repo, so dispatch keys
+# the git-broker allowlist from it and confineGitBrokerEgress both removes the
+# github hosts from the allowlist AND denies them, leaving the proxy's
+# /wardyn/gh/ route as the only route. A DIRECT dial must therefore be a HARD
+# deny, not a first-use hold — that ordering is the load-bearing half of the
+# confinement (a deny beats allow_all_egress, a promoted ApprovedEgress entry,
+# and first-use review alike). Asserted both ways: refused AND no approval.
+log "(d) brokered github.com is HARD-DENIED on the direct route (deny beats first-use review)"
+GH_DIRECT="$(docker exec "${AGENT}" curl -sS -m 20 --connect-timeout 10 \
+          -x http://wardyn-proxy:3128 https://github.com/ 2>&1 || true)"
+if echo "${GH_DIRECT}" | grep -q '403'; then
+  ok "(d) direct github.com refused by the proxy (403) — only /wardyn/gh/ remains"
+else
+  bad "(d) direct github.com was NOT refused — git-broker confinement not in force: ${GH_DIRECT}"
+fi
 
 DENY="$(docker exec "${AGENT}" curl -sS -m 12 --connect-timeout 8 \
          -x http://wardyn-proxy:3128 https://evil.example.com/ 2>&1)"
@@ -192,6 +203,13 @@ PENDING_APPROVAL="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1
   | python3 -c 'import sys,json;print(sum(1 for a in json.load(sys.stdin) if a["kind"]=="egress_domain" and "evil.example.com" in json.dumps(a.get("requested_scope",{}))))')"
 if [[ "${PENDING_APPROVAL}" -ge 1 ]]; then ok "(c) egress_domain ApprovalRequest raised for evil.example.com";
 else bad "(c) no PENDING egress_domain approval found for evil.example.com"; fi
+
+# The contrast that proves the deny SHORT-CIRCUITS first-use review: the unknown
+# domain above raised an approval; the DENIED github.com must not have.
+GH_APPROVAL="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/approvals?state=PENDING" \
+  | python3 -c 'import sys,json;print(sum(1 for a in json.load(sys.stdin) if a["kind"]=="egress_domain" and "github.com" in json.dumps(a.get("requested_scope",{}))))')"
+if [[ "${GH_APPROVAL}" -eq 0 ]]; then ok "(d) no egress_domain approval raised for the denied github.com — deny wins over review";
+else bad "(d) an egress_domain approval WAS raised for github.com (${GH_APPROVAL}) — deny did not short-circuit review"; fi
 
 MDP="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 8 --connect-timeout 6 -w '%{http_code}' \
         -x http://wardyn-proxy:3128 http://169.254.169.254/ 2>&1)"
@@ -331,22 +349,56 @@ else
 fi
 
 # (ii) brokered git-credential chain, LIVE, from inside the real sandbox.
-# wardyn-git-helper reads WARDYN_GITHUB_GRANT_ID + WARDYN_PROXY_URL from env and
-# POSTs the local mint route; the demo policy's github_token grant has
-# requires_approval=true, so the broker first returns 409 pending and raises a
-# credential ApprovalRequest. The helper then polls. We approve out of band,
-# the helper re-mints, and the broker fails closed (no GitHub App key in the
-# demo). We run the helper with a SHORT approval timeout in the background so
-# the script controls the approve step deterministically.
-log "(ii) brokered git-credential chain: helper -> mint -> credential approval"
+# This run declares --repo, so dispatch keys the git-broker allowlist from it and
+# the GitHub App lane is BROKERED: agent-run points the repo at the proxy's
+# /wardyn/gh/<org>/<repo> route, the installation token is minted SERVER-SIDE,
+# and the broker-managed github hosts are denied. The chain is unchanged — it
+# just runs proxy-side now — so it is asserted where it actually lives:
+#   (ii-a) wardyn-git-helper REFUSES github.com and emits no credential. It used
+#          to print a live installation token to stdout inside a one-uid sandbox.
+#   (ii-b) the credential ApprovalRequest is STILL raised, by the broker route's
+#          own mint during the clone at run start (demo grant is
+#          requires_approval=true, so the broker 409s and raises it).
+#   (ii-c) after approving, one brokered request re-mints and the broker fails
+#          closed (no GitHub App key in the demo) — the sandbox sees a 502 and
+#          still never holds a token.
+log "(ii-a) wardyn-git-helper REFUSES the brokered App lane (token stays proxy-side)"
 GH_OUT="${WORKDIR}/githelper.out"; GH_ERR="${WORKDIR}/githelper.err"
-# Short timeout so the helper does not hang the suite if approval never lands.
-docker exec -e WARDYN_APPROVAL_TIMEOUT=60s "${CC_AGENT_CTR}" sh -c \
+# Foreground: a refusal returns immediately (no mint, no approval poll), so the
+# background-PID + timeout dance the helper-driven chain needed is gone.
+docker exec "${CC_AGENT_CTR}" sh -c \
   'printf "protocol=https\nhost=github.com\n\n" | /usr/local/bin/wardyn-git-helper get' \
-  >"${GH_OUT}" 2>"${GH_ERR}" &
-GH_PID=$!
+  >"${GH_OUT}" 2>"${GH_ERR}" || true
+GH_STDOUT="$(cat "${GH_OUT}" 2>/dev/null || true)"
+GH_STDERR="$(cat "${GH_ERR}" 2>/dev/null || true)"
+echo "--- wardyn-git-helper (brokered run) ---"
+echo "stdout: ${GH_STDOUT:-<empty>}"
+echo "stderr: ${GH_STDERR}"
+if echo "${GH_STDOUT}" | grep -q '^password='; then
+  bad "(ii-a) git-helper emitted a credential on a BROKERED run — the installation token entered the sandbox"
+elif echo "${GH_STDERR}" | grep -qiE 'brokered through wardyn-proxy|refusing to mint'; then
+  ok "(ii-a) git-helper refused the brokered App lane — no token in the sandbox"
+else
+  bad "(ii-a) git-helper neither refused nor emitted; unexpected: ${GH_STDERR:-<empty>}"
+fi
 
-# Poll for the credential ApprovalRequest the mint raised (kind=credential).
+# The helper refusing is only half of it — the local mint route is UNAUTHENTICATED
+# and the grant id rides the agent env, so this one-liner is what used to return a
+# live ghs_ installation token (and, the grant being single-use, burn the broker's
+# own mint out from under the clone). It must be a 403 from the proxy itself.
+# Origin-form, same call shape assertion (iii) uses for ANTHROPIC_BASE_URL.
+MINT_CODE="$(docker exec "${CC_AGENT_CTR}" sh -c \
+  'curl -sS -o /dev/null -m 20 -w "%{http_code}" -XPOST "${WARDYN_PROXY_URL}/wardyn/v1/credentials/mint" \
+     -H "content-type: application/json" -d "{\"grant_id\":\"${WARDYN_GITHUB_GRANT_ID}\"}"' 2>&1 || true)"
+if [[ "${MINT_CODE}" == "403" ]]; then
+  ok "(ii-a) direct mint of the BROKERED grant refused by the proxy (403) — the token is not obtainable in-sandbox"
+else
+  bad "(ii-a) direct mint of the brokered grant returned ${MINT_CODE}, want 403 — the in-sandbox token bypass is back"
+fi
+
+# (ii-b) Poll for the credential ApprovalRequest — raised by the BROKER route's
+# server-side mint when agent-run cloned through /wardyn/gh/ at run start.
+log "(ii-b) credential ApprovalRequest raised by the broker's server-side mint (kind=credential, PENDING)"
 log "(ii) credential ApprovalRequest raised (kind=credential, PENDING)"
 CRED_APID=""
 for _ in $(seq 1 15); do
@@ -358,42 +410,39 @@ print(next((a["id"] for a in aps if a.get("kind")=="credential" and a.get("run_i
   [[ -n "${CRED_APID}" ]] && break
   sleep 2
 done
-if [[ -n "${CRED_APID}" ]]; then ok "(ii) credential ApprovalRequest raised (id=${CRED_APID})";
-else bad "(ii) no PENDING credential approval surfaced for the run"; fi
+if [[ -n "${CRED_APID}" ]]; then ok "(ii-b) credential ApprovalRequest raised by the broker route (id=${CRED_APID})";
+else bad "(ii-b) no PENDING credential approval surfaced for the run"; fi
 
 # Approve it via the API (the broker's mint gate consumes APPROVED in the same
-# tx that verifies scope; the helper's poll then re-mints).
+# tx that verifies scope; the next brokered request then re-mints).
 if [[ -n "${CRED_APID}" ]]; then
   APP_CODE="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/approvals/${CRED_APID}/approve" \
               -H "Authorization: Bearer ${ADMIN_TOKEN}")"
-  if [[ "${APP_CODE}" == "200" || "${APP_CODE}" == "202" ]]; then ok "(ii) credential approval APPROVED via API (${APP_CODE})";
-  else bad "(ii) approve call failed (${APP_CODE})"; fi
+  if [[ "${APP_CODE}" == "200" || "${APP_CODE}" == "202" ]]; then ok "(ii-b) credential approval APPROVED via API (${APP_CODE})";
+  else bad "(ii-b) approve call failed (${APP_CODE})"; fi
 fi
 
-# Wait for the helper to finish (it re-mints, broker fails closed). Bounded wait
-# so a hang cannot wedge the suite.
-GH_RC=0
-for _ in $(seq 1 30); do kill -0 "${GH_PID}" 2>/dev/null || break; sleep 2; done
-if kill -0 "${GH_PID}" 2>/dev/null; then
-  note "(ii) git-helper still running after wait; killing"
-  kill "${GH_PID}" >/dev/null 2>&1 || true
-fi
-wait "${GH_PID}" 2>/dev/null; GH_RC=$?
-GH_STDOUT="$(cat "${GH_OUT}" 2>/dev/null || true)"
-GH_STDERR="$(cat "${GH_ERR}" 2>/dev/null || true)"
-echo "--- wardyn-git-helper rc=${GH_RC} ---"
-echo "stdout: ${GH_STDOUT:-<empty>}"
-echo "stderr: ${GH_STDERR}"
-# Fail-closed proof: the helper must NOT have emitted a password (no token was
-# minted — the demo has no GitHubMinter), and the documented fail-closed mint
-# error must appear. The broker returns "no GitHubMinter configured (fail
-# closed)"; the proxy passes the 500 verbatim and the helper surfaces it.
-if echo "${GH_STDOUT}" | grep -q '^password='; then
-  bad "(ii) git-helper emitted a token — fail-closed broken (a credential was minted with no GitHubMinter)"
-elif echo "${GH_STDERR}" | grep -qiE 'no GitHubMinter configured|mint status 500|github_token grant but no'; then
-  ok "(ii) full brokered chain proven; broker failed closed (no GitHubMinter) — no token leaked"
-else
-  bad "(ii) chain did not reach the documented fail-closed mint error: ${GH_STDERR}"
+# (ii-c) Re-drive ONE brokered request now the approval is APPROVED: the proxy
+# re-mints SERVER-SIDE, the demo has no GitHubMinter, so the broker fails closed
+# and the sandbox gets a 502 carrying no credential. Origin-form (no -x): the
+# /wardyn/gh/ route is a proxy-LOCAL route and wardyn-proxy is in the sandbox
+# NO_PROXY — the same shape assertion (iii) uses for the LLM route.
+if [[ -n "${CRED_APID}" ]]; then
+  log "(ii-c) brokered request re-mints after approval and fails closed (no GitHub App)"
+  GB_URL='${WARDYN_PROXY_URL}/wardyn/gh/octocat/Hello-World.git/info/refs?service=git-upload-pack'
+  GB_CODE="$(docker exec "${CC_AGENT_CTR}" sh -c \
+    "curl -sS -o /dev/null -m 30 -w '%{http_code}' \"${GB_URL}\"" 2>&1 || true)"
+  GB_BODY="$(docker exec "${CC_AGENT_CTR}" sh -c "curl -sS -m 30 \"${GB_URL}\"" 2>&1 || true)"
+  echo "git-broker route http_code=${GB_CODE} body=${GB_BODY}"
+  if echo "${GB_BODY}" | grep -qE 'ghs_|"token"|password='; then
+    bad "(ii-c) the git-broker route returned credential material to the sandbox"
+  elif [[ "${GB_CODE}" == "200" ]]; then
+    bad "(ii-c) brokered route returned 200 with no GitHub App configured — fail-closed broken"
+  elif [[ "${GB_CODE}" == "502" ]]; then
+    ok "(ii-c) brokered mint failed closed (502, no GitHubMinter) — no token reached the sandbox"
+  else
+    bad "(ii-c) brokered route returned ${GB_CODE}, want 502 fail-closed: ${GB_BODY}"
+  fi
 fi
 
 # (iii) LLM route fail-closed: with no api_key grant configured the proxy's

@@ -262,10 +262,13 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 
 // requireOperator is the minimal AUTHORIZATION tier layered on top of
 // humanOrAdminAuth (which only AUTHENTICATES). It is nested inside that group on
-// the MUTATING routes of the four highest-blast-radius clusters — managed
-// harness credential, policies, workspaces, site-config (see routes in
-// Server.Handler) — and refuses a signed-in VIEWER with 403. Read routes are
-// untouched: a viewer sees everything, changes nothing.
+// the operator half of ONE tier split — viewer = read + launch runs; operator =
+// configure the deployment (managed harness credential, policies, workspaces,
+// site-config), write/delete SECRETS, DECIDE approvals, and mint an attach
+// ticket (a live PTY into a running sandbox) — and refuses a signed-in VIEWER
+// with 403 (see routes in Server.Handler). Read routes are untouched, and so is
+// launching a run: a viewer uses the product, it just cannot configure it, hold
+// credential material, authorize an escalation, or get a shell.
 //
 // Roles come from ONE optional list, Config.OperatorEmails
 // (WARDYN_OIDC_OPERATOR_EMAILS), mirroring how oidc.Config.AllowedEmailDomains

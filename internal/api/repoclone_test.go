@@ -5,6 +5,7 @@ package api
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -161,5 +162,109 @@ func TestGitBrokerWiring(t *testing.T) {
 	none.augmentGitBrokerGrants("octocat/Hello-World", nil)
 	if len(none.gitGrants) != 0 {
 		t.Errorf("augment with no grant should be a no-op, got %v", none.gitGrants)
+	}
+}
+
+// TestConfineGitBrokerEgress: a BROKERED run's effective egress carries no
+// broker-managed GitHub host — dispatch subtracts them from the allowlist (exact,
+// wildcard, and :port spellings) and denies them, so the /wardyn/gh/ route is the
+// only path to github and the receive-pack branch-namespace parser cannot be
+// routed around. A NON-brokered run is untouched.
+func TestConfineGitBrokerEgress(t *testing.T) {
+	grants := map[string]uuid.UUID{"octocat/hello-world": uuid.New()}
+
+	brokered := types.RunPolicySpec{AllowedDomains: []string{
+		"api.anthropic.com", "GitHub.com", "api.github.com:443",
+		"raw.githubusercontent.com", "*.githubusercontent.com", "codeload.github.com.",
+	}}
+	if dropped := confineGitBrokerEgress(&brokered, grants); len(dropped) == 0 {
+		t.Fatal("confineGitBrokerEgress reported nothing dropped for a brokered run")
+	}
+	for _, d := range brokered.AllowedDomains {
+		if gitBrokerManaged(d) {
+			t.Errorf("broker-managed host %q survived in the effective allowlist: %v", d, brokered.AllowedDomains)
+		}
+	}
+	if len(brokered.AllowedDomains) != 1 || brokered.AllowedDomains[0] != "api.anthropic.com" {
+		t.Errorf("unrelated egress must survive verbatim; got %v", brokered.AllowedDomains)
+	}
+	// The deny is the load-bearing half: it beats allow_all_egress too.
+	for _, want := range gitBrokerManagedHosts {
+		if !slices.Contains(brokered.DeniedDomains, want) {
+			t.Errorf("denied_domains = %v, want it to contain %q", brokered.DeniedDomains, want)
+		}
+	}
+
+	// NON-brokered run: no git grants, so github egress stays the operator's call.
+	plain := types.RunPolicySpec{AllowedDomains: []string{"github.com", "api.anthropic.com"}}
+	if dropped := confineGitBrokerEgress(&plain, nil); dropped != nil {
+		t.Errorf("non-brokered run must be untouched, dropped %v", dropped)
+	}
+	if !slices.Equal(plain.AllowedDomains, []string{"github.com", "api.anthropic.com"}) || len(plain.DeniedDomains) != 0 {
+		t.Errorf("non-brokered run mutated: allowed=%v denied=%v", plain.AllowedDomains, plain.DeniedDomains)
+	}
+
+	// Idempotent + no duplicate deny rows on a policy that already denies a host.
+	twice := types.RunPolicySpec{AllowedDomains: []string{"github.com"}, DeniedDomains: []string{"github.com"}}
+	confineGitBrokerEgress(&twice, grants)
+	confineGitBrokerEgress(&twice, grants)
+	seen := map[string]int{}
+	for _, d := range twice.DeniedDomains {
+		seen[d]++
+	}
+	for d, n := range seen {
+		if n != 1 {
+			t.Errorf("denied_domains has %q %d times, want 1: %v", d, n, twice.DeniedDomains)
+		}
+	}
+
+	// The caller's backing array is never aliased: the source policy a second run
+	// composes from must not see the first run's narrowing.
+	shared := []string{"github.com", "api.anthropic.com"}
+	src := types.RunPolicySpec{AllowedDomains: shared}
+	confineGitBrokerEgress(&src, grants)
+	if !slices.Equal(shared, []string{"github.com", "api.anthropic.com"}) {
+		t.Errorf("caller's AllowedDomains array was mutated in place: %v", shared)
+	}
+}
+
+// TestBuildRepoRecordsCanonicalisesGitHubURLs pins the D2 half the Sec review
+// found incomplete. agent-run registers url.<broker>.insteadOf against
+// "https://github.com/<org>/<repo>" and git PREFIX-matches the record's clone URL
+// against it, so a full github URL must reach the sandbox in exactly that shape.
+// A trailing slash used to survive into the slug (the shell's bare-slug regex
+// then dropped the record entirely) and an http:// clone URL never prefix-matched
+// the https insteadOf — both left the clone dialing github.com directly, a route
+// a brokered run no longer has. A BARE slug is already canonical and must come
+// through byte-identical, casing included.
+func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		// bare slug: untouched, original casing preserved (git's insteadOf match is
+		// case-SENSITIVE even though github itself is not).
+		{"octocat/Hello-World", "https://github.com/octocat/Hello-World.git\t/home/agent/work/Hello-World\toctocat/Hello-World"},
+		// the two spellings the review found mismatching gitBrokerKeyFromSlug:
+		{"https://github.com/octocat/hello-world/", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		{"http://github.com/octocat/hello-world", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		// already-canonical URL forms collapse to the same record.
+		{"https://github.com/octocat/hello-world.git", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		// A MIXED-CASE full URL lowercases, dest included (~/work/hello-world, not
+		// ~/work/Hello-World). Deliberate — see the side-effect note in
+		// buildRepoRecords: it is what lets the dest dedup below see two spellings
+		// of one repo as one repo. Bare slugs, the common form, keep their case.
+		{"https://github.com/Octocat/Hello-World", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world"},
+		// NOT github: left completely alone (its own lane, its own host allowlist).
+		{"https://gitlab.com/o/r.git", "https://gitlab.com/o/r.git\t/home/agent/work/r\thttps://gitlab.com/o/r.git"},
+	} {
+		if got := buildRepoRecords(tc.in, nil); got != tc.want {
+			t.Errorf("buildRepoRecords(%q) =\n  %q\nwant\n  %q", tc.in, got, tc.want)
+		}
+	}
+
+	// A trailing-slash URL and its bare slug are the SAME repo: canonicalisation
+	// makes the dest dedup see that, instead of cloning it twice into
+	// ~/work/repo and ~/work/hello-world.
+	both := buildRepoRecords("octocat/hello-world", []types.WorkspaceRepo{{Repo: "https://github.com/octocat/hello-world/"}})
+	if strings.Contains(both, "\n") {
+		t.Errorf("buildRepoRecords: the same repo in two spellings produced two records:\n%s", both)
 	}
 }

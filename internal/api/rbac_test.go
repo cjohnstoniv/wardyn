@@ -45,14 +45,16 @@ func (rbacStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 }
 
 // rbacServer builds a server with OIDC configured (so the SSO branch of
-// humanOrAdminAuth is live), a secret store (so the harness-credential routes
-// mount) and the given operator allowlist.
+// humanOrAdminAuth is live), a secret store (so the secrets + harness-credential
+// routes mount), the harness's approval service (so GET /approvals answers) and
+// the given operator allowlist.
 func rbacServer(t *testing.T, operatorEmails ...string) *Server {
 	t.Helper()
 	h := newHarness(t)
 	cfg := baseTestConfig(h, rbacStore{})
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
+	cfg.Approvals = h.approvals
 	cfg.OperatorEmails = operatorEmails
 	return New(cfg)
 }
@@ -132,9 +134,16 @@ func TestIsOperator(t *testing.T) {
 	}
 }
 
-// gatedRoutes is the FULL set requireOperator gates: every mutating route of the
-// four disclosed clusters. It is the test's copy of the intent, so adding a
-// mutating route to one of those clusters without gating it fails here.
+// gatedRoutes is the FULL set requireOperator gates, i.e. the operator half of
+// the tier split (viewer = read + launch runs). It is the test's copy of the
+// intent, so adding a mutating route to one of these clusters without gating it
+// fails here.
+//
+// Path ids are deliberately NON-UUID/short where the handler parses one: every
+// gated handler validates its params before it touches a store, so an OPERATOR
+// request stops at a 4xx instead of dereferencing rbacStore's nil embedded
+// Store. That is what TestRequireOperator_OperatorPassesEveryGatedRoute asserts
+// (anything but 401/403).
 var gatedRoutes = []struct{ method, path string }{
 	// 1. managed harness credential
 	{http.MethodPost, "/api/v1/setup/harness-login"},
@@ -159,19 +168,30 @@ var gatedRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/v1/workspaces/w1/verify/suggest-fix"},
 	// 4. site config
 	{http.MethodPut, "/api/v1/site-config"},
+	// 5. secrets — credential MATERIAL (the LIST is names-only and stays a read).
+	{http.MethodPut, "/api/v1/secrets/s1"},
+	{http.MethodDelete, "/api/v1/secrets/s1"},
+	// 6. approval decisions — the live authorization over an escalation. Reading
+	// the queue stays a viewer act (see readRoutes).
+	{http.MethodPost, "/api/v1/approvals/a1/approve"},
+	{http.MethodPost, "/api/v1/approvals/a1/deny"},
+	// 7. attach ticket — mints a live interactive PTY into a running sandbox.
+	{http.MethodPost, "/api/v1/runs/r1/attach-ticket"},
 }
 
-// readRoutes are the reads in those same four clusters. A viewer keeps all of
-// them — this gate refuses writes, it does not blind anyone.
+// readRoutes are the reads in those same clusters. A viewer keeps all of them —
+// this gate refuses writes, it does not blind anyone.
 var readRoutes = []string{
 	"/api/v1/policies",
 	"/api/v1/workspaces",
 	"/api/v1/site-config",
+	"/api/v1/secrets",
+	"/api/v1/approvals",
 }
 
 // TestRequireOperator_ViewerRefusedOnEveryGatedRoute is the finding's regression:
 // with an operator allowlist configured, a signed-in human who is not on it must
-// be refused on every mutating route of the four disclosed clusters.
+// be refused on every gated route.
 func TestRequireOperator_ViewerRefusedOnEveryGatedRoute(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
 	viewer := ssoSession(t, "sub-viewer", rbacViewer)
@@ -247,6 +267,44 @@ func TestRequireOperator_AdminTokenAlwaysOperator(t *testing.T) {
 			w := do(t, srv, rt.method, rt.path, adminToken, "{}")
 			if w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
 				t.Fatalf("status = %d, want the admin token to stay an operator: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestMeReportsOperatorRole: the console cannot hide the operator-only actions
+// from a viewer unless the API tells it the role — otherwise the tier is
+// discoverable only as a raw 403 after the click. handleMe answers with the SAME
+// isOperator predicate requireOperator gates the routes with, so the badge and
+// the gate can never disagree.
+func TestMeReportsOperatorRole(t *testing.T) {
+	srv := rbacServer(t, rbacOperator)
+	for _, tc := range []struct {
+		name, sub, email string
+		want             bool
+	}{
+		{"listed human is operator", "sub-op", "ops@corp.example", true}, // lower-case: list is mixed
+		{"unlisted human is viewer", "sub-viewer", rbacViewer, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/me", ssoSession(t, tc.sub, tc.email), "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET /me = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			var got struct {
+				Principal string `json:"principal"`
+				Method    string `json:"method"`
+				Operator  bool   `json:"operator"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode /me: %v (body %q)", err, w.Body.String())
+			}
+			if got.Operator != tc.want {
+				t.Fatalf("/me operator = %v, want %v (body %q)", got.Operator, tc.want, w.Body.String())
+			}
+			// The two pre-existing fields must survive — the console reads them.
+			if got.Principal == "" || got.Method == "" {
+				t.Fatalf("/me dropped principal/method: %q", w.Body.String())
 			}
 		})
 	}

@@ -124,6 +124,29 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 		if url == "" {
 			return
 		}
+		// A FULL github URL — any spelling the control plane accepts: http://,
+		// trailing slash, .git suffix, :port, mixed case — collapses to the one
+		// shape agent-run's rewrite matches. It registers url.<broker>.insteadOf
+		// against "https://github.com/<org>/<repo>" and git prefix-matches the
+		// clone URL against it, so a trailing slash (which the shell's bare-slug
+		// regex rejects outright) or an http:// URL (which no https insteadOf
+		// prefix-matches) left the clone dialing github.com directly — a route a
+		// brokered run no longer has. A BARE slug is already this shape and is left
+		// untouched, casing included.
+		//
+		// SIDE EFFECT, deliberate: the canonical key is lowercased, so a full URL's
+		// default dest follows — `https://github.com/octocat/Hello-World` clones to
+		// ~/work/hello-world, where HEAD gave ~/work/Hello-World. Accepted rather
+		// than derived-before-canonicalisation, because it is what makes the dest
+		// dedup below SEE that two spellings of one repo are one repo (HEAD cloned
+		// the bare slug and its trailing-slash URL into two directories, the second
+		// named ~/work/repo). A dest is a directory name; resolve_workdir finds the
+		// repo by scanning for .git, never by name.
+		if strings.Contains(slug, "://") {
+			if key := gitBrokerKeyFromSlug(slug); key != "" {
+				slug, url = key, "https://github.com/"+key+".git"
+			}
+		}
 		if dest == "" {
 			name := strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git")
 			if name == "" {

@@ -232,7 +232,10 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 		// the log never overstates OR understates what the deployment enforces.
 		// Log only the COUNT — the list itself is not disclosed.
 		if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
-			slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled. WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are VIEWERS (403 on harness-credential, policy, workspace and site-config writes; reads unchanged). That is the ONLY role tier — everything else, incl. the admin token, is operator",
+			slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled. "+
+				"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are VIEWERS — they read everything and may launch runs, "+
+				"but get 403 on configuring the deployment (harness-credential, policy, workspace, site-config writes), on secret writes/deletes, "+
+				"on deciding an approval, and on minting an attach ticket. That is the ONLY role tier — everything else, incl. the admin token, is operator",
 				slog.Int("operator_emails", len(ops)))
 			// The allowlist matches the IdP's email claim, and email_verified is
 			// only enforced when the domains list is set — without it, an IdP
@@ -243,8 +246,19 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secre
 				slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but WARDYN_OIDC_EMAIL_DOMAINS is not — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list too")
 			}
 		} else {
-			slog.Info("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; the console offers the 'Sign in with SSO' link, and WARDYN_OIDC_OPERATOR_EMAILS is unset, so every SSO human has the same power as the admin token (set it to demote everyone else to a read-only viewer)")
+			slog.Warn("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; " +
+				"the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so every SSO human would have the same power as the admin token — " +
+				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to demote everyone else to a viewer)")
 		}
+	}
+
+	// The second boot refusal (validateConfig, main.go, is the first): SSO
+	// configured with no operator allowlist makes every signed-in human
+	// admin-equivalent. Checked HERE rather than in validateConfig because the
+	// authenticator only exists this far into boot; of.authn is the resolved
+	// "OIDC is configured" fact, so this cannot drift from what actually mounted.
+	if err := validateOperatorPosture(of.authn != nil, splitCSV(*f.oidcOperatorEmails), *f.allowOIDCNoOperatorList); err != nil {
+		return of, err
 	}
 
 	// Devcontainer image builder (optional; docker build tag only). When -envbuild

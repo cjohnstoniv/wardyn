@@ -194,6 +194,70 @@ func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	}
 }
 
+// ─── validateOperatorPosture: SSO with no operator allowlist fails closed ────
+
+// TestValidateOperatorPosture is the second boot refusal's contract: configuring
+// OIDC SSO IS the declaration that more than one human exists, so an empty
+// operator allowlist (which makes every signed-in human admin-equivalent) is
+// refused unless WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST overrides it. Unconditional:
+// no bind-address escape, unlike the plaintext rule above.
+func TestValidateOperatorPosture(t *testing.T) {
+	tests := []struct {
+		name           string
+		oidcConfigured bool
+		operatorEmails []string
+		allowNoList    bool
+		wantErr        bool
+	}{
+		{
+			// The finding: SSO on, nobody named, every human an admin.
+			name: "oidc with an empty operator list is refused", oidcConfigured: true, wantErr: true,
+		},
+		{
+			name: "oidc with an operator list boots", oidcConfigured: true, operatorEmails: []string{"ops@corp.example"},
+		},
+		{
+			name: "oidc with an empty list boots with the explicit override", oidcConfigured: true, allowNoList: true,
+		},
+		{
+			// Additive-compatibility guarantee: the override reproduces the exact
+			// pre-refusal behavior, allowlist or not.
+			name: "override with a list set is still fine", oidcConfigured: true, operatorEmails: []string{"ops@corp.example"}, allowNoList: true,
+		},
+		{
+			// No SSO => the admin token / local mode, one shared credential with no
+			// human identity to demote. Nothing to decide, so the rule never fires
+			// and the default single-operator deployment is untouched.
+			name: "no oidc, no list: unaffected", oidcConfigured: false,
+		},
+		{
+			name: "no oidc with a list set: still unaffected", oidcConfigured: false, operatorEmails: []string{"ops@corp.example"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateOperatorPosture(tc.oidcConfigured, tc.operatorEmails, tc.allowNoList)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateOperatorPosture(%v, %v, %v): want error, got nil", tc.oidcConfigured, tc.operatorEmails, tc.allowNoList)
+				}
+				// The message must name BOTH the fix and the override, or an
+				// operator hitting this at 3am has to read the source.
+				for _, want := range []string{"refusing to start", "WARDYN_OIDC_OPERATOR_EMAILS", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q does not mention %q", err.Error(), want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateOperatorPosture(%v, %v, %v): unexpected error: %v", tc.oidcConfigured, tc.operatorEmails, tc.allowNoList, err)
+			}
+		})
+	}
+}
+
 // ─── flag vs env precedence for the flagEnv/flagBool/flagDuration helpers ────────
 //
 // These helpers seed a flag's DEFAULT from the documented env var, then register

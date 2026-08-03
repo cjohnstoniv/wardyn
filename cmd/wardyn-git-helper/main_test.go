@@ -59,8 +59,9 @@ func TestGetSuccess(t *testing.T) {
 			return
 		}
 		writeJSON(w, http.StatusOK, mintResponse{
-			Kind:      "github_token",
+			Kind:      "git_pat",
 			Token:     "ghs_faketoken",
+			Username:  "x-access-token", // broker-resolved username rides the mint response
 			JTI:       "jti-1",
 			ExpiresAt: time.Now().Add(time.Hour).Format(time.RFC3339),
 		})
@@ -69,7 +70,8 @@ func TestGetSuccess(t *testing.T) {
 	fp := newFakeProxy(t, mux)
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "test-grant-1")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"test-grant-1"}`)
 
 	stdin := strings.NewReader("protocol=https\nhost=github.com\n\n")
 	var stdout, stderr bytes.Buffer
@@ -126,7 +128,8 @@ func TestGetApprovalThenSuccess(t *testing.T) {
 	fp := newFakeProxy(t, mux)
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-999")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-999"}`)
 	// Short approval timeout so the test doesn't hang.
 	t.Setenv("WARDYN_APPROVAL_TIMEOUT", "30s")
 
@@ -157,7 +160,8 @@ func TestGetDenied(t *testing.T) {
 
 	fp := newFakeProxy(t, mux)
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-denied")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-denied"}`)
 
 	stdin := strings.NewReader("protocol=https\nhost=github.com\n\n")
 	var stdout, stderr bytes.Buffer
@@ -191,7 +195,8 @@ func TestGetApprovalTimeout(t *testing.T) {
 
 	fp := newFakeProxy(t, mux)
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-timeout")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-timeout"}`)
 	// Very short timeout so the test is fast.
 	t.Setenv("WARDYN_APPROVAL_TIMEOUT", "1s")
 
@@ -284,7 +289,8 @@ func TestGitHubSubdomain(t *testing.T) {
 
 	fp := newFakeProxy(t, mux)
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-sub")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"api.github.com":"grant-sub"}`)
 
 	stdin := strings.NewReader("protocol=https\nhost=api.github.com\n\n")
 	var stdout, stderr bytes.Buffer
@@ -304,7 +310,8 @@ func TestMint422RequiresSPIRE(t *testing.T) {
 
 	fp := newFakeProxy(t, mux)
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-spire")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-spire"}`)
 
 	stdin := strings.NewReader("protocol=https\nhost=github.com\n\n")
 	var stdout, stderr bytes.Buffer
@@ -327,7 +334,8 @@ func TestMint401Unauthorized(t *testing.T) {
 
 	fp := newFakeProxy(t, mux)
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-unauth")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-unauth"}`)
 
 	stdin := strings.NewReader("protocol=https\nhost=github.com\n\n")
 	var stdout, stderr bytes.Buffer
@@ -359,7 +367,8 @@ func TestApprovalDeniedViaPolling(t *testing.T) {
 
 	fp := newFakeProxy(t, mux)
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-polldeny")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-polldeny"}`)
 	t.Setenv("WARDYN_APPROVAL_TIMEOUT", "30s")
 
 	stdin := strings.NewReader("protocol=https\nhost=github.com\n\n")
@@ -466,7 +475,8 @@ func TestAuthCorrectSecretMints(t *testing.T) {
 	fp := newFakeProxy(t, authMintMux(&minted, "ghs_auth_ok"))
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-auth")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-auth"}`)
 	t.Setenv("WARDYN_GIT_HELPER_SECRET", secret)
 	sf := writeTempSecret(t, secret)
 
@@ -488,7 +498,8 @@ func TestAuthWrongSecretFailsClosed(t *testing.T) {
 	fp := newFakeProxy(t, authMintMux(&minted, "ghs_should_not_mint"))
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-auth")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-auth"}`)
 	t.Setenv("WARDYN_GIT_HELPER_SECRET", "the-wrong-secret")
 	sf := writeTempSecret(t, "the-real-secret")
 
@@ -512,7 +523,8 @@ func TestAuthMissingPresentedSecretFailsClosed(t *testing.T) {
 	fp := newFakeProxy(t, authMintMux(&minted, "ghs_should_not_mint"))
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-auth")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-auth"}`)
 	t.Setenv("WARDYN_GIT_HELPER_SECRET", "") // caller presents nothing
 	sf := writeTempSecret(t, "the-real-secret")
 
@@ -538,7 +550,8 @@ func TestAuthSecretFileAbsentFailsOpen(t *testing.T) {
 	fp := newFakeProxy(t, authMintMux(&minted, "ghs_legacy_ok"))
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
-	t.Setenv("WARDYN_GITHUB_GRANT_ID", "grant-auth")
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "") // App lane is brokered + refused; drive the same mint path via git_pat
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"grant-auth"}`)
 	// No WARDYN_GIT_HELPER_SECRET and a path that does not exist.
 	absent := filepath.Join(t.TempDir(), "does-not-exist.secret")
 
@@ -705,39 +718,84 @@ func TestGetGitHubFallsThroughToPATWhenNoAppGrant(t *testing.T) {
 	assertContains(t, out, "username=x-access-token")
 }
 
-// TestGetGitHubAppGrantWinsOverPAT verifies the App-grant path is checked
-// first and still wins when BOTH WARDYN_GITHUB_GRANT_ID and a github.com
-// git_pat grant are configured — the fallthrough is additive, not a
-// replacement.
-func TestGetGitHubAppGrantWinsOverPAT(t *testing.T) {
+// TestGetGitHubAppGrantRefusesBrokeredLane: a run whose repos the git broker
+// SERVES (WARDYN_GIT_BROKER_REPOS) is BROKERED — the proxy's /wardyn/gh/ route
+// mints server-side, applies the per-repo allowlist, and parses receive-pack refs
+// against the branch namespace. So a GitHub host emits NOTHING here (no mint call
+// at all), even though a github.com git_pat grant is also configured: the
+// installation token must never reach the sandbox, and a PAT fallthrough would
+// just reopen the direct lane the parser cannot see. This is the regression pin
+// for the bypass.
+func TestGetGitHubAppGrantRefusesBrokeredLane(t *testing.T) {
+	var mintCalls atomic.Int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("/wardyn/v1/credentials/mint", func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req["grant_id"] != "gh-app-grant" {
-			http.Error(w, "expected the App grant id, got wrong grant_id", http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, http.StatusOK, mintResponse{
-			Kind:  "github_token",
-			Token: "ghs_apptoken",
-			JTI:   "jti-gh-app",
-		})
+	mux.HandleFunc("/wardyn/v1/credentials/mint", func(w http.ResponseWriter, _ *http.Request) {
+		mintCalls.Add(1)
+		writeJSON(w, http.StatusOK, mintResponse{Kind: "github_token", Token: "ghs_apptoken", JTI: "jti-gh-app"})
 	})
 	fp := newFakeProxy(t, mux)
 
 	t.Setenv("WARDYN_PROXY_URL", fp.URL())
 	t.Setenv("WARDYN_GITHUB_GRANT_ID", "gh-app-grant")
+	t.Setenv("WARDYN_GIT_BROKER_REPOS", "octocat/hello-world") // the run IS brokered
 	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"github.com":"gh-pat-grant-should-not-be-used"}`)
+
+	for _, host := range []string{"github.com", "api.github.com"} {
+		stdin := strings.NewReader("protocol=https\nhost=" + host + "\n\n")
+		var stdout, stderr bytes.Buffer
+		if err := run("get", "", stdin, &stdout, &stderr); err != nil {
+			t.Fatalf("run(%s): %v", host, err)
+		}
+		if stdout.String() != "" {
+			t.Errorf("host %s: stdout = %q, want empty (no credential emitted on a brokered run)", host, stdout.String())
+		}
+		if !strings.Contains(stderr.String(), "brokered") {
+			t.Errorf("host %s: stderr = %q, want it to say the lane is brokered", host, stderr.String())
+		}
+	}
+	if n := mintCalls.Load(); n != 0 {
+		t.Fatalf("mint was called %d times; a refused host must never reach the mint route", n)
+	}
+
+	// The PAT lane is untouched: a NON-github host still mints normally even on a
+	// run that carries an App grant.
+	t.Setenv("WARDYN_GIT_PAT_GRANTS", `{"dev.azure.com":"ado-grant"}`)
+	stdin := strings.NewReader("protocol=https\nhost=dev.azure.com\n\n")
+	var stdout, stderr bytes.Buffer
+	if err := run("get", "", stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("run(dev.azure.com): %v", err)
+	}
+	assertContains(t, stdout.String(), "password=ghs_apptoken")
+	if mintCalls.Load() != 1 {
+		t.Fatalf("mint calls = %d, want exactly 1 (the ADO PAT lane)", mintCalls.Load())
+	}
+}
+
+// TestGetGitHubAppGrantWithNoBrokeredReposStillMints pins the OTHER half of the
+// predicate: a github_token grant that covers NO repo (scope.repos empty and no
+// --repo / workspace_repos — what every shipped example policy produces on its
+// own) is NOT brokered. There is no /wardyn/gh/ route for it and dispatch injects
+// no github deny, so this helper is still the run's only credential path and must
+// behave exactly as it did before the broker landed. Refusing on the grant alone
+// left such a run with no credential AND github.com still reachable.
+func TestGetGitHubAppGrantWithNoBrokeredReposStillMints(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wardyn/v1/credentials/mint", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, mintResponse{Kind: "github_token", Token: "ghs_apptoken", JTI: "jti-gh-app"})
+	})
+	fp := newFakeProxy(t, mux)
+
+	t.Setenv("WARDYN_PROXY_URL", fp.URL())
+	t.Setenv("WARDYN_GITHUB_GRANT_ID", "gh-app-grant")
+	t.Setenv("WARDYN_GIT_BROKER_REPOS", "") // no brokered repos => not a brokered run
 
 	stdin := strings.NewReader("protocol=https\nhost=github.com\n\n")
 	var stdout, stderr bytes.Buffer
 	if err := run("get", "", stdin, &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	out := stdout.String()
-	assertContains(t, out, "password=ghs_apptoken")
-	assertContains(t, out, "username=x-access-token")
+	assertContains(t, stdout.String(), "password=ghs_apptoken")
+	assertContains(t, stdout.String(), "username=x-access-token")
 }
 
 // assertContains is a test helper that fails if substr is not in s.

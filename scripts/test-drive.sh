@@ -505,10 +505,16 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 5: Brokered git credential
-# docker exec wardyn-git-helper get for github.com -> raises a credential
-# ApprovalRequest (requires_approval=true in demo.json) -> we approve it ->
-# the broker fails closed (no GitHub App configured in demo) -> no token in
-# sandbox env (invariant 1: secrets never in sandbox).
+# create_run always passes repo=${PUBLIC_REPO}, so dispatch keys the git-broker
+# allowlist from it and this run is BROKERED: the /wardyn/gh/ route mints the
+# installation token SERVER-SIDE and the broker-managed github hosts are denied.
+# The mint/approval chain is unchanged, it just runs proxy-side now:
+#   (a) wardyn-git-helper REFUSES github.com -> no credential in the sandbox
+#   (b) a credential ApprovalRequest is still raised (requires_approval=true in
+#       demo.json) -> by the broker route's own mint during the clone
+#   (c) we approve -> one brokered request re-mints -> broker fails closed (no
+#       GitHub App configured in demo) -> 502, no token
+#   (d) no token in sandbox env (invariant 1: secrets never in sandbox)
 # ─────────────────────────────────────────────────────────────────────────────
 if run_section 5; then
   log "Section 5: brokered git credential chain"
@@ -525,13 +531,24 @@ if run_section 5; then
     TMPOUT="/tmp/wardyn-td-s5-${S5_RUN_ID}.out"
     TMPERR="/tmp/wardyn-td-s5-${S5_RUN_ID}.err"
 
-    note "section 5: running wardyn-git-helper get (background, 60s approval timeout)"
-    docker exec -e WARDYN_APPROVAL_TIMEOUT=60s "${S5_CTR}" sh -c \
+    # (a) The helper must REFUSE: this run is brokered, so the token belongs
+    # proxy-side. Foreground — a refusal returns immediately (no mint, no poll).
+    note "section 5: running wardyn-git-helper get (expects a refusal, brokered run)"
+    docker exec "${S5_CTR}" sh -c \
       'printf "protocol=https\nhost=github.com\n\n" | /usr/local/bin/wardyn-git-helper get' \
-      >"${TMPOUT}" 2>"${TMPERR}" &
-    S5_PID=$!
+      >"${TMPOUT}" 2>"${TMPERR}" || true
+    S5_REFUSE_OUT="$(cat "${TMPOUT}" 2>/dev/null || echo "")"
+    S5_REFUSE_ERR="$(cat "${TMPERR}" 2>/dev/null || echo "")"
+    if echo "${S5_REFUSE_OUT}" | grep -q '^password='; then
+      bad "section 5: git-helper emitted a credential on a BROKERED run (token entered the sandbox)"
+    elif echo "${S5_REFUSE_ERR}" | grep -qiE 'brokered through wardyn-proxy|refusing to mint'; then
+      ok "section 5: git-helper refused the brokered App lane — no token in the sandbox"
+    else
+      bad "section 5: git-helper neither refused nor emitted: ${S5_REFUSE_ERR:-<empty>}"
+    fi
 
-    # Poll for the credential ApprovalRequest.
+    # (b) Poll for the credential ApprovalRequest — raised by the BROKER route's
+    # server-side mint when agent-run cloned through /wardyn/gh/ at run start.
     S5_CRED_AP=""
     for _ in $(seq 1 20); do
       S5_CRED_AP="$(api "/api/v1/approvals?state=PENDING" \
@@ -547,7 +564,7 @@ print(next((a['id'] for a in aps
     done
 
     if [[ -n "${S5_CRED_AP}" ]]; then
-      ok "section 5: credential ApprovalRequest raised (id=${S5_CRED_AP})"
+      ok "section 5: credential ApprovalRequest raised by the broker route (id=${S5_CRED_AP})"
     else
       bad "section 5: no PENDING credential approval for run ${S5_RUN_ID}"
     fi
@@ -564,27 +581,25 @@ print(next((a['id'] for a in aps
       fi
     fi
 
-    # Wait for the helper to exit.
-    for _ in $(seq 1 30); do kill -0 "${S5_PID}" 2>/dev/null || break; sleep 2; done
-    if kill -0 "${S5_PID}" 2>/dev/null; then
-      note "section 5: git-helper still running after 60s; killing"
-      kill "${S5_PID}" 2>/dev/null || true
-    fi
-    wait "${S5_PID}" 2>/dev/null || true
-
-    S5_STDOUT="$(cat "${TMPOUT}" 2>/dev/null || echo "")"
-    S5_STDERR="$(cat "${TMPERR}" 2>/dev/null || echo "")"
-
-    note "section 5: git-helper stdout: ${S5_STDOUT:-<empty>}"
-    note "section 5: git-helper stderr: ${S5_STDERR:-<empty>}"
-
-    # Fail-closed proof: no token emitted + the documented error message appears.
-    if echo "${S5_STDOUT}" | grep -q '^password='; then
-      bad "section 5: git-helper emitted a token (fail-closed broken; token leaked)"
-    elif echo "${S5_STDERR}" | grep -qiE 'no GitHubMinter configured|mint status 500|fail.?closed|github_token grant but no'; then
-      ok "section 5: broker failed closed (no GitHub App); full chain proven; no token"
-    else
-      note "section 5: fail-closed error message not matched; may be expected if approval timed out"
+    # (c) Re-drive ONE brokered request now the approval is APPROVED: the proxy
+    # re-mints server-side, the demo has no GitHubMinter, so the broker fails
+    # closed and the sandbox sees a 502 carrying no credential. Origin-form (no
+    # -x): /wardyn/gh/ is a proxy-LOCAL route and wardyn-proxy is in NO_PROXY.
+    if [[ -n "${S5_CRED_AP}" ]]; then
+      S5_GB_URL='${WARDYN_PROXY_URL}/wardyn/gh/'"${PUBLIC_REPO}"'.git/info/refs?service=git-upload-pack'
+      S5_GB_CODE="$(docker exec "${S5_CTR}" sh -c \
+        "curl -sS -o /dev/null -m 30 -w '%{http_code}' \"${S5_GB_URL}\"" 2>&1 || echo "")"
+      S5_GB_BODY="$(docker exec "${S5_CTR}" sh -c "curl -sS -m 30 \"${S5_GB_URL}\"" 2>&1 || echo "")"
+      note "section 5: git-broker route http_code=${S5_GB_CODE} body=${S5_GB_BODY}"
+      if echo "${S5_GB_BODY}" | grep -qE 'ghs_|"token"|password='; then
+        bad "section 5: the git-broker route returned credential material to the sandbox"
+      elif [[ "${S5_GB_CODE}" == "200" ]]; then
+        bad "section 5: brokered route returned 200 with no GitHub App configured (fail-closed broken)"
+      elif [[ "${S5_GB_CODE}" == "502" ]]; then
+        ok "section 5: broker re-minted and failed closed (502, no GitHub App); no token in the sandbox"
+      else
+        bad "section 5: brokered route returned ${S5_GB_CODE}, want 502 fail-closed"
+      fi
     fi
 
     # Invariant 1: no token in sandbox env.

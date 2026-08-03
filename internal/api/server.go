@@ -194,10 +194,12 @@ type Config struct {
 	OIDC *oidc.Authenticator
 	// OperatorEmails, when non-empty, is the operator allowlist of the minimal
 	// viewer/operator role gate (requireOperator, http.go): an OIDC human whose
-	// session email is not on it is a VIEWER and is refused with 403 on the
-	// MUTATING routes of the four highest-blast-radius clusters — managed
-	// harness credential, policies, workspaces, site-config. Matching is
-	// case-insensitive on the whole address; read routes are never gated.
+	// session email is not on it is a VIEWER — read everything, launch runs, but
+	// refused with 403 on configuring the deployment (managed harness credential,
+	// policies, workspaces, site-config), writing/deleting SECRETS, DECIDING an
+	// approval, and minting an attach ticket (a live PTY into a running sandbox).
+	// Matching is case-insensitive on the whole address; read routes are never
+	// gated.
 	//
 	// EMPTY (the default) is exactly today's behavior: every authenticated human
 	// is admin-equivalent. Admin-token and local-mode callers are always
@@ -466,13 +468,16 @@ func (s *Server) routes() chi.Router {
 			// front (chi's With is what Group is built from): the minimal role
 			// gate. Routes registered on it are authenticated exactly as before
 			// and then refused for a signed-in VIEWER — see requireOperator, which
-			// is a no-op until WARDYN_OIDC_OPERATOR_EMAILS is set. Only the
-			// MUTATING routes of the four disclosed clusters use it; every read
-			// stays on r, so the gated routes are the ones written out below and
-			// nothing else silently joins them.
+			// is a no-op until WARDYN_OIDC_OPERATOR_EMAILS is set. The tier is
+			// "viewer = read + launch runs": creating/killing/composing a run,
+			// preflight and profile stay on r deliberately (a viewer may USE the
+			// product), while configuring it, touching credential MATERIAL,
+			// DECIDING an approval and minting a PTY ticket are operator acts.
+			// Every read stays on r, so the gated routes are the ones written out
+			// below and nothing else silently joins them.
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
-			// later-added Use applies to r's routes but silently NOT to these 19.
+			// later-added Use applies to r's routes but silently NOT to these 24.
 			operatorOnly := r.With(s.requireOperator)
 			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
@@ -497,11 +502,23 @@ func (s *Server) routes() chi.Router {
 			// bearer on a WebSocket handshake, so the UI first POSTs here
 			// (through THIS authenticated group) and presents the returned
 			// 30s ticket as ?ticket= on the attach WS below.
-			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
+			//
+			// OPERATOR-ONLY: the ticket mints a live interactive PTY inside a
+			// RUNNING sandbox — injected keystrokes and whatever the agent's
+			// injected credentials left on screen — which is strictly more than
+			// "launch a run" and is not something a viewer tier can hold.
+			operatorOnly.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
 
+			// Approvals: reading the queue is a viewer act, DECIDING is not — the
+			// decision IS the live authorization over an egress/credential
+			// escalation. The sandbox can only ever REQUEST one (machine audience,
+			// /internal/approvals below), so gating the decision here cannot
+			// starve an agent of anything it could previously do for itself.
+			// Consequence, by design: a viewer's run that trips an approval blocks
+			// until an operator decides it.
 			r.Get("/approvals", s.handleListApprovals)
-			r.Post("/approvals/{id}/approve", s.handleApproveApproval)
-			r.Post("/approvals/{id}/deny", s.handleDenyApproval)
+			operatorOnly.Post("/approvals/{id}/approve", s.handleApproveApproval)
+			operatorOnly.Post("/approvals/{id}/deny", s.handleDenyApproval)
 
 			r.Get("/audit", s.handleQueryAudit)
 			r.Get("/me", s.handleMe)
@@ -605,9 +622,14 @@ func (s *Server) routes() chi.Router {
 			// Secret management: write/delete/list only. Values are NEVER
 			// readable through the API (read paths are the broker and the
 			// internal injection-resolve endpoint, both audited).
+			//
+			// The writes are operator-only: this is credential MATERIAL, a
+			// strictly larger blast radius than site-config (which only names a
+			// secret *ref*). The LIST stays viewer-readable — it returns names
+			// only, never values.
 			if s.cfg.Secrets != nil {
-				r.Put("/secrets/{name}", s.handlePutSecret)
-				r.Delete("/secrets/{name}", s.handleDeleteSecret)
+				operatorOnly.Put("/secrets/{name}", s.handlePutSecret)
+				operatorOnly.Delete("/secrets/{name}", s.handleDeleteSecret)
 				r.Get("/secrets", s.handleListSecrets)
 			}
 

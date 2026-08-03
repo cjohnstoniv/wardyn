@@ -52,13 +52,20 @@ const defaultMaxTTL = time.Hour
 // branch (including the default) in its granted repos. Enforcement lives one layer
 // out, in the git-broker proxy route (internal/egress/proxy/git_broker.go), which
 // parses the pkt-line command section of a POST git-receive-pack and refuses any
-// ref outside refs/heads/wardyn/<run-id>/. That enforcement is OPT-IN
-// (WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS on the proxy) and OFF by default, because
-// nothing in Wardyn yet tells an agent to name its branch that way — so on a
-// default run this metadata is still advisory. Represent it as enforced only for
-// runs whose proxy has the env set (and whose task text pins the convention);
-// making it default-on is [v0.5 — planned], as is a GitHub-side ruleset that would
-// hold even for a leaked token. See threatmodel/THREAT-MODEL.md asset #4.
+// ref outside refs/heads/wardyn/<run-id>/. That enforcement is ON BY DEFAULT
+// (WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false opts out): agent-run checks each
+// cloned repo out onto wardyn/<run-id>/work, so a stock run complies without the
+// operator pinning the convention in task text, and dispatch strips the
+// broker-managed GitHub hosts from a brokered run's egress so the brokered route
+// is the only route.
+//
+// STILL NOT COVERED, stated plainly: the property binds the BROKERED App lane
+// only. A git_pat or ssh_key push does not traverse this route (SSH is not
+// smart-HTTP; a PAT push is an opaque CONNECT), so those are bounded by the
+// operator who supplied the credential, not by this namespace. A token
+// exfiltrated from the proxy itself is likewise unconstrained. Token-side
+// confinement — a GitHub-side ruleset that would hold even for a leaked token —
+// is [v0.5+ — planned]. See threatmodel/THREAT-MODEL.md asset #4.
 //
 // LOCKSTEP: proxy.BranchNSPrefix rebuilds this same prefix from the run id (the
 // namespace does not travel to the proxy — it is a pure function of the run id).

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,15 +71,12 @@ type dispatchParams struct {
 // result linkage), so p.VerifyPlan is the discriminator between scan-only and
 // verify-only in the same dispatch.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatchParams) {
-	runToken := p.RunToken
+	// Only the values a phase below REBINDS get a local alias; everything else is
+	// read straight off p (the named-field struct is already self-documenting).
 	image := p.Image
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
-	firstGitHubGrantID := p.FirstGitHubGrantID
-	gitPATGrants := p.GitPATGrants
-	sshGrants := p.SSHGrants
 	injections := p.Injections
 	interactive := p.Interactive
-	taskMode := p.TaskMode
 	verifyPlan := p.VerifyPlan
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
@@ -129,7 +127,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// Per-run proxy sidecar (docker hostname) unless the config overrides it.
 	proxyURL := cmp.Or(s.cfg.ProxyURL, "http://wardyn-proxy:3128")
 	sandboxEnv := buildBaseSandboxEnv(run, proxyURL)
-	applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, taskMode, firstGitHubGrantID, gitPATGrants, sshGrants)
+	applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, p.TaskMode, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	// Caller-supplied non-secret env (p.ExtraEnv): compose-only mode's
 	// WARDYN_COMPOSE_* (discriminator + base64 prompt/schema), or the AWS harness
@@ -223,6 +221,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		return
 	}
 
+	// BROKERED GIT: make the broker route the ONLY route. Last of the policy
+	// phases so nothing above can re-add a managed host. See
+	// confineGitBrokerEgress; the run.policy.effective audit below records the
+	// narrowed envelope, so the removal is disclosed, not silent.
+	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
+		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
+			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
+	}
+
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
 	mounts := buildRunMounts(policy, llm)
@@ -242,7 +249,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		// shell isn't empty. A non-interactive run's task exec does this itself.
 		Interactive: interactive,
 		ProxyConfig: runner.ProxyConfig{
-			RunToken:        runToken,
+			RunToken:        p.RunToken,
 			ControlPlaneURL: s.cfg.ControlPlaneURL,
 			// The proxy sidecar enforces THIS run's egress policy; a proxy
 			// without a policy fails closed (no egress at all).
@@ -562,10 +569,12 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 // applyDispatchModeEnv sets dispatchWithVerify's run-mode discriminator env vars
 // (verify-only / scan-only / exec task mode) plus the non-secret grant-id maps
 // (WARDYN_GITHUB_GRANT_ID / WARDYN_GIT_PAT_GRANTS / WARDYN_SSH_GRANTS) that let
-// the in-sandbox helpers mint the credentials they're eligible for. Extracted
+// the in-sandbox helpers mint the credentials they're eligible for, plus
+// WARDYN_GIT_BROKER_REPOS (which of those are served by the git broker instead).
+// Extracted
 // verbatim from dispatchWithVerify — every branch here only decides which keys
 // land in sandboxEnv, none of them change dispatchWithVerify's own control flow.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, verifyPlan json.RawMessage, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string) {
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, verifyPlan json.RawMessage, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID uniquely marks a scan run (ordinary runs never
@@ -591,6 +600,23 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, veri
 	}
 	if firstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = firstGitHubGrantID.String()
+	}
+	// The repos this run is BROKERED for — the SAME map confineGitBrokerEgress
+	// keys on, so the sandbox's answer to "is my GitHub access brokered?" cannot
+	// drift from the control plane's. wardyn-git-helper refuses to mint a GitHub
+	// credential exactly when this is set (resolveGrantForHost): non-empty means
+	// the /wardyn/gh/ route exists AND the broker-managed hosts are denied, so
+	// the token belongs proxy-side only. A github_token grant with no repos
+	// declared anywhere is NOT brokered — no route, no deny — and keeps the
+	// helper as its credential path, unchanged. Non-secret: repo names only,
+	// space-separated canonical "<org>/<repo>", sorted for a stable env value.
+	if len(gitGrants) > 0 {
+		repos := make([]string, 0, len(gitGrants))
+		for key := range gitGrants {
+			repos = append(repos, key)
+		}
+		sort.Strings(repos)
+		sandboxEnv["WARDYN_GIT_BROKER_REPOS"] = strings.Join(repos, " ")
 	}
 	// git_pat grants: surface the {host: grant_id} map so the git-credential
 	// helper can mint the stored PAT for a matched non-GitHub host. Non-secret
@@ -628,6 +654,82 @@ func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy 
 	if repos := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
 		sandboxEnv["WARDYN_REPOS"] = repos
 	}
+}
+
+// confineGitBrokerEgress makes the git-broker route the ONLY route to GitHub for a
+// brokered run: it strips every gitBrokerManagedHosts entry from the allowlist AND
+// denies those hosts outright, returning what it removed (nil = nothing to do).
+//
+// WHY BOTH. The subtraction keeps the effective allowlist honest — it stops
+// claiming a host the run is not meant to dial. The deny is the load-bearing half:
+// deny beats allow AND beats allow_all_egress (proxy.Policy.evalHost), so an
+// allow-all policy cannot leave the direct route open. Without it the confinement
+// the broker route enforces — the per-repo allowlist and the push
+// branch-namespace pkt-line parser — was reachable only by shipped-policy
+// accident: no git host is ever TLS-MITM'd (LLM + operator artifact hosts only),
+// so a direct github.com:443 CONNECT is an opaque tunnel no parser can read, and
+// wardyn-git-helper prints a live minted token to stdout inside the sandbox with
+// the insteadOf rewrite living in the agent-writable global gitconfig.
+//
+// The broker's own re-origination to github.com is unaffected: handleGitBroker
+// dials through the proxy transport after vetURL (the SSRF/private-IP guard),
+// never through the policy evaluator.
+//
+// No-op without git grants — a run with no brokered repo has no broker route, so
+// its GitHub egress is the operator's ordinary policy choice.
+func confineGitBrokerEgress(policy *types.RunPolicySpec, gitGrants map[string]uuid.UUID) []string {
+	if len(gitGrants) == 0 {
+		return nil
+	}
+	kept, dropped := policy.AllowedDomains[:0:0], []string(nil) // :0:0 — never alias the caller's array
+	for _, d := range policy.AllowedDomains {
+		if gitBrokerManaged(d) {
+			dropped = append(dropped, d)
+			continue
+		}
+		kept = append(kept, d)
+	}
+	policy.AllowedDomains = kept
+	denied := map[string]bool{}
+	for _, d := range policy.DeniedDomains {
+		denied[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+	add := []string(nil)
+	for _, h := range gitBrokerManagedHosts {
+		if !denied[h] {
+			add = append(add, h)
+		}
+	}
+	if len(add) > 0 {
+		policy.DeniedDomains = append(append([]string(nil), policy.DeniedDomains...), add...)
+		dropped = append(dropped, add...)
+	}
+	return dropped
+}
+
+// gitBrokerManaged reports whether ONE egress-allowlist entry names a host the
+// git-broker manages — an exact host, a "*." wildcard entry the broker's own
+// wildcard covers, or either carrying a ":port" qualifier. Normalization mirrors
+// proxy.CompilePolicy (lowercase, trailing dot stripped) so what is subtracted is
+// exactly what the proxy would otherwise have allowed.
+func gitBrokerManaged(entry string) bool {
+	h := strings.ToLower(strings.TrimSpace(entry))
+	if host, _, ok := strings.Cut(h, ":"); ok { // "github.com:443" -> "github.com"
+		h = host
+	}
+	h = strings.TrimSuffix(h, ".")
+	for _, m := range gitBrokerManagedHosts {
+		if suffix, wild := strings.CutPrefix(m, "*"); wild {
+			if strings.HasSuffix(h, suffix) {
+				return true
+			}
+			continue
+		}
+		if h == m {
+			return true
+		}
+	}
+	return false
 }
 
 // hasAnthropicAPIKeyInjection reports whether the run already carries an api_key

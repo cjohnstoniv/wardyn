@@ -183,8 +183,9 @@ provision_git_helper_secret() {
 # traffic through the Wardyn git-broker (WARDYN_PROXY_URL/wardyn/gh/<org>/<repo>)
 # instead of dialing github.com directly. git rewrites the transport via
 # url.<broker>.insteadOf; the proxy enforces the per-repo allowlist and mints the
-# scoped installation token SERVER-SIDE (it never enters this sandbox). github.com
-# is not in this run's egress allowlist, so an un-brokered github URL is denied —
+# scoped installation token SERVER-SIDE (it never enters this sandbox). Dispatch
+# subtracts AND denies the broker-managed github hosts for any run with git grants
+# (api.confineGitBrokerEgress), so an un-brokered github URL has no route at all —
 # the repo is the unit of trust. No-op when there is no github grant.
 #
 # Only bare "<org>/<repo>" slugs (the github_token clone form) are rewritten. The
@@ -205,7 +206,15 @@ configure_git_broker_insteadof() {
     local _u _d slug broker
     while IFS=$'\t' read -r _u _d slug; do
         slug="${slug%.git}"
-        # bare <org>/<repo> only — skip full URLs, ssh slugs, and deeper paths.
+        # A full https github URL names the SAME repo as its bare slug, and the
+        # control plane derives the broker key from either (gitBrokerKeyFromSlug),
+        # so normalize it down instead of skipping it. Skipping left the record
+        # dialing github.com directly — a route a brokered run's egress no longer
+        # has (confineGitBrokerEgress), so an unrewritten record would just fail.
+        case "$slug" in
+            https://github.com/*|http://github.com/*) slug="${slug#*://github.com/}" ;;
+        esac
+        # bare <org>/<repo> only — ssh slugs and deeper paths keep their own lane.
         [[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || continue
         broker="${base}/wardyn/gh/${slug}"
         git config --global url."${broker}".insteadOf "https://github.com/${slug}" || true
@@ -214,6 +223,36 @@ configure_git_broker_insteadof() {
             git config --global --add url."${broker}".insteadOf "ssh://git@github.com/${slug}" || true
         fi
     done <<< "$records"
+}
+
+# ── run branch (push branch-namespace confinement) ───────────────────────────
+# name_run_branch <repo-dir> — check a freshly-cloned repo out onto THIS run's own
+# branch, `wardyn/$WARDYN_RUN_ID/work`.
+#
+# That is the namespace the git-broker enforces on push: the proxy parses the
+# pkt-line command section of every POST git-receive-pack and refuses any ref
+# outside refs/heads/wardyn/<run-id>/ (proxy.BranchNSPrefix, in lockstep with
+# broker.branchNamespaceFormat). Enforcement is ON by default, and THIS is what
+# makes that non-breaking: the agent starts on a compliant branch instead of the
+# operator having to pin the convention in task text. push.default=current so a
+# bare `git push` targets the same-named remote branch rather than failing on a
+# missing upstream.
+#
+# BEST-EFFORT by design: an empty repo, an odd checkout state, or a git that
+# dislikes the name logs a warning and continues. The proxy's parser is the gate,
+# not this — a run that never gets its branch simply gets a 403 on an
+# out-of-namespace push, which is the correct outcome. No-op without
+# WARDYN_RUN_ID (always set by dispatch; absent only for a hand-run container).
+name_run_branch() {
+    local dir="$1" branch
+    [[ -n "${WARDYN_RUN_ID:-}" && -n "$dir" ]] || return 0
+    branch="wardyn/${WARDYN_RUN_ID}/work"
+    git config --global push.default current 2>/dev/null || true
+    if git -C "$dir" checkout -b "$branch" 2>/dev/null; then
+        echo "agent-run: on run branch ${branch} (${dir})" >&2
+    else
+        echo "agent-run: WARNING could not create run branch ${branch} in ${dir}; a push outside wardyn/${WARDYN_RUN_ID}/* will be refused by the proxy" >&2
+    fi
 }
 
 # Clone the run's repo(s) into the workspace, if requested and not already present.
@@ -232,6 +271,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug
     echo "agent-run: cloning ${slug:-$url} into ${dest} (shallow, via wardyn-proxy)" >&2
     if git clone --depth 1 -- "$url" "$dest"; then
         echo "agent-run: clone OK (${dest})" >&2
+        name_run_branch "$dest"
     else
         echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
     fi

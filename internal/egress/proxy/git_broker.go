@@ -49,8 +49,8 @@ const (
 	// INSPECT (non-identity Content-Encoding) while enforcement is on — a
 	// distinct row so audit never reads an unparseable body as a ref violation.
 	ruleSourceGitEnc = "brokered:git:branch-ns-encoding"
-	// envEnforceBranchNS opts THIS proxy process into push branch-namespace
-	// confinement. See branchNSEnforced for why it is off by default.
+	// envEnforceBranchNS opts THIS proxy process OUT of push branch-namespace
+	// confinement (=false). See branchNSEnforced: it is ON by default.
 	envEnforceBranchNS = "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"
 	// maxReceivePackCmds caps the pkt-line COMMAND SECTION buffered ahead of the
 	// (still-streamed) packfile. Hundreds of ref updates fit in 64 KiB; anything
@@ -95,7 +95,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push confinement (opt-in). A receive-pack POST carries its ref updates in a
+	// Push confinement (ON by default; =false opts out). A receive-pack POST carries its ref updates in a
 	// small pkt-line command section AHEAD of the packfile, so buffer only that
 	// section, validate every ref against this run's branch namespace, then forward
 	// the buffered bytes followed by the still-streaming pack. Fetch/clone
@@ -188,6 +188,40 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	removeHopByHop(dst)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body) // stream the pack back
+}
+
+// isBrokeredGitGrant reports whether a sandbox-supplied mint body names one of
+// THIS run's git-broker grants — the guard that keeps the App installation token
+// out of the sandbox (handleBrokerMint). handleGitBroker's own mint does NOT come
+// through here: it calls mintGitToken -> forwardToControlPlane directly, so the
+// broker never refuses itself.
+//
+// Decoding mirrors the control plane's handleInternalMint EXACTLY (same
+// encoding/json Decoder, same one-field struct, same "grant_id" tag), so any body
+// that would mint a brokered grant there decodes to that grant id here —
+// including trailing-garbage and duplicate-key bodies, where a json.Unmarshal
+// here would have differed and become a bypass.
+//
+// ponytail: fail OPEN on an undecodable body. A body we cannot decode cannot name
+// a brokered grant the control plane would accept either (it 400s), so forwarding
+// it preserves today's error behavior for legitimate callers without opening a
+// hole. Fail-closed here would only convert a control-plane 400 into a proxy 403.
+func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
+	if len(p.gitGrants) == 0 {
+		return false
+	}
+	var req struct {
+		GrantID uuid.UUID `json:"grant_id"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil || req.GrantID == uuid.Nil {
+		return false
+	}
+	for _, id := range p.gitGrants {
+		if id == req.GrantID {
+			return true
+		}
+	}
+	return false
 }
 
 // gitToken returns a cached (or freshly minted) installation token for grantID,
@@ -316,19 +350,26 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // branchNSEnforced reports whether push branch-namespace confinement is ON for
 // THIS proxy process (env, like the WARDYN_LLM_SCAN kill-switch).
 //
-// OFF by default, honestly: nothing in Wardyn tells an agent to name its branch
-// `wardyn/<run-id>/...` — agent-run creates no branches (deploy/images/common/
-// agent-run-lib.sh only clones), the branch name comes from the operator's task
-// text, and the shipped push scenario asks for `wardyn/demo-push`. Enforcing by
-// default would deny most real pushes with no in-product way to comply. Operators
-// who DO pin the convention in their task text turn this on.
+// ON by default. The reason it could not be is now closed: agent-run checks every
+// cloned repo out onto `wardyn/$WARDYN_RUN_ID/work` and sets push.default=current
+// (name_run_branch in deploy/images/common/agent-run-lib.sh), so a stock run is
+// already inside its namespace and complies without the operator pinning the
+// convention in task text. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt
+// back out (e.g. an image whose agent-run predates the run branch).
+//
+// SCOPE, honestly: this binds the BROKERED path only. It sees git-receive-pack
+// because the sandbox->proxy hop is cleartext on the proxy's own route; a PAT push
+// or an SSH push is an opaque tunnel no pkt-line parser can read, and the
+// installation token itself is repo-scoped but not ref-scoped. Dispatch removes the
+// broker-managed GitHub hosts from a brokered run's egress (confineGitBrokerEgress
+// in internal/api/runs_dispatch.go) so the brokered route is the only route left.
 //
 // Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
 // silently disabling a security control on a typo.
 func branchNSEnforced() bool {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envEnforceBranchNS))); v {
 	case "":
-		return false
+		return true
 	case "0", "false", "no", "off", "disable", "disabled", "none":
 		return false
 	case "1", "true", "yes", "on", "enable", "enabled", "enforce":

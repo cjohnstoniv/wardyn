@@ -3,14 +3,23 @@
 
 // Command wardyn-git-helper is the git credential helper for Wardyn-governed
 // agent sandboxes. It implements the git-credential protocol (get/store/erase)
-// as a thin broker client: on "get" it resolves a grant for the requested host —
-// a GitHub installation token (github.com / *.github.com via
-// WARDYN_GITHUB_GRANT_ID, username x-access-token), OR — for a GitHub host with
-// no App grant configured, or any other host — a stored Personal Access Token
+// as a thin broker client: on "get" it resolves a stored Personal Access Token
 // matched by host (Azure DevOps / GitLab / a plain GitHub PAT via
-// WARDYN_GIT_PAT_GRANTS, username resolved by the broker) — calls the proxy's
+// WARDYN_GIT_PAT_GRANTS, username resolved by the broker), calls the proxy's
 // local mint route, then prints the credentials to stdout for git to consume.
 // The credential never touches disk or argv — stdout only, consumed ephemerally.
+//
+// It does NOT serve the GitHub App lane for a BROKERED run — one whose repos the
+// git broker serves (WARDYN_GIT_BROKER_REPOS non-empty). There, agent-run points
+// each granted repo at the proxy's /wardyn/gh/ route, which mints the repo-scoped
+// installation token SERVER-SIDE, applies the per-repo allowlist, and parses every
+// git-receive-pack ref against the run's branch namespace. A GitHub host is
+// therefore REFUSED here (see resolveGrantForHost) so the token never enters the
+// sandbox at all — it used to be printed to stdout, and a push carrying it
+// straight to github.com:443 is an opaque tunnel no pkt-line parser can inspect.
+// A run with a github_token grant but NO brokered repos has no broker route and
+// no injected deny, so it still mints here, unchanged; so does a GitHub host with
+// no App grant at all, falling through to a git_pat grant.
 //
 // The helper is configured GLOBALLY (git config --system credential.helper), so
 // for any host it does NOT broker (no matching grant) it emits NOTHING and exits
@@ -23,11 +32,12 @@
 //     invariant 1). It is never logged.
 //   - Requests to the proxy use a direct transport (Proxy: nil) — the proxy URL
 //     is a known on-segment address, not subject to HTTP_PROXY env.
-//   - If no grant is configured for the host (github.com without
-//     WARDYN_GITHUB_GRANT_ID AND absent from WARDYN_GIT_PAT_GRANTS, or any other
-//     host absent from WARDYN_GIT_PAT_GRANTS) the helper exits 0 with no output
-//     so git falls through to its normal
-//     prompting. This is intentional: runs without grants must not be blocked.
+//   - If no grant is configured for the host (a github host absent from
+//     WARDYN_GIT_PAT_GRANTS, or any other host absent from it) the helper exits 0
+//     with no output so git falls through to its normal prompting. This is
+//     intentional: runs without grants must not be blocked. A github host on a
+//     BROKERED run (WARDYN_GIT_BROKER_REPOS non-empty) takes the same silent-exit
+//     path, by refusal rather than by absence.
 //
 // Caller authentication (in-sandbox token-exfiltration hardening):
 //
@@ -113,6 +123,13 @@ const (
 	// host present here. Absent/empty => no PAT grants (helper still handles
 	// github.com via WARDYN_GITHUB_GRANT_ID).
 	envGitPATGrants = "WARDYN_GIT_PAT_GRANTS"
+
+	// envGitBrokerRepos is the space-separated set of "<org>/<repo>" this run's
+	// GitHub access is BROKERED for (dispatch writes it from the same map
+	// api.confineGitBrokerEgress keys on). Non-empty is the ONE signal that the
+	// /wardyn/gh/ route exists and the broker-managed GitHub hosts are denied —
+	// see resolveGrantForHost.
+	envGitBrokerRepos = "WARDYN_GIT_BROKER_REPOS"
 )
 
 func main() {
@@ -282,21 +299,49 @@ func runGet(secretFile string, stdin io.Reader, stdout, stderr io.Writer) error 
 
 // resolveGrantForHost picks the credential grant id + fallback git username for
 // the requested host:
-//   - a GitHub host (github.com / *.github.com) routes to WARDYN_GITHUB_GRANT_ID
-//     with the installation-token username x-access-token;
-//   - if no App grant is configured for a GitHub host, it FALLS THROUGH to a
-//     plain git_pat grant for that host in WARDYN_GIT_PAT_GRANTS (a classic or
-//     fine-grained GitHub PAT) — the App path is checked first and still wins
-//     whenever it is configured;
+//   - a GitHub host (github.com / *.github.com) on a BROKERED run
+//     (WARDYN_GIT_BROKER_REPOS non-empty) is REFUSED — see below;
+//   - otherwise a GitHub host routes to WARDYN_GITHUB_GRANT_ID with the
+//     installation-token username x-access-token, unchanged;
+//   - with no App grant configured, a GitHub host falls through to a plain
+//     git_pat grant for it in WARDYN_GIT_PAT_GRANTS (a classic or fine-grained
+//     GitHub PAT), unchanged;
 //   - a non-GitHub host present in WARDYN_GIT_PAT_GRANTS (JSON {host:
 //     grant_id}) routes to that PAT grant; its username is resolved by the
 //     broker and comes back in the mint response, so the fallback here is "".
 //
+// WHY A BROKERED RUN REFUSES. That lane is BROKERED, not helper-served: agent-run
+// rewrites every granted repo's remote to the proxy's /wardyn/gh/<org>/<repo>
+// route (url.<broker>.insteadOf), where the installation token is minted
+// SERVER-SIDE and never enters the sandbox, the per-repo allowlist is applied,
+// and a git-receive-pack's ref updates are parsed against the run's branch
+// namespace. Minting the same token here handed it to whatever spoke git's
+// credential protocol — on stdout, inside a one-uid sandbox — and a push carrying
+// it straight to github.com:443 is an opaque CONNECT tunnel that walks around the
+// pkt-line parser entirely. Dispatch also subtracts AND denies the broker-managed
+// hosts for a brokered run (api.confineGitBrokerEgress), so this path has no route
+// left either; refusing keeps the token itself out of the sandbox.
+//
+// WHY THE PREDICATE IS WARDYN_GIT_BROKER_REPOS, NOT WARDYN_GITHUB_GRANT_ID. Those
+// two are NOT the same set. Confinement (and the /wardyn/gh/ route) fire on the
+// broker map being non-empty — the run's github_token grant scope.repos plus its
+// declared clone set. A github_token grant that declares NO repos anywhere (what
+// every shipped example policy produces before `--repo` is added) has no broker
+// route and no deny, so refusing on the grant alone left such a run with no
+// credential path at all AND github.com still reachable — worse than either
+// design. Keying on the broker set makes the refusal predicate exactly the
+// confinement predicate: refuse where the broker actually serves, mint where the
+// helper is still the only path.
+//
 // An unmatched host returns ("", "") so runGet emits nothing and git falls
-// through — never breaking unrelated git auth. For a github host with neither
-// an App grant nor a PAT grant, it logs the legacy note and returns ("", "").
+// through — never breaking unrelated git auth. Same for the two refusals here:
+// they log to stderr and emit nothing.
 func resolveGrantForHost(host string, stderr io.Writer) (grantID, fallbackUser string) {
 	if isGitHubHost(host) {
+		if strings.TrimSpace(os.Getenv(envGitBrokerRepos)) != "" {
+			fmt.Fprintln(stderr, "wardyn-git-helper: this run's GitHub access is brokered through wardyn-proxy (/wardyn/gh/), where the token is minted server-side; refusing to mint an installation token into the sandbox")
+			return "", ""
+		}
 		if gid := os.Getenv("WARDYN_GITHUB_GRANT_ID"); gid != "" {
 			return gid, "x-access-token"
 		}

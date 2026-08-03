@@ -234,6 +234,12 @@ services:
       # becomes a read-only viewer on the harness-credential, policy, workspace
       # and site-config writes. See docs/OPERATIONS.md "Who can change what".
       WARDYN_OIDC_OPERATOR_EMAILS: "${WARDYN_OIDC_OPERATOR_EMAILS:-}"
+      # Leaving the list empty WITH OIDC configured refuses to boot
+      # (validateOperatorPosture) — every signed-in human would be
+      # admin-equivalent. The demo `sso` profile needs one or the other, so this
+      # override is plumbed: set it true to keep the old all-operators demo, or
+      # (preferred) set WARDYN_OIDC_OPERATOR_EMAILS above.
+      WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST: "${WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"

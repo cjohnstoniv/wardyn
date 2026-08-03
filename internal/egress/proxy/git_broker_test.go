@@ -300,14 +300,17 @@ func TestReceivePackParserStopsAtFlushPkt(t *testing.T) {
 	}
 }
 
-// TestBranchNSEnforcedEnv: the opt-in env parses loudly — off by default and on
-// explicit disable words, on for enable words, and FAIL CLOSED (on) for garbage.
+// TestBranchNSEnforcedEnv: the opt-OUT env parses loudly — ON when unset (the
+// default posture), off only on an explicit disable word, on for enable words,
+// and FAIL CLOSED (on) for garbage.
 func TestBranchNSEnforcedEnv(t *testing.T) {
 	for _, tc := range []struct {
 		val  string
 		want bool
 	}{
-		{"", false}, {"off", false}, {"0", false}, {"false", false}, {"disabled", false},
+		{"", true},    // unset => enforce (agent-run names the run branch)
+		{"   ", true}, // whitespace-only is still "unset"
+		{"off", false}, {"0", false}, {"false", false}, {"disabled", false}, {"none", false},
 		{"1", true}, {"true", true}, {"on", true}, {"enforce", true},
 		{"maybe", true}, // garbage => enforce, never silently off
 	} {
@@ -397,11 +400,37 @@ func TestGitBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
 	}
 }
 
-// TestGitBrokerPushUnenforcedByDefault: confinement is OPT-IN — with the env unset
-// an out-of-namespace push still forwards (fetch/clone are never touched at all).
-// This pins the honest default; flip it when agent-run names branches itself.
-func TestGitBrokerPushUnenforcedByDefault(t *testing.T) {
+// TestGitBrokerEnforcesPushByDefault: confinement is DEFAULT-ON — with the env
+// unset an out-of-namespace push is refused before the mint, and nothing reaches
+// github. agent-run puts the agent on `wardyn/<run-id>/work` (name_run_branch), so
+// the compliant push is the one a stock run makes. This is the regression pin for
+// the default posture; TestGitBrokerPushOptOut covers the escape hatch.
+func TestGitBrokerEnforcesPushByDefault(t *testing.T) {
 	t.Setenv(envEnforceBranchNS, "") // never inherit an operator's setting
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, sink := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (enforcement is ON by default); body=%q", rec.Code, rec.Body.String())
+	}
+	if up.gitHits != 0 || up.mintCalls != 0 {
+		t.Fatalf("upstream hits=%d mints=%d, want 0/0 for a push denied by the default posture", up.gitHits, up.mintCalls)
+	}
+	if !strings.Contains(sink.String(), ruleSourceGitRef) {
+		t.Fatalf("decision log = %q, want a %s deny row", sink.String(), ruleSourceGitRef)
+	}
+}
+
+// TestGitBrokerPushOptOut: `=false` is the documented escape hatch — an operator
+// whose images predate the run branch gets the old streamed-through behaviour
+// (and fetch/clone are never touched in either posture).
+func TestGitBrokerPushOptOut(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "false")
 	up := newGitBrokerUpstream(t, "gh-inst-token")
 	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
 
@@ -411,9 +440,74 @@ func TestGitBrokerPushUnenforcedByDefault(t *testing.T) {
 		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (enforcement is off by default)", rec.Code)
+		t.Fatalf("status = %d, want 200 (enforcement opted out)", rec.Code)
 	}
 	if string(up.gitBody) != body {
 		t.Fatalf("upstream body = %q, want the unenforced push streamed through unchanged", up.gitBody)
+	}
+}
+
+// TestBrokerMintRefusesBrokeredGitGrant is the regression pin for the in-sandbox
+// token bypass. WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint
+// route is unauthenticated, so before this guard a single
+// `curl -XPOST .../wardyn/v1/credentials/mint -d '{"grant_id":"'$WARDYN_GITHUB_GRANT_ID'"}'`
+// handed the sandbox a live ghs_ installation token — and, because an
+// approval-gated grant is single-use, ALSO burnt the broker's one mint out from
+// under the run's own clone/push.
+//
+// The four cases below are the whole contract: refuse the brokered grant, refuse
+// it through the exact parser the control plane uses, keep every OTHER grant
+// minting, and stay fail-OPEN on a body no decoder can read.
+func TestBrokerMintRefusesBrokeredGitGrant(t *testing.T) {
+	brokered := uuid.New()
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": brokered}, upstreamAddr(up.srv))
+
+	mint := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := mustLocalReq(t, http.MethodPost, routeMint, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		p.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// (a) the brokered grant itself: 403, and the upstream mint is never called
+	// (so the single-use grant is not consumed either).
+	if rec := mint(`{"grant_id":"` + brokered.String() + `"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("brokered grant mint status = %d, want 403 (body=%q)", rec.Code, rec.Body.String())
+	}
+	if up.mintCalls != 0 {
+		t.Fatalf("mint was called %d times for a brokered grant; the refusal must precede the forward", up.mintCalls)
+	}
+
+	// (b) PARSER PARITY. The control plane decodes with json.Decoder.Decode, which
+	// stops at the end of the first JSON value and IGNORES trailing bytes — it
+	// would happily mint this. A json.Unmarshal here would have errored and, under
+	// fail-open, waved it straight through. Same decoder, same verdict.
+	if rec := mint(`{"grant_id":"` + brokered.String() + `"} trailing garbage`); rec.Code != http.StatusForbidden {
+		t.Fatalf("trailing-garbage brokered mint status = %d, want 403 — decoder parity with the control plane broken", rec.Code)
+	}
+	if up.mintCalls != 0 {
+		t.Fatalf("mint was called %d times for a trailing-garbage brokered body", up.mintCalls)
+	}
+
+	// (c) NOT a blanket kill switch: any other grant (api_key / git_pat / ssh_key,
+	// or a github grant for a repo this run was never granted) still mints.
+	if rec := mint(`{"grant_id":"` + uuid.New().String() + `"}`); rec.Code != http.StatusOK {
+		t.Fatalf("non-brokered grant mint status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+	}
+	if up.mintCalls != 1 {
+		t.Fatalf("mintCalls = %d, want 1 (the non-brokered grant must reach the control plane)", up.mintCalls)
+	}
+
+	// (d) FAIL-OPEN PIN — do not "harden" this into fail-closed. A body neither
+	// decoder can read cannot name a brokered grant the control plane would accept
+	// (it 400s), so 403ing here would only mask the control plane's own error for
+	// a legitimately-malformed caller. It must be FORWARDED.
+	if rec := mint(`{"grant_id":`); rec.Code == http.StatusForbidden {
+		t.Fatal("an undecodable mint body was refused locally; the guard must fail OPEN and let the control plane answer")
+	}
+	if up.mintCalls != 2 {
+		t.Fatalf("mintCalls = %d, want 2 (the undecodable body must still be forwarded)", up.mintCalls)
 	}
 }

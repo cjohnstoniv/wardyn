@@ -57,8 +57,11 @@ type bootFlags struct {
 	oidcEmailDomains *string
 	// oidcOperatorEmails is the minimal viewer/operator role gate's allowlist
 	// (api.Config.OperatorEmails). Empty = every authenticated human is an
-	// operator, i.e. exactly the pre-existing behavior.
-	oidcOperatorEmails *string
+	// operator, i.e. exactly the pre-existing behavior — which is REFUSED at boot
+	// when OIDC is configured unless allowOIDCNoOperatorList overrides it (see
+	// validateOperatorPosture).
+	oidcOperatorEmails      *string
+	allowOIDCNoOperatorList *bool
 
 	autoStopInterval *time.Duration
 
@@ -132,7 +135,11 @@ func parseBootFlags() *bootFlags {
 		oidcClientSecret:   flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
 		oidcRedirectURL:    flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
 		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains (empty = any verified email)"),
-		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator emails; a signed-in human NOT listed is a viewer (403 on harness-credential/policy/workspace/site-config writes). Empty = every authenticated human is an operator, as today"),
+		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator emails; a signed-in human NOT listed is a viewer (reads + launching runs, 403 on configuring the deployment, secret writes, approval decisions and attach tickets). Empty with OIDC configured is REFUSED at boot — see -allow-oidc-no-operator-list"),
+		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
+		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
+		// shape as -allow-plaintext-listen above.
+		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "override: allow boot with OIDC SSO configured but WARDYN_OIDC_OPERATOR_EMAILS empty, i.e. every signed-in human admin-equivalent (normally refused — prefer setting the operator allowlist)"),
 
 		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (0 disables)"),
 

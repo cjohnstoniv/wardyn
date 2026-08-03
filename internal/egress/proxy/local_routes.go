@@ -126,10 +126,24 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 // handleBrokerMint forwards POST /wardyn/v1/credentials/mint to the control
 // plane's internal mint endpoint with the run token injected. The response
 // (status + body) is passed through verbatim.
+//
+// A grant this proxy brokers on /wardyn/gh/ is REFUSED here (see
+// isBrokeredGitGrant): that route mints the GitHub App installation token
+// server-side and re-originates with it, so handing the same token to the
+// sandbox would defeat the per-repo allowlist and the push branch-namespace
+// parser — and, because an approval-gated grant is single-use, would also burn
+// the broker's one mint out from under the run's own clone/push.
 func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBrokeredBody))
 	if err != nil {
 		http.Error(w, "read request body", http.StatusBadRequest)
+		return
+	}
+	if p.isBrokeredGitGrant(body) {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
+		http.Error(w, "wardyn: this grant is brokered on "+routeGitBroker+
+			"; the GitHub App installation token is minted proxy-side and never enters the sandbox",
+			http.StatusForbidden)
 		return
 	}
 	resp, err := p.forwardToControlPlane(r.Context(), http.MethodPost,
