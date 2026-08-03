@@ -3,21 +3,22 @@
 
 package api
 
-// Record Mode for workspace import: per-task OPEN recording sandboxes.
-// The import pipeline is Source → Scan → Configure → Record (recommended,
-// skippable) → Verify → Finalize: Record LEARNS what a task actually uses
-// (an allow-all-egress run whose audit events are captured server-side via
-// recordmode.Capture), the operator PROMOTES observed needs (egress → the
-// existing ApprovedEgress lane), and Verify re-runs the same commands
-// CONFINED to PROVE least-privilege — verifyEgressDomains already unions
-// ApprovedEgress, so promotion widens the subsequent verify with zero extra
-// wiring.
+// Record Mode for workspace import: per-task recording sandboxes, OPEN or
+// CONFINED. The pipeline is Source → Scan → Requirements → Record (recommended,
+// skippable): Record LEARNS what a task actually uses (an allow-all-egress run
+// whose audit events are captured server-side via recordmode.Capture), the
+// operator PROMOTES observed needs (egress → the ApprovedEgress lane), and a
+// CONFINED REPLAY of the same session re-runs it under only what was approved,
+// to PROVE least-privilege — confinedEgressDomains already unions
+// ApprovedEgress, so promotion widens the next replay with zero extra wiring.
+// The confined replay is what survived the retired verify pipeline: it observes
+// real usage instead of replaying a curated command list.
 //
 // State model: no new WorkspaceStatus (record is per-task and skippable; the
 // workspace stays `scanned` throughout). Per-task state lives in the opaque
 // workspaces.record_results JSONB map, written only via the scoped
-// SetWorkspaceRecordResults; serial concurrency rides active_run_id exactly
-// like verify (one import step at a time — per-task parallelism is the named
+// SetWorkspaceRecordResults; serial concurrency rides active_run_id (one
+// import step at a time — per-task parallelism is the named
 // upgrade path, not built).
 
 import (
