@@ -165,6 +165,10 @@ var gatedRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/v1/workspaces/w1/env-as-code/write"},
 	// 4. site config
 	{http.MethodPut, "/api/v1/site-config"},
+	// The two connectivity probes: each LAUNCHES a sandbox, so a viewer must not
+	// be able to fire them (cost + a real outbound request on the operator's behalf).
+	{http.MethodPost, "/api/v1/site-config/test-proxy"},
+	{http.MethodPost, "/api/v1/site-config/test-redirect"},
 	// 5. secrets — credential MATERIAL (the LIST is names-only and stays a read).
 	{http.MethodPut, "/api/v1/secrets/s1"},
 	{http.MethodDelete, "/api/v1/secrets/s1"},

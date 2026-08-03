@@ -1,0 +1,594 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// ─── classify* pure state-mapping tables ─────────────────────────────────────
+
+func TestClassifyProxyProbe(t *testing.T) {
+	cases := []struct {
+		name       string
+		res        probeRunResult
+		wantState  string
+		wantDetail string
+	}{
+		{"reached", probeRunResult{hasExitCode: true, exitCode: 0, elapsed: 250 * time.Millisecond}, "reached", proxyProbeHost},
+		{"blocked with a real curl error, never a generic string",
+			probeRunResult{hasExitCode: true, exitCode: 7}, "blocked", "connection refused"},
+		{"blocked: DNS", probeRunResult{hasExitCode: true, exitCode: 6}, "blocked", "DNS resolution failed"},
+		{"blocked: TLS", probeRunResult{hasExitCode: true, exitCode: 35}, "blocked", "TLS handshake failed"},
+		{"blocked: unmapped code still names the real number, not a generic label",
+			probeRunResult{hasExitCode: true, exitCode: 99}, "blocked", "curl exit code 99"},
+		{"incomplete probe (timeout/launch failure) is blocked, not a distinct state",
+			probeRunResult{incompleteReason: "did not finish within 50s"}, "blocked", "did not finish within 50s"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyProxyProbe(c.res, proxyProbeHost)
+			if got.State != c.wantState {
+				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
+			}
+			if !strings.Contains(got.Detail, c.wantDetail) {
+				t.Errorf("detail = %q, want it to contain %q", got.Detail, c.wantDetail)
+			}
+			if !strings.Contains(got.Detail, proxyProbeHost) {
+				t.Errorf("detail = %q, want it to name what was probed (%s)", got.Detail, proxyProbeHost)
+			}
+		})
+	}
+}
+
+func TestClassifyRedirectProbe(t *testing.T) {
+	const to, from = "artifactory.corp", "registry.npmjs.org"
+	cases := []struct {
+		name       string
+		res        probeRunResult
+		wantState  string
+		wantDetail string
+	}{
+		{"reached: mirror up, public host correctly blocked",
+			probeRunResult{hasExitCode: true, exitCode: 0}, "reached", to},
+		{"bypass: mirror up AND public host still directly reachable",
+			probeRunResult{hasExitCode: true, exitCode: redirectProbeBypassCode}, "bypass", "not enforced"},
+		{"blocked: the mirror itself is unreachable, real error surfaced",
+			probeRunResult{hasExitCode: true, exitCode: 28}, "blocked", "connection timed out"},
+		{"incomplete probe (timeout/launch failure) is blocked",
+			probeRunResult{incompleteReason: "boom"}, "blocked", "boom"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyRedirectProbe(c.res, to, from)
+			if got.State != c.wantState {
+				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
+			}
+			if !strings.Contains(got.Detail, c.wantDetail) {
+				t.Errorf("detail = %q, want it to contain %q", got.Detail, c.wantDetail)
+			}
+		})
+	}
+}
+
+// bypass must never be reachable via a passed-through curl code: it is only
+// ever produced by the script's own explicit `exit 250`, so classify must key
+// on the sentinel exactly, and a run that never got an exit code at all must
+// never be misread as bypass.
+func TestClassifyRedirectProbe_BypassNeverInferred(t *testing.T) {
+	got := classifyRedirectProbe(probeRunResult{incompleteReason: "sandbox never started"}, "to.example", "from.example")
+	if got.State == "bypass" {
+		t.Fatalf("an incomplete probe (no exit code at all) must never be classified bypass; got %+v", got)
+	}
+}
+
+func TestFindEgressRedirect(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "registry.npmjs.org", To: "artifactory.corp/npm", Ecosystem: "npm"},
+	}}
+	if _, ok := findEgressRedirect(sc, "REGISTRY.NPMJS.ORG"); !ok {
+		t.Error("expected a case-insensitive match on the stored From")
+	}
+	if _, ok := findEgressRedirect(sc, "not-configured.example.com"); ok {
+		t.Error("an unconfigured from must not resolve to any row (this IS the SSRF guard)")
+	}
+}
+
+// ─── fakes: a runner + a store that actually drive dispatchRun to completion ─
+//
+// Every other test fake in this package is a bespoke, minimal per-file type
+// (fakeRunner in interactive_test.go, fkGrantStore/raceStore/bootReconcileStore
+// elsewhere) rather than one shared do-everything fake. These two follow the
+// same convention, implementing exactly what runSiteConfigProbe's dispatch
+// path touches for a minimal (no Bedrock/Secrets/subscription) policy.
+
+// probeFakeRunner is a runner.Runner whose Wait is scriptable: either returns
+// a configured exit code promptly, or blocks until its ctx is done (to drive
+// the timeout/reclaim path without a real 50s wait).
+type probeFakeRunner struct {
+	mu        sync.Mutex
+	exitCode  int
+	block     bool
+	createErr error
+	stopCalls int
+	killCalls int
+}
+
+func (r *probeFakeRunner) Name() string { return "probe-fake" }
+func (r *probeFakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	return runner.Capabilities{Driver: "probe-fake", ConfinementClasses: []types.ConfinementClass{types.CC1}}, nil
+}
+func (r *probeFakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createErr != nil {
+		return runner.Sandbox{}, r.createErr
+	}
+	return runner.Sandbox{Ref: "probe-" + spec.RunID.String(), Driver: "probe-fake", EnforcedClass: spec.ConfinementClass}, nil
+}
+func (r *probeFakeRunner) Exec(context.Context, string, []string) (string, error) {
+	return "exec-1", nil
+}
+func (r *probeFakeRunner) Wait(ctx context.Context, _ string) (int, error) {
+	r.mu.Lock()
+	block, code := r.block, r.exitCode
+	r.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return code, nil
+}
+func (r *probeFakeRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+	return nil, context.Canceled
+}
+func (r *probeFakeRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (r *probeFakeRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (r *probeFakeRunner) StopSandbox(context.Context, string) error {
+	r.mu.Lock()
+	r.stopCalls++
+	r.mu.Unlock()
+	return nil
+}
+func (r *probeFakeRunner) KillSandbox(context.Context, string) error {
+	r.mu.Lock()
+	r.killCalls++
+	r.mu.Unlock()
+	return nil
+}
+func (r *probeFakeRunner) stops() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopCalls
+}
+
+// probeStore is BOTH the store.Store (dispatch's persistence seam) and the
+// audit.Recorder (Config.Audit) a probe run needs, backed by the SAME
+// in-memory event slice -- exactly like production, where the innermost audit
+// writer and the store that answers QueryAuditEvents are the same Postgres
+// table. Without sharing them, probeFailureDetail's read-back of its own
+// run.complete event would never see what s.recordAudit just wrote.
+type probeStore struct {
+	store.Store
+	mu     sync.Mutex
+	runs   map[uuid.UUID]types.AgentRun
+	events []types.AuditEvent
+	cfg    types.SiteConfig
+}
+
+func newProbeStore(cfg types.SiteConfig) *probeStore {
+	return &probeStore{runs: map[uuid.UUID]types.AgentRun{}, cfg: cfg}
+}
+
+func (s *probeStore) CreateRun(_ context.Context, r types.AgentRun) (types.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs[r.ID] = r
+	return r, nil
+}
+func (s *probeStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	return r, nil
+}
+func (s *probeStore) UpdateRunStateIf(_ context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok || r.State != from {
+		return false, nil
+	}
+	r.State = to
+	s.runs[id] = r
+	return true, nil
+}
+func (s *probeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[id]
+	r.SandboxRef = ref
+	s.runs[id] = r
+	return nil
+}
+func (s *probeStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[id]
+	r.AgentExecID = execID
+	s.runs[id] = r
+	return nil
+}
+func (s *probeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg, nil
+}
+func (s *probeStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []types.AuditEvent
+	for _, ev := range s.events {
+		if ev.RunID != nil && *ev.RunID == runID {
+			out = append(out, ev)
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+func (s *probeStore) Record(_ context.Context, ev types.AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, ev)
+	return nil
+}
+func (s *probeStore) actionEvents(action string) []types.AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []types.AuditEvent
+	for _, ev := range s.events {
+		if ev.Action == action {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+func (s *probeStore) runCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.runs)
+}
+func (s *probeStore) soleRunState() types.RunState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.runs {
+		return r.State
+	}
+	return ""
+}
+
+// newProbeHarness builds a Server whose Store AND Audit are the same
+// probeStore (see its doc comment) and whose Runner is fr (nil is a valid,
+// meaningful choice -- it drives the no_runner path exactly like a headless
+// control plane).
+func newProbeHarness(t *testing.T, siteCfg types.SiteConfig, fr runner.Runner) (*Server, *probeStore) {
+	t.Helper()
+	h := newHarness(t)
+	ps := newProbeStore(siteCfg)
+	cfg := baseTestConfig(h, ps)
+	cfg.Audit = ps
+	cfg.Runner = fr
+	return New(cfg), ps
+}
+
+func redirectSiteConfig() types.SiteConfig {
+	return types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "registry.npmjs.org", To: "artifactory.corp/npm", Ecosystem: "npm"},
+	}}
+}
+
+func decodeProbeResponse(t *testing.T, body string) siteConfigProbeResponse {
+	t.Helper()
+	var got siteConfigProbeResponse
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode response: %v (body %q)", err, body)
+	}
+	return got
+}
+
+// ─── test-proxy ───────────────────────────────────────────────────────────────
+
+func TestHandleTestSiteConfigProxy_Reached(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "reached" {
+		t.Errorf("state = %q, want reached (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, proxyProbeHost) {
+		t.Errorf("detail = %q, want it to name %s", got.Detail, proxyProbeHost)
+	}
+
+	events := ps.actionEvents("site_config.test_proxy")
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 site_config.test_proxy audit event, got %d", len(events))
+	}
+	if events[0].Outcome != "success" {
+		t.Errorf("audit outcome = %q, want success", events[0].Outcome)
+	}
+	var data map[string]any
+	_ = json.Unmarshal(events[0].Data, &data)
+	if data["target_host"] != proxyProbeHost {
+		t.Errorf("audit target_host = %v, want %s", data["target_host"], proxyProbeHost)
+	}
+	if data["state"] != "reached" {
+		t.Errorf("audit state = %v, want reached", data["state"])
+	}
+}
+
+func TestHandleTestSiteConfigProxy_BlockedWithRealError(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 7} // curl: connection refused
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (blocked is still a definite answer); body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "blocked" {
+		t.Errorf("state = %q, want blocked", got.State)
+	}
+	if !strings.Contains(got.Detail, "connection refused") {
+		t.Errorf("detail = %q, want the REAL curl error (connection refused), never a generic string", got.Detail)
+	}
+}
+
+func TestHandleTestSiteConfigProxy_NoUpstreamConfigured(t *testing.T) {
+	fr := &probeFakeRunner{}
+	srv, ps := newProbeHarness(t, types.SiteConfig{}, fr) // nothing configured to test
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if ps.runCount() != 0 {
+		t.Error("must never launch a probe sandbox when nothing is configured to test")
+	}
+}
+
+func TestHandleTestSiteConfigProxy_NoRunner(t *testing.T) {
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, nil)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (no_runner is an honest state, not a transport failure); body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "no_runner" {
+		t.Errorf("state = %q, want no_runner", got.State)
+	}
+	if got.Detail != "no runner configured, nothing to launch a probe with" {
+		t.Errorf("detail = %q", got.Detail)
+	}
+	if ps.runCount() != 0 {
+		t.Error("no_runner must never attempt to launch a sandbox")
+	}
+}
+
+func TestHandleTestSiteConfigProxy_RejectsUnknownFields(t *testing.T) {
+	fr := &probeFakeRunner{}
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, `{"target":"https://evil.internal"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 for an unknown field (this endpoint accepts no caller-supplied target)", w.Code)
+	}
+}
+
+// TestHandleTestSiteConfigProxy_NeverLogsCredentialedUpstreamURL is the
+// explicit security assertion the task calls out: the upstream proxy URL may
+// legitimately resolve from a secret carrying an embedded credential, and it
+// must be resolved for the probe (dispatchRun's own resolveRunUpstreamProxy
+// does that) but NEVER appear in this endpoint's own audit event or HTTP
+// response -- only the fixed, non-secret target host this code chose to
+// probe.
+func TestHandleTestSiteConfigProxy_NeverLogsCredentialedUpstreamURL(t *testing.T) {
+	const credentialedURL = "http://svc-account:hunter2-token@proxy.corp:3128"
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}, fr)
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte(credentialedURL)}}
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "hunter2-token") || strings.Contains(w.Body.String(), "svc-account") {
+		t.Fatalf("response body leaks the credentialed upstream URL: %s", w.Body.String())
+	}
+	for _, ev := range ps.events {
+		raw := string(ev.Data)
+		if strings.Contains(raw, "hunter2-token") || strings.Contains(raw, "svc-account") {
+			t.Fatalf("audit event %q leaks the credentialed upstream URL: %s", ev.Action, raw)
+		}
+	}
+}
+
+// ─── test-redirect ────────────────────────────────────────────────────────────
+
+func TestHandleTestSiteConfigRedirect_Reached(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, ps := newProbeHarness(t, redirectSiteConfig(), fr)
+
+	body := `{"from":"registry.npmjs.org","to":"artifactory.corp/npm"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "reached" {
+		t.Errorf("state = %q, want reached (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "artifactory.corp") || !strings.Contains(got.Detail, "registry.npmjs.org") {
+		t.Errorf("detail = %q, want both hosts named", got.Detail)
+	}
+
+	events := ps.actionEvents("site_config.test_redirect")
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 site_config.test_redirect audit event, got %d", len(events))
+	}
+	var data map[string]any
+	_ = json.Unmarshal(events[0].Data, &data)
+	if data["to_host"] != "artifactory.corp" || data["from_host"] != "registry.npmjs.org" {
+		t.Errorf("audit data = %+v, want to_host/from_host set from the STORED row", data)
+	}
+}
+
+func TestHandleTestSiteConfigRedirect_Bypass(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: redirectProbeBypassCode}
+	srv, _ := newProbeHarness(t, redirectSiteConfig(), fr)
+
+	body := `{"from":"registry.npmjs.org","to":"artifactory.corp/npm"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "bypass" {
+		t.Errorf("state = %q, want bypass (mirror reachable AND the public host still directly reachable); detail=%q", got.State, got.Detail)
+	}
+}
+
+func TestHandleTestSiteConfigRedirect_BlockedWithRealError(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 35} // curl: TLS handshake failed
+	srv, _ := newProbeHarness(t, redirectSiteConfig(), fr)
+
+	body := `{"from":"registry.npmjs.org","to":"artifactory.corp/npm"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, body)
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "blocked" {
+		t.Errorf("state = %q, want blocked", got.State)
+	}
+	if !strings.Contains(got.Detail, "TLS handshake failed") {
+		t.Errorf("detail = %q, want the real curl error", got.Detail)
+	}
+}
+
+// TestHandleTestSiteConfigRedirect_UnknownFromIsRefused pins the SSRF guard:
+// a `from` that does not name a row in the stored EgressRedirects must be
+// refused (404) and must NEVER cause a probe sandbox to launch against
+// whatever `to` the caller supplied -- that would be an SSRF gadget built on
+// the operator's own throwaway-sandbox credentials.
+func TestHandleTestSiteConfigRedirect_UnknownFromIsRefused(t *testing.T) {
+	fr := &probeFakeRunner{}
+	srv, ps := newProbeHarness(t, redirectSiteConfig(), fr)
+
+	body := `{"from":"not-configured.example.com","to":"169.254.169.254"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, body)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	if ps.runCount() != 0 {
+		t.Fatal("SSRF guard violated: an unconfigured from must never launch a probe sandbox")
+	}
+}
+
+func TestHandleTestSiteConfigRedirect_MissingFrom(t *testing.T) {
+	fr := &probeFakeRunner{}
+	srv, _ := newProbeHarness(t, redirectSiteConfig(), fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, `{"to":"artifactory.corp/npm"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 when from is omitted; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleTestSiteConfigRedirect_NoRunner(t *testing.T) {
+	srv, ps := newProbeHarness(t, redirectSiteConfig(), nil)
+	body := `{"from":"registry.npmjs.org","to":"artifactory.corp/npm"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "no_runner" {
+		t.Errorf("state = %q, want no_runner", got.State)
+	}
+	if ps.runCount() != 0 {
+		t.Error("no_runner must never attempt to launch a sandbox")
+	}
+}
+
+// ─── timeout / cleanup ────────────────────────────────────────────────────────
+
+// TestSiteConfigProbe_TimeoutReclaimsSandbox pins the hard bound: a probe
+// whose task never finishes must not hold a live sandbox forever. It shrinks
+// the package's wait timeout so the test does not take the real 50s.
+func TestSiteConfigProbe_TimeoutReclaimsSandbox(t *testing.T) {
+	orig := siteConfigProbeWaitTimeout
+	siteConfigProbeWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { siteConfigProbeWaitTimeout = orig })
+
+	fr := &probeFakeRunner{block: true} // Wait never returns on its own
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 even on a probe timeout (still a definite, if blocked, answer); body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "blocked" {
+		t.Errorf("state = %q, want blocked (the probe never finished)", got.State)
+	}
+
+	if n := fr.stops(); n != 1 {
+		t.Errorf("StopSandbox calls = %d, want exactly 1 (the hung probe's sandbox must be torn down)", n)
+	}
+	if st := ps.soleRunState(); st != types.RunKilled {
+		t.Errorf("run state = %q, want KILLED (a hung probe must not be left RUNNING forever)", st)
+	}
+}
+
+// ─── operator-only ────────────────────────────────────────────────────────────
+
+// TestHandleTestSiteConfig_OperatorOnly reuses rbac_test.go's SSO-session
+// harness (rbacServer/ssoSession/doSSO, same package) to prove both new
+// routes sit behind requireOperator: a signed-in human outside the operator
+// allowlist must be refused, never reach the handler.
+func TestHandleTestSiteConfig_OperatorOnly(t *testing.T) {
+	srv := rbacServer(t, rbacOperator)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer)
+	for _, path := range []string{
+		"/api/v1/site-config/test-proxy",
+		"/api/v1/site-config/test-redirect",
+	} {
+		t.Run(path, func(t *testing.T) {
+			w := doSSO(t, srv, http.MethodPost, path, viewer, "{}")
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 (viewer must not reach this handler): %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}

@@ -671,6 +671,12 @@ func (s *Server) routes() chi.Router {
 			// RBAC remains future work (ROADMAP.md).
 			r.Get("/site-config", s.handleGetSiteConfig)
 			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
+			// Live connectivity probes: launch a throwaway one-shot sandbox and
+			// actually traverse the upstream proxy / egress redirect, rather than
+			// a "we wrote it down" test-connection button (site_config_probe.go).
+			// operatorOnly — same posture as the PUT above.
+			operatorOnly.Post("/site-config/test-proxy", s.handleTestSiteConfigProxy)
+			operatorOnly.Post("/site-config/test-redirect", s.handleTestSiteConfigRedirect)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
