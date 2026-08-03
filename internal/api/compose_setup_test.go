@@ -22,19 +22,17 @@ import (
 
 // setupTestStore is a minimal store.Store for deriveSetupItems tests: it embeds
 // the interface (nil — any other method would panic if called) and overrides
-// ONLY GetWorkspaceBySource, keyed by (kind, source), which is all
-// referencedWorkspaces + the primary-git-repo lookup touch.
+// ONLY ListWorkspaces, which is what referencedWorkspaces + findWorkspaceBySource
+// both build their (kind,source)->workspace index from (workspace_refs.go's
+// indexWorkspacesBySource, scanning every workspace's Sources) now that a
+// workspace is a composition rather than one row per kind+source.
 type setupTestStore struct {
 	store.Store
-	byKindSource map[string]types.Workspace
+	all []types.Workspace
 }
 
-func (s setupTestStore) GetWorkspaceBySource(_ context.Context, kind types.WorkspaceKind, source string) (types.Workspace, error) {
-	ws, ok := s.byKindSource[string(kind)+"\x00"+source]
-	if !ok {
-		return types.Workspace{}, store.ErrNotFound
-	}
-	return ws, nil
+func (s setupTestStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return s.all, nil
 }
 
 // setupTestRunner is a minimal runner.Runner for setupBackendItem tests: it
@@ -51,11 +49,7 @@ func (r setupTestRunner) Capabilities(context.Context) (runner.Capabilities, err
 }
 
 func newSetupTestServer(workspaces ...types.Workspace) *Server {
-	byKindSource := map[string]types.Workspace{}
-	for _, ws := range workspaces {
-		byKindSource[string(ws.Kind)+"\x00"+ws.Source] = ws
-	}
-	return &Server{cfg: Config{Store: setupTestStore{byKindSource: byKindSource}}}
+	return &Server{cfg: Config{Store: setupTestStore{all: workspaces}}}
 }
 
 func apiKeyGrant(host, secretName string) types.GrantSpec {
@@ -162,15 +156,16 @@ func TestDeriveSetupItems_SecretDedupsByName(t *testing.T) {
 // ── workspace ───────────────────────────────────────────────────────────────
 
 func TestDeriveSetupItems_WorkspaceStatuses(t *testing.T) {
-	ready := types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/home/me/ready", Name: "ready", Status: types.WorkspaceReady}
-	pending := types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/home/me/pending", Name: "pending", Status: types.WorkspacePendingScan}
-	errored := types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/home/me/errored", Name: "errored", Status: types.WorkspaceError}
+	readyPath, pendingPath, erroredPath := "/home/me/ready", "/home/me/pending", "/home/me/errored"
+	ready := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: readyPath}}, Name: "ready", Status: types.WorkspaceScanned}
+	pending := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: pendingPath}}, Name: "pending", Status: types.WorkspacePendingScan}
+	errored := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: erroredPath}}, Name: "errored", Status: types.WorkspaceError}
 	srv := newSetupTestServer(ready, pending, errored)
 	ro := true
 	spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
-		{Source: ready.Source, Target: "/home/agent/work", ReadOnly: &ro},
-		{Source: pending.Source, Target: "/home/agent/work/pending", ReadOnly: &ro},
-		{Source: errored.Source, Target: "/home/agent/work/errored", ReadOnly: &ro},
+		{Source: readyPath, Target: "/home/agent/work", ReadOnly: &ro},
+		{Source: pendingPath, Target: "/home/agent/work/pending", ReadOnly: &ro},
+		{Source: erroredPath, Target: "/home/agent/work/errored", ReadOnly: &ro},
 	}}
 	run := composer.RunInput{Agent: "claude-code", Repo: "local:ready"}
 
@@ -194,7 +189,11 @@ func TestDeriveSetupItems_WorkspaceStatuses(t *testing.T) {
 // only sets run.Repo for it) — deriveSetupItems must still surface it by
 // looking it up directly via run.Repo.
 func TestDeriveSetupItems_PrimaryGitWorkspaceResolvedFromRunRepo(t *testing.T) {
-	primary := types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindRepo, Source: "octocat/Hello-World", Name: "Hello-World", Status: types.WorkspaceReady}
+	primary := types.Workspace{
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World"}},
+		Name:    "Hello-World", Status: types.WorkspaceScanned,
+	}
 	srv := newSetupTestServer(primary)
 	run := composer.RunInput{Agent: "claude-code", Repo: "octocat/Hello-World"}
 	// No WorkspaceMounts/WorkspaceRepos: applyWorkspaces never adds the PRIMARY
@@ -274,6 +273,11 @@ func TestDeriveSetupItems_EgressDropped(t *testing.T) {
 
 // ── egress (workspace, informational) ───────────────────────────────────────
 
+// workspaceWithProfilePath is the fixed local_dir path workspaceWithProfile's
+// workspace mounts at — shared with its caller's WorkspaceMounts entry so the
+// mount actually resolves back to this workspace via indexWorkspacesBySource.
+const workspaceWithProfilePath = "/home/me/proj"
+
 func workspaceWithProfile(t *testing.T, egressDomains ...string) types.Workspace {
 	t.Helper()
 	profile, err := json.Marshal(map[string]any{"egress_domains": egressDomains, "confidence": "high"})
@@ -281,8 +285,9 @@ func workspaceWithProfile(t *testing.T, egressDomains ...string) types.Workspace
 		t.Fatalf("marshal profile: %v", err)
 	}
 	return types.Workspace{
-		ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/home/me/proj", Name: "proj",
-		Status: types.WorkspaceReady, Profile: profile,
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: workspaceWithProfilePath}},
+		Name:    "proj", Status: types.WorkspaceScanned, Profile: profile,
 	}
 }
 
@@ -292,7 +297,7 @@ func TestDeriveSetupItems_EgressWorkspaceInfoAlwaysSatisfiedAndCopiesDomains(t *
 	ro := true
 	spec := types.RunPolicySpec{
 		AllowedDomains:  []string{"github.com"},
-		WorkspaceMounts: []types.WorkspaceMount{{Source: ws.Source, Target: "/home/agent/work", ReadOnly: &ro}},
+		WorkspaceMounts: []types.WorkspaceMount{{Source: workspaceWithProfilePath, Target: "/home/agent/work", ReadOnly: &ro}},
 	}
 	run := composer.RunInput{Agent: "claude-code", Repo: "local:proj"}
 
@@ -549,8 +554,10 @@ func TestDeriveSetupItems_Residency(t *testing.T) {
 
 func needsWorkspace(name, source string, p workspacescan.WorkspaceProfile) types.Workspace {
 	return types.Workspace{
-		ID: uuid.New(), Name: name, Kind: types.WorkspaceKindLocalDir, Source: source,
-		Status: types.WorkspaceReady, Profile: mustJSON(p),
+		ID:      uuid.New(),
+		Name:    name,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: source}},
+		Status:  types.WorkspaceScanned, Profile: mustJSON(p),
 	}
 }
 

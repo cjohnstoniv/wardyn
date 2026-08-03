@@ -93,10 +93,12 @@ func (s *createDetachStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 	return types.SiteConfig{}, nil
 }
 
-// No onboarded workspaces in this fixture — the create-run path resolves a
-// primary workspace/container for cred-folding, so answer "not found".
-func (s *createDetachStore) GetWorkspaceBySource(context.Context, types.WorkspaceKind, string) (types.Workspace, error) {
-	return types.Workspace{}, store.ErrNotFound
+// No onboarded workspaces in this fixture — the create-run path resolves the
+// referenced workspaces (for the onboarding gate + cred-folding) via
+// ListWorkspaces + indexWorkspacesBySource now that a workspace is a
+// composition of Sources rather than one row per kind+source; answer "none".
+func (s *createDetachStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, nil
 }
 
 func (s *createDetachStore) state(id uuid.UUID) types.RunState {

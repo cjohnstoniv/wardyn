@@ -28,60 +28,47 @@ import (
 // llm_cred, which strict decoding then made unsettable from the SDK).
 type workspaceRequest = client.WorkspaceRequest
 
-// validateWorkspaceLLMCred checks an operator-supplied cred binding (names only;
-// the secret's presence is checked at run-create, not here).
+// validateWorkspaceLLMCred checks an operator-supplied cred binding: a NAME
+// only (whether the named Integration actually exists/resolves is W5's job —
+// see resolveWorkspaceIntegration in llmcred.go). nil, or an empty
+// IntegrationRef (clears the binding), is always valid.
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
-	if c == nil {
+	if c == nil || c.IntegrationRef == "" {
 		return ""
 	}
-	switch c.Mode {
-	case types.WorkspaceLLMCredNone, types.WorkspaceLLMCredManaged:
-		return ""
-	case types.WorkspaceLLMCredAPIKey:
-		if strings.TrimSpace(c.APIKeySecret) == "" {
-			return "llm_cred.api_key_secret is required for mode=api_key"
-		}
-		// Same reserved-name guard the credential SINKS enforce (sinkReservedSecret:
-		// policy.go / inline_policy.go / injection.go): a binding must not name a
-		// platform-internal or managed-credential secret — the sink refuses to
-		// resolve it, so a run would fail the proxy closed at startup, and it must
-		// never be a route to inject wardyn's own signing key / OAuth tokens.
-		if sinkReservedSecret(strings.TrimSpace(c.APIKeySecret)) {
-			return "llm_cred.api_key_secret must not name a reserved platform-internal secret"
-		}
-		return ""
-	case types.WorkspaceLLMCredBedrock:
-		// The per-workspace Bedrock selection overrides the server's global
-		// region/model at dispatch (resolveBedrockAuth). Omit the whole block to
-		// inherit the global config; set it and you must set BOTH — a half override
-		// (this workspace's region against the global model id, or vice versa) is
-		// the misconfiguration that 403s at invoke time, since an inference-profile
-		// model id is region-scoped. Fail closed at write, mirroring the api_key
-		// arm above rather than silently half-applying at dispatch.
-		if b := c.Bedrock; b != nil && (strings.TrimSpace(b.Region) == "") != (strings.TrimSpace(b.Model) == "") {
-			return "llm_cred.bedrock needs BOTH region and model (or neither — omit them to inherit the server's global Bedrock configuration)"
-		}
-		return ""
-	default:
-		return `llm_cred.mode must be "" (none), "managed", "api_key", or "bedrock"`
+	if !repoFieldSafe(c.IntegrationRef) {
+		return "llm_cred.integration_ref must not contain control characters or whitespace"
 	}
+	return ""
 }
+
+// defaultEphemeralTarget is the composition floor's in-sandbox scratch path
+// when a workspace request declares no source at all.
+const defaultEphemeralTarget = "/home/agent/work"
+
+// maxBaseImageSteps / maxBaseImageStepLen cap a custom base image's layered
+// Dockerfile lines — sane ceilings against a hostile/misbehaving request, not
+// a sizing of any real recipe.
+const (
+	maxBaseImageSteps   = 32
+	maxBaseImageStepLen = 2000
+)
 
 // decodeWorkspaceRequest decodes and validates a workspace request body.
 // Unknown JSON fields are rejected (decodeStrictMsg, mirroring
 // decodePolicyRequest's typo-safety) and everything is validated before any
 // store write — workspaces are admin-gated onboarding config, so a bad source
-// must never be persisted (fail closed). It
-// requires a non-empty name/source, a recognized kind, and runs the SAME
-// safety checks the run-creation path already enforces on the equivalent
-// free-text field: local_dir reuses runner.ValidateMountSource, the host
-// bind-mount deny-list (onboarding vets the reusable host SOURCE; the
-// per-run target is chosen later, per-attach — WorkspaceMount.Target /
-// Workspace.DefaultTarget); repo reuses repoFieldSafe + repoCloneURL
-// (runs.go), the same pair that gates AgentRun.Repo today. An optional
-// DefaultTarget is validated via runner.ValidateTarget for either kind, since
-// it becomes an in-container mount/clone target once a run attaches this
-// workspace.
+// must never be persisted (fail closed).
+//
+// The legacy scalar shape (kind+source+ref+default_target+writable) is
+// accepted and FOLDED into exactly one Sources entry (legacyWorkspaceSource) —
+// this keeps `wardyn workspace create --kind local_dir --source /x` and old
+// SDK callers working. Setting BOTH sources and any legacy field is a 400
+// (mutually exclusive, so a caller can never have the two silently disagree).
+// A request with NEITHER gets the composition floor: one ephemeral scratch
+// source, never an error (a workspace always has at least one source).
+// Each source is then validated by type (validateWorkspaceSource), and
+// base_image is shape-guarded (validateWorkspaceBaseImage).
 func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRequest, string) {
 	var req workspaceRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
@@ -91,41 +78,144 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 	if req.Name == "" {
 		return workspaceRequest{}, "name is required"
 	}
-	req.Source = strings.TrimSpace(req.Source)
-	if req.Source == "" {
-		return workspaceRequest{}, "source is required"
+
+	legacy := req.Kind != "" || req.Source != "" || req.Ref != "" || req.DefaultTarget != "" || req.Writable
+	switch {
+	case legacy && len(req.Sources) > 0:
+		return workspaceRequest{}, "sources and the legacy kind/source/ref/default_target/writable fields are mutually exclusive"
+	case legacy:
+		src, baseImage, msg := legacyWorkspaceSource(req)
+		if msg != "" {
+			return workspaceRequest{}, msg
+		}
+		req.Sources = []types.WorkspaceSource{src}
+		if baseImage != nil {
+			req.BaseImage = baseImage
+		}
+	case len(req.Sources) == 0:
+		req.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: defaultEphemeralTarget}}
 	}
-	switch req.Kind {
-	case types.WorkspaceKindLocalDir:
-		if err := runner.ValidateMountSource(req.Source); err != nil {
-			return workspaceRequest{}, "invalid source: " + err.Error()
+
+	for i, src := range req.Sources {
+		if msg := validateWorkspaceSource(src); msg != "" {
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
 		}
-	case types.WorkspaceKindRepo:
-		if !repoFieldSafe(req.Source) {
-			return workspaceRequest{}, "source must not contain control characters or whitespace"
-		}
-		if repoCloneURL(req.Source) == "" {
-			return workspaceRequest{}, "source is not a recognized repo slug or http(s) clone URL"
-		}
-	case types.WorkspaceKindContainer:
-		// A bring-your-own base IMAGE as a named execution environment. Source is
-		// the image ref (tag or digest); there is no host mount to validate. Basic
-		// shape guard only — the daemon validates the ref for real at pull/wrap time.
-		if !repoFieldSafe(req.Source) {
-			return workspaceRequest{}, "source (image ref) must not contain control characters or whitespace"
-		}
-	default:
-		return workspaceRequest{}, `kind must be "local_dir", "repo", or "container"`
 	}
-	if req.DefaultTarget != "" {
-		if err := runner.ValidateTarget(req.DefaultTarget); err != nil {
-			return workspaceRequest{}, "invalid default_target: " + err.Error()
-		}
+	if msg := validateWorkspaceBaseImage(req.BaseImage); msg != "" {
+		return workspaceRequest{}, msg
 	}
 	if msg := validateWorkspaceLLMCred(req.LLMCred); msg != "" {
 		return workspaceRequest{}, msg
 	}
 	return req, ""
+}
+
+// legacyWorkspaceSource folds the pre-composition-model scalar shape
+// (kind+source+ref+default_target+writable) into exactly one WorkspaceSource.
+// A legacy "container" kind — a bring-your-own base image with no mount — was
+// the pre-composition shape for what is now an ephemeral source plus a "byo"
+// BaseImage (WorkspaceSourceType has no "container" of its own).
+func legacyWorkspaceSource(req workspaceRequest) (types.WorkspaceSource, *types.WorkspaceBaseImage, string) {
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		return types.WorkspaceSource{}, nil, "source is required"
+	}
+	switch req.Kind {
+	case types.WorkspaceKindLocalDir:
+		return types.WorkspaceSource{
+			Type: types.WorkspaceSourceTypeLocalDir, Path: source,
+			Target: req.DefaultTarget, Writable: req.Writable,
+		}, nil, ""
+	case types.WorkspaceKindRepo:
+		return types.WorkspaceSource{
+			Type: types.WorkspaceSourceTypeRepo, Source: source,
+			Ref: req.Ref, Target: req.DefaultTarget,
+		}, nil, ""
+	case types.WorkspaceKindContainer:
+		return types.WorkspaceSource{Type: types.WorkspaceSourceTypeEphemeral, Target: req.DefaultTarget},
+			&types.WorkspaceBaseImage{Kind: "byo", Image: source}, ""
+	default:
+		return types.WorkspaceSource{}, nil, `kind must be "local_dir", "repo", or "container"`
+	}
+}
+
+// validateWorkspaceSource runs the same safety checks the run-creation path
+// already enforces on the equivalent free-text field, per source Type:
+// local_dir reuses runner.ValidateMountSource on Path (the host bind-mount
+// deny-list — onboarding vets the reusable host PATH; the per-run target is
+// chosen later, per-attach); repo reuses repoFieldSafe + repoCloneURL
+// (runs.go), the same pair that gates AgentRun.Repo today; ephemeral has no
+// host/repo value to check. An optional Target is validated via
+// runner.ValidateTarget for every type, since it becomes an in-container
+// mount/clone/scratch-dir path once a run attaches this workspace.
+func validateWorkspaceSource(src types.WorkspaceSource) string {
+	switch src.Type {
+	case types.WorkspaceSourceTypeLocalDir:
+		if strings.TrimSpace(src.Path) == "" {
+			return "path is required for a local_dir source"
+		}
+		if err := runner.ValidateMountSource(src.Path); err != nil {
+			return "invalid path: " + err.Error()
+		}
+	case types.WorkspaceSourceTypeRepo:
+		if strings.TrimSpace(src.Source) == "" {
+			return "source is required for a repo source"
+		}
+		if !repoFieldSafe(src.Source) {
+			return "source must not contain control characters or whitespace"
+		}
+		if repoCloneURL(src.Source) == "" {
+			return "source is not a recognized repo slug or http(s) clone URL"
+		}
+	case types.WorkspaceSourceTypeEphemeral:
+		// no host/repo value to validate — target only, below.
+	default:
+		return `type must be "local_dir", "repo", or "ephemeral"`
+	}
+	if src.Target != "" {
+		if err := runner.ValidateTarget(src.Target); err != nil {
+			return "invalid target: " + err.Error()
+		}
+	}
+	return ""
+}
+
+// validateWorkspaceBaseImage shape-guards an onboarded workspace's base-image
+// choice. A non-"recommended" Image is checked with the same charset guard the
+// legacy "container" kind used for its image ref (repoFieldSafe: no control
+// characters/whitespace) — the daemon validates the ref for real at
+// pull/build time. Steps are only meaningful (and only capped) for "custom".
+func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
+	if b == nil {
+		return ""
+	}
+	switch b.Kind {
+	case "recommended", "registry", "custom", "byo":
+	default:
+		return `base_image.kind must be "recommended", "registry", "custom", or "byo"`
+	}
+	if b.Kind != "recommended" {
+		if strings.TrimSpace(b.Image) == "" {
+			return "base_image.image is required for kind " + b.Kind
+		}
+		if !repoFieldSafe(b.Image) {
+			return "base_image.image must not contain control characters or whitespace"
+		}
+	}
+	if len(b.Steps) > 0 {
+		if b.Kind != "custom" {
+			return "base_image.steps is only valid for kind=custom"
+		}
+		if len(b.Steps) > maxBaseImageSteps {
+			return fmt.Sprintf("base_image.steps: too many steps (max %d)", maxBaseImageSteps)
+		}
+		for _, step := range b.Steps {
+			if len(step) > maxBaseImageStepLen {
+				return fmt.Sprintf("base_image.steps: a step exceeds the max length (%d)", maxBaseImageStepLen)
+			}
+		}
+	}
+	return ""
 }
 
 // handleListWorkspaces returns onboarded workspaces in reverse creation order,
@@ -163,36 +253,41 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ws)
 }
 
-// sshWorkspaceSourceReady returns a 400-worthy message when a repo workspace's
-// source is an SSH clone URL to a supported provider but the operator has not yet
+// sshWorkspaceSourcesReady returns a 400-worthy message when any repo source's
+// clone URL is an SSH URL to a supported provider but the operator has not yet
 // stored the canonical ssh-key-<host> secret the clone needs — rejecting at
 // onboarding instead of accepting a workspace whose every scan/verify/record clone
-// would then fail. "" = fine (not an SSH source, or the secret is present). It runs
-// AFTER decodeWorkspaceRequest (which already rejects an SSH URL to an unsupported
-// host via repoCloneURL). Shared by create + update so switching an existing
-// workspace's source to SSH is covered too.
-func (s *Server) sshWorkspaceSourceReady(ctx context.Context, req workspaceRequest) string {
-	if req.Kind != types.WorkspaceKindRepo {
-		return ""
+// would then fail. "" = fine (no SSH repo sources, or every needed secret is
+// present). It runs AFTER decodeWorkspaceRequest (which already rejects an SSH
+// URL to an unsupported host via repoCloneURL). Shared by create + update so
+// switching an existing workspace's source to SSH is covered too.
+func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.WorkspaceSource) string {
+	var names []string
+	namesLoaded := false
+	for _, src := range sources {
+		if src.Type != types.WorkspaceSourceTypeRepo {
+			continue
+		}
+		host, ok := sshCloneHost(src.Source)
+		if !ok {
+			continue
+		}
+		secretName, ok := canonicalSSHKeySecret(host)
+		if !ok {
+			continue
+		}
+		if !namesLoaded {
+			// Don't hard-block onboarding on a transient secret-store read error;
+			// the run-time grant path still gates the actual clone.
+			names, _ = s.listUserSecretNames(ctx)
+			namesLoaded = true
+		}
+		if slices.Contains(names, secretName) {
+			continue
+		}
+		return "SSH source needs the " + secretName + " secret first — store your private key via setup's SCM import or `wardyn secret set " + secretName + "`"
 	}
-	host, ok := sshCloneHost(req.Source)
-	if !ok {
-		return ""
-	}
-	secretName, ok := canonicalSSHKeySecret(host)
-	if !ok {
-		return ""
-	}
-	names, err := s.listUserSecretNames(ctx)
-	if err != nil {
-		// Don't hard-block onboarding on a transient secret-store read error; the
-		// run-time grant path still gates the actual clone.
-		return ""
-	}
-	if slices.Contains(names, secretName) {
-		return ""
-	}
-	return "SSH source needs the " + secretName + " secret first — store your private key via setup's SCM import or `wardyn secret set " + secretName + "`"
+	return ""
 }
 
 // handleCreateWorkspace validates the request and onboards a new workspace in
@@ -206,24 +301,21 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if msg := s.sshWorkspaceSourceReady(r.Context(), req); msg != "" {
+	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	now := s.cfg.Now().UTC()
 	id := uuid.New()
 	ws := types.Workspace{
-		ID:            id,
-		Name:          req.Name,
-		Kind:          req.Kind,
-		Source:        req.Source,
-		Ref:           req.Ref,
-		DefaultTarget: req.DefaultTarget,
-		Writable:      req.Writable,
-		LLMCred:       req.LLMCred,
-		Status:        types.WorkspacePendingScan,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:        id,
+		Name:      req.Name,
+		Sources:   req.Sources,
+		BaseImage: req.BaseImage,
+		LLMCred:   req.LLMCred,
+		Status:    types.WorkspacePendingScan,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	created, err := s.cfg.Store.CreateWorkspace(r.Context(), ws)
 	if err != nil {
@@ -232,22 +324,21 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.create", id.String(), "success", mustJSON(map[string]any{
-			// writable is recorded: it is the operator's consent to let a sandboxed
-			// agent's changes persist to a HOST directory, so it belongs in the trail.
-			"name": created.Name, "kind": created.Kind, "source": created.Source,
-			"writable": created.Writable,
+			"name": created.Name, "sources": len(created.Sources),
 		})))
 	writeJSON(w, http.StatusCreated, created)
 }
 
 // handleUpdateWorkspace replaces a workspace's editable identity fields (name,
-// kind, source, ref, default_target), round-tripping the fetched row so the
-// scan-owned fields survive (the store UPDATE replaces every column — the old
+// sources, base_image), round-tripping the fetched row so the scan-owned
+// fields survive (the store UPDATE replaces every column — the old
 // construct-from-scratch call zeroed status, violating its CHECK constraint).
-// When SOURCE or KIND changes, the scan state (profile/image/status) AND the
-// operator's egress approvals are reset: both were reviewed against the OLD
-// content and must be re-earned. Returns 404 when unknown, 400 on an invalid
-// body/source.
+// When the COMPOSITION (sources) or the BASE IMAGE changes, the scan state
+// (profile/image/status), the requirements contract, and the operator's
+// egress approvals are reset: all were reviewed against the OLD content and
+// must be re-earned. LLMCred is CREATE-ONLY (see workspaceRequest.LLMCred) and
+// is deliberately left untouched here. Returns 404 when unknown, 400 on an
+// invalid body/source.
 func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -258,7 +349,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if msg := s.sshWorkspaceSourceReady(r.Context(), req); msg != "" {
+	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -269,30 +360,18 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// this GET→mutate→UPDATE can race an async repo-scan upload and
 	// write back a stale profile; identity edits are rare and the remedy is a
 	// re-scan — add an optimistic updated_at guard if it ever bites for real.
-	// A repo's Ref change is content-changing too: the profile and approvals
-	// were reviewed against the old branch/tag.
-	rescan := ws.Source != req.Source || ws.Kind != req.Kind ||
-		(req.Kind == types.WorkspaceKindRepo && ws.Ref != req.Ref)
-	ws.Name, ws.Kind, ws.Source, ws.Ref, ws.DefaultTarget =
-		req.Name, req.Kind, req.Source, req.Ref, req.DefaultTarget
-	// writable is an editable identity field too: the store UPDATE replaces every
-	// column, so omitting it here would silently REVOKE a granted write opt-in on
-	// any unrelated edit (rename, retarget).
-	ws.Writable = req.Writable
+	rescan := !slices.Equal(ws.Sources, req.Sources) || !baseImageEqual(ws.BaseImage, req.BaseImage)
+	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, req.BaseImage
 	if rescan {
 		ws.Profile = nil
 		ws.ImageRef = ""
 		ws.BuiltProfileHash = ""
 		ws.ApprovedEgress = nil
 		// Operator approvals and recorded evidence were reviewed against the OLD
-		// content too: stale setup commands must not auto-run against new source,
-		// and stale verify/record results — including the verified_* "this image
-		// was PROVEN to install/build/test" stamp — must not read as proof for it.
-		ws.SetupCommands = nil
-		ws.VerifyResult = nil
+		// content too: stale requirements/record results must not read as proof
+		// for the new composition.
+		ws.Requirements = nil
 		ws.RecordResults = nil
-		ws.VerifiedProfileHash = ""
-		ws.VerifiedAt = nil
 		ws.Status = types.WorkspacePendingScan
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws)
@@ -305,9 +384,18 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.update", id.String(), "success", mustJSON(map[string]any{
-			"name": updated.Name, "kind": updated.Kind, "source": updated.Source, "rescan_required": rescan,
+			"name": updated.Name, "sources": len(updated.Sources), "rescan_required": rescan,
 		})))
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// baseImageEqual reports whether two base-image choices are equivalent
+// (nil-safe; Steps compared by content).
+func baseImageEqual(a, b *types.WorkspaceBaseImage) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Kind == b.Kind && a.Image == b.Image && slices.Equal(a.Steps, b.Steps)
 }
 
 // maxApprovedEgress bounds the operator-owned approved-egress list — matches
@@ -359,7 +447,7 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			if msg := validateWorkspaceLLMCred(&req); msg != "" {
 				return nil, msg
 			}
-			if req.Mode == types.WorkspaceLLMCredNone {
+			if req.IntegrationRef == "" {
 				return nil, "" // nil clears the binding
 			}
 			return &req, ""
@@ -368,11 +456,11 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			return s.cfg.Store.SetWorkspaceLLMCred(ctx, id, cred)
 		},
 		func(cred *types.WorkspaceLLMCred) map[string]any {
-			mode := types.WorkspaceLLMCredNone
+			ref := ""
 			if cred != nil {
-				mode = cred.Mode
+				ref = cred.IntegrationRef
 			}
-			return map[string]any{"mode": string(mode)}
+			return map[string]any{"integration_ref": ref}
 		})
 }
 
@@ -448,14 +536,25 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 
 // runUsesWorkspace reports whether a run referenced ws, using the denormalized
 // run fields (WorkspacePath = the primary local-dir source; Repo = the repo
-// slug/URL). Only the PRIMARY workspace is linked on the run, so observed
-// telemetry is scoped to runs where ws was primary — a deliberate,
-// honest limit (secondary mounts aren't denormalized onto the run).
+// slug/URL) against EVERY one of ws's sources — not just the single-source
+// Kind/Source mirror, which is empty for a multi-source workspace. Only the
+// PRIMARY workspace is linked on the run, so observed telemetry is scoped to
+// runs where ws was primary — a deliberate, honest limit (secondary
+// mounts/repos aren't denormalized onto the run).
 func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
-	if ws.Kind == types.WorkspaceKindLocalDir {
-		return run.WorkspacePath == ws.Source
+	for _, src := range ws.Sources {
+		switch src.Type {
+		case types.WorkspaceSourceTypeLocalDir:
+			if run.WorkspacePath != "" && run.WorkspacePath == src.Path {
+				return true
+			}
+		case types.WorkspaceSourceTypeRepo:
+			if run.Repo != "" && run.Repo == src.Source {
+				return true
+			}
+		}
 	}
-	return run.Repo == ws.Source
+	return false
 }
 
 // handleWriteEnvAsCode generates committable env-as-code from the workspace's
@@ -463,9 +562,11 @@ func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
 // redirects, plus an AGENTS.md documenting the detected toolchain/commands) and
 // writes it into the host source dir — the host-write half of what used to be
 // handleFinalizeWorkspace's optional emit, extracted on its own now that there
-// is no more "finalize to ready" step. LOCAL-DIR ONLY: a repo workspace has no
-// host path to write into (regenerate + commit yourself via
-// GET /workspaces/{id}/env-as-code, which stays the read path for both kinds).
+// is no more "finalize to ready" step. LOCAL-DIR ONLY: a repo-only workspace
+// has no host path to write into (regenerate + commit yourself via
+// GET /workspaces/{id}/env-as-code, which stays the read path regardless of
+// composition). Writes to the FIRST local_dir source when the workspace has
+// more than one.
 func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -475,17 +576,18 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if ws.Kind != types.WorkspaceKindLocalDir {
+	localDirs := workspaceSourcesOfType(ws, types.WorkspaceSourceTypeLocalDir)
+	if len(localDirs) == 0 {
 		writeError(w, http.StatusUnprocessableEntity,
-			"env-as-code can only be written to disk for a local_dir workspace (a repo has no host path — "+
-				"use GET /workspaces/{id}/env-as-code and commit the files yourself)")
+			"env-as-code can only be written to disk for a workspace with a local_dir source (a repo/ephemeral-only "+
+				"workspace has no host path — use GET /workspaces/{id}/env-as-code and commit the files yourself)")
 		return
 	}
 	files, ok := s.envAsCodeFor(w, r, ws)
 	if !ok {
 		return
 	}
-	if werr := writeEnvAsCode(ws.Source, files); werr != nil {
+	if werr := writeEnvAsCode(localDirs[0].Path, files); werr != nil {
 		writeError(w, http.StatusInternalServerError, "write env-as-code: "+werr.Error())
 		return
 	}
@@ -611,18 +713,27 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 
 // handleScanWorkspace scans an onboarded workspace and persists its profile.
 //
-//   - local_dir: scanned HOST-SIDE inline via workspacescan.Scan (bounded,
-//     read-only, no subprocess — the host control plane can read the reusable
-//     onboarded path directly). The derived profile is persisted, status flips
-//     to scanned (NOT ready — `ready` means the import was finalized/verified)
-//     and the profile is returned (200). An onboarded path that is gone or is
-//     not a directory persists status=error and 422s instead, so a typo never
-//     reads as green.
-//   - repo: a repo is NOT on the host — it scans as a governed throwaway run
-//     whose ScanFacts return over the brokered scan-result route
-//     (handleUploadScanResult). Launching it returns 202 with the scan_run_id
-//     (503 with no runner configured, 409 when an import step already holds the
-//     workspace's slot); the profile lands asynchronously.
+//   - a REPO source needs a governed clone-and-scan run — there is no host-side
+//     way to scan it. It scans as a governed throwaway run whose ScanFacts
+//     return over the brokered scan-result route (handleUploadScanResult).
+//     Launching it returns 202 with the scan_run_id (503 with no runner
+//     configured, 409 when an import step already holds the workspace's
+//     slot); the profile lands asynchronously.
+//     ponytail: when a repo source is present, this scans ONLY the first one
+//     (firstRepoSource) and any local_dir sources on the SAME workspace are
+//     scanned by a LATER call once the repo scan lands, not merged in the
+//     same pass — multi-source aggregation across BOTH kinds in one governed
+//     run is the upgrade path if that's ever needed.
+//   - otherwise, every local_dir source is scanned HOST-SIDE inline via
+//     workspacescan.Scan (bounded, read-only, no subprocess — the host control
+//     plane can read the reusable onboarded path directly) and merged into one
+//     profile (mergeWorkspaceProfiles). The derived profile is persisted,
+//     status flips to scanned, and the profile is returned (200). An onboarded
+//     path that is gone or is not a directory persists status=error and 422s
+//     instead, so a typo never reads as green.
+//   - an ephemeral-only composition has nothing to scan: it is marked scanned
+//     with an empty profile immediately (a scratch dir implies nothing about
+//     languages/egress/secrets).
 func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -633,51 +744,8 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch ws.Kind {
-	case types.WorkspaceKindLocalDir:
-		// A nonexistent / unreadable path must NOT report green "Ready": Scan() never
-		// errors (it degrades to a low-confidence profile on a bound/unknown build
-		// system), so an operator typo would otherwise flip straight to Ready and only
-		// surface much later as an empty sandbox mount. Stat the source first and
-		// persist status=error with an actionable reason instead.
-		if fi, serr := os.Stat(ws.Source); serr != nil || !fi.IsDir() {
-			detail := "local directory not found on this host: " + ws.Source
-			if serr == nil && !fi.IsDir() {
-				detail = "onboarded source is not a directory: " + ws.Source
-			}
-			ws.Status = types.WorkspaceError
-			if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
-				writeError(w, http.StatusInternalServerError, "persist scan status: "+uerr.Error())
-				return
-			}
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
-			writeError(w, http.StatusUnprocessableEntity, detail)
-			return
-		}
-		profile := workspacescan.Scan(ws.Source)
-		ws.Profile = mustJSON(profile)
-		// Scanned, not ready: the import flow continues (configure → verify →
-		// finalize). A scanned workspace is already usable for runs (the mount
-		// gate is onboarding-based, not status-based); `ready` now means the
-		// import was finalized/verified.
-		ws.Status = types.WorkspaceScanned
-		if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": uerr.Error()})))
-			writeError(w, http.StatusInternalServerError, "persist scan profile: "+uerr.Error())
-			return
-		}
-		// Counts only — never detected names (and never values) in audit data.
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.scan", id.String(), "success", mustJSON(map[string]any{
-				"kind": ws.Kind, "confidence": profile.Confidence, "needs_review": profile.NeedsReview,
-				"secret_reqs": len(profile.RequiredSecrets), "services": len(profile.ServicesNeeded),
-				"suggested_egress": len(profile.SuggestedEgress), "secret_files": len(profile.SecretFilesPresent),
-				"leak_findings": len(profile.LeakFindings), "build_mem_mib": profile.BuildMemoryMiB,
-			})))
-		writeJSON(w, http.StatusOK, profile)
-	case types.WorkspaceKindRepo:
+	switch localDirs := workspaceSourcesOfType(ws, types.WorkspaceSourceTypeLocalDir); {
+	case len(workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo)) > 0:
 		if s.cfg.Runner == nil {
 			writeError(w, http.StatusServiceUnavailable, "no runner configured to launch a governed scan run")
 			return
@@ -696,7 +764,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,
 			"workspace.scan", id.String(), "success", mustJSON(map[string]any{
-				"kind": ws.Kind, "scan_run_id": run.ID.String(),
+				"sources": len(ws.Sources), "scan_run_id": run.ID.String(),
 			})))
 		// 202: the profile is populated asynchronously when the scan run uploads its
 		// ScanFacts (SetWorkspaceScanResult flips the workspace to status=scanned).
@@ -704,7 +772,66 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 			"scan_run_id": run.ID, "workspace_id": ws.ID, "state": run.State,
 			"detail": "governed scan run launched; the workspace profile updates when the scan completes",
 		})
+	case len(localDirs) > 0:
+		// A nonexistent / unreadable path must NOT report green "Ready": Scan() never
+		// errors (it degrades to a low-confidence profile on a bound/unknown build
+		// system), so an operator typo would otherwise flip straight to Ready and only
+		// surface much later as an empty sandbox mount. Stat every source first and
+		// persist status=error with an actionable reason instead.
+		profiles := make([]workspacescan.WorkspaceProfile, 0, len(localDirs))
+		for _, src := range localDirs {
+			fi, serr := os.Stat(src.Path)
+			if serr == nil && fi.IsDir() {
+				profiles = append(profiles, workspacescan.Scan(src.Path))
+				continue
+			}
+			detail := "local directory not found on this host: " + src.Path
+			if serr == nil && !fi.IsDir() {
+				detail = "onboarded source is not a directory: " + src.Path
+			}
+			ws.Status = types.WorkspaceError
+			if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
+				writeError(w, http.StatusInternalServerError, "persist scan status: "+uerr.Error())
+				return
+			}
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
+			writeError(w, http.StatusUnprocessableEntity, detail)
+			return
+		}
+		profile := mergeWorkspaceProfiles(profiles)
+		ws.Profile = mustJSON(profile)
+		// Scanned: the workspace is already usable for runs (the mount gate is
+		// onboarding-based, not status-based).
+		ws.Status = types.WorkspaceScanned
+		if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": uerr.Error()})))
+			writeError(w, http.StatusInternalServerError, "persist scan profile: "+uerr.Error())
+			return
+		}
+		// Counts only — never detected names (and never values) in audit data.
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"workspace.scan", id.String(), "success", mustJSON(map[string]any{
+				"local_dir_sources": len(localDirs), "confidence": profile.Confidence, "needs_review": profile.NeedsReview,
+				"secret_reqs": len(profile.RequiredSecrets), "services": len(profile.ServicesNeeded),
+				"suggested_egress": len(profile.SuggestedEgress), "secret_files": len(profile.SecretFilesPresent),
+				"leak_findings": len(profile.LeakFindings), "build_mem_mib": profile.BuildMemoryMiB,
+			})))
+		writeJSON(w, http.StatusOK, profile)
 	default:
-		writeError(w, http.StatusBadRequest, "unknown workspace kind")
+		// Ephemeral-only composition: nothing to scan. Mark it scanned with an
+		// empty (high-confidence — there is nothing ambiguous about "no source")
+		// profile so the workspace is immediately usable.
+		profile := workspacescan.WorkspaceProfile{Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic}
+		ws.Profile = mustJSON(profile)
+		ws.Status = types.WorkspaceScanned
+		if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
+			writeError(w, http.StatusInternalServerError, "persist scan profile: "+uerr.Error())
+			return
+		}
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"workspace.scan", id.String(), "success", mustJSON(map[string]any{"ephemeral_only": true})))
+		writeJSON(w, http.StatusOK, profile)
 	}
 }

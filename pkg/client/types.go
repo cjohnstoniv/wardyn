@@ -58,14 +58,28 @@ type (
 	Workspace = types.Workspace
 
 	// WorkspaceLLMCred is the operator-owned model/harness credential binding
-	// carried in WorkspaceRequest.LLMCred (Mode is "" / "managed" / "api_key" /
-	// "bedrock"; the server 400s an unknown mode).
+	// carried in WorkspaceRequest.LLMCred: IntegrationRef names a
+	// SiteConfig.Integrations entry this workspace's model/harness access
+	// resolves through. "" (or a nil WorkspaceLLMCred) means no binding.
 	WorkspaceLLMCred = types.WorkspaceLLMCred
 
-	// WorkspaceBedrockRef is the per-workspace Bedrock selection carried in
-	// WorkspaceLLMCred.Bedrock. Aliased because it is a POINTER field: without a
-	// nameable type a caller cannot build a bedrock binding at all.
+	// WorkspaceBedrockRef is a Bedrock region/model selection. Aliased because
+	// it is a pointer-field shape a caller may need to build (dispatchParams.
+	// BedrockRef server-side); no current WorkspaceLLMCred field carries one —
+	// that binding resolves through an Integration (see WorkspaceLLMCred) —
+	// but the type is kept nameable for that resolution's future wiring.
 	WorkspaceBedrockRef = types.WorkspaceBedrockRef
+
+	// WorkspaceSource is one entry in a Workspace's composition, carried in
+	// WorkspaceRequest.Sources and returned in Workspace.Sources.
+	WorkspaceSource = types.WorkspaceSource
+
+	// WorkspaceBaseImage is a Workspace's base-image choice, carried in
+	// WorkspaceRequest.BaseImage and returned in Workspace.BaseImage.
+	WorkspaceBaseImage = types.WorkspaceBaseImage
+
+	// WorkspaceRequirement is one entry in Workspace.Requirements.
+	WorkspaceRequirement = types.WorkspaceRequirement
 
 	// SiteConfig is the operator-wide site config. Returned by GetSiteConfig and
 	// accepted by PutSiteConfig.
@@ -104,8 +118,14 @@ type (
 	ApprovalKind = types.ApprovalKind
 
 	// WorkspaceKind is what a workspace onboards (Workspace.Kind,
-	// WorkspaceRequest.Kind).
+	// WorkspaceRequest.Kind). Deprecated: a DERIVED READ-ONLY MIRROR of
+	// Workspace.Sources[0] (single-source only) — see WorkspaceSourceType for
+	// the field a multi-source Workspace actually carries per-source.
 	WorkspaceKind = types.WorkspaceKind
+
+	// WorkspaceSourceType discriminates a WorkspaceSource's kind (local_dir |
+	// repo | ephemeral).
+	WorkspaceSourceType = types.WorkspaceSourceType
 )
 
 // ApprovalState values. ListApprovals accepts one of these (or "" for all
@@ -158,9 +178,18 @@ const (
 	ActorSystem = types.ActorSystem
 )
 
-// WorkspaceKind values (WorkspaceRequest.Kind).
+// WorkspaceKind values (WorkspaceRequest.Kind). Deprecated: the legacy
+// single-source shape; a new caller should build WorkspaceSource entries with
+// a WorkspaceSourceType value instead.
 const (
 	WorkspaceKindLocalDir  = types.WorkspaceKindLocalDir
 	WorkspaceKindRepo      = types.WorkspaceKindRepo
 	WorkspaceKindContainer = types.WorkspaceKindContainer
+)
+
+// WorkspaceSourceType values (WorkspaceSource.Type).
+const (
+	WorkspaceSourceTypeLocalDir  = types.WorkspaceSourceTypeLocalDir
+	WorkspaceSourceTypeRepo      = types.WorkspaceSourceTypeRepo
+	WorkspaceSourceTypeEphemeral = types.WorkspaceSourceTypeEphemeral
 )

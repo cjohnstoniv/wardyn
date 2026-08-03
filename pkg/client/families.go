@@ -13,22 +13,41 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// WorkspaceRequest is the body for POST/PUT /api/v1/workspaces. Name/Kind/Source
-// are required; the server validates Source with the same deny-list the run path
-// uses (local_dir bind-mount safety, repo slug/URL shape) before persisting.
+// WorkspaceRequest is the body for POST/PUT /api/v1/workspaces. Name is
+// required, plus either Sources or the legacy scalar shape (Kind+Source);
+// the server validates each source with the same deny-list the run path uses
+// (local_dir bind-mount safety, repo slug/URL shape) before persisting.
 //
 // internal/api aliases this type (`type workspaceRequest = client.WorkspaceRequest`)
 // so server and SDK cannot drift; the server rejects unknown JSON fields, so a
 // field missing here is unreachable from the SDK rather than merely undocumented.
 type WorkspaceRequest struct {
-	Name          string              `json:"name"`
-	Kind          types.WorkspaceKind `json:"kind"`
-	Source        string              `json:"source"`
+	Name string `json:"name"`
+	// Sources is the workspace's composition: one-or-more local_dir/repo/
+	// ephemeral sources. Mutually exclusive with the legacy scalar fields
+	// below (Kind/Source/Ref/DefaultTarget/Writable) — set one or the other,
+	// never both. Omitting both onboards the composition floor: one ephemeral
+	// scratch source.
+	Sources []types.WorkspaceSource `json:"sources,omitempty"`
+	// BaseImage is the workspace's base-image choice. Nil means the platform
+	// default convention image for the detected/scanned stack.
+	BaseImage *types.WorkspaceBaseImage `json:"base_image,omitempty"`
+
+	// Deprecated: Kind/Source/Ref/DefaultTarget/Writable are the pre-
+	// composition-model scalar shape — a single source, folded server-side
+	// into Sources[0] (legacyWorkspaceSource). Kept so
+	// `wardyn workspace create --kind local_dir --source /x` and existing SDK
+	// callers keep working; prefer Sources for a new caller, especially a
+	// multi-source one.
+	Kind          types.WorkspaceKind `json:"kind,omitempty"`
+	Source        string              `json:"source,omitempty"`
 	Ref           string              `json:"ref,omitempty"`
 	DefaultTarget string              `json:"default_target,omitempty"`
-	// Writable opts the workspace into a READ-WRITE mount for import Record/Verify
-	// runs; omitted/false is read-only (the safe default). A sandboxed agent's
-	// changes then PERSIST to the host directory.
+	// Deprecated: see Kind. Writable opts the single legacy source into a
+	// READ-WRITE mount for import Record/Verify runs; omitted/false is
+	// read-only (the safe default). A sandboxed agent's changes then PERSIST
+	// to the host directory. A multi-source caller sets WorkspaceSource.Writable
+	// per source instead.
 	Writable bool `json:"writable,omitempty"`
 	// LLMCred is the operator-owned model/harness credential BINDING for this
 	// workspace/container (refs/names only). A run that picks the workspace

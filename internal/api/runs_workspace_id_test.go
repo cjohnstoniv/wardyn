@@ -21,16 +21,19 @@ import (
 // image behind decodeAndValidateCreateRun's image/builder checks.
 func TestSeedRequestWorkspace(t *testing.T) {
 	h := newHarness(t)
-	seed := func(ws types.Workspace, spec *types.RunPolicySpec, req *createRunRequest) (int, error) {
+	seed := func(ws types.Workspace, spec *types.RunPolicySpec, req *createRunRequest) ([]string, int, error) {
 		return New(baseTestConfig(h, &workspaceStoreFake{ws: ws})).
 			seedRequestWorkspace(context.Background(), spec, req)
+	}
+	localDirWS := func(id uuid.UUID, path string) types.Workspace {
+		return types.Workspace{ID: id, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}}}
 	}
 	id := uuid.New()
 
 	t.Run("local dir prepends a read-only mount", func(t *testing.T) {
 		spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/from-policy", Target: "/home/agent/other"}}}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-		if code, err := seed(types.Workspace{ID: id, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app"}, &spec, &req); err != nil {
+		if _, code, err := seed(localDirWS(id, "/srv/app"), &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if got := spec.WorkspaceMounts[0]; got.Source != "/srv/app" || got.Target != composerWorkspaceTarget {
@@ -47,7 +50,8 @@ func TestSeedRequestWorkspace(t *testing.T) {
 	t.Run("repo prepends a workspace_repos entry and labels the run", func(t *testing.T) {
 		spec := types.RunPolicySpec{}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-		if code, err := seed(types.Workspace{ID: id, Kind: types.WorkspaceKindRepo, Source: "acme/widgets"}, &spec, &req); err != nil {
+		repoWS := types.Workspace{ID: id, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "acme/widgets"}}}
+		if _, code, err := seed(repoWS, &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if len(spec.WorkspaceRepos) != 1 || spec.WorkspaceRepos[0].Repo != "acme/widgets" {
@@ -58,15 +62,59 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("container is refused", func(t *testing.T) {
+	// A migrated container-kind workspace is now an ephemeral source + a custom
+	// BaseImage (0029). seedRequestWorkspace itself no longer refuses it — it
+	// seeds req.Image from BaseImage exactly as an explicit --image would set
+	// it — but the SAME validateImageBuildRequest gate its real callers
+	// (handleCreateRun, handlePreflightRun) run immediately afterward still
+	// refuses it when no ImageBuilder is wired, so the end-to-end refusal
+	// survives, just split across the two functions.
+	t.Run("container-shaped workspace seeds req.Image, still gated on the image builder", func(t *testing.T) {
 		spec := types.RunPolicySpec{}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-		code, err := seed(types.Workspace{ID: id, Kind: types.WorkspaceKindContainer, Source: "ghcr.io/acme/base:1"}, &spec, &req)
-		if err == nil || code != http.StatusBadRequest {
-			t.Fatalf("code = %d, err = %v; want 400 (a container workspace must go through `image`, which is builder-gated)", code, err)
+		srv := New(baseTestConfig(h, &workspaceStoreFake{ws: types.Workspace{
+			ID:        id,
+			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+			BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
+		}}))
+		if _, code, err := srv.seedRequestWorkspace(context.Background(), &spec, &req); err != nil {
+			t.Fatalf("seed: %d %v", code, err)
 		}
-		if req.Image != "" || len(spec.WorkspaceMounts) != 0 {
-			t.Error("a refused container workspace must seed nothing")
+		if req.Image != "ghcr.io/acme/base:1" {
+			t.Fatalf("req.Image = %q, want the workspace's base image seeded (mirrors an explicit --image)", req.Image)
+		}
+		if len(spec.WorkspaceMounts) != 0 || len(spec.WorkspaceRepos) != 0 {
+			t.Error("an ephemeral-only workspace must seed no mounts/repos")
+		}
+		if msg := srv.validateImageBuildRequest(req); msg == "" {
+			t.Fatal("want a refusal message (no ImageBuilder wired) — a container-shaped workspace's image must still go through the builder gate")
+		}
+	})
+
+	// A multi-source workspace — only possible under the composition model — must
+	// seed ONE policy entry per local_dir/repo source, in order, while its
+	// ephemeral source contributes NO policy entry (it surfaces only via the
+	// returned ephemeralDirs, for the caller to expose as WARDYN_EPHEMERAL_DIRS).
+	t.Run("multi-source workspace seeds one entry per source, ephemeral contributes none", func(t *testing.T) {
+		spec := types.RunPolicySpec{}
+		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
+		ws := types.Workspace{ID: id, Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/one"},
+			{Type: types.WorkspaceSourceTypeRepo, Source: "acme/two"},
+			{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"},
+		}}
+		dirs, code, err := seed(ws, &spec, &req)
+		if err != nil {
+			t.Fatalf("seed: %d %v", code, err)
+		}
+		if len(spec.WorkspaceMounts) != 1 || spec.WorkspaceMounts[0].Source != "/srv/one" {
+			t.Errorf("want exactly 1 mount for the local_dir source, got %+v", spec.WorkspaceMounts)
+		}
+		if len(spec.WorkspaceRepos) != 1 || spec.WorkspaceRepos[0].Repo != "acme/two" {
+			t.Errorf("want exactly 1 repo entry for the repo source, got %+v", spec.WorkspaceRepos)
+		}
+		if len(dirs) != 1 || dirs[0] != "/home/agent/scratch" {
+			t.Errorf("ephemeral source must surface as an ephemeralDir, never a policy entry: got %v", dirs)
 		}
 	})
 
@@ -76,9 +124,37 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		// The unique-target invariant must catch the seed's own output.
 		spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/from-policy", Target: composerWorkspaceTarget}}}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-		code, err := seed(types.Workspace{ID: id, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app"}, &spec, &req)
+		_, code, err := seed(localDirWS(id, "/srv/app"), &spec, &req)
 		if err == nil || code != http.StatusUnprocessableEntity {
 			t.Fatalf("code = %d, err = %v; want 422 on the duplicate in-container target", code, err)
 		}
 	})
+}
+
+// TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage covers the
+// OTHER image-resolution path a migrated container-kind workspace exercises:
+// resolveWorkspaceImage (workspace_run.go), used by the import-pipeline's
+// scan/record/verify runs — distinct from TestSeedRequestWorkspace above, which
+// pins the ordinary create-run --image/workspace_id seed. An explicit BaseImage
+// choice ("custom"/"registry"/"byo") takes precedence over the detected-
+// toolchain devcontainer path unconditionally, before any profile is even
+// consulted — the one thing the pre-composition-model "container" kind ever
+// did, so a migrated row (ephemeral source + BaseImage) must still resolve to
+// that same fixed image.
+func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, nil)
+	cfg.ImageBuilder = fakeImageBuilder{}
+	srv := New(cfg)
+	ws := types.Workspace{
+		ID:        uuid.New(),
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
+		// No Profile: an unscanned ephemeral-only workspace has none, and the
+		// BaseImage branch must return before ever needing one.
+	}
+	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws)
+	if !ok || image != "ghcr.io/acme/base:1" {
+		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the workspace's BaseImage verbatim, unconditionally", image, ok)
+	}
 }

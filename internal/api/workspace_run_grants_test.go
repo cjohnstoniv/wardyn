@@ -15,7 +15,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // ─── clone-grant FK ordering (verify/record) ─────────────────────────────────
@@ -38,8 +37,8 @@ type fkGrantStore struct {
 	skipRunInsert bool
 }
 
-func (s *fkGrantStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
-	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive, vr, vh, va)
+func (s *fkGrantStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive)
 }
 func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, runID uuid.UUID, _ *uuid.UUID) (types.Workspace, bool, error) {
 	ws := s.ws
@@ -116,11 +115,9 @@ func newFKGrantStore(wsID uuid.UUID) *fkGrantStore {
 	return &fkGrantStore{
 		runs: map[uuid.UUID]types.AgentRun{},
 		importStateFake: importStateFake{ws: types.Workspace{
-			ID: wsID, Kind: types.WorkspaceKindRepo, Source: "acme/private-thing",
-			Status: types.WorkspaceScanned,
-			SetupCommands: mustJSON([]workspacescan.SetupCommand{
-				{Stage: "install", Command: "npm ci"},
-			}),
+			ID:      wsID,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "acme/private-thing"}},
+			Status:  types.WorkspaceScanned,
 		}},
 	}
 }

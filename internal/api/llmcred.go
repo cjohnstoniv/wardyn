@@ -202,106 +202,78 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 	return injected, warns
 }
 
+// resolveWorkspaceIntegration resolves a workspace's LLMCred.IntegrationRef
+// against SiteConfig.Integrations into concrete model/harness wiring (secret
+// name, host, header format). Not implemented yet: it mutates nothing and
+// always reports itself unresolvable, so a workspace naming an
+// integration_ref today silently falls back to the run's global provider
+// config (or no model access) rather than guessing or erroring.
+// W5: look up ref in SiteConfig.Integrations (IntegrationAIProvider), fold its
+// Credentials/Config into spec the way the old Mode-specific branches
+// (api_key/managed/bedrock) used to.
+func resolveWorkspaceIntegration(ctx context.Context, ref string) (ok bool) {
+	return false
+}
+
 // applyWorkspaceCreds folds the PRIMARY workspace/container's operator-owned
-// model/harness cred BINDING (types.WorkspaceLLMCred) into the run's policy at
-// create — the credential analogue of unionWorkspaceEgress. A run that picks a
-// workspace/container inherits its model access; a workspace that binds nothing
-// (nil / Mode="") leaves the run on the global provider config, or a plain
-// governed command that needs no model. Refs/names only — the secret is resolved
-// and injected at dispatch, never resident. Returns the mode applied (for audit),
-// or "" when nothing was bound.
-func (s *Server) applyWorkspaceCreds(ctx context.Context, spec *types.RunPolicySpec, primary *types.Workspace, agent string) types.WorkspaceLLMCredMode {
-	if primary == nil || primary.LLMCred == nil || primary.LLMCred.Mode == types.WorkspaceLLMCredNone {
+// model/harness cred BINDING (types.WorkspaceLLMCred.IntegrationRef) into the
+// run's policy at create — the credential analogue of unionWorkspaceEgress. A
+// workspace that binds nothing (nil / IntegrationRef="") leaves the run on the
+// global provider config, or a plain governed command that needs no model.
+// Refs/names only — the secret is resolved and injected at dispatch, never
+// resident. Returns the integration ref applied (for audit), or "" when
+// nothing was bound (including today's always-true case: see
+// resolveWorkspaceIntegration).
+func (s *Server) applyWorkspaceCreds(ctx context.Context, spec *types.RunPolicySpec, primary *types.Workspace, agent string) string {
+	if primary == nil || primary.LLMCred == nil || primary.LLMCred.IntegrationRef == "" {
 		return ""
 	}
-	p, ok := agentLLMProvider(agent)
-	if !ok {
+	if _, ok := agentLLMProvider(agent); !ok {
 		return "" // non-LLM agent — nothing to bind
 	}
-	c := primary.LLMCred
-	switch c.Mode {
-	case types.WorkspaceLLMCredAPIKey:
-		// A workspace-specific api_key secret, injected proxy-side (never resident).
-		if c.APIKeySecret == "" || !s.secretPresent(ctx, c.APIKeySecret) {
-			return "" // absent secret would fail the proxy closed — fall back rather than hard-fail
-		}
-		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
-			return c.Mode // an api_key grant for this host was already proposed; respect it
-		}
-		scope, _ := json.Marshal(map[string]string{
-			"host": p.host, "header": p.header, "format": p.format, "secret_name": c.APIKeySecret,
-		})
-		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
-			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
-		})
-		if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
-			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
-		}
-	case types.WorkspaceLLMCredManaged:
-		// The Wardyn-managed subscription injects proxy-side at dispatch when the run
-		// has anthropic egress and NO api-key grant for the host (resolveLLMTransport's
-		// managed gate). Ensure the egress; drop any competing api-key grant so managed
-		// wins. (The managed token itself is a control-plane-wide connected credential.)
-		removeAPIKeyGrantForHost(spec, p.host)
-		for _, d := range []string{"*.anthropic.com", p.host} {
-			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
-				spec.AllowedDomains = append(spec.AllowedDomains, d)
-			}
-		}
-	case types.WorkspaceLLMCredBedrock:
-		// Bedrock credentials are resolved at dispatch (resolveBedrockAuth); the
-		// binding drops any competing api-key grant so Bedrock is the path taken.
-		// A per-workspace REGION overrides the global one there, so allow its
-		// regional data+control-plane hosts here — dispatch adds them too, but the
-		// egress belongs on the run's policy from create (the composer/preview and
-		// any policy echo read this spec, not the dispatch-local copy).
-		removeAPIKeyGrantForHost(spec, p.host)
-		if b := c.Bedrock; b != nil && b.Region != "" && !spec.AllowAllEgress {
-			unionAllowedDomains(spec, []string{bedrockRuntimeHost(b.Region), bedrockControlHost(b.Region)})
-		}
+	if !resolveWorkspaceIntegration(ctx, primary.LLMCred.IntegrationRef) {
+		return "" // W5: not yet resolvable — fall back to the global provider config
 	}
-	return c.Mode
+	return primary.LLMCred.IntegrationRef
 }
 
 // applyPrimaryWorkspaceCreds resolves the run's PRIMARY workspace/container and
-// folds its cred binding into the spec (applyWorkspaceCreds), auditing the mode
-// applied. The primary is the first referenced local_dir/repo workspace, or —
-// for a bring-your-own-container run — the onboarded CONTAINER workspace whose
-// image this run launches. A workspace that binds nothing leaves the run on the
-// global provider config (or a plain governed command).
+// folds its cred binding into the spec (applyWorkspaceCreds), auditing the ref
+// applied. The primary is the first referenced local_dir/repo workspace. A
+// workspace that binds nothing leaves the run on the global provider config
+// (or a plain governed command).
 //
-// Returns the workspace's Bedrock selection when (and only when) a BEDROCK
-// binding was applied, for dispatch to resolve region/model against
+// Returns the workspace's Bedrock selection when a Bedrock-backed integration
+// was applied, for dispatch to resolve region/model against
 // (dispatchParams.BedrockRef); nil means "use the global Bedrock config".
+// W5: always nil today — Bedrock-via-Integration resolution isn't wired yet.
 func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) *types.WorkspaceBedrockRef {
 	primary := s.primaryWorkspace(ctx, req, wsRefs)
 	if primary == nil {
 		return nil
 	}
-	mode := s.applyWorkspaceCreds(ctx, spec, primary, req.Agent)
-	if mode == "" {
+	ref := s.applyWorkspaceCreds(ctx, spec, primary, req.Agent)
+	if ref == "" {
 		return nil
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
-		runID.String(), "success", mustJSON(map[string]any{"mode": string(mode)})))
-	if mode == types.WorkspaceLLMCredBedrock {
-		return primary.LLMCred.Bedrock
-	}
+		runID.String(), "success", mustJSON(map[string]any{"integration_ref": ref})))
 	return nil
 }
 
 // primaryWorkspace resolves the run's PRIMARY workspace — wsRefs[0] when the
-// spec references any, else the container workspace matching req.Image. Shared
-// by launch (applyPrimaryWorkspaceCreds) and preflight so the two cannot
-// disagree about whose credential binding a run inherits.
+// spec references any. Shared by launch (applyPrimaryWorkspaceCreds) and
+// preflight so the two cannot disagree about whose credential binding a run
+// inherits. ctx/req are accepted (rather than a bare []types.Workspace param)
+// so both call sites keep the same shape; neither is read today.
+//
+// The old req.Image-matched CONTAINER-kind lookup (GetWorkspaceBySource) is
+// GONE: base_image now lives directly on the workspace row a workspace_id
+// launch already resolves (seedRequestWorkspace), so there is no more
+// separate "find the container workspace this image ref happens to name" path.
 func (s *Server) primaryWorkspace(ctx context.Context, req createRunRequest, wsRefs []types.Workspace) *types.Workspace {
-	switch {
-	case len(wsRefs) > 0:
+	if len(wsRefs) > 0 {
 		return &wsRefs[0]
-	case req.Image != "" && s.cfg.Store != nil:
-		if cw, err := s.cfg.Store.GetWorkspaceBySource(ctx, types.WorkspaceKindContainer, req.Image); err == nil {
-			return &cw
-		}
 	}
 	return nil
 }

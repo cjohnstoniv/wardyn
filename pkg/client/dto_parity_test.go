@@ -34,7 +34,11 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 	}{
 		{"CreateRunRequest", client.CreateRunRequest{}, []string{"agent", "repo"}},
 		{"PolicyRequest", client.PolicyRequest{}, []string{"name", "spec"}},
-		{"WorkspaceRequest", client.WorkspaceRequest{}, []string{"kind", "name", "source"}},
+		// Only `name` survives the zero value: under the composition model the
+		// legacy scalars (kind/source/…) are deprecated optionals, and omitting
+		// `sources` entirely is legal — the server onboards the floor (one
+		// ephemeral scratch source) rather than rejecting the request.
+		{"WorkspaceRequest", client.WorkspaceRequest{}, []string{"name"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := json.Marshal(tc.req)

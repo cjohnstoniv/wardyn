@@ -321,11 +321,52 @@ func workspaceLLMCredParam(c *types.WorkspaceLLMCred) any {
 	return b
 }
 
+// workspaceSourcesParam serializes a workspace's source composition for its
+// NOT NULL sources JSONB column. Unlike the other JSONB helpers here, this one
+// NEVER returns nil: a nil/empty slice still marshals to the JSON array "[]"
+// (never SQL NULL), matching the column's NOT NULL constraint (0029).
+func workspaceSourcesParam(sources []types.WorkspaceSource) any {
+	if sources == nil {
+		sources = []types.WorkspaceSource{}
+	}
+	b, err := json.Marshal(sources)
+	if err != nil {
+		return []byte("[]") // unreachable for this concrete type; fail-safe
+	}
+	return b
+}
+
+// workspaceBaseImageParam serializes a workspace's base-image choice for its
+// nullable base_image JSONB column; nil ⇒ NULL (no explicit choice recorded).
+func workspaceBaseImageParam(img *types.WorkspaceBaseImage) any {
+	if img == nil {
+		return nil
+	}
+	b, err := json.Marshal(img)
+	if err != nil {
+		return nil // fail-safe to "no base image recorded"
+	}
+	return b
+}
+
+// workspaceRequirementsParam serializes a workspace's requirements contract
+// for its nullable requirements JSONB column; empty/nil ⇒ NULL, mirroring
+// workspaceApprovedParam.
+func workspaceRequirementsParam(reqs map[string]types.WorkspaceRequirement) any {
+	if len(reqs) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(reqs)
+	if err != nil {
+		return nil // unreachable for this concrete type; fail-safe to "none declared"
+	}
+	return b
+}
+
 // wsCols is the canonical workspace column list (order matches scanWorkspace).
-const wsCols = `id, name, kind, source, ref, default_target, profile, image_ref, ` +
-	`built_profile_hash, approved_egress, setup_commands, verify_result, ` +
-	`verified_profile_hash, verified_at, active_run_id, status, created_at, updated_at, ` +
-	`record_results, writable, llm_cred`
+const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
+	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
+	`record_results, llm_cred`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
@@ -333,15 +374,14 @@ const wsCols = `id, name, kind, source, ref, default_target, profile, image_ref,
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		RETURNING ` + wsCols
 	return scanWorkspace(s.Pool.QueryRow(ctx, q,
-		ws.ID, ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
-		workspaceProfileParam(ws.Profile), ws.ImageRef, ws.BuiltProfileHash,
-		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
-		workspaceProfileParam(ws.VerifyResult), ws.VerifiedProfileHash, ws.VerifiedAt,
-		ws.ActiveRunID, string(ws.Status), ws.CreatedAt, ws.UpdatedAt,
-		workspaceProfileParam(ws.RecordResults), ws.Writable, workspaceLLMCredParam(ws.LLMCred),
+		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
+		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
+		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
+		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
+		workspaceLLMCredParam(ws.LLMCred),
 	))
 }
 
@@ -350,47 +390,35 @@ func (s PG) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, er
 	return scanWorkspace(s.Pool.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id = $1`, id))
 }
 
-// GetWorkspaceBySource returns the workspace with the given kind+source, or
-// ErrNotFound — the read side of the partial-unique (source) WHERE
-// kind='local_dir' index, and the lookup a repo-kind workspace resolves by.
-func (s PG) GetWorkspaceBySource(ctx context.Context, kind types.WorkspaceKind, source string) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx,
-		`SELECT `+wsCols+` FROM workspaces WHERE kind = $1 AND source = $2`, string(kind), source))
-}
-
 // ListWorkspaces returns all workspaces in reverse creation order. The slice
 // is empty (never nil) when no workspaces exist.
 func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 	return s.ListWorkspacesPage(ctx, Page{})
 }
 
-// UpdateWorkspace replaces a workspace's editable identity fields (name, kind,
-// source, ref, default_target) and bumps updated_at, returning the persisted
-// row. It is a FULL-column write (it also sets profile, image_ref,
+// UpdateWorkspace replaces a workspace's editable composition (name, sources,
+// base_image, requirements) and bumps updated_at, returning the persisted row.
+// It is a FULL-column write (it also sets profile, image_ref,
 // built_profile_hash, status and the other scan-owned columns), which is why
 // callers must round-trip the fetched row. Returns ErrNotFound when no
 // workspace has the given id.
 //
 // handleUpdateWorkspace does round-trip, and resets the scan-owned fields +
-// ApprovedEgress itself when source/kind changed — the persisted profile and
-// egress approvals were reviewed against the OLD source.
+// ApprovedEgress itself when the composition changed — the persisted profile
+// and egress approvals were reviewed against the OLD sources.
 func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
-		SET name=$1, kind=$2, source=$3, ref=$4, default_target=$5,
-			profile=$6, image_ref=$7, built_profile_hash=$8, approved_egress=$9,
-			setup_commands=$10, verify_result=$11, verified_profile_hash=$12,
-			verified_at=$13, active_run_id=$14, status=$15, record_results=$16,
-			writable=$17, llm_cred=$18, updated_at=now()
-		WHERE id=$19
+		SET name=$1, sources=$2, base_image=$3, requirements=$4,
+			profile=$5, image_ref=$6, built_profile_hash=$7, approved_egress=$8,
+			active_run_id=$9, status=$10, record_results=$11, llm_cred=$12, updated_at=now()
+		WHERE id=$13
 		RETURNING ` + wsCols
 	return scanWorkspace(s.Pool.QueryRow(ctx, q,
-		ws.Name, string(ws.Kind), ws.Source, ws.Ref, ws.DefaultTarget,
-		workspaceProfileParam(ws.Profile), ws.ImageRef, ws.BuiltProfileHash,
-		workspaceApprovedParam(ws.ApprovedEgress), workspaceProfileParam(ws.SetupCommands),
-		workspaceProfileParam(ws.VerifyResult), ws.VerifiedProfileHash, ws.VerifiedAt,
-		ws.ActiveRunID, string(ws.Status), workspaceProfileParam(ws.RecordResults),
-		ws.Writable, workspaceLLMCredParam(ws.LLMCred), id,
+		ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
+		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
+		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
+		string(ws.Status), workspaceProfileParam(ws.RecordResults), workspaceLLMCredParam(ws.LLMCred), id,
 	))
 }
 
@@ -415,13 +443,18 @@ func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domain
 		workspaceApprovedParam(domains), id))
 }
 
-// SetWorkspaceSetupCommands replaces ONLY the operator-approved setup-commands
-// column (scoped write, same anti-clobber discipline as approved-egress). The
-// blob is opaque []workspacescan.SetupCommand JSON.
-func (s PG) SetWorkspaceSetupCommands(ctx context.Context, id uuid.UUID, cmds json.RawMessage) (types.Workspace, error) {
+// SetWorkspaceRequirements replaces ONLY the requirements-contract column
+// (plus updated_at), returning the updated row. Scoped write, same
+// anti-clobber discipline as SetWorkspaceApprovedEgress: it can never clobber
+// a concurrently-persisted async scan (profile/status land via the full-column
+// UpdateWorkspace, and a read-modify-write here would silently revert them).
+// Pass the FULL desired map — like SetWorkspaceApprovedEgress, this replaces
+// rather than merges; a caller adding one requirement to an existing set reads
+// first, merges in Go, then calls this with the result.
+func (s PG) SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return scanWorkspace(s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET setup_commands=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
-		workspaceProfileParam(cmds), id))
+		`UPDATE workspaces SET requirements=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		workspaceRequirementsParam(reqs), id))
 }
 
 // SetWorkspaceRecordResult atomically upserts ONE task's entry in the Record
@@ -503,18 +536,15 @@ func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, 
 		imageRef, builtHash, id))
 }
 
-// SetWorkspaceImportState is the scoped writer the import orchestrator uses to
-// advance the pipeline without a full-row read-modify-write: it sets status +
-// the in-flight run pointer, and (when a verify reports) the verify result and
-// proven-working markers. Any nil pointer leaves that column unchanged via
-// COALESCE-on-sentinel is avoided by taking explicit values — callers pass the
-// current values for columns they don't mean to change.
+// SetWorkspaceImportState is the scoped writer the scan orchestrator uses to
+// advance status + the in-flight run pointer without a full-row read-modify-
+// write.
 //
 // FENCED (mirrors SetWorkspaceScanResult): the write is conditional on the
 // import-step slot still holding expectedActive, so a caller that decided what
 // to write from a STALE read cannot land it. Every caller here does check-then-
 // act (read the workspace, decide, write), and this was the only unfenced
-// workspace writer — a finalize/update racing a live verify/record run could
+// workspace writer — a finalize/update racing a live scan/record run could
 // overwrite the fresher state the concurrent run had just written, which is
 // exactly the class of race the C001 finalize guard closed at one call site
 // only. Pass expectedActive = the active_run_id observed in the read the
@@ -522,15 +552,13 @@ func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, 
 // means the slot moved under the caller, which must then re-read rather than
 // retry blindly. Returns ErrNotFound only when the workspace does not exist.
 func (s PG) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
-	status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID,
-	verifyResult json.RawMessage, verifiedHash string, verifiedAt *time.Time) (types.Workspace, bool, error) {
+	status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error) {
 	// IS NOT DISTINCT FROM (not `=`) so a nil expectedActive correctly matches a
 	// NULL slot — `active_run_id = NULL` is never true in SQL.
 	ws, err := scanWorkspace(s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET status=$1, active_run_id=$2, verify_result=$3,
-			verified_profile_hash=$4, verified_at=$5, updated_at=now()
-		 WHERE id=$6 AND active_run_id IS NOT DISTINCT FROM $7 RETURNING `+wsCols,
-		string(status), activeRunID, workspaceProfileParam(verifyResult), verifiedHash, verifiedAt, id, expectedActive))
+		`UPDATE workspaces SET status=$1, active_run_id=$2, updated_at=now()
+		 WHERE id=$3 AND active_run_id IS NOT DISTINCT FROM $4 RETURNING `+wsCols,
+		string(status), activeRunID, id, expectedActive))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish a guard miss (slot moved) from a missing workspace.
 		cur, gerr := s.GetWorkspace(ctx, id)
@@ -586,13 +614,12 @@ func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
-	var kind, status string
-	var profileRaw, approvedRaw, setupRaw, verifyRaw, recordRaw, llmCredRaw []byte
+	var status string
+	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw []byte
 	err := row.Scan(
-		&ws.ID, &ws.Name, &kind, &ws.Source, &ws.Ref, &ws.DefaultTarget,
-		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &setupRaw, &verifyRaw,
-		&ws.VerifiedProfileHash, &ws.VerifiedAt, &ws.ActiveRunID, &status, &ws.CreatedAt, &ws.UpdatedAt,
-		&recordRaw, &ws.Writable, &llmCredRaw,
+		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
+		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
+		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
@@ -600,19 +627,26 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	if err != nil {
 		return types.Workspace{}, fmt.Errorf("store: scan workspace: %w", err)
 	}
-	ws.Kind = types.WorkspaceKind(kind)
 	ws.Status = types.WorkspaceStatus(status)
 	if profileRaw != nil {
 		ws.Profile = json.RawMessage(profileRaw)
 	}
-	if setupRaw != nil {
-		ws.SetupCommands = json.RawMessage(setupRaw)
-	}
-	if verifyRaw != nil {
-		ws.VerifyResult = json.RawMessage(verifyRaw)
-	}
 	if recordRaw != nil {
 		ws.RecordResults = json.RawMessage(recordRaw)
+	}
+	// sources is NOT NULL; malformed JSONB is unreachable via
+	// workspaceSourcesParam, but fail safe to "no sources" rather than error.
+	_ = json.Unmarshal(sourcesRaw, &ws.Sources)
+	if baseImageRaw != nil {
+		var bi types.WorkspaceBaseImage
+		if json.Unmarshal(baseImageRaw, &bi) == nil {
+			ws.BaseImage = &bi
+		}
+	}
+	if requirementsRaw != nil {
+		// Malformed JSONB is unreachable via workspaceRequirementsParam; on the
+		// off chance, fail safe to "no requirements declared" rather than error.
+		_ = json.Unmarshal(requirementsRaw, &ws.Requirements)
 	}
 	if approvedRaw != nil {
 		// Malformed JSONB is unreachable via workspaceApprovedParam; on the
@@ -625,7 +659,35 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 			ws.LLMCred = &c
 		}
 	}
+	deriveWorkspaceMirrors(&ws)
 	return ws, nil
+}
+
+// deriveWorkspaceMirrors populates ws.Kind/Source/Ref/DefaultTarget as
+// READ-ONLY convenience mirrors of ws.Sources[0], for single-source workspaces
+// only — the shape pkg/client and `wardyn workspace list` still render. A
+// multi-source workspace has no single "the" kind/source/ref/target, so the
+// mirrors are left zero rather than arbitrarily picking one. Derived purely
+// from Sources[0] (never BaseImage): a migrated legacy 'container' workspace
+// (now an ephemeral source + a custom base image) mirrors as
+// Kind="ephemeral", not Kind="container" — the composition model has no
+// single-field notion of "container" to reconstruct. These fields are NEVER
+// persisted; they exist on the Go struct only after this derivation.
+func deriveWorkspaceMirrors(ws *types.Workspace) {
+	if len(ws.Sources) != 1 {
+		return
+	}
+	src := ws.Sources[0]
+	ws.Kind = types.WorkspaceKind(src.Type)
+	ws.Ref = src.Ref
+	ws.DefaultTarget = src.Target
+	switch src.Type {
+	case types.WorkspaceSourceTypeLocalDir:
+		ws.Source = src.Path
+	case types.WorkspaceSourceTypeRepo:
+		ws.Source = src.Source
+		// ephemeral carries neither Path nor Source; ws.Source stays "".
+	}
 }
 
 // ─── CredentialGrant ─────────────────────────────────────────────────────────

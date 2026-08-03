@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestResolveBedrockAuth_NotConfigured is the common case: an operator who
@@ -95,6 +97,42 @@ func TestResolveBedrockAuth_Ready(t *testing.T) {
 	sort.Strings(wantHosts)
 	if len(hosts) != len(wantHosts) || hosts[0] != wantHosts[0] || hosts[1] != wantHosts[1] {
 		t.Errorf("egress hosts = %v, want %v (data-plane + control-plane)", hosts, wantHosts)
+	}
+}
+
+// TestResolveBedrockAuth_WorkspaceRefOverridesGlobal pins the per-workspace
+// override math resolveBedrockAuth has always done (cmp.Or(ws.Region, region) /
+// cmp.Or(ws.Model, model)): a picked workspace/container's WorkspaceBedrockRef
+// beats the operator's global BedrockRegion/BedrockModel, in both the effective
+// env AND the resulting regional egress hosts. This dispatch-level machinery is
+// still fully wired (dispatchParams.BedrockRef, resolveLLMTransport) — only the
+// PRODUCER of a non-nil ref from a real onboarded workspace's LLMCred binding is
+// currently a W5 stub (applyPrimaryWorkspaceCreds always returns nil; see
+// applyWorkspaceCreds in llmcred.go and TestApplyWorkspaceCreds_NoBindingIsNoOp
+// in workspace_creds_test.go), so this exercises resolveBedrockAuth directly
+// with a literal ref rather than through that disconnected end-to-end path.
+func TestResolveBedrockAuth_WorkspaceRefOverridesGlobal(t *testing.T) {
+	s := fullyConfiguredBedrockServer() // global: us-east-1 / us.anthropic...
+	ws := &types.WorkspaceBedrockRef{Region: "eu-central-1", Model: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, ws)
+	if !ba.ready {
+		t.Fatal("ready = false with a fully-configured server plus a workspace override; want true")
+	}
+	if ba.region != ws.Region || ba.model != ws.Model {
+		t.Fatalf("region/model = %q/%q, want the WORKSPACE override %q/%q", ba.region, ba.model, ws.Region, ws.Model)
+	}
+	if got := ba.env["AWS_REGION"]; got != ws.Region {
+		t.Errorf("env[AWS_REGION] = %q, want the workspace region %q (global us-east-1 is only the fallback)", got, ws.Region)
+	}
+	if got := ba.env["ANTHROPIC_MODEL"]; got != ws.Model {
+		t.Errorf("env[ANTHROPIC_MODEL] = %q, want the workspace model %q", got, ws.Model)
+	}
+	hosts := strings.Join(ba.egressHosts, ",")
+	if !strings.Contains(hosts, bedrockRuntimeHost(ws.Region)) || !strings.Contains(hosts, bedrockControlHost(ws.Region)) {
+		t.Errorf("egress hosts = %v, want the workspace region's data+control-plane hosts", ba.egressHosts)
+	}
+	if strings.Contains(hosts, bedrockRuntimeHost("us-east-1")) {
+		t.Errorf("egress hosts %v carry the GLOBAL region; the workspace override must replace it, not add to it", ba.egressHosts)
 	}
 }
 

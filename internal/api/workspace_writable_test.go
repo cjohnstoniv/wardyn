@@ -22,11 +22,13 @@ import (
 func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec
+	const path = "/home/me/projects/thing"
 	ws := types.Workspace{
-		ID:     uuid.New(),
-		Kind:   types.WorkspaceKindLocalDir,
-		Source: "/home/me/projects/thing",
-		// Writable deliberately left false.
+		ID: uuid.New(),
+		Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: path},
+			// Writable deliberately left false.
+		},
 	}
 
 	wireWorkspaceSource(&run, &policy, ws)
@@ -35,8 +37,8 @@ func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 		t.Fatalf("want exactly 1 workspace mount, got %d", len(policy.WorkspaceMounts))
 	}
 	m := policy.WorkspaceMounts[0]
-	if m.Source != ws.Source {
-		t.Errorf("mount source = %q, want %q", m.Source, ws.Source)
+	if m.Source != path {
+		t.Errorf("mount source = %q, want %q", m.Source, path)
 	}
 	// The flag must be set EXPLICITLY (not left nil): the effective value is what
 	// matters, and ReadOnlyOrDefault must resolve to read-only.
@@ -51,11 +53,12 @@ func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec
+	const path = "/home/me/projects/thing"
 	ws := types.Workspace{
-		ID:       uuid.New(),
-		Kind:     types.WorkspaceKindLocalDir,
-		Source:   "/home/me/projects/thing",
-		Writable: true, // operator explicitly ticked it
+		ID: uuid.New(),
+		Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: path, Writable: true}, // operator explicitly ticked it
+		},
 	}
 
 	wireWorkspaceSource(&run, &policy, ws)
@@ -66,7 +69,7 @@ func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 	if policy.WorkspaceMounts[0].ReadOnlyOrDefault() {
 		t.Error("Writable=true must mount the workspace READ-WRITE (install/build/edit)")
 	}
-	if run.WorkspacePath != ws.Source {
-		t.Errorf("run.WorkspacePath = %q, want %q", run.WorkspacePath, ws.Source)
+	if run.WorkspacePath != path {
+		t.Errorf("run.WorkspacePath = %q, want %q", run.WorkspacePath, path)
 	}
 }

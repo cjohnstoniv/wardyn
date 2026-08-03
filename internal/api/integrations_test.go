@@ -162,7 +162,7 @@ func TestCapabilitiesFor(t *testing.T) {
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
 				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_mount"},
 				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "resident_mount"},
+				{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: "resident_mount"},
 			},
 		},
 		{
@@ -173,7 +173,7 @@ func TestCapabilitiesFor(t *testing.T) {
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
 				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: "host-only: no live Claude CLI session found on this host", Residency: "resident_mount"},
 				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "resident_mount"},
+				{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: "resident_mount"},
 			},
 		},
 		{
@@ -184,7 +184,7 @@ func TestCapabilitiesFor(t *testing.T) {
 				{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
 				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: "host-only: wardynd runs in a container and can only see a ~/.claude mounted into it — the managed lane avoids this", Residency: "resident_mount"},
 				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXSubCodex},
-				{ID: "wardyn_features", State: CapAvailable, Residency: "resident_mount"},
+				{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: "resident_mount"},
 			},
 		},
 
@@ -212,25 +212,25 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			name: "bedrock: region unset — agent runs stay available, wardyn_features needs setup",
+			name: "bedrock: region unset — every cell needs setup (resolveBedrockAuth is unready)",
 			v:    integrationView{Type: "bedrock", Config: map[string]any{"lane": "sso"}},
 			env:  capEnv{BedrockRegionSet: false, BedrockModelSet: true},
 			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
+				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: "Region/model unset"},
+				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 			},
 		},
 		{
-			name: "bedrock: model unset — same needs_setup (either unset triggers it)",
+			name: "bedrock: model unset — same, either unset takes the whole integration out",
 			v:    integrationView{Type: "bedrock", Config: map[string]any{"lane": "static"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: false},
 			want: []Capability{
-				{ID: "model_api", State: CapAvailable, Residency: "resident_env"},
-				{ID: "tool:claude-code", State: CapAvailable, Residency: "resident_env"},
+				{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+				{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 				{ID: "tool:codex-cli", State: CapImpossible, Reason: reasonXBedrockCodex},
-				{ID: "wardyn_features", State: CapNeedsSetup, Reason: "Region/model unset"},
+				{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
 			},
 		},
 

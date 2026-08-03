@@ -8,14 +8,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // importStateFake implements store.Store's SetWorkspaceImportState by mutating
@@ -29,10 +27,10 @@ type importStateFake struct {
 
 // SetWorkspaceImportState models the REAL store's fence: the write applies only
 // while the import-step slot still holds expectedActive (SQL: active_run_id IS
-// NOT DISTINCT FROM $7, so nil matches NULL). A guard miss returns the current
+// NOT DISTINCT FROM $4, so nil matches NULL). A guard miss returns the current
 // row with applied=false and writes NOTHING — tests that assert a stale writer
 // is refused depend on this, so keep it faithful to store.go.
-func (s *importStateFake) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
+func (s *importStateFake) SetWorkspaceImportState(_ context.Context, _ uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error) {
 	cur := s.ws
 	if s.state != nil {
 		cur = *s.state // reflect any earlier applied write
@@ -43,9 +41,6 @@ func (s *importStateFake) SetWorkspaceImportState(_ context.Context, _ uuid.UUID
 	ws := cur
 	ws.Status = status
 	ws.ActiveRunID = active
-	ws.VerifyResult = vr
-	ws.VerifiedProfileHash = vh
-	ws.VerifiedAt = va
 	s.state = &ws
 	return ws, true, nil
 }
@@ -81,8 +76,8 @@ func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace,
 // SetWorkspaceImportState resolves the otherwise-ambiguous selector between the
 // embedded nil store.Store interface and importStateFake (both declare this
 // method) by routing to importStateFake's shared implementation explicitly.
-func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID, vr json.RawMessage, vh string, va *time.Time) (types.Workspace, bool, error) {
-	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive, vr, vh, va)
+func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error) {
+	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive)
 }
 func (s *recordStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	if s.run.ID == uuid.Nil {
@@ -163,8 +158,9 @@ func (s *recordStore) savedResult(t *testing.T, task string) RecordTaskResult {
 // recordingWorkspace returns a workspace with one in-flight recording for task.
 func recordingWorkspace(wsID, runID uuid.UUID, task string) types.Workspace {
 	return types.Workspace{
-		ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
-		ActiveRunID: &runID,
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned, ActiveRunID: &runID,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			task: {RunID: runID, Mode: "auto", Status: recordStatusRecording},
 		}),
@@ -278,8 +274,11 @@ func TestReconcileRecordRun_IgnoresNonRecordAndSupersededRuns(t *testing.T) {
 
 func TestRecordWorkspace_Guards(t *testing.T) {
 	wsID := uuid.New()
-	ws := types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
-		SetupCommands: mustJSON([]workspacescan.SetupCommand{{Stage: "build", Command: "go build ./...", Source: "convention:go"}})}
+	ws := types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned,
+	}
 	fake := &recordStore{importStateFake: importStateFake{ws: ws}}
 	srv := newTestSrv(t, fake)
 	url := "/api/v1/workspaces/" + wsID.String() + "/record"
@@ -322,8 +321,10 @@ func TestRecordSessionKey_Slugs(t *testing.T) {
 
 func TestGetWorkspace_ReturnsRecordResultsNoDerivedTasks(t *testing.T) {
 	wsID := uuid.New()
-	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
-		Status: types.WorkspaceScanned,
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:  types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build-test": {RunID: uuid.New(), Label: "build & test", Mode: recordModeInteractive, Status: recordStatusRecorded},
 		})}}}
@@ -360,7 +361,9 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 		{Host: "169.254.169.254", DenyCount: 1},
 		{Host: "localhost", AllowCount: 1}, // not a ValidApprovedHost shape → skipped
 	}}
-	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
 		Status: types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
@@ -407,7 +410,9 @@ func TestPromoteRecordEgress_GuardMissConflicts(t *testing.T) {
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
 	// The row the handler reads says `recorded`, but the guarded write sees the
 	// fake's saved blob where a re-record flipped it back to `recording`.
-	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Status: recordStatusRecorded, Observations: &obs},
@@ -447,7 +452,9 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 		// either way (it is a per-run phase after every union).
 		{Host: "ssh.github.com", AllowCount: 3},
 	}}
-	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
@@ -476,7 +483,9 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 		{Host: "api.stripe.com", AllowCount: 1},
 		{Host: "evil.example.com", AllowCount: 1},
 	}}
-	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
+	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
+		ID:      wsID,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
 		Status: types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},

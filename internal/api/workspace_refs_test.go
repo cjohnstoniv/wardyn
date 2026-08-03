@@ -24,8 +24,17 @@ func (s wsRefStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 
 func TestValidateWorkspaceSources(t *testing.T) {
 	onboarded := []types.Workspace{
-		{Kind: types.WorkspaceKindLocalDir, Source: "/home/me/project"},
-		{Kind: types.WorkspaceKindRepo, Source: "octocat/Hello-World"},
+		{Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/me/project"}}},
+		{Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World"}}},
+		// A single workspace composed of SEVERAL sources — only possible under the
+		// composition model. The membership sets are built from every workspace's
+		// Sources (indexWorkspacesBySource), not a single-source Kind/Source mirror,
+		// so a multi-source workspace's second/third entry must clear the gate
+		// exactly like a single-source workspace's only entry.
+		{Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/me/multi-dir"},
+			{Type: types.WorkspaceSourceTypeRepo, Source: "acme/multi-repo"},
+		}},
 	}
 	srv := &Server{cfg: Config{
 		Store: wsRefStore{ws: onboarded},
@@ -62,6 +71,20 @@ func TestValidateWorkspaceSources(t *testing.T) {
 			WorkspaceMounts: []types.WorkspaceMount{mount("/home/me/project", "/home/agent/work"), mount("/host/creds/.claude", claudeCredTarget)},
 			WorkspaceRepos:  []types.WorkspaceRepo{{Repo: "octocat/Hello-World"}},
 		}, false},
+		// (a) Both of ONE multi-source workspace's sources clear the gate.
+		{"multi-source workspace: both its own sources pass", types.RunPolicySpec{
+			WorkspaceMounts: []types.WorkspaceMount{mount("/home/me/multi-dir", "/home/agent/work")},
+			WorkspaceRepos:  []types.WorkspaceRepo{{Repo: "acme/multi-repo"}},
+		}, false},
+		// (b) A path that is NOT any onboarded workspace's source is still refused
+		// even alongside a mount that legitimately belongs to a multi-source
+		// workspace — membership is per-source, not "the run touched a known workspace".
+		{"multi-source workspace: an un-onboarded third source still rejected", types.RunPolicySpec{
+			WorkspaceMounts: []types.WorkspaceMount{
+				mount("/home/me/multi-dir", "/home/agent/work"),
+				mount("/home/me/not-onboarded-at-all", "/home/agent/other"),
+			},
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

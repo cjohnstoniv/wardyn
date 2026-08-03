@@ -5,11 +5,99 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
+
+// parseWorkspaceSourceArg parses one --add TYPE:VALUE[@TARGET] argument into a
+// WorkspaceSource. TYPE is "dir" (local_dir), "repo", or "ephemeral"; VALUE is
+// the host path / repo slug (empty for ephemeral); an optional "@TARGET"
+// suffix sets the in-container mount/clone/scratch path. There is no
+// per-source --ref/--writable in this grammar — onboard a single source
+// needing those with --kind/--source/--ref/--writable instead.
+func parseWorkspaceSourceArg(s string) (sdk.WorkspaceSource, error) {
+	typ, rest, ok := strings.Cut(s, ":")
+	if !ok {
+		return sdk.WorkspaceSource{}, fmt.Errorf("invalid --add %q: want TYPE:VALUE[@TARGET]", s)
+	}
+	value, target, _ := strings.Cut(rest, "@")
+	switch typ {
+	case "dir", "local_dir":
+		if value == "" {
+			return sdk.WorkspaceSource{}, fmt.Errorf("invalid --add %q: dir needs a host path", s)
+		}
+		return sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeLocalDir, Path: value, Target: target}, nil
+	case "repo":
+		if value == "" {
+			return sdk.WorkspaceSource{}, fmt.Errorf("invalid --add %q: repo needs a slug/URL", s)
+		}
+		return sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeRepo, Source: value, Target: target}, nil
+	case "ephemeral":
+		return sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeEphemeral, Target: target}, nil
+	default:
+		return sdk.WorkspaceSource{}, fmt.Errorf("invalid --add %q: type must be dir, repo, or ephemeral", s)
+	}
+}
+
+// firstWorkspaceSourceLabel is the human-meaningful value of one source: the
+// host path (local_dir), the repo slug/URL (repo), or its target (ephemeral,
+// which has neither).
+func firstWorkspaceSourceLabel(src sdk.WorkspaceSource) string {
+	switch src.Type {
+	case sdk.WorkspaceSourceTypeLocalDir:
+		return src.Path
+	case sdk.WorkspaceSourceTypeRepo:
+		return src.Source
+	default:
+		return src.Target
+	}
+}
+
+// workspaceComposition renders a workspace's composition for CLI display: the
+// single source's type+value when there's exactly one (matching how a
+// single-source row always rendered), or a "N dirs · N repos · N ephemeral"
+// summary for a multi-source row — never an empty Kind, which a multi-source
+// workspace's derived mirror always leaves blank.
+func workspaceComposition(ws sdk.Workspace) string {
+	if len(ws.Sources) == 1 {
+		return string(ws.Sources[0].Type) + " " + firstWorkspaceSourceLabel(ws.Sources[0])
+	}
+	var dirs, repos, ephemeral int
+	for _, src := range ws.Sources {
+		switch src.Type {
+		case sdk.WorkspaceSourceTypeLocalDir:
+			dirs++
+		case sdk.WorkspaceSourceTypeRepo:
+			repos++
+		case sdk.WorkspaceSourceTypeEphemeral:
+			ephemeral++
+		}
+	}
+	var parts []string
+	if dirs > 0 {
+		parts = append(parts, pluralCount(dirs, "dir"))
+	}
+	if repos > 0 {
+		parts = append(parts, pluralCount(repos, "repo"))
+	}
+	if ephemeral > 0 {
+		parts = append(parts, pluralCount(ephemeral, "ephemeral"))
+	}
+	if len(parts) == 0 {
+		return "no sources"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func pluralCount(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
 
 // workspaceCmd onboards and inspects workspaces. `create` is the load-bearing
 // verb: a run whose policy names workspace_mounts/workspace_repos is refused
@@ -29,15 +117,29 @@ func workspaceCmd(client clientFn) *cobra.Command {
 
 	var req sdk.WorkspaceRequest
 	var createJSON bool
+	var addSources []string
 	create := &cobra.Command{
-		Use:   "create --kind local_dir --source <path>",
+		Use:   "create --kind local_dir --source <path> [--add TYPE:VALUE[@TARGET] ...]",
 		Short: "Onboard a workspace (this is what clears the run-create onboarding gate)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Default the name to the source: onboarding one directory should not
-			// require inventing a label for it.
+			for _, a := range addSources {
+				src, err := parseWorkspaceSourceArg(a)
+				if err != nil {
+					return err
+				}
+				req.Sources = append(req.Sources, src)
+			}
+			// Default the name to the source (legacy shape) or the first --add
+			// source: onboarding one directory should not require inventing a
+			// label for it.
 			if req.Name == "" {
-				req.Name = req.Source
+				switch {
+				case req.Source != "":
+					req.Name = req.Source
+				case len(req.Sources) > 0:
+					req.Name = firstWorkspaceSourceLabel(req.Sources[0])
+				}
 			}
 			ws, err := client().CreateWorkspace(cmd.Context(), req)
 			if err != nil {
@@ -46,19 +148,18 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			if createJSON {
 				return emitJSON(ws)
 			}
-			fmt.Printf("created workspace %s (%q, %s %s, status %s)\n", ws.ID, ws.Name, ws.Kind, ws.Source, ws.Status)
+			fmt.Printf("created workspace %s (%q, %s, status %s)\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
 			return nil
 		},
 	}
-	create.Flags().StringVar(&req.Name, "name", "", "human-readable name (defaults to --source)")
-	create.Flags().StringVar((*string)(&req.Kind), "kind", "", "local_dir (a host directory), repo (a git slug/URL) or container (a base image ref)")
+	create.Flags().StringVar(&req.Name, "name", "", "human-readable name (defaults to --source, or the first --add source)")
+	create.Flags().StringVar((*string)(&req.Kind), "kind", "", "local_dir (a host directory), repo (a git slug/URL) or container (a base image ref) — a single legacy source; mutually exclusive with --add")
 	create.Flags().StringVar(&req.Source, "source", "", "absolute host path, repo slug/clone URL, or image ref — validated by the same deny-list the run path uses")
 	create.Flags().StringVar(&req.Ref, "ref", "", "git ref (branch/tag/sha); repo kind only")
 	create.Flags().StringVar(&req.DefaultTarget, "target", "", "default in-container mount/clone target (must be under /home/agent, /work or /workspace)")
 	create.Flags().BoolVar(&req.Writable, "writable", false, "mount READ-WRITE for import Record/Verify runs — a sandboxed agent's changes then PERSIST to the host directory (default read-only)")
+	create.Flags().StringArrayVar(&addSources, "add", nil, `add one composition source, repeatable: "dir:/host/path[@/target]", "repo:org/lib[@/target]", or "ephemeral:[@/target]" (mutually exclusive with --kind/--source/--ref/--target/--writable; no per-source --ref/--writable in this form)`)
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the created workspace as JSON")
-	_ = create.MarkFlagRequired("kind")
-	_ = create.MarkFlagRequired("source")
 
 	var listJSON bool
 	var listLimit int
@@ -75,9 +176,9 @@ func workspaceCmd(client clientFn) *cobra.Command {
 				return emitJSON(wss)
 			}
 			tw := newTab()
-			fmt.Fprintln(tw, "ID\tNAME\tKIND\tSOURCE\tSTATUS")
+			fmt.Fprintln(tw, "ID\tNAME\tCOMPOSITION\tSTATUS")
 			for _, ws := range wss {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ws.ID, ws.Name, ws.Kind, ws.Source, ws.Status)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
 			}
 			return tw.Flush()
 		},
@@ -85,9 +186,10 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 
+	getJSON := true
 	get := &cobra.Command{
 		Use:   "get <workspace-id>",
-		Short: "Show one workspace (full row, including its scan profile) as JSON",
+		Short: "Show one workspace (full row, including its scan profile)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("workspace", args[0])
@@ -98,9 +200,16 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(ws)
+			if getJSON {
+				return emitJSON(ws)
+			}
+			tw := newTab()
+			fmt.Fprintln(tw, "ID\tNAME\tCOMPOSITION\tSTATUS")
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
+			return tw.Flush()
 		},
 	}
+	get.Flags().BoolVar(&getJSON, "json", true, "emit raw JSON (--json=false for a one-line composition table)")
 
 	del := &cobra.Command{
 		Use:     "delete <workspace-id>",

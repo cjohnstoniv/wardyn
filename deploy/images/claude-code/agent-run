@@ -337,6 +337,7 @@ if [[ "${1:-}" == "--idle" ]]; then
     trap wipe_ssh_grants EXIT
     workdir="${HOME}/work"
     mkdir -p "$workdir"
+    make_ephemeral_dirs  # scratch sources: no host mount, created in the sandbox
     configure_git_broker_insteadof  # route granted GitHub repos through the git-broker
     dispatch_repo_clones
     resolve_workdir  # prefer the cloned repo dir as the attach landing dir
@@ -390,6 +391,7 @@ trap wipe_ssh_grants EXIT
 
 workdir="${HOME}/work"
 mkdir -p "$workdir"
+make_ephemeral_dirs  # scratch sources: no host mount, created in the sandbox
 
 # Clone the run's repo(s) into the workspace (WARDYN_REPOS preferred, legacy
 # WARDYN_REPO_URL fallback) — see clone_one/dispatch_repo_clones in

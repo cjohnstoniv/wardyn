@@ -37,6 +37,11 @@ type dispatchParams struct {
 	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
 	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
+	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
+	// ephemeral workspace source(s) declare — no host mount, no clone; the
+	// sandbox just needs the directory to exist. Surfaced as
+	// WARDYN_EPHEMERAL_DIRS (comma-separated); nil/empty adds nothing.
+	EphemeralDirs []string
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -145,6 +150,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			"and a GitHub PAT is typically a user PAT, wider than the repo-scoped installation token beside it. "+
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
+	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	// Caller-supplied non-secret env (p.ExtraEnv): compose-only mode's
 	// WARDYN_COMPOSE_* (discriminator + base64 prompt/schema), or the AWS harness
 	// login's pre-login WARDYN_AWS_SSO_CONFIG_B64 — the same "only a
@@ -678,6 +684,19 @@ func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy 
 	if repos := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
 		sandboxEnv["WARDYN_REPOS"] = repos
 	}
+}
+
+// applyEphemeralDirsEnv surfaces a run's ephemeral workspace-source targets as
+// WARDYN_EPHEMERAL_DIRS (comma-separated in-sandbox paths with no host mount
+// and no clone — the sandbox entrypoint mkdirs them). No-op when there are
+// none.
+// ponytail: a plain mkdir'd directory has no size cap; a tmpfs mount (with a
+// size limit) is the upgrade path if an unbounded scratch dir ever needs one.
+func applyEphemeralDirsEnv(sandboxEnv map[string]string, dirs []string) {
+	if len(dirs) == 0 {
+		return
+	}
+	sandboxEnv["WARDYN_EPHEMERAL_DIRS"] = strings.Join(dirs, ",")
 }
 
 // hasAnthropicAPIKeyInjection reports whether the run already carries an api_key

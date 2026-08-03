@@ -27,36 +27,154 @@ import (
 // selection). Best-effort + never errors: a source with no matching onboarded row
 // is skipped (the onboarding gate already rejected non-onboarded sources at
 // run-create, so in practice every user source resolves here). Deduped by
-// (kind, source).
+// workspace id. The lookup is by workspaceSourceIndex (workspace_refs.go),
+// built from EVERY workspace's Sources — not the single-source Kind/Source
+// mirror, which is empty for a multi-source workspace.
 func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicySpec) []types.Workspace {
 	if s.cfg.Store == nil {
 		return nil
 	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return nil
+	}
+	idx := indexWorkspacesBySource(all)
 	var out []types.Workspace
-	seen := map[string]bool{}
-	add := func(kind types.WorkspaceKind, source string) {
-		if source == "" {
+	seen := map[uuid.UUID]bool{}
+	add := func(ws types.Workspace, ok bool) {
+		if !ok || seen[ws.ID] {
 			return
 		}
-		key := string(kind) + "\x00" + source
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		if ws, err := s.cfg.Store.GetWorkspaceBySource(ctx, kind, source); err == nil {
-			out = append(out, ws)
-		}
+		seen[ws.ID] = true
+		out = append(out, ws)
 	}
 	for _, wm := range spec.WorkspaceMounts {
 		if systemMountTargets[wm.Target] {
 			continue
 		}
-		add(types.WorkspaceKindLocalDir, wm.Source)
+		ws, ok := idx.localDir[wm.Source]
+		add(ws, ok)
 	}
 	for _, wr := range spec.WorkspaceRepos {
-		add(types.WorkspaceKindRepo, wr.Repo)
+		ws, ok := idx.repo[wr.Repo]
+		add(ws, ok)
 	}
 	return out
+}
+
+// workspaceSourcesOfType filters ws.Sources down to entries of typ, preserving
+// order.
+func workspaceSourcesOfType(ws types.Workspace, typ types.WorkspaceSourceType) []types.WorkspaceSource {
+	var out []types.WorkspaceSource
+	for _, src := range ws.Sources {
+		if src.Type == typ {
+			out = append(out, src)
+		}
+	}
+	return out
+}
+
+// firstRepoSource returns the workspace's first repo-type source. A workspace
+// can carry more than one; the governed scan run — one clone, one uploaded
+// profile via SetWorkspaceScanResult's wholesale replace — only ever scans ONE
+// repo per run today.
+// ponytail: multi-repo scan-and-merge (like the local_dir aggregate scan in
+// handleScanWorkspace) is the upgrade path if a workspace with several repo
+// sources ever needs each one profiled.
+func firstRepoSource(ws types.Workspace) (types.WorkspaceSource, bool) {
+	for _, src := range ws.Sources {
+		if src.Type == types.WorkspaceSourceTypeRepo {
+			return src, true
+		}
+	}
+	return types.WorkspaceSource{}, false
+}
+
+// mergeWorkspaceProfiles combines N local_dir sources' individually-scanned
+// profiles into ONE profile for the workspace: union the set-like fields
+// (languages, package managers, egress, tools, required secrets, services,
+// suggested egress, secret-file paths), concatenate leak findings and setup
+// commands (never drop a suspected secret or an install step), take the
+// largest build-memory hint, and take the LOWEST confidence (one ambiguous
+// source makes the whole workspace's profile suspect). Empty input returns
+// the zero profile; a single profile is returned unchanged.
+func mergeWorkspaceProfiles(profiles []workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile {
+	if len(profiles) == 0 {
+		return workspacescan.WorkspaceProfile{}
+	}
+	if len(profiles) == 1 {
+		return profiles[0]
+	}
+	langs, pkgMgrs, egress, tools := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	services, suggested, secretFiles := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	github, otherHosts := map[string]struct{}{}, map[string]struct{}{}
+	secretByName := map[string]workspacescan.SecretNeed{}
+	var leaks []workspacescan.LeakFinding
+	var setupCmds []workspacescan.SetupCommand
+	hasDevcontainer, hasDockerfile, needsReview := false, false, false
+	buildMemMiB := 0
+	confidenceRank := map[string]int{
+		workspacescan.ConfidenceHigh: 3, workspacescan.ConfidenceMedium: 2, workspacescan.ConfidenceLow: 1,
+	}
+	lowest := workspacescan.ConfidenceHigh
+
+	addAll := func(dst map[string]struct{}, xs []string) {
+		for _, x := range xs {
+			dst[x] = struct{}{}
+		}
+	}
+	for _, p := range profiles {
+		addAll(langs, p.Languages)
+		addAll(pkgMgrs, p.PackageManagers)
+		addAll(egress, p.EgressDomains)
+		addAll(tools, p.Tools)
+		addAll(services, p.ServicesNeeded)
+		addAll(suggested, p.SuggestedEgress)
+		addAll(secretFiles, p.SecretFilesPresent)
+		addAll(github, p.GitRemotes.GitHub)
+		addAll(otherHosts, p.GitRemotes.OtherHosts)
+		for _, n := range p.RequiredSecrets {
+			if _, dup := secretByName[n.Name]; !dup {
+				secretByName[n.Name] = n
+			}
+		}
+		leaks = append(leaks, p.LeakFindings...)
+		setupCmds = append(setupCmds, p.SetupCommands...)
+		hasDevcontainer = hasDevcontainer || p.HasDevcontainer
+		hasDockerfile = hasDockerfile || p.HasDockerfile
+		needsReview = needsReview || p.NeedsReview
+		if p.BuildMemoryMiB > buildMemMiB {
+			buildMemMiB = p.BuildMemoryMiB
+		}
+		if confidenceRank[p.Confidence] < confidenceRank[lowest] {
+			lowest = p.Confidence
+		}
+	}
+	requiredSecrets := make([]workspacescan.SecretNeed, 0, len(secretByName))
+	for _, n := range secretByName {
+		requiredSecrets = append(requiredSecrets, n)
+	}
+	slices.SortFunc(requiredSecrets, func(a, b workspacescan.SecretNeed) int { return strings.Compare(a.Name, b.Name) })
+
+	return workspacescan.WorkspaceProfile{
+		Languages:          sortedKeys(langs),
+		PackageManagers:    sortedKeys(pkgMgrs),
+		EgressDomains:      sortedKeys(egress),
+		Tools:              sortedKeys(tools),
+		GitRemotes:         workspacescan.GitRemotes{GitHub: sortedKeys(github), OtherHosts: sortedKeys(otherHosts)},
+		HasDevcontainer:    hasDevcontainer,
+		HasDockerfile:      hasDockerfile,
+		RequiredSecrets:    requiredSecrets,
+		ServicesNeeded:     sortedKeys(services),
+		SuggestedEgress:    sortedKeys(suggested),
+		SecretFilesPresent: sortedKeys(secretFiles),
+		BuildMemoryMiB:     buildMemMiB,
+		LeakFindings:       leaks,
+		SetupCommands:      setupCmds,
+		Confidence:         lowest,
+		NeedsReview:        needsReview,
+		Source:             workspacescan.SourceDeterministic,
+	}
 }
 
 // workspaceProfile decodes a workspace's opaque profile blob into the scanner's
@@ -202,7 +320,10 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // onboarded workspace, or ok=false to fall through to the convention image.
 // Order (all fail-OPEN — any failure returns ok=false + convention image, never
 // blocks the run):
-//   - a REPO whose profile HasDevcontainer → build the repo's own devcontainer;
+//   - an explicit BaseImage CHOICE on the workspace ("registry"/"byo"/"custom") →
+//     use it (see below);
+//   - a REPO PRIMARY source (Sources[0]) whose profile HasDevcontainer → build
+//     the repo's own devcontainer;
 //   - a cached generated image still valid for the current profile hash → reuse;
 //   - else generate a devcontainer for the detected toolchain, build it, and cache
 //     image_ref + built_profile_hash on the workspace for reuse.
@@ -212,10 +333,6 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	if s.cfg.ImageBuilder == nil {
 		return "", false
 	}
-	p, ok := workspaceProfile(primary)
-	if !ok {
-		return "", false // unscanned/malformed → convention image
-	}
 
 	buildAudit := func(outcome string, extra map[string]any) {
 		extra["workspace_id"] = primary.ID.String()
@@ -223,18 +340,39 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			runID.String(), outcome, mustJSON(extra)))
 	}
 
-	// A repo carrying its OWN devcontainer: respect it, build from the repo — UNLESS
-	// the source is an SSH URL. The image builder (envbuilder) clones with no minted
-	// key / known_hosts / :443 ProxyCommand — only the agent-run sandbox has that
-	// wiring — so an SSH devcontainer build would fail auth. Fall through to a
-	// generated toolchain image; agent-run still clones the repo itself using the
-	// run's ssh_key grant (the repo's own devcontainer is just not built in v1).
-	if primary.Kind == types.WorkspaceKindRepo && p.HasDevcontainer {
-		if _, ssh := sshCloneHost(primary.Source); ssh {
+	// An explicit base-image CHOICE takes precedence over everything below.
+	// "recommended" (Wardyn's own convention image for the detected stack) —
+	// like a nil BaseImage — falls through to the devcontainer/generated path
+	// instead of a fixed ref.
+	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
+		// "custom" additionally layers b.Steps on the base via a Dockerfile
+		// build. ponytail: no builder method layers Dockerfile lines on a base
+		// image yet, so this falls back to Image verbatim (Steps ignored) —
+		// same as "registry"/"byo" ("used verbatim, no layering") — until one
+		// exists.
+		buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "image": b.Image})
+		return b.Image, true
+	}
+
+	p, ok := workspaceProfile(primary)
+	if !ok {
+		return "", false // unscanned/malformed → convention image
+	}
+
+	// A repo PRIMARY source (Sources[0]) carrying its OWN devcontainer: respect
+	// it, build from the repo — UNLESS the source is an SSH URL. The image
+	// builder (envbuilder) clones with no minted key / known_hosts / :443
+	// ProxyCommand — only the agent-run sandbox has that wiring — so an SSH
+	// devcontainer build would fail auth. Fall through to a generated toolchain
+	// image; agent-run still clones the repo itself using the run's ssh_key
+	// grant (the repo's own devcontainer is just not built in v1).
+	if len(primary.Sources) > 0 && primary.Sources[0].Type == types.WorkspaceSourceTypeRepo && p.HasDevcontainer {
+		repoSrc := primary.Sources[0]
+		if _, ssh := sshCloneHost(repoSrc.Source); ssh {
 			buildAudit("skipped", map[string]any{"source": "repo-devcontainer", "reason": "ssh-source-not-buildable-by-image-builder"})
-		} else if url := repoCloneURL(primary.Source); url != "" {
+		} else if url := repoCloneURL(repoSrc.Source); url != "" {
 			tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
-			if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, primary.Ref, tag); err == nil {
+			if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag); err == nil {
 				buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
 				return built, true
 			} else {
@@ -284,9 +422,32 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 // that needs one surfaces as an observed-egress denial the operator can
 // promote (least-privilege, honest).
 func confinedEgressDomains(ws types.Workspace) []string {
-	base := &types.RunPolicySpec{AllowedDomains: scanEgressDomains(repoCloneURL(ws.Source))}
+	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
 	return base.AllowedDomains
+}
+
+// workspaceCloneEgress is the clone-host allowlist for EVERY repo source a
+// workspace holds. It must iterate Sources, not the derived ws.Source mirror:
+// that field is only populated for a single-source workspace, so reading it
+// silently dropped the clone host of every non-GitHub repo past the first —
+// and a confined replay would then deny the clone it was launched to prove.
+// GitHub sources contribute nothing here by design (they route through the
+// broker, which is on-segment, not an egress host), which is exactly why the
+// gap stayed invisible.
+func workspaceCloneEgress(ws types.Workspace) []string {
+	var hosts []string
+	seen := map[string]struct{}{}
+	for _, src := range workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo) {
+		for _, h := range scanEgressDomains(repoCloneURL(src.Source)) {
+			if _, dup := seen[h]; dup {
+				continue
+			}
+			seen[h] = struct{}{}
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
 }
 
 // claimImportStep atomically claims the workspace's serial import-step slot for
@@ -472,14 +633,22 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
-	cloneURL := wireWorkspaceSource(&run, &policy, ws)
+	cloneURLs := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create record run: %w", err))
 	}
 	// Clone grants only AFTER the run row exists — credential_grants.run_id has an
-	// immediate FK to agent_runs(id).
-	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, cloneURL)
+	// immediate FK to agent_runs(id). Only the FIRST repo source's clone gets an
+	// auto-minted credential (see wireWorkspaceSource's doc comment) — matches
+	// the pre-composition-model single-source behavior; an additional repo
+	// source needs its own pre-existing access until multi-repo grant minting
+	// is wired.
+	var primaryCloneURL string
+	if len(cloneURLs) > 0 {
+		primaryCloneURL = cloneURLs[0]
+	}
+	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, primaryCloneURL)
 	if gerr != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create record clone grants: %w", gerr))
 	}
@@ -552,43 +721,68 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		Image:              image,
 		Policy:             policy,
 		FirstGitHubGrantID: ghGrantID,
-		GitGrants:          gitBrokerGrant(cloneURL, ghGrantID),
+		GitGrants:          gitBrokerGrant(primaryCloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		Injections:         injections,
 		Interactive:        interactive,
 	}), weakCC, nil
 }
 
-// wireWorkspaceSource points run+policy at the workspace source: a repo
-// clones (run.Repo); a local dir is bind-mounted at the composer workspace
-// target. It returns the repo's clone URL ("" for a local dir) to hand to
-// workspaceSourceGrants. Used by launchRecordRun (launchScanRun is repo-only,
-// so it wires run.Repo directly).
+// wireWorkspaceSource points run+policy at EVERY one of the workspace's
+// sources: each repo source clones (added to policy.WorkspaceRepos; the FIRST
+// also sets run.Repo, the run-row label); each local_dir source is
+// bind-mounted at its own target (falling back to the composer workspace
+// target when unset). An ephemeral source gets NO policy entry (a mkdir
+// inside the sandbox, not a mount/clone — mirrors runs_create.go's
+// WARDYN_EPHEMERAL_DIRS handling for the ordinary create-run path); this
+// import-flow launch does not thread that env var, so an ephemeral source
+// here is silently inert.
+//
+// It returns every repo source's clone URL, in Sources order, for
+// workspaceSourceGrants — which today only auto-mints a clone credential for
+// the FIRST one (see launchRecordRun's call site); an additional repo source
+// needs its own pre-existing access until multi-repo grant minting is wired.
 //
 // ORDERING (load-bearing): this is a PURE run/policy mutation, so it must run
 // BEFORE Store.CreateRun persists the row — whereas the clone grants it used to
 // also create must run AFTER it, since credential_grants.run_id REFERENCES
 // agent_runs(id) with an immediate FK. Doing both halves here forced one of the
 // two orders to be wrong; the grant half is split out for that reason.
-func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURL string) {
-	if ws.Kind == types.WorkspaceKindRepo {
-		run.Repo = ws.Source
-		return repoCloneURL(ws.Source)
+func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs []string) {
+	for _, src := range ws.Sources {
+		switch src.Type {
+		case types.WorkspaceSourceTypeRepo:
+			if run.Repo == "" {
+				run.Repo = src.Source
+			}
+			policy.WorkspaceRepos = append(policy.WorkspaceRepos, types.WorkspaceRepo{Repo: src.Source, Target: src.Target})
+			if url := repoCloneURL(src.Source); url != "" {
+				cloneURLs = append(cloneURLs, url)
+			}
+		case types.WorkspaceSourceTypeLocalDir:
+			target := src.Target
+			if target == "" {
+				target = composerWorkspaceTarget
+			}
+			// ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted.
+			// Omitting it mounted every imported source read-only, which made the
+			// Record step's own promise ("so the agent can make changes")
+			// impossible to keep: `pnpm install` cannot write node_modules, a build
+			// cannot emit artifacts, and no source file can be edited. Honor the
+			// operator's explicit per-source opt-in instead; the default is still
+			// read-only, so this widens nothing unless a human ticked the box.
+			ro := !src.Writable
+			if run.WorkspacePath == "" {
+				run.WorkspacePath = src.Path
+			}
+			policy.WorkspaceMounts = append(policy.WorkspaceMounts, types.WorkspaceMount{
+				Source: src.Path, Target: target, ReadOnly: &ro,
+			})
+		case types.WorkspaceSourceTypeEphemeral:
+			// no policy entry — see doc comment above.
+		}
 	}
-	// ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted. Omitting
-	// it here mounted every imported workspace read-only, which made the Record
-	// step's own promise ("so the agent can make changes") impossible to keep:
-	// `pnpm install` cannot write node_modules, a build cannot emit artifacts,
-	// and no source file can be edited — i.e. no contribution, from the very flow
-	// that exists to record one. Honor the operator's explicit per-workspace
-	// opt-in instead, mirroring the composer's ws.ReadWrite; the default is still
-	// read-only, so this widens nothing unless a human ticked the box.
-	ro := !ws.Writable
-	policy.WorkspaceMounts = []types.WorkspaceMount{
-		{Source: ws.Source, Target: composerWorkspaceTarget, ReadOnly: &ro},
-	}
-	run.WorkspacePath = ws.Source
-	return ""
+	return cloneURLs
 }
 
 // workspaceSourceGrants creates the repo clone's read credentials. It MUST be
@@ -719,8 +913,7 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 		// record_results, approvals). Fenced on THIS run still owning the import
 		// step: a newer scan that already claimed the slot must not be reverted by
 		// this late reconcile.
-		_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceError, nil,
-			&runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
+		_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceError, nil, &runID)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.scan",
 			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_facts_uploaded"})))
 	}
@@ -901,9 +1094,13 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
 	}
-	url := repoCloneURL(ws.Source)
+	repoSrc, ok := firstRepoSource(ws)
+	if !ok {
+		return types.AgentRun{}, fmt.Errorf("workspace %s has no repo source to scan", ws.ID)
+	}
+	url := repoCloneURL(repoSrc.Source)
 	if url == "" {
-		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", ws.Source)
+		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", repoSrc.Source)
 	}
 	// Detach from request cancellation before the durable launch work: a client
 	// that walks away must not cancel it (same rationale as launchRecordRun).
@@ -926,7 +1123,7 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 		return types.AgentRun{}, release(err)
 	}
 	now := run.CreatedAt
-	run.Repo = ws.Source                  // wardyn-scan clones it; no model call in scan-only mode
+	run.Repo = repoSrc.Source             // wardyn-scan clones it; no model call in scan-only mode
 	run.AutoStopAfterSec = scanIdleCapSec // reaper reads the run row; == scanPolicy below
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {

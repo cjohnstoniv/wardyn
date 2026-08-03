@@ -75,8 +75,9 @@ func TestSetApprovedEgressRoundTrip(t *testing.T) {
 	wsID := uuid.New()
 	profile := mustJSON(workspacescan.WorkspaceProfile{SuggestedEgress: []string{"ghcr.io"}, Confidence: "high", Source: "deterministic"})
 	fake := &approvedEgressStore{ws: types.Workspace{
-		ID: wsID, Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/home/u/repo",
-		Profile: profile, Status: types.WorkspaceReady,
+		ID: wsID, Name: "w",
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/repo", Target: "/home/agent/work"}},
+		Profile: profile, Status: types.WorkspaceScanned,
 	}}
 	srv := New(baseTestConfig(h, fake))
 
@@ -97,7 +98,7 @@ func TestSetApprovedEgressRoundTrip(t *testing.T) {
 		t.Errorf("persisted ApprovedEgress = %+v, want %v", fake.updated, want)
 	}
 	// Approval must NOT touch the scan-owned fields.
-	if fake.updated.Status != types.WorkspaceReady || string(fake.updated.Profile) != string(profile) {
+	if fake.updated.Status != types.WorkspaceScanned || string(fake.updated.Profile) != string(profile) {
 		t.Errorf("approval mutated scan-owned fields: %+v", fake.updated)
 	}
 
@@ -117,8 +118,9 @@ func TestSetApprovedEgressRoundTrip(t *testing.T) {
 // union into the run allowlist; content-derived SuggestedEgress NEVER does.
 func TestUnionWorkspaceEgress_ApprovedYesSuggestedNever(t *testing.T) {
 	ws := types.Workspace{
-		ID: uuid.New(), Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/w",
-		Status:         types.WorkspaceReady,
+		ID: uuid.New(), Name: "w",
+		Sources:        []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+		Status:         types.WorkspaceScanned,
 		ApprovedEgress: []string{"ghcr.io"},
 		Profile: mustJSON(workspacescan.WorkspaceProfile{
 			EgressDomains:   []string{"registry.npmjs.org"},
@@ -168,8 +170,9 @@ func TestObservedEgress(t *testing.T) {
 	runOther := uuid.New()
 	fake := &observedEgressStore{
 		ws: types.Workspace{
-			ID: wsID, Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/home/u/repo",
-			Status:         types.WorkspaceReady,
+			ID: wsID, Name: "w",
+			Sources:        []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/repo", Target: "/home/agent/work"}},
+			Status:         types.WorkspaceScanned,
 			ApprovedEgress: []string{"already.example.com"},
 			Profile: mustJSON(workspacescan.WorkspaceProfile{
 				EgressDomains: []string{"registry.npmjs.org"}, Confidence: "high", Source: "deterministic",

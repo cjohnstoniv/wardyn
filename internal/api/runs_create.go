@@ -47,18 +47,12 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// is mutually exclusive with a devcontainer build, and — unlike DevcontainerRepo,
 	// which degrades to the convention image — an explicitly chosen image with no
 	// ImageBuilder wired is a hard error (never silently swap a chosen image for the
-	// convention one).
-	if req.Image != "" {
-		if req.DevcontainerRepo != "" {
-			writeError(w, http.StatusBadRequest, "image and devcontainer_repo are mutually exclusive")
-			return req, "", false
-		}
-		if s.cfg.ImageBuilder == nil {
-			writeError(w, http.StatusBadRequest,
-				"a custom sandbox image was requested but this control plane has no image builder wired "+
-					"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)")
-			return req, "", false
-		}
+	// convention one). seedRequestWorkspace's caller re-runs this SAME check after
+	// workspace_id is resolved — a workspace's base_image can ALSO set req.Image,
+	// after this ran, and must clear the identical gate (see validateImageBuildRequest).
+	if msg := s.validateImageBuildRequest(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return req, "", false
 	}
 
 	// Validate the requested confinement class up front (fail closed before any
@@ -89,63 +83,119 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	return req, reqCC, true
 }
 
+// validateImageBuildRequest enforces the image/devcontainer_repo XOR + the
+// image-builder-wired requirement. Shared by decodeAndValidateCreateRun (the
+// request's own --image) and seedRequestWorkspace's caller: a workspace's
+// base_image can ALSO set req.Image, AFTER decodeAndValidateCreateRun has
+// already run — so the identical check must run again once that seed lands,
+// or a workspace's base_image would bypass a check an explicit --image must
+// pass (e.g. silently pairing with a --devcontainer-repo the user set, or
+// reaching FinalizeBase with no ImageBuilder wired).
+func (s *Server) validateImageBuildRequest(req createRunRequest) string {
+	if req.Image == "" {
+		return ""
+	}
+	if req.DevcontainerRepo != "" {
+		return "image and devcontainer_repo are mutually exclusive"
+	}
+	if s.cfg.ImageBuilder == nil {
+		return "a custom sandbox image was requested but this control plane has no image builder wired " +
+			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)"
+	}
+	return ""
+}
+
 // seedRequestWorkspace attaches the workspace named by req.WorkspaceID to the
 // RESOLVED spec. Without it the only way to launch against an onboarded
 // workspace is to hand-reproduce its exact source string in a policy file — the
 // console hides that by synthesizing an inline policy, the CLI and SDK could not.
 //
-// It PREPENDS, so wsRefs[0] (referencedWorkspaces) stays this workspace even when
-// the caller also passed a policy — that first ref is what drives the run's
-// model/harness cred binding and its built image. Everything downstream
-// (validateWorkspaceSources, primaryWorkspacePath, unionRunEgress,
-// resolveWorkspaceImage) then works unchanged off the spec, which is why this
-// must run BEFORE the onboarding gate rather than beside it.
+// It walks the workspace's Sources in order, collecting each one's
+// mount/repo entry, then PREPENDS the whole batch onto the resolved spec in
+// ONE shot — so wsRefs[0] (referencedWorkspaces) stays this workspace even
+// when the caller also passed a policy (that first ref is what drives the
+// run's model/harness cred binding and its built image), AND this
+// workspace's own sources keep their relative order ahead of any
+// pre-existing spec entries. Everything downstream (validateWorkspaceSources,
+// primaryWorkspacePath, unionRunEgress, resolveWorkspaceImage) then works
+// unchanged off the spec, which is why this must run BEFORE the onboarding
+// gate rather than beside it.
+//
+//   - repo source    → collected into spec.WorkspaceRepos; the FIRST repo
+//     source also sets req.Repo (run-row label only — the gate + wsRefs read
+//     WorkspaceRepos).
+//   - local_dir source → collected into spec.WorkspaceMounts (read-only
+//     unless the source itself is Writable).
+//   - ephemeral source → NO policy entry (there is no host/repo source for
+//     one) — its target is returned in ephemeralDirs for the caller to surface
+//     as WARDYN_EPHEMERAL_DIRS at dispatch (runs_dispatch.go); the sandbox
+//     mkdirs it.
+//
+// base_image REPLACES the old container-kind image resolution: when the
+// workspace carries one (and the caller didn't already set an explicit
+// --image), it sets req.Image — mirroring exactly what a user passing
+// --image <that ref> would have done, so resolveCreateRunImage's ordinary
+// BYOI-wrap path picks it up. "recommended" is not a fixed ref (it just means
+// "no override"), so it never sets req.Image.
 //
 // It deliberately does NOT set run.WorkspaceID: that column is the TRUSTED
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
-// run must never claim it. A CONTAINER workspace is refused rather than silently
-// becoming the image — that would bypass decodeAndValidateCreateRun's
-// image/devcontainer XOR and builder-wired checks, which already ran.
-func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (int, error) {
+// run must never claim it.
+func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, code int, err error) {
 	if req.WorkspaceID == nil {
-		return 0, nil
+		return nil, 0, nil
 	}
 	if s.cfg.Store == nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf("workspace_id requires a store, but none is configured")
+		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace_id requires a store, but none is configured")
 	}
-	ws, err := s.cfg.Store.GetWorkspace(ctx, *req.WorkspaceID)
-	if err != nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s: %w", *req.WorkspaceID, err)
+	ws, gerr := s.cfg.Store.GetWorkspace(ctx, *req.WorkspaceID)
+	if gerr != nil {
+		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s: %w", *req.WorkspaceID, gerr)
 	}
-	// The stored default_target becomes an in-container mount/clone target here,
-	// so re-validate it against the same deny-list runner.ValidateTarget applies at
-	// onboarding — a row written before that check existed must not ride straight
-	// past the gate onto a system path (e.g. /home/agent/.claude).
-	target := ws.DefaultTarget
-	if target != "" {
-		if err := runner.ValidateTarget(target); err != nil {
-			return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s default_target: %w", ws.ID, err)
+	var newMounts []types.WorkspaceMount
+	var newRepos []types.WorkspaceRepo
+	for _, src := range ws.Sources {
+		// The stored target becomes an in-container mount/clone/scratch target
+		// here, so re-validate it against the same deny-list runner.ValidateTarget
+		// applies at onboarding — a row written before that check existed must not
+		// ride straight past the gate onto a system path (e.g. /home/agent/.claude).
+		target := src.Target
+		if target != "" {
+			if verr := runner.ValidateTarget(target); verr != nil {
+				return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
+			}
+		}
+		switch src.Type {
+		case types.WorkspaceSourceTypeRepo:
+			newRepos = append(newRepos, types.WorkspaceRepo{Repo: src.Source, Target: target})
+		case types.WorkspaceSourceTypeLocalDir:
+			// Read-only unless the operator ticked Writable on this source — the
+			// same per-source opt-in wireWorkspaceSource honors for import runs.
+			ro := !src.Writable
+			if target == "" {
+				target = composerWorkspaceTarget
+			}
+			newMounts = append(newMounts, types.WorkspaceMount{Source: src.Path, Target: target, ReadOnly: &ro})
+		case types.WorkspaceSourceTypeEphemeral:
+			// No policy entry — it's a mkdir inside the sandbox, not a mount/clone.
+			// ponytail: a plain directory has no size cap; a tmpfs mount (with a
+			// size limit) is the upgrade path if an unbounded scratch dir ever
+			// needs one.
+			if target != "" {
+				ephemeralDirs = append(ephemeralDirs, target)
+			}
 		}
 	}
-	switch ws.Kind {
-	case types.WorkspaceKindRepo:
-		spec.WorkspaceRepos = append([]types.WorkspaceRepo{{Repo: ws.Source, Target: target}}, spec.WorkspaceRepos...)
-		if req.Repo == "" {
-			req.Repo = ws.Source // run-row label only; the gate + wsRefs read WorkspaceRepos
-		}
-	case types.WorkspaceKindLocalDir:
-		// Read-only unless the operator ticked Writable on the workspace itself —
-		// the same per-workspace opt-in wireWorkspaceSource honors for import runs.
-		ro := !ws.Writable
-		if target == "" {
-			target = composerWorkspaceTarget
-		}
-		spec.WorkspaceMounts = append([]types.WorkspaceMount{
-			{Source: ws.Source, Target: target, ReadOnly: &ro},
-		}, spec.WorkspaceMounts...)
-	default:
-		return http.StatusBadRequest, fmt.Errorf(
-			"workspace %s is a %s workspace; pass its image ref as `image` instead of workspace_id", ws.ID, ws.Kind)
+	spec.WorkspaceMounts = append(newMounts, spec.WorkspaceMounts...)
+	spec.WorkspaceRepos = append(newRepos, spec.WorkspaceRepos...)
+	if req.Repo == "" && len(newRepos) > 0 {
+		req.Repo = newRepos[0].Repo // run-row label only; the gate + wsRefs read WorkspaceRepos
+	}
+	// base_image replaces the old container-kind image resolution. An explicit
+	// user --image always wins (never silently overridden); "recommended"
+	// just means "no override", so only a real build choice sets req.Image.
+	if req.Image == "" && ws.BaseImage != nil && ws.BaseImage.Kind != "recommended" {
+		req.Image = ws.BaseImage.Image
 	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
 	// can break: the unique in-container target across workspace_mounts +
@@ -156,10 +206,10 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// nested INSIDE a writable mount still clones into the host bind — permitted,
 	// since clone-into-mounted-workspace is how the legacy default dest
 	// ~/work/<name> already behaves when ~/work is a mounted dir.
-	if err := validatePolicyWorkspaces(*spec); err != nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, err)
+	if verr := validatePolicyWorkspaces(*spec); verr != nil {
+		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
 	}
-	return 0, nil
+	return ephemeralDirs, 0, nil
 }
 
 // enforcedConfinement is the PURE confinement math both the launch path and the

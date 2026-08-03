@@ -169,11 +169,13 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 			repaired = true
 		}
 	}
-	// Verify/scan strand: the workspace is mid-import but its in-flight run has
+	// Scan strand: the workspace is mid-import but its in-flight run has
 	// already terminated — settle it to a clear failure so the operator sees a
 	// reason instead of an endless spinner. reconcileWorkspaceRun re-fences on the
 	// active_run_id, so a newer run that has taken the slot is left untouched.
-	if ws.ActiveRunID != nil && (ws.Status == types.WorkspaceVerifying || ws.Status == types.WorkspaceScanning) {
+	// (The `verifying` status this used to also cover is retired — collapsed
+	// into scanned/pending_scan/scanning/error.)
+	if ws.ActiveRunID != nil && ws.Status == types.WorkspaceScanning {
 		if run, err := s.cfg.Store.GetRun(ctx, *ws.ActiveRunID); err == nil && isTerminalRunState(run.State) {
 			s.reconcileWorkspaceRun(ctx, *ws.ActiveRunID)
 			repaired = true
@@ -336,7 +338,7 @@ func (s *Server) promoteSkipHosts(ws types.Workspace) map[string]struct{} {
 		}
 	}
 	add(modelProviderEgress(s.cfg.DefaultPolicy))
-	add(scanEgressDomains(repoCloneURL(ws.Source)))
+	add(workspaceCloneEgress(ws)) // every repo source, not just the derived mirror
 	add(gitBrokerManagedHosts)
 	add(gitBrokerSSHHosts()) // bare hosts: this map keys on the raw lowercased host
 	return skip

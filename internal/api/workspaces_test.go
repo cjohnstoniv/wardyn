@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -115,12 +114,6 @@ type workspaceStoreFake struct {
 func (s *workspaceStoreFake) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
 	return s.ws, nil
 }
-func (s *workspaceStoreFake) GetWorkspaceBySource(_ context.Context, kind types.WorkspaceKind, source string) (types.Workspace, error) {
-	if kind == s.ws.Kind && source == s.ws.Source {
-		return s.ws, nil
-	}
-	return types.Workspace{}, store.ErrNotFound
-}
 func (s *workspaceStoreFake) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return []types.Workspace{s.ws}, nil
 }
@@ -140,14 +133,13 @@ func (s *workspaceStoreFake) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws 
 func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 	h := newHarness(t)
 	id := uuid.New()
-	at := time.Now().UTC()
 	fake := &workspaceStoreFake{ws: types.Workspace{
-		ID: id, Name: "w", Kind: types.WorkspaceKindLocalDir, Source: "/home/u/old",
-		Status: types.WorkspaceReady, Profile: mustJSON(workspacescan.WorkspaceProfile{Confidence: "high"}),
+		ID: id, Name: "w",
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/old"}},
+		Status:  types.WorkspaceScanned, Profile: mustJSON(workspacescan.WorkspaceProfile{Confidence: "high"}),
 		ImageRef: "wardyn/ws:abc", BuiltProfileHash: "abc", ApprovedEgress: []string{"example.com"},
-		SetupCommands: mustJSON([]workspacescan.SetupCommand{{Stage: "install", Command: "npm ci"}}),
-		VerifyResult:  mustJSON(map[string]any{"ok": true}), RecordResults: mustJSON(map[string]any{"t": 1}),
-		VerifiedProfileHash: "abc", VerifiedAt: &at,
+		Requirements:  map[string]types.WorkspaceRequirement{"secret:acme-key": {Level: "required", Provenance: "scan_seeded"}},
+		RecordResults: mustJSON(map[string]any{"t": 1}),
 	}}
 	srv := New(baseTestConfig(h, fake))
 	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String(), adminToken,
@@ -157,8 +149,7 @@ func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 	}
 	got := fake.updated
 	if got.Profile != nil || got.ImageRef != "" || got.BuiltProfileHash != "" || got.ApprovedEgress != nil ||
-		got.SetupCommands != nil || got.VerifyResult != nil || got.RecordResults != nil ||
-		got.VerifiedProfileHash != "" || got.VerifiedAt != nil || got.Status != types.WorkspacePendingScan {
+		got.Requirements != nil || got.RecordResults != nil || got.Status != types.WorkspacePendingScan {
 		t.Errorf("source change must clear every field reviewed against the old source; got %+v", got)
 	}
 }

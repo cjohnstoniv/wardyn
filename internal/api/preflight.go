@@ -38,8 +38,9 @@ type preflightResponse struct {
 // here: deriveSetupItems' backend row reports that honestly instead, so a host
 // that can't yet enforce the class shows a fixable checklist row on Review
 // rather than a fatal error that blanks the panel. Reproduced launch gates:
-// resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (container-kind
-// refusal, unknown workspace, target collision), the onboarded-workspace gate,
+// resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (unknown
+// workspace, an image/devcontainer_repo XOR violation surfaced by a
+// workspace's base_image, target collision), the onboarded-workspace gate,
 // the workspace credential-binding fold, and the confinement
 // floor check below. Not reproduced (unreachable via the wizard body this
 // endpoint serves): the agent-required 400, the BYOI image/devcontainer 400s,
@@ -61,12 +62,19 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same workspace_id seeding launch runs (runs.go): an unknown or
-	// container-kind workspace fails here exactly as it would at create, and the
-	// checklist below sees the attached workspace (seedRequestWorkspace prepends
-	// it, so deriveSetupItems' workspace rows match launch).
-	if code, err := s.seedRequestWorkspace(ctx, &spec, &req); err != nil {
+	// Same workspace_id seeding launch runs (runs.go): an unknown workspace or a
+	// base_image-triggered XOR violation fails here exactly as it would at
+	// create, and the checklist below sees the attached workspace
+	// (seedRequestWorkspace prepends it, so deriveSetupItems' workspace rows
+	// match launch). ephemeralDirs is launch-only (WARDYN_EPHEMERAL_DIRS at
+	// dispatch) — preflight dispatches nothing, so it's discarded here.
+	if _, code, err := s.seedRequestWorkspace(ctx, &spec, &req); err != nil {
 		writeError(w, code, "workspace_id: "+err.Error())
+		return
+	}
+	// Same base_image XOR + builder-wired re-check launch runs (runs.go).
+	if msg := s.validateImageBuildRequest(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 

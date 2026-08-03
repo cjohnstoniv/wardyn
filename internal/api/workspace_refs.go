@@ -24,6 +24,55 @@ var systemMountTargets = map[string]bool{
 	claudeCredJSONTarget: true, // /home/agent/.claude.json
 }
 
+// workspaceSourceIndex indexes onboarded workspaces by each of their local_dir
+// (by Path) and repo (by Source slug/URL) entries — the lookup a workspace
+// composed of Sources needs, in place of the old single kind+source store
+// query (store.GetWorkspaceBySource, removed: a workspace is no longer one
+// row per kind+source). Built by scanning every workspace's Sources once;
+// callers resolving several sources at once (referencedWorkspaces) should
+// build one index rather than calling findWorkspaceBySource in a loop.
+type workspaceSourceIndex struct {
+	localDir map[string]types.Workspace // Path -> owning workspace
+	repo     map[string]types.Workspace // Source (slug/URL) -> owning workspace
+}
+
+// indexWorkspacesBySource builds a workspaceSourceIndex from a workspace list.
+func indexWorkspacesBySource(all []types.Workspace) workspaceSourceIndex {
+	idx := workspaceSourceIndex{localDir: map[string]types.Workspace{}, repo: map[string]types.Workspace{}}
+	for _, ws := range all {
+		for _, src := range ws.Sources {
+			switch src.Type {
+			case types.WorkspaceSourceTypeLocalDir:
+				idx.localDir[src.Path] = ws
+			case types.WorkspaceSourceTypeRepo:
+				idx.repo[src.Source] = ws
+			}
+		}
+	}
+	return idx
+}
+
+// findWorkspaceBySource looks up ONE onboarded workspace by a local_dir Path or
+// repo Source, listing+indexing on demand. Best-effort: a store error or no
+// match returns ok=false. Prefer indexWorkspacesBySource directly when
+// resolving several sources at once.
+func (s *Server) findWorkspaceBySource(ctx context.Context, typ types.WorkspaceSourceType, value string) (types.Workspace, bool) {
+	if s.cfg.Store == nil || value == "" {
+		return types.Workspace{}, false
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return types.Workspace{}, false
+	}
+	idx := indexWorkspacesBySource(all)
+	if typ == types.WorkspaceSourceTypeLocalDir {
+		ws, ok := idx.localDir[value]
+		return ws, ok
+	}
+	ws, ok := idx.repo[value]
+	return ws, ok
+}
+
 // validateWorkspaceSources fails a run closed (422) when any USER-workspace mount
 // source or repo on the spec is not a pre-ONBOARDED workspace. It is the
 // un-bypassable onboarding gate: called at run-create over the RESOLVED spec
@@ -35,6 +84,11 @@ var systemMountTargets = map[string]bool{
 // profile/secret value), returns (statusCode, error) on rejection or (0, nil) when
 // every user source is onboarded. The runner.ValidateMount deny-list still runs
 // underneath as defense-in-depth; this is a floor-RAISING allow-list on top.
+//
+// The membership sets are built from EVERY workspace's Sources (not from the
+// single-source Kind/Source mirror, which is empty for a multi-source
+// workspace) — a multi-source workspace's second/third local_dir or repo entry
+// must clear this gate exactly like its first.
 func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec) (int, error) {
 	// A mount at a system target (subscription creds) is exempt from the onboarding
 	// gate ONLY when its SOURCE matches the operator's TRUSTED ceiling (DefaultPolicy)
@@ -72,32 +126,23 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		return http.StatusUnprocessableEntity, fmt.Errorf(
 			"workspace onboarding requires a store, but none is configured")
 	}
-	ws, err := s.cfg.Store.ListWorkspaces(ctx)
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
 	if err != nil {
 		return http.StatusUnprocessableEntity, fmt.Errorf("list workspaces: %w", err)
 	}
-	localSrc := make(map[string]bool)
-	repoSrc := make(map[string]bool)
-	for _, w := range ws {
-		switch w.Kind {
-		case types.WorkspaceKindLocalDir:
-			localSrc[w.Source] = true
-		case types.WorkspaceKindRepo:
-			repoSrc[w.Source] = true
-		}
-	}
+	idx := indexWorkspacesBySource(all)
 
 	for _, wm := range spec.WorkspaceMounts {
 		if isBlessedSystemMount(wm) {
 			continue // operator-blessed system creds mount — exempt (H8: source-validated)
 		}
-		if !localSrc[wm.Source] {
+		if _, ok := idx.localDir[wm.Source]; !ok {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
 		}
 	}
 	for _, wr := range spec.WorkspaceRepos {
-		if !repoSrc[wr.Repo] {
+		if _, ok := idx.repo[wr.Repo]; !ok {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
 				"repo %q is not an onboarded repository (onboard it first via the workspaces API)", wr.Repo)
 		}

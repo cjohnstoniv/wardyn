@@ -74,6 +74,13 @@ const (
 	reasonXSubDirect      = "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting."
 	reasonXAzureDirect    = "No sandbox lane exists — Azure is called from the control plane only."
 	reasonBedrockFeatures = "Wardyn's own features reach Bedrock through the AWS credential chain — the same lane this integration uses."
+	// reasonBedrockUnset states the real dispatch behavior: without both a
+	// region and a model id, resolveBedrockAuth never reports ready and the run
+	// falls through to whatever other lane it has (usually none).
+	reasonBedrockUnset = "Region and model id are unset — a run can't reach Bedrock until both are set."
+	// reasonHostCLIOptIn is the canon note for the host-CLI lane's Wardyn-features
+	// cell (mock: CAPS.sub, hostCli branch) — verbatim.
+	reasonHostCLIOptIn = "Opt-in — off until you switch it on."
 )
 
 // capabilitiesFor computes the full capability matrix for one integration.
@@ -150,11 +157,23 @@ func subscriptionCaps(v integrationView, env capEnv) []Capability {
 	} else if !envManagedBlobPresent(env, "anthropic") {
 		claudeState, claudeReason = CapNeedsSetup, "no managed Claude subscription connected"
 	}
+	// Wardyn's own features ride the HOST-CLI lane only when the operator opts
+	// in: that wire shells out to the resident `claude` login on the control
+	// plane, which is subscription-ToS-sensitive, so the composer backend that
+	// implements it ships disabled by default (backends.factory). Reporting it
+	// "available" here would promise Composer a session it will not use — and
+	// would default Wardyn's own calls onto the operator's personal login. The
+	// managed lane has no such caveat: it sends Claude-Code-shaped requests
+	// through the sandbox wire.
+	features := Capability{ID: "wardyn_features", State: CapAvailable, Residency: residency}
+	if lane == "resident_host" {
+		features = Capability{ID: "wardyn_features", State: CapOff, Reason: reasonHostCLIOptIn, Residency: residency}
+	}
 	return []Capability{
 		{ID: "model_api", State: CapImpossible, Reason: reasonXSubDirect},
 		{ID: "tool:claude-code", State: claudeState, Reason: claudeReason, Residency: residency},
 		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
-		{ID: "wardyn_features", State: CapAvailable, Residency: residency},
+		features,
 	}
 }
 
@@ -168,30 +187,36 @@ func residentHostReason(env capEnv) string {
 	return "host-only: no live Claude CLI session found on this host"
 }
 
-// bedrockCaps builds the bedrock matrix. model_api and tool:claude-code are
-// unconditionally available: the claude-code CLI resolves its own AWS
-// credentials (bearer/SSO/~/.aws/static keys) the same way an ambient AWS SDK
-// would, so Wardyn does not presume to gate the AGENT's own configuration on
-// its region/model knobs. wardyn_features is the one cell that DOES need
-// Region+model set, because Wardyn's own control-plane code calls Bedrock
-// directly with no such fallback.
+// bedrockCaps builds the bedrock matrix — ONE integration carrying the lane
+// choice (auto|bearer|sso|aws_dir|static), because that is what
+// resolveBedrockAuth resolves: one account, one region, one model, an ordered
+// credential fallback. Residency follows the lane (bearer is injected on the
+// wire; every other lane puts AWS credentials inside the sandbox).
 func bedrockCaps(v integrationView, env capEnv) []Capability {
 	lane, _ := v.Config["lane"].(string)
 	residency := "resident_env"
 	if lane == "bearer" {
 		residency = "proxy_injected"
 	}
-	caps := []Capability{
+	// Region+model gate EVERY Bedrock cell, not just Wardyn's own features:
+	// resolveBedrockAuth (runs_bedrock.go) returns an unready bedrockAuth when
+	// either is empty, and dispatch then falls silently to the api-key lane. A
+	// cell that reads "available" while the run it describes cannot reach
+	// Bedrock at all is exactly the drift this matrix exists to prevent.
+	if !env.BedrockRegionSet || !env.BedrockModelSet {
+		return []Capability{
+			{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
+			{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockUnset},
+		}
+	}
+	return []Capability{
 		{ID: "model_api", State: CapAvailable, Residency: residency},
 		{ID: "tool:claude-code", State: CapAvailable, Residency: residency},
 		{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", v.Type)},
+		{ID: "wardyn_features", State: CapAvailable, Residency: residency, Reason: reasonBedrockFeatures},
 	}
-	if env.BedrockRegionSet && env.BedrockModelSet {
-		caps = append(caps, Capability{ID: "wardyn_features", State: CapAvailable, Residency: residency, Reason: reasonBedrockFeatures})
-	} else {
-		caps = append(caps, Capability{ID: "wardyn_features", State: CapNeedsSetup, Reason: "Region/model unset"})
-	}
-	return caps
 }
 
 // githubAppCaps builds the github_app matrix: clone:app is a single brokered

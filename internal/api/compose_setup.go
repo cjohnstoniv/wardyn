@@ -101,7 +101,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	// ("local:<dir>", "ephemeral") so this lookup only ever fires for a real repo
 	// slug/URL.
 	if run.Repo != "" && run.Repo != "ephemeral" && !strings.HasPrefix(run.Repo, "local:") {
-		if ws, ok := s.workspaceBySource(ctx, types.WorkspaceKindRepo, run.Repo); ok {
+		if ws, ok := s.findWorkspaceBySource(ctx, types.WorkspaceSourceTypeRepo, run.Repo); ok {
 			workspaces = append([]types.Workspace{ws}, workspaces...)
 		}
 	}
@@ -113,21 +113,6 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 		items = append(items, it)
 	}
 	return items
-}
-
-// workspaceBySource is a nil-safe wrapper around Store.GetWorkspaceBySource.
-// referencedWorkspaces already guards s.cfg.Store == nil internally; this
-// mirrors that guard for the one extra lookup deriveSetupItems needs (the
-// primary git workspace, which referencedWorkspaces can't see — see above).
-func (s *Server) workspaceBySource(ctx context.Context, kind types.WorkspaceKind, source string) (types.Workspace, bool) {
-	if s.cfg.Store == nil {
-		return types.Workspace{}, false
-	}
-	ws, err := s.cfg.Store.GetWorkspaceBySource(ctx, kind, source)
-	if err != nil {
-		return types.Workspace{}, false
-	}
-	return ws, true
 }
 
 // setupLLMAccessItem reshapes the ALREADY-COMPUTED reconcileLLMAccess verdict
@@ -275,11 +260,11 @@ func setupWorkspaceItems(workspaces []types.Workspace) []SetupItem {
 			RequiredBy: "the agent's working directory",
 		}
 		switch ws.Status {
-		case types.WorkspaceReady, types.WorkspaceScanned, types.WorkspaceBuilding,
-			types.WorkspaceBuildError, types.WorkspaceVerifying, types.WorkspaceVerifyFailed:
-			// Any status from `scanned` onward has a usable profile and is
-			// mountable (the mount gate is onboarding-based, not status-based);
-			// `ready` is the fully-finalized/verified end state.
+		case types.WorkspaceScanned:
+			// The only satisfied status now: a usable profile exists and the
+			// workspace is mountable (the mount gate is onboarding-based, not
+			// status-based). The retired ready/building/build_error/verifying/
+			// verify_failed stages collapsed into this one on migration.
 			it.Status = "satisfied"
 			it.Detail = "onboarded and scanned"
 			if p, ok := workspaceProfile(ws); ok {
@@ -302,6 +287,11 @@ func setupWorkspaceItems(workspaces []types.Workspace) []SetupItem {
 						p.LeakFindings[0].Kind + ") — rotate/remove before mounting"
 				}
 			}
+		case types.WorkspaceScanning:
+			// Still in-flight — not yet satisfied, but not a fixable gap either
+			// (a scan is already running; re-triggering one 409s).
+			it.Status = "unverified"
+			it.Detail = string(ws.Status)
 		case types.WorkspacePendingScan, types.WorkspaceError:
 			it.Status = "unverified"
 			it.Detail = string(ws.Status)

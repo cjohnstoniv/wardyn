@@ -65,6 +65,24 @@ prepare_claude_config_dir() {
     [[ -f "${HOME}/.claude.json" ]] && cp -a "${HOME}/.claude.json" "$cfg/.claude.json" 2>/dev/null || true
 }
 
+# ── Ephemeral workspace sources ───────────────────────────────────────────────
+# A workspace may hold ephemeral sources: scratch directories that exist ONLY
+# inside the sandbox and die with it. They are deliberately NOT mounts — there
+# is no host path to bind, so dispatch just names their targets in
+# WARDYN_EPHEMERAL_DIRS (comma-separated) and we mkdir them here, before the
+# task or any clone runs. Best-effort per dir: a target the image already owns
+# (or cannot create) must not take the whole run down over scratch space.
+# ponytail: plain mkdir on the sandbox rootfs; a tmpfs with a size cap is the
+# upgrade path if a run ever needs the scratch dir bounded.
+make_ephemeral_dirs() {
+    [[ -n "${WARDYN_EPHEMERAL_DIRS:-}" ]] || return 0
+    local IFS=',' d
+    for d in ${WARDYN_EPHEMERAL_DIRS}; do
+        [[ -n "$d" ]] || continue
+        mkdir -p "$d" 2>/dev/null || echo "wardyn: could not create ephemeral dir $d" >&2
+    done
+}
+
 # ── Managed subscription (proxy-injected, compose mode) ───────────────────────
 # In managed mode there is NO host ~/.claude to mount (the compose control plane
 # is distroless). Dispatch instead delivers an inert SENTINEL .credentials.json

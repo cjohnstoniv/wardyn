@@ -67,12 +67,22 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// workspace_id: seed the named onboarded workspace's source onto the resolved
+	// workspace_id: seed the named onboarded workspace's sources onto the resolved
 	// spec (prepended, so it is the PRIMARY) before anything reads it. This is what
 	// lets a CLI/SDK caller launch against a workspace without hand-reproducing its
 	// exact source path in a policy file — see seedRequestWorkspace.
-	if code, err := s.seedRequestWorkspace(ctx, &spec, &req); err != nil {
-		writeError(w, code, "workspace_id: "+err.Error())
+	ephemeralDirs, code, seedErr := s.seedRequestWorkspace(ctx, &spec, &req)
+	if seedErr != nil {
+		writeError(w, code, "workspace_id: "+seedErr.Error())
+		return
+	}
+	// A workspace's base_image may have just set req.Image (seedRequestWorkspace):
+	// re-run the image/devcontainer_repo XOR + builder-wired check
+	// decodeAndValidateCreateRun already ran on an EXPLICIT --image, since that
+	// ran before workspace_id was resolved and would otherwise let a
+	// workspace's base_image bypass it entirely.
+	if msg := s.validateImageBuildRequest(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	// ONBOARDING GATE (un-bypassable): every user-workspace mount source and repo on
@@ -237,6 +247,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Interactive:        req.Interactive,
 			TaskMode:           req.TaskMode,
 			BedrockRef:         bedrockRef,
+			EphemeralDirs:      ephemeralDirs,
 		})
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)

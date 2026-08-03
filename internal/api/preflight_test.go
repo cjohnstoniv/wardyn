@@ -56,18 +56,28 @@ func TestPreflight_HappyPath(t *testing.T) {
 func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()
+	// A migrated container-kind workspace is now an ephemeral source + a custom
+	// BaseImage (0029). seedRequestWorkspace seeds req.Image from BaseImage (no
+	// refusal by itself), but the SAME validateImageBuildRequest gate
+	// handlePreflightRun runs immediately after still refuses it because no
+	// ImageBuilder is wired here — so the end-to-end 400 survives (see the
+	// identical restructuring in TestSeedRequestWorkspace/runs_workspace_id_test.go).
 	h.srv.cfg.Store = &workspaceStoreFake{
 		Store: h.srv.cfg.Store,
-		ws:    types.Workspace{ID: wsID, Kind: types.WorkspaceKindContainer, Source: "ghcr.io/acme/base:1"},
+		ws: types.Workspace{
+			ID:        wsID,
+			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+			BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
+		},
 	}
 	body := `{"agent":"claude-code","repo":"ephemeral","workspace_id":"` + wsID.String() + `",` +
 		`"inline_policy":{"min_confinement_class":"CC1"}}`
 	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("preflight with a container workspace_id: code=%d, want 400 (same refusal as launch); body=%s", w.Code, w.Body.String())
+		t.Fatalf("preflight with a container-shaped workspace_id (no image builder wired): code=%d, want 400 (same refusal as launch); body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "workspace_id:") {
-		t.Errorf("error must carry the launch path's workspace_id prefix; body=%s", w.Body.String())
+	if !strings.Contains(w.Body.String(), "no image builder wired") {
+		t.Errorf("error must carry the builder-gate refusal; body=%s", w.Body.String())
 	}
 
 	// The other half of parity: a workspace launch WOULD accept must surface on
@@ -75,7 +85,11 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	// to a "workspace" setup row, exactly what the pre-fix code silently dropped.
 	h.srv.cfg.Store = &workspaceStoreFake{
 		Store: h.srv.cfg.Store,
-		ws:    types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app", Status: types.WorkspaceReady},
+		ws: types.Workspace{
+			ID:      wsID,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/app"}},
+			Status:  types.WorkspaceScanned,
+		},
 	}
 	body = `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
 		`"inline_policy":{"min_confinement_class":"CC1"}}`
@@ -89,56 +103,6 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	}
 	if _, ok := findItem(resp.SetupItems, "workspace:"+wsID.String()); !ok {
 		t.Errorf("checklist must carry the seeded workspace's row; items=%+v", resp.SetupItems)
-	}
-}
-
-// TestPreflight_WorkspaceAPIKeyCredFold pins the credential half of launch
-// parity: a workspace bound to an api_key secret with a NON-convention name
-// (the whole point of per-workspace bindings) must yield a SATISFIED
-// llm_access row naming that secret — not the false "add anthropic-api-key"
-// red the pre-fix verdict produced by keying on the provider convention name.
-func TestPreflight_WorkspaceAPIKeyCredFold(t *testing.T) {
-	h, sec := newSecretsHarness(t)
-	delete(sec.m, "anthropic-api-key")
-	sec.m["acme-anthropic-key"] = []byte("sk-ant-workspace")
-	wsID := uuid.New()
-	h.srv.cfg.Store = &workspaceStoreFake{
-		Store: h.srv.cfg.Store,
-		ws: types.Workspace{
-			ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/srv/app", Status: types.WorkspaceReady,
-			LLMCred: &types.WorkspaceLLMCred{Mode: types.WorkspaceLLMCredAPIKey, APIKeySecret: "acme-anthropic-key"},
-		},
-	}
-	body := `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
-		`"inline_policy":{"min_confinement_class":"CC1"}}`
-	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code=%d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	var resp preflightResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	it, ok := findItem(resp.SetupItems, "llm_access:claude-code")
-	if !ok || it.Status != "satisfied" {
-		t.Fatalf("llm_access row = %+v (ok=%v), want satisfied via the workspace-bound secret", it, ok)
-	}
-	if !strings.Contains(it.Detail, "acme-anthropic-key") {
-		t.Errorf("detail must name the workspace's own secret, got %q", it.Detail)
-	}
-
-	// Inverse: the bound secret absent -> missing. applyWorkspaceCreds folds no
-	// grant for an absent secret (same at launch), so the CTA falls back to the
-	// convention name a composed run would use — the honest no-binding message.
-	delete(sec.m, "acme-anthropic-key")
-	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
-	var resp2 preflightResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp2); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	it2, ok2 := findItem(resp2.SetupItems, "llm_access:claude-code")
-	if !ok2 || it2.Status == "satisfied" {
-		t.Fatalf("llm_access row = %+v (ok=%v), want missing when the bound secret is absent", it2, ok2)
 	}
 }
 
