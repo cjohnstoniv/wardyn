@@ -1,6 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//lint:file-ignore SA1019 This file CONTAINS the compatibility fold: it reads the
+// deprecated single-source scalars (Kind/Source/Ref/DefaultTarget/Writable, and
+// the container kind) precisely so a pre-composition CLI or SDK caller keeps
+// working. Deprecating them is what tells NEW callers to use Sources; the fold
+// is the reason they can still be deprecated rather than deleted.
+
 package api
 
 import (

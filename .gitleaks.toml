@@ -24,4 +24,11 @@ paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
     # FAKE tokens (glpat-…, credentials-in-URL) that the detector must match.
     '''internal/workspacescan/detect_test\.go''',
+    # Same category, client side: the Add-workspace wizard warns when a custom
+    # Dockerfile build step looks like it carries a credential, so its tests
+    # must contain lines that look exactly like that. A detector's tests have
+    # to hold the thing it detects.
+    '''ui/src/app/components/screens/workspace-wizard/wizard-types\.test\.ts''',
+    '''ui/src/app/components/screens/workspace-wizard/step-base-image\.test\.tsx''',
+    '''ui/e2e/workspace-wizard\.spec\.ts''',
 ]

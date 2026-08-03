@@ -1,6 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//lint:file-ignore SA1019 The SDK re-exports and references the deprecated
+// single-source shape on purpose: it is the wire compatibility surface older
+// callers still send.
+
 package client
 
 // This file re-exports — as type aliases and const re-exports — the

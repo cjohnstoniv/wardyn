@@ -1,6 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//lint:file-ignore SA1019 The CLI still accepts --kind/--source/--writable and
+// sends them as the deprecated scalars; the server folds them into one source.
+// Reading them here is the compatibility path, not an oversight.
+
 package main
 
 import (

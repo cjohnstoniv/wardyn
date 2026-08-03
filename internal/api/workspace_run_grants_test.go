@@ -60,13 +60,6 @@ func (s *fkGrantStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, im
 	return ws, nil
 }
 
-// builtImage reports the image resolveWorkspaceImage cached on the workspace —
-// "" when the build never produced one (e.g. it was cancelled).
-func (s *fkGrantStore) builtImage() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.built
-}
 func (s *fkGrantStore) CreateRun(_ context.Context, run types.AgentRun) (types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
