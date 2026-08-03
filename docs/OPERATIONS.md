@@ -228,13 +228,35 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-redirect \
   -d '{"from":"https://registry.npmjs.org/"}'
 ```
 
-`test-proxy` takes no body, and runs whether or not an upstream proxy is
+`test-proxy` needs no body, and runs whether or not an upstream proxy is
 configured — with one it proves the chain works, without one it proves direct
 egress works, and it says which path it took. The question it answers ("can a
 sandbox on this host reach the internet?") matters most where nothing is
 configured yet. It goes out through the sandbox's normal egress, which
 dispatch already chains to the configured upstream, so it proves the path a
 real run takes rather than a reconstruction of it.
+
+It also accepts an optional `{"url": "https://…"}`:
+
+```sh
+curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
+  -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://intranet.corp.internal/health"}'
+```
+
+That exists for hosts with no public internet — internal-only or air-gapped
+deployments, where none of the default targets will ever answer. Point it at
+something your network *can* reach and the check goes back to proving what it
+is for: that egress works, not that the public internet does.
+
+A custom target proves strictly less, and the response says so. Wardyn has no
+idea what your endpoint is supposed to return, so it cannot match a known
+payload — it only reports that the request completed. The URL is validated the
+same way any stored site-config URL is (http(s) only, a real host, no shell
+metacharacters) and rejected before a sandbox launches. It is not stored and
+changes nothing about later runs; it is a recovery affordance for a failed
+check, not configuration.
 
 Two details of *how* it decides, both of which change the answer on a
 corporate network:
