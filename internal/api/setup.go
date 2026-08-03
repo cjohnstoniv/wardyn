@@ -943,9 +943,9 @@ const refRulesetTimeout = 5 * time.Second
 // regression:
 //
 //   - It is skipped entirely unless a GitHub App is configured AND a verifier is
-//     wired AND the default policy or a stored one names a concrete repo in a
-//     github_token grant. A deployment without the App never makes the call and
-//     never sees the row.
+//     wired AND a concrete repo is known — see firstBrokeredRepo for the two
+//     places that can come from. A deployment with neither signal never makes
+//     the call and never sees the row.
 //   - Every failure — timeout, rate limit, 403 on the permission, a repo the
 //     installation cannot see — grades "info"/unknown. A network blip must not
 //     read as a security regression.
@@ -978,12 +978,16 @@ func (s *Server) githubRefRulesetCheck(ctx context.Context, githubApp bool) (Set
 	return s.refRulesetRow, true
 }
 
-// firstBrokeredRepo returns the first "owner/name" the default policy, then any
-// stored policy, names in a github_token grant scope — the repos the App can
-// reach through Wardyn. "" when none: shipped example policies carry
-// "repos": [] because eligible_grants are TEMPLATES the run fills in, so a fresh
-// install legitimately has nothing to probe and the row is omitted rather than
-// guessed at.
+// firstBrokeredRepo returns the first "owner/name" Wardyn can name a concrete
+// repo for. It tries the default policy, then any stored policy, for a
+// github_token grant whose scope.repos is non-empty — a deliberate,
+// admin-authored signal, but rare in practice: shipped example policies
+// (examples/policies/*.json) all carry "repos": [] because eligible_grants
+// are TEMPLATES the run fills in. Falls back to firstBrokeredRepoFromRuns
+// (setup_checks.go) for the common case that leaves: a repo declared on an
+// actual run, not a static policy field. "" when neither source has
+// anything: a fresh install has nothing to probe, and the row is omitted
+// rather than guessed at.
 func (s *Server) firstBrokeredRepo(ctx context.Context) string {
 	specs := []types.RunPolicySpec{s.cfg.DefaultPolicy}
 	if s.cfg.Store != nil {
@@ -1003,7 +1007,7 @@ func (s *Server) firstBrokeredRepo(ctx context.Context) string {
 			}
 		}
 	}
-	return ""
+	return s.firstBrokeredRepoFromRuns(ctx)
 }
 
 // hostProxyCheck summarizes host-proxy detection as a single non-blocking

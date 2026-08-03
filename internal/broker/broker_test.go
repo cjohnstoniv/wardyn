@@ -627,3 +627,27 @@ func TestJSONScopeEqual_OrderInsensitive(t *testing.T) {
 		t.Fatal("different scopes must not be equal")
 	}
 }
+
+// TestMintForGrant_EmptyRepoScopeFails pins that a github_token grant naming NO
+// repo cannot mint. GitHub installation tokens are per-installation and the
+// owner is derived from the first repo, so githubMinter refuses an empty list
+// before it ever dials — and FakeGitHubMinter now reproduces that precondition,
+// which is what lets a test see it at all. Until it did, every caller that
+// synthesized `"repos": []` (workspace scan/verify/record clone grants) looked
+// healthy here and 502'd at the proxy's git-broker route in production.
+func TestMintForGrant_EmptyRepoScopeFails(t *testing.T) {
+	b, db, _, gh := newTestBroker(t)
+	runID := uuid.New()
+	scope, _ := json.Marshal(githubScope{
+		Repos:       []string{},
+		Permissions: map[string]string{"contents": "read"},
+	})
+	gid := seedGrant(db, runID, types.GrantSpec{Kind: types.GrantGitHubToken, Scope: scope, TTLSeconds: 600})
+
+	if _, err := b.MintForGrant(context.Background(), callerFor(runID), gid); err == nil {
+		t.Fatal("a github_token grant scoped to NO repo must fail the mint, not hand out an unscoped token")
+	}
+	if gh.Calls != 1 {
+		t.Fatalf("minter calls = %d, want 1 — the guard belongs in the minter (where production has it), not in the caller", gh.Calls)
+	}
+}

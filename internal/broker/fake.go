@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -47,6 +48,14 @@ func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []stri
 	f.LastRepos = repos
 	f.LastPermissions = permissions
 	f.LastTTL = ttl
+	// Reproduce the ONE precondition the real minter enforces before it talks to
+	// GitHub (githubMinter.MintInstallationToken): an installation token is
+	// per-installation and the owner is derived from the first repo, so an empty
+	// repo list cannot mint. A fake that accepted it made every caller with an
+	// empty scope.repos look healthy in tests while 502-ing in production.
+	if len(repos) == 0 {
+		return "", time.Time{}, errors.New("broker: github token requires at least one repo")
+	}
 	if f.Err != nil {
 		return "", time.Time{}, f.Err
 	}

@@ -249,3 +249,53 @@ func TestLaunchVerifyRun_CloneGrantFailureAbortsLaunch(t *testing.T) {
 		t.Fatal("a clone grant that cannot be persisted must FAIL the verify launch, not silently dispatch a sandbox that cannot authenticate its clone")
 	}
 }
+
+// TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey pins the fix for a grant that
+// could never mint. The scan/verify/record clone grant used to carry
+// `"repos": []` while the broker allowlist it is reached through was keyed from
+// the CLONE URL — two different answers to "which repo is this token for". The
+// real minter refuses an empty list outright (GitHub installation tokens are
+// per-installation; the owner comes from the first repo), so every GitHub HTTPS
+// scan/verify/record clone 502'd at handleGitBroker once a real GitHub App was
+// configured. No test saw it because FakeGitHubMinter did not reproduce that
+// precondition (it does now — internal/broker.TestMintForGrant_EmptyRepoScopeFails).
+//
+// The invariant this pins is the one that was broken: the grant's scope.repos
+// and the broker map key are THE SAME repo, derived from the same function.
+func TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	fake := newFKGrantStore(wsID)
+	srv := New(baseTestConfig(h, fake))
+
+	runID := uuid.New()
+	fake.runs[runID] = types.AgentRun{ID: runID} // satisfy the fake's FK check
+
+	const cloneURL = "https://github.com/acme/Private-Thing.git"
+	gid, err := srv.maybeGitHubReadGrant(context.Background(), runID, time.Now(), cloneURL)
+	if err != nil || gid == nil {
+		t.Fatalf("maybeGitHubReadGrant(%q) = (%v, %v), want a grant", cloneURL, gid, err)
+	}
+	if got := len(fake.grants); got != 1 {
+		t.Fatalf("persisted %d grants, want 1", got)
+	}
+	repos := githubScopeRepos(fake.grants[0].Spec.Scope)
+	if len(repos) != 1 {
+		t.Fatalf("grant scope.repos = %v — an empty list is unmintable (broker: github token requires at least one repo)", repos)
+	}
+	// The broker map the proxy serves this grant on, keyed from the clone URL.
+	brokerMap := gitBrokerGrant(cloneURL, gid)
+	if _, ok := brokerMap[repos[0]]; !ok {
+		t.Fatalf("grant scope.repos = %v but the broker route is keyed %v — the token is scoped to a repo the route does not serve",
+			repos, brokerMap)
+	}
+
+	// A github.com URL with no derivable "<org>/<repo>" yields NO grant: an
+	// unmintable grant is worse than none, because it also sets
+	// WARDYN_GITHUB_GRANT_ID and points the in-sandbox helper at a mint that can
+	// only fail.
+	deep, err := srv.maybeGitHubReadGrant(context.Background(), runID, time.Now(), "https://github.com/acme")
+	if err != nil || deep != nil {
+		t.Fatalf("a github URL with no <org>/<repo> must yield no grant; got (%v, %v)", deep, err)
+	}
+}

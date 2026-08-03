@@ -111,9 +111,10 @@ func TestValidatePolicySpec_SSHKey(t *testing.T) {
 
 // TestValidatePolicySpec_BrokeredForgeIsSingleLane pins the write-time half of
 // "brokered means single-lane": a policy may not declare BOTH a github_token
-// grant (the brokered, branch-namespace-confined lane) and an ssh_key grant for
-// the same forge (an unparseable second push path). Either alone is fine, an
-// ssh_key for a DIFFERENT forge is fine, and git_pat is deliberately NOT refused.
+// grant (the brokered, branch-namespace-confined lane) and a SECOND credential
+// lane to the same forge — an ssh_key (unparseable push path) or a git_pat (a
+// resident, usually user-scoped token whose pushes are an opaque CONNECT
+// tunnel). Either alone is fine, and a credential for a DIFFERENT host is fine.
 func TestValidatePolicySpec_BrokeredForgeIsSingleLane(t *testing.T) {
 	ghToken := types.GrantSpec{
 		Kind:  types.GrantGitHubToken,
@@ -122,28 +123,38 @@ func TestValidatePolicySpec_BrokeredForgeIsSingleLane(t *testing.T) {
 	sshFor := func(host string) types.GrantSpec {
 		return types.GrantSpec{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]any{"host": host, "key_secret_ref": "gh-ssh-key"})}
 	}
+	patFor := func(host string) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": host, "secret_name": "gh-pat"})}
+	}
 	withGrants := func(gs ...types.GrantSpec) types.RunPolicySpec {
 		return types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: gs}
 	}
 
 	// REFUSED: both lanes to github.com, in either grant order and under either
-	// spelling of the host (sshOver443Endpoint folds ssh.github.com onto the forge).
+	// spelling of the host (sshOver443Endpoint folds ssh.github.com onto the forge;
+	// brokeredForgeHost folds case/trailing dot and covers *.github.com — the same
+	// set wardyn-git-helper's isGitHubHost refuses on).
 	for _, c := range []struct {
-		name string
-		spec types.RunPolicySpec
+		name     string
+		spec     types.RunPolicySpec
+		wantKind string
 	}{
-		{"token-then-ssh", withGrants(ghToken, sshFor("github.com"))},
-		{"ssh-then-token", withGrants(sshFor("github.com"), ghToken)},
-		{"ssh-host-alias", withGrants(ghToken, sshFor("ssh.github.com"))},
-		{"host-case-and-dot", withGrants(ghToken, sshFor("GitHub.com."))},
+		{"token-then-ssh", withGrants(ghToken, sshFor("github.com")), "ssh_key"},
+		{"ssh-then-token", withGrants(sshFor("github.com"), ghToken), "ssh_key"},
+		{"ssh-host-alias", withGrants(ghToken, sshFor("ssh.github.com")), "ssh_key"},
+		{"host-case-and-dot", withGrants(ghToken, sshFor("GitHub.com.")), "ssh_key"},
+		{"token-then-pat", withGrants(ghToken, patFor("github.com")), "git_pat"},
+		{"pat-then-token", withGrants(patFor("github.com"), ghToken), "git_pat"},
+		{"pat-host-case-and-dot", withGrants(ghToken, patFor("GitHub.com.")), "git_pat"},
+		{"pat-github-subdomain", withGrants(ghToken, patFor("api.github.com")), "git_pat"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := validatePolicySpec(c.spec)
 			if err == nil {
-				t.Fatal("expected the github_token + ssh_key combination to be refused")
+				t.Fatalf("expected the github_token + %s combination to be refused", c.wantKind)
 			}
 			// The message must name both kinds and the host, not just "invalid".
-			for _, want := range []string{"github_token", "ssh_key", "single-lane"} {
+			for _, want := range []string{"github_token", c.wantKind, "single-lane"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error must mention %q, got: %v", want, err)
 				}
@@ -151,23 +162,23 @@ func TestValidatePolicySpec_BrokeredForgeIsSingleLane(t *testing.T) {
 		})
 	}
 
-	// ACCEPTED: each lane alone, a different forge, and git_pat alongside the
-	// broker. git_pat is not refused on purpose — on a brokered run it is already
-	// dead twice (wardyn-git-helper refuses on isGitHubHost before the PAT
-	// fallback when WARDYN_GIT_BROKER_REPOS is set, and github.com is one of the
-	// four broker denies), so refusing it would change behaviour for no gain.
-	gitPAT := types.GrantSpec{
-		Kind:  types.GrantGitPAT,
-		Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"}),
-	}
+	// ACCEPTED: each lane alone, and a credential for a host the broker does not
+	// serve. git_pat's ordinary supported use — ADO/GitLab/GHES — must stay legal
+	// alongside a github_token grant; the rule binds the BROKERED forge only.
 	for _, c := range []struct {
 		name string
 		spec types.RunPolicySpec
 	}{
 		{"github_token-alone", withGrants(ghToken)},
 		{"ssh_key-alone", withGrants(sshFor("github.com"))},
+		{"git_pat-alone", withGrants(patFor("github.com"))},
 		{"ssh_key-other-forge", withGrants(ghToken, sshFor("dev.azure.com"))},
-		{"git_pat-with-broker", withGrants(ghToken, gitPAT)},
+		{"git_pat-other-host", withGrants(ghToken, patFor("dev.azure.com"))},
+		{"git_pat-gitlab", withGrants(ghToken, patFor("gitlab.com"))},
+		{"git_pat-ghes", withGrants(ghToken, patFor("ghes.corp.internal"))},
+		// NOT a github.com subdomain — the suffix test must match on a label
+		// boundary, not a raw string suffix.
+		{"git_pat-lookalike-host", withGrants(ghToken, patFor("notgithub.com"))},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if err := validatePolicySpec(c.spec); err != nil {
@@ -261,7 +272,7 @@ func TestBrokeredRunWithholdsSSHGrantEnv(t *testing.T) {
 	brokered := map[string]uuid.UUID{"acme/widgets": uuid.New()}
 	apply := func(sshGrants map[string]string, gitGrants map[string]uuid.UUID) (map[string]string, []string) {
 		env := map[string]string{}
-		dropped := applyDispatchModeEnv(env, run, nil, false, "", nil, nil, sshGrants, gitGrants)
+		dropped, _ := applyDispatchModeEnv(env, run, nil, false, "", nil, nil, sshGrants, gitGrants)
 		return env, dropped
 	}
 

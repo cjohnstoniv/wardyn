@@ -41,9 +41,10 @@ sandbox. To make that the only route to those host **names**, dispatch
 subtracts **and denies** `github.com`, `api.github.com`, `codeload.github.com`,
 `*.githubusercontent.com` — and the forge's `ssh.<forge>` SSH-over-443 endpoint
 (`ssh.github.com` in v1; the broker is github.com-only) — for that run
-(`confineGitBrokerEgress`, `internal/api/runs_dispatch.go`). All of these are
+(`confineGitBrokerEgress`, `internal/api/runs_dispatch_gitbroker.go`). All of these are
 added on **every** brokered run, whether or not it holds an `ssh_key` grant at
-all — see "The `ssh_key` lane is closed too" below for what that buys.
+all — see "The `ssh_key` and `git_pat` lanes are closed too" below for what
+that buys.
 
 **Nothing in the policy re-opens those names.** The confinement runs last,
 after every widening phase, and a deny beats `allowed_domains`, beats
@@ -71,7 +72,7 @@ run a brokered policy with `allow_all_egress`, the broker route is the only
 *convenient* route, not the only one — it is what git itself uses, since a
 clone/push URL carries a name, never a bare IP.
 
-### The `ssh_key` lane is closed too
+### The `ssh_key` and `git_pat` lanes are closed too
 
 An earlier pass over this doc described a real gap here: the GitHub denies
 were exact HTTPS hosts, so a run that also carried an `ssh_key` grant for the
@@ -82,26 +83,38 @@ beside the brokered one. That gap is now closed, at write time and at dispatch:
   from `validatePolicySpec` on every policy write — stored `POST`/`PUT
   /policies`, an inline run policy, `WARDYN_DEFAULT_POLICY`, and the
   composer/profile clamps) refuses a policy that declares both a `github_token`
-  grant and an `ssh_key` grant for the same forge, with a `400` naming the
-  choice: brokered and branch-confined, or operator-supplied and unbound — not
-  both for one forge. It fires on the DECLARATION, not on whether a run ends up
-  brokered — a `github_token` grant with `"repos": []` still counts, since
-  policy-write cannot know what a later run will `--repo` into.
+  grant and an `ssh_key` **or** `git_pat` grant for the same forge, with a `400`
+  naming the choice: brokered and branch-confined, or operator-supplied and
+  unbound — not both for one forge. It fires on the DECLARATION, not on whether
+  a run ends up brokered — a `github_token` grant with `"repos": []` still
+  counts, since policy-write cannot know what a later run will `--repo` into.
 - **Dispatch.** For a policy stored before this rule existed,
   `confineGitBrokerEgress` denies the forge's `ssh.<forge>` endpoint alongside
-  the HTTPS hosts above, and `dropBrokeredSSHGrants` withholds that forge's
-  `ssh_key` grant from the sandbox env entirely — the private key is never
-  minted, not merely unable to reach its forge — logging an `slog` warning and
-  a `run.ssh.brokered_forge` audit event so the withholding is never silent.
+  the HTTPS hosts above, and `dropBrokeredGrants` withholds that forge's
+  `ssh_key` **and** `git_pat` grants from the sandbox env entirely — the
+  credential is never minted, not merely unable to reach its forge — logging an
+  `slog` warning and a `run.ssh.brokered_forge` / `run.git_pat.brokered_forge`
+  audit event so neither withholding is ever silent.
+- **Mint.** `POST /api/v1/internal/credentials/mint` refuses either kind for a
+  brokered forge before it opens the broker transaction
+  (`brokeredForgeMintKind`, `internal/api/internal.go`). This is the seam that
+  matters most for `git_pat`: the proxy's own mint refusal
+  (`isBrokeredGitGrant`) matches `github_token` grant ids only, so a caller that
+  POSTs the mint route directly — rather than going through
+  `wardyn-git-helper`, which every GitHub host on a brokered run already refuses
+  — used to be answered with the PAT.
 
 | Lane | Route to the forge | What binds a push |
 |---|---|---|
-| `github_token` with repos (brokered) | `/wardyn/gh/<org>/<repo>` only — every name above is denied | Per-repo allowlist **plus** the receive-pack pkt-line parser (`internal/egress/proxy/git_broker.go`), which reads the refs being pushed and refuses any outside `refs/heads/wardyn/<run-id>/`. Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out |
-| An `ssh_key` grant for the **same** forge | None | Refused at write (`400`) going forward; for anything already stored, the grant is withheld from the sandbox at dispatch — there is no credential left to push with |
+| `github_token` with repos (brokered) | `/wardyn/gh/<org>/<repo>` only — every name above is denied | Per-repo allowlist **plus** the receive-pack pkt-line parser (`internal/egress/proxy/git_broker.go`), which reads the refs being pushed and refuses any outside `refs/heads/wardyn/<run-id>/`. Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out, and a push forwarded unparsed carries the distinct decision-log `rule_source` `brokered:git:branch-ns-off` so the posture is provable per push |
+| An `ssh_key` grant for the **same** forge | None | Refused at write (`400`) going forward; for anything already stored, the grant is withheld from the sandbox at dispatch and refused at mint — there is no credential left to push with |
+| A `git_pat` grant for the **same** forge (`github.com` or a `*.github.com` host) | None | Same three seams. A GitHub `git_pat` is typically a *user* PAT — broader than the repo-scoped installation token beside it, and bound by no branch namespace |
 
-An `ssh_key` grant for a **different** forge (`dev.azure.com`, say, alongside a
-`github.com` `github_token`) is untouched by either mechanism — both key on the
-same forge. There the old shape still applies: the key is resident for the
+An `ssh_key` or `git_pat` grant for a **different** host (`dev.azure.com`,
+`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is
+untouched by any of it — every mechanism keys on the same forge, and that
+non-GitHub lane is what `git_pat` is for. There the old shape still applies for
+`ssh_key`: the key is resident for the
 clone only — `agent-run` mints it, writes it `0400`, clones, then shreds it and
 unsets `GIT_SSH_COMMAND` before exec'ing the agent — a real narrowing and not a
 confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), an
@@ -308,11 +321,11 @@ an unrecognised literal is rejected at write time.
 
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
-| `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and the forge's `ssh.<forge>` endpoint** — see "Brokered GitHub" above. Also refuses a co-declared `ssh_key` grant for the same forge at write time (see "The `ssh_key` lane is closed too"). Drop the grant if the run needs direct GitHub fetches. |
+| `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and the forge's `ssh.<forge>` endpoint** — see "Brokered GitHub" above. Also refuses a co-declared `ssh_key` or `git_pat` grant for the same forge at write time (see "The `ssh_key` and `git_pat` lanes are closed too"). Drop the grant if the run needs direct GitHub fetches. |
 | `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today. |
 | `api_key` | `{"host":"…","header":"…"}` | Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
-| `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation. `username` defaults by convention (ADO `pat`, GitLab `oauth2`). |
-| `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after — except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` lane is closed too"). |
+| `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation. `username` defaults by convention (ADO `pat`, GitLab `oauth2`). A GitHub `host` (`github.com` or a `*.github.com` host) may not be combined with a `github_token` grant — refused at write, withheld at dispatch, refused at mint (see "The `ssh_key` and `git_pat` lanes are closed too"); every other host is unaffected. |
+| `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after — except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` and `git_pat` lanes are closed too"). |
 
 ## `workspace_mounts[]` — `WorkspaceMount`
 

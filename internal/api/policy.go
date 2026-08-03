@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -179,11 +178,12 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 }
 
 // validateGrantLaneExclusivity refuses a policy that declares BOTH a
-// github_token grant and an ssh_key grant for the same forge. Brokered means
+// github_token grant and a second credential lane to the same forge — an
+// ssh_key, or a git_pat. Brokered means
 // SINGLE-LANE: on a brokered run the git-broker route is the only route to the
 // forge by NAME, so every push is parsed and held inside refs/heads/wardyn/<run-id>/
 // (confineGitBrokerEgress denies the managed hosts AND the forge's SSH endpoint;
-// dropBrokeredSSHGrants withholds the key itself). "By name" is the standing
+// dropBrokeredGrants withholds the key itself). "By name" is the standing
 // caveat those denies have always carried — see confineGitBrokerEgress; it is not
 // new here. A co-granted ssh_key would hand the same run a second push path that
 // SSH makes unparseable — so the operator picks one lane here, at write time,
@@ -196,19 +196,28 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 // know whether a given run will be brokered; the rule it enforces is DECLARATIVE
 // (you may not declare both lanes to one forge), and the message says so.
 //
-// git_pat is NOT covered, on purpose: on a brokered run a git_pat for a GitHub
-// host is already dead twice over (wardyn-git-helper refuses on isGitHubHost
-// before the PAT fallback when WARDYN_GIT_BROKER_REPOS is set, and github.com is
-// one of the four broker denies), so refusing it would be a behaviour change with
-// no security benefit. SSH is the exception because git's credential-helper seam
-// is HTTP-only: there is no chokepoint to refuse at.
+// git_pat FOR A BROKERED FORGE IS COVERED TOO, since 2026-08-03. It used to be
+// exempt on the reasoning that such a grant was "already dead twice over" —
+// wardyn-git-helper refuses on isGitHubHost before the PAT fallback whenever
+// WARDYN_GIT_BROKER_REPOS is set, and github.com is one of the four broker
+// denies. The first of those is not a barrier: the helper is how *git* asks for a
+// credential, and nothing obliges an agent to go through git — a POST to the mint
+// route returns the PAT, because the proxy's mint refusal (isBrokeredGitGrant)
+// matches github_token grant ids only. That left one barrier, a name-keyed egress
+// deny that this repo documents as not binding a raw-IP CONNECT under
+// allow_all_egress. And a GitHub git_pat is typically a USER PAT — wider than the
+// repo-scoped installation token beside it, and bound by no branch namespace.
+// A git_pat for a NON-brokered host (dev.azure.com, gitlab.com, GHES) is the
+// ordinary supported lane and is untouched.
 //
-// Host matching across the two grant shapes: a github_token grant's scope is
+// Host matching across the three grant shapes: a github_token grant's scope is
 // "<org>/<repo>" repos, so it implies the forge by construction (gitBrokerForges,
 // github.com-only in v1); an ssh_key grant carries an explicit host, folded
-// through sshOver443Endpoint — the same normalization validateEligibleGrant above
-// already applies, and the one that treats "github.com" and "ssh.github.com" as
-// the same forge. Comparing endpoints IS the same-forge test.
+// through sshOver443Endpoint (brokeredForgeSSHHost) — the same normalization
+// validateEligibleGrant above already applies, and the one that treats
+// "github.com" and "ssh.github.com" as the same forge; a git_pat carries the host
+// git will dial, matched against gitBrokerForges host-or-subdomain
+// (brokeredForgeHost), the same set wardyn-git-helper's isGitHubHost refuses on.
 func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 	brokered := false
 	for _, g := range grants {
@@ -220,25 +229,32 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 	if !brokered {
 		return nil
 	}
+	// A malformed scope was already rejected by validateEligibleGrant above, and
+	// an unsupported host simply fails to match; both `continue`.
 	for i, g := range grants {
-		if g.Kind != types.GrantSSHKey {
-			continue
+		switch g.Kind {
+		case types.GrantSSHKey:
+			host, _, _, _, derr := sshKeyScopeFields(g.Scope)
+			if derr != nil || !brokeredForgeSSHHost(host) {
+				continue
+			}
+			return fmt.Errorf("eligible_grants[%d]: this policy declares BOTH a github_token grant and an ssh_key grant for %q — "+
+				"a brokered forge is single-lane: the git-broker route is its only route by name, so every push it carries is parsed and "+
+				"confined to refs/heads/wardyn/<run-id>/, while an ssh_key gives the same run a second push path SSH makes unparseable. Choose one: "+
+				"drop the ssh_key grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with your own "+
+				"key, unbrokered and unbound", i, host)
+		case types.GrantGitPAT:
+			host, _, _, derr := gitPATScopeFields(g.Scope)
+			if derr != nil || !brokeredForgeHost(host) {
+				continue
+			}
+			return fmt.Errorf("eligible_grants[%d]: this policy declares BOTH a github_token grant and a git_pat grant for %q — "+
+				"a brokered forge is single-lane: the git-broker route is its only route by name, so every push it carries is parsed and "+
+				"confined to refs/heads/wardyn/<run-id>/, while a git_pat puts a resident token in the sandbox whose pushes are an opaque "+
+				"CONNECT tunnel no parser can read — and a GitHub PAT is usually a user PAT, wider than the repo-scoped installation token. "+
+				"Choose one: drop the git_pat grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with "+
+				"your own PAT, unbrokered and unbound. A git_pat for a non-brokered host (dev.azure.com, gitlab.com, GHES) is unaffected", i, host)
 		}
-		// A malformed scope or unsupported host was already rejected above; both
-		// simply fail to match here.
-		host, _, _, _, derr := sshKeyScopeFields(g.Scope)
-		if derr != nil {
-			continue
-		}
-		ep, ok := sshOver443Endpoint(host)
-		if !ok || !slices.Contains(gitBrokerSSHEndpoints(), ep) {
-			continue
-		}
-		return fmt.Errorf("eligible_grants[%d]: this policy declares BOTH a github_token grant and an ssh_key grant for %q — "+
-			"a brokered forge is single-lane: the git-broker route is its only route by name, so every push it carries is parsed and "+
-			"confined to refs/heads/wardyn/<run-id>/, while an ssh_key gives the same run a second push path SSH makes unparseable. Choose one: "+
-			"drop the ssh_key grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with your own "+
-			"key, unbrokered and unbound", i, host)
 	}
 	return nil
 }

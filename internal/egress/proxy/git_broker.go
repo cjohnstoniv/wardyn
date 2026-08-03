@@ -50,8 +50,16 @@ const (
 	// distinct row so audit never reads an unparseable body as a ref violation.
 	ruleSourceGitEnc = "brokered:git:branch-ns-encoding"
 	// envEnforceBranchNS opts THIS proxy process OUT of push branch-namespace
-	// confinement (=false). See branchNSEnforced: it is ON by default.
+	// confinement (=false). See BranchNSEnforced: it is ON by default.
 	envEnforceBranchNS = "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"
+	// ruleSourceGitNSOff marks a push this proxy FORWARDED WITHOUT PARSING because
+	// envEnforceBranchNS opted the process out. It is the after-the-fact half of
+	// that opt-out being visible: the boot log (cmd/wardyn-proxy) states the
+	// posture once, and this row proves per push which posture actually applied,
+	// in the same append-only audit stream the ordinary "brokered:git" allow lands
+	// in (handlePostDecision records rule_source verbatim). Without it an
+	// unparsed push and a parsed one were the same audit record.
+	ruleSourceGitNSOff = "brokered:git:branch-ns-off"
 	// maxReceivePackCmds caps the pkt-line COMMAND SECTION buffered ahead of the
 	// (still-streamed) packfile. Hundreds of ref updates fit in 64 KiB; anything
 	// larger is pathological and is refused rather than buffered.
@@ -101,8 +109,17 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// the buffered bytes followed by the still-streaming pack. Fetch/clone
 	// (info/refs, upload-pack) never enter this branch: pure streaming, zero added
 	// latency. A denial happens BEFORE gitToken, so a refused push never mints.
+	//
+	// allowSrc is the rule_source the ALLOW row below carries. A push forwarded
+	// with the parser opted out gets its own value (ruleSourceGitNSOff) so the
+	// audit stream distinguishes the two postures per push; everything else keeps
+	// the ordinary "brokered:git".
 	var reqBody io.Reader = r.Body
-	if rest == "git-receive-pack" && branchNSEnforced() {
+	allowSrc := ruleSourceGit
+	isPush := rest == "git-receive-pack"
+	if isPush && !BranchNSEnforced() {
+		allowSrc = ruleSourceGitNSOff
+	} else if isPush {
 		// git does not gzip receive-pack bodies (remote-curl only sets
 		// gzip_request for fetch), but a compressed body must never be waved
 		// through unparsed — that would be a silent bypass.
@@ -174,7 +191,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")
 
-	p.emitGitDecision(r, egress.Allow, ruleSourceGit)
+	p.emitGitDecision(r, egress.Allow, allowSrc)
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
@@ -251,6 +268,19 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 	if err != nil {
 		return "", err
 	}
+	// Register the installation token in the process-global mask registry, the
+	// same place injector values land (inject.go) and the same one httpError's
+	// maskDecisionBytes reads — so a `ghs_...` can never ride out on a
+	// sandbox-visible error string or a decision-log line. Defense in depth: no
+	// live leak is known (this token is set as Basic auth on the OUTBOUND request
+	// only and never appears in an error the sandbox sees), but "no path today"
+	// is not a property of the token, it is a property of the current call sites.
+	// AddGlobal dedupes by value, so the cache's re-mints add at most one entry
+	// per rotation on a process that lives one run.
+	//
+	// HONEST RESIDUAL, same as inject.go's: verbatim bytes only — a base64/hex or
+	// model-narrated form of the token is not caught.
+	procRegistry.AddGlobal([]byte(tok))
 	e.token, e.expiresAt = tok, expMs
 	return tok, nil
 }
@@ -347,8 +377,13 @@ func BranchNSPrefix(runID uuid.UUID) string {
 	return "refs/heads/wardyn/" + runID.String() + "/"
 }
 
-// branchNSEnforced reports whether push branch-namespace confinement is ON for
-// THIS proxy process (env, like the WARDYN_LLM_SCAN kill-switch).
+// BranchNSEnforced reports whether push branch-namespace confinement is ON for
+// THIS proxy process (env, like the WARDYN_LLM_SCAN kill-switch). Exported so
+// cmd/wardyn-proxy can state the posture ONCE at boot: this is the only
+// default-ON control in the git-broker path, and =false used to produce no
+// signal anywhere — no boot line, no distinct decision row — while the per-mint
+// branch_namespace metadata is written identically either way, so a run on an
+// opted-out proxy read exactly like a confined one.
 //
 // ON by default. The reason it could not be is now closed: agent-run checks every
 // cloned repo out onto `wardyn/$WARDYN_RUN_ID/work` and sets push.default=current
@@ -363,10 +398,11 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // installation token itself is repo-scoped but not ref-scoped. Dispatch removes AND
 // denies the broker-managed GitHub host names on a brokered run — plus that forge's
 // ssh.<forge> endpoint, so a co-granted ssh_key leaves no push path beside the
-// brokered one (confineGitBrokerEgress in internal/api/runs_dispatch.go, and
-// validateGrantLaneExclusivity refuses the combination at policy-write), and the
-// forge's ssh_key grant is withheld from the sandbox entirely at dispatch
-// (dropBrokeredSSHGrants) so no unusable private key is left resident. With one
+// brokered one (confineGitBrokerEgress in internal/api/runs_dispatch_gitbroker.go,
+// and validateGrantLaneExclusivity refuses the combination at policy-write), and
+// the forge's ssh_key AND git_pat grants are withheld from the sandbox entirely
+// at dispatch (dropBrokeredGrants) so no unusable credential is left resident.
+// With one
 // standing caveat, the same one docs/POLICIES.md gives the four HTTPS denies:
 // those are NAME-based denies and a name-based deny does not bind an IP LITERAL
 // (under allow_all_egress a CONNECT to 140.82.114.4:22 is still allowed). The
@@ -375,7 +411,7 @@ func BranchNSPrefix(runID uuid.UUID) string {
 //
 // Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
 // silently disabling a security control on a typo.
-func branchNSEnforced() bool {
+func BranchNSEnforced() bool {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envEnforceBranchNS))); v {
 	case "":
 		return true

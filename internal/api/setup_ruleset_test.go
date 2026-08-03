@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -118,6 +121,28 @@ func TestGithubRefRulesetCheck_GatedAndCached(t *testing.T) {
 		}
 	})
 
+	t.Run("template policy names no repo, but a recent run was actually brokered: probes it anyway", func(t *testing.T) {
+		// The common shape in practice (examples/policies/*.json ship "repos": []):
+		// nothing in the policy names a repo, yet a real run declared one AND held
+		// a github_token grant — augmentGitBrokerGrants would have unioned it into
+		// the broker map at run time, so the checklist must find it too.
+		runID := uuid.New()
+		v := &fakeRefRulesetVerifier{confined: true, detail: "acme/widgets: confined."}
+		st := &firstBrokeredRepoStore{
+			runs: []types.AgentRun{{ID: runID, Repo: "acme/widgets"}},
+			grants: map[uuid.UUID][]types.CredentialGrant{
+				runID: {{ID: uuid.New(), RunID: runID, Spec: types.GrantSpec{Kind: types.GrantGitHubToken}}},
+			},
+		}
+		s := New(Config{GitHubRulesets: v, Store: st, DefaultPolicy: githubPolicy(t)})
+		if _, ok := s.githubRefRulesetCheck(ctx, true); !ok {
+			t.Fatal("row must render: the run's declared repo was actually brokered, even though the template policy names none")
+		}
+		if v.lastRepo != "acme/widgets" {
+			t.Fatalf("probed %q, want the run's declared repo", v.lastRepo)
+		}
+	})
+
 	t.Run("repo present: probes once, then serves the cache", func(t *testing.T) {
 		v := &fakeRefRulesetVerifier{confined: true, detail: "acme/widgets: confined."}
 		now := time.Now()
@@ -147,6 +172,101 @@ func TestGithubRefRulesetCheck_GatedAndCached(t *testing.T) {
 		}
 		if v.calls != 2 {
 			t.Fatalf("calls = %d, want 2 — the cache must expire", v.calls)
+		}
+	})
+}
+
+// firstBrokeredRepoStore fakes the two reads firstBrokeredRepo's run-fallback
+// needs: ListRuns (newest-first, like the real ORDER BY created_at DESC) and
+// ListGrantsByRun. Does not implement store.Pager, so these tests also exercise
+// the non-Pager fallback path every real deployment (which always uses PG, a
+// Pager) never takes.
+type firstBrokeredRepoStore struct {
+	store.Store
+	runs   []types.AgentRun
+	grants map[uuid.UUID][]types.CredentialGrant
+}
+
+// ListPolicies: empty — these tests exercise the run-fallback specifically, so
+// no stored policy should contribute a scope.repos hit ahead of it.
+func (s *firstBrokeredRepoStore) ListPolicies(context.Context) ([]types.RunPolicy, error) {
+	return nil, nil
+}
+
+func (s *firstBrokeredRepoStore) ListRuns(context.Context) ([]types.AgentRun, error) {
+	return s.runs, nil
+}
+
+func (s *firstBrokeredRepoStore) ListGrantsByRun(_ context.Context, id uuid.UUID) ([]types.CredentialGrant, error) {
+	return s.grants[id], nil
+}
+
+// TestFirstBrokeredRepo_RunFallback covers the selection fix directly (see also
+// the end-to-end subtest above): a template policy (scope.repos: [], the
+// shipped-example shape) names nothing, so the repo has to come from a run that
+// was ACTUALLY brokered — declared a repo AND held a github_token grant, the
+// same two facts augmentGitBrokerGrants itself requires.
+func TestFirstBrokeredRepo_RunFallback(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a run with a declared repo AND a github_token grant is found", func(t *testing.T) {
+		runID := uuid.New()
+		st := &firstBrokeredRepoStore{
+			runs: []types.AgentRun{{ID: runID, Repo: "acme/widgets"}},
+			grants: map[uuid.UUID][]types.CredentialGrant{
+				runID: {{ID: uuid.New(), RunID: runID, Spec: types.GrantSpec{Kind: types.GrantGitHubToken}}},
+			},
+		}
+		s := New(Config{Store: st, DefaultPolicy: githubPolicy(t)})
+		if got := s.firstBrokeredRepo(ctx); got != "acme/widgets" {
+			t.Fatalf("firstBrokeredRepo = %q, want %q", got, "acme/widgets")
+		}
+	})
+
+	t.Run("a declared repo with no github_token grant at all is never claimed brokered", func(t *testing.T) {
+		runID := uuid.New()
+		st := &firstBrokeredRepoStore{
+			runs:   []types.AgentRun{{ID: runID, Repo: "acme/widgets"}},
+			grants: map[uuid.UUID][]types.CredentialGrant{}, // a plain read-only clone: no broker route ever existed
+		}
+		s := New(Config{Store: st, DefaultPolicy: githubPolicy(t)})
+		if got := s.firstBrokeredRepo(ctx); got != "" {
+			t.Fatalf("firstBrokeredRepo = %q, want \"\" — no github_token grant means no broker route", got)
+		}
+	})
+
+	t.Run("a run whose OTHER grant kind is not github_token is skipped", func(t *testing.T) {
+		runID := uuid.New()
+		st := &firstBrokeredRepoStore{
+			runs: []types.AgentRun{{ID: runID, Repo: "acme/widgets"}},
+			grants: map[uuid.UUID][]types.CredentialGrant{
+				runID: {{ID: uuid.New(), RunID: runID, Spec: types.GrantSpec{Kind: types.GrantGitPAT}}},
+			},
+		}
+		s := New(Config{Store: st, DefaultPolicy: githubPolicy(t)})
+		if got := s.firstBrokeredRepo(ctx); got != "" {
+			t.Fatalf("firstBrokeredRepo = %q, want \"\" — a git_pat grant is not a github broker route", got)
+		}
+	})
+
+	t.Run("an explicit policy scope.repos still wins over the run fallback", func(t *testing.T) {
+		runID := uuid.New()
+		st := &firstBrokeredRepoStore{
+			runs: []types.AgentRun{{ID: runID, Repo: "from-a-run/should-not-win"}},
+			grants: map[uuid.UUID][]types.CredentialGrant{
+				runID: {{ID: uuid.New(), RunID: runID, Spec: types.GrantSpec{Kind: types.GrantGitHubToken}}},
+			},
+		}
+		s := New(Config{Store: st, DefaultPolicy: githubPolicy(t, "from-the-policy/wins")})
+		if got := s.firstBrokeredRepo(ctx); got != "from-the-policy/wins" {
+			t.Fatalf("firstBrokeredRepo = %q, want the policy-declared repo to win", got)
+		}
+	})
+
+	t.Run("no store at all: run fallback is a no-op, same as before", func(t *testing.T) {
+		s := New(Config{DefaultPolicy: githubPolicy(t)})
+		if got := s.firstBrokeredRepo(ctx); got != "" {
+			t.Fatalf("firstBrokeredRepo = %q, want \"\"", got)
 		}
 	})
 }

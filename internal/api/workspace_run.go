@@ -693,14 +693,28 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 // failure is returned, never swallowed: the clone cannot authenticate without
 // the grant, so the launch must fail loudly rather than dispatch a sandbox
 // whose private-repo clone is guaranteed to 403.
+//
+// SCOPED TO THE CLONE'S OWN REPO — the SAME key gitBrokerGrant uses for the
+// broker map, so the grant and the route it is reached through can never
+// disagree. It used to write `"repos": []`, which the real minter refuses
+// outright (githubMinter.MintInstallationToken: an installation token is
+// per-installation and the owner comes from the first repo), so every
+// scan/verify/record clone of a GitHub HTTPS repo 502'd at handleGitBroker the
+// moment a real GitHub App was configured. No test saw it because
+// FakeGitHubMinter did not reproduce that precondition; it does now.
+//
+// A github.com URL with no derivable "<org>/<repo>" (a deeper path) yields NO
+// grant: there is nothing a token could be scoped to, and an unmintable grant is
+// worse than none — it also sets WARDYN_GITHUB_GRANT_ID, pointing the in-sandbox
+// helper at a mint that can only fail.
 func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) (*uuid.UUID, error) {
-	u, perr := neturl.Parse(cloneURL)
-	if perr != nil || u.Hostname() != "github.com" || !isHTTPScheme(u.Scheme) {
+	repo := gitBrokerKey(cloneURL) // "" for non-github, non-HTTPS, or a non-repo path
+	if repo == "" {
 		return nil, nil
 	}
 	gid := uuid.New()
 	scope, _ := json.Marshal(map[string]any{
-		"repos": []string{}, "permissions": map[string]string{"contents": "read"},
+		"repos": []string{repo}, "permissions": map[string]string{"contents": "read"},
 	})
 	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 		ID: gid, RunID: runID, CreatedAt: now,

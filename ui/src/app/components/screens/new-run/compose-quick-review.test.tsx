@@ -80,7 +80,7 @@ describe("ComposeQuickReview — honest can/can't split", () => {
 });
 
 describe("canLines / cantLines — grant honesty (D2)", () => {
-  it("a write-capable github grant is an AMBER capability, and the broker line a guarantee", () => {
+  it("a write-capable github grant pushes confined to its own branch, and can never open a PR", () => {
     const p: RunPolicySpec = {
       allowed_domains: [],
       first_use_approval: "always_deny",
@@ -95,11 +95,35 @@ describe("canLines / cantLines — grant honesty (D2)", () => {
     };
     const can = canLines(p).map((l) => l.text);
     const cant = cantLines(p).map((l) => l.text);
-    expect(can.some((t) => /push branches and open prs/i.test(t))).toBe(true);
+    // Honest capability: it pushes, but only into its own run branch — never an
+    // unconstrained push, and never a claim it can open a PR (api.github.com is
+    // broker-denied; see examples/workspaces/github-push/TASK.md).
+    expect(can.some((t) => /push branches/i.test(t))).toBe(true);
+    expect(can.some((t) => /refs\/heads\/wardyn\/<run-id>\//.test(t))).toBe(true);
+    expect(can.some((t) => /\bpr\b|pull request/i.test(t))).toBe(false);
     // Mint-accurate: approval gates the token MINT (once), not every push.
     expect(can.some((t) => /you approve its token before it's minted/i.test(t))).toBe(true);
-    // The broker guarantee lives in the can't column, verbatim from copy.ts.
+    // The broker guarantee lives in the can't column, verbatim from copy.ts —
+    // alongside the PR-denial guarantee, which belongs there instead.
     expect(cant).toContain(CAPABILITY.brokerLine);
+    expect(cant.some((t) => /open a pull request/i.test(t))).toBe(true);
+  });
+
+  it("a read-only github grant states the read-only guarantee, not the (redundant) PR-denial line", () => {
+    const p: RunPolicySpec = {
+      allowed_domains: [],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [
+        { kind: "github_token", requires_approval: false, scope: { permissions: { contents: "read" } } },
+      ],
+    };
+    const can = canLines(p).map((l) => l.text);
+    const cant = cantLines(p).map((l) => l.text);
+    // No push capability line at all for a read-only token.
+    expect(can.some((t) => /push branches/i.test(t))).toBe(false);
+    expect(cant.some((t) => /its github token is read-only/i.test(t))).toBe(true);
+    expect(cant.some((t) => /open a pull request/i.test(t))).toBe(false);
   });
 
   it("a git_pat grant uses the gitPatLine exception (no reassuring broker claim)", () => {
@@ -115,6 +139,36 @@ describe("canLines / cantLines — grant honesty (D2)", () => {
     expect(can).toContain(CAPABILITY.gitPatLine);
     // ...and the broker "can't see your keys" guarantee is NOT claimed for a PAT.
     expect(cant).not.toContain(CAPABILITY.brokerLine);
+  });
+
+  it("an ssh_key grant uses the sshKeyLine exception, same shape as git_pat", () => {
+    const p: RunPolicySpec = {
+      allowed_domains: [],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [{ kind: "ssh_key", requires_approval: false, scope: { host: "dev.azure.com" } }],
+    };
+    const can = canLines(p).map((l) => l.text);
+    // Before this fix ssh_key fell through to the generic "short-lived
+    // credential" line — wrong for a resident, disk-written key.
+    expect(can).toContain(CAPABILITY.sshKeyLine);
+    expect(can.some((t) => /short-lived/i.test(t))).toBe(false);
+  });
+
+  it("an api_key grant is never claimed short-lived — it's a long-lived key injected proxy-side", () => {
+    const p: RunPolicySpec = {
+      allowed_domains: [],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [{ kind: "api_key", requires_approval: true, scope: { host: "api.example.com" } }],
+    };
+    const can = canLines(p).map((l) => l.text);
+    // Before this fix api_key fell through to the generic "short-lived
+    // {noun}" line — contradicting this file's own header note that api_key is
+    // a long-lived stored key injected proxy-side, unlike github_token's mint.
+    expect(can.some((t) => /short-lived/i.test(t))).toBe(false);
+    expect(can.some((t) => /injected proxy-side/i.test(t))).toBe(true);
+    expect(can.some((t) => /asks you first/i.test(t))).toBe(true);
   });
 
   it("no leak: the barrier reads by label (Wall), never the wire class", () => {

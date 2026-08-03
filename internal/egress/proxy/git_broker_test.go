@@ -323,8 +323,8 @@ func TestBranchNSEnforcedEnv(t *testing.T) {
 	} {
 		t.Run("val="+tc.val, func(t *testing.T) {
 			t.Setenv(envEnforceBranchNS, tc.val)
-			if got := branchNSEnforced(); got != tc.want {
-				t.Fatalf("branchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
+			if got := BranchNSEnforced(); got != tc.want {
+				t.Fatalf("BranchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
 			}
 		})
 	}
@@ -439,7 +439,7 @@ func TestGitBrokerEnforcesPushByDefault(t *testing.T) {
 func TestGitBrokerPushOptOut(t *testing.T) {
 	t.Setenv(envEnforceBranchNS, "false")
 	up := newGitBrokerUpstream(t, "gh-inst-token")
-	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+	p, sink := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
 
 	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
 	rec := httptest.NewRecorder()
@@ -451,6 +451,62 @@ func TestGitBrokerPushOptOut(t *testing.T) {
 	}
 	if string(up.gitBody) != body {
 		t.Fatalf("upstream body = %q, want the unenforced push streamed through unchanged", up.gitBody)
+	}
+	// The opt-out must be VISIBLE after the fact. Until this row existed, a push
+	// forwarded unparsed and a push the parser cleared produced the identical
+	// audit record ("brokered:git" allow), so a run on an opted-out proxy was
+	// indistinguishable from a confined one without inspecting the sidecar's env.
+	if !strings.Contains(sink.String(), ruleSourceGitNSOff) {
+		t.Fatalf("decision log = %q, want an unparsed push to carry rule_source %s", sink.String(), ruleSourceGitNSOff)
+	}
+}
+
+// TestGitBrokerPushRuleSourceDistinguishesPosture is the other half of the row
+// above: an ENFORCED, in-namespace push must keep the ordinary "brokered:git"
+// source, and a fetch must too. If both postures shared one value the row would
+// prove nothing.
+func TestGitBrokerPushRuleSourceDistinguishesPosture(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "on")
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, sink := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	ref := "refs/heads/wardyn/" + p.runID.String() + "/feature"
+	body := pkt(someOID+" "+otherOID+" "+ref+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for an in-namespace push", rec.Code)
+	}
+	if strings.Contains(sink.String(), ruleSourceGitNSOff) {
+		t.Fatalf("decision log = %q, want NO %s row for a push the parser actually cleared",
+			sink.String(), ruleSourceGitNSOff)
+	}
+	if !strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGit+`"`) {
+		t.Fatalf("decision log = %q, want the ordinary %s allow row", sink.String(), ruleSourceGit)
+	}
+}
+
+// TestGitBrokerMintedTokenIsMaskRegistered pins the defense-in-depth the git
+// broker was missing: the injector registers every credential it resolves with
+// the process-global secret registry (inject.go), which is what httpError's
+// maskDecisionBytes reads before writing an error to the SANDBOX — but the
+// installation token minted on this route was never registered, so nothing in
+// the mask path knew the bytes. No live leak was found; "no path today" is a
+// property of the current call sites, not of the token.
+func TestGitBrokerMintedTokenIsMaskRegistered(t *testing.T) {
+	const tok = "ghs_masktest_0123456789"
+	up := newGitBrokerUpstream(t, tok)
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/Hello-World.git/info/refs?service=git-upload-pack", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := string(maskDecisionBytes([]byte("upstream said: " + tok))); strings.Contains(got, tok) {
+		t.Fatalf("maskDecisionBytes = %q — a minted installation token must be redactable from sandbox-visible text", got)
 	}
 }
 

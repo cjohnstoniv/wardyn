@@ -15,7 +15,16 @@
 // almost any site (except a block-list)"), never "unrestricted"; brokered grants
 // carry CAPABILITY.brokerLine; a git_pat grant uses CAPABILITY.gitPatLine (the PAT
 // is handed to git INSIDE the sandbox, so the agent's process really can read it —
-// no reassuring broker claim).
+// no reassuring broker claim); an ssh_key grant uses CAPABILITY.sshKeyLine for the
+// same reason (a resident key file, not a broker mint).
+//
+// A write-capable github_token's push is a broker route, not a bare token: it can
+// only land in the run's own branch namespace (refs/heads/wardyn/<run-id>/,
+// proxy.BranchNSPrefix — enforced by default) and it can NEVER open a pull request
+// from inside the sandbox (api.github.com is one of the four hosts a brokered
+// run's egress denies outright — confineGitBrokerEgress). Never claim either an
+// unconstrained push or PR-opening for it — see canLines/cantLines below for
+// exactly where each half of that honest split lives.
 import * as React from "react";
 import {
   Clock,
@@ -120,8 +129,13 @@ export function canLines(p: RunPolicySpec): CapLine[] {
         out.push({
           icon: GitBranch,
           // Approval gates the TOKEN MINT (once), not every push — never claim
-          // a per-push gate that doesn't exist.
-          text: `Push branches and open PRs${
+          // a per-push gate that doesn't exist. The push itself is a broker
+          // route, not a bare token: it lands only in the run's own branch
+          // namespace (refs/heads/wardyn/<run-id>/, enforced by default) —
+          // never claim an unconstrained push. It can never open a PR from
+          // inside the sandbox either; that guarantee lives in the can't
+          // column, not here.
+          text: `Push branches, confined to refs/heads/wardyn/<run-id>/${
             g.requires_approval ? " — you approve its token before it's minted" : " without pausing to ask"
           }.`,
         });
@@ -131,12 +145,26 @@ export function canLines(p: RunPolicySpec): CapLine[] {
       // Honest exception: the PAT is handed to git INSIDE the sandbox, so the
       // agent's process can read it — there is no broker protection to claim.
       out.push({ icon: KeyRound, text: CAPABILITY.gitPatLine });
+    } else if (g.kind === "ssh_key") {
+      // Same honest exception as git_pat, same shape: a RESIDENT private key
+      // file, not a broker mint — see CAPABILITY.sshKeyLine's doc in copy.ts.
+      out.push({ icon: KeyRound, text: CAPABILITY.sshKeyLine });
     } else if (g.kind === "cloud_sts") {
       // The embedded IdP structurally refuses cloud_sts mints (needs SPIRE) —
       // never claim a capability the backend can't deliver.
       out.push({
         icon: KeyRound,
         text: "Requests a cloud credential — this control plane can't mint it (needs a SPIRE identity provider).",
+      });
+    } else if (g.kind === "api_key") {
+      // NOT "short-lived" like github_token's broker mint: the stored key is
+      // long-lived and injected proxy-side by the proxy — it never enters the
+      // sandbox at all (see CAPABILITY.brokerLine's doc above).
+      out.push({
+        icon: KeyRound,
+        text: `Use a stored API key, injected proxy-side — it never enters the sandbox${
+          g.requires_approval ? " — asks you first" : ""
+        }.`,
       });
     } else {
       out.push({
@@ -205,6 +233,18 @@ export function cantLines(p: RunPolicySpec): CapLine[] {
   } else {
     if (brokered.length > 0) {
       out.push({ icon: KeyRound, text: CAPABILITY.brokerLine });
+    }
+    // Structural, not scope-dependent: api.github.com is one of the four hosts
+    // confineGitBrokerEgress denies for EVERY brokered run, read-only or write
+    // — there is no route from the sandbox to GitHub's API either way. Gated on
+    // write-capable only so it doesn't pointlessly repeat next to the read-only
+    // line below: told its token is read-only, an operator already knows it
+    // can't push a branch to open a PR from in the first place.
+    if (grants.some((g) => g.kind === "github_token" && isWriteCapable(g))) {
+      out.push({
+        icon: GitBranch,
+        text: "Open a pull request from inside the sandbox — GitHub's API is broker-denied; open it yourself from the pushed branch.",
+      });
     }
     if (grants.some((g) => g.kind === "github_token" && !isWriteCapable(g))) {
       out.push({

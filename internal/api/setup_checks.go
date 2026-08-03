@@ -4,10 +4,13 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/setup"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -15,7 +18,9 @@ import (
 // handleSetupStatus — one small pure function per row, in the order the wizard
 // renders them. "info" is used for permanent / non-fixable or purely-optional
 // conditions so the operator is never shown a red they cannot clear. (The
-// remaining rows still live beside their state in setup.go.)
+// remaining rows still live beside their state in setup.go.) firstBrokeredRepoFromRuns
+// below is the one exception to "pure": it needs the store to confirm a run was
+// actually brokered, not just guess from a Repo string.
 
 // runnerCheck grades the sandbox runner: no runner (or no live class) is the one
 // FAIL on the checklist — runs cannot launch at all. CC2+ is ok; a CC1-only host
@@ -203,4 +208,61 @@ func refRulesetCheck(repo string, confined bool, detail string, err error) Setup
 				" The bypass part of that verdict is read from current_user_can_bypass, which GitHub returns to the caller making the request; whether it is computed meaningfully for a GitHub App installation token is not something Wardyn has confirmed.",
 		}
 	}
+}
+
+// firstBrokeredRepoRunScan bounds firstBrokeredRepoFromRuns to the N most
+// recent runs — a fixed window, not a COUNT/EXISTS query (ponytail: widen it
+// if a real install's brokered runs turn out to sit consistently deeper).
+const firstBrokeredRepoRunScan = 20
+
+// firstBrokeredRepoFromRuns is firstBrokeredRepo's fallback for the common
+// case its own doc describes: shipped policies template scope.repos: [], so
+// the repo actually brokered for a run usually comes from the run's declared
+// --repo / workspace repos at CREATE time instead (augmentGitBrokerGrants,
+// runs_create.go), unioned into the git-broker map only when the run also
+// held a github_token grant — never recorded back onto the policy.
+//
+// This mirrors that exact pair of facts on the most recent runs: a declared
+// repo Wardyn resolves as a github.com clone (gitBrokerKeyFromSlug), AND an
+// actual github_token grant on that run (its persisted CredentialGrant rows,
+// not guessed from Repo being non-empty). So it can't over-claim a repo that
+// was only ever cloned read-only with no credential at all — a run with no
+// repo, or a repo but no github grant, contributes nothing to the broker map
+// either, and is skipped here the same way.
+//
+// Only run.Repo (the legacy single-repo field) is scanned; a run brokered
+// purely through workspace_repos, with no legacy --repo, falls through to "".
+// Bounded to firstBrokeredRepoRunScan runs — at the SQL level when the store
+// is a store.Pager (indexed, newest-first), else in Go over the unbounded
+// (but still newest-first) List — so an install with a GitHub App configured
+// and a long run history that never touches GitHub can't turn this
+// (5-minute-cached) check into a store round trip per run.
+func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
+	if s.cfg.Store == nil {
+		return ""
+	}
+	var runs []types.AgentRun
+	var err error
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		runs, err = pg.ListRunsPage(ctx, store.Page{Limit: firstBrokeredRepoRunScan})
+	} else {
+		runs, err = s.cfg.Store.ListRuns(ctx) // newest-first; only test doubles lack Pager
+	}
+	if err != nil {
+		return ""
+	}
+	for i, run := range runs {
+		if i >= firstBrokeredRepoRunScan {
+			break
+		}
+		key := gitBrokerKeyFromSlug(run.Repo)
+		if key == "" {
+			continue // no repo, or not a github.com slug/URL
+		}
+		if grants, gerr := s.cfg.Store.ListGrantsByRun(ctx, run.ID); gerr == nil &&
+			slices.ContainsFunc(grants, func(g types.CredentialGrant) bool { return g.Spec.Kind == types.GrantGitHubToken }) {
+			return key
+		}
+	}
+	return ""
 }

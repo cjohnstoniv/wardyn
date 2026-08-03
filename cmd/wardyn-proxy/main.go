@@ -71,6 +71,20 @@ func main() {
 		os.Exit(2)
 	}
 
+	// State the git-broker push posture ONCE at boot, and only when it is OFF —
+	// the sibling of the WARDYN_LLM_SCAN line above, for the one control in that
+	// path that is ON by default. WARN, not Info: the kill-switch above disables
+	// something the policy had to opt INTO, this disables a confinement every
+	// brokered run otherwise gets. A garbage value already logs (fail-closed,
+	// proxy.BranchNSEnforced); before this, the OFF state logged nothing at all,
+	// so the only way to tell a confined proxy from an opted-out one was
+	// `docker inspect` on the sidecar. Per-push proof lives in the decision log
+	// (rule_source "brokered:git:branch-ns-off").
+	if !proxy.BranchNSEnforced() {
+		slog.Warn("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false — push branch-namespace confinement is OFF for this proxy; a brokered git push may update ANY ref in a granted repo, including the default branch",
+			slog.String("run_id", cfg.RunID.String()))
+	}
+
 	// Startup mint of injection credentials is bounded: fail closed if the
 	// broker is unreachable or an approval is still pending.
 	startupCtx, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)

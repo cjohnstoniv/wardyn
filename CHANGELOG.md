@@ -35,32 +35,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shipped-policy convention: no git host is ever TLS-MITM'd, so a
   `github.com:443` CONNECT is an opaque tunnel the ref parser cannot inspect,
   and the helper printed a live token to stdout inside the sandbox. A run with
-  **no** git grants is unaffected, and the `git_pat` lane is unchanged.
+  **no** git grants is unaffected.
   Honest scope: this binds the brokered App lane — a `git_pat` push (opaque
   CONNECT) cannot be bound by a receive-pack parser and remains bounded by the
-  operator who supplied the credential. `ssh_key` used to carry that same
-  honest-scope exception for the SAME forge; it no longer does — see the
-  single-lane entry below.
-- **A brokered forge is now single-lane: `ssh_key` can no longer ride beside a
-  `github_token` grant for it.** Closes the gap the entry above used to carve
-  out. Two mechanisms, write time and dispatch: `validateGrantLaneExclusivity`
+  operator who supplied the credential. `ssh_key` and `git_pat` used to carry
+  that same honest-scope exception for the SAME forge; neither does now — see
+  the single-lane entry below.
+- **A brokered forge is now single-lane: neither `ssh_key` nor `git_pat` can
+  ride beside a `github_token` grant for it.** Closes the gap the entry above
+  used to carve out. Three seams: `validateGrantLaneExclusivity`
   (`internal/api/policy.go`) refuses a policy that declares both a
-  `github_token` grant and an `ssh_key` grant for the same forge (`400`, on
-  every policy write — stored, inline, `WARDYN_DEFAULT_POLICY`, and the
-  composer/profile clamps); and `confineGitBrokerEgress`
-  (`internal/api/runs_dispatch.go`) now also denies that forge's `ssh.<forge>`
-  SSH-over-443 endpoint — spelled as the bare host, so the deny covers every
-  port, not just 443 — alongside the four managed HTTPS hosts, on every
-  brokered run regardless of whether it holds an `ssh_key` grant. For a policy
-  stored before this rule shipped, `dropBrokeredSSHGrants` withholds that
-  forge's `ssh_key` grant from the sandbox env at dispatch entirely, so the
-  private key is never minted (not merely denied a route), with a `slog`
-  warning and a `run.ssh.brokered_forge` audit event. An `ssh_key` grant for a
-  *different* forge is untouched by either mechanism. This reverses an earlier
-  decision from an earlier pass of this same doc-reconciliation effort, on the
-  owner's call — see `confineGitBrokerEgress` for why. Same standing caveat as
-  the four HTTPS denies: it is a NAME deny, so a raw-IP CONNECT reaches
-  `allow` under `allow_all_egress` (measured) — see `docs/POLICIES.md`.
+  `github_token` grant and an `ssh_key` or `git_pat` grant for the same forge
+  (`400`, on every policy write — stored, inline, `WARDYN_DEFAULT_POLICY`, and
+  the composer/profile clamps); `confineGitBrokerEgress`
+  (`internal/api/runs_dispatch_gitbroker.go`) also denies that forge's
+  `ssh.<forge>` SSH-over-443 endpoint — spelled as the bare host, so the deny
+  covers every port, not just 443 — alongside the four managed HTTPS hosts, on
+  every brokered run regardless of which grants it holds; and
+  `handleInternalMint` refuses either kind for a brokered forge before opening
+  the broker transaction. For a policy stored before the rule shipped,
+  `dropBrokeredGrants` withholds that forge's `ssh_key` **and** `git_pat`
+  grants from the sandbox env at dispatch entirely, so the credential is never
+  minted (not merely denied a route), each with a `slog` warning and a
+  `run.ssh.brokered_forge` / `run.git_pat.brokered_forge` audit event. An
+  `ssh_key` or `git_pat` grant for a *different* host (ADO, GitLab, GHES — the
+  lane `git_pat` exists for) is untouched by any of it. The `git_pat` half
+  corrects a stated justification that did not hold: a brokered `git_pat` was
+  called "already dead twice over", counting `wardyn-git-helper`'s in-sandbox
+  refusal as one death — but that only binds a caller that asks *git* for the
+  credential, and the proxy's own mint refusal (`isBrokeredGitGrant`) matches
+  `github_token` grant ids only, so a direct POST to the mint route was
+  answered with the PAT. That left one barrier, a name-keyed deny; and a GitHub
+  `git_pat` is typically a *user* PAT, broader than the repo-scoped
+  installation token beside it. The `ssh_key` half reverses an earlier decision
+  of this same doc-reconciliation effort, on the owner's call — see
+  `confineGitBrokerEgress` for why. Same standing caveat as the four HTTPS
+  denies: it is a NAME deny, so a raw-IP CONNECT reaches `allow` under
+  `allow_all_egress` (measured) — see `docs/POLICIES.md`.
 - **Token-side confinement: GitHub ref-ruleset verification, plus an opt-in
   mint gate.** `VerifyRefRuleset` (`internal/broker/ruleset.go`) asks GitHub
   which rules are in force on a repo outside and inside the run's push
@@ -127,6 +138,42 @@ and does not yet follow semantic versioning (interfaces are not stable).
   over within one ~30s backoff of the leader's session ending. See
   `docs/OPERATIONS.md` ("One replica, by construction") for the full
   mechanism and what remains per-process by design.
+
+### Fixed
+
+- **Opting a proxy out of push branch-namespace confinement is no longer
+  silent.** `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` used to produce no
+  signal anywhere — no boot line, no distinct audit row — while the per-mint
+  `branch_namespace` metadata was written identically either way, so a run on
+  an opted-out proxy read exactly like a confined one and the posture was only
+  discoverable by inspecting the sidecar's environment. `wardyn-proxy` now
+  logs a one-shot `slog` WARN at boot when enforcement is OFF (the sibling of
+  the `WARDYN_LLM_SCAN` kill-switch line, at WARN because this control is ON by
+  default), and every push it then forwards unparsed carries the decision-log
+  `rule_source` `brokered:git:branch-ns-off` instead of `brokered:git`, so the
+  posture is provable per push in the append-only audit log rather than
+  inferred. Enforcement itself is unchanged, and a garbage value still fails
+  closed.
+- **The minted GitHub installation token is registered with the proxy's secret
+  mask registry.** Injector credentials were registered (`internal/egress/proxy/inject.go`)
+  but the git-broker's token was not, so `httpError`'s `maskDecisionBytes`
+  — the mask every sandbox-facing error string passes through — did not know
+  the bytes. No live leak was found (the token is set as Basic auth on the
+  outbound request only); this makes the redaction a property of the token
+  rather than of the current call sites. Verbatim bytes only, the same honest
+  residual the injector path carries.
+- **Workspace scan/verify/record clone grants are scoped to the repo they
+  clone.** `maybeGitHubReadGrant` synthesized a `github_token` grant with
+  `"repos": []` while the git-broker allowlist it is reached through was keyed
+  from the CLONE URL — two different answers to "which repo is this token
+  for". The real minter refuses an empty repo list outright (a GitHub
+  installation token is per-installation and the owner is derived from the
+  first repo), so every GitHub HTTPS scan/verify/record clone would `502` at
+  the broker route once a real GitHub App was configured. No test caught it
+  because `broker.FakeGitHubMinter` did not reproduce that precondition; it
+  does now, so the guard is enforced in tests exactly as in production. A
+  `github.com` URL with no derivable `<org>/<repo>` now yields no grant at all
+  rather than an unmintable one.
 
 ### Changed
 

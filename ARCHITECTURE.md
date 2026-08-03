@@ -241,9 +241,9 @@ is decided by grant kind and host, and neither can cover the other's set:
 
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
-| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route at all and the repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work` |
-| `git_pat` (Azure DevOps / GitLab / a plain GitHub PAT), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git` |
-| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredSSHGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
+| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
+| `git_pat` (Azure DevOps / GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git`. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
+| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
 
 The broker is structurally github.com-only and App-token-only: it has no host
 parameter and no username plumbing, and authenticates as
@@ -261,11 +261,12 @@ grant id, so the env var is not a way back to it. "Has a grant" and "is brokered
 are NOT the same set: a `github_token` grant covering no repo has no
 `/wardyn/gh/` route and no injected GitHub deny, so the helper is still its
 credential path and mints unchanged. A GitHub host with no App grant at all
-still falls through to a `git_pat` grant. The same exclusivity now reaches
-`ssh_key`: a policy may not declare a `github_token` grant and an `ssh_key`
-grant for the same forge — that would give a brokered run a second,
-unparseable push path — see [docs/POLICIES.md](docs/POLICIES.md) "The
-`ssh_key` lane is closed too".)
+still falls through to a `git_pat` grant. The same exclusivity reaches BOTH
+operator-supplied lanes: a policy may not declare a `github_token` grant and an
+`ssh_key` **or** `git_pat` grant for the same forge — either would give a
+brokered run a second push path the receive-pack parser cannot read — see
+[docs/POLICIES.md](docs/POLICIES.md) "The `ssh_key` and `git_pat` lanes are
+closed too".)
 
 ## Layered egress (identical semantics on both targets)
 
