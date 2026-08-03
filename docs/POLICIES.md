@@ -19,8 +19,8 @@ write time. A guard test fails if a field here drifts from the struct.
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `allowed_domains` | `[]string` | `[]` (deny all) | L2 egress allowlist: exact hosts or `*.` wildcards. Empty under default-deny means the sandbox reaches nothing. Each entry must be a shape the proxy's matcher can match — a mid-label wildcard, a URL, or a bad `:port` is rejected at write time rather than shipped as a rule that silently matches nothing. |
-| `denied_domains` | `[]string` | `[]` | Always wins over `allowed_domains`, in both egress modes. Same entry-shape validation. |
-| `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only: any non-denied **public** host is allowed. The SSRF/private-IP guard is unaffected (metadata, loopback, link-local and private ranges stay denied unconditionally), and credential injection still requires an exact `allowed_domains` entry — allow-all never widens where a secret may go. `first_use_approval` is inert under it. |
+| `denied_domains` | `[]string` | `[]` | Always wins over `allowed_domains`, in both egress modes. Same entry-shape validation. **Dispatch appends four of its own** for any run carrying a `github_token` grant with repos — see the note below the table. |
+| `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only: any non-denied **public** host is allowed. The SSRF/private-IP guard is unaffected (metadata, loopback, link-local and private ranges stay denied unconditionally), and credential injection still requires an exact `allowed_domains` entry — allow-all never widens where a secret may go. `first_use_approval` is inert under it. It does **not** re-open the four GitHub hosts a brokered run loses — a deny beats allow-all too. |
 | `first_use_approval` | `string` | `always_deny` | How an unknown domain is handled. See the three modes below. A legacy boolean still decodes (`true`→`deny_with_review`, `false`→`always_deny`). |
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction. |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
@@ -30,6 +30,28 @@ write time. A guard test fails if a field here drifts from the struct.
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
+
+### Brokered GitHub: four denies you did not write
+
+A run whose `github_token` grant covers at least one repo (from the grant's
+`scope.repos`, or from the run's `--repo` / `workspace_repos` clone set) is
+**brokered**: git traffic goes through the proxy's `/wardyn/gh/<org>/<repo>`
+route, where the installation token is minted server-side and never enters the
+sandbox. To make that the *only* route, dispatch subtracts **and denies**
+`github.com`, `api.github.com`, `codeload.github.com` and `*.githubusercontent.com`
+for that run (`confineGitBrokerEgress`, `internal/api/runs_dispatch.go`).
+
+There is **no escape hatch**, by design: it runs last, after every widening
+phase, and a deny beats `allowed_domains`, beats `allow_all_egress`, beats a
+promoted `ApprovedEgress` entry, and beats a runtime `first_use_approval` — the
+proxy returns on the deny verdict before it ever considers an approval. So a
+brokered run cannot `curl` the GitHub API, `gh pr create`, or fetch a release
+tarball or a raw `githubusercontent.com` file, no matter what the policy says.
+The narrowed envelope is disclosed in the `run.policy.effective` audit event.
+
+**If the run needs direct GitHub fetches, drop the `github_token` grant** (and
+allowlist the hosts you need). A run with no git grants keeps whatever GitHub
+egress its policy grants — the confinement is no-op without one.
 
 ### `first_use_approval` modes
 
@@ -53,7 +75,7 @@ an unrecognised literal is rejected at write time.
 
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
-| `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. |
+| `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com` and `*.githubusercontent.com`** — see "Brokered GitHub" above. Drop the grant if the run needs direct GitHub fetches. |
 | `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today. |
 | `api_key` | `{"host":"…","header":"…"}` | Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation. `username` defaults by convention (ADO `pat`, GitLab `oauth2`). |

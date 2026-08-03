@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. Every signed-in user has admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` is set, which demotes unlisted signers-in to read-only viewers on the harness-credential/policy/workspace/site-config writes — one tier, not **team mode** (per-user RBAC), which does not exist yet and is not scheduled; see [ROADMAP.md](../../ROADMAP.md) and [docs/OPERATIONS.md](../../docs/OPERATIONS.md). |
+| `dex`      | OIDC IdP for human SSO. Static demo user `demo@wardyn.local`. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. Every signed-in user has admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` is set, which demotes unlisted signers-in to read-only viewers on the harness-credential/policy/workspace/site-config writes, secret writes/deletes, approval decisions, and attach-ticket minting (reading, and launching/killing runs, stay open) — one tier, not **team mode** (per-user RBAC), which does not exist yet and is not scheduled; see [ROADMAP.md](../../ROADMAP.md) and [docs/OPERATIONS.md](../../docs/OPERATIONS.md). |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -72,8 +72,10 @@ active profiles). To bring Dex up yourself on top of a `scripts/up.sh up` stack:
 docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex
 ```
 
-and set `WARDYN_OIDC_ISSUER=http://localhost:5556` in `deploy/compose/.env`
-before restarting `wardynd`.
+and set `WARDYN_OIDC_ISSUER=http://localhost:5556` **and**
+`WARDYN_OIDC_OPERATOR_EMAILS=you@example.com` (or
+`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`) in `deploy/compose/.env` before
+restarting `wardynd` — the issuer alone now REFUSES TO BOOT.
 
 ## No-login local mode (`WARDYN_LOCAL_MODE`)
 

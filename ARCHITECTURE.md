@@ -241,7 +241,7 @@ is decided by grant kind and host, and neither can cover the other's set:
 
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
-| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; with github.com off the run's allowlist an un-brokered GitHub URL is denied, so the repo is the unit of trust |
+| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route at all and the repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work` |
 | `git_pat` (Azure DevOps / GitLab / a plain GitHub PAT), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git` |
 | `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1) |
 
@@ -251,9 +251,17 @@ parameter and no username plumbing, and authenticates as
 `ssh_key` cannot be proxy-injected at all — git-over-HTTPS to those hosts is an
 opaque CONNECT tunnel, and git's SSH transport has no credential-helper seam
 (`internal/types/types.go`, `GrantGitPAT`/`GrantSSHKey`). Deleting either lane
-drops a supported SCM. (The helper also carries a GitHub-App branch —
-`WARDYN_GITHUB_GRANT_ID` — that the `insteadOf` rewrite makes unreachable for a
-granted repo; it is the fallback for a GitHub host the rewrite did not cover.)
+drops a supported SCM. (The helper deliberately does NOT serve the GitHub-App
+lane on a **brokered** run — one the broker serves at least one repo for,
+`WARDYN_GIT_BROKER_REPOS` non-empty. There it refuses every GitHub host rather
+than printing an installation token to stdout inside the sandbox — a token that
+could then be pushed straight to `github.com:443`, an opaque tunnel around the
+broker's receive-pack ref check — and the proxy's mint route refuses the same
+grant id, so the env var is not a way back to it. "Has a grant" and "is brokered"
+are NOT the same set: a `github_token` grant covering no repo has no
+`/wardyn/gh/` route and no injected GitHub deny, so the helper is still its
+credential path and mints unchanged. A GitHub host with no App grant at all
+still falls through to a `git_pat` grant.)
 
 ## Layered egress (identical semantics on both targets)
 
@@ -300,7 +308,9 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > sign-in lights up when OIDC is configured — but every signed-in user has
 > admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` is set, which buys
 > exactly one tier (unlisted signers-in become read-only viewers on the
-> harness-credential, policy, workspace and site-config writes) and is not RBAC.
+> harness-credential, policy, workspace and site-config writes, secret
+> writes/deletes, approval decisions, and attach-ticket minting — reading, and
+> launching/killing runs, stay open) and is not RBAC.
 > `make setup` asks **containerized vs host** (Enter =
 > containerized; both single-user); team is not a selectable mode
 > (`WARDYN_SETUP_MODE=team` prints a notice and exits).

@@ -97,6 +97,11 @@ func safeProposal() composer.Proposal {
 			AllowedDomains:      []string{"api.anthropic.com"},
 			MinConfinementClass: types.CC2,
 			FirstUseApproval:    types.FirstUseDenyWithReview,
+			// A real idle timeout, not the zero value: Grade treats auto_stop_after_sec
+			// <= 0 as never-reap (internal/lifecycle: "0 DISABLED", the same as an
+			// explicit -1) and grades it HIGH on a non-interactive run — matches the
+			// sane-default fixture in internal/composer/backends/factory.go's newFake.
+			AutoStopAfterSec: 1800,
 			EligibleGrants: []types.GrantSpec{{
 				Kind:             types.GrantGitHubToken,
 				RequiresApproval: true,

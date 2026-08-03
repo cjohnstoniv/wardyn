@@ -10,17 +10,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- **Push branch-namespace confinement is now REAL** (opt-in). The git-broker
-  route parses the pkt-line command section of a `POST …/git-receive-pack` and
-  refuses any ref outside `refs/heads/wardyn/<run-id>/` — other branches, the
-  default branch, tags, `refs/pull/*`, and deletes outside the namespace all
-  403 before the installation token is minted, with a `brokered:git:branch-ns`
-  deny row in the decision log. Only that (≤64 KiB) command section is
-  buffered; the packfile still streams, and clone/fetch are untouched.
-  **Off by default** — nothing in Wardyn yet tells an agent to name its branch
-  `wardyn/<run-id>/…`, so enforcing by default would deny most real pushes.
-  Turn it on per proxy with `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=1` and pin the
-  convention in your task text. Unrecognized values fail closed (enforce).
+- **Push branch-namespace confinement is now REAL, and ON BY DEFAULT.** The
+  git-broker route parses the pkt-line command section of a
+  `POST …/git-receive-pack` and refuses any ref outside
+  `refs/heads/wardyn/<run-id>/` — other branches, the default branch, tags,
+  `refs/pull/*`, and deletes outside the namespace all 403 before the
+  installation token is minted, with a `brokered:git:branch-ns` deny row in the
+  decision log. Only that (≤64 KiB) command section is buffered; the packfile
+  still streams, and clone/fetch are untouched. Nothing to turn on: `agent-run`
+  now checks each cloned repo out onto `wardyn/$WARDYN_RUN_ID/work` and sets
+  `push.default=current`, so a stock run pushes inside its own namespace without
+  the operator pinning the convention in task text. Set
+  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` per proxy to opt out (for an image
+  whose `agent-run` predates the run branch); unrecognized values fail closed.
+- **The brokered git route is now the ONLY route.** Dispatch subtracts the
+  broker-managed GitHub hosts (`github.com`, `api.github.com`,
+  `codeload.github.com`, `*.githubusercontent.com`) from the egress allowlist of
+  any run with git grants **and denies them** — deny beats `allow_all_egress`
+  too — and `wardyn-git-helper` no longer mints a GitHub App token into a
+  brokered sandbox at all (a GitHub host is refused whenever
+  `WARDYN_GIT_BROKER_REPOS` is non-empty — a grant covering no repo is not
+  brokered and still mints via the helper). Previously the direct lane was
+  closed only by shipped-policy convention: no git host is ever TLS-MITM'd, so a
+  `github.com:443` CONNECT is an opaque tunnel the ref parser cannot inspect,
+  and the helper printed a live token to stdout inside the sandbox. A run with
+  **no** git grants is unaffected, and the `git_pat` lane is unchanged.
+  Honest scope: this binds the brokered App lane — a `git_pat` push (opaque
+  CONNECT) and an `ssh_key` push (not smart-HTTP) cannot be bound by a
+  receive-pack parser and remain bounded by the operator who supplied the
+  credential; token-side/GitHub-ruleset confinement is still planned.
 - **wardynd images are published to GHCR** (`.github/workflows/publish-image.yml`:
   main pushes → `:latest` + `:sha-<7>`, `vX.Y.Z` tags → the bare semver the Helm
   chart's default resolves to; `workflow_dispatch` `extra_tag` backfills
@@ -32,15 +50,38 @@ and does not yet follow semantic versioning (interfaces are not stable).
   default never resolved from the distroless WorkingDir).
 
 - **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate** (flag
-  `-oidc-operator-emails`), the first authorization tier on the control plane.
-  List the operators and every other signed-in human becomes a **viewer**: 403
-  on the mutating routes of the four highest-blast-radius clusters (managed
-  harness credential, policies, workspaces, `PUT /site-config`); reads are
-  unchanged. Additive — unset (the default) keeps today's behavior exactly, and
-  the admin token and local mode are always operators (one shared credential,
-  no human to key a role off). This is one allowlist, not RBAC: secret
-  write/delete and run create/kill are still open to any signed-in human
+  `-oidc-operator-emails`), the first authorization tier on the control plane,
+  now covering 24 routes. List the operators and every other signed-in human
+  becomes a **viewer**: reads everything and can launch/kill runs, but is
+  403'd on configuring the deployment (managed harness credential, policies,
+  workspaces, `PUT /site-config`), writing/deleting secrets, deciding an
+  approval, and minting an attach ticket. Additive — unset (the default) keeps
+  today's behavior exactly, and the admin token and local mode are always
+  operators (one shared credential, no human to key a role off). Configuring
+  OIDC SSO with the operator list left empty now **refuses to boot** (flag
+  `-allow-oidc-no-operator-list` / `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`
+  overrides, for a deployment that really does want every signed-in human
+  admin-equivalent). This is one allowlist, not RBAC: run create/kill stay
+  open to any signed-in human by design
   (`ROADMAP.md`, `threatmodel/THREAT-MODEL.md` residual #14).
+- **Three per-process defects that used to make `replicas > 1` unsafe are now
+  closed at the code level** — not because multi-replica is a supported
+  configuration today (no shipped topology runs more than one: compose pins
+  `container_name`, the chart pins `replicas: 1`), but because a future build
+  no longer needs three separate durability projects to get there. Session
+  recordings default to a Postgres-backed store (migration 0028,
+  `internal/recording/pgstore.go`) visible to every replica;
+  `WARDYN_RECORDING_STORE=fs` still selects the legacy per-pod directory, and
+  the real "fully off" recipe is now two variables
+  (`WARDYN_RECORDING_STORE=fs` **and** `WARDYN_RECORDING_DIR=""`). Run-watcher
+  adoption is a Postgres lease plus a periodic cross-replica sweep (migration
+  0027, `internal/api/reconcile.go`): a run orphaned by a pod that never comes
+  back is adopted by any live replica within roughly 65-150s instead of
+  stranding forever. The ground-truth token rotator is leader-elected via a
+  Postgres advisory lock (`cmd/wardynd/gt_rotator.go`), with a standby taking
+  over within one ~30s backoff of the leader's session ending. See
+  `docs/OPERATIONS.md` ("One replica, by construction") for the full
+  mechanism and what remains per-process by design.
 
 ### Changed
 

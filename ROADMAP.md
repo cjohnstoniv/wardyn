@@ -68,7 +68,7 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 | Milestone | Scope |
 |---|---|
-| **v0.5** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L1 default-deny (nftables / NetworkPolicy, blocking `169.254.169.254`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · Kubernetes runner driver + the Helm chart (`deploy/helm/wardyn/` is render-checked only today — it deploys the control plane but cannot create sandboxes) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · signed image publishing, which turns CI-mode source builds into pulls and enables a reusable one-line GitHub Action ([docs/CI.md](docs/CI.md)) · branch-namespace enforcement DEFAULT-ON for minted git tokens — the proxy-side push-ref check ships today as opt-in `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; making it the default needs agent-run to name run branches itself, plus GitHub-side rulesets so the property holds even for a leaked token (`threatmodel/THREAT-MODEL.md` asset #4) |
+| **v0.5** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L1 default-deny (nftables / NetworkPolicy, blocking `169.254.169.254`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · Kubernetes runner driver + the Helm chart (now both `helm-lint`-checked and kind-install-tested in CI — `helm-install-test` proves a built image converges to a healthy control plane on every PR, though it overrides the image and the age key rather than testing an unmodified default install — but it still only deploys the control plane; no Kubernetes runner exists to create a sandbox on it) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · signed image publishing, which turns CI-mode source builds into pulls and enables a reusable one-line GitHub Action ([docs/CI.md](docs/CI.md)) · **token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check now ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix; GitHub-side rulesets are what make the property hold for a leaked token, or for the `git_pat`/`ssh_key` lanes no receive-pack parser can bind (`threatmodel/THREAT-MODEL.md` asset #4) |
 | **v1.0** | CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · hash-chained audit + signed action receipts · separation of duty on the control plane · the conformance suite green on both the Docker and Kubernetes targets |
 
 ### Extension-phase handoff (v0.5 detail from the 0.4.4 solidification sweep)
@@ -78,27 +78,40 @@ extension phase — each was confirmed real, sized L (multi-day), and left out o
 the final cleanup on purpose:
 
 - **Authorization/RBAC + owner scoping.** A **minimal** viewer/operator gate now
-  ships: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in human outside that list
-  is a viewer — 403 on the mutating routes of the four `humanOrAdminAuth` gap
-  sites (`internal/api/server.go`: harness-cred, site-config, policies,
-  workspaces), reads unchanged. Unset (the default) is the old behavior: every
-  authenticated human is admin-equivalent. That is one allowlist, not RBAC. Still
-  open: real roles/permissions, a role for the admin token and local mode (both
-  are a single shared credential, so both are always operators), per-resource
-  owner scoping, `CreatedBy` persisted-but-never-filtered, no tenant/org columns.
+  ships across 24 routes: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in
+  human outside that list is a viewer — reads everything, launches and kills
+  runs, but is 403'd on configuring the deployment (managed harness credential,
+  policies, workspaces, site-config), writing/deleting secrets, deciding an
+  approval, and minting an attach ticket (`internal/api/server.go`,
+  `requireOperator`). Unset (the default) is the old behavior: every
+  authenticated human is admin-equivalent. Configuring OIDC SSO with the list
+  left empty now REFUSES TO BOOT (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`
+  overrides). This is one allowlist, not RBAC. Still open: real
+  roles/permissions, a role for the admin token and local mode (both are a
+  single shared credential, so both are always operators), per-resource owner
+  scoping, `CreatedBy` persisted-but-never-filtered, no tenant/org columns.
 - **Kubernetes runner driver** on the existing `substrate.Substrate` seam, plus
   the pieces it drags in: a PVC/volume mount model (today `runner.Mount` is a
-  host bind), non-host-local artifact delivery, published + signed images, a
-  chart install test, Ingress/TLS wiring, and a K8s ground-truth correlator
-  (today docker-label-based).
-- **HA.** The control plane is a documented singleton. Attach tickets, compose
-  results, and the reaper tick are now Postgres-backed (migration 0026 + a
-  `pg_try_advisory_lock` on the tick), so they survive a crash and no longer
-  break under a second replica — but the residual is still fatal to
-  `replicas > 1`: in-process run watchers, fs-only recordings, and the
-  ground-truth token rotator (the local audit spool file is per-process by
-  design — it is the Postgres-write fallback each pod drains itself). Durable or
-  shared variants of those three before `replicas > 1` means anything.
+  host bind), non-host-local artifact delivery, published + signed images,
+  Ingress/TLS wiring, and a K8s ground-truth correlator (today
+  docker-label-based). A chart install test already exists
+  (`helm-install-test`, a kind-based CI gate) — it proves the control plane
+  boots, not that this driver can create a sandbox on it.
+- **HA.** The control plane is a documented singleton — no shipped topology
+  runs more than one replica (compose pins `container_name`; the chart pins
+  `replicas: 1`). At the code level, though, the per-process defects that used
+  to make a second replica silently drop requests are now closed: attach
+  tickets, compose results, and the reaper tick are Postgres-backed (migration
+  0026 + a `pg_try_advisory_lock` on the tick); run watchers are lease-tracked
+  with a periodic cross-replica sweep that adopts an orphaned run within
+  ~65-150s (migration 0027); session recordings are Postgres-backed and the
+  process default (migration 0028); and the ground-truth token rotator is
+  leader-elected via a Postgres advisory lock. The local audit spool file stays
+  per-process by design (the Postgres-write fallback each pod drains itself) —
+  it was never one of the fatal three. None of this makes `replicas > 1`
+  supported: closing the code-level defects is not the same as building,
+  testing, and releasing a multi-replica topology, and nothing here has done
+  that.
 - **SPIRE identity / OpenBao secretstore** (seams + conformance suites ship).
 - **Team mode:** SAML/SCIM, per-user RBAC on the console (SSO *sign-in* shipped
   in 0.4.4; authorization did not).
@@ -140,7 +153,9 @@ shipped behavior; none is scheduled.
   console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is configured
   (`/healthz` reports `sso`), and the session it mints authenticates the whole API.
   There is exactly ONE role tier: `WARDYN_OIDC_OPERATOR_EMAILS` (above) demotes
-  unlisted signers-in to read-only viewers on four write clusters. Unset, or for
+  unlisted signers-in to read-only viewers across 24 routes — configuring the
+  deployment, credential writes, approval decisions, and attach tickets; reading
+  and launching/killing runs stay open to any signed-in human. Unset, or for
   anything it does not cover, anyone who signs in has the same powers as the admin
   token.
 

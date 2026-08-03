@@ -55,16 +55,25 @@ invitation, not an embarrassment.
 4. **Source code + the git push capability** — the minted GitHub installation
    token is repo-scoped and permission-clamped (max `contents:write` +
    `pull_requests:write`, 1h TTL). Bot-branch-namespace confinement
-   (`wardyn/<run-id>/*`, "PR is the only merge path") is **[shipped, opt-in]**
-   at the git-broker proxy route: it parses the `git-receive-pack` pkt-line
-   command section and refuses every ref outside
+   (`wardyn/<run-id>/*`, "PR is the only merge path") is **[shipped,
+   default-on]** at the git-broker proxy route: it parses the
+   `git-receive-pack` pkt-line command section and refuses every ref outside
    `refs/heads/wardyn/<run-id>/` (including deletes) before the token is
-   minted. It is OFF unless the proxy sets
-   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, and it binds the BROKERED PATH ONLY —
-   the installation token still cannot self-restrict to a ref prefix, so a
-   token exfiltrated from the proxy, or any push that does not traverse
-   `/wardyn/gh/`, is unconstrained by it. Token-side confinement needs
-   GitHub branch-protection rulesets **[v0.5+ — planned]**.
+   minted. It needs no opt-in because `agent-run` checks each cloned repo out
+   onto `wardyn/<run-id>/work`, so a stock run already complies;
+   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` is the escape hatch. Dispatch
+   also subtracts the broker-managed GitHub hosts from a brokered run's egress
+   and denies them, so the brokered route is the only route to those repos —
+   previously a sandbox could dial `github.com:443` directly, an opaque CONNECT
+   the pkt-line parser cannot read, and `wardyn-git-helper` no longer mints an
+   installation token into a brokered sandbox at all.
+   It binds the **brokered App lane only**, and that boundary is honest, not a
+   gap we are papering over: a `git_pat` push is an opaque CONNECT and an
+   `ssh_key` push is not smart-HTTP, so no receive-pack parser can bind either —
+   those are bounded by the operator who supplied the credential (and the SSH key
+   is clone-window-only: `wipe_ssh_grants` runs before the agent starts). A token
+   exfiltrated from the proxy itself is likewise unconstrained. Token-side
+   confinement needs GitHub branch-protection rulesets **[v0.5+ — planned]**.
 5. **Audit integrity** — the append-only control-plane log, eBPF ground truth,
    PTY recordings. Tampering defeats incident response. NOTE: append-only
    protects what IS written; it does not yet guarantee every control-plane
@@ -146,7 +155,7 @@ the L3 tool gateway planned at v0.5.
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; userns (`hostUsers:false`) + PSS-restricted + no hostPath are the Kubernetes path **[v0.5+ — planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
 | Host-side RCE at image-wrap time from a hostile Bring-Your-Own-Image base (`ONBUILD` triggers) | BYOI (`internal/envbuild` `FinalizeBase`) wraps an operator-named base with the runner tools via a `FROM` + `COPY` on the host daemon — outside the untrusted-build sandbox and outside every confinement tier. A `FROM` fires any `ONBUILD` triggers baked into the base, so a hostile base could run code on the host *before* any confinement exists. Docker exposes no flag to suppress triggers, so the base is preflighted (`ImageInspect`) and the wrap is **refused** if it declares any (`assertWrapSafeBase`), on both the BYOI and devcontainer paths; Wardyn also pulls the base itself rather than via the builder's `PullParent`, so the wrap builds `FROM` the exact image the preflight inspected **[shipped]**. Residual: wrapping is not vetting — base content is unscanned/unattested and digest pinning is honored but NOT enforced (see §5 residual 13). | B1 |
-| Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[shipped, opt-in]** on the brokered git path (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; push-ref inspection in `internal/egress/proxy/git_broker.go`) and **[v0.5+ — planned]** as a default and as a token-side/GitHub-ruleset property — the token itself is still repo-scoped but NOT branch-scoped. | B4, B5, ID |
+| Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[shipped, default-on]** on the brokered git path (push-ref inspection in `internal/egress/proxy/git_broker.go`; `agent-run` names the run branch `wardyn/<run-id>/work` so a stock run complies, `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and the brokered route is now the ONLY route — dispatch subtracts + denies the broker-managed GitHub hosts for a run with git grants, and the credential helper refuses to mint an installation token into a brokered sandbox. It binds the brokered App lane only: `git_pat` (opaque CONNECT) and `ssh_key` (not smart-HTTP) are structurally unbindable by a receive-pack parser and are bounded by the operator who supplied the credential. A token-side/GitHub-ruleset property that would hold even for a leaked token is **[v0.5+ — planned]** — the token itself is still repo-scoped but NOT branch-scoped. | B4, B5, ID |
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit, and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not to the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, which the same insider can rewrite — the control plane authenticates but does not authorize, so in an OIDC deployment the ceiling is not above them. See residual #14. | B5, ID |
@@ -318,20 +327,25 @@ hiding them would repeat the failure mode we are designed to avoid.
     developer holds admin powers by default, because there is exactly one role
     tier and it is off unless configured. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
     to a list of operator addresses makes every other signed-in human a
-    **viewer**: 403 on the mutating routes of four clusters — the managed
+    **viewer**: 403 on the mutating routes of seven clusters — the managed
     harness credential, policy CRUD, workspace CRUD (including the scoped
-    widening writes below) and `PUT /site-config`. Reads are never gated, the
-    admin token and local mode are always operators (one shared credential
-    carries no human to demote), and NOTHING ELSE is covered — notably `PUT`/
-    `DELETE /secrets/{name}`, `POST /runs` and `POST /runs/{id}/kill` remain open
-    to any signed-in human. Leave the list unset and the paragraph below is the
-    whole truth. Policy
+    widening writes below), `PUT /site-config`, secret write/delete, deciding
+    an approval (`POST /approvals/{id}/approve|deny`), and minting an attach
+    ticket (`POST /runs/{id}/attach-ticket` — a live PTY into a running
+    sandbox). Reads are never gated, the admin token and local mode are always
+    operators (one shared credential carries no human to demote), and NOTHING
+    ELSE is covered — notably `POST /runs` and `POST /runs/{id}/kill` remain
+    open to any signed-in human: launching and stopping a run is a viewer act
+    by design, and a viewer's own run that trips an approval simply blocks
+    until an operator decides it. Leave the list unset and the paragraph below
+    is the whole truth. Policy
     CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
     `setup-commands` writes that widen what a run may do), secret write/delete,
     `GET`/`PUT /site-config`, the managed harness credential (`POST
     /setup/harness-login` and `PUT`/`DELETE /setup/harness-credential/{provider}`
-    — connects/disconnects the shared subscription EVERY run inherits) and
-    `POST /runs/{id}/kill` all sit in one `humanOrAdminAuth` group
+    — connects/disconnects the shared subscription EVERY run inherits),
+    deciding an approval, minting an attach ticket, and `POST
+    /runs/{id}/kill` all sit in one `humanOrAdminAuth` group
     (`internal/api/server.go`, which says so at each site). So the §1 insider
     can raise their own ceiling rather than exceed it: `PUT` a policy with a
     wide-open allowlist, or point every run's upstream proxy at a host they
@@ -385,7 +399,7 @@ says so.
 | Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
 |---|---|---|---|
 | `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time and shredded right after the clone; mask-registered at mint. Within that window anything running as the agent uid can read it. Wardyn cannot down-scope or expire an SSH private key (`internal/broker/broker.go` `mintSSHKey`, `deploy/images/*/agent-run`). |
-| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret; the value is mask-registered at mint. **No expiry, no down-scoping** — Wardyn holds an operator-provisioned PAT and can only forward it (no ADO/GitLab token-minting integration); that is this grant kind's honesty ceiling. GitHub's *transport* is the contrast the ADO design targets — a granted repo's git traffic is rewritten (`insteadOf`) to the proxy-side git broker, which mints the App installation token SERVER-side and re-originates with it, so the clone/push itself never carries a token into the sandbox, and github.com is not in the run's egress. State that precisely, though: the in-sandbox credential helper still has a GitHub mint path, gated only by the same per-run caller-auth secret, so the installation token remains OBTAINABLE from inside the sandbox — bounded by being repo-scoped and ≤1h, which is exactly what the ADO PAT is not. |
+| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret; the value is mask-registered at mint. **No expiry, no down-scoping** — Wardyn holds an operator-provisioned PAT and can only forward it (no ADO/GitLab token-minting integration); that is this grant kind's honesty ceiling. GitHub's *transport* is the contrast the ADO design targets — a granted repo's git traffic is rewritten (`insteadOf`) to the proxy-side git broker, which mints the App installation token SERVER-side and re-originates with it, so the clone/push itself never carries a token into the sandbox, and dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants, so there is no direct route either. On a **brokered** run — one the broker actually serves at least one repo for (`WARDYN_GIT_BROKER_REPOS` non-empty, the same map that drives the deny) — the helper REFUSES every GitHub host **and** the proxy's mint route refuses that grant id, so the installation token is not obtainable from inside the sandbox even though the grant id itself rides the agent env: the contrast with the ADO PAT is structural there, not just scope+TTL. A `github_token` grant that covers **no** repo is deliberately NOT brokered — it has no `/wardyn/gh/` route and no injected deny — so the helper remains its only credential path and mints as before; that shape is an ordinary helper-served token with this row's usual `git_pat`-grade bounds. |
 | Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — there is no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
 | Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | A minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — this is a **not-yet-built** gap, not an impossibility. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative, mirroring Bedrock bearer mode). Until that ships, the token is written into the sandbox. | Files written `0600`; the token values are mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh + client secret again at use; a lapsed token is detected before dispatch and the run falls through to the next credential mode rather than being handed a dead token; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy carried in the env var is not matched, and Wardyn cannot revoke an SSO session. |
 | **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |

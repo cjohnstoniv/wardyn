@@ -216,9 +216,13 @@ git-broker.
 
 Exactly two deployment paths, and only one runs sandboxes today: `deploy/compose`
 **[shipped]** and one blessed Helm chart `deploy/helm/wardyn` **[v0.5+ —
-planned]**, render-checked in CI but with no Kubernetes runner driver behind it
-yet. Also still unbuilt: SPIRE, OpenBao, L1 default-deny, an MCP/tool gateway,
-arbitrary-domain TLS interception, OTLP/OCSF sinks, and multi-user team mode.
+planned]** — CI now proves it both renders (`helm-lint`) and boots to a healthy
+control plane on a real cluster (a kind-based install test, though it overrides
+the image and the age key rather than trying an unmodified default install) —
+but still with no Kubernetes runner driver behind it, so it deploys the control
+plane and cannot create a sandbox yet. Also still unbuilt: SPIRE, OpenBao, L1
+default-deny, an MCP/tool gateway, arbitrary-domain TLS interception, OTLP/OCSF
+sinks, and multi-user team mode.
 
 ---
 

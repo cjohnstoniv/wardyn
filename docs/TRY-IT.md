@@ -137,13 +137,18 @@ then `wardyn secret set github-app-id` and `wardyn secret set github-app-key`
 minted installation token is 1h, repo-scoped, and permission-clamped to
 `contents:write` + `pull_requests:write`. Branch-namespace confinement
 (`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the
-brokered git path when you opt in** with
-`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=1` on the proxy: a push to any other ref
-is refused with 403 before the token is minted. It is **off by default** (the
-token itself is not branch-scoped, and the run's task text has to pin the
-branch name), so on a stock run the token can still push to any branch in its
-granted repos — see `threatmodel/THREAT-MODEL.md` asset #4 and
-[ROADMAP.md](../ROADMAP.md).
+brokered git path by default**: a push to any other ref is refused with 403
+before the token is minted. Nothing to turn on — `agent-run` checks each cloned
+repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its
+namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
+
+What that does **not** cover, plainly: the confinement binds the brokered GitHub
+App lane, because that is the only lane the proxy can read (a `git_pat` push is
+an opaque CONNECT tunnel and `ssh_key` is not smart-HTTP — those are bounded by
+the operator who supplied the credential). And the installation token itself is
+repo-scoped but not ref-scoped, so a token leaked out of the proxy is
+unconstrained; GitHub-side rulesets are the fix and are planned, not shipped —
+see `threatmodel/THREAT-MODEL.md` asset #4 and [ROADMAP.md](../ROADMAP.md).
 
 ### Model auth: three ways to give Claude Code its LLM access
 
