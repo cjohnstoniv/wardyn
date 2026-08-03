@@ -450,9 +450,16 @@ func checkPushCommand(line, prefix string) error {
 	ref := parts[2]
 	// Defense in depth: receive-pack refuses funny refnames server-side, but a
 	// prefix test must never be the only thing between "wardyn/<id>/x" and a
-	// traversal or an embedded second ref.
+	// traversal or an embedded second ref. Control characters are rejected here
+	// rather than left to the forge: git's own check_refname_format would catch
+	// them, but leaning on the server makes this parser's guarantee weaker than
+	// it reads — an embedded LF or CR is exactly the shape that smuggles a
+	// second command past a line-oriented reader.
 	if strings.Contains(ref, "..") || strings.ContainsAny(ref, " \t\\^~:?*[") {
 		return fmt.Errorf("refusing malformed refname %q", ref)
+	}
+	if i := strings.IndexFunc(ref, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
+		return fmt.Errorf("refusing refname %q: control character at byte %d", ref, i)
 	}
 	if !strings.HasPrefix(ref, prefix) || len(ref) <= len(prefix) {
 		return fmt.Errorf("push to %q is outside this run's branch namespace", ref)

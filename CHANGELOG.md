@@ -75,7 +75,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `internal/recording/pgstore.go`) visible to every replica;
   `WARDYN_RECORDING_STORE=fs` still selects the legacy per-pod directory, and
   the real "fully off" recipe is now two variables
-  (`WARDYN_RECORDING_STORE=fs` **and** `WARDYN_RECORDING_DIR=""`). Run-watcher
+  (`WARDYN_RECORDING_STORE=fs` **and** `WARDYN_RECORDING_DIR=""`). Note that
+  this is the BINARY's default: the Helm chart deliberately pins `fs`, because
+  it is single-replica by policy and `pg` retains every cast forever by
+  default — so a `helm install` does NOT get the Postgres store unless you set
+  `env.WARDYN_RECORDING_STORE=pg`. Compose does get it. Run-watcher
   adoption is a Postgres lease plus a periodic cross-replica sweep (migration
   0027, `internal/api/reconcile.go`): a run orphaned by a pod that never comes
   back is adopted by any live replica within roughly 65-150s instead of

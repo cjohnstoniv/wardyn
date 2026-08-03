@@ -246,6 +246,13 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+prefix+"../../heads/main"+firstCaps) + "0000", "malformed refname"},
 		{"embedded-second-ref",
 			pkt(someOID+" "+otherOID+" "+inNS+" refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		// An embedded LF/CR is the shape that smuggles a second command past a
+		// line-oriented reader. Both stay INSIDE the namespace, so only the
+		// control-character check can refuse them — the prefix test cannot.
+		{"embedded-newline-refname",
+			pkt(someOID+" "+otherOID+" "+inNS+"\nrefs/heads/main"+firstCaps) + "0000", "control character"},
+		{"embedded-cr-refname",
+			pkt(someOID+" "+otherOID+" "+inNS+"\rrefs/heads/main"+firstCaps) + "0000", "control character"},
 		{"push-cert", pkt("push-cert"+firstCaps) + "0000", "unsupported receive-pack command"},
 		{"malformed-length", "zzzz" + "0000", "malformed pkt-line length"},
 		{"delim-pkt", "0001" + "0000", "unexpected pkt-line length"},
