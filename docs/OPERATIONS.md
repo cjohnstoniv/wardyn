@@ -81,8 +81,10 @@ A viewer reads everything and is refused (403) on the writes with the widest
 blast radius: the managed harness credential (`POST /setup/harness-login`,
 `PUT`/`DELETE /setup/harness-credential/{provider}`), policy create/update/delete,
 every mutating `/workspaces` route (including the `approved-egress`, `llm-cred`
-and `requirements` writes that widen what a run may do), `PUT /site-config`,
-secret write/delete (`PUT`/`DELETE /secrets/{name}` — the name-only list stays
+and `requirements` writes that widen what a run may do), `PUT /site-config`
+and its connectivity probes (`POST /site-config/test-proxy`, `POST
+/site-config/test-redirect` — each launches a sandbox and makes a real
+outbound request on the operator's behalf), secret write/delete (`PUT`/`DELETE /secrets/{name}` — the name-only list stays
 readable), deciding an approval (`POST /approvals/{id}/approve|deny` — the
 queue stays readable), and attaching to a running sandbox — BOTH lanes to a
 live PTY, the ticket mint (`POST /runs/{id}/attach-ticket`) and the WebSocket
@@ -109,6 +111,149 @@ one shared credential with no human behind it. Real roles and owner scoping
 are v0.5+ ([ROADMAP.md](../ROADMAP.md); `threatmodel/THREAT-MODEL.md`
 residual #14). Wardyn's operator boundary is still "everyone with a login is
 trusted staff".
+
+## Corporate network: upstream proxy and egress redirects
+
+One more piece of operator-wide config lives in Postgres alongside everything
+in **State stores** above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`,
+`wardyn site-config get|apply`) — the corporate upstream proxy and the list of
+outbound redirects every run's egress inherits. Unconfigured is a valid,
+common state: a host with direct internet access needs none of this. Because
+it lives in Postgres, `make reset-all` takes it with the volume; `wardyn
+site-config get > corp-baseline.json` before a reset and `wardyn site-config
+apply corp-baseline.json` after is the round-trip — the document carries
+secret **names**, never values, so it's safe to keep beside the repo.
+
+### Upstream proxy: plain URL vs. secret
+
+- `upstream_proxy_url` — a plain URL (`http://proxy.corp.internal:8080`),
+  stored and read back in the clear. A proxy address is topology, not a
+  credential; forcing it through the write-only secret store meant a
+  mistyped URL could never be read back to debug.
+- `upstream_proxy_secret_ref` — the *name* of a secret holding the proxy URL,
+  for a proxy that needs an embedded credential
+  (`http://user:pass@proxy.corp.internal:8080`).
+
+**An `upstream_proxy_url` carrying a `user:pass@` is rejected server-side,
+always** (`validateSiteConfig`, `internal/api/site_config.go` — `PUT
+/site-config` 400s). This is a guarantee, not a UI courtesy: even a client
+that skips its own check cannot persist a credential in the clear this way.
+Put a credentialed proxy URL in a secret instead:
+
+```sh
+wardyn secret set upstream-proxy-url          # paste the full, credentialed URL
+# then reference it by name in the applied site config:
+#   "upstream_proxy_secret_ref": "upstream-proxy-url"
+```
+
+If both fields are set, `upstream_proxy_url` wins — harmless mid-migration
+from one to the other, but don't rely on it; clear whichever you're not using.
+
+### Egress redirects: two tiers
+
+`egress_redirects` is a list of `{from, to, token_secret_ref, ecosystem}`
+entries. Each substitutes a public/upstream URL or host for a
+corporate-internal one in every run's egress, with an optional token injected
+proxy-side as a Bearer credential for `to`'s host (the sandbox never holds
+it). This replaced the old `artifact_overrides` map (one entry per package
+ecosystem) because a corporate estate redirects container registries and
+internal appliances too, not only package managers — the shape generalized
+from "one entry per ecosystem" to "a list of From → To pairs over any URL,
+host, or IP".
+
+What you get depends on whether `ecosystem` is set:
+
+| `ecosystem` | Egress substituted | Token injected | Per-tool config file |
+|---|---|---|---|
+| `npm` \| `pip` \| `cargo` \| `maven` \| `go` \| `nuget` | yes | yes | yes |
+| empty (**network only**) | yes | yes | no |
+
+An ecosystem row gets the per-tool config file `EmitArtifactConfig`
+(`internal/workspacescan/gen.go`) writes at workspace-import time — `.npmrc`,
+`.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`,
+`GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress
+substitution and token injection every redirect gets.
+
+A network-only row (empty `ecosystem`: a container registry, an internal
+appliance, a bare host or IP) gets the network half only: its host is
+substituted into the run's egress allowlist and its token is injected
+proxy-side, exactly like an ecosystem row, but **no config file is written**
+— there is no `.npmrc` equivalent for an arbitrary host. That is a real cost,
+not a technicality: the workspace still needs to be told to pull from the
+mirror itself (`docker login` against the internal registry, an appliance
+client's own config), or a run reaches an allowed, credentialed host that
+nothing in the sandbox actually asks for. The UI labels these rows `network
+only` so the gap stays visible instead of reading like a redirect that does
+everything the row above it does.
+
+### Upgrading from `artifact_overrides`
+
+A site-config document saved before this shipped used
+`artifact_overrides: {"npm": {"base_url": "..."}, ...}`. Migration `0030`
+rewrites the one stored row automatically on the first boot after upgrade —
+nothing to do for what's already in Postgres.
+
+`PUT /site-config` (and so `wardyn site-config apply`) still accepts a legacy
+`artifact_overrides` body **for one release**, folding it into
+`egress_redirects` before validating. This isn't generosity: `apply` replaces
+the *whole* document, so an operator re-applying a file they saved before
+this release — without the fold — would silently wipe the proxy and every
+redirect rather than just fail to update them. A body that sets both fields
+is rejected (400) rather than guessed at. `wardyn site-config get` after
+upgrading no longer returns `artifact_overrides` at all — re-save the file at
+that point.
+
+### Testing it: two probes, not a courtesy button
+
+Wardyn otherwise has no test-connection buttons anywhere: it cannot dial a
+stored credential, so a green tick would mean "we wrote it down" while
+reading as "we checked" — a false reassurance nobody wants at 3am. `POST
+/api/v1/site-config/test-proxy` and `POST /api/v1/site-config/test-redirect`
+are the deliberate exception, on the same footing as the GitHub ref-ruleset
+check ([TRY-IT.md](TRY-IT.md)): the check is real. Each launches a throwaway,
+one-shot confined sandbox, makes an actual outbound request through it — the
+same path a real run's egress takes — and tears the sandbox down. Both are
+**operator-only** (a viewer 403s, like `PUT /site-config` itself) and
+**audited** (`site_config.test_proxy` / `site_config.test_redirect`); the
+audit row carries the host(s) probed and the outcome, never the proxy URL,
+which may legitimately carry a credential.
+
+```sh
+curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
+  -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN"
+
+curl -s -X POST http://localhost:8080/api/v1/site-config/test-redirect \
+  -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"https://registry.npmjs.org/"}'
+```
+
+`test-proxy` takes no body; it 400s outright if no upstream proxy is
+configured yet (nothing to test). It curls a known-reachable host
+(`api.github.com`) through the sandbox's normal egress, which dispatch
+already chains to the configured upstream — so it proves the path a real run
+takes, not a reconstruction of it.
+
+`test-redirect` takes `{"from": "..."}` naming an entry already in the stored
+`egress_redirects` (404 if it names none — the request's `from` only ever
+*selects* a stored row). **It never dials a caller-supplied target**: the
+probe target always comes from the stored row, never the request body, or
+the endpoint would be an SSRF gadget with a friendly label. It runs two
+fetches in one sandbox — the mirror (`to`) through the normal path, then the
+public endpoint (`from`) again with the proxy deliberately bypassed — to
+catch a redirect that's configured but not enforced.
+
+Both return `200` with `{"state", "detail", "elapsed_ms"}`:
+
+| `state` | Means |
+|---|---|
+| `reached` | The path works — proxy or mirror reachable, and for a redirect, the public host is correctly *blocked* when dialed directly. |
+| `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
+| `bypass` | **Read this one carefully — it's the one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. `test-redirect` only. |
+| `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
+
+A probe is bounded well under a minute and reclaims (kills) its sandbox if the
+run doesn't finish in time, so a wedged probe can never hold one open.
 
 ## The age key has no rotation path
 

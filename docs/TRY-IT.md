@@ -12,10 +12,15 @@ tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
 Kata microVM; whichever are missing show a copy-paste
 `wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
 setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. Inside a corporate network, its **Integrations**
-step (the same page as `/integrations`) chains the sandbox proxy through your
-proxy, redirects npm/pip/cargo/maven/go/nuget at an Artifactory/Nexus mirror,
-and covers GitHub Enterprise / Azure DevOps — see [`docs/adoption/`](adoption/).
+straight into your first run. The rail runs 10 steps; inside a corporate
+network, the **Corporate network** step — seated right before Integrations,
+because nothing downstream can be verified until the network path works —
+chains the sandbox proxy through your proxy and redirects package registries
+(or any other host: a container registry, an internal appliance) at an
+internal mirror, each with a live probe that actually tests the path (see
+[OPERATIONS.md](OPERATIONS.md)). **Integrations** (the same page as
+`/integrations`) is where you then connect a model provider and cover GitHub
+Enterprise / Azure DevOps — see [`docs/adoption/`](adoption/).
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 
