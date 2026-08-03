@@ -8,6 +8,57 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Corporate network is its own Getting-started step, and it comes before
+  Integrations** — because on a corporate network every integration after it
+  depends on the path it configures, and discovering that at the point an
+  integration fails to validate is too late. Two tabs: **Host proxy** presents
+  what Wardyn detected in the host's environment as evidence with a "Use this"
+  next to each row, rather than asking an operator to retype what the machine
+  already knows; **Egress redirection** holds the redirects.
+- **The upstream proxy URL is no longer forced to be a secret.** `SiteConfig`
+  gained `upstream_proxy_url` beside the existing `upstream_proxy_secret_ref`.
+  Most corporate proxy URLs carry no credential, and making every operator
+  mint a secret to store `http://proxy.corp.internal:3128` taught the wrong
+  lesson about what a secret is. A URL that *does* embed `user:pass@` is
+  rejected server-side by `validateSiteConfig` and must go to the secret store
+  — enforced in the API, not merely discouraged in the UI, because the client
+  is not the thing standing between a credential and the config document.
+- **Two connectivity probes that actually probe**: `POST
+  /api/v1/site-config/test-proxy` and `POST /api/v1/site-config/test-redirect`
+  (operator-only, audited). Each launches a throwaway confined sandbox and
+  makes a real request through the path a run would take, returning `reached`,
+  `blocked`, `bypass`, or an honest `no_runner`. The redirect probe's second
+  fetch is the interesting one: it re-requests the public host with the proxy
+  deliberately bypassed, which catches a redirect that is configured but not
+  enforced — a state that looks identical to a working one until a run quietly
+  pulls from the internet. curl's exit codes are reported as what they mean
+  (DNS, refused, TLS, timeout) rather than collapsing into "failed". These are
+  the only test buttons in the product; everywhere else Wardyn still refuses to
+  claim it verified a credential it cannot dial.
+
+### Changed
+
+- **Artifact registry overrides became egress redirects.** The ecosystem-keyed
+  `artifact_overrides` map is now an `egress_redirects` list of
+  `{from, to, token_secret_ref, ecosystem}`, which stops the shape from
+  implying that only package registries can be redirected. Two tiers, and the
+  UI now says which one a row gets: a known ecosystem (npm, pip, cargo, maven,
+  go, nuget) gets both the network substitution and a generated tool config
+  (`.npmrc`, `pip.conf`, …); a container registry or arbitrary host gets the
+  network half only — the mirror substituted into the run's egress and the
+  token injected proxy-side — and is marked `network only`, because there is
+  no config file to write for it and pretending otherwise would be the bug.
+  Migration `0030` rewrites stored documents; the request decoder still folds a
+  legacy `artifact_overrides` body for one release, since `PUT /site-config` is
+  a whole-document replace and an operator applying a config file saved in the
+  old shape would otherwise silently erase their proxy and every redirect.
+- **The workspace Requirements step is four tabs** — Record · Egress · Secrets
+  · Files & services — matching the approved design. Record leads, because the
+  honest answer to "what does this workspace need?" is usually "drive it once
+  and find out."
+
 ## [0.4.5] — 2026-08-03
 
 ### Added

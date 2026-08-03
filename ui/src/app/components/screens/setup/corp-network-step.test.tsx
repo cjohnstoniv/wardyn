@@ -262,6 +262,21 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     expect(screen.queryByText(T.TEST_STANDING)).not.toBeInTheDocument();
   });
 
+  it("a FAILED REQUEST is not a probe verdict — it must never render as 'Blocked'", async () => {
+    // The whole point of these buttons is that a result means something. A 403,
+    // a restarted wardynd, or a malformed payload never reached the network at
+    // all, so reporting "Blocked" would blame a firewall that is working fine.
+    testProxyMock.mockRejectedValueOnce(new Error("403 operator role required"));
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+
+    await screen.findByRole("button", { name: /^test proxy$/i });
+    expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reached")).not.toBeInTheDocument();
+    // ...and it falls back to untested, so the operator can retry.
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
+  });
+
   it("redirect row Test: disables + relabels to 'Testing…' while running — the mock left this always-on; both buttons must match", async () => {
     let resolve!: (v: { state: string; detail: string }) => void;
     testRedirectMock.mockReturnValue(new Promise((r) => (resolve = r)));

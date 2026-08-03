@@ -345,7 +345,12 @@ function HostProxyTab({
       const result = await healthApi.testProxy();
       setTest({ kind: "done", result });
     } catch (e) {
-      setTest({ kind: "done", result: { state: "blocked", detail: getErrorMessage(e) } });
+      // A request that never produced a probe result is NOT a probe verdict. Rendering
+      // it as "blocked" would blame the corporate network for a 403, a restarted
+      // wardynd, or a bad payload — sending the operator to debug a firewall that is
+      // working fine. Report the request failure as itself and stay untested.
+      toast.error("Could not run the proxy test", { description: getErrorMessage(e) });
+      setTest({ kind: "idle" });
     }
   };
   const elapsed = useElapsedTimer(test.kind === "running");
@@ -773,7 +778,9 @@ function EgressTab({
       const result = await healthApi.testRedirect(r.from, r.to);
       setTestStates((s) => ({ ...s, [i]: { kind: "done", result } }));
     } catch (e) {
-      setTestStates((s) => ({ ...s, [i]: { kind: "done", result: { state: "blocked", detail: getErrorMessage(e) } } }));
+      // See the proxy tab's runTest: a failed request is not a "blocked" verdict.
+      toast.error(`Could not test the ${r.from} redirect`, { description: getErrorMessage(e) });
+      setTestStates((s) => ({ ...s, [i]: { kind: "idle" } }));
     }
   };
   const testAll = () => redirects.forEach((r, i) => runTest(i, r));
