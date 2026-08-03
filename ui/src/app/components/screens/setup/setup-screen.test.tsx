@@ -195,7 +195,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // credential to clone, so meeting it afterwards would be an auth failure that
     // reads as a Wardyn bug.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(await screen.findByText("GitHub App")).toBeInTheDocument(); // credentials
+    // The GitHub App card moved to SCM Provider (Change 5) — Credentials now
+    // keeps only the lead line, the SCM Provider jump, and the PAT quick-add.
+    expect(
+      await screen.findByRole("heading", { name: /repo & cloud credentials/i }),
+    ).toBeInTheDocument(); // credentials
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces

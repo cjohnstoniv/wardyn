@@ -4,14 +4,14 @@
  */
 
 import * as React from "react";
-import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle } from "lucide-react";
+import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch } from "lucide-react";
 import { secrets as secretsApi } from "../../lib/api/secrets";
 import { composer as composerApi } from "../../lib/api/compose";
 import { getErrorMessage } from "../../lib/format";
 import type { ComposerBackend } from "../../lib/types";
+import { LANE_META, laneOfName, type Lane } from "../../lib/scm-provider";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
 import {
   Table,
@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
+import { Field } from "./new-run/step-shell";
 import { Mono } from "../wardyn/code-block";
 import { Chip, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";
@@ -51,11 +52,12 @@ const SECRET_NAME_RE = /^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$/;
 // (never on a prefilled/rotate open — the operator already knows the name then).
 // Chips only prefill the Name field, never a value — the credential itself is
 // always typed/pasted by the operator.
+// github-pat/gitlab-pat are deliberately NOT suggested here — they're now
+// LEGACY_NAMES (lib/scm-provider.ts): the SCM ladder writes git-pat-<slug>
+// instead, and suggesting the old flat names would contradict that convention.
 const PROVIDER_NAME_CHIPS = [
   "anthropic-api-key",
   "openai-api-key",
-  "github-pat",
-  "gitlab-pat",
   "kubeconfig",
   "npm-token",
   "pypi-token",
@@ -310,6 +312,23 @@ export function SecretsScreen() {
   );
 }
 
+// What a locked name actually means. NOT "the clone lane matches this name":
+// no Go code maps a host to a secret name. The only reader of the
+// git-pat-/ssh-key- prefixes is scmProviderCheck (internal/api/setup.go:865),
+// which grades setup posture and gates nothing. A run reaches a credential
+// through a grant that names it explicitly — git_pat {host, secret_name},
+// ssh_key {host, key_secret_ref}, both required
+// (internal/api/runs_scm.go:223-260) — chosen by hand in the New Run wizard's
+// git-credential card. The GitHub App is the one place a name IS the binding:
+// the broker reads the fixed github-app-id / github-app-key
+// (cmd/wardynd/main.go:698-699).
+function lockedNameHint(lane: Lane, hasHost: boolean): string {
+  if (lane === "app") return "Locked — the GitHub App broker reads this exact secret name.";
+  const grant = lane === "ssh" ? "ssh_key" : "git_pat";
+  const bound = `A run reaches it through a ${grant} grant that names it (New Run → Access), not through the name itself.`;
+  return hasHost ? `Locked — the conventional name for this host. ${bound}` : `Locked. ${bound}`;
+}
+
 // A write-only Add-secret dialog: name Input + value Textarea. The value field is
 // cleared after submit and its content is NEVER echoed back anywhere. Exported so
 // the New Run wizard can offer "Add secret" inline, and so this screen can reuse
@@ -320,6 +339,9 @@ export function AddSecretDialog({
   onSaved,
   existingNames = [],
   initialName = "",
+  lockName,
+  host,
+  lane,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -332,6 +354,20 @@ export function AddSecretDialog({
   // or this screen's "Rotate" action prefilling the secret being rotated).
   // Optional — defaults to "", preserving existing callers' blank-name behavior.
   initialName?: string;
+  // Host-aware locked mode (design "Prompt D"): Name becomes read-only — the
+  // operator can never edit it. Optional and additive; omitted, this is
+  // exactly today's editable, chip-suggested dialog.
+  lockName?: boolean;
+  // The host this credential is FOR. Rendered ONCE, above Name, as a read-only
+  // fact block (glyph + host + lane chip) — never as an input, because this
+  // dialog only stores a name/value pair: nothing here binds the secret to the
+  // host. That binding is per-run, made in the New Run wizard's git-credential
+  // card (a git_pat/ssh_key grant naming both the host and the secret). No
+  // host, no block — the generic blank-name dialog has nothing to claim.
+  host?: string;
+  // Which lane chip the fact block shows; defaults to laneOfName(name) so a
+  // caller that already knows the locked name doesn't have to re-derive it.
+  lane?: Lane;
 }) {
   const [name, setName] = React.useState(initialName);
   const [value, setValue] = React.useState("");
@@ -355,6 +391,7 @@ export function AddSecretDialog({
   // its value. Detect that case (exact match on the trimmed name) so we can warn.
   const trimmed = name.trim();
   const isOverwrite = existingNames.includes(trimmed);
+  const resolvedLane: Lane = lane ?? laneOfName(trimmed);
   // Editing the name clears any prior overwrite acknowledgement.
   React.useEffect(() => {
     setConfirmOverwrite(false);
@@ -396,31 +433,61 @@ export function AddSecretDialog({
         <DialogHeader>
           <DialogTitle>{isOverwrite ? "Rotate secret" : "Add secret"}</DialogTitle>
           <DialogDescription>
-            The value is stored write-only — it is injected proxy-side at use time and is never
-            returned by the API or shown again.
+            {lockName
+              ? "The value is write-only — it can be replaced or removed, never read back."
+              : "The value is stored write-only — it is injected proxy-side at use time and is never returned by the API or shown again."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">
-          <div className="space-y-2">
-            <Label htmlFor="secret-name">Name</Label>
+          {/* Read-only fact, never an input, and the ONE place the host appears
+              on screen — the hint below deliberately says "this host" rather
+              than repeating it. */}
+          {host && (
+            <div className="flex items-center gap-2.5">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground">
+                <GitBranch className="size-4" />
+              </div>
+              <Mono className="text-sm text-foreground">{host}</Mono>
+              <Chip tone={LANE_META[resolvedLane].tone} title={LANE_META[resolvedLane].tooltip}>
+                {LANE_META[resolvedLane].label}
+              </Chip>
+            </div>
+          )}
+          <Field
+            label="Name"
+            htmlFor="secret-name"
+            hint={lockName ? lockedNameHint(resolvedLane, !!host) : undefined}
+          >
             {/* Suggestions only on a BLANK-name open (a fresh "Add secret", not a
-                rotate/fix-flow open that already knows what it wants) — prefill
-                the name only, never a value. */}
-            {!initialName && (
+                rotate/fix-flow or locked open that already knows what it wants) —
+                prefill the name only, never a value. */}
+            {!initialName && !lockName && (
               <ProviderNameChips onPick={setName} />
             )}
             <Input
               id="secret-name"
               placeholder="anthropic-api-key"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              // Guarded, not just the readOnly attribute below: readOnly stops a
+              // real user's keystrokes, but a dispatched change event still
+              // reaches a controlled input's onChange. Locked means locked.
+              onChange={(e) => {
+                if (!lockName) setName(e.target.value);
+              }}
               className="font-mono"
               autoComplete="off"
+              readOnly={lockName}
+              aria-readonly={lockName}
             />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="secret-value">Value</Label>
+          </Field>
+          <Field
+            label="Value"
+            htmlFor="secret-value"
+            // Locked mode's DialogDescription already states the write-only fact
+            // above — repeating "never displayed again" here would say it twice.
+            hint={lockName ? undefined : "This field is cleared on save and the value is never displayed again."}
+          >
             <Textarea
               id="secret-value"
               placeholder="sk-…"
@@ -431,10 +498,7 @@ export function AddSecretDialog({
               autoComplete="off"
               className="font-mono text-xs"
             />
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-              This field is cleared on save and the value is never displayed again.
-            </p>
-          </div>
+          </Field>
           {/* MEDIUM fix: warn when the name already exists so the operator
               doesn't silently overwrite a secret currently referenced by runs. */}
           {isOverwrite && !error && (

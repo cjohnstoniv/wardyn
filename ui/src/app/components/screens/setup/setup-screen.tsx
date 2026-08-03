@@ -35,9 +35,9 @@ import {
   HostProxyStep,
   LaunchStep,
   ReviewStep,
-  ScmProviderStep,
   WorkspacesStep,
 } from "./step-bodies";
+import { ScmProviderStep } from "./scm-provider-step";
 import { DEMO_STEP_IDS, OPTIONAL_STEPS, STEP_ORDER, stepBadges, stepDone, type SetupStepId } from "./steps";
 import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 
@@ -334,8 +334,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             siteConfig={siteConfig}
             reloadSiteConfig={reloadSiteConfig}
             saveSiteConfig={saveSiteConfig}
-            onAddSecret={openAddSecret}
-            onJump={selectStep}
             onRecheck={recheck}
             rechecking={rechecking}
           />
@@ -353,14 +351,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         {stepId === "workspaces" && (
           <WorkspacesStep workspaces={workspaces} loading={wsLoading} onReload={loadWorkspaces} />
         )}
-        {stepId === "credentials" && (
-          <CredentialsStep
-            status={status}
-            onAddSecret={openAddSecret}
-            onRecheck={recheck}
-            rechecking={rechecking}
-          />
-        )}
+        {stepId === "credentials" && <CredentialsStep onJump={selectStep} />}
         {stepId === "review" && (
           <ReviewStep
             status={status}

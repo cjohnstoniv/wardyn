@@ -33,6 +33,7 @@ vi.mock("../../lib/api/compose", () => ({
 }));
 
 import { SecretsScreen, AddSecretDialog } from "./secrets";
+import { LANE_META } from "../../lib/scm-provider";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -155,8 +156,8 @@ describe("AddSecretDialog — provider chips (F5)", () => {
     const nameInput = screen.getByLabelText(/name/i) as HTMLInputElement;
     expect(nameInput.value).toBe("");
 
-    await user.click(screen.getByRole("button", { name: "github-pat" }));
-    expect(nameInput.value).toBe("github-pat");
+    await user.click(screen.getByRole("button", { name: "npm-token" }));
+    expect(nameInput.value).toBe("npm-token");
 
     // Never touches the Value field — chips prefill the name only.
     expect((screen.getByLabelText(/value/i) as HTMLTextAreaElement).value).toBe("");
@@ -178,6 +179,146 @@ describe("AddSecretDialog — provider chips (F5)", () => {
     render(
       <AddSecretDialog open onOpenChange={() => {}} initialName="anthropic-api-key" />,
     );
+    expect(screen.queryByRole("button", { name: "npm-token" })).toBeNull();
+  });
+
+  it("no longer suggests the legacy github-pat/gitlab-pat names (superseded by git-pat-<slug>)", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
     expect(screen.queryByRole("button", { name: "github-pat" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "gitlab-pat" })).toBeNull();
+  });
+});
+
+// L2: AddSecretDialog's locked, host-aware mode (design "Prompt D") — the SCM
+// ladder/Credentials quick-add open this with lockName+host+lane instead of a
+// blank editable dialog. The blank-name/rotate paths above are pinned to their
+// EXISTING behavior and must stay green untouched by this mode.
+describe("AddSecretDialog — locked, host-aware mode (L2)", () => {
+  beforeEach(() => {
+    setSecretMock.mockReset();
+    setSecretMock.mockResolvedValue(undefined);
+  });
+
+  it("locks the Name field: readOnly, aria-readonly, and immune to attempted edits", () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="dev.azure.com"
+        lane="pat"
+        initialName="git-pat-dev-azure-com"
+      />,
+    );
+    const nameInput = screen.getByLabelText(/name/i) as HTMLInputElement;
+    expect(nameInput).toHaveAttribute("readonly");
+    expect(nameInput).toHaveAttribute("aria-readonly", "true");
+    expect(nameInput.className).toMatch(/font-mono/);
+
+    fireEvent.change(nameInput, { target: { value: "not-the-real-name" } });
+    expect(nameInput.value).toBe("git-pat-dev-azure-com");
+  });
+
+  it("renders the host fact block exactly once, with the given lane chip — never as an input", () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="dev.azure.com"
+        lane="pat"
+        initialName="git-pat-dev-azure-com"
+      />,
+    );
+    // The host is a fact (Mono text), not a labelled/editable field.
+    expect(screen.getByText("dev.azure.com")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/host/i)).toBeNull();
+    expect(screen.getByText(LANE_META.pat.label)).toBeInTheDocument();
+  });
+
+  it("defaults the lane chip via laneOfName(name) when `lane` is omitted", () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="github.com"
+        initialName="ssh-key-github-com"
+      />,
+    );
+    expect(screen.getByText(LANE_META.ssh.label)).toBeInTheDocument();
+  });
+
+  it("Name helper names the real host", () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="ghes.corp.internal"
+        lane="pat"
+        initialName="git-pat-ghes-corp-internal"
+      />,
+    );
+    // The name is a CONVENTION, not a binding: nothing server-side maps a host
+    // to a secret name, so the hint must point at the grant that does bind it
+    // (and must not repeat the host — the fact block above already shows it).
+    expect(screen.getByText(/locked — the conventional name for this host/i)).toBeInTheDocument();
+    expect(screen.getByText(/git_pat grant that names it/i)).toBeInTheDocument();
+  });
+
+  it("falls back to a locked-but-generic helper when no host is given", () => {
+    render(
+      <AddSecretDialog open onOpenChange={() => {}} lockName initialName="some-locked-name" />,
+    );
+    expect(screen.getByText(/locked\. a run reaches it through a git_pat grant/i)).toBeInTheDocument();
+    // No host to claim, so no fact block — this is the "locked, no host" case,
+    // distinct from the untouched generic blank-name dialog (that one isn't
+    // locked at all; this one is locked but has nothing to attribute).
+    expect(screen.queryByText(LANE_META.pat.label)).toBeNull();
+  });
+
+  it("keeps the overwrite warning visible together with the host block — the moment of decision", async () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="ghes.corp.internal"
+        lane="pat"
+        initialName="git-pat-ghes-corp-internal"
+        existingNames={["git-pat-ghes-corp-internal"]}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+
+    // Both visible at once: the operator must see WHICH host before confirming.
+    expect(screen.getByText("ghes.corp.internal")).toBeInTheDocument();
+    expect(screen.getByText(/already exists/i)).toBeInTheDocument();
+
+    const save = screen.getByRole("button", { name: /overwrites/i });
+    fireEvent.click(save);
+    const overwrite = await screen.findByRole("button", { name: /^overwrite secret$/i });
+    // Host block still present at the actual confirm click, not just before it.
+    expect(screen.getByText("ghes.corp.internal")).toBeInTheDocument();
+    fireEvent.click(overwrite);
+    await waitFor(() =>
+      expect(setSecretMock).toHaveBeenCalledWith("git-pat-ghes-corp-internal", "sk-new"),
+    );
+  });
+
+  it("drops the separate write-only Value hint in locked mode (the description already said it)", () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="dev.azure.com"
+        lane="pat"
+        initialName="git-pat-dev-azure-com"
+      />,
+    );
+    expect(screen.getByText(/write-only.*never read back/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cleared on save/i)).toBeNull();
   });
 });

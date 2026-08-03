@@ -12,10 +12,7 @@
 import * as React from "react";
 import {
   AlertTriangle,
-  Cloud,
-  GitBranch,
   Info,
-  KeyRound,
   Loader2,
   Plus,
   CircleCheck,
@@ -35,16 +32,14 @@ import type {
   WorkspaceProfile,
 } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
-import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { getErrorMessage } from "../../../lib/format";
 import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
-import { StatusChip } from "../../wardyn/status-chip";
 import { CC_META } from "../../wardyn/cc-meta";
 import { BTN, RUN_MODE } from "../../wardyn/copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { DomainPillList, Field } from "../new-run/step-shell";
+import { Field } from "../new-run/step-shell";
 import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { ImportWorkspaceDialog } from "../import-workspace/import-panel";
 import type { Readiness } from "../onboarding/intro";
@@ -68,7 +63,7 @@ const CHECK_COLOR: Record<SetupCheckStatus, string> = {
   info: "text-muted-foreground",
 };
 
-function CheckRow({ check }: { check: SetupCheck }) {
+export function CheckRow({ check }: { check: SetupCheck }) {
   const Icon = CHECK_ICON[check.status] ?? Info;
   const color = CHECK_COLOR[check.status] ?? "text-muted-foreground";
   const fix = check.fix;
@@ -212,7 +207,7 @@ const ARTIFACT_ECOSYSTEMS = ["npm", "pip", "cargo", "maven", "go", "nuget"] as c
 // between copies. `mutate` PUTs via the orchestrator-owned saveSiteConfig and
 // reports failure as `false` — toasting the server's reason — so each step only
 // commits its own local field state once the PUT actually lands.
-function useSiteConfigStep(
+export function useSiteConfigStep(
   reloadSiteConfig: () => Promise<void>,
   saveSiteConfig: (next: SiteConfig) => Promise<void>,
 ) {
@@ -239,7 +234,7 @@ function useSiteConfigStep(
   return { saving, mutate };
 }
 
-function RecheckButton({ onRecheck, rechecking }: { onRecheck: () => void; rechecking: boolean }) {
+export function RecheckButton({ onRecheck, rechecking }: { onRecheck: () => void; rechecking: boolean }) {
   return (
     <Button variant="ghost" size="sm" onClick={onRecheck} disabled={rechecking}>
       {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
@@ -424,159 +419,6 @@ export function HostProxyStep({
           </Button>
         </div>
       </Field>
-
-      <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
-    </div>
-  );
-}
-
-export function ScmProviderStep({
-  status,
-  siteConfig,
-  reloadSiteConfig,
-  saveSiteConfig,
-  onAddSecret,
-  onJump,
-  onRecheck,
-  rechecking,
-}: {
-  status: SetupStatus;
-  siteConfig: SiteConfig | null;
-  reloadSiteConfig: () => Promise<void>;
-  saveSiteConfig: (next: SiteConfig) => Promise<void>;
-  onAddSecret: (name: string) => void;
-  onJump: (id: SetupStepId) => void;
-  onRecheck: () => void;
-  rechecking: boolean;
-}) {
-  const check = status.checks.find((c) => c.id === "scm_provider");
-  const [host, setHost] = React.useState("");
-  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
-
-  const addHost = async () => {
-    const h = host.trim().toLowerCase();
-    if (!h) return;
-    const hosts = Array.from(new Set([...(siteConfig?.scm_hosts ?? []), h]));
-    const next: SiteConfig = { ...(siteConfig ?? {}), scm_hosts: hosts };
-    if (await mutate(next, "Failed to add the SCM host")) setHost("");
-  };
-
-  const removeHost = async (h: string) => {
-    const next: SiteConfig = {
-      ...(siteConfig ?? {}),
-      scm_hosts: (siteConfig?.scm_hosts ?? []).filter((x) => x !== h),
-    };
-    await mutate(next, "Failed to remove the SCM host");
-  };
-
-  return (
-    <div className="space-y-5">
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        GitHub (App recommended — or a PAT / SSH over 443) and Azure DevOps (PAT or SSH) both clone
-        through the credential broker; agents never see the raw token.
-      </p>
-
-      {check && (
-        <ul>
-          <CheckRow check={check} />
-        </ul>
-      )}
-
-      {status.scm?.gh_cli && (
-        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-          <Info className="mt-0.5 size-3.5 shrink-0" />
-          gh CLI login detected on the host — that token is broad; Wardyn never imports it. Prefer a
-          fine-grained PAT (rung 2).
-        </p>
-      )}
-
-      {/* Rung 1 — GitHub App: brokered, ≤1h scoped tokens; the only credential
-          Wardyn itself can expire. App ID / PEM inputs live on the Credentials
-          step; this card is the ladder's status + pitch, not a second form —
-          so it carries a JUMP to that form rather than a dead "Needs setup"
-          badge with nothing to click (every other rung here has an action). */}
-      <div className="space-y-2.5 rounded-xl border border-border p-4">
-        <div className="flex items-center gap-2">
-          <GitBranch className="size-4 text-foreground" />
-          <h3 className="text-sm font-semibold text-foreground">GitHub App</h3>
-          <div className="ml-auto flex items-center gap-1.5">
-            <Chip tone="primary" className="uppercase tracking-wide">
-              Recommended
-            </Chip>
-            <Chip tone="success">brokered</Chip>
-            <StatusChip status={status.secrets.github_app ? "ready" : "needs-setup"} />
-          </div>
-        </div>
-        <p className="text-xs leading-snug text-muted-foreground">
-          Wardyn mints a fresh ≤1h read-scoped token per run — the only credential Wardyn itself can
-          expire.
-        </p>
-        {!status.secrets.github_app && (
-          <Button variant="outline" size="sm" onClick={() => onJump("credentials")}>
-            <KeyRound className="size-3.5" /> Set up on the Credentials step
-          </Button>
-        )}
-      </div>
-
-      {/* Rung 2 — fine-grained PAT: brokered per-clone, never resident. */}
-      <div className="space-y-2.5 rounded-xl border border-border p-4">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-foreground">Fine-grained PAT</h3>
-          <Chip tone="success">brokered</Chip>
-        </div>
-        <p className="text-xs leading-snug text-muted-foreground">
-          Create a fine-grained token scoped to one repo, Contents: Read-only, short expiry (
-          <span className="font-mono">github.com/settings/personal-access-tokens/new</span> → Only
-          select repositories). Store as{" "}
-          <span className="font-mono">git-pat-&lt;host-slug&gt;</span>, then reference it from a
-          git_pat grant.
-        </p>
-        <Button variant="outline" size="sm" onClick={() => onAddSecret("git-pat-github-com")}>
-          <KeyRound className="size-3.5" /> Add PAT secret
-        </Button>
-      </div>
-
-      {/* Rung 3 — SSH deploy key: single-repo, read-only, but resident on disk. */}
-      <div className="space-y-2.5 rounded-xl border border-border p-4">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-foreground">SSH deploy key</h3>
-          <Chip tone="warning">resident (seconds)</Chip>
-        </div>
-        <p className="text-xs leading-snug text-muted-foreground">
-          A read-only deploy key clones exactly one repo. <span className="font-mono">make setup</span>{" "}
-          can generate one — the private half never leaves this machine&apos;s encrypted store. Leave
-          &quot;Allow write access&quot; unchecked.
-        </p>
-        <Button variant="outline" size="sm" onClick={() => onAddSecret("ssh-key-github-com")}>
-          <KeyRound className="size-3.5" /> Add SSH key secret
-        </Button>
-      </div>
-
-      {/* Rung 4 — personal SSH key / classic PAT: whole-account, not a card. */}
-      <p className="flex items-start gap-1.5 text-xs text-warning">
-        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-        A personal id_ed25519 or classic PAT grants your whole account — prefer the rungs above.
-      </p>
-
-      <Field
-        label="Self-hosted GHES / ADO Server host"
-        htmlFor="scm-host"
-        hint="Adds a custom SCM host (e.g. ghes.corp.internal) so runs can clone from it."
-      >
-        <div className="flex gap-2">
-          <Input
-            id="scm-host"
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-            placeholder="ghes.corp.internal"
-          />
-          <Button variant="outline" onClick={addHost} disabled={saving || siteConfig === null || !host.trim()}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : "Add"}
-          </Button>
-        </div>
-      </Field>
-
-      <DomainPillList domains={siteConfig?.scm_hosts ?? []} onRemove={removeHost} />
 
       <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
     </div>
@@ -875,40 +717,20 @@ export function WorkspacesStep({
 }
 
 // ------------------------------------------------------------
-// Credentials step — Optional (B8): excluded from readiness, never blocks launch.
+// Credentials step — Optional (B8): excluded from readiness, never blocks
+// launch. A lead line and a jump to SCM Provider, nothing else.
+//
+// ponytail: the PAT quick-add that used to sit here is DELETED, not fixed. It
+// was a second door to the same AddSecretDialog sitting directly under the
+// button that opens the proper one, and it got the shared facts wrong in two
+// ways the SCM Provider door doesn't: it passed the raw typed string as the
+// host (so "https://GHES.corp.internal/" showed that as the host while
+// deriving the name git-pat-https-ghes-corp-internal), and it never wrote
+// scm_hosts, so the hostname was not registered for egress. Fixing it meant
+// porting panel 1's validator into a duplicate flow; deleting it is the
+// shorter diff and leaves one place where a credential is added.
 // ------------------------------------------------------------
-export function CredentialsStep({
-  status,
-  onAddSecret,
-  onRecheck,
-  rechecking,
-}: {
-  status: SetupStatus;
-  onAddSecret: (name: string) => void;
-  onRecheck: () => void;
-  rechecking: boolean;
-}) {
-  const [appId, setAppId] = React.useState("");
-  const [savingAppId, setSavingAppId] = React.useState(false);
-
-  const saveAppId = async () => {
-    const id = appId.trim();
-    if (!id) return;
-    setSavingAppId(true);
-    try {
-      await secretsApi.setSecret("github-app-id", id);
-      onRecheck();
-    } catch (e) {
-      // Without this catch a failed save is an unhandled rejection: the spinner
-      // stops with zero feedback and the operator believes the App ID saved.
-      toast.error("Failed to save App ID", {
-        description: getErrorMessage(e),
-      });
-    } finally {
-      setSavingAppId(false);
-    }
-  };
-
+export function CredentialsStep({ onJump }: { onJump: (id: SetupStepId) => void }) {
   return (
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">
@@ -916,50 +738,16 @@ export function CredentialsStep({
         and it doesn&apos;t count against readiness.
       </p>
 
-      <div className="space-y-3 rounded-xl border border-border p-4">
-        <div className="flex items-center gap-2">
-          <GitBranch className="size-4 text-foreground" />
-          <h3 className="text-sm font-semibold text-foreground">GitHub App</h3>
-          <span className="ml-auto">
-            <StatusChip status={status.secrets.github_app ? "ready" : "needs-setup"} />
-          </span>
-        </div>
-        <p className="text-xs leading-snug text-muted-foreground">
-          The broker mints short-lived, scoped tokens from this — agents never see the real key.
-        </p>
-        <Field label="App ID" htmlFor="setup-github-app-id">
-          <div className="flex gap-2">
-            <Input
-              id="setup-github-app-id"
-              value={appId}
-              onChange={(e) => setAppId(e.target.value)}
-              placeholder="123456"
-              className="font-mono"
-            />
-            <Button variant="outline" onClick={saveAppId} disabled={savingAppId || !appId.trim()}>
-              {savingAppId ? <Loader2 className="size-4 animate-spin" /> : "Save"}
-            </Button>
-          </div>
-        </Field>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => onAddSecret("github-app-key")}>
-            <KeyRound className="size-3.5" /> Add private key (PEM)
-          </Button>
-          <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
-        </div>
-      </div>
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        Storing a credential doesn&apos;t attach it to anything: each run names the host and the
+        stored secret in its own git_pat / ssh_key grant, in the New Run wizard&apos;s
+        git-credential card.
+      </p>
 
-      <div className="space-y-3 rounded-xl border border-border p-4">
-        <div className="flex items-center gap-2">
-          <Cloud className="size-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold text-foreground">Personal access token</h3>
-        </div>
-        <p className="text-xs leading-snug text-muted-foreground">
-          For a non-GitHub host (Azure DevOps, GitLab). The PAT is stored here as a named secret; it&apos;s
-          bound to a specific host per run in the New Run wizard&apos;s git-credential card.
-        </p>
-        <Button variant="outline" size="sm" onClick={() => onAddSecret("ado-pat")}>
-          <KeyRound className="size-3.5" /> Add PAT
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm text-muted-foreground">Per-provider setup lives in SCM Provider.</p>
+        <Button variant="outline" size="sm" onClick={() => onJump("scm_provider")}>
+          Go to SCM Provider
         </Button>
       </div>
     </div>
