@@ -8,6 +8,95 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-08-03
+
+### Added
+
+- **A workspace is now a COMPOSITION.** It holds one or more sources — local
+  directories, repositories, and ephemeral scratch dirs — instead of exactly
+  one source with a kind. Multiples of a type are allowed; the floor is one
+  (an ephemeral scratch dir, seeded structurally so the invalid state cannot
+  be built). The base image stops masquerading as a source and becomes the
+  environment the sources live in; an old `container`-kind workspace migrates
+  to an ephemeral source plus a custom base image, which is what it always
+  meant. `kind`/`source`/`ref`/`default_target` survive as read-only mirrors
+  of a single-source workspace so existing SDK and CLI callers keep working.
+  Migration `0029` backfills before it constrains and was proven forward
+  against a real Postgres.
+- **The requirements contract.** Every control a workspace can carry — a
+  secret by name, an egress host, write access to a directory — is a row with
+  one axis: **Required** rides along with every run that attaches the
+  workspace, **Optional** is a per-run opt-in. `PUT /workspaces/{id}/requirements`
+  writes it; launch and preflight fold it through the same function, so Review
+  cannot predict something launch won't do. A workspace with no requirements
+  declared resolves byte-identically to before. A `scan_seeded` requirement can
+  never auto-grant a secret — the scanner reads untrusted repo content, so only
+  an operator's direct declaration attaches a credential.
+- **Integrations** — one surface for the systems outside Wardyn: model
+  providers, git hosts, artifact mirrors, the corporate proxy. Rows are
+  DERIVED from what already exists (stored secret names, site config, setup
+  status), so an operator who never opens the page keeps identical behavior and
+  one who does can adopt a row to edit it. Each row states what it powers,
+  where its credential lives at run time, and — for capabilities that are
+  impossible rather than unconfigured — why, as a fact with no control beside
+  it. A **Tools** tab names the other half: a tool is what the image carries,
+  an integration is what it connects through.
+- **Model access resolves** instead of being configured per run: an explicit
+  integration on the run, else the workspace's binding, else the operator's
+  site-wide default, else nothing (unchanged honest path). `PUT`/`DELETE
+  /integrations/{id}` and `POST /integrations/{id}/adopt` manage stored rows;
+  the composer registry derives from the integration marked for Wardyn's own
+  features, with `WARDYN_COMPOSER_CONFIG` still winning outright when set.
+- **A single Add-workspace wizard** — Sources → Base image → Requirements →
+  Done — replacing three inconsistent entry points and the six-step import
+  dialog. Custom image builds accept Dockerfile steps, and a credential-shaped
+  line warns (naming the line and detector, never the value) without blocking.
+- **A workspace detail page** at `/workspaces/:id`: the requirements editor,
+  the candidates Wardyn noticed but hasn't given to any run, recorded sessions
+  and their confined replays, and env-as-code.
+
+### Changed
+
+- **Getting started is nine steps, not thirteen.** The model-provider, host-
+  proxy, SCM-provider, artifact-registry and credentials steps were five rail
+  entries for one activity; they are now one optional Integrations step. The
+  dependency their ORDER used to encode — you cannot reach a model provider
+  through an unconfigured corporate proxy — is now a banner that says so.
+  Readiness reads the same derived rows the Integrations page renders, so the
+  funnel and that page cannot disagree.
+- Workspace status collapsed to `pending_scan → scanning → scanned | error`
+  and reads as one word in the console: Setting up / Usable / Scan failed.
+- The run's Access step no longer asks how to authenticate; it shows what
+  resolved and why, with a per-run override.
+
+### Removed
+
+- **The verify pipeline.** `wardyn-verify`, its brokered upload route,
+  `POST /workspaces/{id}/verify`, `PUT /workspaces/{id}/setup-commands`,
+  `POST .../verify/suggest-fix`, `POST .../finalize` and four lifecycle states
+  are gone. It executed an operator-approved command list and wrote "verified"
+  onto a row nothing gated on. The environment proof that survives is the
+  honest one: record a session, promote what it actually reached, replay it
+  confined. Detected build commands are now documentation in AGENTS.md, and
+  the emitted devcontainer no longer auto-runs them at create — nothing
+  verified them. Finalize's one real job, writing those files into a local
+  workspace, is now `POST /workspaces/{id}/env-as-code/write`.
+
+### Fixed
+
+- A confined replay of a multi-repo workspace silently omitted the clone host
+  of every non-GitHub repo past the first (the helper read the single-source
+  mirror field). GitHub sources masked it entirely, since they route through
+  the broker and need no allowlist entry.
+- `PUT /site-config` would have deleted every stored integration when an older
+  client round-tripped a document written before integrations existed. The
+  handler now refuses such a body and carries the stored rows forward itself.
+- Preflight folded only the workspace tier of model-access resolution, so a run
+  whose access came from an explicit integration or the operator's default
+  previewed as having none.
+- Ephemeral workspace targets were named in the sandbox environment but never
+  created — nothing on the other side read the variable.
+
 ### Added
 
 - **Push branch-namespace confinement is now REAL, and ON BY DEFAULT.** The

@@ -112,7 +112,7 @@ for status to be reported" and cannot be merged.
 `wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` automatically —
 `.github/workflows/publish-image.yml` builds and pushes on every push to
 `main` (`:latest`, `:sha-<commit>`) and on every `vX.Y.Z` release tag (the
-bare semver, e.g. `0.4.4`, matching `Chart.yaml`'s `appVersion`); step 4's
+bare semver, e.g. `0.4.5`, matching `Chart.yaml`'s `appVersion`); step 4's
 pushes are what trigger it. The compose stack still always builds from
 source (see [docs/CI.md](docs/CI.md)). Nothing else (the `wardyn-proxy`
 sidecar, agent images) is published yet, and there is no digest-pinning or
