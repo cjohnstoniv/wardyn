@@ -372,8 +372,6 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // rendering, not a hand-rolled duplicate (see integrations-screen.test.tsx
     // for that component's own coverage).
     expect(await screen.findByText("AI providers")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /manage in integrations/i })).toBeInTheDocument();
-
     const nav = screen.getByRole("navigation", { name: /setup steps/i });
     const btn = within(nav).getByRole("button", { name: /integrations/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
@@ -420,7 +418,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(within(btn).queryByText("Skipped")).not.toBeInTheDocument();
     });
 
-    it("an explicit 'Skip this step' click earns the checkmark and advances past Integrations", async () => {
+    it("clicking Next past Integrations with nothing connected IS the skip — checkmark, Skipped badge, no button needed", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
@@ -428,11 +426,22 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
-      await user.click(await screen.findByRole("button", { name: /^skip this step$/i }));
+      // The two dead affordances stay dead: Next is the one forward control.
+      expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^next: the sealed box$/i }));
 
       expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
       const nav = screen.getByRole("navigation", { name: /setup steps/i });
       const btn = within(nav).getByRole("button", { name: /integrations/i });
+      expect(within(btn).getByText("Skipped")).toBeInTheDocument();
+      // …and the checkmark: forward-past is the same per-browser decision the
+      // old explicit control recorded (persisted via markIntegrationsSkipped).
+      expect(btn.querySelector("[data-done]") ?? within(btn).getByText("Skipped")).toBeTruthy();
+
+      // Backing INTO the step decides nothing extra and the state holds.
+      await user.click(screen.getByRole("button", { name: /^back$/i }));
+      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       expect(within(btn).getByText("Skipped")).toBeInTheDocument();
     });
 

@@ -5,12 +5,14 @@
 
 // IntegrationsStep is a thin wrapper: the lede, the embedded list (its own
 // coverage lives in integrations/integrations-screen.test.tsx — mocked out
-// here so this suite stays scoped to what THIS component owns), the "Manage
-// in Integrations" link, and the count/skipped-gated skip control.
+// here so this suite stays scoped to what THIS component owns), and the
+// scope note. It has NO footer of its own any more: "Manage in Integrations"
+// duplicated the embed (this IS that page), and "Skip this step" duplicated
+// Next — skipping is what clicking Next past the step means now
+// (setup-screen.test.tsx covers that orchestrator rule).
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { IntegrationsStep } from "./integrations-step";
 import { T } from "../../../lib/integrations";
@@ -26,7 +28,7 @@ vi.mock("../integrations/integrations-screen", () => ({
 function renderStep(props: Partial<ComponentProps<typeof IntegrationsStep>> = {}) {
   return render(
     <MemoryRouter>
-      <IntegrationsStep count={0} skipped={false} onSkip={vi.fn()} onRecheck={vi.fn()} {...props} />
+      <IntegrationsStep onRecheck={vi.fn()} {...props} />
     </MemoryRouter>,
   );
 }
@@ -51,32 +53,11 @@ describe("IntegrationsStep", () => {
     expect(screen.getByText(T.EMBED_SCOPE_NOTE)).toBeInTheDocument();
   });
 
-  it("links to /integrations for deeper management", () => {
+  // The two dead affordances, pinned dead: the manage link pointed at the
+  // page this step already embeds, and the skip button duplicated Next.
+  it("renders neither a 'Manage in Integrations' link nor a 'Skip this step' button", () => {
     renderStep();
-    const link = screen.getByRole("link", { name: /manage in integrations/i });
-    expect(link).toHaveAttribute("href", "/integrations");
-  });
-
-  it("offers 'Skip this step' with nothing connected and not yet skipped", () => {
-    renderStep({ count: 0, skipped: false });
-    expect(screen.getByRole("button", { name: /^skip this step$/i })).toBeInTheDocument();
-  });
-
-  it("hides the skip control once something is connected — the step already reads Ready", () => {
-    renderStep({ count: 2, skipped: false });
+    expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
-  });
-
-  it("hides the skip control once already explicitly skipped", () => {
-    renderStep({ count: 0, skipped: true });
-    expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
-  });
-
-  it("clicking Skip calls onSkip", async () => {
-    const user = userEvent.setup();
-    const onSkip = vi.fn();
-    renderStep({ onSkip });
-    await user.click(screen.getByRole("button", { name: /^skip this step$/i }));
-    expect(onSkip).toHaveBeenCalledTimes(1);
   });
 });

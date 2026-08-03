@@ -140,13 +140,25 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // goes through this instead of raw setStepId, so leaving a step can be
   // recorded exactly once. "Leaving" counts in every direction — going Back off
   // a step still means you've seen it — simplest honest rule, no special-casing.
-  // Never touches `done`: a visited-but-unconfigured optional step reads
-  // "Skipped" (below), never a false checkmark.
+  // One exception touches more than the visited set: moving FORWARD past
+  // Integrations with nothing connected IS the skip (the step is optional and
+  // has no skip button of its own — Next is the one forward affordance), so it
+  // marks the same per-browser decision the old explicit control did and the
+  // step reads Skipped with its checkmark. Backing off it decides nothing.
+  const integrationsCountRef = React.useRef(0);
   const selectStep = React.useCallback(
     (next: SetupStepId) => {
       if (next !== stepId) {
         markStepVisited(stepId);
         setVisitedSteps((s) => (s.has(stepId) ? s : new Set(s).add(stepId)));
+        if (
+          stepId === "integrations" &&
+          STEP_ORDER.indexOf(next) > STEP_ORDER.indexOf("integrations") &&
+          integrationsCountRef.current === 0
+        ) {
+          markIntegrationsSkipped();
+          setSkippedIntegrations(true);
+        }
       }
       setStepId(next);
     },
@@ -270,6 +282,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // them here too would double-count the same configuration under two steps.
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
   const integrationsCount = integrationsData.ai.length + integrationsData.scm.length;
+  integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {
     proxyConfigured: isProxyConfigured(siteConfig),
@@ -395,21 +408,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onTabChange={setCorpTab}
           />
         )}
-        {stepId === "integrations" && (
-          <IntegrationsStep
-            count={integrationsCount}
-            skipped={skippedIntegrations}
-            onSkip={() => {
-              markIntegrationsSkipped();
-              setSkippedIntegrations(true);
-              // Advance past the (now-decided) optional step.
-              const i = STEP_ORDER.indexOf("integrations");
-              const nextStep = STEP_ORDER[i + 1];
-              if (nextStep) selectStep(nextStep);
-            }}
-            onRecheck={recheck}
-          />
-        )}
+        {stepId === "integrations" && <IntegrationsStep onRecheck={recheck} />}
         {DEMOS.some((d) => d.id === stepId) && (
           <React.Suspense
             fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}

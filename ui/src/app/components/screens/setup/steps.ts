@@ -371,7 +371,8 @@ export function stepDone(
     corp_network:
       corpNetworkGate(corpNetwork, corpNetworkRedirects).on &&
       corpNetwork.proxyProbe?.state === "reached",
-    // An explicit "Skip this step" click (see setup-gate's markIntegrationsSkipped)
+    // A forward Next past the step with nothing connected (setup-screen's
+    // selectStep -> markIntegrationsSkipped)
     // ORs in from the orchestrator, exactly like the old model-skip override —
     // this pure fn only knows about a real connected integration.
     integrations: integrationsCount > 0,

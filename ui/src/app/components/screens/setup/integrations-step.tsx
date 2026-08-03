@@ -21,28 +21,17 @@
 // EMBED_SCOPE_NOTE says where they went — rendered in BOTH the empty and
 // connected states, since a first visit is exactly when someone wonders where
 // those two categories are (the mock only showed the note once connected).
-import { ArrowUpRight } from "lucide-react";
-import { Link } from "react-router-dom";
-import { Button } from "../../ui/button";
+//
+// No footer of its own: "Manage in Integrations" duplicated the embed (this
+// IS that page), and "Skip this step" duplicated Next — the step is optional,
+// so clicking Next past it with nothing connected marks it Skipped
+// (setup-screen.tsx's selectStep). One forward affordance, not three.
 import { T } from "../../../lib/integrations";
 import { IntegrationsScreen } from "../integrations/integrations-screen";
 
 export function IntegrationsStep({
-  count,
-  skipped,
-  onSkip,
   onRecheck,
 }: {
-  /** Count of connected integrations (AI + SCM only now — see steps.ts /
-   *  setup-screen.tsx) — the same number the rail's "Ready · N connected"
-   *  badge shows. */
-  count: number;
-  /** The operator already clicked "Skip this step" once (per-browser —
-   *  setup-gate's integrationsSkipped). Hides the control once true, matching
-   *  the old model-skip step's behavior — no reason to offer skipping a step
-   *  that's already been decided. */
-  skipped: boolean;
-  onSkip: () => void;
   /** Re-fetch the orchestrator's own status/siteConfig/secrets so the rail
    *  badge doesn't go stale right after an in-embed add/rotate/delete. */
   onRecheck: () => void;
@@ -53,24 +42,6 @@ export function IntegrationsStep({
 
       <IntegrationsScreen embedded onChanged={onRecheck} hideCategories={["host_proxy", "artifact_mirror"]} />
       <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EMBED_SCOPE_NOTE}</p>
-
-      <div className="flex items-center gap-3 border-t border-border pt-4">
-        <Link
-          to="/integrations"
-          className="inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline"
-        >
-          Manage in Integrations
-          <ArrowUpRight className="size-3.5" aria-hidden />
-        </Link>
-        <span className="flex-1" />
-        {/* Once something's connected, "skip" no longer makes sense — this step
-            already reads Ready, not Optional. */}
-        {count === 0 && !skipped && (
-          <Button size="sm" variant="ghost" onClick={onSkip}>
-            Skip this step
-          </Button>
-        )}
-      </div>
     </div>
   );
 }
