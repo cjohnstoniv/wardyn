@@ -18,9 +18,9 @@
 
 // ============================ COPY CANON (verbatim) ============================
 export const T = {
-  LEDE: "Named connections to systems outside Wardyn — model providers, git hosts, artifact mirrors, your corporate proxy. Wardyn runs without any of them.",
+  LEDE: "Named connections to systems outside Wardyn — model providers, git hosts, egress redirects, your corporate proxy. Wardyn runs without any of them.",
   FOOTNOTE:
-    "Wardyn doesn't test-connect. Everything here is what's stored and what Wardyn can see locally — except the GitHub App's ref-confinement row, which really does ask GitHub.",
+    "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
   EMPTY_TITLE: "No integrations",
   EMPTY_BODY:
@@ -28,10 +28,39 @@ export const T = {
   EMPTY_AI:
     "None. Runs work without a model — add one to have a coding agent drive a run, or to use Wardyn's own AI features.",
   EMPTY_SCM: "None. Public repos clone without any credential.",
-  EMPTY_MIRROR: "None. Runs fetch from the public registries.",
+  EMPTY_EGRESS: "None. Outbound traffic goes to the public endpoints.",
   EMPTY_PROXY: "None. The sandbox reaches the internet through wardyn-proxy directly.",
   PROXY_BANNER:
-    "A corporate proxy was detected on this host. Until it's connected, sandboxes may not reach anything — add the Host proxy integration first.",
+    "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
+  CORP_LEDE:
+    "Optional, and first for a reason. If this machine reaches the internet through a corporate proxy or an internal registry mirror, set that up before connecting anything else — a model provider or a git host you add first will look broken when it's the network that's blocked.",
+  EMBED_SCOPE_NOTE:
+    "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
+  EVIDENCE_HEAD: "What Wardyn found on this host",
+  EVIDENCE_EXPLAIN:
+    "Read from this machine's environment and git config. Wardyn does not use these automatically: a sandbox gets only what you configure below.",
+  EVIDENCE_NONE: "Nothing found — no proxy variables in this machine's environment, none in git config.",
+  NOPROXY_NOTE: "Not applied — Wardyn's own egress allowlist decides what a sandbox may reach.",
+  CONFIG_HEAD: "What sandboxes will use",
+  NOT_CONFIGURED: "Not configured — sandboxes go direct",
+  PROXY_URL_HINT:
+    "The URL sandboxes chain through. Stored as plain configuration — it's topology, not a credential — unless it carries a username and password.",
+  CRED_URL_NOTE:
+    "This URL has a username and password in it. Wardyn will store it as a secret so it isn't displayed or logged; the sandbox never holds it either way.",
+  SECRET_INSTEAD_HINT:
+    "For a URL already in the store, or when policy requires it. The store is write-only — the value can't be read back here.",
+  EGRESS_DESC:
+    "Point outbound traffic at an internal mirror or appliance instead of the public endpoint. Anything a run fetches — registries, container images, a specific host — can be redirected.",
+  TEST_OK: "Reached artifactory.corp.internal through the proxy in 240ms.",
+  TEST_BLOCKED: "Could not reach it: connection refused through http://proxy.corp.acme.com:8080.",
+  TEST_BYPASS:
+    "The mirror answered, but registry.npmjs.org is still reachable from a sandbox — runs can still bypass the mirror.",
+  TEST_NORUNNER:
+    "No runner is configured on this host — there's nothing to launch a probe with. Configure a barrier first, then test.",
+  TEST_STANDING:
+    "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
+  TEST_PROXY_HINT:
+    "Launches a throwaway confined probe through wardyn-proxy chained to the configured upstream, and reports what actually happened. A real sandbox launch — seconds, not instant.",
   X_KEY_CODEX: "Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.",
   X_SUB_CODEX: "Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting.",
   X_BEDROCK_CODEX: "Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting.",
@@ -65,12 +94,32 @@ export const T = {
   ],
   CAT_AI: "Powers a coding agent's model calls, or Wardyn's own AI features. Skip if you run governed commands or drive runs yourself.",
   CAT_SCM: "Lets runs clone from a git host. Skip if your repos are public.",
-  CAT_MIRROR: "Redirects npm/pip/cargo/maven/go/nuget to a corporate mirror. Skip if public registries are reachable.",
+  CAT_MIRROR:
+    "Points outbound traffic — registries, container images, a specific host — at an internal mirror or appliance. Skip if the public endpoints are reachable.",
   CAT_PROXY: "Chains wardyn-proxy through your corporate proxy. Skip if the sandbox reaches the internet directly.",
   TY_KEY: "Drives Claude Code, direct API calls, and Wardyn's features. Never resident.",
   TY_OPENAI: "Drives Codex CLI, direct API calls, and Wardyn's features.",
   TY_AZURE: "Powers Wardyn's own AI features only. Neither agent tool can be pointed at an Azure deployment.",
 };
+
+// ============================ EGRESS REDIRECT SUGGESTIONS (verbatim) ============================
+// The Corporate network / Egress redirection "From" combobox's suggested-source
+// list (mockup's EGRESS_SUGGEST) — the label IS the URL; the ecosystem is only a
+// muted secondary hint, not a selectable field (typing anything else — a full
+// URL, a bare host, an IP — is just as valid; see T.EGRESS_DESC).
+export const EGRESS_SUGGEST: ReadonlyArray<readonly [url: string, ecosystem: string]> = [
+  ["https://registry.npmjs.org", "npm"],
+  ["https://pypi.org/simple", "pip"],
+  ["https://files.pythonhosted.org", "pip"],
+  ["https://crates.io", "cargo"],
+  ["https://static.crates.io", "cargo"],
+  ["https://repo.maven.apache.org/maven2", "maven"],
+  ["https://proxy.golang.org", "go"],
+  ["https://sum.golang.org", "go"],
+  ["https://api.nuget.org/v3/index.json", "nuget"],
+  ["https://registry-1.docker.io", "container images"],
+  ["https://ghcr.io", "container images"],
+];
 
 // ============================ CAPABILITY-LINE NOTES (verbatim) ============================
 // mockup/wardyn-integrations.js's `CAPS` — one capability table per AI

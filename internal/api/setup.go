@@ -1086,29 +1086,32 @@ func hostProxyCheck(d setup.HostProxyDetection, blind bool) SetupCheck {
 	return SetupCheck{ID: "host_proxy", Label: "Host proxy", Status: "info", Detail: detail}
 }
 
-// artifactRepoCheck reports whether the operator has configured artifact-registry
-// redirects (Artifactory/Nexus mirrors per ecosystem). Always "info" — optional
-// and non-blocking, mirroring the other new corporate-baseline steps; it just
-// tells the operator which ecosystems every run now pulls from the corp mirror
-// (and which of those inject a token proxy-side).
+// artifactRepoCheck reports whether the operator has configured egress
+// redirects (package-registry mirrors, or any other outbound redirect).
+// Always "info": optional and non-blocking.
 func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
-	if len(sc.ArtifactOverrides) == 0 {
+	if len(sc.EgressRedirects) == 0 {
 		return SetupCheck{
-			ID: "artifact_repo", Label: "Artifact repository redirection", Status: "info",
-			Detail: "No artifact-registry redirects configured (optional): point npm/pip/cargo/maven/go/nuget at a corporate Artifactory/Nexus mirror so runs never reach public registries.",
-			Fix:    "Set artifact_overrides via PUT /api/v1/site-config (or the Artifact Redirect setup step).",
+			ID: "artifact_repo", Label: "Egress redirection", Status: "info",
+			Detail: "No egress redirects configured (optional): point npm/pip/cargo/maven/go/nuget (or any other outbound host) at a corporate mirror/relay so runs never reach the public destination directly.",
+			Fix:    "Set egress_redirects via PUT /api/v1/site-config (or the Corporate Network setup step).",
 		}
 	}
-	ecos := slices.Sorted(maps.Keys(sc.ArtifactOverrides))
-	tokened := 0
-	for _, ov := range sc.ArtifactOverrides {
-		if ov.TokenSecretRef != "" {
+	ecos, network, tokened := map[string]bool{}, 0, 0
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "" {
+			network++
+		} else {
+			ecos[r.Ecosystem] = true
+		}
+		if r.TokenSecretRef != "" {
 			tokened++
 		}
 	}
-	detail := "Redirecting " + strings.Join(ecos, ", ") + " to a corporate mirror; every run's egress substitutes the corp host for those public registries."
+	detail := fmt.Sprintf("%d redirect(s) configured (ecosystems: %s; %d network-only); egress substitutes the corp destination in.",
+		len(sc.EgressRedirects), strings.Join(slices.Sorted(maps.Keys(ecos)), ", "), network)
 	if tokened > 0 {
-		detail += fmt.Sprintf(" %d with a token injected proxy-side (the sandbox never holds it).", tokened)
+		detail += fmt.Sprintf(" %d with a token injected proxy-side.", tokened)
 	}
-	return SetupCheck{ID: "artifact_repo", Label: "Artifact repository redirection", Status: "info", Detail: detail}
+	return SetupCheck{ID: "artifact_repo", Label: "Egress redirection", Status: "info", Detail: detail}
 }

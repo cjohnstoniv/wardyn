@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -564,32 +563,34 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 	return rows
 }
 
-// artifactMirrorRows derives one artifact_mirror row per corp mirror HOST
-// (several ecosystems commonly share one Artifactory/Nexus host), mirroring
-// planArtifactRedirect's dedupe-by-host shape (artifact_redirect.go). A row's
-// token credential is the FIRST (sorted-ecosystem-order) configured
-// TokenSecretRef seen for that host — the common case is one token per host;
-// a host with genuinely divergent per-ecosystem tokens still redirects every
-// ecosystem (Config carries all of them), it just reports one representative
-// credential.
+// artifactMirrorRows derives one artifact_mirror row per corp mirror/relay HOST
+// (several redirects — ecosystem-scoped or network-only alike — commonly share
+// one destination), mirroring planArtifactRedirect's dedupe-by-host shape
+// (artifact_redirect.go). A row's token credential is the FIRST TokenSecretRef
+// seen for that host in EgressRedirects' stored order — the common case is one
+// token per host; a host with genuinely divergent per-redirect tokens still
+// redirects every one of them (Config carries every ecosystem it touches), it
+// just reports one representative credential. Ecosystems is empty for a purely
+// network-only host (no package-manager config file, egress substitution only).
 func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrationRow {
 	type hostEcos struct {
 		ecosystems []string
 		token      string
 	}
 	byHost := map[string]*hostEcos{}
-	for _, eco := range slices.Sorted(maps.Keys(sc.ArtifactOverrides)) {
-		ov := sc.ArtifactOverrides[eco]
-		host := strings.ToLower(workspacescan.HostOf(ov.BaseURL))
+	for _, r := range sc.EgressRedirects {
+		host := strings.ToLower(workspacescan.HostOf(r.To))
 		if host == "" {
 			continue
 		}
 		he, ok := byHost[host]
 		if !ok {
-			he = &hostEcos{token: ov.TokenSecretRef}
+			he = &hostEcos{token: r.TokenSecretRef}
 			byHost[host] = he
 		}
-		he.ecosystems = append(he.ecosystems, eco)
+		if r.Ecosystem != "" {
+			he.ecosystems = append(he.ecosystems, r.Ecosystem)
+		}
 	}
 	var rows []integrationRow
 	for host, he := range byHost {

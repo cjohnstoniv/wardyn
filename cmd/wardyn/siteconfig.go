@@ -30,13 +30,14 @@ import (
 func siteConfigCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "site-config",
-		Short: "Get or replace the operator-wide corporate baseline (proxy / artifact mirrors / SCM hosts)",
+		Short: "Get or replace the operator-wide corporate baseline (proxy / egress redirects / SCM hosts)",
 		Long: "Read or replace the operator-wide corporate baseline. The document carries secret\n" +
 			"NAMES, never secret values, so it is safe to save alongside the repo:\n\n" +
 			"    wardyn site-config get > corp-baseline.json      # before a reset\n" +
 			"    wardyn site-config apply corp-baseline.json      # after `make setup`\n\n" +
 			"`apply` REPLACES the whole document (the server contract), so edit what `get`\n" +
-			"produced rather than sending a fragment.",
+			"produced rather than sending a fragment. A document saved before egress_redirects\n" +
+			"existed (still keyed by artifact_overrides) is folded automatically on apply.",
 	}
 	cmd.AddCommand(siteConfigGetCmd(client), siteConfigApplyCmd(client))
 	return cmd

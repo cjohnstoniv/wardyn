@@ -1,6 +1,13 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//lint:file-ignore SA1019 TestHandlePutSiteConfig_LegacyArtifactOverridesFold and
+// TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects read
+// the deprecated SiteConfig.ArtifactOverrides to prove the request-decode fold
+// (foldLegacyArtifactOverrides) round-trips it correctly — see
+// internal/api/site_config.go's own file-scope ignore for why the field still
+// exists.
+
 package api
 
 import (
@@ -27,55 +34,59 @@ func TestValidateSiteConfig(t *testing.T) {
 		{"good upstream proxy secret ref", types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}, true},
 		{"bad upstream proxy secret ref (uppercase)", types.SiteConfig{UpstreamProxySecretRef: "Corp-Proxy"}, false},
 		{"reserved upstream proxy secret ref", types.SiteConfig{UpstreamProxySecretRef: "wardyn-signing-key"}, false},
+		{"good upstream proxy plain URL", types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, true},
+		{"upstream proxy plain URL with embedded userinfo is REJECTED (Task 1's mandatory guard)",
+			types.SiteConfig{UpstreamProxyURL: "http://user:pass@proxy.corp:3128"}, false},
+		{"upstream proxy plain URL malformed", types.SiteConfig{UpstreamProxyURL: "not a url"}, false},
 		{"good scm host", types.SiteConfig{ScmHosts: []string{"dev.azure.com"}}, true},
 		{"scm host with scheme", types.SiteConfig{ScmHosts: []string{"https://dev.azure.com"}}, false},
 		{"scm host with port", types.SiteConfig{ScmHosts: []string{"dev.azure.com:443"}}, false},
 		{"scm host wildcard", types.SiteConfig{ScmHosts: []string{"*.azure.com"}}, false},
 		{"scm host no dot", types.SiteConfig{ScmHosts: []string{"localhost"}}, false},
 		{
-			"good artifact override", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token"},
+			"good ecosystem egress redirect", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
 			}}, true,
 		},
 		{
-			"unknown ecosystem", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"rubygems": {BaseURL: "https://artifactory.corp/api/gems/gems-remote/"},
+			"good network-only egress redirect (no ecosystem)", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
+			}}, true,
+		},
+		{
+			"unknown ecosystem", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://x.corp/gems/", To: "https://artifactory.corp/api/gems/gems-remote/", Ecosystem: "rubygems"},
 			}}, false,
 		},
 		{
-			"bad scheme (ftp)", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "ftp://artifactory.corp/npm/"},
+			"bad scheme (ftp) in to", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "ftp://artifactory.corp/npm/", Ecosystem: "npm"},
 			}}, false,
 		},
 		{
-			"no scheme", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "artifactory.corp/npm/"},
+			"bad from (shell metacharacters)", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/`whoami`", To: "https://artifactory.corp/npm/", Ecosystem: "npm"},
 			}}, false,
 		},
 		{
-			"shell metacharacters", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "https://artifactory.corp/npm/`whoami`"},
+			"control char in to", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm/\n", Ecosystem: "npm"},
 			}}, false,
 		},
 		{
-			"control char", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "https://artifactory.corp/npm/\n"},
+			"bad token secret ref", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "Bad Ref!", Ecosystem: "npm"},
 			}}, false,
 		},
 		{
-			"bad token secret ref", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "Bad Ref!"},
-			}}, false,
-		},
-		{
-			"reserved token secret ref", types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "wardyn-session-key"},
+			"reserved token secret ref", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "wardyn-session-key", Ecosystem: "npm"},
 			}}, false,
 		},
 		{
 			"private IP host is still a well-formed URL (host validation, not SSRF IP-block)",
-			types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-				"npm": {BaseURL: "https://10.0.0.5/npm/"},
+			types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://10.0.0.5/npm/", Ecosystem: "npm"},
 			}}, true,
 		},
 	}
@@ -151,9 +162,10 @@ func TestHandlePutSiteConfig_ValidationRejected(t *testing.T) {
 		{"unknown field", `{"upstream_proxy_secret_ref":"x","bogus":1}`},
 		{"bad secret ref", `{"upstream_proxy_secret_ref":"Bad Ref"}`},
 		{"reserved secret ref", `{"upstream_proxy_secret_ref":"wardyn-signing-key"}`},
+		{"upstream proxy url with embedded userinfo", `{"upstream_proxy_url":"http://user:pass@proxy.corp:3128"}`},
 		{"bad scm host", `{"scm_hosts":["https://dev.azure.com"]}`},
-		{"unknown ecosystem", `{"artifact_overrides":{"rubygems":{"base_url":"https://x.corp/gems/"}}}`},
-		{"bad base url scheme", `{"artifact_overrides":{"npm":{"base_url":"ftp://x.corp/npm/"}}}`},
+		{"unknown ecosystem", `{"egress_redirects":[{"from":"https://x.corp/gems/","to":"https://artifactory.corp/api/gems/gems-remote/","ecosystem":"rubygems"}]}`},
+		{"bad to url scheme", `{"egress_redirects":[{"from":"https://registry.npmjs.org/","to":"ftp://x.corp/npm/","ecosystem":"npm"}]}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -181,9 +193,9 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 
 	body := `{
 		"upstream_proxy_secret_ref": "corp-proxy-url",
-		"artifact_overrides": {
-			"npm": {"base_url": "https://artifactory.corp/api/npm/npm-remote/", "token_secret_ref": "npm-token"}
-		},
+		"egress_redirects": [
+			{"from": "https://registry.npmjs.org/", "to": "https://artifactory.corp/api/npm/npm-remote/", "token_secret_ref": "npm-token", "ecosystem": "npm"}
+		],
 		"scm_hosts": ["dev.azure.com"]
 	}`
 	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
@@ -226,8 +238,72 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 	if err := json.Unmarshal(w2.Body.Bytes(), &got2); err != nil {
 		t.Fatal(err)
 	}
-	if got2.ArtifactOverrides["npm"].TokenSecretRef != "npm-token" {
-		t.Errorf("GET ArtifactOverrides[npm].TokenSecretRef = %q, want npm-token", got2.ArtifactOverrides["npm"].TokenSecretRef)
+	if len(got2.EgressRedirects) != 1 || got2.EgressRedirects[0].TokenSecretRef != "npm-token" {
+		t.Errorf("GET EgressRedirects = %+v, want one npm entry with TokenSecretRef npm-token", got2.EgressRedirects)
+	}
+}
+
+// TestHandlePutSiteConfig_LegacyArtifactOverridesFold is the fold-compat proof
+// for Task 3: a body saved before EgressRedirects existed (still keyed by the
+// deprecated artifact_overrides) must keep applying — folded into
+// EgressRedirects with the correct per-ecosystem From URL, never persisted back
+// in the old shape.
+func TestHandlePutSiteConfig_LegacyArtifactOverridesFold(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	body := `{"artifact_overrides": {
+		"npm": {"base_url": "https://artifactory.corp/api/npm/npm-remote/", "token_secret_ref": "npm-token"},
+		"go":  {"base_url": "https://artifactory.corp/api/go/go-remote"}
+	}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got types.SiteConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ArtifactOverrides) != 0 {
+		t.Errorf("ArtifactOverrides = %+v, want empty (folded, never persisted in the old shape)", got.ArtifactOverrides)
+	}
+	if len(got.EgressRedirects) != 2 {
+		t.Fatalf("EgressRedirects = %+v, want 2 folded entries", got.EgressRedirects)
+	}
+	// Sorted by ecosystem key (go < npm) -- see foldLegacyArtifactOverrides.
+	if got.EgressRedirects[0].Ecosystem != "go" || got.EgressRedirects[0].From != "https://proxy.golang.org" ||
+		got.EgressRedirects[0].To != "https://artifactory.corp/api/go/go-remote" || got.EgressRedirects[0].TokenSecretRef != "" {
+		t.Errorf("EgressRedirects[0] = %+v, want the folded go entry", got.EgressRedirects[0])
+	}
+	if got.EgressRedirects[1].Ecosystem != "npm" || got.EgressRedirects[1].From != "https://registry.npmjs.org/" ||
+		got.EgressRedirects[1].To != "https://artifactory.corp/api/npm/npm-remote/" || got.EgressRedirects[1].TokenSecretRef != "npm-token" {
+		t.Errorf("EgressRedirects[1] = %+v, want the folded npm entry", got.EgressRedirects[1])
+	}
+	// The STORE must never see the legacy field either — only the fold's output.
+	if fake.putSeen == nil || len(fake.putSeen.ArtifactOverrides) != 0 {
+		t.Errorf("store received ArtifactOverrides = %+v, want empty (fold must clear it before persisting)", fake.putSeen)
+	}
+}
+
+// TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects: a
+// body that sets BOTH the deprecated and the current field is ambiguous (which
+// one is authoritative?) and must 400 rather than silently pick one.
+func TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, audit := newSiteConfigHarness(t, fake)
+	body := `{
+		"artifact_overrides": {"npm": {"base_url": "https://artifactory.corp/npm/"}},
+		"egress_redirects": [{"from": "https://registry.npmjs.org/", "to": "https://artifactory.corp/npm/", "ecosystem": "npm"}]
+	}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen != nil {
+		t.Errorf("a rejected write must never reach the store, got %+v", fake.putSeen)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("a rejected write must not audit, got %d events", len(audit.events))
 	}
 }
 

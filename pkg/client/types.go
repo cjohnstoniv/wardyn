@@ -90,10 +90,19 @@ type (
 	SiteConfig = types.SiteConfig
 
 	// ArtifactOverride is one ecosystem's artifact-registry redirect, carried in
-	// SiteConfig.ArtifactOverrides. Aliased for the same reason as
-	// WorkspaceBedrockRef: GetSiteConfig returns a NIL map when unconfigured, so
-	// without a nameable element type the redirects cannot be written at all.
+	// the deprecated SiteConfig.ArtifactOverrides.
+	//
+	// Deprecated: superseded by EgressRedirect. Kept aliased so a caller that
+	// still builds the legacy shape (PutSiteConfig folds it server-side for one
+	// release) can name the element type; GetSiteConfig itself now returns this
+	// field empty.
 	ArtifactOverride = types.ArtifactOverride
+
+	// EgressRedirect is one outbound redirect (package registry or otherwise),
+	// carried in SiteConfig.EgressRedirects. Aliased for the same reason as
+	// ArtifactOverride: GetSiteConfig returns a nil slice when unconfigured, so
+	// without a nameable element type a caller could not author one at all.
+	EgressRedirect = types.EgressRedirect
 )
 
 // Enumerated string types named in exported signatures and struct fields.

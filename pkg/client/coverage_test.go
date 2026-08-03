@@ -30,6 +30,7 @@ var (
 	_ client.WorkspaceBedrockRef
 	_ client.SiteConfig
 	_ map[string]client.ArtifactOverride
+	_ []client.EgressRedirect
 )
 
 func TestClientCoversRouteFamilies(t *testing.T) {

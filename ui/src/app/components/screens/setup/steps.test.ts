@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import type { SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
 import { deriveReadiness } from "../onboarding/intro";
-import { DEMO_STEP_IDS, PHASES, STEP_HEADING, STEP_LABEL, STEP_ORDER, stepBadges, stepDone } from "./steps";
+import { DEMO_STEP_IDS, OPTIONAL_STEPS, PHASES, STEP_HEADING, STEP_LABEL, STEP_ORDER, stepBadges, stepDone } from "./steps";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
@@ -153,6 +153,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
   it("pins the frozen step ids and labels (e2e clicks `Next: {label}`)", () => {
     expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
+      ["corp_network", "Corporate network"],
       ["integrations", "Integrations"],
       // The four Demos sub-steps — labels come from the demo catalog titles.
       ["sealed-box", "The sealed box"],
@@ -164,17 +165,17 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["launch", "Launch"],
     ]);
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
+    expect(STEP_HEADING.corp_network).toBe("Corporate network");
     expect(STEP_HEADING.integrations).toBe("Connect what's outside Wardyn");
   });
 
-  // 13 -> 9 collapse: provider/host_proxy/scm_provider/artifact_repo/credentials
-  // are gone (their configuration now lives on /integrations); `integrations`
-  // is the one new step, right after Environment for the same prerequisite
-  // reason the corporate-network steps used to lead the model step — a demo or
-  // a connected model needs egress.
+  // 9 -> 10: Corporate network comes BACK as its own step, right BEFORE
+  // Integrations — see steps.ts's PHASES comment for why the order itself
+  // (not a banner) is the fix for "blocked network reads as bad credential".
   it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
+      "corp_network",
       "integrations",
       "sealed-box",
       "fail-then-approve",
@@ -184,10 +185,72 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "review",
       "launch",
     ]);
-    expect(STEP_ORDER).toHaveLength(9);
+    expect(STEP_ORDER).toHaveLength(10);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // The four Demos sub-steps ARE the demos phase, in catalog order.
     expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
+  });
+
+  it("corp_network is optional", () => {
+    expect(OPTIONAL_STEPS.has("corp_network")).toBe(true);
+  });
+});
+
+describe("corp_network badge — the 4-rung ladder (Optional -> Skipped is an orchestrator override, same as integrations)", () => {
+  const unset = { proxyConfigured: false, proxyDetected: false, redirectCount: 0 };
+
+  it("reads Optional/false with nothing detected and nothing configured (the default when corpNetwork is omitted)", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    expect(stepBadges(status, readiness, [], 0).corp_network).toEqual({ text: "Optional", tone: "neutral" });
+    expect(stepDone(status, readiness, [], 0).corp_network).toBe(false);
+  });
+
+  it("reads amber 'Detected — not configured' once a proxy was detected but nothing is saved", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyDetected: true };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Detected — not configured",
+      tone: "warning",
+    });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+  });
+
+  it("reads 'Ready · proxy' once the proxy is configured, even with zero redirects", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyConfigured: true };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · proxy", tone: "success" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
+  });
+
+  it("reads 'Ready · N redirects' (no 'proxy') when only redirects are configured", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, redirectCount: 1 };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · 1 redirect", tone: "success" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
+  });
+
+  // The mock's own self-contradiction (prose says "proxy + 3 redirects" but
+  // renders a 4-entry fixture) — the badge must derive the count from the
+  // data, never a fixed word, so this reads "+ 4 redirects" here.
+  it("derives the redirect count from the data — proxy + 4 redirects, not a stale '3'", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { proxyConfigured: true, proxyDetected: false, redirectCount: 4 };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Ready · proxy + 4 redirects",
+      tone: "success",
+    });
+  });
+
+  it("a configured proxy wins over mere detection (Ready, not the amber Detected line)", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { proxyConfigured: true, proxyDetected: true, redirectCount: 0 };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network.tone).toBe("success");
   });
 });
 

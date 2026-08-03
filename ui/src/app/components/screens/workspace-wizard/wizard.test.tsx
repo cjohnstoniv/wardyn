@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 const createWorkspaceMock = vi.fn();
 const scanWorkspaceMock = vi.fn();
@@ -103,6 +104,10 @@ describe("WorkspaceWizard — the happy path end to end", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
     await screen.findByText(C.S3_BLURB);
+    // The Requirements step opens on its Record tab (step-requirements.tsx) —
+    // DATABASE_URL lives under Secrets. Radix Tabs activates on mousedown, so
+    // this needs real userEvent rather than fireEvent.click.
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Secrets" }));
     // Seeded from the profile — DATABASE_URL defaults to required.
     expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
 

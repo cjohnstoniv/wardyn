@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -46,7 +47,7 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 		bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
 	}}
 
-	// Operator SiteConfig: upstream corp proxy, npm artifact redirect (with a
+	// Operator SiteConfig: upstream corp proxy, npm egress redirect (with a
 	// token so the MITM+injection half is exercised too), and a declared GHES
 	// SCM host. site_config is a store-wide (not per-run) singleton row, so
 	// restore the zero value afterward — otherwise a value seeded here leaks
@@ -54,8 +55,8 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 	ctx := context.Background()
 	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
 		UpstreamProxySecretRef: "corp-proxy-url",
-		ArtifactOverrides: map[string]types.ArtifactOverride{
-			"npm": {BaseURL: "https://artifactory.corp/npm", TokenSecretRef: "npm-artifactory-token"},
+		EgressRedirects: []types.EgressRedirect{
+			{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", TokenSecretRef: "npm-artifactory-token", Ecosystem: "npm"},
 		},
 		ScmHosts: []string{"ghes.corp.example"},
 	}); err != nil {
@@ -65,10 +66,55 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 		_, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{})
 	})
 
-	// dispatchInlinePolicy carries registry.npmjs.org in the STARTING egress
-	// allowlist so the artifact-redirect substitution assertion below is real
-	// (proves removal) rather than vacuous (proves absence of something never
-	// there).
+	spec := dispatchAndCaptureSpec(t, srv, fr)
+	assertProxyArtifactScmBedrockComposition(t, spec)
+}
+
+// TestDispatch_SiteConfigComposition_LegacyArtifactOverridesFold is the
+// dispatch-level half of the fold-compat golden the Wave A gate requires: the
+// SAME composition as TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock,
+// seeded via a PUT /site-config body in the DEPRECATED artifact_overrides shape
+// instead of EgressRedirects directly — proving the request-decode fold
+// (foldLegacyArtifactOverrides, site_config.go) produces a BYTE-IDENTICAL
+// dispatched SandboxSpec to the current canonical shape, not just an
+// isolated-unit match.
+func TestDispatch_SiteConfigComposition_LegacyArtifactOverridesFold(t *testing.T) {
+	fr := &fakeRunner{}
+	srv, _ := pgHarnessWithRunner(t, fr)
+
+	srv.cfg.BedrockRegion = "us-east-1"
+	srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
+		"corp-proxy-url":             []byte("http://proxy.corp:3128"),
+		"npm-artifactory-token":      []byte("s3cr3t-npm-token"),
+		bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
+		bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+	}}
+
+	legacyBody := `{
+		"upstream_proxy_secret_ref": "corp-proxy-url",
+		"artifact_overrides": {"npm": {"base_url": "https://artifactory.corp/npm", "token_secret_ref": "npm-artifactory-token"}},
+		"scm_hosts": ["ghes.corp.example"]
+	}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, legacyBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("seed legacy site config: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	t.Cleanup(func() {
+		_, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{})
+	})
+
+	spec := dispatchAndCaptureSpec(t, srv, fr)
+	assertProxyArtifactScmBedrockComposition(t, spec)
+}
+
+// dispatchAndCaptureSpec drives POST /api/v1/runs with the shared inline policy
+// both site-config composition tests need (registry.npmjs.org present in the
+// STARTING egress allowlist, so the substitution assertion below is real —
+// proves removal — rather than vacuous) and returns the fakeRunner-captured
+// SandboxSpec.
+func dispatchAndCaptureSpec(t *testing.T, srv *Server, fr *fakeRunner) runner.SandboxSpec {
+	t.Helper()
 	const dispatchInlinePolicy = `{"allowed_domains":["api.anthropic.com","registry.npmjs.org"],"min_confinement_class":"CC2"}`
 	body := `{"agent":"claude-code","repo":"acme/widgets","task":"do the thing","inline_policy":` + dispatchInlinePolicy + `}`
 	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
@@ -78,7 +124,17 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 	if fr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
-	spec := fr.lastSpec
+	return fr.lastSpec
+}
+
+// assertProxyArtifactScmBedrockComposition is the shared assertion body for
+// both the canonical-shape and legacy-fold composition tests: same platform
+// env, same Bedrock wiring, same upstream-proxy + artifact-MITM ProxyConfig,
+// same token injection (never resident in Env), same AllowedDomains
+// substitution. Kept as ONE function so the two tests can never silently drift
+// apart on what "the same dispatch behavior" means.
+func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxSpec) {
+	t.Helper()
 
 	// 1. Platform sandboxEnv + artifact config delivery + the Bedrock switch —
 	// all riding the same Env map.

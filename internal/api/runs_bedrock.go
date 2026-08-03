@@ -42,27 +42,36 @@ func mavenProxyOpts(proxyURL string) string {
 }
 
 // resolveUpstreamProxyURL resolves the operator-wide site-config upstream/corp
-// proxy secret ref (types.SiteConfig.UpstreamProxySecretRef) to a URL for
-// ProxyConfig.UpstreamProxyURL. getSecret resolves a secret name to its
+// proxy to a URL for ProxyConfig.UpstreamProxyURL, preferring the plain
+// plainURL (types.SiteConfig.UpstreamProxyURL) when set, else falling back to
+// resolving secretRef (types.SiteConfig.UpstreamProxySecretRef) exactly as
+// before the plain-URL field existed. getSecret resolves a secret name to its
 // plaintext value (typically s.cfg.Secrets.Get); nil means no secret store is
 // configured.
 //
-// Fail SAFE, never errors: an empty ref, a reserved platform-internal name
-// (defense-in-depth — validateSiteConfig/validSecretRef already reject this at
-// PUT /api/v1/site-config write time, but this guards a row written before
-// that check existed, mirroring handleInternalInjection's sink-side reserved-
-// name guard), a missing secret store, an unresolvable secret, or a non-http
-// URL all return ("", <reason>) — the caller audits the reason and dispatches
-// with direct egress instead of failing the run. A resolved http URL returns
+// Fail SAFE, never errors: an empty plainURL AND empty secretRef, a reserved
+// platform-internal secret name (defense-in-depth — validateSiteConfig/
+// validSecretRef already reject this at PUT /api/v1/site-config write time,
+// but this guards a row written before that check existed, mirroring
+// handleInternalInjection's sink-side reserved-name guard), a missing secret
+// store, an unresolvable secret, or a non-http URL (from EITHER source) all
+// return ("", <reason>) — the caller audits the reason and dispatches with
+// direct egress instead of failing the run. A resolved http URL returns
 // (url, "").
 //
-// Scheme is restricted to http because the sidecar's own config validation
-// (parseUpstreamProxy, internal/egress/proxy/upstream.go) rejects https: the
-// hop TO the corp proxy is a plaintext CONNECT + Proxy-Authorization today, and
-// an https:// proxy URL would need a TLS wrap first or leak that Basic
-// credential in cleartext — so an https ref is skipped here rather than
-// crashing the proxy sidecar at startup.
-func resolveUpstreamProxyURL(ctx context.Context, secretRef string, getSecret func(context.Context, string) ([]byte, error)) (proxyURL, failReason string) {
+// Scheme is restricted to http for BOTH sources because the sidecar's own
+// config validation (parseUpstreamProxy, internal/egress/proxy/upstream.go)
+// rejects https: the hop TO the corp proxy is a plaintext CONNECT +
+// Proxy-Authorization today, and an https:// proxy URL would need a TLS wrap
+// first or leak that Basic credential in cleartext — so an https value is
+// skipped here rather than crashing the proxy sidecar at startup.
+func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, getSecret func(context.Context, string) ([]byte, error)) (proxyURL, failReason string) {
+	if plainURL != "" {
+		if raw, ok := normalizedHTTPProxyURL(plainURL); ok {
+			return raw, ""
+		}
+		return "", "unsupported-scheme"
+	}
 	if secretRef == "" {
 		return "", ""
 	}
@@ -76,12 +85,22 @@ func resolveUpstreamProxyURL(ctx context.Context, secretRef string, getSecret fu
 	if err != nil {
 		return "", "secret-not-found"
 	}
-	raw := strings.TrimSpace(string(val))
-	u, perr := url.Parse(raw)
-	if perr != nil || !strings.EqualFold(u.Scheme, "http") {
-		return "", "unsupported-scheme"
+	if raw, ok := normalizedHTTPProxyURL(string(val)); ok {
+		return raw, ""
 	}
-	return raw, ""
+	return "", "unsupported-scheme"
+}
+
+// normalizedHTTPProxyURL trims raw and reports (trimmed, true) when it parses
+// as an http-scheme URL, else ("", false). Shared by both resolveUpstreamProxyURL
+// sources so the scheme restriction can never drift between them.
+func normalizedHTTPProxyURL(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil || !strings.EqualFold(u.Scheme, "http") {
+		return "", false
+	}
+	return trimmed, true
 }
 
 // Bedrock: AWS Bedrock as an Anthropic transport for claude-code runs (an

@@ -96,7 +96,7 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			AdminToken: adminToken,
 			Store: setupCheckIdsStore{sc: types.SiteConfig{
 				UpstreamProxySecretRef: "corp-proxy-url",
-				ArtifactOverrides:      map[string]types.ArtifactOverride{"npm": {BaseURL: "https://artifactory.corp/npm"}},
+				EgressRedirects:        []types.EgressRedirect{{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", Ecosystem: "npm"}},
 				ScmHosts:               []string{"ghes.corp.example"},
 			}},
 		})),

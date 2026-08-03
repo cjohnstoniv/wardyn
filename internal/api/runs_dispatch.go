@@ -505,39 +505,44 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport) []runner.Mount
 
 // resolveRunUpstreamProxy resolves the operator-wide upstream/corp proxy
 // (site-config → ProxyConfig.UpstreamProxyURL). A locked-down corporate network
-// may give the sandbox host NO direct internet route at all —
-// site_config.UpstreamProxySecretRef (admin-authored via PUT /api/v1/site-config)
-// names the secret holding the corp CONNECT-proxy URL. The resolved cred-bearing
-// URL lands in the sidecar's WARDYN_PROXY_CONFIG_JSON env var, the SAME posture
-// as RunToken today: proxy-process-only, never on the sandbox side, masked from
-// decision-log/stdout by the proxy — a deliberate, already-documented tradeoff
-// (see runner.ProxyConfig.UpstreamProxyURL), not a new one. Fail SAFE: an
-// unconfigured ref, an unresolvable secret, or a non-http URL all return ""
-// (direct egress, today's behavior) plus an audit event; none of them fail the
-// run or crash dispatch. Extracted verbatim from dispatchWithVerify.
+// may give the sandbox host NO direct internet route at all — the operator
+// configures the corp CONNECT-proxy URL via PUT /api/v1/site-config either as a
+// plain site_config.UpstreamProxyURL or (when it carries a credential) as
+// site_config.UpstreamProxySecretRef naming the secret holding it;
+// resolveUpstreamProxyURL prefers the plain URL when set. The resolved
+// cred-bearing URL lands in the sidecar's WARDYN_PROXY_CONFIG_JSON env var, the
+// SAME posture as RunToken today: proxy-process-only, never on the sandbox
+// side, masked from decision-log/stdout by the proxy — a deliberate,
+// already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
+// new one. Fail SAFE: neither field configured, an unresolvable secret, or a
+// non-http URL (from either source) all return "" (direct egress, today's
+// behavior) plus an audit event; none of them fail the run or crash dispatch.
+// Extracted verbatim from dispatchWithVerify.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 			runID.String(), "failure", mustJSON(map[string]any{"reason": "site-config-read-error"})))
 		return ""
 	}
-	if siteCfg.UpstreamProxySecretRef == "" {
+	if siteCfg.UpstreamProxyURL == "" && siteCfg.UpstreamProxySecretRef == "" {
 		return ""
 	}
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
 		getSecret = s.cfg.Secrets.Get
 	}
-	resolved, failReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxySecretRef, getSecret)
+	detail := map[string]any{
+		"secret_ref": siteCfg.UpstreamProxySecretRef, "url_configured": siteCfg.UpstreamProxyURL != "",
+	}
+	resolved, failReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	if failReason != "" {
+		detail["reason"] = failReason
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-			runID.String(), "failure", mustJSON(map[string]any{
-				"reason": failReason, "secret_ref": siteCfg.UpstreamProxySecretRef,
-			})))
+			runID.String(), "failure", mustJSON(detail)))
 		return ""
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-		runID.String(), "success", mustJSON(map[string]any{"secret_ref": siteCfg.UpstreamProxySecretRef})))
+		runID.String(), "success", mustJSON(detail)))
 	return resolved
 }
 

@@ -391,6 +391,7 @@ export function WorkspaceWizard({
               onChange={(requirements) => patch({ requirements })}
               storedSecretNames={s.secretNames}
               onSecretStored={onSecretStored}
+              powerSource={s.powerSource}
             />
           )}
           {s.step === "done" && (

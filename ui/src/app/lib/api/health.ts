@@ -8,6 +8,18 @@
 import type { SiteConfig } from "../types";
 import { asJson, wfetch } from "./core";
 
+// Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —
+// never a cached or inferred verdict (T.TEST_STANDING). "bypass" is the
+// redirect-only case where the mirror answered but the public endpoint is
+// STILL reachable from a sandbox (T.TEST_BYPASS); "no_runner" means there's
+// nothing on this host to launch the probe with (T.TEST_NORUNNER), including
+// an older server with no test endpoint at all.
+export interface ProxyTestResult {
+  state: "reached" | "blocked" | "bypass" | "no_runner";
+  detail: string;
+  elapsed_ms?: number;
+}
+
 export const health = {
   // GET /api/v1/site-config — the operator-wide baseline (upstream proxy secret
   // ref / per-ecosystem artifact-registry overrides / default SCM hosts). An
@@ -27,6 +39,33 @@ export const health = {
   async putSiteConfig(cfg: SiteConfig): Promise<void> {
     const res = await wfetch("/site-config", { method: "PUT", body: JSON.stringify(cfg) });
     await asJson<SiteConfig>(res);
+  },
+
+  // POST /api/v1/site-config/test-proxy — launches a throwaway confined probe
+  // through wardyn-proxy chained to the configured upstream and reports what
+  // actually happened (T.TEST_PROXY_HINT); never a cached/inferred verdict. A
+  // 404 means this server build predates the endpoint — that must read as
+  // "can't test here" (no_runner), never a fake pass.
+  async testProxy(): Promise<ProxyTestResult> {
+    const res = await wfetch("/site-config/test-proxy", { method: "POST" });
+    if (res.status === 404) {
+      return { state: "no_runner", detail: "This server build has no test-proxy endpoint." };
+    }
+    return asJson<ProxyTestResult>(res);
+  },
+
+  // POST /api/v1/site-config/test-redirect — the same real probe, for one
+  // egress redirect. A redirect has no server-side id, so it's identified by
+  // its from/to pair (what the row already holds client-side).
+  async testRedirect(from: string, to: string): Promise<ProxyTestResult> {
+    const res = await wfetch("/site-config/test-redirect", {
+      method: "POST",
+      body: JSON.stringify({ from, to }),
+    });
+    if (res.status === 404) {
+      return { state: "no_runner", detail: "This server build has no test-redirect endpoint." };
+    }
+    return asJson<ProxyTestResult>(res);
   },
 
   // GET /healthz — liveness + trust boundary (unauthenticated; surfaced in the

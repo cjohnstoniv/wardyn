@@ -72,7 +72,9 @@ describe("IntegrationsScreen — the four category sections", () => {
     expect(screen.getByText("anthropic · api key")).toBeInTheDocument();
     // The other three sections are empty — each shows its OWN T.EMPTY_* line.
     expect(screen.getByText(T.EMPTY_SCM)).toBeInTheDocument();
-    expect(screen.getByText(T.EMPTY_MIRROR)).toBeInTheDocument();
+    // T.EMPTY_MIRROR was retired with the Corporate-network restructure;
+    // T.EMPTY_EGRESS is its replacement (integrations-screen.tsx CATEGORY_EMPTY).
+    expect(screen.getByText(T.EMPTY_EGRESS)).toBeInTheDocument();
     expect(screen.getByText(T.EMPTY_PROXY)).toBeInTheDocument();
   });
 
@@ -222,6 +224,34 @@ describe("IntegrationsScreen — embedded mode (Getting Started's Integrations s
 
     // The delete's own reload (a REAL mutation) does fire it.
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  // hideCategories (Corporate network restructure): additive and opt-in — the
+  // two tests above never pass it, so their "keeps everything else" coverage
+  // is untouched. This is the ONE caller that does (integrations-step.tsx).
+  it("hideCategories omits host_proxy + artifact_mirror entirely, even when both have rows", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+    getSiteConfigMock.mockResolvedValue({
+      artifact_overrides: { npm: { base_url: "https://artifactory.corp.internal/api/npm/x" } },
+      upstream_proxy_secret_ref: "upstream-proxy-url",
+    });
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+
+    render(
+      <MemoryRouter>
+        <IntegrationsScreen embedded hideCategories={["host_proxy", "artifact_mirror"]} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Anthropic (API key)");
+    // Both hidden categories have a real row (per the siteConfig above) —
+    // their content, and the proxy banner, must not render anyway.
+    expect(screen.queryByText("artifactory.corp.internal")).not.toBeInTheDocument();
+    expect(screen.queryByText("corporate proxy")).not.toBeInTheDocument();
+    expect(screen.queryByText(T.EMPTY_EGRESS)).not.toBeInTheDocument();
+    expect(screen.queryByText(T.EMPTY_PROXY)).not.toBeInTheDocument();
+    // AI still renders — hiding two categories must not blank the whole page.
+    expect(screen.getByText(T.FOOTNOTE)).toBeInTheDocument();
   });
 });
 

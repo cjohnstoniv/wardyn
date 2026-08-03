@@ -474,13 +474,14 @@ type ResourceLimits struct {
 }
 
 // SiteConfig is the operator-wide, admin-authored baseline every run inherits:
-// a corporate upstream proxy, per-ecosystem artifact-registry overrides, and
-// default SCM hosts. It is the ONE net-new persistence surface the enterprise
-// Getting-Started enhancements introduce (the Host Proxy and Artifact
-// Repository Redirection steps read it; everything else rides secrets +
-// grants). There is exactly one SiteConfig for the operator (a store
-// singleton); GetSiteConfig returns the zero value when none has been written
-// yet — "unconfigured" is a valid, common state, not an error.
+// a corporate upstream proxy, egress redirects (package-registry mirrors and,
+// more generally, any outbound URL/host/IP redirect), and default SCM hosts.
+// It is the ONE net-new persistence surface the enterprise Getting-Started
+// enhancements introduce (the Host Proxy and Corporate Network / Egress
+// Redirection steps read it; everything else rides secrets + grants). There is
+// exactly one SiteConfig for the operator (a store singleton); GetSiteConfig
+// returns the zero value when none has been written yet — "unconfigured" is a
+// valid, common state, not an error.
 //
 // Secret VALUES never live here — only secret NAMES (refs) the broker/proxy
 // resolve at dispatch/injection time, mirroring how RunPolicySpec's
@@ -488,18 +489,57 @@ type ResourceLimits struct {
 type SiteConfig struct {
 	// UpstreamProxySecretRef names a secret holding the corporate upstream proxy
 	// URL (optionally with embedded user:pass), or "" when no upstream proxy is
-	// configured.
+	// configured. Mutually exclusive in PRACTICE with UpstreamProxyURL (either
+	// may be set; UpstreamProxyURL wins when both are — see
+	// resolveUpstreamProxyURL) but not rejected as a validation error, since an
+	// operator migrating from one to the other may round-trip both briefly.
 	UpstreamProxySecretRef string `json:"upstream_proxy_secret_ref,omitempty"`
+	// UpstreamProxyURL is the corporate upstream proxy URL written IN THE CLEAR
+	// (http only — see resolveUpstreamProxyURL). A proxy URL is topology, not a
+	// credential, and forcing every operator through the write-only secret store
+	// means a mistyped URL can never be read back to debug. It MUST NOT embed a
+	// userinfo (user:pass@) — validateSiteConfig rejects that at write time with
+	// a 400 telling the caller to use UpstreamProxySecretRef instead, which
+	// exists precisely for a proxy that DOES need an embedded credential.
+	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
 	// ArtifactOverrides maps an ecosystem ("npm"|"pip"|"cargo"|"maven"|"go"|
-	// "nuget") to its corporate artifact-registry redirect. A missing key means
-	// that ecosystem is unconfigured (public registry, untouched).
+	// "nuget") to its corporate artifact-registry redirect.
+	//
+	// Deprecated: superseded by EgressRedirects, which generalizes this from
+	// package registries to any outbound URL/host. Kept ONLY so the PUT
+	// /site-config request decoder and `wardyn site-config apply` keep accepting
+	// a document saved before this release — decodeStrict rejects unknown JSON
+	// fields, so removing this field would turn every such legacy body into a
+	// hard 400 instead of a fold. handlePutSiteConfig folds a non-empty value
+	// into EgressRedirects (rejecting a body that sets both) and never persists
+	// this field again; migration 0030 performs the same rewrite once, in place,
+	// on the one already-stored document. Never populated by a read from
+	// storage post-migration — treat a non-empty value outside the fold as
+	// legacy request input only.
 	ArtifactOverrides map[string]ArtifactOverride `json:"artifact_overrides,omitempty"`
+	// EgressRedirects is the operator's outbound redirect list: FROM a public/
+	// upstream URL or host, TO a corporate-internal replacement, generalizing
+	// ArtifactOverride from package registries to any destination (a container
+	// registry, a telemetry/SDK callback host, ...). Each entry is one of two
+	// tiers, discriminated by Ecosystem:
+	//
+	//   - Ecosystem set (one of the ArtifactOverride closed set): FULL behavior,
+	//     unchanged from the old ArtifactOverride — a per-tool config file
+	//     (.npmrc/pip.conf/.cargo/config.toml/.m2/settings.xml/NuGet.Config/
+	//     GOPROXY+GOSUMDB) via workspacescan.EmitArtifactConfig, PLUS egress
+	//     substitution, PLUS token injection.
+	//   - Ecosystem "" (NETWORK-ONLY): egress substitution (To's host allowed,
+	//     From's host dropped) PLUS token injection for To's host, but NO config
+	//     file — there is no ".npmrc equivalent" for an arbitrary host (a
+	//     container registry, a telemetry endpoint, ...), and inventing one
+	//     would be a lie about what Wardyn actually configures.
+	EgressRedirects []EgressRedirect `json:"egress_redirects,omitempty"`
 	// ScmHosts are the operator's default SCM hosts (e.g. "dev.azure.com",
 	// "github.example.com") the SCM Provider step / egress bundling consult.
 	ScmHosts []string `json:"scm_hosts,omitempty"`
 	// Integrations are the operator-configured external connections (AI
 	// providers, SCM hosts, artifact mirrors, the host proxy) — the generalized
-	// replacement UpstreamProxySecretRef/ArtifactOverrides are migrating
+	// replacement UpstreamProxySecretRef/EgressRedirects are migrating
 	// toward. Both the legacy fields and this one are read; nothing here
 	// removes the legacy fields yet.
 	Integrations []Integration `json:"integrations,omitempty"`
@@ -509,9 +549,39 @@ type SiteConfig struct {
 // base URL to emit into that ecosystem's config (.npmrc/pip.conf/cargo config/
 // settings.xml/GOPROXY/nuget.config) plus an optional secret ref for a token
 // injected proxy-side (the sandbox never holds the value).
+//
+// Deprecated: superseded by EgressRedirect (BaseURL -> To, unchanged
+// semantics). See SiteConfig.ArtifactOverrides for why the type is kept.
 type ArtifactOverride struct {
 	BaseURL        string `json:"base_url"`
 	TokenSecretRef string `json:"token_secret_ref,omitempty"`
+}
+
+// EgressRedirect is one outbound redirect: requests to From are substituted to
+// To (From's host dropped from egress, To's host allowed), with an optional
+// token injected proxy-side for To's host. See SiteConfig.EgressRedirects for
+// the two-tier Ecosystem behavior. From/To are validated (validateSiteConfig)
+// with the same control-char/shell-metacharacter/real-host discipline as the
+// legacy ArtifactOverride.BaseURL — either a full http(s) URL (validSiteURL) or
+// a bare host (validSiteHost); workspacescan.EmitArtifactConfig relies on that
+// safety for its raw string interpolation into .npmrc/settings.xml/etc, so
+// keep any future validation change there in sync.
+type EgressRedirect struct {
+	// From is the public/upstream URL or host being redirected away from.
+	From string `json:"from"`
+	// To is the corporate-internal URL or host every matching run's egress is
+	// substituted to. For an Ecosystem row this is also the value emitted into
+	// that ecosystem's config file (the old ArtifactOverride.BaseURL).
+	To string `json:"to"`
+	// TokenSecretRef optionally names a secret whose value is injected
+	// proxy-side as a Bearer token for To's host (the sandbox never holds it).
+	TokenSecretRef string `json:"token_secret_ref,omitempty"`
+	// Ecosystem, when set, is one of the six package-manager ecosystems
+	// ("npm"|"pip"|"cargo"|"maven"|"go"|"nuget") this redirect ALSO emits a
+	// per-tool config file for, in addition to the egress substitution and
+	// token injection every redirect gets. Empty means NETWORK-ONLY: no config
+	// file is emitted (see SiteConfig.EgressRedirects).
+	Ecosystem string `json:"ecosystem,omitempty"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.

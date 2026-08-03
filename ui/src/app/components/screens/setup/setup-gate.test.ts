@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { setupGateActive, dismissSetup } from "./setup-gate";
+import { corpNetworkSkipped, dismissSetup, markCorpNetworkSkipped, setupGateActive } from "./setup-gate";
 import { baseStatus } from "./test-fixtures";
 
 describe("setupGateActive — the HARD first-run gate", () => {
@@ -28,5 +28,15 @@ describe("setupGateActive — the HARD first-run gate", () => {
   it("never gates on SSO or an unreachable daemon", () => {
     expect(setupGateActive(baseStatus({ auth: { mode: "sso", local_loopback: false } }))).toBe(false);
     expect(setupGateActive(baseStatus({ unreachable: true }))).toBe(false);
+  });
+});
+
+describe("corpNetworkSkipped — same per-browser flag pattern as integrationsSkipped", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("is false until marked, true after", () => {
+    expect(corpNetworkSkipped()).toBe(false);
+    markCorpNetworkSkipped();
+    expect(corpNetworkSkipped()).toBe(true);
   });
 });

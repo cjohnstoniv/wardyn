@@ -41,9 +41,9 @@ func TestPG_SiteConfigGetPutSingleton(t *testing.T) {
 
 	cfg := types.SiteConfig{
 		UpstreamProxySecretRef: "corp-proxy-url",
-		ArtifactOverrides: map[string]types.ArtifactOverride{
-			"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token"},
-			"go":  {BaseURL: "https://artifactory.corp/api/go/go-remote"},
+		EgressRedirects: []types.EgressRedirect{
+			{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
+			{From: "https://proxy.golang.org", To: "https://artifactory.corp/api/go/go-remote", Ecosystem: "go"},
 		},
 		ScmHosts: []string{"dev.azure.com", "github.example.com"},
 	}

@@ -15,8 +15,12 @@ import { MemoryRouter } from "react-router-dom";
 import { IntegrationsStep } from "./integrations-step";
 import { T } from "../../../lib/integrations";
 
+const integrationsScreenPropsSpy = vi.fn();
 vi.mock("../integrations/integrations-screen", () => ({
-  IntegrationsScreen: () => <div data-testid="embedded-list" />,
+  IntegrationsScreen: (props: unknown) => {
+    integrationsScreenPropsSpy(props);
+    return <div data-testid="embedded-list" />;
+  },
 }));
 
 function renderStep(props: Partial<ComponentProps<typeof IntegrationsStep>> = {}) {
@@ -32,6 +36,19 @@ describe("IntegrationsStep", () => {
     renderStep();
     expect(screen.getByText(T.STEP_LEDE)).toBeInTheDocument();
     expect(screen.getByTestId("embedded-list")).toBeInTheDocument();
+  });
+
+  // Corporate-network restructure: host proxy + egress redirection moved out
+  // of this embed and into their own step — the embedded list is told to hide
+  // both categories, and the note explaining where they went always renders
+  // (not just once something's connected — a first, empty visit is exactly
+  // when someone wonders where those two categories are).
+  it("hides the host-proxy and egress-redirection categories from the embed and explains why", () => {
+    renderStep();
+    expect(integrationsScreenPropsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ embedded: true, hideCategories: ["host_proxy", "artifact_mirror"] }),
+    );
+    expect(screen.getByText(T.EMBED_SCOPE_NOTE)).toBeInTheDocument();
   });
 
   it("links to /integrations for deeper management", () => {

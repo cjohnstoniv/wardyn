@@ -33,7 +33,11 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // configuration now lives on /integrations (see ../integrations). `integrations`
 // is the one new step: an embedded, thin view of that same page, so Getting
 // Started never forks a second copy of that configuration surface.
-export type SetupStepId = "environment" | "integrations" | DemoStepId | "workspaces" | "review" | "launch";
+//
+// 9 -> 10: `corp_network` comes BACK as its own step, right before
+// `integrations` — see corp-network-step.tsx and the PHASES comment below for
+// why the ORDER, not a banner, is the actual fix.
+export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review" | "launch";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). Scoped
@@ -48,6 +52,7 @@ const DEMO_TITLES = Object.fromEntries(
 // here instead of each rebuilding the same map (F5).
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
+  corp_network: "Corporate network",
   integrations: "Integrations",
   ...DEMO_TITLES,
   workspaces: "Workspaces",
@@ -57,6 +62,9 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
 
 export const STEP_HEADING: Record<SetupStepId, string> = {
   environment: "Pick your barrier",
+  // Same string as the rail label — the mock's own gsScaffold title for this
+  // step, not a distinct noun-phrase like the other steps get.
+  corp_network: "Corporate network",
   integrations: "Connect what's outside Wardyn",
   ...DEMO_TITLES,
   workspaces: "Onboard a workspace",
@@ -76,17 +84,17 @@ export interface PhaseDef {
   collapsible?: boolean;
 }
 
-// Walk order: essentials → demos → your work → finish. Integrations sits right
-// after Environment in Essentials — it carries what used to be three separate
-// prerequisite steps (host proxy / SCM host / artifact mirror) plus the model
-// picker, and the same prerequisite reasoning that put those ahead of the model
-// step still holds: a demo or a connected model needs egress, so an operator
-// behind an unconfigured corporate proxy who meets that later reads an
-// environmental failure as "Wardyn is broken". The conditional proxy-detected
-// banner that used to be the host_proxy step's own check now lives in the
-// embedded integrations list itself (T.PROXY_BANNER) — see integrations-step.tsx.
+// Walk order: essentials → demos → your work → finish. Corporate network sits
+// right after Environment, BEFORE Integrations: if this machine reaches the
+// internet through a corporate proxy or an internal registry mirror, that has
+// to be set up before a model provider or a git host is added, or an
+// unconfigured corporate network reads as a bad credential (the ORDER is the
+// fix, not a banner — see corp-network-step.tsx's T.CORP_LEDE). Integrations
+// itself still carries the model/SCM-host picker; it no longer owns host proxy
+// or egress redirection — those moved to Corporate network (T.EMBED_SCOPE_NOTE
+// on the embedded list explains the split to anyone who visited it before).
 export const PHASES: PhaseDef[] = [
-  { id: "essentials", label: "Essentials", steps: ["environment", "integrations"] },
+  { id: "essentials", label: "Essentials", steps: ["environment", "corp_network", "integrations"] },
   { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
   { id: "work", label: "Your work", steps: ["workspaces"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
@@ -106,10 +114,12 @@ export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
 // Essentials and two Finish steps). Exported so the layout and its test share
 // one list instead of each hardcoding the same membership.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
+  // Corporate network is OPTIONAL — most hosts reach the internet directly;
+  // it only matters behind a proxy or an internal mirror.
+  "corp_network",
   // Integrations is OPTIONAL — every category it covers (model/harness, SCM
-  // host, artifact mirror, host proxy) is itself skippable; Wardyn runs with
-  // none of them connected. The barrier (Environment) is the sole hard
-  // requirement.
+  // host) is itself skippable; Wardyn runs with none of them connected. The
+  // barrier (Environment) is the sole hard requirement.
   "integrations",
   ...DEMO_STEP_IDS,
   "workspaces",
@@ -121,6 +131,30 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
 // ------------------------------------------------------------
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
 
+// The three SiteConfig-derived facts Corporate network's badge/done need — see
+// corp-network-step.tsx's isProxyConfigured/proxyDetected, the SAME helpers
+// the step body itself renders from, so the rail can never disagree with it.
+export interface CorpNetworkState {
+  proxyConfigured: boolean;
+  proxyDetected: boolean;
+  redirectCount: number;
+}
+const CORP_NETWORK_UNSET: CorpNetworkState = { proxyConfigured: false, proxyDetected: false, redirectCount: 0 };
+
+// Ladder: Optional -> Skipped (orchestrator override, like integrations) ->
+// Detected — not configured (amber; a real corporate proxy is sitting there
+// unconfigured) -> Ready · proxy + N redirects. The count is always DERIVED
+// from redirectCount, never a fixed word — a fixture with 4 redirects reads
+// "+ 4 redirects", not a stale "+ 3".
+function corpNetworkBadge(c: CorpNetworkState): StepBadge {
+  const parts: string[] = [];
+  if (c.proxyConfigured) parts.push("proxy");
+  if (c.redirectCount > 0) parts.push(`${c.redirectCount} redirect${c.redirectCount === 1 ? "" : "s"}`);
+  if (parts.length) return { text: `Ready · ${parts.join(" + ")}`, tone: "success" };
+  if (c.proxyDetected) return { text: "Detected — not configured", tone: "warning" };
+  return { text: "Optional", tone: "neutral" };
+}
+
 export function stepBadges(
   status: SetupStatus,
   r: Readiness,
@@ -130,6 +164,7 @@ export function stepBadges(
   // integrations data (siteConfig + secret names) this count derives from;
   // this pure function only needs the resulting number.
   integrationsCount: number,
+  corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
 ): Record<SetupStepId, StepBadge> {
   const readyWorkspaces = workspaces.filter((w) => isUsable(w.status)).length;
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
@@ -142,6 +177,7 @@ export function stepBadges(
     environment: r.barrierReady
       ? { text: `Ready · ${r.barrierCount} of 3 barriers`, tone: "success" }
       : { text: "Needs setup", tone: "warning" },
+    corp_network: corpNetworkBadge(corpNetwork),
     // Ladder: Optional -> Skipped (visited, left unconfigured — applied by the
     // orchestrator's generic visited-steps override, see setup-screen.tsx) ->
     // Ready · N connected.
@@ -190,6 +226,7 @@ export function stepDone(
   r: Readiness,
   workspaces: Workspace[],
   integrationsCount: number,
+  corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
 ): Record<SetupStepId, boolean> {
   // Demos: advisory here (all false). The orchestrator ORs in the per-browser
   // "launched demos" set to earn each demo's checkmark — kept out of this pure fn
@@ -203,6 +240,10 @@ export function stepDone(
     // reads. An unrelated failing check must not blank this dot while the badge
     // stays green (Review owns the whole-checks rollup).
     environment: r.barrierReady,
+    // Configured (proxy OR at least one redirect) — an explicit skip (setup-
+    // gate's markCorpNetworkSkipped, mirroring markIntegrationsSkipped) ORs in
+    // from the orchestrator on top of this, same as integrations below.
+    corp_network: corpNetwork.proxyConfigured || corpNetwork.redirectCount > 0,
     // An explicit "Skip this step" click (see setup-gate's markIntegrationsSkipped)
     // ORs in from the orchestrator, exactly like the old model-skip override —
     // this pure fn only knows about a real connected integration.

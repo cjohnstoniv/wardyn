@@ -22,7 +22,7 @@ import type { WorkspaceRequirementsMap, WorkspaceSourceInput } from "../../../li
 import type { Workspace, WorkspaceProfile } from "../../../lib/types";
 import { C } from "../../../lib/workspace-copy";
 import { StepRequirements } from "../workspace-wizard/step-requirements";
-import type { SourceRow } from "../workspace-wizard/wizard-types";
+import type { PowerSource, SourceRow } from "../workspace-wizard/wizard-types";
 import { WorkspaceLLMCredDialog, llmCredLabel, llmCredTone } from "../workspace-llm-cred";
 import { SectionCard } from "./section-card";
 
@@ -61,6 +61,23 @@ function sourcesOf(ws: Workspace): SourceRow[] {
       target: ws.default_target ?? "",
     },
   ];
+}
+
+// Maps the workspace's REAL llm_cred binding onto the wizard's PowerSource
+// shape — the one idiom StepRequirements' Record/Egress/Secrets tabs key off,
+// on both surfaces (see step-requirements.tsx's `powerSource` prop comment).
+// Unlike the wizard (which can't yet write a real llm_cred — wizard-types.ts's
+// own comment), the detail page's ws.llm_cred IS the real, persisted binding,
+// so "nothing resolves" here means something more concrete than the wizard's
+// unreachable-today `{kind:"none"}`: a pinned api_key whose secret was since
+// deleted from the store — the same `broken` condition ModelAccessGroup below
+// already flags.
+function resolvedPowerSource(ws: Workspace, storedSecretNames: string[]): PowerSource {
+  const cred = ws.llm_cred;
+  if (!cred?.mode) return { kind: "default" };
+  const broken = cred.mode === "api_key" && !!cred.api_key_secret && !storedSecretNames.includes(cred.api_key_secret);
+  if (broken) return { kind: "none" };
+  return { kind: "pinned", integrationId: cred.mode, name: llmCredLabel(cred) };
 }
 
 export function RequirementsCard({
@@ -123,6 +140,7 @@ export function RequirementsCard({
             onChange={(next) => void persist(next)}
             storedSecretNames={storedSecretNames}
             onSecretStored={onSecretStored}
+            powerSource={resolvedPowerSource(ws, storedSecretNames)}
           />
         </>
       )}

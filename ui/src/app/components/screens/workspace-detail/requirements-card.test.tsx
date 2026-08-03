@@ -23,6 +23,14 @@ vi.mock("../../../lib/api/secrets", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 import { RequirementsCard } from "./requirements-card";
+import { RD } from "../../../lib/workspace-copy";
+
+// Radix Tabs activates a trigger on mousedown (not click) — fireEvent.click
+// alone never fires that, so switching tabs needs real userEvent.
+async function openTab(name: string) {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  await user.click(screen.getByRole("tab", { name }));
+}
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -110,7 +118,7 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
     egress_domains: ["registry.npmjs.org"],
   };
 
-  it("renders the same contract groups the wizard renders", () => {
+  it("renders the same contract groups the wizard renders", async () => {
     render(
       <RequirementsCard
         ws={ws({ profile: profile as unknown as Record<string, unknown> })}
@@ -119,9 +127,13 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
         onSecretStored={vi.fn()}
       />,
     );
+    // The Requirements step opens on its Record tab (step-requirements.tsx) —
+    // Secrets/Egress each need switching to.
+    await openTab("Secrets");
     expect(screen.getByTestId("group-secrets")).toBeInTheDocument();
-    expect(screen.getByTestId("group-egress")).toBeInTheDocument();
     expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
+    await openTab("Egress");
+    expect(screen.getByTestId("group-egress")).toBeInTheDocument();
     expect(screen.getByText("registry.npmjs.org")).toBeInTheDocument();
   });
 
@@ -138,6 +150,7 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
         onSecretStored={vi.fn()}
       />,
     );
+    await user.click(screen.getByRole("tab", { name: "Secrets" }));
     const secretsGroup = within(screen.getByTestId("group-secrets"));
     await user.click(secretsGroup.getByRole("radio", { name: "Optional" }));
     await waitFor(() =>
@@ -149,5 +162,64 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
       ),
     );
     await waitFor(() => expect(onWorkspaceUpdated).toHaveBeenCalledWith(updated));
+  });
+});
+
+describe("RequirementsCard — Record/Egress tabs reflect the REAL llm_cred binding, not the wizard's PowerSource", () => {
+  const profile: WorkspaceProfile = {
+    required_secrets: [{ name: "DATABASE_URL", kind: "postgres" }],
+    egress_domains: ["registry.npmjs.org"],
+  };
+
+  it("treats an unbound workspace as the server default — Record a session stays enabled", () => {
+    render(
+      <RequirementsCard
+        ws={ws({ profile: profile as unknown as Record<string, unknown> })}
+        storedSecretNames={[]}
+        onWorkspaceUpdated={vi.fn()}
+        onSecretStored={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Record a session" })).toBeEnabled();
+    expect(screen.queryByText(RD.RECORD_HINT)).not.toBeInTheDocument();
+  });
+
+  it("treats a pinned api_key binding whose secret isn't stored as nothing resolving", () => {
+    render(
+      <RequirementsCard
+        ws={ws({
+          profile: profile as unknown as Record<string, unknown>,
+          llm_cred: { mode: "api_key", api_key_secret: "missing-key" },
+        })}
+        storedSecretNames={[]}
+        onWorkspaceUpdated={vi.fn()}
+        onSecretStored={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(RD.RECORD_HINT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record a session" })).toBeDisabled();
+  });
+
+  it("Egress tab seeds the 'from model access' row once the api_key binding's secret IS stored", async () => {
+    render(
+      <RequirementsCard
+        ws={ws({
+          profile: profile as unknown as Record<string, unknown>,
+          llm_cred: { mode: "api_key", api_key_secret: "anthropic-api-key" },
+        })}
+        storedSecretNames={["anthropic-api-key"]}
+        onWorkspaceUpdated={vi.fn()}
+        onSecretStored={vi.fn()}
+      />,
+    );
+    await openTab("Egress");
+    const egressGroup = within(screen.getByTestId("group-egress"));
+    const chip = egressGroup.getByText("from model access");
+    expect(chip).toHaveAttribute("title", RD.EGRESS_TIP);
+    // A pinned binding is named plainly (API key: <secret>) rather than a
+    // fabricated hostname — see step-requirements.tsx's ResolvedToken. (The
+    // SAME label also appears in the Model access chip above — scope to the
+    // egress group so the two don't collide.)
+    expect(egressGroup.getByText("API key: anthropic-api-key")).toBeInTheDocument();
   });
 });

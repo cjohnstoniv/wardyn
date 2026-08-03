@@ -42,16 +42,16 @@ describe("SetupLayout", () => {
     expect(screen.queryByText("Optional")).not.toBeInTheDocument();
   });
 
-  // Integrations directly follows Environment: the 13->9 collapse folded the old
-  // corporate-network steps and the model picker into this one step, for the
-  // same prerequisite reason they used to lead — connecting a model (or running
-  // a demo) needs egress.
-  it("footer renders 'Next: Integrations' on the environment step and calls onSelect(\"integrations\")", async () => {
+  // Corporate network directly follows Environment (9->10: it came back as its
+  // own step, right before Integrations — see steps.ts's PHASES comment for
+  // why the ORDER is the actual fix for "blocked network reads as bad
+  // credential").
+  it("footer renders 'Next: Corporate network' on the environment step and calls onSelect(\"corp_network\")", async () => {
     const onSelect = vi.fn();
     renderLayout({ current: "environment", onSelect });
-    const nextBtn = screen.getByRole("button", { name: /^next: integrations$/i });
+    const nextBtn = screen.getByRole("button", { name: /^next: corporate network$/i });
     await user.click(nextBtn);
-    expect(onSelect).toHaveBeenCalledWith("integrations");
+    expect(onSelect).toHaveBeenCalledWith("corp_network");
   });
 
   // No phase is collapsible in the 9-step rail, so the phase-level skip control

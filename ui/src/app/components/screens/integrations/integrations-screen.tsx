@@ -58,7 +58,9 @@ const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
 const CATEGORY_EMPTY: Record<IntegrationCategory, string> = {
   ai_provider: T.EMPTY_AI,
   scm_host: T.EMPTY_SCM,
-  artifact_mirror: T.EMPTY_MIRROR,
+  // T.EMPTY_MIRROR was retired with the Corporate-network restructure
+  // (mockup2/wardyn-integrations.js) — T.EMPTY_EGRESS is its replacement.
+  artifact_mirror: T.EMPTY_EGRESS,
   host_proxy: T.EMPTY_PROXY,
 };
 
@@ -78,6 +80,7 @@ type Loaded = { status: SetupStatus; siteConfig: SiteConfig; secretNames: string
 export function IntegrationsScreen({
   embedded = false,
   onChanged,
+  hideCategories,
 }: {
   /** Thin-embed mode (the Getting Started Integrations step): drops the
    *  PageHeader and the Integrations/Tools tab strip, keeping everything
@@ -88,6 +91,15 @@ export function IntegrationsScreen({
    *  Started) refresh its own copy of status/siteConfig/secrets so the rail's
    *  "Ready · N connected" badge doesn't go stale right after an in-embed add. */
   onChanged?: () => void;
+  /** Category sections to omit entirely (their rows, their contribution to
+   *  the empty-state total, and — for host_proxy — the proxy banner). Additive
+   *  and opt-in: omitted (the default), every category renders exactly as
+   *  before. Used by the Getting Started Integrations step now that Corporate
+   *  network owns host_proxy/artifact_mirror (egress redirection) as its own
+   *  step — see integrations-step.tsx's T.EMBED_SCOPE_NOTE. The full
+   *  /integrations page never passes this: all four categories still appear
+   *  there. */
+  hideCategories?: IntegrationCategory[];
 } = {}) {
   const operator = useOperator();
   const navigate = useNavigate();
@@ -143,8 +155,13 @@ export function IntegrationsScreen({
   }
 
   const { status, siteConfig, data } = loaded;
-  const totalRows = data.ai.length + data.scm.length + data.mirror.length + data.proxy.length;
-  const showBanner = proxyBannerNeeded(status, siteConfig);
+  const hidden = new Set(hideCategories);
+  const totalRows =
+    (hidden.has("ai_provider") ? 0 : data.ai.length) +
+    (hidden.has("scm_host") ? 0 : data.scm.length) +
+    (hidden.has("artifact_mirror") ? 0 : data.mirror.length) +
+    (hidden.has("host_proxy") ? 0 : data.proxy.length);
+  const showBanner = !hidden.has("host_proxy") && proxyBannerNeeded(status, siteConfig);
 
   const requestDelete = (row: IntegrationRow) => setToDelete(row);
   const runDelete = async () => deleteIntegration(toDelete!, siteConfig);
@@ -233,26 +250,30 @@ export function IntegrationsScreen({
                 onReCheck={load}
                 onDelete={requestDelete}
               />
-              <CategorySection
-                category="artifact_mirror"
-                label="Artifact mirrors"
-                rows={data.mirror}
-                operator={operator}
-                onOpen={(r) => navigate(`/integrations/${r.id}`)}
-                onRotate={setRotateName}
-                onReCheck={load}
-                onDelete={requestDelete}
-              />
-              <CategorySection
-                category="host_proxy"
-                label="Host proxy"
-                rows={data.proxy}
-                operator={operator}
-                onOpen={(r) => navigate(`/integrations/${r.id}`)}
-                onRotate={setRotateName}
-                onReCheck={load}
-                onDelete={requestDelete}
-              />
+              {!hidden.has("artifact_mirror") && (
+                <CategorySection
+                  category="artifact_mirror"
+                  label="Artifact mirrors"
+                  rows={data.mirror}
+                  operator={operator}
+                  onOpen={(r) => navigate(`/integrations/${r.id}`)}
+                  onRotate={setRotateName}
+                  onReCheck={load}
+                  onDelete={requestDelete}
+                />
+              )}
+              {!hidden.has("host_proxy") && (
+                <CategorySection
+                  category="host_proxy"
+                  label="Host proxy"
+                  rows={data.proxy}
+                  operator={operator}
+                  onOpen={(r) => navigate(`/integrations/${r.id}`)}
+                  onRotate={setRotateName}
+                  onReCheck={load}
+                  onDelete={requestDelete}
+                />
+              )}
             </>
           )}
 

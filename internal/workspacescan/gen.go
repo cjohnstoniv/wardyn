@@ -91,9 +91,13 @@ type genDevcontainer struct {
 //
 // artifactBases maps an artifact ecosystem (npm|pip|cargo|maven|go|nuget) to the
 // operator's corporate registry base URL (from the persisted site-config,
-// URL-ONLY — never a token). When non-empty, the matching per-tool config files
-// (and go's containerEnv) are merged in so a committed workspace pulls from the
-// corporate mirror; pass nil when no redirect is configured.
+// URL-ONLY — never a token). The caller (api.artifactBaseURLs) derives this
+// from the Ecosystem-tier subset of types.SiteConfig.EgressRedirects, already
+// skipping every NETWORK-ONLY row (Ecosystem "") — this function only ever
+// sees an ecosystem that actually wants a config file. When non-empty, the
+// matching per-tool config files (and go's containerEnv) are merged in so a
+// committed workspace pulls from the corporate mirror; pass nil when no
+// redirect is configured.
 func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string) (map[string]string, error) {
 	dc := genDevcontainer{Image: genBaseImage}
 	if features := featuresFor(p.Languages); len(features) > 0 {

@@ -5,9 +5,7 @@ package api
 
 import (
 	"context"
-	"maps"
 	neturl "net/url"
-	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -63,36 +61,50 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 	return unionAllowedDomains(spec, sc.ScmHosts)
 }
 
-// substituteArtifactEgress applies the operator's artifact-registry redirects to
-// a run's AllowedDomains: for each CONFIGURED ecosystem it DROPS that language's
-// public-registry hosts (markers.go's egress* literals, via
-// workspacescan.PublicRegistryHosts) and ADDS the corporate mirror host (the host
-// of the override base URL). Corp REPLACES public for configured langs;
-// unconfigured langs are untouched, and markers.go stays universally correct —
-// the substitution lives here, at the composition layer that reads site-config,
-// never in the marker literals. Returns a FRESH slice (never mutates the input's
-// backing array); a no-op (returns the input) when nothing is configured. A
-// malformed override base URL leaves that ecosystem's public hosts in place
-// (fail safe: never silently drop egress a build still needs).
+// substituteArtifactEgress applies the operator's egress redirects to a run's
+// AllowedDomains. Two tiers (types.SiteConfig.EgressRedirects):
+//   - Ecosystem set: UNCHANGED from the old ArtifactOverride behavior — DROPS
+//     that language's entire public-registry host set (markers.go's egress*
+//     literals, via workspacescan.PublicRegistryHosts), not just the one
+//     redirect's own From host, since a mirror commonly fronts more than one
+//     public host for the same ecosystem (e.g. pip's index host AND its file-
+//     download CDN) and byte-identical fold-compat depends on dropping both.
+//   - Ecosystem "" (network-only): DROPS exactly the one declared From host —
+//     there is no per-ecosystem table to consult for an arbitrary redirect.
+//
+// Either tier ADDS the redirect's To host. Corp REPLACES public for configured
+// redirects; everything else is untouched, and markers.go stays universally
+// correct — the substitution lives here, at the composition layer that reads
+// site-config, never in the marker literals. Returns a FRESH slice (never
+// mutates the input's backing array); a no-op (returns the input) when nothing
+// is configured. A malformed From/To leaves that redirect's public host(s) in
+// place (fail safe: never silently drop egress a build still needs).
 func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
-	if len(sc.ArtifactOverrides) == 0 {
+	if len(sc.EgressRedirects) == 0 {
 		return domains
 	}
 	drop := map[string]bool{}
 	var add []string
 	added := map[string]bool{}
-	ecos := slices.Sorted(maps.Keys(sc.ArtifactOverrides)) // deterministic add order
-	for _, eco := range ecos {
-		corp := strings.ToLower(workspacescan.HostOf(sc.ArtifactOverrides[eco].BaseURL))
-		if corp == "" {
-			continue
+	for _, r := range sc.EgressRedirects {
+		to := strings.ToLower(workspacescan.HostOf(r.To))
+		if to == "" {
+			continue // malformed To: this redirect contributes nothing
 		}
-		for _, h := range workspacescan.PublicRegistryHosts(eco) {
-			drop[strings.ToLower(h)] = true
+		if r.Ecosystem != "" {
+			for _, h := range workspacescan.PublicRegistryHosts(r.Ecosystem) {
+				drop[strings.ToLower(h)] = true
+			}
+		} else {
+			from := strings.ToLower(workspacescan.HostOf(r.From))
+			if from == "" {
+				continue // malformed From: fail safe, drop nothing for this row
+			}
+			drop[from] = true
 		}
-		if !added[corp] {
-			added[corp] = true
-			add = append(add, corp)
+		if !added[to] {
+			added[to] = true
+			add = append(add, to)
 		}
 	}
 	out := make([]string, 0, len(domains)+len(add))

@@ -656,9 +656,9 @@ func TestEffectiveIntegrations_ScmHostsMergesWithCredential(t *testing.T) {
 }
 
 func TestEffectiveIntegrations_ArtifactMirror(t *testing.T) {
-	sc := types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-		"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token"},
-		"pip": {BaseURL: "https://artifactory.corp/api/pip/pip-remote/"},
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
+		{From: "https://pypi.org/simple/", To: "https://artifactory.corp/api/pip/pip-remote/", Ecosystem: "pip"},
 	}}
 	srv := New(integrationsTestConfig(t, sc, nil))
 	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "artifact_mirror:artifactory.corp")

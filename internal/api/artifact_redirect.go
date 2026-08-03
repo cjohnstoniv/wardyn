@@ -32,34 +32,47 @@ type artifactRedirectPlan struct {
 }
 
 // artifactBaseURLs extracts ecosystem -> base URL (URL-only, no token) from a
-// SiteConfig, or nil when no overrides are configured.
+// SiteConfig's EgressRedirects, skipping every NETWORK-ONLY row (Ecosystem ==
+// ""), or nil when nothing is configured. This is the sole ecosystem-scoped
+// filter both EmitArtifactConfig callers (planArtifactRedirect below,
+// workspaces.go's envAsCodeFor) go through, so a network-only redirect can
+// never accidentally grow a package-manager config file.
 func artifactBaseURLs(sc types.SiteConfig) map[string]string {
-	if len(sc.ArtifactOverrides) == 0 {
+	if len(sc.EgressRedirects) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(sc.ArtifactOverrides))
-	for eco, ov := range sc.ArtifactOverrides {
-		out[eco] = ov.BaseURL
+	out := make(map[string]string, len(sc.EgressRedirects))
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "" {
+			continue // network-only: no per-tool config file
+		}
+		out[r.Ecosystem] = r.To
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
 
-// planArtifactRedirect builds the dispatch-time artifact-redirect plan for a run
+// planArtifactRedirect builds the dispatch-time egress-redirect plan for a run
 // from the operator-wide site-config. It:
-//   - emits each configured ecosystem's per-tool config (URL-only) as a base64
-//     env payload agent-run materializes under $HOME, plus go's GOPROXY/GOSUMDB;
-//   - for each corp host WITH a token secret THAT EXISTS, authors a stored-secret
-//     api_key grant + injection rule so the token injects proxy-side, and marks
-//     the host for TLS-MITM (the injector cannot rewrite an opaque CONNECT).
+//   - emits each Ecosystem-tier redirect's per-tool config (URL-only) as a
+//     base64 env payload agent-run materializes under $HOME, plus go's
+//     GOPROXY/GOSUMDB (network-only rows contribute no file — see
+//     types.SiteConfig.EgressRedirects);
+//   - for EVERY redirect's To host WITH a token secret THAT EXISTS (both
+//     tiers), authors a stored-secret api_key grant + injection rule so the
+//     token injects proxy-side, and marks the host for TLS-MITM (the injector
+//     cannot rewrite an opaque CONNECT).
 //
-// Config-only (no token, or a token whose secret is absent) still redirects the
-// URL — anonymous-read corp repos work without a token, and a dangling token ref
-// degrades to config-only rather than failing the run (non-blocking posture).
-// Grant creation touches the store; a create failure is audited and that one
-// ecosystem is skipped, never aborting the run.
+// A redirect with no token (or a token whose secret is absent) still redirects
+// the URL/host — anonymous-read corp destinations work without a token, and a
+// dangling token ref degrades to redirect-only rather than failing the run
+// (non-blocking posture). Grant creation touches the store; a create failure is
+// audited and that one redirect is skipped, never aborting the run.
 func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig) artifactRedirectPlan {
 	var plan artifactRedirectPlan
-	if len(sc.ArtifactOverrides) == 0 {
+	if len(sc.EgressRedirects) == 0 {
 		return plan
 	}
 	files, env := workspacescan.EmitArtifactConfig(artifactBaseURLs(sc))
@@ -70,8 +83,8 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		plan.configB64 = encodeArtifactConfig(files)
 	}
 
-	// Which stored secrets exist: token injection degrades to config-only when the
-	// referenced secret is absent (never fail the run on a dangling ref).
+	// Which stored secrets exist: token injection degrades to redirect-only when
+	// the referenced secret is absent (never fail the run on a dangling ref).
 	present := map[string]bool{}
 	if s.cfg.Secrets != nil {
 		if names, err := s.cfg.Secrets.List(ctx); err == nil {
@@ -81,25 +94,25 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}
 	}
 
-	// Dedupe token injection by corp HOST — one Artifactory commonly backs several
-	// ecosystems on different paths. Deterministic: iterate ecosystems sorted so a
-	// shared host with divergent token refs resolves first-wins stably.
-	ecos := slices.Sorted(maps.Keys(sc.ArtifactOverrides))
+	// Dedupe token injection by TO host — one corp mirror/relay commonly backs
+	// several redirects (ecosystem or network-only alike). EgressRedirects is a
+	// stored SLICE (operator-authored order, already deterministic), so a
+	// shared host with divergent token refs resolves first-sighted-wins stably
+	// without needing a sort.
 	seenHost := map[string]bool{}
-	for _, eco := range ecos {
-		ov := sc.ArtifactOverrides[eco]
-		if ov.TokenSecretRef == "" {
-			continue // config-only ecosystem (anonymous read)
+	for _, r := range sc.EgressRedirects {
+		if r.TokenSecretRef == "" {
+			continue // no token configured for this redirect
 		}
-		host := strings.ToLower(workspacescan.HostOf(ov.BaseURL))
+		host := strings.ToLower(workspacescan.HostOf(r.To))
 		if host == "" || seenHost[host] {
 			continue
 		}
-		if !present[ov.TokenSecretRef] {
+		if !present[r.TokenSecretRef] {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
-					"ecosystem": eco, "host": host,
-					"detail": "token_secret_ref not found; config-only redirect (no token injected)",
+					"ecosystem": r.Ecosystem, "host": host,
+					"detail": "token_secret_ref not found; redirect applied without token injection",
 				})))
 			continue
 		}
@@ -109,7 +122,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 			"host":        host,
 			"header":      "Authorization",
 			"format":      "Bearer %s",
-			"secret_name": ov.TokenSecretRef,
+			"secret_name": r.TokenSecretRef,
 		})
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: s.cfg.Now().UTC(),
@@ -117,7 +130,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}); gerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "failure", mustJSON(map[string]any{
-					"ecosystem": eco, "host": host, "error": gerr.Error(),
+					"ecosystem": r.Ecosystem, "host": host, "error": gerr.Error(),
 				})))
 			continue
 		}
@@ -129,8 +142,8 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		plan.mitmHosts = append(plan.mitmHosts, host)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 			run.ID.String(), "success", mustJSON(map[string]any{
-				"ecosystem": eco, "host": host, "tls_mitm": true, "secret_name": ov.TokenSecretRef,
-				"detail": "corporate registry token injected proxy-side; sandbox never holds it",
+				"ecosystem": r.Ecosystem, "host": host, "tls_mitm": true, "secret_name": r.TokenSecretRef,
+				"detail": "corporate mirror/relay token injected proxy-side; sandbox never holds it",
 			})))
 	}
 	return plan

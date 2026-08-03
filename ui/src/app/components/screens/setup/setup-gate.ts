@@ -47,6 +47,20 @@ export function markIntegrationsSkipped(): void {
   lsSet(INTEGRATIONS_SKIPPED_KEY, "1");
 }
 
+// Corporate-network-skip flag — same pattern as integrationsSkipped above, for
+// the (optional) Corporate network step: an explicit "Skip this step" earns it
+// the checkmark with nothing configured, rather than requiring a real proxy or
+// egress redirect. A real configured value (proxy or >=1 redirect) makes it moot.
+const CORP_NETWORK_SKIPPED_KEY = "wardyn-corp-network-skipped";
+
+export function corpNetworkSkipped(): boolean {
+  return lsGet(CORP_NETWORK_SKIPPED_KEY) === "1";
+}
+
+export function markCorpNetworkSkipped(): void {
+  lsSet(CORP_NETWORK_SKIPPED_KEY, "1");
+}
+
 // Visited-step set (A4) — steps the operator has navigated AWAY from at least
 // once (per browser), regardless of direction (Next, Back, a rail jump, or an
 // in-step jump all count — leaving a step backward still means you've seen it).

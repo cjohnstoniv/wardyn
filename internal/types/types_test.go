@@ -448,9 +448,10 @@ func TestWorkspaceLLMCredDecode(t *testing.T) {
 func TestSiteConfigRoundTrip(t *testing.T) {
 	in := SiteConfig{
 		UpstreamProxySecretRef: "corp-proxy-url",
-		ArtifactOverrides: map[string]ArtifactOverride{
-			"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token"},
-			"go":  {BaseURL: "https://artifactory.corp/api/go/go-remote"},
+		UpstreamProxyURL:       "http://proxy.corp:3128",
+		EgressRedirects: []EgressRedirect{
+			{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
+			{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
 		},
 		ScmHosts: []string{"dev.azure.com", "github.example.com"},
 	}

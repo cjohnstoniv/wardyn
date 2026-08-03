@@ -14,16 +14,20 @@ import {
   BEDROCK_LANE_META,
   IMPOSSIBLE,
   TOOLS,
+  EGRESS_SUGGEST,
 } from "./integrations";
 
 // Sentinel byte-exact pins against the approved mock export
-// (mockup/wardyn-integrations.js `T`/`CAPS`) — em-dashes, the curly single
-// quotes in BLAST[1], and the middle dot in CAPS.azure()'s label are all
-// significant and easy to flatten by hand-retyping.
+// (mockup2/wardyn-integrations.js `T`/`CAPS`/`EGRESS_SUGGEST`) — em-dashes, the
+// curly single quotes in BLAST[1], and the middle dot in CAPS.azure()'s label
+// are all significant and easy to flatten by hand-retyping. Full deep-equal +
+// key-set verification against the mock's own literal lives in a one-off
+// scratchpad script (real TS compile + eval, not a re-typed copy) — these
+// sentinels are the fast, in-repo tripwire for the same class of drift.
 describe("integrations — T canon sentinel pins", () => {
   it("pins plain entries verbatim, em-dashes included", () => {
     expect(T.LEDE).toBe(
-      "Named connections to systems outside Wardyn — model providers, git hosts, artifact mirrors, your corporate proxy. Wardyn runs without any of them.",
+      "Named connections to systems outside Wardyn — model providers, git hosts, egress redirects, your corporate proxy. Wardyn runs without any of them.",
     );
     expect(T.LAW).toBe(
       "A tool is what the image carries. An integration is what it connects through. Wardyn never installs tools into your image — it only wires them at run time.",
@@ -31,6 +35,59 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.X_SUB_DIRECT).toBe(
       "A subscription token is accepted only for Claude-Code-shaped requests; anything else comes back 429. That's Anthropic's gate, not a Wardyn setting.",
     );
+  });
+
+  // The 13->10 Corporate-network restructure's changed/new copy — a corporate
+  // proxy is now ordered BEFORE integrations in Getting Started (steps.ts), so
+  // the banner points there instead of just offering an inline add, and the
+  // embed note explains why host proxy / egress redirection stop appearing
+  // once that step exists. EMPTY_MIRROR is GONE (superseded by EMPTY_EGRESS) —
+  // asserting `in` rather than a value pins the deletion itself.
+  it("pins the corp-network-restructure copy (changed + new), and confirms EMPTY_MIRROR is deleted", () => {
+    expect(T.PROXY_BANNER).toBe(
+      "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
+    );
+    expect(T.CAT_MIRROR).toBe(
+      "Points outbound traffic — registries, container images, a specific host — at an internal mirror or appliance. Skip if the public endpoints are reachable.",
+    );
+    expect(T.FOOTNOTE).toBe(
+      "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
+    );
+    expect(T.CORP_LEDE).toBe(
+      "Optional, and first for a reason. If this machine reaches the internet through a corporate proxy or an internal registry mirror, set that up before connecting anything else — a model provider or a git host you add first will look broken when it's the network that's blocked.",
+    );
+    expect(T.EMBED_SCOPE_NOTE).toBe(
+      "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
+    );
+    expect(T.EMPTY_EGRESS).toBe("None. Outbound traffic goes to the public endpoints.");
+    expect(T.NOPROXY_NOTE).toBe("Not applied — Wardyn's own egress allowlist decides what a sandbox may reach.");
+    expect(T.NOT_CONFIGURED).toBe("Not configured — sandboxes go direct");
+    expect(T.CRED_URL_NOTE).toBe(
+      "This URL has a username and password in it. Wardyn will store it as a secret so it isn't displayed or logged; the sandbox never holds it either way.",
+    );
+    expect("EMPTY_MIRROR" in T).toBe(false);
+  });
+
+  it("pins the five real Test-probe verdict strings verbatim (T.TEST_STANDING makes clear these are honest, not inferred)", () => {
+    expect(T.TEST_OK).toBe("Reached artifactory.corp.internal through the proxy in 240ms.");
+    expect(T.TEST_BLOCKED).toBe("Could not reach it: connection refused through http://proxy.corp.acme.com:8080.");
+    expect(T.TEST_BYPASS).toBe(
+      "The mirror answered, but registry.npmjs.org is still reachable from a sandbox — runs can still bypass the mirror.",
+    );
+    expect(T.TEST_NORUNNER).toBe(
+      "No runner is configured on this host — there's nothing to launch a probe with. Configure a barrier first, then test.",
+    );
+    expect(T.TEST_STANDING).toBe(
+      "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
+    );
+  });
+
+  it("pins EGRESS_SUGGEST verbatim — 11 entries, label IS the url, including both container-images rows", () => {
+    expect(EGRESS_SUGGEST).toHaveLength(11);
+    expect(EGRESS_SUGGEST[0]).toEqual(["https://registry.npmjs.org", "npm"]);
+    expect(EGRESS_SUGGEST[9]).toEqual(["https://registry-1.docker.io", "container images"]);
+    expect(EGRESS_SUGGEST[10]).toEqual(["https://ghcr.io", "container images"]);
+    expect(EGRESS_SUGGEST.filter(([, eco]) => eco === "container images")).toHaveLength(2);
   });
 
   it("pins BLAST verbatim, including the curly quotes around 'Describe your task'", () => {

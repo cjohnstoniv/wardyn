@@ -149,13 +149,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all nine funnel steps and Next/Back move within bounds", async () => {
+  it("walks all ten funnel steps and Next/Back move within bounds", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is anchored as /^back$/i so it can't collide with another
-    // Back-ish verb. STEP_ORDER (13 -> 9 collapse): essentials [environment,
-    // integrations] → demos (four sub-steps) → your work [workspaces] → finish.
+    // Back-ish verb. STEP_ORDER (9 -> 10: Corporate network came back): essentials
+    // [environment, corp_network, integrations] → demos (four sub-steps) → your
+    // work [workspaces] → finish.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
@@ -164,8 +165,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByText("gVisor runtime")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^back$/i })).toBeDisabled();
 
-    // Integrations directly follows Environment — it folds in what used to be
-    // three corporate-network steps plus the model picker.
+    // Corporate network directly follows Environment (the order itself is the
+    // fix for "blocked network reads as bad credential" — see steps.ts).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+
+    // Integrations follows Corporate network — it folds in the model/SCM-host
+    // picker (host proxy / egress redirection moved to the step just visited).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i }),
@@ -220,6 +226,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
 
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
     expect(
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i }),
@@ -244,6 +251,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
@@ -262,6 +270,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
@@ -276,6 +285,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(await screen.findByRole("button", { name: /^skip this step$/i }));
@@ -289,6 +299,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     it("visited-step tracking round-trips through localStorage across a remount", async () => {
       const { unmount } = renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
@@ -357,8 +368,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (step 8 of 9) — checks live there now, not the barrier step
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    // walk to Review (step 9 of 10) — checks live there now, not the barrier step
+    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -405,7 +416,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByText("Vault")).toBeInTheDocument();
     expect(screen.queryByText("Secret store durability")).not.toBeInTheDocument();
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

@@ -13,14 +13,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// artifactSiteCfgStore is dispatchTestStore with ONE operator artifact override,
+// artifactSiteCfgStore is dispatchTestStore with ONE operator egress redirect,
 // so the dispatch under test really widens its egress mid-flight
 // (substituteArtifactEgress) instead of handing the proxy the policy it was given.
 type artifactSiteCfgStore struct{ *dispatchTestStore }
 
 func (artifactSiteCfgStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
-		"npm": {BaseURL: "https://artifactory.corp/npm"},
+	return types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", Ecosystem: "npm"},
 	}}, nil
 }
 

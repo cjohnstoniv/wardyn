@@ -133,19 +133,25 @@ func ageKeyCheck(durable bool) SetupCheck {
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
-// proxy, artifact-registry overrides, default SCM hosts) has been authored yet.
-// Always "info" — it is optional and skippable, never a blocking gate.
+// proxy, egress redirects, default SCM hosts) has been authored yet. Always
+// "info" — it is optional and skippable, never a blocking gate.
+//
+// Deliberately does not check the deprecated ArtifactOverrides: sc always
+// comes from Store.GetSiteConfig, and every persisted document has already
+// gone through either the PUT-time fold (foldLegacyArtifactOverrides,
+// site_config.go) or the one-time 0030 migration, so that field is provably
+// always empty by the time it is read back here.
 func siteConfigCheck(sc types.SiteConfig) SetupCheck {
-	if sc.UpstreamProxySecretRef != "" || len(sc.ArtifactOverrides) > 0 || len(sc.ScmHosts) > 0 {
+	if sc.UpstreamProxySecretRef != "" || sc.UpstreamProxyURL != "" || len(sc.EgressRedirects) > 0 || len(sc.ScmHosts) > 0 {
 		return SetupCheck{
 			ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-			Detail: "An operator-wide site config is set (upstream proxy / artifact-registry overrides / SCM hosts); every run inherits it.",
+			Detail: "An operator-wide site config is set (upstream proxy / egress redirects / SCM hosts); every run inherits it.",
 		}
 	}
 	return SetupCheck{
 		ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
-		Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
-		Fix:    "Set one via PUT /api/v1/site-config (or the Host Proxy / Artifact Redirect setup steps).",
+		Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, egress redirects, and default SCM hosts that every run would inherit.",
+		Fix:    "Set one via PUT /api/v1/site-config (or the Host Proxy / Corporate Network setup steps).",
 	}
 }
 
