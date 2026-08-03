@@ -42,15 +42,50 @@ const (
 	// this literal is reached only via its own explicit `exit`, never via a
 	// passed-through `$?`.
 	redirectProbeBypassCode = 250
-	// proxyProbeHost is the known-reachable host a test-proxy probe curls
-	// THROUGH wardyn-proxy (chained to the configured upstream, if any).
-	// api.github.com is already Wardyn's own most central external dependency
-	// (every GitHub clone/broker call needs it) -- if the corp upstream can't
-	// reach it, most real runs would be broken too, which makes it a more
-	// useful diagnostic than an arbitrary unrelated pick.
-	proxyProbeHost = "api.github.com"
-	proxyProbeURL  = "https://" + proxyProbeHost
+	// proxyProbeInterceptedCode is proxyProbeScript's own sentinel for "an
+	// endpoint ANSWERED, but with something other than its known payload" --
+	// i.e. a captive portal or a corporate block page replied 200 in its place.
+	// Same reserved range and same rule as redirectProbeBypassCode: reached
+	// only via an explicit `exit`, never a passed-through curl code.
+	proxyProbeInterceptedCode = 251
 )
+
+// proxyProbeTargets are the endpoints a connectivity probe tries, in order,
+// each paired with a substring its REAL response is known to contain.
+//
+// Two properties matter, and a plausible-looking pick fails both. First,
+// availability: this must not be a host an enterprise plausibly blocks, because
+// a false "no internet" now GATES setup. api.github.com was the original choice
+// and is a bad one -- plenty of orgs block GitHub outright, and Wardyn would
+// have reported their working network as broken. These two are the endpoints
+// Windows (NCSI) and Firefox use for their own network detection, so blocking
+// them breaks the OS's connectivity indicator -- about as close to
+// structurally-unblockable as the public internet offers.
+//
+// Second, and easier to miss: the response CONTENT has to be checked. A
+// corporate block page is a 200 with HTML in it, so an exit-code-only probe
+// reports "reached" while egress is firmly blocked -- precisely backwards on
+// the networks this feature exists for. Matching the known payload is how
+// captive-portal detection works everywhere, and it is why these endpoints
+// publish a fixed body at all.
+var proxyProbeTargets = []struct{ url, want string }{
+	{"https://www.msftconnecttest.com/connecttest.txt", "Microsoft Connect Test"},
+	{"https://detectportal.firefox.com/success.txt", "success"},
+}
+
+// proxyProbeHosts is proxyProbeTargets' host set, for the probe run's egress
+// allowlist. Derived, never hand-listed -- a target added above without its
+// host allowed would fail as "DNS resolution failed" and read as a real
+// network fault.
+var proxyProbeHosts = func() []string {
+	hosts := make([]string, 0, len(proxyProbeTargets))
+	for _, t := range proxyProbeTargets {
+		if h := workspacescan.HostOf(t.url); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}()
 
 // siteConfigProbeWaitTimeout bounds how long a handler waits for the
 // throwaway probe run to reach a terminal state before reclaiming it. The UI
@@ -60,14 +95,42 @@ const (
 // seconds to exercise the timeout/reclaim path.
 var siteConfigProbeWaitTimeout = 50 * time.Second
 
-// proxyProbeScript curls a known-reachable host through the sandbox's normal
-// egress path (HTTP_PROXY/HTTPS_PROXY already point at wardyn-proxy, which
-// chains to the operator's configured upstream automatically -- see
-// resolveRunUpstreamProxy in runs_dispatch.go). No -f: any COMPLETE HTTP
-// response (even a 4xx) proves the path is reachable end to end; only a
-// connection-level failure (DNS/refused/TLS/timeout) is a real curl exit code
-// worth reporting -- see curlExitDetail.
-const proxyProbeScript = `curl -sS -o /dev/null --connect-timeout 5 --max-time 20 "$WARDYN_PROBE_URL"`
+// proxyProbeScript walks proxyProbeTargets through the sandbox's normal egress
+// path (HTTP_PROXY/HTTPS_PROXY already point at wardyn-proxy, which chains to
+// the operator's configured upstream automatically -- see
+// resolveRunUpstreamProxy in runs_dispatch.go) and succeeds on the FIRST target
+// that returns its own known payload.
+//
+// Three outcomes, deliberately distinguished:
+//   - a target answers with its expected body  -> exit 0, genuinely reached.
+//   - every target fails at the connection level -> propagate the last curl
+//     exit code, so curlExitDetail can name the real cause (DNS/refused/TLS).
+//   - something ANSWERED but with the wrong body -> exit the intercepted
+//     sentinel. This is the case an exit-code-only probe gets backwards: a
+//     corporate block page is a perfectly well-formed 200.
+//
+// The URL/expectation pairs are compiled-in constants, never operator input, so
+// they are interpolated into the script directly (see buildProxyProbeScript);
+// nothing a caller controls reaches this shell.
+var proxyProbeScript = buildProxyProbeScript()
+
+func buildProxyProbeScript() string {
+	var b strings.Builder
+	b.WriteString("answered=0\nlast=0\n")
+	for _, t := range proxyProbeTargets {
+		fmt.Fprintf(&b, `out=$(curl -sS --connect-timeout 5 --max-time 15 %q 2>/dev/null)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  answered=1
+  case "$out" in *%q*) exit 0 ;; esac
+else
+  last=$rc
+fi
+`, t.url, t.want)
+	}
+	fmt.Fprintf(&b, "[ \"$answered\" -eq 1 ] && exit %d\nexit \"$last\"\n", proxyProbeInterceptedCode)
+	return b.String()
+}
 
 // redirectProbeScript runs the TWO-probe check a redirect needs, inside ONE
 // sandbox so both probes observe the SAME confinement class's structural
@@ -302,7 +365,17 @@ func classifyProxyProbe(res probeRunResult, host string, viaProxy bool) siteConf
 	case res.hasExitCode && res.exitCode == 0:
 		return siteConfigProbeResponse{
 			State:     "reached",
-			Detail:    fmt.Sprintf("reached %s %s in %s", host, path, res.elapsed.Round(time.Millisecond)),
+			Detail:    fmt.Sprintf("reached the public internet %s in %s (verified against %s)", path, res.elapsed.Round(time.Millisecond), host),
+			ElapsedMS: res.elapsed.Milliseconds(),
+		}
+	case res.hasExitCode && res.exitCode == proxyProbeInterceptedCode:
+		// The single most misleading corporate-network state, and the one an
+		// exit-code-only probe scores as success: something replied, so the
+		// connection worked, but it was not the endpoint we asked for.
+		return siteConfigProbeResponse{
+			State: "blocked",
+			Detail: fmt.Sprintf("something answered %s but it was not the real endpoint — a captive portal or a corporate block page is intercepting. "+
+				"Egress is not actually open, whatever the reply said", path),
 			ElapsedMS: res.elapsed.Milliseconds(),
 		}
 	case res.hasExitCode:
@@ -405,15 +478,15 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 
 	actor := principalFromRequest(r)
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, proxyProbeScript,
-		[]string{proxyProbeHost}, map[string]string{"WARDYN_PROBE_URL": proxyProbeURL})
+		proxyProbeHosts, nil)
 	if perr != nil {
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
 	}
-	resp := classifyProxyProbe(res, proxyProbeHost, viaProxy)
+	resp := classifyProxyProbe(res, strings.Join(proxyProbeHosts, ", "), viaProxy)
 	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
-			"state": resp.State, "target_host": proxyProbeHost, "elapsed_ms": resp.ElapsedMS,
+			"state": resp.State, "target_host": strings.Join(proxyProbeHosts, ", "), "elapsed_ms": resp.ElapsedMS,
 		})))
 	writeJSON(w, http.StatusOK, resp)
 }

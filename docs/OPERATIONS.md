@@ -228,11 +228,30 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-redirect \
   -d '{"from":"https://registry.npmjs.org/"}'
 ```
 
-`test-proxy` takes no body; it 400s outright if no upstream proxy is
-configured yet (nothing to test). It curls a known-reachable host
-(`api.github.com`) through the sandbox's normal egress, which dispatch
-already chains to the configured upstream — so it proves the path a real run
-takes, not a reconstruction of it.
+`test-proxy` takes no body, and runs whether or not an upstream proxy is
+configured — with one it proves the chain works, without one it proves direct
+egress works, and it says which path it took. The question it answers ("can a
+sandbox on this host reach the internet?") matters most where nothing is
+configured yet. It goes out through the sandbox's normal egress, which
+dispatch already chains to the configured upstream, so it proves the path a
+real run takes rather than a reconstruction of it.
+
+Two details of *how* it decides, both of which change the answer on a
+corporate network:
+
+- **It does not use github.com.** Plenty of organisations block GitHub
+  outright, and a false "no internet" from a working network is worse than no
+  check at all. The targets are the endpoints Windows (NCSI) and Firefox use
+  for their own connectivity detection — blocking those breaks the operating
+  system's network indicator, so they are about as close to unblockable as the
+  public internet offers. Several are tried; one blocked endpoint does not
+  fail the probe.
+- **It checks the response body, not just the exit code.** A corporate block
+  page or captive portal is a perfectly well-formed HTTP 200, so an
+  exit-code-only probe reports success while egress is firmly shut. Each
+  target publishes a fixed payload; the probe matches it. A reply that arrives
+  but does not match is reported as blocked, naming interception as the cause
+  — that state is the whole reason the check exists.
 
 `test-redirect` takes `{"from": "..."}` naming an entry already in the stored
 `egress_redirects` (404 if it names none — the request's `from` only ever

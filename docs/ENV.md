@@ -206,7 +206,6 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
 | `WARDYN_MITM_CA_PEM` | string (PEM) | (unset) | MITM CA the sandbox trusts |
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
-| `WARDYN_PROBE_URL` | string | (unset) | site-config test-proxy: the known-reachable URL the one-shot exec probe curls through wardyn-proxy (`internal/api/site_config_probe.go`) |
 | `WARDYN_PROBE_TO_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `to` URL the probe fetches through wardyn-proxy |
 | `WARDYN_PROBE_FROM_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `from` URL the probe fetches directly (`--noproxy`), to check whether the mirror is actually enforced |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |

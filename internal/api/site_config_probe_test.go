@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,9 +18,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // ─── classify* pure state-mapping tables ─────────────────────────────────────
+
+// probeHostsLabel is the human-readable host list the classifier embeds; the
+// probe now tries several endpoints, so tests assert against the joined form.
+var probeHostsLabel = strings.Join(proxyProbeHosts, ", ")
 
 func TestClassifyProxyProbe(t *testing.T) {
 	cases := []struct {
@@ -28,7 +34,7 @@ func TestClassifyProxyProbe(t *testing.T) {
 		wantState  string
 		wantDetail string
 	}{
-		{"reached", probeRunResult{hasExitCode: true, exitCode: 0, elapsed: 250 * time.Millisecond}, "reached", proxyProbeHost},
+		{"reached", probeRunResult{hasExitCode: true, exitCode: 0, elapsed: 250 * time.Millisecond}, "reached", probeHostsLabel},
 		{"blocked with a real curl error, never a generic string",
 			probeRunResult{hasExitCode: true, exitCode: 7}, "blocked", "connection refused"},
 		{"blocked: DNS", probeRunResult{hasExitCode: true, exitCode: 6}, "blocked", "DNS resolution failed"},
@@ -40,15 +46,15 @@ func TestClassifyProxyProbe(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := classifyProxyProbe(c.res, proxyProbeHost, true)
+			got := classifyProxyProbe(c.res, probeHostsLabel, true)
 			if got.State != c.wantState {
 				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
 			}
 			if !strings.Contains(got.Detail, c.wantDetail) {
 				t.Errorf("detail = %q, want it to contain %q", got.Detail, c.wantDetail)
 			}
-			if !strings.Contains(got.Detail, proxyProbeHost) {
-				t.Errorf("detail = %q, want it to name what was probed (%s)", got.Detail, proxyProbeHost)
+			if !strings.Contains(got.Detail, probeHostsLabel) {
+				t.Errorf("detail = %q, want it to name what was probed (%s)", got.Detail, probeHostsLabel)
 			}
 		})
 	}
@@ -332,8 +338,8 @@ func TestHandleTestSiteConfigProxy_Reached(t *testing.T) {
 	if got.State != "reached" {
 		t.Errorf("state = %q, want reached (detail=%q)", got.State, got.Detail)
 	}
-	if !strings.Contains(got.Detail, proxyProbeHost) {
-		t.Errorf("detail = %q, want it to name %s", got.Detail, proxyProbeHost)
+	if !strings.Contains(got.Detail, probeHostsLabel) {
+		t.Errorf("detail = %q, want it to name %s", got.Detail, probeHostsLabel)
 	}
 
 	events := ps.actionEvents("site_config.test_proxy")
@@ -345,8 +351,8 @@ func TestHandleTestSiteConfigProxy_Reached(t *testing.T) {
 	}
 	var data map[string]any
 	_ = json.Unmarshal(events[0].Data, &data)
-	if data["target_host"] != proxyProbeHost {
-		t.Errorf("audit target_host = %v, want %s", data["target_host"], proxyProbeHost)
+	if data["target_host"] != probeHostsLabel {
+		t.Errorf("audit target_host = %v, want %s", data["target_host"], probeHostsLabel)
 	}
 	if data["state"] != "reached" {
 		t.Errorf("audit state = %v, want reached", data["state"])
@@ -391,6 +397,46 @@ func TestHandleTestSiteConfigProxy_NoUpstreamConfiguredStillProbes(t *testing.T)
 	}
 	if ps.runCount() != 1 {
 		t.Errorf("runCount = %d, want 1 -- the probe must actually launch", ps.runCount())
+	}
+}
+
+func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
+	// The corporate-network state an exit-code-only probe scores as SUCCESS: a
+	// block page or captive portal replies 200, so the connection "worked"
+	// while egress is firmly shut. Now that a green probe UNLOCKS the setup
+	// gate, calling this reached would wave an operator through a network that
+	// cannot actually reach anything.
+	got := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: proxyProbeInterceptedCode}, probeHostsLabel, true)
+	if got.State != "blocked" {
+		t.Fatalf("state = %q, want blocked — an intercepted reply is NOT reachability", got.State)
+	}
+	if !strings.Contains(got.Detail, "captive portal") || !strings.Contains(got.Detail, "not actually open") {
+		t.Errorf("detail = %q, want it to name interception and say egress is not open", got.Detail)
+	}
+}
+
+func TestProxyProbeScript_ChecksBodyAndCoversEveryTarget(t *testing.T) {
+	// Two invariants the script must keep, both load-bearing:
+	//  1. every target's host is in the egress allowlist, or it fails as "DNS
+	//     resolution failed" and reads as a real network fault;
+	//  2. each target's expected BODY appears in the script — a probe that only
+	//     looked at exit codes is the bug this replaced.
+	if len(proxyProbeTargets) < 2 {
+		t.Fatal("want at least two independent targets: one blocked endpoint must not fail the whole probe")
+	}
+	for _, tg := range proxyProbeTargets {
+		h := workspacescan.HostOf(tg.url)
+		if !slices.Contains(proxyProbeHosts, h) {
+			t.Errorf("target %s: host %q missing from the probe egress allowlist", tg.url, h)
+		}
+		if !strings.Contains(proxyProbeScript, tg.want) {
+			t.Errorf("target %s: expected body %q never checked by the script", tg.url, tg.want)
+		}
+	}
+	// github.com is exactly the wrong pick — orgs block it, and a false "no
+	// internet" now gates setup.
+	if strings.Contains(proxyProbeScript, "github") {
+		t.Error("probe must not depend on github.com: plenty of orgs block it outright")
 	}
 }
 
