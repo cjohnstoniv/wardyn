@@ -158,7 +158,12 @@ See `values.yaml` for all options. Key settings:
 - `postgres.dsn.value`: inline DSN (inline mode only)
 - `auth.adminToken.secretRef.name` / `auth.adminToken.value`: admin bearer token,
   external Secret or inline demo. **One of these (or `env.WARDYN_OIDC_ISSUER`)
-  is required** — the chart fails the render otherwise.
+  is required** — the chart fails the render otherwise. `env.WARDYN_OIDC_ISSUER`
+  alone renders fine but is NOT enough to boot: also set
+  `env.WARDYN_OIDC_OPERATOR_EMAILS`, or the pod crash-loops — wardynd refuses to
+  start with OIDC configured and an empty operator list (override with
+  `env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` if every signed-in human should
+  really be admin-equivalent).
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty
   => wardynd self-generates an ephemeral key). `ageKey` is inline-mode only;
   with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.
@@ -179,11 +184,25 @@ See `values.yaml` for all options. Key settings:
 - `persistence.enabled`: also decides `WARDYN_RECORDING_DIR` —
   `<mountPath>/recordings` when on, empty (replay disabled) when off. wardynd's
   own default writes to the read-only root FS and would crash-loop the pod.
+  The chart pins `WARDYN_RECORDING_STORE=fs` — not because `pg` is unsafe here
+  (its casts are already readable from any replica), but because this chart is
+  single-replica by policy (see `replicas` below), so there is no HA reason to
+  force the unbounded-by-default `pg` store on every install. Without the pin,
+  wardynd's own process default (`pg`) would win instead, ignoring
+  `WARDYN_RECORDING_DIR` and persisting every PTY asciicast into the
+  control-plane database with `WARDYN_RECORDING_RETENTION_DAYS` defaulting to
+  keep-forever. An operator who wants that anyway can opt in with one key:
+  `env.WARDYN_RECORDING_STORE=pg` (leave `persistence` off — the `pg` store
+  needs no PVC).
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
-- `replicas`: **leave at 1.** wardynd is single-writer by construction — attach
-  tickets (`internal/api/server.go`), compose-result uploads
-  (`internal/api/composeresult.go`) and the ground-truth token rotator
-  (`cmd/wardynd/gt_rotator.go`) are per-process, so a second replica drops the
-  requests that land on the wrong pod. See [docs/OPERATIONS.md](../../../docs/OPERATIONS.md).
+- `replicas`: **leave at 1.** No shipped topology runs more than one — this
+  chart pins the default, and `container_name` in the compose stack rejects
+  `--scale` outright. The per-process defects that used to make a second
+  replica drop requests — attach tickets, compose-result uploads, run
+  watchers, session recordings, and the ground-truth token rotator — are now
+  closed at the code level (Postgres-backed state, leases, and leader
+  election). That does not make `replicas > 1` a supported configuration: it
+  has not been built, tested, or released as one. See
+  [docs/OPERATIONS.md](../../../docs/OPERATIONS.md).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

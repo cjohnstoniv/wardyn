@@ -124,6 +124,36 @@ func (f *fakeRecorder) last() (types.AuditEvent, bool) {
 	return f.events[len(f.events)-1], true
 }
 
+// fakeTickLock is a controllable lifecycle.Config.TickLock (S4): set held to
+// force every acquire to report "another control plane holds it", or leave it
+// false to win the lock immediately. releases counts how many times a
+// returned release func was actually invoked, so a test can assert it fires
+// exactly once per won tick.
+type fakeTickLock struct {
+	mu       sync.Mutex
+	held     bool
+	releases int
+}
+
+func (f *fakeTickLock) acquire(context.Context) (func(), bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.held {
+		return nil, false
+	}
+	return func() {
+		f.mu.Lock()
+		f.releases++
+		f.mu.Unlock()
+	}, true
+}
+
+func (f *fakeTickLock) releaseCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.releases
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // makeReaper creates a Reaper wired to the provided fakes with a deliberately
@@ -573,5 +603,60 @@ func TestSnapshotUpdatedAtThreadedToStopper(t *testing.T) {
 	}
 	if !got.Equal(snapshotAt) {
 		t.Errorf("notAfter threaded to StopRun = %v, want the snapshot updated_at %v", got, snapshotAt)
+	}
+}
+
+// TestTickLockHeldElsewhereSkipsReap covers S4 case 1: when Config.TickLock
+// reports the lock is held elsewhere, the tick must skip the reap body
+// entirely — an idle run that would otherwise be stopped is left untouched
+// and no audit event is emitted. This is the seam Config.TickLock's own doc
+// comment admits tests previously drove nil (ungated) only.
+func TestTickLockHeldElsewhereSkipsReap(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+
+	runID := uuid.New()
+	// Idle well past its threshold — WOULD be stopped if the tick ran.
+	store.rows = []lifecycle.RunSummary{
+		{ID: runID, UpdatedAt: base.Add(-60 * time.Minute), PolicyAutoStopAfterSec: int((30 * time.Minute).Seconds())},
+	}
+
+	lock := &fakeTickLock{held: true}
+	r := lifecycle.New(store, stopper, rec, lifecycle.Config{
+		Interval: time.Hour,
+		Now:      func() time.Time { return base },
+		TickLock: lock.acquire,
+	})
+	r.Tick(context.Background())
+
+	if stopper.wasStopped(runID) {
+		t.Error("reap body must not run when the tick lock is held elsewhere")
+	}
+	if rec.len() != 0 {
+		t.Errorf("expected 0 audit events when the lock is held elsewhere, got %d", rec.len())
+	}
+}
+
+// TestTickLockAcquiredReleasesExactlyOnce covers S4 case 2: when
+// Config.TickLock hands back a lock, Tick must call its release func exactly
+// once (never zero — leaking the lock forever — and never more than once).
+func TestTickLockAcquiredReleasesExactlyOnce(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{} // no rows: only the lock's release count is under test
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+
+	lock := &fakeTickLock{}
+	r := lifecycle.New(store, stopper, rec, lifecycle.Config{
+		Interval: time.Hour,
+		Now:      func() time.Time { return base },
+		TickLock: lock.acquire,
+	})
+	r.Tick(context.Background())
+
+	if got := lock.releaseCount(); got != 1 {
+		t.Errorf("release() called %d times, want exactly 1", got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -200,4 +201,57 @@ func readKey(t *testing.T, store Store, key string) string {
 	var b bytes.Buffer
 	_, _ = b.ReadFrom(rc)
 	return b.String()
+}
+
+// TestReadCapped covers the pg store's bounded read (pgstore.go): the growth
+// strategy there exists to keep a hostile max-size cast from OOMKilling the
+// control plane, so the contract it has to keep is exact — everything under
+// the cap round-trips byte-for-byte, and anything over it comes back as
+// limit+1 bytes so SaveCast rejects it BEFORE the INSERT (no partial row).
+func TestReadCapped(t *testing.T) {
+	const limit = 8
+	for _, tc := range []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"under", "abc", 3},
+		{"exactly at the cap", "12345678", 8},
+		{"over the cap", "123456789abcdef", limit + 1},
+		{"empty", "", 0},
+	} {
+		got, err := readCapped(iotest.OneByteReader(strings.NewReader(tc.in)), limit)
+		if err != nil {
+			t.Fatalf("%s: readCapped: %v", tc.name, err)
+		}
+		if len(got) != tc.want || !strings.HasPrefix(tc.in, string(got)) {
+			t.Errorf("%s: readCapped = %q (%d bytes), want the first %d bytes of %q", tc.name, got, len(got), tc.want, tc.in)
+		}
+	}
+
+	if _, err := readCapped(iotest.TimeoutReader(strings.NewReader("abcd")), limit); err == nil {
+		t.Error("readCapped must propagate a mid-stream read error, not truncate silently")
+	}
+}
+
+// TestReadCapped_GrowsInOneStep pins the strategy, not just the contract. Every
+// case above stays inside the initial 64 KiB buffer, so none of them reach the
+// regrow — and a growth chain that reallocated repeatedly would satisfy them all
+// while reintroducing the 2.5x memory peak readCapped exists to avoid. A payload
+// that outgrows the start must land in a buffer sized exactly limit+1: one step,
+// two allocations total, whatever the input size.
+func TestReadCapped_GrowsInOneStep(t *testing.T) {
+	const limit = 70 << 10 // above the 64 KiB start, so the regrow must happen
+	in := strings.Repeat("a", 65<<10)
+
+	got, err := readCapped(strings.NewReader(in), limit)
+	if err != nil {
+		t.Fatalf("readCapped: %v", err)
+	}
+	if string(got) != in {
+		t.Fatalf("readCapped returned %d bytes, want the %d-byte input back", len(got), len(in))
+	}
+	if cap(got) != limit+1 {
+		t.Errorf("buffer cap = %d, want %d: the grow step must go straight to limit+1, not chain reallocations", cap(got), limit+1)
+	}
 }

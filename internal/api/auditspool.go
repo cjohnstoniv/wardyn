@@ -71,9 +71,24 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 // against concurrent Append (a failed write during a drain blocks briefly instead
 // of racing the truncate); the bounded batch keeps that hold short.
 //
-// at-least-once. A crash between rec.Record succeeding and the on-disk
-// trim can re-replay a duplicate on the next Drain; give InsertAuditEvent an
-// `ON CONFLICT (id) DO NOTHING` and that becomes exactly-once.
+// at-least-once, and it stays that way. A crash between rec.Record succeeding
+// and the on-disk trim can re-replay a duplicate on the next Drain.
+// `ON CONFLICT (id) DO NOTHING` does NOT fix that: audit_events has no unique
+// constraint on `id` (the PK is the surrogate `seq`), so Postgres rejects that
+// clause at PLAN time with 42P10 — it would break every audit insert, not just
+// the replayed ones. Retrofitting the index is also not a boot-time migration:
+// pre-existing duplicate ids would fail it inside applyMigration's transaction
+// and abort startup, CREATE UNIQUE INDEX CONCURRENTLY cannot run in that
+// transaction (25001), and de-duplicating first is blocked by the append-only
+// DELETE trigger (P0001) — i.e. it would require disabling the very guarantee
+// db.AuditDDLProtected exists to verify.
+//
+// The duplicate is also the benign direction: `seq` still identifies the row
+// uniquely, a replayed event is byte-identical and self-identifying by its
+// repeated `id`, and an append-only log that records an event twice is a far
+// smaller integrity problem than one that drops it. If exactly-once is ever
+// wanted, the non-destructive path is an operator-run, out-of-band
+// CREATE UNIQUE INDEX CONCURRENTLY after a duplicate check, behind a flag.
 func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

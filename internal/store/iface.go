@@ -34,6 +34,8 @@ type Store interface {
 	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
 	SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error
+	// The run-watcher lease is NOT here on purpose — see RunWatcherLeaser
+	// (store_watcher.go), which follows Pager's type-assert seam.
 
 	// RunPolicy.
 	CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error)

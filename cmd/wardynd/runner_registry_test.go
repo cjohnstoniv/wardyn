@@ -18,7 +18,7 @@ import (
 
 func rrFlags(runnerSel string) *bootFlags {
 	sel, cmap, img := runnerSel, "", "wardyn-proxy:test"
-	id, sec, rec := "embedded", "pg", "fs" // the defaults; componentsInfo derefs them
+	id, sec, rec := "embedded", "pg", "pg" // the defaults; componentsInfo derefs them
 	return &bootFlags{
 		runnerSel: &sel, confinementMap: &cmap, proxyImage: &img,
 		identitySel: &id, secretStoreSel: &sec, recordingSel: &rec,

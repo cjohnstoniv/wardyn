@@ -19,7 +19,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
-	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -312,6 +311,21 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 	}
 }
 
+// groundtruthRotatorLock is the ground-truth rotator's leader-election gate
+// (S2): a Postgres try-advisory-lock acquired ONCE (not per-tick, unlike
+// reapTickLock above) so at most one replica runs the mint/write loop in the
+// steady state while every other replica parks on a backoff. NOT a fencing
+// primitive — a lost session can transiently leave two leaders; see
+// runGroundtruthTokenRotatorLeader (gt_rotator.go). Unlike reapTickLock this
+// surfaces err separately from a plain not-acquired so the caller can log
+// standby state (lock genuinely held elsewhere) distinctly from an
+// unreachable database.
+func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), bool, error) {
+	return func(ctx context.Context) (func(), bool, error) {
+		return db.TryAdvisoryLock(ctx, pool, db.GroundTruthRotatorLockKey)
+	}
+}
+
 // lifecycleStopper adapts the runner + store to lifecycle.Stopper. StopRun wins
 // the idle-guarded RUNNING->STOPPED transition FIRST (so a run touched after the
 // reaper's snapshot, or already moved terminal, is left alone), then gracefully
@@ -423,8 +437,21 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 	}
 }
 
-// runRecordingSweeper periodically unlinks stored session recordings older than
-// `after`, until ctx is cancelled. Only started when the operator sets a
+// recordingSweepable is satisfied structurally by BOTH recording.FSStore and
+// recording.PGStore. Sweep is deliberately NOT on recording.Store itself (see
+// the package doc on internal/recording/store.go): retention is a
+// storage-backend concern, and a future object-storage backend would use its
+// bucket's own lifecycle rules instead of an app-level sweep. This unexported
+// interface — rather than promoting Sweep to recording.Store, or duplicating
+// the goroutine-launch code below per concrete type — is the smaller diff for
+// the ONE call site (startBackgroundWorkers' type-assert in boot_serve.go)
+// that needs to sweep whichever concrete store is selected.
+type recordingSweepable interface {
+	Sweep(olderThan time.Duration) (int, error)
+}
+
+// runRecordingSweeper periodically deletes stored session recordings older
+// than `after`, until ctx is cancelled. Only started when the operator sets a
 // retention window (WARDYN_RECORDING_RETENTION_DAYS); unset = keep forever,
 // because a recording is governance evidence and deleting one is an operator
 // decision, not a default.
@@ -432,7 +459,7 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 // Deletions are audited: a sweep that removed anything emits one
 // recording.retention.sweep event, so the disappearance of evidence is itself
 // evidence. The first sweep runs after one tick, mirroring the other sweepers.
-func runRecordingSweeper(ctx context.Context, s *recording.FSStore, rec audit.Recorder, interval, after time.Duration) {
+func runRecordingSweeper(ctx context.Context, s recordingSweepable, rec audit.Recorder, interval, after time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

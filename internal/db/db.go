@@ -45,6 +45,25 @@ const migrateAdvisoryLockKey int64 = 0x5741524459_4D4947 // ASCII "WARDYMIG"; an
 // reap of the same runs is pure duplicate work and a duplicate run.autostop.
 const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 
+// GroundTruthRotatorLockKey elects the ground-truth token rotator's leader
+// across control planes (S2). Unlike ReaperAdvisoryLockKey (re-tried every
+// tick via TryAdvisoryLock, release()d at the end of each one), this key is
+// acquired ONCE before the rotator's loop starts and held for the process
+// lifetime: only the holder mints/writes the shared token file, and every
+// other replica parks on a backoff and retries, taking over automatically
+// when the holder's Postgres session ends.
+//
+// It buys AT MOST ONE STEADY-STATE leader, NOT mutual exclusion. An advisory
+// lock dies with its SESSION, not with the process, and the holder never
+// re-verifies it: a Postgres restart, a failover, pg_terminate_backend or an
+// idle-session timeout releases it under a still-running leader, and a standby
+// takes over within one backoff — two rotators, neither aware. Harmless for
+// THIS workload only, because every write is an atomic rename of a stateless
+// token (cmd/wardynd/gt_rotator.go). Work that needs genuine fencing must not
+// reuse this key. Any stable value works, as long as it differs from every
+// other key in this file.
+const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
+
 // TryAdvisoryLock takes session-level advisory lock key on a connection borrowed
 // from pool WITHOUT waiting, reporting ok=false when another session already
 // holds it. Call the returned release (deferred) to unlock and hand the

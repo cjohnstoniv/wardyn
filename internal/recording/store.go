@@ -63,6 +63,19 @@ func CastKey(runID, suffix string) string {
 	return runID + castSep + suffix
 }
 
+// validSuffix rejects a session suffix that could misaddress a cast: one
+// containing castSep would let a composite key collide with a DIFFERENT
+// run/suffix pair, and the rest are the same defensive set safeRunPath applies
+// to a runID. Shared by every Store implementation's SaveCastNamed (not just
+// FSStore's) so a suffix is accepted or rejected identically no matter which
+// backend WARDYN_RECORDING_STORE selects.
+func validSuffix(suffix string) error {
+	if strings.ContainsAny(suffix, "/\\\x00"+castSep) || strings.Contains(suffix, "..") {
+		return errors.New("recording: invalid session suffix")
+	}
+	return nil
+}
+
 // FSStore is a filesystem-backed Store. Each recording is stored as
 // <root>/<runID>.cast. The root directory is created on first use.
 type FSStore struct {
@@ -85,8 +98,8 @@ func NewFSStore(root string) (*FSStore, error) {
 func (s *FSStore) SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error {
 	// Reject a suffix that could carry path separators / traversal up front, so
 	// the composite key cannot escape root even though safeRunPath re-checks.
-	if strings.ContainsAny(suffix, "/\\\x00"+castSep) || strings.Contains(suffix, "..") {
-		return errors.New("recording: invalid session suffix")
+	if err := validSuffix(suffix); err != nil {
+		return err
 	}
 	return s.SaveCast(ctx, CastKey(runID, suffix), r)
 }
@@ -172,18 +185,32 @@ func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, erro
 	return f, err
 }
 
+// validKey rejects a cast key (a bare runID or a "<runID>~<suffix>" composite)
+// that no Store should accept. Shared by EVERY implementation, not just the
+// path-building one: the checks read as fs-specific but a divergence is a
+// correctness bug on its own — a key one backend stores and another rejects
+// means switching WARDYN_RECORDING_STORE silently changes which recordings
+// exist, and a raw NUL byte reaching Postgres surfaces as a driver error
+// instead of this message. recordingtest's conformance suite pins it for both.
+func validKey(key string) error {
+	if key == "" {
+		return errors.New("recording: empty run id")
+	}
+	if strings.ContainsAny(key, "/\\\x00") {
+		return errors.New("recording: invalid run id (path separator)")
+	}
+	if key == ".." || strings.HasPrefix(key, "../") || strings.HasSuffix(key, "/..") || strings.Contains(key, "/../") {
+		return errors.New("recording: invalid run id (dot-dot)")
+	}
+	return nil
+}
+
 // safeRunPath builds the .cast file path for runID inside root. It rejects any
 // runID that contains path separators, null bytes, or dot-dot sequences, which
 // would allow directory traversal outside root.
 func safeRunPath(root, runID string) (string, error) {
-	if runID == "" {
-		return "", errors.New("recording: empty run id")
-	}
-	if strings.ContainsAny(runID, "/\\\x00") {
-		return "", errors.New("recording: invalid run id (path separator)")
-	}
-	if runID == ".." || strings.HasPrefix(runID, "../") || strings.HasSuffix(runID, "/..") || strings.Contains(runID, "/../") {
-		return "", errors.New("recording: invalid run id (dot-dot)")
+	if err := validKey(runID); err != nil {
+		return "", err
 	}
 	// Extra guard: filepath.Clean must not escape root.
 	joined := filepath.Join(root, runID+".cast")

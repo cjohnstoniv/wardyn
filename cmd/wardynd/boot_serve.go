@@ -35,13 +35,20 @@ import (
 //   - Groundtruth token rotator: keep a shared token file fresh so the
 //     eBPF/Tetragon ingest sidecar — which re-reads the file on a 401 — recovers
 //     when its ~1h token expires instead of going permanently blind. Off
-//     unless WARDYN_GROUNDTRUTH_TOKEN_FILE is configured.
+//     unless WARDYN_GROUNDTRUTH_TOKEN_FILE is configured. Leader-elected
+//     across replicas (S2): a Postgres advisory lock acquired once, so at most
+//     one replica rewrites the shared file in the steady state; standbys retry
+//     on a backoff and take over automatically when the leader's session ends.
+//     Not fencing — a lost session can leave two writers briefly, which is
+//     harmless because each write is an atomic rename of a stateless token.
 //   - Approval expiry sweeper: transition PENDING approvals older than the
 //     cutoff to EXPIRED so the queue does not grow unbounded.
 //   - Recording retention sweeper: delete stored session recordings past the
 //     operator's retention window. Off unless WARDYN_RECORDING_RETENTION_DAYS
-//     is set, and only for fs-backed stores (object storage uses its own
-//     bucket lifecycle rules).
+//     is set, and only for stores that implement retention (fs and pg today,
+//     via the recordingSweepable interface in adapters.go; a future
+//     object-storage backend would use its own bucket lifecycle rules
+//     instead).
 //   - Boot-time reconciliation (C3): re-derive the state of any run left
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
@@ -59,7 +66,17 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	}
 
 	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
-		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotator(rootCtx, idp, gtFile) })
+		// The rotator's leader lock holds ONE pooled connection for the whole
+		// process lifetime, and the reaper borrows another for the length of each
+		// tick — so a pool sized below 3 can leave request-serving queries with
+		// none, and pgxpool.Acquire BLOCKS until its context is done rather than
+		// erroring. That failure looks like a hang, not a misconfiguration, so
+		// say so at boot (docs/ENV.md, WARDYN_PG_DSN's pool_max_conns note).
+		if mc := pool.Config().MaxConns; mc < 3 {
+			slog.Warn("wardynd: pool_max_conns below the documented minimum of 3 while the groundtruth rotator is enabled — the rotator holds one connection for the process lifetime and the lifecycle reaper borrows one per tick; requests can block waiting for a connection",
+				slog.Int("pool_max_conns", int(mc)))
+		}
+		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtFile) })
 		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
 	}
 
@@ -74,10 +91,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		)
 	}
 
-	if fs, ok := recStore.(*recording.FSStore); ok && *f.recordingRetention > 0 {
+	if rs, ok := recStore.(recordingSweepable); ok && *f.recordingRetention > 0 {
 		after := time.Duration(*f.recordingRetention) * 24 * time.Hour
 		go goSafe("recording.sweeper", func() {
-			runRecordingSweeper(rootCtx, fs, maskedRec, time.Hour, after)
+			runRecordingSweeper(rootCtx, rs, maskedRec, time.Hour, after)
 		})
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}

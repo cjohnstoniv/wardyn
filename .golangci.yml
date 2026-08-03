@@ -12,7 +12,7 @@
 # the gate lands GREEN at HEAD — they are ratchets, not aspirations):
 #   funlen lines=150 (ignore-comments): the largest legitimate remaining
 #     function measures 141 non-comment lines; the next offenders above 150 are
-#     the two explicitly //nolint'd long-but-linear functions. New code has no
+#     the explicitly //nolint'd long-but-linear functions. New code has no
 #     business beating the worst of the cleaned-up tree.
 #   funlen statements=100: same shape — worst passing function has ~89.
 #   gocyclo 30: golangci's historical default; everything except the
@@ -23,7 +23,8 @@
 #     documented-flag style (long flag usage strings are excluded below).
 #
 # Every //nolint for these linters must carry a reason. Current justified set
-# (grep '//nolint:funlen'): api.runComposePipeline, docker.CreateSandbox.
+# (grep '//nolint:funlen'): api.runComposePipeline, docker.CreateSandbox,
+# api.dispatchRun.
 version: "2"
 
 run:

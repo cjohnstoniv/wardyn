@@ -508,6 +508,8 @@ volumes:
   # sidecar reads it, so the ground-truth stream survives the ~1h token TTL.
   groundtruth_token:
   recordings:
+    # Empty under the default `pg` store; used only with
+    # WARDYN_RECORDING_STORE=fs or the WARDYN_RECORDING_MOUNT fallback.
     # Explicit name so the docker runner can mount the SAME volume into agent
     # containers by name (compose would otherwise prefix it with the project).
     # Per-namespace so concurrent stacks don't share one recordings volume

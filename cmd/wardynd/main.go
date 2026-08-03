@@ -211,7 +211,7 @@ func run() error {
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds, the
 	// AI Run Composer, subscription/managed LLM credential providers, advisory AI
 	// scan fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
-	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, secrets, posture.secureCookies)
+	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, posture.secureCookies)
 	if err != nil {
 		return err
 	}

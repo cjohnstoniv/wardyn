@@ -62,6 +62,79 @@ func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {
 	}
 }
 
+// groundtruthRotatorLockBackoff is how long a standby replica waits between
+// attempts to take over the leader lock. Fixed, not configurable: the lock is
+// uncontended almost always — a standby only wins when the leader's Postgres
+// SESSION ends (usually its process exiting, but see below), which is not
+// something an operator tunes per deployment.
+const groundtruthRotatorLockBackoff = 30 * time.Second
+
+// runGroundtruthTokenRotatorLeader gates runGroundtruthTokenRotator behind a
+// cluster-wide leader election (S2). `path` lives on a volume SHARED across
+// every wardynd replica (see deploy/compose's `groundtruth_token` volume), so
+// every replica running the rotator unconditionally would all rewrite the
+// same file — harmless (tokens are stateless ES256 JWT-SVIDs, so the damage
+// is file thrash and duplicate mints, not invalidation) but wasteful. Only
+// the lock holder mints/writes; every other replica parks on
+// groundtruthRotatorLockBackoff and retries, taking over automatically once
+// the holder's Postgres session ends.
+//
+// AT MOST ONE STEADY-STATE LEADER — not exactly one, and NOT a fencing
+// primitive. The advisory lock is SESSION-scoped and this loop never
+// re-verifies it after the acquire, so any session loss short of process death
+// (a Postgres restart, an RDS failover, pg_terminate_backend, an idle-session
+// timeout, a network blip) silently releases it while the old leader keeps
+// rotating; a standby then wins within one backoff. Two leaders, undetected.
+// That is ACCEPTED, not overlooked: both write the identical harmless thing —
+// mint a stateless token, atomically rename it into place — so a reader always
+// sees one whole valid token and the worst case is the pre-S2 behavior this
+// replaced. Do NOT hang anything that needs real mutual exclusion on
+// db.GroundTruthRotatorLockKey; it would inherit an exclusivity guarantee that
+// is not there.
+//
+// tryLock is a seam so this stays unit-testable without Postgres, mirroring
+// lifecycle.Config.TickLock's func-typed style; wardynd wires
+// groundtruthRotatorLock(pool) (adapters.go), which calls
+// db.TryAdvisoryLock(ctx, pool, db.GroundTruthRotatorLockKey). Unlike the
+// reaper's TickLock (try/release every tick), this acquires ONCE and holds
+// the connection for the process lifetime — the accepted cost of
+// acquire-once.
+func runGroundtruthTokenRotatorLeader(ctx context.Context, tryLock func(context.Context) (release func(), ok bool, err error), m gtMinter, path string) {
+	// Non-leader outcomes are logged on TRANSITION only: this loop retries every
+	// 30s forever, so an unconditional line is 2,880/day/replica in the ordinary
+	// standby steady state and the same again per replica during a Postgres
+	// outage (the sibling reapTickLock drops its equivalent to Debug for exactly
+	// this, adapters.go). Transition-logging keeps the ERROR loud the first time
+	// — a rotator that never acquires leaves the ingest blind, which must not be
+	// a Debug-level fact — without the repetition.
+	logged := "" // last non-leader outcome already logged
+	for {
+		release, ok, err := tryLock(ctx)
+		switch {
+		case err != nil:
+			if logged != "err" {
+				logged = "err"
+				slog.ErrorContext(ctx, "wardynd: groundtruth rotator: lock acquire failed", slog.Any("err", err))
+			}
+		case ok:
+			slog.InfoContext(ctx, "wardynd: groundtruth rotator: acquired leader lock")
+			runGroundtruthTokenRotator(ctx, m, path)
+			release()
+			return
+		default:
+			if logged != "standby" {
+				logged = "standby"
+				slog.InfoContext(ctx, "wardynd: groundtruth rotator: standby, another replica holds the lock")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(groundtruthRotatorLockBackoff):
+		}
+	}
+}
+
 // writeTokenFileAtomic writes the token 0600 via a temp file + rename so the ingest
 // (a concurrent reader) never observes a half-written token.
 func writeTokenFileAtomic(path, token string) error {

@@ -3,14 +3,22 @@
 
 package recording
 
-import "github.com/cjohnstoniv/wardyn/internal/component"
+import (
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/component"
+)
 
 // Deps are the platform primitives a recording.Store constructor may use. New
 // seams keep their own typed Deps so heterogeneous construction stays type-safe.
 type Deps struct {
 	// Dir is the base directory for filesystem-backed stores. Empty => recording
-	// disabled (the fs constructor returns a nil Store).
+	// disabled (the fs constructor returns a nil Store). fs-specific; pg ignores it.
 	Dir string
+	// Pool is the shared pgxpool the pg-backed store persists through — the SAME
+	// pool the rest of the control plane uses, so a cast is visible to every
+	// replica instead of living on one pod's local disk.
+	Pool *pgxpool.Pool
 }
 
 // Constructor builds a Store from Deps. It may return (nil, nil) to mean
@@ -18,7 +26,7 @@ type Deps struct {
 // no-recording.
 type Constructor func(Deps) (Store, error)
 
-var reg = component.NewRegistry[Constructor]("fs")
+var reg = component.NewRegistry[Constructor]("pg")
 
 // Register adds a recording-store implementation; call it from an init().
 func Register(name string, c Constructor) { reg.Register(name, c) }

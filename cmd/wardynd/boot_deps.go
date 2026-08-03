@@ -185,13 +185,18 @@ type optionalFeatures struct {
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
 // verbatim from run() — construction order and log lines are unchanged.
-func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, secrets secretstore.Store, secureCookies bool) (optionalFeatures, error) {
+func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, secureCookies bool) (optionalFeatures, error) {
 	var of optionalFeatures
 
-	// Recording store (pluggable seam; default "fs"). The fs store serves replays
-	// and accepts wardyn-rec uploads. Empty -recording-dir => a nil store (replay
-	// disabled), the same as before.
-	recStore, rerr := recording.New(*f.recordingSel, recording.Deps{Dir: *f.recordingDir})
+	// Recording store (pluggable seam; default "pg" — see boot_flags.go). pg
+	// makes a cast saved by one replica visible to replay on ANY replica; the fs
+	// store's directory is per-pod, so a cross-replica replay 404s.
+	// WARDYN_RECORDING_STORE=fs still selects that old on-disk behavior. Empty
+	// -recording-dir disables the fs store specifically (recording.Deps' Dir
+	// doc); it has no effect on pg, which is disabled only by an absent pool
+	// (never the case once wardynd has booted — Postgres is the one required
+	// dependency).
+	recStore, rerr := recording.New(*f.recordingSel, recording.Deps{Dir: *f.recordingDir, Pool: pool})
 	if rerr != nil {
 		return of, fmt.Errorf("recording store: %w", rerr)
 	}
@@ -356,7 +361,7 @@ func componentsInfo(f *bootFlags, runnerTarget string) map[string]api.ComponentI
 	return map[string]api.ComponentInfo{
 		"identity":      {Selected: *f.identitySel, Available: identity.Names(), Source: sourceOf(*f.identitySel, "embedded")},
 		"secret_store":  {Selected: *f.secretStoreSel, Available: secretstore.Names(), Source: sourceOf(*f.secretStoreSel, "pg")},
-		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "fs")},
+		"recording":     {Selected: *f.recordingSel, Available: recording.Names(), Source: sourceOf(*f.recordingSel, "pg")},
 		"policy_engine": {Selected: "builtin"},
 		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), Source: sourceOf(*f.runnerSel, "none")},
 	}

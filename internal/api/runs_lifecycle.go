@@ -61,6 +61,12 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					runID.String(), "failure", mustJSON(map[string]any{"panic": fmt.Sprintf("%v", r)})))
 			}
 		}()
+		// Hold the run's watcher lease while this goroutine is its watcher, so no
+		// other replica's sweep adopts a run that is already being watched — and so
+		// one does adopt it if this process dies mid-Wait (reconcile.go).
+		stopLease := s.holdRunWatcherLease(base, runID)
+		defer stopLease()
+
 		exitCode, werr := s.cfg.Runner.Wait(base, ref)
 		if werr != nil {
 			// Audit the watcher's exit for forensics either way.

@@ -22,29 +22,28 @@ import (
 
 // ── store tests ──────────────────────────────────────────────────────────────
 
-func TestFSStore_TraversalRejection(t *testing.T) {
-	store, err := recording.NewFSStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFSStore: %v", err)
+// TestNew_DefaultIsPG pins the S3 default flip: an empty selector must
+// resolve to "pg", not "fs", and "fs" must remain explicitly selectable so
+// WARDYN_RECORDING_STORE=fs still recovers the legacy per-pod store. The pg
+// constructor needs a live pool to fully construct (see the WARDYN_TEST_PG
+// -gated pgstore_pg_test.go for that), but DEFAULT RESOLUTION itself needs no
+// database: New("", ...) with no pool hits pg's constructor and observes ITS
+// nil-pool guard — proving "" resolved to pg, not fs (which would have
+// happily returned a nil Store for an empty Dir instead of erroring).
+func TestNew_DefaultIsPG(t *testing.T) {
+	if _, err := recording.New("", recording.Deps{}); err == nil {
+		t.Fatal(`New("", no pool) succeeded; want the pg constructor's nil-pool error (proves "" resolves to pg)`)
 	}
-	ctx := context.Background()
-	evil := []string{
-		"../etc/passwd",
-		"../../etc/shadow",
-		"run/../../secret",
-		"",
-		"run\x00bad",
-		"/abs/path",
-	}
-	for _, id := range evil {
-		if err := store.SaveCast(ctx, id, strings.NewReader("x")); err == nil {
-			t.Errorf("SaveCast(%q) should have been rejected", id)
-		}
-		if _, err := store.OpenCast(ctx, id); err == nil {
-			t.Errorf("OpenCast(%q) should have been rejected", id)
-		}
+	s, err := recording.New("fs", recording.Deps{Dir: t.TempDir()})
+	if err != nil || s == nil {
+		t.Fatalf(`New("fs", ...) = %v, %v; "fs" must remain explicitly selectable`, s, err)
 	}
 }
+
+// Traversal/invalid-key rejection lives in the SHARED conformance suite
+// (recordingtest.RunConformance's rejects_invalid_keys), which fs_conformance_test.go
+// runs against FSStore and pgstore_pg_test.go runs against PGStore — the two
+// stores must reject the same keys, which an fs-only test could not pin.
 
 func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 	root := t.TempDir()

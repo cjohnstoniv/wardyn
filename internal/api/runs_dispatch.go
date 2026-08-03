@@ -70,6 +70,15 @@ type dispatchParams struct {
 // WARDYN_VERIFY_COMMANDS. A verify run still sets WorkspaceID (for the trusted
 // result linkage), so p.VerifyPlan is the discriminator between scan-only and
 // verify-only in the same dispatch.
+//
+// PHASE ORDER IS THE CONTRACT: the policy phases below narrow `policy` in
+// sequence, and confineGitBrokerEgress runs LAST so nothing above it can re-add
+// a broker-managed host; the ProxyConfig snapshot then captures that final
+// policy, and the run.policy.effective audit event discloses it. Keep new
+// phases inside this sequence, in the right place — a phase hoisted into a
+// caller silently loses the ordering guarantee.
+//
+//nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatchParams) {
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
@@ -325,6 +334,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
 	}
+
+	// The run now HAS something to watch, so its watcher-lease grace starts HERE,
+	// not at row creation: the row still carries the heartbeat it was born with,
+	// which any image build longer than the stale window has already let expire —
+	// so without this one stamp the next sweep on any replica adopts a run this
+	// dispatch is still setting up (reconcile.go).
+	s.stampRunWatcherLease(ctx, run.ID)
 
 	// KILL-RACE GUARD: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
