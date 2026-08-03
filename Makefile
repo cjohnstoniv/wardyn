@@ -217,7 +217,7 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	tools_dir="$$(mktemp -d)"; \
 	trap 'docker rm -f wardyn-envbuild-registry >/dev/null 2>&1 || true; rm -rf "$$tools_dir"' EXIT; \
 	echo "==> staging runner tools into $$tools_dir"; \
-	go build -o "$$tools_dir/" ./cmd/wardyn-rec ./cmd/wardyn-verify ./cmd/wardyn-git-helper; \
+	go build -o "$$tools_dir/" ./cmd/wardyn-rec ./cmd/wardyn-git-helper; \
 	cp deploy/images/claude-code/agent-run "$$tools_dir/agent-run"; \
 	cp deploy/images/common/agent-run-lib.sh "$$tools_dir/agent-run-lib.sh"; \
 	chmod +x "$$tools_dir/agent-run" "$$tools_dir/agent-run-lib.sh"; \

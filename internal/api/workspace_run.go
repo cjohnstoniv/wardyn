@@ -275,14 +275,15 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	return built, true
 }
 
-// verifyEgressDomains is the two-phase SETUP allowlist for a verify run:
-// deliberately WIDER than a scan's narrow git-only set, so install commands can
-// reach their registries. Base = git hosts (for clone) unioned with the
-// workspace's trusted egress (profile.EgressDomains, filename-keyed marker
-// registries) + operator ApprovedEgress. Content-derived SuggestedEgress is NOT
-// included — a build that needs one surfaces as an observed-egress denial the
-// operator can promote (least-privilege, honest).
-func verifyEgressDomains(ws types.Workspace) []string {
+// confinedEgressDomains is the two-phase SETUP allowlist for a confined
+// (non-learning) record replay: deliberately WIDER than a scan's narrow
+// git-only set, so install commands can reach their registries. Base = git
+// hosts (for clone) unioned with the workspace's trusted egress
+// (profile.EgressDomains, filename-keyed marker registries) + operator
+// ApprovedEgress. Content-derived SuggestedEgress is NOT included — a build
+// that needs one surfaces as an observed-egress denial the operator can
+// promote (least-privilege, honest).
+func confinedEgressDomains(ws types.Workspace) []string {
 	base := &types.RunPolicySpec{AllowedDomains: scanEgressDomains(repoCloneURL(ws.Source))}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
 	return base.AllowedDomains
@@ -362,106 +363,27 @@ func (s *Server) dispatchAndSettle(ctx context.Context, created types.AgentRun, 
 	return created
 }
 
-// launchVerifyRun starts a throwaway GOVERNED run that runs wardyn-verify — it
-// executes the workspace's OPERATOR-APPROVED SetupCommands (install/build/test)
-// in the BUILT devcontainer image (resolveWorkspaceImage) under confinement,
-// captures per-step results, and uploads a VerifyResult via the trusted
-// run→workspace linkage. Wider (setup-phase) egress than a scan. The commands
-// are the discriminator passed to dispatchWithVerify (both scan and verify set
-// WorkspaceID). Returns the created run; the caller has already flipped the
-// workspace to `verifying` + set active_run_id.
-func (s *Server) launchVerifyRun(ctx context.Context, actor string, ws types.Workspace, commands json.RawMessage) (types.AgentRun, error) {
-	if s.cfg.Runner == nil {
-		return types.AgentRun{}, fmt.Errorf("no runner configured")
-	}
-	// Detach from request cancellation BEFORE any of the launch's durable work: the
-	// claim, mint, CreateRun, status flip and the multi-minute devcontainer IMAGE
-	// BUILD all run here, and dispatch's own WithoutCancel lands too late to protect
-	// them. A client that walks away mid-build would otherwise cancel the build,
-	// and resolveWorkspaceImage's fail-open would silently downgrade the run to the
-	// convention image — which then fails on a missing toolchain (exit 127).
-	ctx = context.WithoutCancel(ctx)
-	runID := uuid.New()
-	// The claim also establishes the fence the verify-result upload enforces (H6).
-	_, release, err := s.claimImportStep(ctx, ws, runID)
-	if err != nil {
-		return types.AgentRun{}, err
-	}
-	cc := s.defaultFloorClass()
-	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace verify", ws, cc)
-	if err != nil {
-		return types.AgentRun{}, release(err)
-	}
-	now := run.CreatedAt
-	// Source wiring: a repo clones (run.Repo); a local dir is bind-mounted.
-	policy := types.RunPolicySpec{
-		MinConfinementClass: cc,
-		AllowedDomains:      verifyEgressDomains(ws),
-		// Above wardyn-verify's 40-min total budget so a legitimately long build
-		// isn't idle-reaped mid-run (which would strand the workspace in
-		// `verifying`). The verify binary self-bounds the actual work.
-		AutoStopAfterSec: 3600,
-	}
-	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
-	cloneURL := wireWorkspaceSource(&run, &policy, ws)
-	created, err := s.cfg.Store.CreateRun(ctx, run)
-	if err != nil {
-		return types.AgentRun{}, release(fmt.Errorf("create verify run: %w", err))
-	}
-	// Clone grants only AFTER the run row exists — credential_grants.run_id has an
-	// immediate FK to agent_runs(id).
-	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, cloneURL)
-	if gerr != nil {
-		return types.AgentRun{}, release(fmt.Errorf("create verify clone grants: %w", gerr))
-	}
-
-	// Flip to `verifying` BEFORE dispatch — mirror launchScanRun's pre-dispatch
-	// status write. The old post-launch flip in handleVerifyWorkspace could
-	// REGRESS a fast verify whose result upload already landed (status ready /
-	// verify_failed, active_run_id cleared) back to `verifying`. active_run_id was
-	// already CAS-claimed to runID above; preserve any prior verify markers. Best
-	// effort: the verify run reports + flips status regardless of this write.
-	// Fenced on the claim made just above: if the slot moved, this run is no
-	// longer the workspace's verify run and must not write its status.
-	_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifying,
-		&runID, &runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
-
-	// Run IN the built devcontainer image (build it now if needed — this is
-	// Stage 5 folded into verify).
-	return s.dispatchAndSettle(ctx, created, dispatchParams{
-		RunToken:           runToken,
-		Image:              s.workspaceRunImage(ctx, runID, ws),
-		Policy:             policy,
-		FirstGitHubGrantID: ghGrantID,
-		GitGrants:          gitBrokerGrant(cloneURL, ghGrantID),
-		SSHGrants:          sshGrants,
-		VerifyPlan:         commands,
-	}), nil
-}
-
-// launchRecordRun starts one session's interactive sandbox — launchVerifyRun
-// with three deltas:
+// launchRecordRun starts one session's interactive sandbox.
 //   - run.Task = "workspace record" (the server-side discriminator: uploads and
 //     reconciles branch on it, and it keys the trusted run→workspace linkage);
 //   - egress depends on `confined`: a LEARNING session (confined=false) is OPEN
 //     (AllowAllEgress=true) so every host the task dials is logged egress.allow
-//     (complete capture, no per-domain approvals); a VERIFY session
+//     (complete capture, no per-domain approvals); a CONFINED REPLAY session
 //     (confined=true) is default-deny, limited to AllowedDomains, so re-running
 //     the same steps proves least privilege and off-policy hosts are denied live.
-//     AllowedDomains keeps the verify union anyway — credential injection fires
-//     ONLY on exact allowlist entries even under allow-all, and clone needs its
-//     git hosts; private/metadata IPs stay denied by the unconditional guard;
+//     AllowedDomains keeps the confined-egress union anyway — credential
+//     injection fires ONLY on exact allowlist entries even under allow-all, and
+//     clone needs its git hosts; private/metadata IPs stay denied by the
+//     unconditional guard;
 //   - confinement = the STRONGEST class the wired runner supports (an open
 //     sandbox deserves the best isolation available), never the policy floor.
 //     weakCC reports when that best is still CC1 so callers warn loudly —
 //     refusing would make record unusable on Docker Desktop boxes.
 //
-// Sessions are always interactive: dispatch passes a nil verify plan, so no
-// record run ever execs wardyn-verify or uploads a verify result. The
-// sandbox comes up idle for the attach terminal (bounded — an abandoned
-// OPEN-egress sandbox must not live forever); the operator's "Done
-// recording" is the normal run kill, and capture happens at termination from
-// the audit events.
+// Sessions are always interactive: the sandbox comes up idle for the attach
+// terminal (bounded — an abandoned OPEN-egress sandbox must not live forever);
+// the operator's "Done recording" is the normal run kill, and capture happens
+// at termination from the audit events.
 //
 // LAUNCH ORDER (concurrency-load-bearing): (1) CAS-claim active_run_id — the
 // atomic serial gate; a concurrent step launch that also saw the slot free
@@ -472,8 +394,9 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
 	}
-	// Detach from request cancellation before the durable launch work + image build
-	// (same rationale as launchVerifyRun).
+	// Detach from request cancellation before the durable launch work + image
+	// build: a client that walks away mid-build must not cancel it (dispatch's
+	// own WithoutCancel lands too late to protect the pre-dispatch work above it).
 	ctx = context.WithoutCancel(ctx)
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
@@ -527,16 +450,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
-		// A VERIFY session (confined) is default-deny, limited to AllowedDomains
+		// A CONFINED REPLAY session is default-deny, limited to AllowedDomains
 		// (baseline clone/registry hosts ∪ the workspace's approved egress) — so
 		// re-running the same steps proves they work under least privilege. A
 		// learning session (open) allows all egress so the capture is complete.
 		// Same interactive attach either way.
 		AllowAllEgress: !confined,
-		AllowedDomains: verifyEgressDomains(ws),
-		// In a confined verify, an off-policy host ESCALATES to the operator instead
+		AllowedDomains: confinedEgressDomains(ws),
+		// In a confined replay, an off-policy host ESCALATES to the operator instead
 		// of a silent hard-deny — so a "bad curl" surfaces an approve/reject decision
-		// in the verify panel as it happens. Inert under allow-all, so it's a no-op
+		// in the record panel as it happens. Inert under allow-all, so it's a no-op
 		// for a learning session. (Cloud-metadata / private IPs stay unconditionally
 		// blocked regardless.)
 		FirstUseApproval: verifyFirstUse,
@@ -567,8 +490,8 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// The model provider is part of the HARNESS the operator configured (getting
 	// started), not per-workspace app egress they approve — so its host must be
-	// reachable in EVERY agent session, confined verify included. A learning session
-	// is AllowAllEgress so it's fine; a confined verify's AllowedDomains is
+	// reachable in EVERY agent session, confined replay included. A learning session
+	// is AllowAllEgress so it's fine; a confined replay's AllowedDomains is
 	// baseline+approved and would NOT list api.anthropic.com, which makes
 	// applyLLMCredMount refuse the subscription mount (anthropicReachable=false) and
 	// silently fall back to a broken api-key path. Union the ceiling's model-provider
@@ -580,7 +503,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// dispatch then auto-provisions the rest from the resulting policy (no runs.go
 	// change): subscription is detected from the /home/agent/.claude mount, and
 	// Bedrock is wired by dispatch's resolveBedrockAuth when modelRun is true (an
-	// interactive record run has verifyPlan==nil, so modelRun is true).
+	// interactive run is never a scan run, so modelRun is true).
 	var injections []runner.InjectionGrant
 	subMounted, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true)
 	llmMode := "none"
@@ -613,8 +536,9 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 
 	// Save the resolved auth mode + model onto the session entry so it's visible and a
-	// verify replay reflects the SAME provider the operator configured (not a guess).
-	// Guarded on `recording`: a superseding re-record must not resurrect this entry.
+	// later confined replay reflects the SAME provider the operator configured (not a
+	// guess). Guarded on `recording`: a superseding re-record must not resurrect this
+	// entry.
 	_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 		RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined,
 		Status: recordStatusRecording, StartedAt: startedAt,
@@ -623,7 +547,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
-	var plan json.RawMessage
 	return s.dispatchAndSettle(ctx, created, dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
@@ -633,14 +556,14 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		SSHGrants:          sshGrants,
 		Injections:         injections,
 		Interactive:        interactive,
-		VerifyPlan:         plan,
 	}), weakCC, nil
 }
 
 // wireWorkspaceSource points run+policy at the workspace source: a repo
 // clones (run.Repo); a local dir is bind-mounted at the composer workspace
 // target. It returns the repo's clone URL ("" for a local dir) to hand to
-// workspaceSourceGrants. Shared by launchVerifyRun and launchRecordRun.
+// workspaceSourceGrants. Used by launchRecordRun (launchScanRun is repo-only,
+// so it wires run.Repo directly).
 //
 // ORDERING (load-bearing): this is a PURE run/policy mutation, so it must run
 // BEFORE Store.CreateRun persists the row — whereas the clone grants it used to
@@ -689,7 +612,7 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 
 // maybeGitHubReadGrant creates a read-only github_token grant for a github.com
 // clone URL (nil for any other host) — extracted from launchScanRun's
-// private-repo clone support so launchVerifyRun can reuse it. A CreateGrant
+// private-repo clone support so launchRecordRun can reuse it too. A CreateGrant
 // failure is returned, never swallowed: the clone cannot authenticate without
 // the grant, so the launch must fail loudly rather than dispatch a sandbox
 // whose private-repo clone is guaranteed to 403.
@@ -699,7 +622,7 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 // disagree. It used to write `"repos": []`, which the real minter refuses
 // outright (githubMinter.MintInstallationToken: an installation token is
 // per-installation and the owner comes from the first repo), so every
-// scan/verify/record clone of a GitHub HTTPS repo 502'd at handleGitBroker the
+// scan/record clone of a GitHub HTTPS repo 502'd at handleGitBroker the
 // moment a real GitHub App was configured. No test saw it because
 // FakeGitHubMinter did not reproduce that precondition; it does now.
 //
@@ -765,14 +688,14 @@ func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time
 	return map[string]string{host: gid.String()}, nil
 }
 
-// reconcileWorkspaceRun is called when a governed scan/verify run reaches a
-// terminal state. If the workspace is STILL in the in-flight state pointing at
-// this run — meaning the run's result upload never arrived (the scan/verify
-// binary uploads BEFORE the process exits, so by the time the completion
-// watcher fires a successful upload has already advanced the workspace) — it
-// reconciles the workspace out of the stuck state instead of leaving it hung.
-// The common cause is a sandbox that cannot reach the control plane (e.g.
-// Docker-Desktop/WSL2 NAT networking).
+// reconcileWorkspaceRun is called when a governed scan run reaches a terminal
+// state. If the workspace is STILL in the in-flight state pointing at this run
+// — meaning the run's result upload never arrived (the scan binary uploads
+// BEFORE the process exits, so by the time the completion watcher fires a
+// successful upload has already advanced the workspace) — it reconciles the
+// workspace out of the stuck state instead of leaving it hung. The common
+// cause is a sandbox that cannot reach the control plane (e.g. Docker-Desktop/
+// WSL2 NAT networking).
 func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || run.WorkspaceID == nil {
@@ -788,31 +711,14 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	switch ws.Status {
-	case types.WorkspaceVerifying:
-		// The verify run ended but no result arrived — record a synthetic failure
-		// so the operator sees a clear reason instead of an endless spinner.
-		vr := workspacescan.VerifyResult{
-			Ran: true, OK: false, Done: true,
-			Steps: []workspacescan.VerifyStepResult{{
-				Stage: "run", Command: run.Task, ExitCode: -1,
-				LogTail: "the verify sandbox finished but its result never reached the control plane — " +
-					"the sandbox likely cannot reach wardynd (check sandbox→control-plane networking, " +
-					"e.g. Docker Desktop + WSL2 requires mirrored networking or a containerized control plane).",
-			}},
-		}
-		// Fenced on THIS run still owning the import step: a newer verify that
-		// already claimed the slot must not be reverted by this late reconcile.
-		_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceVerifyFailed, nil,
-			&runID, mustJSON(vr), ws.VerifiedProfileHash, ws.VerifiedAt)
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.verify",
-			ws.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_result_uploaded"})))
 	case types.WorkspaceScanning:
 		// A repo scan run ended without uploading facts — leave a clear error via a
-		// SCOPED write that MIRRORS the verify branch above: touch only status +
-		// clear the in-flight pointer. The previous full-row UpdateWorkspace replayed
-		// this stale pre-read snapshot over EVERY column, clobbering any
-		// concurrently-persisted async field (profile, record_results, approvals).
-		// Same fence as the verify branch: only reconcile the slot this run owns.
+		// SCOPED write: touch only status + clear the in-flight pointer. The
+		// previous full-row UpdateWorkspace replayed a stale pre-read snapshot over
+		// EVERY column, clobbering any concurrently-persisted async field (profile,
+		// record_results, approvals). Fenced on THIS run still owning the import
+		// step: a newer scan that already claimed the slot must not be reverted by
+		// this late reconcile.
 		_, _, _ = s.cfg.Store.SetWorkspaceImportState(ctx, ws.ID, types.WorkspaceError, nil,
 			&runID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "workspace.scan",
@@ -824,11 +730,11 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 // state DURING dispatch — a CreateSandbox error or a STARTING→FAILED grant/MITM
 // path CAS's the run to FAILED before Exec runs, so the completion watcher (which
 // starts only after a successful Exec) never fires and no reconcile hook would
-// otherwise settle the workspace. Without this, verify/scan strand in
-// `verifying`/`scanning` forever and a record capture is never taken.
+// otherwise settle the workspace. Without this, a scan strands in `scanning`
+// forever and a record capture is never taken.
 // Both reconcilers are idempotent + self-scoping — reconcileRecordRun no-ops for a
 // non-record run, reconcileWorkspaceRun no-ops unless the workspace still points at
-// this run in verifying/scanning — so calling both is safe for any launch kind.
+// this run in `scanning` — so calling both is safe for any launch kind.
 func (s *Server) settleTerminalLaunch(ctx context.Context, runID uuid.UUID, created types.AgentRun) {
 	if !isTerminalRunState(created.State) {
 		return
@@ -930,6 +836,16 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 		})))
 }
 
+// outcomeBool renders a bool as the audit outcome string convention
+// ("success"/"failure"). Its only remaining caller is reconcileRecordRun; it
+// used to be shared with the (now-removed) verify-result upload handler.
+func outcomeBool(ok bool) string {
+	if ok {
+		return "success"
+	}
+	return "failure"
+}
+
 // mintedSecretNames resolves minted grant ids to operator-meaningful names for
 // the "proven used" render: an api_key grant's secret_name, otherwise the grant
 // kind. Deduped, sorted (stable render), never values.
@@ -989,8 +905,8 @@ func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Works
 	if url == "" {
 		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", ws.Source)
 	}
-	// Detach from request cancellation before the durable launch work (same
-	// rationale as launchVerifyRun).
+	// Detach from request cancellation before the durable launch work: a client
+	// that walks away must not cancel it (same rationale as launchRecordRun).
 	ctx = context.WithoutCancel(ctx)
 
 	runID := uuid.New()

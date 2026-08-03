@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Onboarded workspaces + the guided Import flow (scan/build/verify/record/
-// finalize). Run-creation pickers offer ONLY these; a run may not reference any
+// Onboarded workspaces + the guided Import flow (scan/record). Verify/finalize
+// are retired from the interim import panel (see import-panel.tsx); env-as-code
+// generation stays available standalone via getEnvAsCode below. Run-creation
+// pickers offer ONLY these onboarded workspaces; a run may not reference any
 // other source.
-import type { SetupCommand, Workspace, WorkspaceKind, WorkspaceLLMCred } from "../types";
+import type { Workspace, WorkspaceKind, WorkspaceLLMCred } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 export const workspaces = {
@@ -79,22 +81,11 @@ export const workspaces = {
 
   // GET /api/v1/workspaces/{id} -> the single onboarded workspace, or undefined on
   // 404. The import panel polls this to watch one workspace's status advance
-  // (scanning → building → verifying → ready) without re-listing every workspace.
+  // (scanning → scanned; building/verifying/ready are legacy-only now) without
+  // re-listing every workspace.
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, { method: "GET" });
     if (res.status === 404) return undefined;
-    return asJson<Workspace>(res);
-  },
-
-  // PUT /api/v1/workspaces/{id}/setup-commands { commands } -> updated Workspace.
-  // The operator-approved list of build/verify commands (FULL replacement) that a
-  // verify run will execute. Distinct from the scanner's profile.setup_commands
-  // proposal — this is what the operator confirmed.
-  async setSetupCommands(id: string, commands: SetupCommand[]): Promise<Workspace> {
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/setup-commands`, {
-      method: "PUT",
-      body: JSON.stringify({ commands }),
-    });
     return asJson<Workspace>(res);
   },
 
@@ -112,51 +103,6 @@ export const workspaces = {
     return asJson<Workspace>(res);
   },
 
-  // POST /api/v1/workspaces/{id}/verify. Kicks a governed build+verify run.
-  //   202 -> { verify_run_id, workspace_id, state }: started; poll the workspace.
-  //   422 -> no approved setup commands yet (approve some in Configure first)
-  //   503 -> this control plane has no runner (-runner none) — can't verify, but
-  //          the operator can still finalize as configured
-  //   409 -> a verify is already running for this workspace
-  // The 422/503/409 cases are EXPECTED, actionable states the panel renders inline,
-  // so they resolve to { ok:false, status, detail } rather than throw. Any OTHER
-  // non-2xx is a real failure and throws HttpError.
-  async verifyWorkspace(
-    id: string,
-  ): Promise<{ ok: boolean; status: number; verify_run_id?: string; state?: string; detail?: string }> {
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/verify`, { method: "POST" });
-    if (res.status === 202) {
-      const body = await asJson<{ verify_run_id?: string; state?: string }>(res);
-      return { ok: true, status: 202, verify_run_id: body?.verify_run_id, state: body?.state };
-    }
-    if (res.status === 422 || res.status === 503 || res.status === 409) {
-      return { ok: false, status: res.status, detail: await errText(res) };
-    }
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
-    // A synchronous 200 (some backends may verify inline) — treat as started.
-    return { ok: true, status: res.status };
-  },
-
-  // POST /api/v1/workspaces/{id}/verify/suggest-fix — the AGENTIC half of the
-  // verify-fix loop (ADVISORY). Asks a composer backend to diagnose a FAILED verify
-  // from the failing step + already-masked logs + detected profile, and propose the
-  // single most likely concrete fix (an egress host to allow, a secret to add by
-  // name, or a corrected command). Human-gated: it returns prose the operator
-  // applies via the existing endpoints — it never auto-applies anything. An optional
-  // backend override picks a non-default composer backend.
-  //   200 -> { suggestion }
-  //   404 -> composer not enabled here (the panel hides the affordance up front)
-  //   422 -> no failed verify result to diagnose yet
-  //   400 -> unknown backend / 502 -> backend failed
-  // Errors surface as HttpError with .status, like compose().
-  async suggestVerifyFix(id: string, backend?: string): Promise<string> {
-    const qs = backend ? `?backend=${encodeURIComponent(backend)}` : "";
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/verify/suggest-fix${qs}`, {
-      method: "POST",
-    });
-    return (await asJson<{ suggestion?: string }>(res)).suggestion ?? "";
-  },
-
   // POST /api/v1/workspaces/{id}/record { name, confined }. Kicks an OPEN
   // (allow-all-egress) recording sandbox for one task under the strongest available
   // confinement.
@@ -164,8 +110,9 @@ export const workspaces = {
   //   422 -> unknown task / no approved commands for an auto task
   //   503 -> this control plane has no runner (can't record)
   //   409 -> another import step (record/verify/…) is already running
-  // Mirrors verifyWorkspace exactly: 422/503/409 are EXPECTED, actionable states the
-  // pane renders inline as { ok:false, status, detail }; any OTHER non-2xx throws.
+  // Same 422/503/409-inline pattern as this file's other governed-run kickoffs:
+  // EXPECTED, actionable states the pane renders inline as { ok:false, status,
+  // detail }; any OTHER non-2xx throws.
   async recordTask(
     id: string,
     name: string,
@@ -202,21 +149,6 @@ export const workspaces = {
     );
     if (res.status === 404) return workspaces.setApprovedEgress(id, fallbackDomains);
     return asJson<Workspace>(res);
-  },
-
-  // POST /api/v1/workspaces/{id}/finalize { emit_env_as_code } ->
-  // { workspace, emitted_files }. emitted_files maps filename -> content
-  // (devcontainer.json / AGENTS.md / …) when emit_env_as_code is set; empty otherwise.
-  async finalizeWorkspace(
-    id: string,
-    opts: { emitEnvAsCode: boolean },
-  ): Promise<{ workspace: Workspace; emitted_files: Record<string, string> }> {
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/finalize`, {
-      method: "POST",
-      body: JSON.stringify({ emit_env_as_code: opts.emitEnvAsCode }),
-    });
-    const body = await asJson<{ workspace: Workspace; emitted_files?: Record<string, string> }>(res);
-    return { workspace: body.workspace, emitted_files: body.emitted_files ?? {} };
   },
 
   // GET /api/v1/workspaces/{id}/env-as-code -> { emitted_files } (same key as

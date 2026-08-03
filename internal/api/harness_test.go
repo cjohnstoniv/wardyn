@@ -1,0 +1,138 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// TestAgentImage pins agentImage's behavior across the harness-catalog rewire:
+// a WARDYN_AGENT_IMAGES override always wins (even for an agent the catalog
+// has never heard of), and the ghcr.io fallback convention is BYTE-IDENTICAL
+// to the pre-catalog code for every id here — catalog member or not — because
+// every shipped row's ImageKey equals its ID.
+func TestAgentImage(t *testing.T) {
+	ids := []string{"claude-code", "codex-cli", "none", "oracle", "some-random-string"}
+
+	t.Run("ghcr fallback: no WARDYN_AGENT_IMAGES override", func(t *testing.T) {
+		for _, id := range ids {
+			if got, want := agentImage(id, nil), "ghcr.io/cjohnstoniv/agent-"+id+":latest"; got != want {
+				t.Errorf("agentImage(%q, nil) = %q, want %q", id, got, want)
+			}
+		}
+	})
+
+	t.Run("WARDYN_AGENT_IMAGES override wins for its own id only", func(t *testing.T) {
+		images := map[string]string{"claude-code": "example.com/custom/claude:v9"}
+		if got, want := agentImage("claude-code", images), "example.com/custom/claude:v9"; got != want {
+			t.Errorf("agentImage(claude-code, override) = %q, want %q", got, want)
+		}
+		// Every other id is untouched by an override naming a different agent —
+		// each still falls through to its own ghcr convention.
+		for _, id := range []string{"codex-cli", "none", "oracle", "some-random-string"} {
+			if got, want := agentImage(id, images), "ghcr.io/cjohnstoniv/agent-"+id+":latest"; got != want {
+				t.Errorf("agentImage(%q, override-for-claude-code) = %q, want %q", id, got, want)
+			}
+		}
+	})
+}
+
+// TestAgentLLMProvider pins agentLLMProvider's outputs literally as the old
+// claude-code/codex-cli switch produced them, for every id in the shared
+// rewire test set.
+func TestAgentLLMProvider(t *testing.T) {
+	tests := []struct {
+		agent  string
+		want   llmProvider
+		wantOK bool
+	}{
+		{"claude-code", llmProvider{host: "api.anthropic.com", header: "x-api-key", format: "%s", secret: "anthropic-api-key"}, true},
+		{"codex-cli", llmProvider{host: "api.openai.com", header: "Authorization", format: "Bearer %s", secret: "openai-api-key"}, true},
+		{"none", llmProvider{}, false},
+		{"oracle", llmProvider{}, false},
+		{"some-random-string", llmProvider{}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.agent, func(t *testing.T) {
+			got, ok := agentLLMProvider(tc.agent)
+			if ok != tc.wantOK {
+				t.Fatalf("agentLLMProvider(%q) ok = %v, want %v", tc.agent, ok, tc.wantOK)
+			}
+			if got != tc.want {
+				t.Errorf("agentLLMProvider(%q) = %+v, want %+v", tc.agent, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAgentHarnessLoginCatalogRewire pins agentHarnessLogin's outputs
+// literally as the old claude-code/aws-sso switch produced them, for every id
+// in the shared rewire test set, PLUS the aws-sso auxiliary row the rewire is
+// required to leave untouched (harnessLogin has a slice field, so equality is
+// reflect.DeepEqual, not ==). Complements the pre-existing TestAgentHarnessLogin
+// in harnesscred_test.go, which this rewire must keep passing unmodified.
+func TestAgentHarnessLoginCatalogRewire(t *testing.T) {
+	claudeCode := harnessLogin{
+		provider:    "anthropic",
+		agent:       "claude-code",
+		secretName:  harnessCredSecretName("anthropic"),
+		sentinel:    types.ManagedOAuthSecret,
+		injectHost:  subscriptionInjectionHost,
+		tokenPrefix: "sk-ant-oat",
+		egress:      []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
+	}
+	awsSSO := harnessLogin{
+		provider:          awsSSOProvider,
+		agent:             awsSSOAgent,
+		secretName:        harnessCredSecretName(awsSSOProvider),
+		sentinel:          "",
+		injectHost:        "",
+		tokenPrefix:       "",
+		egress:            []string{"*.awsapps.com"},
+		regionalSSOEgress: true,
+		captureViaHelper:  true,
+	}
+
+	tests := []struct {
+		agent  string
+		want   harnessLogin
+		wantOK bool
+	}{
+		{"claude-code", claudeCode, true},
+		{"codex-cli", harnessLogin{}, false},
+		{"none", harnessLogin{}, false},
+		{"oracle", harnessLogin{}, false},
+		{"some-random-string", harnessLogin{}, false},
+		{awsSSOAgent, awsSSO, true}, // the auxiliary entry the rewire must leave untouched
+	}
+	for _, tc := range tests {
+		t.Run(tc.agent, func(t *testing.T) {
+			got, ok := agentHarnessLogin(tc.agent)
+			if ok != tc.wantOK {
+				t.Fatalf("agentHarnessLogin(%q) ok = %v, want %v", tc.agent, ok, tc.wantOK)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("agentHarnessLogin(%q) = %+v, want %+v", tc.agent, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHarnessLoginByProvider pins the provider-keyed lookup that both
+// agentHarnessLogin paths (the harness catalog for claude-code, the untouched
+// direct case for aws-sso) must still resolve through.
+func TestHarnessLoginByProvider(t *testing.T) {
+	if _, ok := harnessLoginByProvider("anthropic"); !ok {
+		t.Error(`harnessLoginByProvider("anthropic") ok = false, want true`)
+	}
+	if _, ok := harnessLoginByProvider(awsSSOProvider); !ok {
+		t.Errorf("harnessLoginByProvider(%q) ok = false, want true", awsSSOProvider)
+	}
+	if _, ok := harnessLoginByProvider("bogus-provider"); ok {
+		t.Error(`harnessLoginByProvider("bogus-provider") ok = true, want false`)
+	}
+}

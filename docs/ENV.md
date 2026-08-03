@@ -179,12 +179,6 @@ pointed at `/data/audit/audit.log`.
 |---|---|---|---|
 | `WARDYN_RUN_TOKEN` 🔒 | string | (unset) | bearer for `-upload-url` auth (flag `-run-token`) |
 
-## `wardyn-verify`
-
-| Variable | Type | Default | Notes |
-|---|---|---|---|
-| `WARDYN_VERIFY_COMMANDS` | string | (unset) | verify command list |
-
 ## `internal/envbuild` (devcontainer builder, invoked by `wardynd`)
 
 | Variable | Type | Default | Notes |
@@ -212,7 +206,6 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_MITM_CA_PEM` | string (PEM) | (unset) | MITM CA the sandbox trusts |
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
-| `WARDYN_VERIFY_ONLY` | bool | (unset) | verify-only run flag |
 | `WARDYN_COMPOSE_ONLY` | bool | (unset) | compose-only run flag: run claude in plan mode for a run proposal |
 | `WARDYN_COMPOSE_SYSTEM_B64` | base64 | (unset) | compose run: system prompt (base64) |
 | `WARDYN_COMPOSE_PROMPT_B64` | base64 | (unset) | compose run: user prompt (base64) |

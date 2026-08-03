@@ -114,12 +114,12 @@ log "Assembling runner tools from ${AGENT_IMAGE} -> ${TOOLS_DIR}"
 # The agent image has no default CMD (the driver always supplies argv), so
 # docker create needs a dummy command; the container is never started.
 tools_ctr="$(docker create "${AGENT_IMAGE}" true)" || die "docker create ${AGENT_IMAGE} (build it or unset WARDYN_CI_SKIP_BUILD)"
-for tool in agent-run agent-run-lib.sh wardyn-rec wardyn-verify wardyn-git-helper wardyn-scan; do
+for tool in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper wardyn-scan; do
   docker cp -q "${tools_ctr}:/usr/local/bin/${tool}" "${TOOLS_DIR}/" 2>/dev/null \
     || warn "tool ${tool} not present in ${AGENT_IMAGE} (continuing)"
 done
 docker rm -f "${tools_ctr}" >/dev/null
-for required in agent-run wardyn-verify wardyn-git-helper; do
+for required in agent-run wardyn-git-helper; do
   [[ -f "${TOOLS_DIR}/${required}" ]] || die "required runner tool ${required} missing from ${AGENT_IMAGE}"
 done
 export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"

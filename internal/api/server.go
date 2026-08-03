@@ -624,26 +624,17 @@ func (s *Server) routes() chi.Router {
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
-			// Operator-approved setup commands the verify run executes
-			// (promoted from the scanner's advisory profile.setup_commands).
-			operatorOnly.Put("/workspaces/{id}/setup-commands", s.handleSetSetupCommands)
-			// Launch a governed verify run: execute the approved setup commands
-			// in the built image under confinement (see handleVerifyWorkspace).
-			operatorOnly.Post("/workspaces/{id}/verify", s.handleVerifyWorkspace)
 			// Record Mode: launch one task's OPEN recording sandbox (learn what
 			// the task actually uses; see handleRecordWorkspace), then promote
 			// the observed-allowed hosts into ApprovedEgress (operator one-click).
 			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
 			operatorOnly.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
-			// Finalize the import: mark ready + optionally emit committable
-			// env-as-code (devcontainer.json/AGENTS.md). The GET re-generates
-			// the same files any time, so a repo workspace's committable output
-			// does not die with the one-shot finalize response.
-			operatorOnly.Post("/workspaces/{id}/finalize", s.handleFinalizeWorkspace)
+			// Committable env-as-code (devcontainer.json/AGENTS.md) from the
+			// scanned profile. GET re-generates it any time (repo workspaces have
+			// no host path to write into); the write route is local-dir-only and
+			// writes it into the host source dir (see handleWriteEnvAsCode).
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
-			// Agentic verify-fix: ask a compose backend to diagnose a failed
-			// verify and suggest a concrete fix (advisory; see handleSuggestVerifyFix).
-			operatorOnly.Post("/workspaces/{id}/verify/suggest-fix", s.handleSuggestVerifyFix)
+			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
 			// Secret management: write/delete/list only. Values are NEVER
 			// readable through the API (read paths are the broker and the
@@ -741,12 +732,6 @@ func (s *Server) routes() chi.Router {
 			// which injects the run token) for the waiting RunClaudeCompose to read.
 			// Same cross-run guard as scan (token run id must match the path run id).
 			r.Put("/internal/compose-results/{runID}", s.handleUploadComposeResult)
-
-			// Verify-result upload: PUT /api/v1/internal/verify-results/{runID}
-			// wardyn-verify PUTs the VerifyResult (per-step exit codes + bounded
-			// logs) from inside a governed verify run via the proxy's brokered
-			// verify-result route. Same cross-run guard + trusted linkage as scan.
-			r.Put("/internal/verify-results/{runID}", s.handleUploadVerifyResult)
 
 			// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
 			// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the

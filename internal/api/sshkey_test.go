@@ -272,7 +272,7 @@ func TestBrokeredRunWithholdsSSHGrantEnv(t *testing.T) {
 	brokered := map[string]uuid.UUID{"acme/widgets": uuid.New()}
 	apply := func(sshGrants map[string]string, gitGrants map[string]uuid.UUID) (map[string]string, []string) {
 		env := map[string]string{}
-		dropped, _ := applyDispatchModeEnv(env, run, nil, false, "", nil, nil, sshGrants, gitGrants)
+		dropped, _ := applyDispatchModeEnv(env, run, false, "", nil, nil, sshGrants, gitGrants)
 		return env, dropped
 	}
 

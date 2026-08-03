@@ -507,7 +507,7 @@ func assertEnvValue(t *testing.T, env []string, key, want string) {
 // image --selftest, and ci-run.sh staging. Loosening the slice (dropping a tool)
 // fails here, so the reconciliation cannot be silently reverted.
 func TestRequiredTools_CanonicalUnion(t *testing.T) {
-	want := []string{"agent-run", "agent-run-lib.sh", "wardyn-rec", "wardyn-verify", "wardyn-git-helper"}
+	want := []string{"agent-run", "agent-run-lib.sh", "wardyn-rec", "wardyn-git-helper"}
 	if len(requiredTools) != len(want) {
 		t.Fatalf("requiredTools = %v, want %v", requiredTools, want)
 	}

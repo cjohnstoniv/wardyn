@@ -110,9 +110,9 @@ const (
 // The set is the UNION reconciled across the three drifted "required tools"
 // sites the review flagged, so the build gate no longer passes a tools
 // dir that the runtime would then reject:
-//   - the old build gate here required only {agent-run, wardyn-verify,
-//     wardyn-git-helper} — too loose: it never checked wardyn-rec or the sourced
-//     lib, so a build-valid dir could still fail at record/exec time;
+//   - the old build gate here required only {agent-run, wardyn-git-helper} —
+//     too loose: it never checked wardyn-rec or the sourced lib, so a
+//     build-valid dir could still fail at record/exec time;
 //   - deploy/images/*/agent-run's --selftest requires wardyn-rec (and sources
 //     agent-run-lib.sh under `set -euo pipefail`, making the lib load-bearing);
 //   - scripts/ci-run.sh stages all of these from the agent image.
@@ -125,7 +125,6 @@ var requiredTools = []string{
 	"agent-run",         // task entrypoint the runner execs
 	"agent-run-lib.sh",  // sourced by agent-run under `set -euo pipefail` (load-bearing)
 	"wardyn-rec",        // session recorder; required by the image --selftest
-	"wardyn-verify",     // confined replay/verify
 	"wardyn-git-helper", // brokered-token git credential helper
 }
 

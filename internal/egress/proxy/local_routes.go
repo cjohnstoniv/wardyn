@@ -35,7 +35,6 @@ const (
 	routeApprovals      = "/wardyn/v1/approvals/"
 	routeRecordings     = "/wardyn/v1/recordings/"
 	routeScanResults    = "/wardyn/v1/scan-results/"
-	routeVerifyResults  = "/wardyn/v1/verify-results/"
 	routeComposeResults = "/wardyn/v1/compose-results/"
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run (uploaded by wardyn-aws-sso). Same brokered shape as the
@@ -58,7 +57,6 @@ const (
 	ruleSourceApprovals      = "brokered:approvals"
 	ruleSourceRecordings     = "brokered:recording"
 	ruleSourceScanResults    = "brokered:scan-result"
-	ruleSourceVerifyResults  = "brokered:verify-result"
 	ruleSourceComposeResults = "brokered:compose-result"
 	ruleSourceSSOToken       = "brokered:sso-token"
 	ruleSourceLLM            = "brokered:llm"
@@ -106,8 +104,6 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerRecording(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeScanResults):
 		p.handleBrokerScanResult(w, r)
-	case r.Method == http.MethodPut && strings.HasPrefix(path, routeVerifyResults):
-		p.handleBrokerVerifyResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeComposeResults):
 		p.handleBrokerComposeResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
@@ -244,15 +240,6 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, pr
 func (p *Proxy) handleBrokerScanResult(w http.ResponseWriter, r *http.Request) {
 	p.forwardBrokeredUpload(w, r, routeScanResults, "/api/v1/internal/scan-results/",
 		ruleSourceScanResults, "read scan result body", maxScanResultBody)
-}
-
-// handleBrokerVerifyResult forwards PUT /wardyn/v1/verify-results/{runID} to the
-// control plane's internal verify-result endpoint with the run token injected —
-// the exact sibling of handleBrokerScanResult. Cross-run uploads are rejected
-// control-plane-side; the run→workspace linkage comes from trusted state.
-func (p *Proxy) handleBrokerVerifyResult(w http.ResponseWriter, r *http.Request) {
-	p.forwardBrokeredUpload(w, r, routeVerifyResults, "/api/v1/internal/verify-results/",
-		ruleSourceVerifyResults, "read verify result body", maxScanResultBody)
 }
 
 // handleBrokerSSOToken forwards PUT /wardyn/v1/sso-token/{runID} to the control

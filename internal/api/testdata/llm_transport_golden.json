@@ -1,0 +1,139 @@
+{
+  "claude-code/anthropic-api-key-injection-present": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
+  "claude-code/bedrock-bearer": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": true,
+    "inject_bedrock_bearer": true,
+    "bedrock_bearer": true,
+    "bedrock_region": "us-east-1",
+    "bedrock_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "sandbox_env": {
+      "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "AWS_BEARER_TOKEN_BEDROCK": "wardyn-proxy-injected",
+      "AWS_DEFAULT_REGION": "us-east-1",
+      "AWS_REGION": "us-east-1",
+      "CLAUDE_CODE_USE_BEDROCK": "1"
+    },
+    "allowed_domains": [
+      "bedrock-runtime.us-east-1.amazonaws.com",
+      "bedrock.us-east-1.amazonaws.com",
+      "git.example.com"
+    ]
+  },
+  "claude-code/bedrock-static-keys": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": true,
+    "inject_bedrock_bearer": false,
+    "bedrock_region": "us-east-1",
+    "bedrock_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "sandbox_env": {
+      "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "AWS_ACCESS_KEY_ID": "AKIATESTTESTTESTTEST",
+      "AWS_DEFAULT_REGION": "us-east-1",
+      "AWS_REGION": "us-east-1",
+      "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMItesttesttesttesttesttestKEY",
+      "CLAUDE_CODE_USE_BEDROCK": "1"
+    },
+    "allowed_domains": [
+      "bedrock-runtime.us-east-1.amazonaws.com",
+      "bedrock.us-east-1.amazonaws.com",
+      "git.example.com"
+    ]
+  },
+  "claude-code/managed-subscription-blob-present": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": true,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+      "CLAUDE_CONFIG_DIR": "/home/agent/.claude-run",
+      "WARDYN_CLAUDE_MANAGED_B64": "eyJjbGF1ZGVBaU9hdXRoIjp7ImFjY2Vzc1Rva2VuIjoic2stYW50LW9hdDAxLXdhcmR5bi1pbmVydC1zZW50aW5lbC1wcm94eS1pbmplY3RzLXRoZS1saXZlLXRva2VuIiwiZXhwaXJlc0F0Ijo0MTAyNDQ0ODAwMDAwLCJyZWZyZXNoVG9rZW4iOiIiLCJzY29wZXMiOlsidXNlcjppbmZlcmVuY2UiXSwic3Vic2NyaXB0aW9uVHlwZSI6Im1heCJ9fQ=="
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
+  "claude-code/nothing-configured": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
+  "claude-code/resident-subscription-token-wired": {
+    "subscription": true,
+    "inject_sub": true,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+      "CLAUDE_CONFIG_DIR": "/home/agent/.claude-run"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
+  "codex-cli/nothing-configured": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected",
+      "OPENAI_API_KEY": "wardyn-proxy-injected",
+      "OPENAI_BASE_URL": "http://wardyn-proxy:3128/wardyn/llm/openai"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
+  "codex-cli/openai-api-key-present": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected",
+      "OPENAI_API_KEY": "wardyn-proxy-injected",
+      "OPENAI_BASE_URL": "http://wardyn-proxy:3128/wardyn/llm/openai"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  }
+}

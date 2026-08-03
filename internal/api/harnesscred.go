@@ -78,23 +78,12 @@ type harnessLogin struct {
 }
 
 // agentHarnessLogin returns the login convention for an agent, if it supports
-// container login.
+// container login. claude-code (and any future catalog row that gains a Login
+// convention) resolves through the harness catalog (harness.go); aws-sso is a
+// login-only auxiliary provider that names no coding-agent harness, so it
+// stays a direct case here exactly as before the catalog existed.
 func agentHarnessLogin(agent string) (harnessLogin, bool) {
 	switch agent {
-	case "claude-code":
-		return harnessLogin{
-			provider:    "anthropic",
-			agent:       "claude-code",
-			secretName:  harnessCredSecretName("anthropic"),
-			sentinel:    types.ManagedOAuthSecret,
-			injectHost:  subscriptionInjectionHost, // api.anthropic.com
-			tokenPrefix: "sk-ant-oat",
-			// `claude setup-token` OAuth (observed v2.1.x): authorize on claude.com,
-			// remote callback on platform.claude.com, token exchange on the Anthropic
-			// console/api hosts. Enumerated empirically; prune/extend from the login
-			// run's decision log (any extra host surfaces as a deny_with_review).
-			egress: []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
-		}, true
 	case awsSSOAgent:
 		return harnessLogin{
 			provider:   awsSSOProvider,
@@ -126,7 +115,11 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 			captureViaHelper:  true,
 		}, true
 	default:
-		return harnessLogin{}, false
+		def, ok := harnessByID(agent)
+		if !ok || def.Login == nil {
+			return harnessLogin{}, false
+		}
+		return *def.Login, true
 	}
 }
 

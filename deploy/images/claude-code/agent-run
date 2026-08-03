@@ -420,17 +420,6 @@ if [[ "${WARDYN_SCAN_ONLY:-}" == "1" ]]; then
     exec wardyn-scan
 fi
 
-# Governed VERIFY run: run the operator-approved setup commands (install/build/
-# test) over the cloned/mounted workspace and upload the VerifyResult, then exit.
-# No agent/model invocation. Secrets are proxy-injected (never resident), so the
-# setup commands reach their registries through wardyn-proxy without any secret
-# in the sandbox env.
-if [[ "${WARDYN_VERIFY_ONLY:-}" == "1" ]]; then
-    export WARDYN_WORKSPACE_DIR="${WARDYN_WORKSPACE_DIR:-$workdir}"
-    echo "agent-run: verify-only mode — running wardyn-verify over ${WARDYN_WORKSPACE_DIR}" >&2
-    exec wardyn-verify
-fi
-
 # Exec task mode (BYOA/CI): run the task as a plain shell command instead of
 # the agent harness — no model call, so the anthropic auth wiring below is
 # skipped. Never returns when WARDYN_TASK_MODE=exec (see agent-run-lib.sh).

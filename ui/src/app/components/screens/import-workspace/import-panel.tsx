@@ -4,52 +4,37 @@
  */
 
 // ImportWorkspaceDialog — the guided, resumable "import a workspace" overlay
-// (Devin-style): Source → Scan → Configure → Verify → Finalize. It clones the
+// (Devin-style): Source → Scan → Configure → Record. It clones the
 // NewRunDialog pattern: its OWN Dialog on top of Getting Started, its own step
 // state, reset-on-open, and it returns to the caller via onOpenChange(false) +
 // onReload (never a route change).
 //
+// Interim panel: this stays the working add-workspace UI until a later wave
+// rebuilds Verify/Finalize (import-types.ts keeps the retired verify-checklist
+// helpers, unused, for that wave). Record's "Done" just closes the panel —
+// there's no separate build+verify or emit-env-as-code step here anymore.
+// Env-as-code generation still exists standalone via api.getEnvAsCode (e.g.
+// the Workspaces screen's kebab menu) — it never depended on this panel.
+//
 // Reuse-heavy by design: AddWorkspaceDialog (Source), WorkspaceNeedsPanel
 // (Scan/Configure profile + egress-approve), AddSecretDialog (Secrets),
-// StepIndicator (rail), usePoll (watch status while scanning/building/verifying).
+// StepIndicator (rail), usePoll (watch status while scanning, or a legacy
+// building/verifying row).
 import * as React from "react";
-import {
-  Check,
-  CircleCheck,
-  CircleX,
-  FileCode2,
-  Loader2,
-  Play,
-  Plus,
-  RotateCw,
-  ScanSearch,
-  ShieldCheck,
-  Sparkles,
-  TriangleAlert,
-} from "lucide-react";
+import { CircleCheck, Loader2, Plus, RotateCw, ScanSearch, ShieldCheck, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import type { SetupCommand, Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { Workspace } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { composer as composerApi } from "../../../lib/api/compose";
 import { usePoll } from "../../../lib/use-poll";
 import { getErrorMessage as msg } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { hasLlmPath } from "../onboarding/intro";
 import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
-import { Checkbox } from "../../ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "../../ui/dialog";
-import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
-import { CodeBlock, Mono } from "../../wardyn/code-block";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
+import { ConfinementChip, SectionLabel } from "../../wardyn/primitives";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { StepIndicator, OptionCard } from "../new-run/step-shell";
 import { AddWorkspaceDialog } from "../workspaces";
@@ -62,18 +47,9 @@ import {
   activeStepForStatus,
   isTransientStatus,
   isRecording,
-  recordSessions,
   sessionKeyOf,
   newEgressHosts,
-  verifyPhase,
-  verifyRows,
-  verifyProgress,
-  runningLabel,
-  fmtStepDuration,
-  VERIFY_PHASE_LABEL,
-  VERIFY_PHASE_TONE,
   type ImportStepId,
-  type VerifyRow,
 } from "./import-types";
 
 export function ImportWorkspaceDialog({
@@ -101,12 +77,8 @@ export function ImportWorkspaceDialog({
 
   // Brokered secret names (for the Configure step's "already stored" chips).
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
-  // Whether a composer backend is configured — gates the AGENTIC "diagnose with AI"
-  // affordance on the Verify step (detected the same way new-run-dialog does: an
-  // empty backend list means the composer is off / suggest-fix would 404).
-  const [composerEnabled, setComposerEnabled] = React.useState(false);
   // fix: Record's "no model configured" warning must be composer-INDEPENDENT —
-  // driving it off composerEnabled fired the warning even with a connected
+  // driving it off composer detection fired the warning even with a connected
   // subscription or a stored provider key (a run can have model access with no
   // composer backend). Derive it from GET /setup/status via hasLlmPath instead —
   // the same readiness check Getting Started uses.
@@ -114,28 +86,25 @@ export function ImportWorkspaceDialog({
   const [addSecretOpen, setAddSecretOpen] = React.useState(false);
   const [addSecretName, setAddSecretName] = React.useState("");
 
-  // Scan / verify busy + verify inline notice (422/503/409).
+  // Scan busy state + the server's scan-failure detail (ScanPane names the real cause).
   const [scanning, setScanning] = React.useState(false);
-  // The server's scan-failure detail, kept so ScanPane can name the real cause.
   const [scanError, setScanError] = React.useState<string | null>(null);
-  const [verifyBusy, setVerifyBusy] = React.useState(false);
-  const [verifyNotice, setVerifyNotice] = React.useState<{ status: number; detail?: string } | null>(null);
 
   // Record step: which task's record run is being kicked, its inline notice
-  // (422/503/409, same shape as verify), and the ProfileReview drawer's run id
-  // ("Save task profile" opens it — the panel owns the drawer so the pane stays
-  // free of the profile round-trip).
+  // (422/503/409), and the ProfileReview drawer's run id ("Save task profile"
+  // opens it — the panel owns the drawer so the pane stays free of the profile
+  // round-trip).
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
   const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   // Suggested "save as is" policy name (workspace + recording) for the profile drawer.
   const [profileName, setProfileName] = React.useState<string | undefined>(undefined);
-  // fix: the Record/Verify panes' one-click (approveHost) and bulk
-  // (promoteEgress) egress approvals used to PUT straight to the API — skipping
-  // the same untrusted-content confirm the Workspaces screen enforces for the
-  // identical action (the host names come from a workspace's own files or a
-  // run's observed egress, neither of which is trusted). Route both through
-  // one pending-confirm gate so every caller gets it for free.
+  // fix: the Record pane's one-click (approveHost) and bulk (promoteEgress)
+  // egress approvals used to PUT straight to the API — skipping the same
+  // untrusted-content confirm the Workspaces screen enforces for the identical
+  // action (the host names come from a workspace's own files or a run's
+  // observed egress, neither of which is trusted). Route both through one
+  // pending-confirm gate so every caller gets it for free.
   const [pendingConfirm, setPendingConfirm] = React.useState<{ hosts: string[]; run: () => void } | null>(
     null,
   );
@@ -143,11 +112,6 @@ export function ImportWorkspaceDialog({
     setProfileRunId(id);
     setProfileName(name);
   };
-
-  // Finalize state.
-  const [emitCode, setEmitCode] = React.useState(false);
-  const [finalizing, setFinalizing] = React.useState(false);
-  const [emitted, setEmitted] = React.useState<Record<string, string> | null>(null);
 
   // Guards a one-time auto-scan per workspace so re-renders don't re-fire it.
   const scanFired = React.useRef<string | null>(null);
@@ -175,15 +139,6 @@ export function ImportWorkspaceDialog({
     secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
   }, []);
 
-  const loadComposer = React.useCallback(() => {
-    // The "Diagnose with AI" affordance shows only when a composer backend is
-    // actually configured (an empty list / probe error hides it, no crash).
-    composerApi
-      .listComposerBackends()
-      .then((bs) => setComposerEnabled(bs.length > 0))
-      .catch(() => setComposerEnabled(false));
-  }, []);
-
   // fix: Record's model-readiness warning (see llmReady above).
   const loadLlmReadiness = React.useCallback(() => {
     setupApi
@@ -204,17 +159,11 @@ export function ImportWorkspaceDialog({
     setAddSecretOpen(false);
     setAddSecretName("");
     setScanning(false);
-    setVerifyBusy(false);
-    setVerifyNotice(null);
     setRecordBusyTask(null);
     setRecordNotice(null);
     setProfileRunId(null);
-    setEmitCode(false);
-    setFinalizing(false);
-    setEmitted(null);
     scanFired.current = null;
     loadSecrets();
-    loadComposer();
     loadLlmReadiness();
     if (workspaceId) {
       setStep("scan"); // provisional; refined by loadWs once the status is known
@@ -223,12 +172,13 @@ export function ImportWorkspaceDialog({
       setStep("source");
       workspacesApi.listWorkspaces().then(setExisting).catch(() => setExisting([]));
     }
-  }, [open, workspaceId, loadWs, loadSecrets, loadComposer, loadLlmReadiness]);
+  }, [open, workspaceId, loadWs, loadSecrets, loadLlmReadiness]);
 
-  // Poll the single workspace while it's mid-flight server-side (scanning /
-  // building / verifying) — paused otherwise so a settled workspace isn't polled.
-  // Record adds NO transient WorkspaceStatus (the status stays `scanned`), so the
-  // gate must ALSO stay open while any task is recording, or the pane never updates.
+  // Poll the single workspace while it's mid-flight server-side (scanning, or a
+  // legacy building/verifying row) — paused otherwise so a settled workspace
+  // isn't polled. Record adds NO transient WorkspaceStatus (the status stays
+  // `scanned`), so the gate must ALSO stay open while any task is recording, or
+  // the pane never updates.
   const transient = !!ws && isTransientStatus(ws.status);
   const recording = !!ws && isRecording(ws);
   usePoll(
@@ -280,37 +230,20 @@ export function ImportWorkspaceDialog({
     setStep(activeStepForStatus(w.status));
   };
 
-  const doVerify = async () => {
+  // Start (or re-start) a NAMED recording session. 400/503/409 render inline;
+  // any other failure toasts. Reload after so the pane picks up the `recording`
+  // state (and the poll gate stays open while it runs). busyTask keys off the
+  // predicted slug so a re-record disables the right card.
+  const doRecord = async (name: string) => {
     if (!wsId) return;
-    setVerifyBusy(true);
-    setVerifyNotice(null);
-    try {
-      const r = await workspacesApi.verifyWorkspace(wsId);
-      if (!r.ok) setVerifyNotice({ status: r.status, detail: r.detail });
-      await loadWs(wsId); // pick up building/verifying/verify_failed
-    } catch (e) {
-      toast.error("Verification failed to start", { description: msg(e) });
-    } finally {
-      setVerifyBusy(false);
-    }
-  };
-
-  // Start (or re-start) a NAMED recording session. 400/503/409 render inline (same
-  // as verify); any other failure toasts. Reload after so the pane picks up the
-  // `recording` state (and the poll gate stays open while it runs). busyTask keys
-  // off the predicted slug so a re-record disables the right card.
-  const doRecord = async (name: string, confined = false) => {
-    if (!wsId) return;
-    // A confined verify run is keyed verify:<slug> server-side (verifyKeyOf) — match
-    // that so the right recording's card shows busy.
-    setRecordBusyTask((confined ? "verify:" : "") + sessionKeyOf(name));
+    setRecordBusyTask(sessionKeyOf(name));
     setRecordNotice(null);
     try {
-      const r = await workspacesApi.recordTask(wsId, name, confined);
+      const r = await workspacesApi.recordTask(wsId, name);
       if (!r.ok) setRecordNotice({ status: r.status, detail: r.detail });
       await loadWs(wsId);
     } catch (e) {
-      toast.error(confined ? "Verify session failed to start" : "Recording failed to start", { description: msg(e) });
+      toast.error("Recording failed to start", { description: msg(e) });
     } finally {
       setRecordBusyTask(null);
     }
@@ -355,7 +288,7 @@ export function ImportWorkspaceDialog({
 
   // fix: gate both the single-host and bulk approve actions behind the
   // same untrusted-content confirm the Workspaces screen already enforces
-  // (ConfirmEgressDialog below) — these wrappers are what Record/Verify get as
+  // (ConfirmEgressDialog below) — these wrappers are what Record gets as
   // onApproveHost/onPromoteEgress; the raw approveHost/promoteEgress above only
   // ever run after the operator confirms.
   const requestApproveHost = (host: string) => setPendingConfirm({ hosts: [host], run: () => void approveHost(host) });
@@ -364,29 +297,11 @@ export function ImportWorkspaceDialog({
     setPendingConfirm({ hosts: newEgressHosts(ws, taskKey), run: () => void promoteEgress(taskKey) });
   };
 
-  const doFinalize = async () => {
-    if (!wsId) return;
-    setFinalizing(true);
-    try {
-      const { workspace, emitted_files } = await workspacesApi.finalizeWorkspace(wsId, { emitEnvAsCode: emitCode });
-      setWs(workspace);
-      if (Object.keys(emitted_files).length) {
-        setEmitted(emitted_files); // show the copyable files, then Done closes
-        toast.success("Workspace imported");
-      } else {
-        finishAndClose();
-      }
-    } catch (e) {
-      toast.error("Finalize failed", { description: msg(e) });
-    } finally {
-      setFinalizing(false);
-    }
-  };
-
-  // Kill any in-flight interactive record/verify run when the panel closes, so an
-  // abandoned attach sandbox doesn't linger until its idle cap. Best-effort + fire-
-  // and-forget; the kill ALSO captures the recording server-side (reconcileRecordRun),
-  // so closing the panel is an implicit "Done" rather than a lost session.
+  // Kill any in-flight interactive record run when the panel closes, so an
+  // abandoned attach sandbox doesn't linger until its idle cap. Best-effort +
+  // fire-and-forget; the kill ALSO captures the recording server-side
+  // (reconcileRecordRun), so closing the panel is an implicit "Done" rather
+  // than a lost session.
   const killInFlightRecordings = React.useCallback(() => {
     for (const v of Object.values(ws?.record_results ?? {})) {
       if (v.status === "recording") void runsApi.killRun(v.run_id).catch(() => {});
@@ -405,6 +320,16 @@ export function ImportWorkspaceDialog({
     killInFlightRecordings();
     onReload();
     onOpenChange(false);
+  };
+
+  // Plain client-side finish — no server round-trip. The old Verify/Finalize
+  // steps (build+verify, then emit-env-as-code) are retired from this interim
+  // panel; env-as-code generation still exists standalone via api.getEnvAsCode
+  // (see the Workspaces screen's kebab menu). Reachable from Configure (finish
+  // without ever recording anything) or from Record.
+  const handleDone = () => {
+    toast.success("Workspace added");
+    finishAndClose();
   };
 
   const openAddSecret = (name: string) => {
@@ -466,60 +391,11 @@ export function ImportWorkspaceDialog({
                 notice={recordNotice}
                 busyTask={recordBusyTask}
                 modelReady={llmReady}
-                onRecord={(name) => doRecord(name, false)}
+                onRecord={doRecord}
                 onDoneRecording={doneRecording}
                 onPromoteEgress={requestPromoteEgress}
                 onApproveHost={requestApproveHost}
                 onOpenProfile={openProfile}
-              />
-            )}
-
-            {/* Verify = re-run your steps in a CONFINED session (default-deny egress,
-                limited to the approved set); off-policy hosts are blocked live. The
-                older automated setup-command verify (VerifyPane) is still shown when
-                an auto-verify is in flight or has a result — driven via the API.
-                fix: it's ALSO the fallback when Record was skipped (zero open
-                recordings to replay) — otherwise "Skip recording" stranded the
-                operator at RecordPane's confined dead-end, contradicting
-                STEP_BLURB.record's "Verify still proves it either way". */}
-            {step === "verify" && ws &&
-              (ws.verify_result ||
-              ["building", "build_error", "verifying", "verify_failed"].includes(ws.status) ||
-              recordSessions(ws, false).length === 0 ? (
-                <VerifyPane
-                  ws={ws}
-                  busy={verifyBusy}
-                  notice={verifyNotice}
-                  composerEnabled={composerEnabled}
-                  onVerify={doVerify}
-                  onApproveHost={requestApproveHost}
-                  onBackToConfigure={() => setStep("configure")}
-                  onContinueFinalize={() => setStep("finalize")}
-                />
-              ) : (
-                <RecordPane
-                  ws={ws}
-                  confined
-                  notice={recordNotice}
-                  busyTask={recordBusyTask}
-                  modelReady={llmReady}
-                  onRecord={(name) => doRecord(name, true)}
-                  onDoneRecording={doneRecording}
-                  onPromoteEgress={requestPromoteEgress}
-                  onApproveHost={requestApproveHost}
-                  onOpenProfile={openProfile}
-                />
-              ))}
-
-            {step === "finalize" && ws && (
-              <FinalizePane
-                ws={ws}
-                emitCode={emitCode}
-                onEmitCodeChange={setEmitCode}
-                finalizing={finalizing}
-                emitted={emitted}
-                onFinalize={doFinalize}
-                onDone={finishAndClose}
               />
             )}
           </div>
@@ -529,29 +405,22 @@ export function ImportWorkspaceDialog({
               Back
             </Button>
             {/* Forward nav for the steps whose primary action isn't the "advance"
-                action itself (Source advances on pick; Finalize's action closes). */}
+                action itself (Source advances on pick). Configure and Record both
+                offer Done — recording is recommended, never required. */}
             {step === "scan" && (
               <Button onClick={() => setStep("configure")} disabled={!scanned}>
                 Next: Configure
               </Button>
             )}
             {step === "configure" && (
-              <Button onClick={() => setStep("record")}>Next: Record</Button>
-            )}
-            {step === "record" && (
               <div className="flex items-center gap-2">
-                {/* Both advance to Verify — recording is recommended, never required. */}
-                <Button variant="outline" onClick={() => setStep("verify")}>
-                  Skip recording
+                <Button variant="outline" onClick={() => setStep("record")}>
+                  Next: Record
                 </Button>
-                <Button onClick={() => setStep("verify")}>Continue to Verify</Button>
+                <Button onClick={handleDone}>Done</Button>
               </div>
             )}
-            {step === "verify" && (
-              <Button variant="outline" onClick={() => setStep("finalize")}>
-                Continue to Finalize
-              </Button>
-            )}
+            {step === "record" && <Button onClick={handleDone}>Done</Button>}
           </div>
         </DialogContent>
       </Dialog>
@@ -585,8 +454,8 @@ export function ImportWorkspaceDialog({
       />
 
       {/* the same untrusted-content confirm Workspaces enforces, gating
-          Record/Verify's one-click (requestApproveHost) and bulk
-          (requestPromoteEgress) egress approvals above. */}
+          Record's one-click (requestApproveHost) and bulk (requestPromoteEgress)
+          egress approvals above. */}
       <ConfirmEgressDialog
         hosts={pendingConfirm?.hosts ?? null}
         onOpenChange={(o) => !o && setPendingConfirm(null)}
@@ -603,10 +472,8 @@ export function ImportWorkspaceDialog({
 const STEP_BLURB: Record<ImportStepId, string> = {
   source: "Pick a directory or repo to import. Wardyn scans it once, you review what it needs, then verify the environment before any run touches it.",
   scan: "Wardyn scans the committed files deterministically — languages, package managers, declared secrets (names only), and egress hosts.",
-  configure: "Approve the detected setup commands, broker any secrets it needs by name, and approve the egress hosts it may reach. Nothing here is agent-authored.",
-  record: "Optional but recommended: run each task once in an OPEN recording sandbox to learn what it actually uses, then promote those needs. Skippable — Verify still proves the environment either way.",
-  verify: "Run the approved setup commands in a governed sandbox to prove the environment builds before an agent uses it.",
-  finalize: "Lock in the reviewed profile. Optionally emit a devcontainer.json / AGENTS.md you can commit.",
+  configure: "Broker any secrets it needs by name, and approve the egress hosts it may reach. Nothing here is agent-authored.",
+  record: "Optional but recommended: run each task once in an OPEN recording sandbox to learn what it actually uses, then promote those needs. Skippable — click Done when you're finished.",
 };
 
 // ------------------------------------------------------------
@@ -776,7 +643,6 @@ function ConfigurePane({
   return (
     <div className="space-y-5">
       <SecurityChip />
-      <SetupCommandsCard ws={ws} onSaved={onWorkspaceUpdated} />
       <section className="space-y-2">
         <SectionLabel>Detected profile, secrets & egress</SectionLabel>
         {/* Reuses the /workspaces needs panel — declared secrets (names only, with
@@ -792,501 +658,3 @@ function ConfigurePane({
     </div>
   );
 }
-
-// The closed stage set the server accepts (workspacescan.setupStages) — an
-// unlisted stage 400s (validateSetupCommand). Kept in sync by hand; small and
-// stable enough that a shared wire contract would be overkill here.
-const SETUP_COMMAND_STAGES = ["install", "build", "test", "lint"] as const;
-
-// Approve/edit the scanner-detected setup commands, then PUT them (the approved
-// list a verify run executes). Working copy starts from the operator-approved
-// list if present, else the detected proposal.
-function SetupCommandsCard({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => void }) {
-  const profile = (ws.profile ?? {}) as WorkspaceProfile;
-  const detected = React.useMemo(() => profile.setup_commands ?? [], [profile.setup_commands]);
-  const approved = React.useMemo(() => ws.setup_commands ?? [], [ws.setup_commands]);
-
-  type Row = SetupCommand & { include: boolean };
-  const seed = React.useCallback(
-    (): Row[] =>
-      (approved.length ? approved : detected).map((c) => ({ ...c, include: true })),
-    [approved, detected],
-  );
-  const [rows, setRows] = React.useState<Row[]>(seed);
-  const [saving, setSaving] = React.useState(false);
-  // Re-seed when we switch to a different workspace.
-  React.useEffect(() => {
-    setRows(seed());
-  }, [ws.id, seed]);
-
-  const setRow = (i: number, patch: Partial<Row>) =>
-    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const addRow = () =>
-    setRows((rs) => [...rs, { stage: "install", command: "", source: "operator", include: true }]);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const commands: SetupCommand[] = rows
-        .filter((r) => r.include && r.command.trim())
-        .map(({ stage, command, source }) => ({ stage, command: command.trim(), source }));
-      onSaved(await workspacesApi.setSetupCommands(ws.id, commands));
-      toast.success("Setup commands saved");
-    } catch (e) {
-      toast.error("Failed to save setup commands", { description: msg(e) });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <section className="space-y-2.5" data-testid="setup-commands">
-      <SectionLabel>Setup commands</SectionLabel>
-      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-        Detected from committed files (untrusted). Approve or edit what runs during verify — nothing
-        runs until you save.
-      </p>
-      {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No setup commands detected. Add one to verify a build.</p>
-      ) : (
-        <ul className="space-y-2">
-          {rows.map((r, i) => (
-            <li key={i} className="flex items-center gap-2 rounded-lg border border-border p-2.5">
-              <Checkbox
-                checked={r.include}
-                onCheckedChange={(v) => setRow(i, { include: !!v })}
-                aria-label={`Include ${r.stage} command`}
-              />
-              <select
-                value={r.stage}
-                onChange={(e) => setRow(i, { stage: e.target.value })}
-                aria-label={`Stage for command ${i + 1}`}
-                className="h-8 rounded-md border border-border bg-transparent px-2 text-xs"
-              >
-                {SETUP_COMMAND_STAGES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-              <Input
-                value={r.command}
-                onChange={(e) => setRow(i, { command: e.target.value })}
-                className="h-8 flex-1 font-mono text-xs"
-                placeholder="npm ci"
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={addRow}>
-          <Plus className="size-3.5" /> Add command
-        </Button>
-        <Button size="sm" onClick={save} disabled={saving}>
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-          Save setup commands
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-// ------------------------------------------------------------
-// Verify
-// ------------------------------------------------------------
-function VerifyPane({
-  ws,
-  busy,
-  notice,
-  composerEnabled,
-  onVerify,
-  onApproveHost,
-  onBackToConfigure,
-  onContinueFinalize,
-}: {
-  ws: Workspace;
-  busy: boolean;
-  notice: { status: number; detail?: string } | null;
-  composerEnabled: boolean;
-  onVerify: () => void;
-  onApproveHost: (host: string) => void;
-  onBackToConfigure: () => void;
-  onContinueFinalize: () => void;
-}) {
-  const phase = verifyPhase(ws.status, ws.verify_result);
-  const running = ws.status === "building" || ws.status === "verifying";
-  const result = ws.verify_result;
-
-  // Live checklist: merge approved setup commands with the (possibly streamed)
-  // verify_result so pending steps show up front and the running step is flagged.
-  const commands = ws.setup_commands ?? [];
-  const rows = verifyRows(commands, result);
-  const { started, total } = verifyProgress(commands, result);
-  const hasSteps = (result?.steps?.length ?? 0) > 0;
-  const showChecklist = running || hasSteps;
-
-  // Least-privilege one-click fix: denied hosts from run history the operator can
-  // approve, then re-verify. Fetched on demand.
-  const [observed, setObserved] = React.useState<{ denied: string[]; runs_examined: number } | null>(null);
-  const [observedLoading, setObservedLoading] = React.useState(false);
-  const checkDenied = async () => {
-    setObservedLoading(true);
-    try {
-      setObserved(await workspacesApi.getObservedEgress(ws.id));
-    } catch (e) {
-      toast.error("Failed to load denied egress", { description: msg(e) });
-    } finally {
-      setObservedLoading(false);
-    }
-  };
-  const deniedNotApproved = (observed?.denied ?? []).filter((h) => !(ws.approved_egress ?? []).includes(h));
-
-  // AGENTIC fix (the deterministic egress button's sibling): ask a composer backend
-  // to diagnose the failure. Human-gated (explicit click), ADVISORY (prose the
-  // operator reads and applies via the affordances above/in Configure) — never
-  // auto-applied. Self-contained here, mirroring checkDenied's on-demand fetch.
-  const [aiSuggestion, setAiSuggestion] = React.useState<string | null>(null);
-  const [aiLoading, setAiLoading] = React.useState(false);
-  const [aiError, setAiError] = React.useState<string | null>(null);
-  const askAi = async () => {
-    setAiLoading(true);
-    setAiError(null);
-    try {
-      setAiSuggestion(await workspacesApi.suggestVerifyFix(ws.id));
-    } catch (e) {
-      setAiError(msg(e));
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <SectionLabel>Environment verification</SectionLabel>
-        <Chip tone={VERIFY_PHASE_TONE[phase]} dot pulse={running}>
-          {VERIFY_PHASE_LABEL[phase]}
-        </Chip>
-      </div>
-
-      {/* 503: honest no-runner path — can't verify, but finalize is still allowed. */}
-      {notice?.status === 503 && (
-        <div
-          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning"
-          data-testid="verify-no-runner"
-        >
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <div className="space-y-2">
-            <p>
-              Verification needs a runner (this control plane runs{" "}
-              <span className="font-mono">-runner none</span>); you can still finalize as configured.
-            </p>
-            <Button size="sm" variant="outline" onClick={onContinueFinalize}>
-              Finalize as configured
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* 422: no approved commands — send them back to Configure. */}
-      {notice?.status === 422 && (
-        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <div className="space-y-2">
-            <p>{notice.detail || "Approve at least one setup command before verifying."}</p>
-            <Button size="sm" variant="outline" onClick={onBackToConfigure}>
-              Back to Configure
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* 409: a verify is already running. */}
-      {notice?.status === 409 && (
-        <p className="text-xs text-muted-foreground">
-          {notice.detail || "A verification is already running for this workspace."}
-        </p>
-      )}
-
-      {/* In-flight progress header — "step N of total" + a slim bar. */}
-      {running && (
-        <div className="space-y-1.5" data-testid="verify-progress">
-          <p className="text-sm text-muted-foreground">
-            {total > 0
-              ? `Verifying environment — step ${started} of ${total}`
-              : "Verifying environment…"}
-          </p>
-          {total > 0 && (
-            <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
-              <div
-                className="h-full rounded-full bg-primary transition-all"
-                style={{ width: `${Math.min(100, Math.round((started / total) * 100))}%` }}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Per-command checklist: pending (waiting) → running (streamed log) → done
-          pass (collapsed logs) / fail (expanded logs). Derived from the approved
-          setup commands so not-yet-started steps are visible up front. */}
-      {showChecklist && rows.length > 0 && (
-        <div className="space-y-2" data-testid="verify-steps">
-          {rows.map((r, i) => (
-            <VerifyStepRow key={i} row={r} />
-          ))}
-        </div>
-      )}
-
-      {/* Honest environmental-failure hint (toolchain missing / Maven proxy /
-          GOTMPDIR) — server-classified, shown above the egress-fix so a 127 or
-          "permission denied" isn't misread as a denied-host problem. */}
-      {!running && result && !result.ok && result.failure_hint && (
-        <div
-          className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-[0.6875rem] leading-snug text-foreground"
-          data-testid="verify-failure-hint"
-        >
-          {result.failure_hint}
-        </div>
-      )}
-
-      {/* One-click fix from denied egress — only on a settled failure/partial. */}
-      {!running && result && !result.ok && (
-        <div className="space-y-2 rounded-lg border border-border p-3" data-testid="verify-fix">
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-            A build often fails because a needed host was denied. Approve a denied host, then re-run.
-          </p>
-          {observed === null ? (
-            <Button size="sm" variant="outline" onClick={checkDenied} disabled={observedLoading}>
-              {observedLoading ? <Loader2 className="size-3.5 animate-spin" /> : <ScanSearch className="size-3.5" />}
-              Suggest a fix from denied egress
-            </Button>
-          ) : deniedNotApproved.length === 0 ? (
-            <p className="text-[0.6875rem] text-muted-foreground">
-              No denied egress to approve from {observed.runs_examined} recent run
-              {observed.runs_examined === 1 ? "" : "s"}.
-            </p>
-          ) : (
-            <ul className="space-y-1.5" data-testid="verify-fix-hosts">
-              {deniedNotApproved.map((h) => (
-                <li key={h} className="flex items-center gap-2">
-                  <Mono className="flex-1 text-foreground">{h}</Mono>
-                  <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHost(h)}>
-                    <Check className="size-3.5" /> Approve
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {/* AGENTIC fix — a composer backend diagnoses the failure. Hidden entirely
-          when no composer is configured (suggest-fix would 404). Advisory + human-
-          gated: the operator clicks to ask, reads the suggestion, and applies it
-          via the Approve buttons above or in Configure — nothing is auto-applied. */}
-      {!running && result && !result.ok && composerEnabled && (
-        <div className="space-y-2 rounded-lg border border-border p-3" data-testid="verify-ai-fix">
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-            Or ask AI to diagnose the failure from the (secret-masked) logs. It suggests one likely
-            fix — a host to allow, a secret to add, or a corrected command — for you to apply. It
-            never changes anything on its own.
-          </p>
-          {aiSuggestion === null ? (
-            <Button size="sm" variant="outline" onClick={askAi} disabled={aiLoading}>
-              {aiLoading ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-              Diagnose with AI
-            </Button>
-          ) : (
-            <div className="space-y-2" data-testid="verify-ai-suggestion">
-              <CodeBlock text={aiSuggestion} />
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-                Suggested by the model — you decide. Approve any host above, or add a secret / edit a
-                command back in Configure.
-              </p>
-            </div>
-          )}
-          {aiError && (
-            <p className="flex items-start gap-1.5 text-[0.6875rem] text-danger" data-testid="verify-ai-error">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-              {aiError}
-            </p>
-          )}
-        </div>
-      )}
-
-      {phase === "success" && result?.ran && (
-        <p className="flex items-center gap-1.5 text-sm text-success">
-          <CircleCheck className="size-4" /> The environment built and verified successfully.
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={onVerify} disabled={busy || running}>
-          {busy || running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-          {result ? "Re-run verify" : "Verify environment"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// One row of the verify checklist. Pending shows "waiting"; running streams its
-// log tail live under a gerund label; a passed step collapses its logs behind a
-// "show output" toggle; a failed step shows exit/timeout + expanded logs (the
-// detail the operator needs). All log strings are already server-masked — rendered
-// VERBATIM, never unmasked.
-export function VerifyStepRow({ row }: { row: VerifyRow }) {
-  const [open, setOpen] = React.useState(false);
-  const step = row.step;
-  const dur = fmtStepDuration(step?.duration_ms);
-  const logHead = step?.log_head;
-  const logTail = step?.log_tail;
-  const hasLog = !!(logHead || logTail);
-
-  return (
-    <div className="rounded-lg border border-border p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {row.state === "pending" && (
-          <span className="size-2 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden />
-        )}
-        {row.state === "running" && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
-        {row.state === "pass" && <CircleCheck className="size-4 shrink-0 text-success" />}
-        {row.state === "fail" && <CircleX className="size-4 shrink-0 text-danger" />}
-
-        <Chip tone="neutral">{row.stage}</Chip>
-        {row.state === "running" ? (
-          <span className="text-sm text-foreground">{runningLabel(row)}</span>
-        ) : (
-          <Mono className="text-foreground">{row.command}</Mono>
-        )}
-
-        <span className="ml-auto flex items-center gap-2">
-          {row.state === "pending" && <span className="text-xs text-muted-foreground">waiting</span>}
-          {row.state === "pass" && (
-            <>
-              {dur && <span className="text-xs text-muted-foreground">{dur}</span>}
-              {hasLog && (
-                <button
-                  onClick={() => setOpen((o) => !o)}
-                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                >
-                  {open ? "hide output" : "show output"}
-                </button>
-              )}
-            </>
-          )}
-          {row.state === "fail" && (
-            <Chip tone="danger" dot>
-              {step?.timed_out ? "timed out" : `exit ${step?.exit_code}`}
-            </Chip>
-          )}
-        </span>
-      </div>
-
-      {/* running: stream the tail (fall back to head) so the operator sees progress */}
-      {row.state === "running" && (logTail || logHead) && <LogPre text={logTail || logHead || ""} />}
-      {/* pass: logs collapsed behind the toggle */}
-      {row.state === "pass" && open && (
-        <>
-          {logHead && <LogPre text={logHead} />}
-          {logTail && <LogPre text={logTail} />}
-        </>
-      )}
-      {/* fail: expand head + tail — this is the failure to read */}
-      {row.state === "fail" && (
-        <>
-          {logHead && <LogPre text={logHead} />}
-          {logTail && <LogPre text={logTail} />}
-        </>
-      )}
-    </div>
-  );
-}
-
-// A small scrollable log excerpt. Text is already masked server-side; rendered
-// as-is inside a fixed-height scroller so a long tail doesn't blow out the row.
-export function LogPre({ text }: { text: string }) {
-  return (
-    <pre className="scroll-thin mt-2 max-h-40 overflow-auto rounded-md bg-surface-2/60 p-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
-      <code className="font-mono">{text}</code>
-    </pre>
-  );
-}
-
-// ------------------------------------------------------------
-// Finalize
-// ------------------------------------------------------------
-function FinalizePane({
-  ws,
-  emitCode,
-  onEmitCodeChange,
-  finalizing,
-  emitted,
-  onFinalize,
-  onDone,
-}: {
-  ws: Workspace;
-  emitCode: boolean;
-  onEmitCodeChange: (v: boolean) => void;
-  finalizing: boolean;
-  emitted: Record<string, string> | null;
-  onFinalize: () => void;
-  onDone: () => void;
-}) {
-  if (emitted) {
-    const files = Object.entries(emitted);
-    return (
-      <div className="space-y-4">
-        <p className="flex items-center gap-1.5 text-sm text-success">
-          <CircleCheck className="size-4" /> {ws.name} imported.
-        </p>
-        {files.length > 0 && (
-          <section className="space-y-3">
-            <SectionLabel>Emitted files — commit these to keep the environment reproducible</SectionLabel>
-            {files.map(([name, content]) => (
-              <div key={name} className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                  <FileCode2 className="size-3.5 text-cyan" /> {name}
-                </div>
-                <CodeBlock text={content} />
-              </div>
-            ))}
-          </section>
-        )}
-        <Button onClick={onDone}>Done</Button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <SecurityChip />
-      <p className="text-sm text-muted-foreground">
-        Lock in the reviewed profile as this workspace&apos;s environment. Runs will reuse it.
-      </p>
-      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border p-3">
-        <Checkbox
-          checked={emitCode}
-          onCheckedChange={(v) => onEmitCodeChange(!!v)}
-          className="mt-0.5"
-          aria-label="Emit devcontainer.json and AGENTS.md"
-        />
-        <span className="space-y-0.5">
-          <span className="block text-sm font-medium text-foreground">
-            Emit devcontainer.json / AGENTS.md
-          </span>
-          <span className="block text-[0.6875rem] leading-snug text-muted-foreground">
-            Generate committable environment-as-code files from the reviewed profile.
-          </span>
-        </span>
-      </label>
-      <Button onClick={onFinalize} disabled={finalizing}>
-        {finalizing ? <Loader2 className="size-4 animate-spin" /> : <CircleCheck className="size-4" />}
-        Finalize import
-      </Button>
-    </div>
-  );
-}
-

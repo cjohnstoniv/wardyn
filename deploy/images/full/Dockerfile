@@ -1,8 +1,8 @@
 # wardyn/agent-full: the convention claude-code agent image + the full
 # real language toolchains (Go, Python, Rust, JDK21/Maven; Node/npm already in
-# the base). Sidesteps envbuild entirely: record/verify AND contributor runs all
+# the base). Sidesteps envbuild entirely: record AND contributor runs all
 # resolve to ONE image that carries BOTH the wardyn binaries (agent-run,
-# wardyn-verify, wardyn-rec, wardyn-scan, claude, git — inherited from the base)
+# wardyn-rec, wardyn-scan, claude, git — inherited from the base)
 # AND the toolchains, so real build/test commands run in-sandbox.
 
 # Toolchain SOURCE stages. Go and Rust are COPYed out of their digest-pinned
@@ -94,7 +94,8 @@ COPY --from=rustroot /usr/local/rustup/ /opt/rust/
 COPY --from=rustroot /usr/local/cargo/ /opt/rust/
 RUN chmod -R a+rwX /opt/rust
 
-# wardyn-verify runs setup commands via `/bin/sh -lc` — a LOGIN shell, which
+# The exec task mode (WARDYN_TASK_MODE=exec, deploy/images/common/agent-run-lib.sh
+# maybe_exec_task_mode) runs its command via `/bin/sh -lc` — a LOGIN shell, which
 # sources /etc/profile and RESETS PATH to the system default, dropping the Docker
 # ENV PATH additions (go, rust). Re-export the toolchain PATH + homes from
 # /etc/profile.d so login shells see them (java/mvn/python3 already live under
@@ -134,10 +135,10 @@ RUN printf '%s\n' \
       > /etc/profile.d/toolchains.sh
 
 # Sanity: every toolchain resolves under BOTH a plain and a LOGIN shell (the
-# latter is how wardyn-verify invokes setup commands).
+# latter is how exec task mode invokes its command).
 RUN node --version && npm --version && python3 --version && go version \
     && java -version && mvn -v | head -1 && rustc --version && cargo --version \
-    && command -v claude && command -v agent-run && command -v wardyn-verify \
+    && command -v claude && command -v agent-run \
     && sh -lc 'go version && cargo --version && mvn -v | head -1 && python3 --version'
 
 USER agent

@@ -25,16 +25,15 @@ import (
 type llmProvider struct{ host, header, format, secret string }
 
 // agentLLMProvider maps a coding-agent name to its model provider's api_key
-// injection convention, or ok=false for a non-LLM / unknown agent.
+// injection convention, or ok=false for a non-LLM / unknown agent. A thin
+// lookup into the harness catalog (harness.go); the convention itself lives
+// on each row's Gateway field.
 func agentLLMProvider(agent string) (llmProvider, bool) {
-	switch agent {
-	case "claude-code":
-		return llmProvider{host: "api.anthropic.com", header: "x-api-key", format: "%s", secret: "anthropic-api-key"}, true
-	case "codex-cli":
-		return llmProvider{host: "api.openai.com", header: "Authorization", format: "Bearer %s", secret: "openai-api-key"}, true
-	default:
+	def, ok := harnessByID(agent)
+	if !ok || def.Gateway == nil {
 		return llmProvider{}, false
 	}
+	return *def.Gateway, true
 }
 
 // apiKeyGrantScopeHost decodes an api_key grant scope's host field

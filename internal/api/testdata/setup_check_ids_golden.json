@@ -1,0 +1,41 @@
+{
+  "bare": [
+    "age_key",
+    "agent_image",
+    "composer",
+    "host_proxy",
+    "llm_provider",
+    "runner",
+    "scm_provider"
+  ],
+  "with_bedrock_knobs": [
+    "age_key",
+    "agent_image",
+    "bedrock_provider",
+    "composer",
+    "host_proxy",
+    "llm_provider",
+    "runner",
+    "scm_provider"
+  ],
+  "with_github_app_secrets": [
+    "age_key",
+    "agent_image",
+    "composer",
+    "host_proxy",
+    "llm_provider",
+    "runner",
+    "scm_provider"
+  ],
+  "with_store": [
+    "age_key",
+    "agent_image",
+    "artifact_repo",
+    "composer",
+    "host_proxy",
+    "llm_provider",
+    "runner",
+    "scm_provider",
+    "site_config"
+  ]
+}

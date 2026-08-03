@@ -68,37 +68,38 @@ func featuresFor(langs []string) map[string]map[string]any {
 }
 
 // genDevcontainer is the minimal devcontainer.json shape we emit. Struct field
-// order controls JSON key order (image, features, containerEnv, then
-// postCreateCommand); the features/containerEnv maps' own keys are sorted by
-// encoding/json, so the whole document is deterministic. ContainerEnv is only
-// populated by EmitEnvAsCode (GenerateDevcontainer leaves it unset — the
-// envbuilder-built image's runs already get the fidelity env from
-// dispatchWithVerify's sandboxEnv, so it would be a no-op there).
+// order controls JSON key order (image, features, then containerEnv); the
+// features/containerEnv maps' own keys are sorted by encoding/json, so the
+// whole document is deterministic. ContainerEnv is only populated by
+// EmitEnvAsCode (GenerateDevcontainer leaves it unset — the envbuilder-built
+// image's runs already get the fidelity env from dispatch's sandboxEnv, so it
+// would be a no-op there). No postCreateCommand: Wardyn has no verify step to
+// prove a detected install/build command actually works, so it is documented
+// in AGENTS.md as prose (genAgentsMD) rather than auto-run, unattended, at
+// container create.
 type genDevcontainer struct {
-	Image             string                    `json:"image"`
-	Features          map[string]map[string]any `json:"features,omitempty"`
-	ContainerEnv      map[string]string         `json:"containerEnv,omitempty"`
-	PostCreateCommand string                    `json:"postCreateCommand,omitempty"`
+	Image        string                    `json:"image"`
+	Features     map[string]map[string]any `json:"features,omitempty"`
+	ContainerEnv map[string]string         `json:"containerEnv,omitempty"`
 }
 
-// EmitEnvAsCode produces committable environment-as-code from a VERIFIED
-// profile + its operator-approved setup commands: a devcontainer.json (base +
-// language features + the install/build steps as postCreateCommand) and an
-// AGENTS.md documenting the detected toolchain and setup commands. Returned as
-// path -> content. The install/build stages become postCreateCommand (env
-// setup); test/lint are documented in AGENTS.md but not auto-run on create.
+// EmitEnvAsCode produces committable environment-as-code from a scanned
+// profile: a devcontainer.json (base + language features + artifact-registry
+// redirects) and an AGENTS.md documenting the DETECTED toolchain and setup
+// commands (profile.SetupCommands, a scan-time heuristic — never verified) as
+// prose, for a human/agent to run deliberately. Returned as path -> content.
 //
 // artifactBases maps an artifact ecosystem (npm|pip|cargo|maven|go|nuget) to the
 // operator's corporate registry base URL (from the persisted site-config,
 // URL-ONLY — never a token). When non-empty, the matching per-tool config files
 // (and go's containerEnv) are merged in so a committed workspace pulls from the
 // corporate mirror; pass nil when no redirect is configured.
-func EmitEnvAsCode(p WorkspaceProfile, approved []SetupCommand, artifactBases map[string]string) (map[string]string, error) {
+func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string) (map[string]string, error) {
 	dc := genDevcontainer{Image: genBaseImage}
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
-	// GOTMPDIR: dispatchWithVerify's sandboxEnv (runs.go) sets this for every
+	// GOTMPDIR: dispatch's sandboxEnv (runs_dispatch.go) sets this for every
 	// Wardyn-governed run because the sandbox /tmp is noexec and `go test`
 	// compiles+execs its test binaries into $TMPDIR. Workspace-folder-relative
 	// (not a home-dir guess) so it works under any base image's remoteUser; a
@@ -116,15 +117,6 @@ func EmitEnvAsCode(p WorkspaceProfile, approved []SetupCommand, artifactBases ma
 		}
 		dc.ContainerEnv[k] = v
 	}
-	var setup []string
-	for _, c := range approved {
-		if c.Stage == "install" || c.Stage == "build" {
-			setup = append(setup, c.Command)
-		}
-	}
-	if len(setup) > 0 {
-		dc.PostCreateCommand = strings.Join(setup, " && ")
-	}
 	b, err := json.MarshalIndent(dc, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("workspacescan: marshal devcontainer: %w", err)
@@ -132,7 +124,7 @@ func EmitEnvAsCode(p WorkspaceProfile, approved []SetupCommand, artifactBases ma
 	b = append(b, '\n')
 	out := map[string]string{
 		genDevcontainerPath: string(b),
-		"AGENTS.md":         genAgentsMD(p, approved),
+		"AGENTS.md":         genAgentsMD(p),
 	}
 	for path, content := range artifactFiles {
 		out[path] = content
@@ -240,21 +232,24 @@ func nugetConfig(base string) string {
 
 // genAgentsMD documents the detected environment + setup commands in the
 // emerging AGENTS.md convention, so an agent (Wardyn's or a competitor's) knows
-// how to build/test the repo.
-func genAgentsMD(p WorkspaceProfile, approved []SetupCommand) string {
+// how to build/test the repo. Setup commands come from p.SetupCommands — a
+// scan-time DETECTED heuristic (deriveSetupCommands), never verified — so they
+// are prose for a human/agent to review and run deliberately, not something
+// this generator or a devcontainer postCreateCommand ever auto-executes.
+func genAgentsMD(p WorkspaceProfile) string {
 	var b strings.Builder
 	b.WriteString("# AGENTS.md\n\n")
-	b.WriteString("Environment generated by Wardyn's verified workspace import.\n\n")
+	b.WriteString("Environment generated by Wardyn's workspace import.\n\n")
 	if len(p.Languages) > 0 {
 		b.WriteString("## Languages\n\n" + strings.Join(p.Languages, ", ") + "\n\n")
 	}
 	if len(p.PackageManagers) > 0 {
 		b.WriteString("## Package managers\n\n" + strings.Join(p.PackageManagers, ", ") + "\n\n")
 	}
-	if len(approved) > 0 {
-		b.WriteString("## Setup commands (verified working)\n\n")
+	if len(p.SetupCommands) > 0 {
+		b.WriteString("## Detected setup commands (not verified — review before running)\n\n")
 		for _, stage := range []string{"install", "build", "test", "lint"} {
-			for _, c := range approved {
+			for _, c := range p.SetupCommands {
 				if c.Stage == stage {
 					b.WriteString("- **" + stage + "**: `" + c.Command + "`\n")
 				}

@@ -19,7 +19,7 @@
 //   - approvals:   ListApprovals, Approve, Deny
 //   - policies:    CreatePolicy, GetPolicy, ListPolicies, UpdatePolicy, DeletePolicy
 //   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
-//     DeleteWorkspace, ScanWorkspace, VerifyWorkspace, RecordWorkspaceTask
+//     DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - audit:       AuditEvents, RecentAuditEvents
 //   - secrets:     ListSecrets, SetSecret, DeleteSecret
 //   - site-config: GetSiteConfig, PutSiteConfig

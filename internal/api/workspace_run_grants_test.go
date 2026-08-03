@@ -125,35 +125,13 @@ func newFKGrantStore(wsID uuid.UUID) *fkGrantStore {
 	}
 }
 
-// TestLaunchVerifyRun_CloneGrantCreatedAfterRunRow pins the ORDERING that
-// credential_grants' FK to agent_runs(id) requires: a repo workspace's verify run
+// TestLaunchRecordRun_CloneGrantCreatedAfterRunRow pins the ORDERING that
+// credential_grants' FK to agent_runs(id) requires: a repo workspace's record run
 // must create its github_token clone grant only AFTER Store.CreateRun persists
 // the run row. The counterfactual: with the grant creation folded back into
 // wireWorkspaceSource (i.e. run one line BEFORE CreateRun), every CreateGrant
 // here is FK-rejected, so no grant exists, WARDYN_GITHUB_GRANT_ID is never set,
 // and the sandbox's private-repo clone 403s with no signal at all.
-func TestLaunchVerifyRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
-	h := newHarness(t)
-	wsID := uuid.New()
-	fake := newFKGrantStore(wsID)
-	cfg := baseTestConfig(h, fake)
-	cfg.Runner = &fakeRunner{}
-	cfg.Broker = h.broker
-	srv := New(cfg)
-
-	_, err := srv.launchVerifyRun(context.Background(), "alice@example.com", fake.ws, fake.ws.SetupCommands)
-	if err != nil {
-		t.Fatalf("launchVerifyRun on a github repo workspace failed: %v", err)
-	}
-	kinds := fake.grantKinds()
-	if len(kinds) != 1 || kinds[0] != types.GrantGitHubToken {
-		t.Fatalf("verify run must persist exactly one github_token clone grant AFTER its run row exists; got %v", kinds)
-	}
-}
-
-// TestLaunchRecordRun_CloneGrantCreatedAfterRunRow is the record-lane twin of
-// TestLaunchVerifyRun_CloneGrantCreatedAfterRunRow — the same inverted order
-// lived in both launchers.
 func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()
@@ -174,89 +152,13 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	}
 }
 
-// ─── image build survives a client disconnect ────────────────────────────────
-
-// ctxImageBuilder honors caller cancellation the way the real envbuild builder
-// does (runBuildAndFinalize returns on ctx.Done and kills the build container).
-type ctxImageBuilder struct{ built string }
-
-func (b *ctxImageBuilder) BuildDevcontainer(ctx context.Context, _, _, _ string) (string, error) {
-	return b.BuildFromDevcontainerFiles(ctx, nil, "")
-}
-func (b *ctxImageBuilder) BuildFromDevcontainerFiles(ctx context.Context, _ map[string]string, _ string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("envbuild: build cancelled or timed out: %w", err)
-	}
-	return b.built, nil
-}
-func (b *ctxImageBuilder) FinalizeBase(context.Context, string, string) (string, error) {
-	return "", nil
-}
-
-// TestLaunchVerifyRun_ImageBuildSurvivesClientDisconnect pins one layer
-// higher than dispatch: the launcher's own pre-dispatch work — mint, CreateRun,
-// status flip and the multi-minute devcontainer BUILD — must not run on the
-// cancellable HTTP request context. resolveWorkspaceImage fails OPEN by
-// contract, so a caller that walks away mid-build otherwise silently downgrades
-// the run to the Node-only convention image, which then dies on a missing
-// toolchain (exit 127) and points the operator at their WARDYN_AGENT_IMAGES
-// config for a failure that was really a cancelled build. The counterfactual:
-// without launchVerifyRun's context.WithoutCancel, the build sees the cancelled
-// ctx and the run dispatches with the convention image.
-func TestLaunchVerifyRun_ImageBuildSurvivesClientDisconnect(t *testing.T) {
-	h := newHarness(t)
-	wsID := uuid.New()
-	fake := newFKGrantStore(wsID)
-	// A scanned profile is what makes resolveWorkspaceImage generate + build.
-	fake.ws.Profile = mustJSON(workspacescan.WorkspaceProfile{Languages: []string{"Go"}})
-	builder := &ctxImageBuilder{built: "wardyn-workspace/built:abc123"}
-	cfg := baseTestConfig(h, fake)
-	cfg.Runner = &fakeRunner{}
-	cfg.Broker = h.broker
-	cfg.ImageBuilder = builder
-	srv := New(cfg)
-
-	// The client hangs up the moment the handler hands off to the launcher.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, err := srv.launchVerifyRun(ctx, "alice@example.com", fake.ws, fake.ws.SetupCommands); err != nil {
-		t.Fatalf("launchVerifyRun after client disconnect: %v", err)
-	}
-	if got := fake.builtImage(); got != builder.built {
-		t.Fatalf("verify run image = %q, want the BUILT image %q — a client disconnect must not cancel the build and silently downgrade the run to the convention image",
-			got, builder.built)
-	}
-}
-
-// TestLaunchVerifyRun_CloneGrantFailureAbortsLaunch pins the other half of the
-// same root cause: a CreateGrant failure must never be SWALLOWED. A repo whose
-// clone needs a credential has to fail the launch loudly rather than dispatch a
-// sandbox whose clone is guaranteed to fail auth. The counterfactual: with
-// maybeGitHubReadGrant's `return nil` swallow restored, launchVerifyRun returns
-// no error and the run dispatches credential-less.
-func TestLaunchVerifyRun_CloneGrantFailureAbortsLaunch(t *testing.T) {
-	h := newHarness(t)
-	wsID := uuid.New()
-	fake := newFKGrantStore(wsID)
-	fake.skipRunInsert = true
-	cfg := baseTestConfig(h, fake)
-	cfg.Runner = &fakeRunner{}
-	cfg.Broker = h.broker
-	srv := New(cfg)
-
-	if _, err := srv.launchVerifyRun(context.Background(), "alice@example.com", fake.ws, fake.ws.SetupCommands); err == nil {
-		t.Fatal("a clone grant that cannot be persisted must FAIL the verify launch, not silently dispatch a sandbox that cannot authenticate its clone")
-	}
-}
-
 // TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey pins the fix for a grant that
-// could never mint. The scan/verify/record clone grant used to carry
-// `"repos": []` while the broker allowlist it is reached through was keyed from
-// the CLONE URL — two different answers to "which repo is this token for". The
-// real minter refuses an empty list outright (GitHub installation tokens are
+// could never mint. The scan/record clone grant used to carry `"repos": []`
+// while the broker allowlist it is reached through was keyed from the CLONE
+// URL — two different answers to "which repo is this token for". The real
+// minter refuses an empty list outright (GitHub installation tokens are
 // per-installation; the owner comes from the first repo), so every GitHub HTTPS
-// scan/verify/record clone 502'd at handleGitBroker once a real GitHub App was
+// scan/record clone 502'd at handleGitBroker once a real GitHub App was
 // configured. No test saw it because FakeGitHubMinter did not reproduce that
 // precondition (it does now — internal/broker.TestMintForGrant_EmptyRepoScopeFails).
 //

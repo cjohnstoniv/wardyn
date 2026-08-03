@@ -17,23 +17,27 @@ import type {
   WorkspaceStatus,
 } from "../../../lib/types";
 
-// Source → Scan → Configure → Record → Verify → Finalize. Record is the OPEN
-// recording step (recommended, skippable) that learns real usage before the
-// confined Verify proves it. Build lives inside Verify (the verify run does build
-// + verify together), so there's no separate Build step.
-export type ImportStepId = "source" | "scan" | "configure" | "record" | "verify" | "finalize";
+// Source → Scan → Configure → Record. Record is the OPEN recording step
+// (recommended, skippable). Verify and Finalize are RETIRED from this interim
+// panel — it stays the working add-workspace UI until a later wave rebuilds
+// them (see import-panel.tsx's header comment). The verify-checklist pure
+// helpers below (verifyPhase/verifyRows/verifyProgress/…) are kept, unused,
+// for that wave — they cost nothing at rest and nothing here calls them today.
+export type ImportStepId = "source" | "scan" | "configure" | "record";
 
 export const IMPORT_STEPS: { id: ImportStepId; label: string }[] = [
   { id: "source", label: "Source" },
   { id: "scan", label: "Scan" },
   { id: "configure", label: "Configure" },
   { id: "record", label: "Record" },
-  { id: "verify", label: "Verify" },
-  { id: "finalize", label: "Finalize" },
 ];
 
 // Which import step a workspace's server-side status corresponds to — used to
 // RESUME a mid-flight import at the right rail position when the panel opens.
+// LEGACY-tolerant: building/build_error/verifying/verify_failed/ready predate
+// the verify/finalize retirement above and can still sit on older rows until
+// the migration wave; Record is the nearest surviving step for all of them —
+// it was the immediate predecessor of both retired steps.
 export function activeStepForStatus(status: WorkspaceStatus): ImportStepId {
   switch (status) {
     case "pending_scan":
@@ -46,9 +50,8 @@ export function activeStepForStatus(status: WorkspaceStatus): ImportStepId {
     case "build_error":
     case "verifying":
     case "verify_failed":
-      return "verify";
     case "ready":
-      return "finalize";
+      return "record";
     default:
       return "source";
   }

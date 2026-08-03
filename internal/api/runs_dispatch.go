@@ -18,12 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// dispatchParams carries the per-run inputs the create / workspace / verify
-// handlers thread into dispatchRun. It replaces an 11–12-arg positional
-// signature whose two adjacent map[string]string fields — GitPATGrants and
-// SSHGrants — were a silent swap hazard: a transposed pair still compiled and
-// ran, wiring the wrong credential family onto every host. Named fields make
-// each call site self-documenting; the zero value is the "none" case per field.
+// dispatchParams carries the per-run inputs the create / workspace handlers
+// thread into dispatchRun. It replaces an 11–12-arg positional signature whose
+// two adjacent map[string]string fields — GitPATGrants and SSHGrants — were a
+// silent swap hazard: a transposed pair still compiled and ran, wiring the
+// wrong credential family onto every host. Named fields make each call site
+// self-documenting; the zero value is the "none" case per field.
 type dispatchParams struct {
 	RunToken           string                     // proxy-verifiable run token (never a usable in-sandbox secret)
 	Image              string                     // resolved sandbox OCI image (convention or built devcontainer)
@@ -35,7 +35,6 @@ type dispatchParams struct {
 	Injections         []runner.InjectionGrant    // proxy-side credential injections
 	Interactive        bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
-	VerifyPlan         json.RawMessage            // non-nil ⇒ VERIFY run (execs wardyn-verify with these commands)
 	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
 	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
 }
@@ -64,13 +63,6 @@ type dispatchParams struct {
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
 //
-// VERIFY MODE: a non-nil p.VerifyPlan (JSON []workspacescan.SetupCommand) makes
-// this a VERIFY run — it execs wardyn-verify (in the built devcontainer image)
-// instead of the scanner or the agent, with the commands riding
-// WARDYN_VERIFY_COMMANDS. A verify run still sets WorkspaceID (for the trusted
-// result linkage), so p.VerifyPlan is the discriminator between scan-only and
-// verify-only in the same dispatch.
-//
 // PHASE ORDER IS THE CONTRACT: the policy phases below narrow `policy` in
 // sequence, and confineGitBrokerEgress runs LAST so nothing above it can re-add
 // a broker-managed host; the ProxyConfig snapshot then captures that final
@@ -86,7 +78,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
 	interactive := p.Interactive
-	verifyPlan := p.VerifyPlan
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -140,7 +131,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, p.TaskMode, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -197,7 +188,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, verifyPlan, interactive, proxyURL, p.BedrockRef)
+	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, interactive, proxyURL, p.BedrockRef)
 
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
@@ -599,34 +590,25 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 	}
 }
 
-// applyDispatchModeEnv sets dispatchWithVerify's run-mode discriminator env vars
-// (verify-only / scan-only / exec task mode) plus the non-secret grant-id maps
+// applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
+// (scan-only / exec task mode) plus the non-secret grant-id maps
 // (WARDYN_GITHUB_GRANT_ID / WARDYN_GIT_PAT_GRANTS / WARDYN_SSH_GRANTS) that let
 // the in-sandbox helpers mint the credentials they're eligible for, plus
 // WARDYN_GIT_BROKER_REPOS (which of those are served by the git broker instead).
-// Extracted
-// verbatim from dispatchWithVerify — every branch here only decides which keys
-// land in sandboxEnv, none of them change dispatchWithVerify's own control flow.
+// Every branch here only decides which keys land in sandboxEnv, none of them
+// change dispatchRun's own control flow.
 //
 // Returns the ssh_key and git_pat grant hosts it withheld because the run is
 // BROKERED for that forge (dropBrokeredGrants) — both nil in the ordinary case.
 // The caller warns and audits each; neither must ever be silent.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, verifyPlan json.RawMessage, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) (droppedSSH, droppedPAT []string) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
-	// the agent. A non-nil WorkspaceID uniquely marks a scan run (ordinary runs never
-	// set it); no agent CLI / model call happens.
-	// A verify run (verifyPlan present) execs wardyn-verify in the built image;
-	// a scan run (WorkspaceID set, no verify plan) execs wardyn-scan. verifyPlan
-	// is the discriminator since both set WorkspaceID for the trusted upload
-	// linkage. The approved setup commands are non-secret operator-authored
-	// values (secrets are proxy-injected, never resident), so they ride env.
-	if len(verifyPlan) > 0 {
-		sandboxEnv["WARDYN_VERIFY_ONLY"] = "1"
-		sandboxEnv["WARDYN_VERIFY_COMMANDS"] = string(verifyPlan)
-	} else if run.WorkspaceID != nil && !interactive {
-		// An INTERACTIVE workspace-linked run (interactive Record Mode) is a
-		// human-driven sandbox, not a scan — never mark it WARDYN_SCAN_ONLY.
+	// the agent. A non-nil WorkspaceID marks a scan run — UNLESS the run is
+	// interactive (an interactive workspace-linked run is Record Mode, a
+	// human-driven sandbox, never a scan); no agent CLI / model call happens on a
+	// scan.
+	if run.WorkspaceID != nil && !interactive {
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
 	}
 	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell

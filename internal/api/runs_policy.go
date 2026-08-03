@@ -182,12 +182,20 @@ func classesOrNone(classes []types.ConfinementClass) string {
 
 // agentImage resolves an agent name to its OCI image. images is consulted first
 // (operator-provided map from WARDYN_AGENT_IMAGES); when the agent is absent or
-// the map is nil, the ghcr convention image is used as fallback.
+// the map is nil, the ghcr convention image is used as fallback, keyed by the
+// harness catalog's ImageKey when agent names a known harness (harness.go) or
+// by the raw agent string otherwise — identical to the convention every agent
+// used before the catalog existed, since every shipped row's ImageKey equals
+// its ID.
 func agentImage(agent string, images map[string]string) string {
 	if ref, ok := images[agent]; ok {
 		return ref
 	}
-	return "ghcr.io/cjohnstoniv/agent-" + agent + ":latest"
+	key := agent
+	if def, ok := harnessByID(agent); ok && def.ImageKey != "" {
+		key = def.ImageKey
+	}
+	return "ghcr.io/cjohnstoniv/agent-" + key + ":latest"
 }
 
 // primaryWorkspacePath returns the run's first local host workspace mount source

@@ -13,6 +13,6 @@ services:
       WARDYN_ENVBUILD: "true"
       WARDYN_ENVBUILD_TOOLS_DIR: /wardyn-tools
     volumes:
-      # Runner tools (agent-run, agent-run-lib.sh, wardyn-rec, wardyn-verify,
+      # Runner tools (agent-run, agent-run-lib.sh, wardyn-rec, wardyn-scan,
       # wardyn-git-helper) the finalize stage COPYs into wrapped images.
       - ${WARDYN_CI_TOOLS_DIR:?exported by scripts/ci-run.sh}:/wardyn-tools:ro

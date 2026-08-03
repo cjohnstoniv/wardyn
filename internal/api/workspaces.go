@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -459,53 +458,15 @@ func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
 	return run.Repo == ws.Source
 }
 
-// maxSetupCommands bounds the operator-approved setup-command list.
-const maxSetupCommands = 32
-
-// handleSetSetupCommands replaces the workspace's operator-APPROVED setup
-// commands (install/build/test/lint) that a verify run will execute. Full
-// replacement (PUT), audited, stored OUTSIDE the scan-owned profile blob — like
-// approved-egress, a detected command is advisory until the operator promotes
-// it here, and a rescan can neither add nor resurrect an approval. These
-// commands RUN (confined) at verify time, so each is validated to a single-line,
-// bounded, control-char-free string, and only known stages are accepted.
-func (s *Server) handleSetSetupCommands(w http.ResponseWriter, r *http.Request) {
-	type body struct {
-		Commands []workspacescan.SetupCommand `json:"commands"`
-	}
-	scopedWorkspaceWrite(s, w, r, "workspace.import.setup_commands",
-		func(req body) ([]workspacescan.SetupCommand, string) {
-			if len(req.Commands) > maxSetupCommands {
-				return nil, "too many commands (max 32)"
-			}
-			for _, c := range req.Commands {
-				if !workspacescan.ValidSetupCommand(c) {
-					return nil, "invalid setup command (stage must be install|build|test|lint; command single-line ≤512 chars)"
-				}
-			}
-			return req.Commands, ""
-		},
-		func(ctx context.Context, id uuid.UUID, cmds []workspacescan.SetupCommand) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceSetupCommands(ctx, id, mustJSON(cmds)) // canonical stored form
-		},
-		func(cmds []workspacescan.SetupCommand) map[string]any {
-			// Counts + stages only in audit — never anything value-shaped.
-			stages := make([]string, 0, len(cmds))
-			for _, c := range cmds {
-				stages = append(stages, c.Stage)
-			}
-			return map[string]any{"count": len(cmds), "stages": stages}
-		})
-}
-
-// handleVerifyWorkspace launches a governed VERIFY run that executes the
-// workspace's operator-approved SetupCommands (install/build/test) in its built
-// devcontainer image under confinement, and reports per-step results back. The
-// workspace flips to `verifying`; the verify-result upload flips it to `ready`
-// (green) or `verify_failed`. Requires approved setup commands + a runner —
-// under -runner none it honestly 503s ("verify needs a runner") rather than
-// claiming ready without running anything.
-func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
+// handleWriteEnvAsCode generates committable env-as-code from the workspace's
+// CURRENT scanned profile (base + language features + artifact-registry
+// redirects, plus an AGENTS.md documenting the detected toolchain/commands) and
+// writes it into the host source dir — the host-write half of what used to be
+// handleFinalizeWorkspace's optional emit, extracted on its own now that there
+// is no more "finalize to ready" step. LOCAL-DIR ONLY: a repo workspace has no
+// host path to write into (regenerate + commit yourself via
+// GET /workspaces/{id}/env-as-code, which stays the read path for both kinds).
+func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
 		return
@@ -514,132 +475,27 @@ func (s *Server) handleVerifyWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if len(ws.SetupCommands) == 0 || string(ws.SetupCommands) == "null" {
-		writeError(w, http.StatusUnprocessableEntity, "no approved setup commands — approve them via PUT /workspaces/{id}/setup-commands first")
+	if ws.Kind != types.WorkspaceKindLocalDir {
+		writeError(w, http.StatusUnprocessableEntity,
+			"env-as-code can only be written to disk for a local_dir workspace (a repo has no host path — "+
+				"use GET /workspaces/{id}/env-as-code and commit the files yourself)")
 		return
 	}
-	if s.cfg.Runner == nil {
-		writeError(w, http.StatusServiceUnavailable, "verify needs a configured runner (this control plane runs with -runner none; scan and configure still work)")
-		return
-	}
-	// A stale active_run_id (its run failed to upload, was killed, or idle-reaped)
-	// must not permanently 409-brick re-verify: only block when the pointed-to
-	// run is genuinely still live.
-	if ws.ActiveRunID != nil {
-		if active, gerr := s.cfg.Store.GetRun(r.Context(), *ws.ActiveRunID); gerr == nil && !isTerminalRunState(active.State) {
-			writeError(w, http.StatusConflict, "an import step is already running for this workspace")
-			return
-		}
-	}
-
-	// launchVerifyRun flips the workspace to `verifying` + claims the in-flight run
-	// pointer BEFORE it dispatches — like the scan/record lanes — so a fast
-	// verify whose result upload lands immediately isn't regressed by a status write
-	// that arrives after it. No post-launch state write here.
-	actorType, actor := actorFromRequest(r)
-	run, lerr := s.launchVerifyRun(r.Context(), actor, ws, ws.SetupCommands)
-	if errors.Is(lerr, errImportStepBusy) {
-		// Lost the serial-slot CAS to a run launched between our liveness check and
-		// the claim (M1) — surface as a clean 409, not a 500.
-		writeError(w, http.StatusConflict, "an import step is already running for this workspace")
-		return
-	}
-	if lerr != nil {
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-			"workspace.import.verify", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
-		writeError(w, http.StatusInternalServerError, "launch verify run: "+lerr.Error())
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,
-		"workspace.import.verify", id.String(), "success", mustJSON(map[string]any{"verify_run_id": run.ID.String()})))
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"verify_run_id": run.ID, "workspace_id": id, "state": run.State,
-		"detail": "governed verify run launched; the workspace status updates when it completes",
-	})
-}
-
-// handleFinalizeWorkspace completes an import: marks the workspace ready and,
-// when the operator opts in, EMITS committable env-as-code (a devcontainer.json
-// + AGENTS.md from the verified profile + approved setup commands) — the detect-
-// AND-emit differentiator. For a local_dir workspace the files are written into
-// the host source dir (operator-confirmed, fixed safe paths); for a repo they
-// are returned in the response for the operator to commit.
-func (s *Server) handleFinalizeWorkspace(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "workspace")
+	files, ok := s.envAsCodeFor(w, r, ws)
 	if !ok {
 		return
 	}
-	var req struct {
-		EmitEnvAsCode bool `json:"emit_env_as_code"`
-	}
-	if r.ContentLength != 0 {
-		if !decodeStrict(w, r, &req) {
-			return
-		}
-	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
-	if !ok {
-		return
-	}
-
-	// Refuse to finalize while an import step is still LIVE: finalize zeroes
-	// active_run_id and marks the workspace ready, which would silently drop the
-	// running verify/record run's real result — its later result upload then 409s
-	// on the now-cleared pointer. Mirror the same live-run guard verify/record use
-	// (a stale pointer to a terminal run does not block — only a genuinely live one).
-	if ws.ActiveRunID != nil {
-		if active, gerr := s.cfg.Store.GetRun(r.Context(), *ws.ActiveRunID); gerr == nil && !isTerminalRunState(active.State) {
-			writeError(w, http.StatusConflict, "an import step is still running for this workspace; wait for it to finish before finalizing")
-			return
-		}
-	}
-
-	emitted := map[string]string{}
-	if req.EmitEnvAsCode {
-		files, ok := s.envAsCodeFor(w, r, ws)
-		if !ok {
-			return
-		}
-		if ws.Kind == types.WorkspaceKindLocalDir {
-			if werr := writeEnvAsCode(ws.Source, files); werr != nil {
-				writeError(w, http.StatusInternalServerError, "write env-as-code: "+werr.Error())
-				return
-			}
-		} else {
-			// Repo: return content for the operator to commit (a broker-driven
-			// branch-commit is a follow-up). Dismissing the dialog does not lose
-			// it — GET /workspaces/{id}/env-as-code regenerates the same files.
-			emitted = files
-		}
-	}
-
-	// Mark ready. If a verify already passed, status is already ready; otherwise
-	// finalize confirms a configured (verify-skipped) import as ready.
-	//
-	// FENCED on the slot the active-run guard above read: that guard only proves
-	// no run was live AT READ TIME, so a verify/record run claiming the slot
-	// between the check and this write would otherwise be silently clobbered by
-	// this finalize (the guard closes the window it can see; the fence closes the
-	// rest of it).
-	updated, applied, err := s.cfg.Store.SetWorkspaceImportState(r.Context(), id, types.WorkspaceReady,
-		nil, ws.ActiveRunID, ws.VerifyResult, ws.VerifiedProfileHash, ws.VerifiedAt)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "finalize: "+err.Error())
-		return
-	}
-	if !applied {
-		writeError(w, http.StatusConflict, "an import step claimed this workspace while finalizing; re-check its state and retry")
+	if werr := writeEnvAsCode(ws.Source, files); werr != nil {
+		writeError(w, http.StatusInternalServerError, "write env-as-code: "+werr.Error())
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.import.finalize", id.String(), "success", mustJSON(map[string]any{
-			"emitted": req.EmitEnvAsCode, "files": len(emitted),
-		})))
-	writeJSON(w, http.StatusOK, map[string]any{"workspace": updated, "emitted_files": emitted})
+		"workspace.envcode.write", id.String(), "success", mustJSON(map[string]any{"files": len(files)})))
+	writeJSON(w, http.StatusOK, map[string]any{"written_files": files})
 }
 
 // envAsCodeFor generates the committable env-as-code for a workspace from its
-// CURRENT reviewed profile + approved setup commands. Shared by finalize and
+// CURRENT scanned profile. Shared by handleWriteEnvAsCode and
 // handleGetEnvAsCode so the two generations can never drift. It writes its own
 // error response (422 when the workspace has no scanned profile, 500 when the
 // generator fails) and returns ok=false, mirroring getWorkspaceOr404.
@@ -649,8 +505,6 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 		writeError(w, http.StatusUnprocessableEntity, "workspace has no scanned profile to emit from")
 		return nil, false
 	}
-	var approved []workspacescan.SetupCommand
-	_ = json.Unmarshal(ws.SetupCommands, &approved)
 	// Fold the operator-wide artifact-registry redirects (URL-only) into the
 	// committable output so an exported workspace pulls from the corp mirror.
 	// Best-effort: a store error / no site-config just omits them.
@@ -660,7 +514,7 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 			artifactBases = artifactBaseURLs(sc)
 		}
 	}
-	files, gerr := workspacescan.EmitEnvAsCode(profile, approved, artifactBases)
+	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases)
 	if gerr != nil {
 		writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
 		return nil, false

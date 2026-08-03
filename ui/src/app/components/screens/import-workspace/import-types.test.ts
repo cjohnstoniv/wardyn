@@ -34,16 +34,21 @@ const ws = (over: Partial<Workspace> = {}): Workspace => ({
 });
 
 describe("activeStepForStatus", () => {
-  it("maps each server status to the right rail step", () => {
+  it("maps each current server status to the right rail step", () => {
     expect(activeStepForStatus("pending_scan")).toBe("scan");
     expect(activeStepForStatus("scanning")).toBe("scan");
     expect(activeStepForStatus("error")).toBe("scan");
     expect(activeStepForStatus("scanned")).toBe("configure");
-    expect(activeStepForStatus("building")).toBe("verify");
-    expect(activeStepForStatus("build_error")).toBe("verify");
-    expect(activeStepForStatus("verifying")).toBe("verify");
-    expect(activeStepForStatus("verify_failed")).toBe("verify");
-    expect(activeStepForStatus("ready")).toBe("finalize");
+  });
+
+  // Legacy: verify/finalize are retired from this panel; Record is the
+  // nearest surviving step for every status that used to route past it.
+  it("is legacy-tolerant: every retired build/verify status resumes on Record", () => {
+    expect(activeStepForStatus("building")).toBe("record");
+    expect(activeStepForStatus("build_error")).toBe("record");
+    expect(activeStepForStatus("verifying")).toBe("record");
+    expect(activeStepForStatus("verify_failed")).toBe("record");
+    expect(activeStepForStatus("ready")).toBe("record");
   });
 });
 
@@ -180,16 +185,9 @@ describe("runningLabel + fmtStepDuration", () => {
   });
 });
 
-describe("IMPORT_STEPS — Record sits between Configure and Verify", () => {
-  it("orders the rail source→scan→configure→record→verify→finalize", () => {
-    expect(IMPORT_STEPS.map((s) => s.id)).toEqual([
-      "source",
-      "scan",
-      "configure",
-      "record",
-      "verify",
-      "finalize",
-    ]);
+describe("IMPORT_STEPS — Source → Scan → Configure → Record", () => {
+  it("orders the rail source→scan→configure→record (verify/finalize retired)", () => {
+    expect(IMPORT_STEPS.map((s) => s.id)).toEqual(["source", "scan", "configure", "record"]);
   });
 });
 

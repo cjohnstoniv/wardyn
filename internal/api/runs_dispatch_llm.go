@@ -20,7 +20,7 @@ import (
 // Wardyn-managed subscription, Bedrock, api-key gateway) credentials the run,
 // and which proxy-side injections/MITM that implies. Produced by
 // resolveLLMTransport, consumed by the CA / grant-authoring / SandboxSpec
-// phases of dispatchWithVerify.
+// phases of dispatchRun.
 type llmTransport struct {
 	// subscription: the policy bind-mounts the resident ~/.claude (claudeCredTarget).
 	subscription bool
@@ -46,10 +46,10 @@ type llmTransport struct {
 // placeholders / Bedrock env / the codex-cli OpenAI gateway route). It may
 // append Bedrock egress hosts to policy.AllowedDomains and register resident
 // SigV4 creds with the mask registry. injections is read-only here (it gates
-// the managed fallback); the grant-authoring phases mutate it later. Extracted
-// verbatim from dispatchWithVerify — see the inline comments for the full
-// precedence rationale: host-staged mount > managed > Bedrock > api-key.
-func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, verifyPlan json.RawMessage, interactive bool, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
+// the managed fallback); the grant-authoring phases mutate it later. See the
+// inline comments for the full precedence rationale: host-staged mount >
+// managed > Bedrock > api-key.
+func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
 	var t llmTransport
 
 	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
@@ -77,13 +77,14 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// (checked first) and api-key mode (the fallback). See resolveBedrockAuth for
 	// the readiness rule and the resident-AWS-cred rationale.
 	//
-	// modelRun gates Bedrock on a run that actually invokes the model: a verify run
-	// (execs wardyn-verify — verifyPlan present) or a scan run (execs wardyn-scan —
-	// WorkspaceID set, non-interactive) makes no model call, so it must NOT receive
-	// the resident AWS SigV4 creds (least privilege — the creds are masked + confined
-	// regardless, but there's no reason to place them in a sandbox that never signs a
-	// Bedrock request). Mirrors the WARDYN_VERIFY_ONLY / WARDYN_SCAN_ONLY discriminator.
-	modelRun := len(verifyPlan) == 0 && !(run.WorkspaceID != nil && !interactive)
+	// modelRun gates Bedrock on a run that actually invokes the model: a scan run
+	// (execs wardyn-scan — WorkspaceID set, non-interactive) makes no model call,
+	// so it must NOT receive the resident AWS SigV4 creds (least privilege — the
+	// creds are masked + confined regardless, but there's no reason to place them
+	// in a sandbox that never signs a Bedrock request). An INTERACTIVE
+	// workspace-linked run (Record Mode) is a human-driven sandbox, not a scan, so
+	// it stays a model run. Mirrors the WARDYN_SCAN_ONLY discriminator.
+	modelRun := !(run.WorkspaceID != nil && !interactive)
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
 	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)

@@ -83,15 +83,6 @@ func (c *Client) ScanWorkspace(ctx context.Context, id uuid.UUID) (json.RawMessa
 	return out, err
 }
 
-// VerifyWorkspace launches the import verify run for a workspace. Returns the
-// raw accepted-run reply. POST /api/v1/workspaces/{id}/verify; 503 when no runner
-// is wired; 409 while another import step is live.
-func (c *Client) VerifyWorkspace(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
-	var out json.RawMessage
-	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+id.String()+"/verify", nil, &out)
-	return out, err
-}
-
 // GetSiteConfig returns the operator-wide site config. GET /api/v1/site-config.
 func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 	var out types.SiteConfig

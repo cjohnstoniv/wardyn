@@ -13,13 +13,13 @@ func TestEmitEnvAsCode(t *testing.T) {
 	p := WorkspaceProfile{
 		Languages: []string{"Go", "JavaScript"}, PackageManagers: []string{"go", "pnpm"},
 		ServicesNeeded: []string{"postgres"}, Confidence: "high", Source: "deterministic",
+		SetupCommands: []SetupCommand{
+			{Stage: "install", Command: "pnpm install --frozen-lockfile"},
+			{Stage: "build", Command: "go build ./..."},
+			{Stage: "test", Command: "go test ./..."},
+		},
 	}
-	approved := []SetupCommand{
-		{Stage: "install", Command: "pnpm install --frozen-lockfile"},
-		{Stage: "build", Command: "go build ./..."},
-		{Stage: "test", Command: "go test ./..."},
-	}
-	files, err := EmitEnvAsCode(p, approved, nil)
+	files, err := EmitEnvAsCode(p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,20 +28,18 @@ func TestEmitEnvAsCode(t *testing.T) {
 		t.Fatal("no devcontainer.json emitted")
 	}
 	var parsed struct {
-		Image             string            `json:"image"`
-		Features          map[string]any    `json:"features"`
-		ContainerEnv      map[string]string `json:"containerEnv"`
-		PostCreateCommand string            `json:"postCreateCommand"`
+		Image        string            `json:"image"`
+		Features     map[string]any    `json:"features"`
+		ContainerEnv map[string]string `json:"containerEnv"`
 	}
 	if err := json.Unmarshal([]byte(dc), &parsed); err != nil {
 		t.Fatalf("devcontainer.json not valid JSON: %v", err)
 	}
-	// install+build become postCreateCommand; test does NOT.
-	if !strings.Contains(parsed.PostCreateCommand, "pnpm install") || !strings.Contains(parsed.PostCreateCommand, "go build") {
-		t.Errorf("postCreateCommand = %q, want install+build", parsed.PostCreateCommand)
-	}
-	if strings.Contains(parsed.PostCreateCommand, "go test") {
-		t.Error("test stage must not be in postCreateCommand")
+	// No postCreateCommand, ever: there is no verify step to prove a detected
+	// install/build command actually works, so nothing is auto-run, unattended,
+	// on container create — it's prose in AGENTS.md instead (asserted below).
+	if strings.Contains(dc, "postCreateCommand") {
+		t.Errorf("devcontainer.json must never carry postCreateCommand (no verify step to prove it works): %s", dc)
 	}
 	if len(parsed.Features) != 2 {
 		t.Errorf("expected go+node features, got %v", parsed.Features)
@@ -66,7 +64,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 
 func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Java"}, PackageManagers: []string{"maven"}}
-	files, err := EmitEnvAsCode(p, nil, nil)
+	files, err := EmitEnvAsCode(p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

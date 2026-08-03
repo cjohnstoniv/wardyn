@@ -264,32 +264,6 @@ func ValidApprovedHost(h string) bool {
 	return strings.Contains(h, ".") && suggestedHostRE.MatchString(h)
 }
 
-// setupStages is the closed set of setup-command stages.
-var setupStages = map[string]struct{}{"install": {}, "build": {}, "test": {}, "lint": {}}
-
-const maxSetupCommandLen = 512
-
-// ValidSetupCommand reports whether c is an acceptable operator-approved setup
-// command: a known stage and a single-line, bounded, control-char-free command
-// (the operator vouches for what it DOES — it runs confined — but the string
-// must be safe to store, audit, and stream). Source is advisory metadata and is
-// not validated for content beyond length.
-func ValidSetupCommand(c SetupCommand) bool {
-	if _, ok := setupStages[c.Stage]; !ok {
-		return false
-	}
-	cmd := strings.TrimSpace(c.Command)
-	if cmd == "" || len(cmd) > maxSetupCommandLen || len(c.Source) > 128 {
-		return false
-	}
-	for _, r := range cmd {
-		if r == '\n' || r == '\r' || r == 0 || (r < 0x20 && r != '\t') || r == 0x7f {
-			return false // no newlines/NUL/control — single-line command only
-		}
-	}
-	return true
-}
-
 func classifySecretKind(name string) string {
 	upper := strings.ToUpper(name)
 	for _, e := range secretKindByPrefix {

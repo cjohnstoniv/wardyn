@@ -20,7 +20,7 @@ import (
 
 // importStateFake implements store.Store's SetWorkspaceImportState by mutating
 // a copy of the embedded workspace snapshot and recording the write. The
-// record/verify test fakes below otherwise duplicated this method
+// scan/record test fakes below otherwise duplicated this method
 // byte-for-byte, so they embed this instead.
 type importStateFake struct {
 	ws    types.Workspace
@@ -176,6 +176,14 @@ func egressAllowEvent(runID uuid.UUID, host string) types.AuditEvent {
 		Target: host, Data: mustJSON(map[string]any{"host": host, "method": "GET"})}
 }
 
+// newTestSrv builds a bare *Server over a caller-supplied fake store, reusing
+// newHarness's identity/audit wiring. Shared by the record-endpoint tests
+// below (formerly named newVerifySrv — a generic helper, not verify-specific).
+func newTestSrv(t *testing.T, fake store.Store) *Server {
+	h := newHarness(t)
+	return New(baseTestConfig(h, fake))
+}
+
 func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()
@@ -273,7 +281,7 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 	ws := types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned,
 		SetupCommands: mustJSON([]workspacescan.SetupCommand{{Stage: "build", Command: "go build ./...", Source: "convention:go"}})}
 	fake := &recordStore{importStateFake: importStateFake{ws: ws}}
-	srv := newVerifySrv(t, fake)
+	srv := newTestSrv(t, fake)
 	url := "/api/v1/workspaces/" + wsID.String() + "/record"
 
 	// Empty/blank session name → 400 (a session must be named).
@@ -319,7 +327,7 @@ func TestGetWorkspace_ReturnsRecordResultsNoDerivedTasks(t *testing.T) {
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build-test": {RunID: uuid.New(), Label: "build & test", Mode: recordModeInteractive, Status: recordStatusRecorded},
 		})}}}
-	srv := newVerifySrv(t, fake)
+	srv := newTestSrv(t, fake)
 	w := do(t, srv, http.MethodGet, "/api/v1/workspaces/"+wsID.String(), adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("get: code = %d", w.Code)
@@ -357,7 +365,7 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
-	srv := newVerifySrv(t, fake)
+	srv := newTestSrv(t, fake)
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -409,7 +417,7 @@ func TestPromoteRecordEgress_GuardMissConflicts(t *testing.T) {
 	fake.saved = mustJSON(map[string]RecordTaskResult{
 		"build": {RunID: uuid.New(), Status: recordStatusRecording},
 	})
-	srv := newVerifySrv(t, &staleReadStore{recordStore: fake, staleWS: fake.ws})
+	srv := newTestSrv(t, &staleReadStore{recordStore: fake, staleWS: fake.ws})
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record/build/promote-egress", adminToken, "")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("code = %d, want 409 when the recording changed concurrently; body=%s", w.Code, w.Body.String())
@@ -473,7 +481,7 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
-	srv := newVerifySrv(t, fake)
+	srv := newTestSrv(t, fake)
 	url := "/api/v1/workspaces/" + wsID.String() + "/record/build/promote-egress"
 
 	// A host that wasn't observed+allowed in this recording → reject, nothing promoted.

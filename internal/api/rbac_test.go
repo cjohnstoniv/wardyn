@@ -160,12 +160,9 @@ var gatedRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/v1/workspaces/w1/scan"},
 	{http.MethodPut, "/api/v1/workspaces/w1/approved-egress"},
 	{http.MethodPut, "/api/v1/workspaces/w1/llm-cred"},
-	{http.MethodPut, "/api/v1/workspaces/w1/setup-commands"},
-	{http.MethodPost, "/api/v1/workspaces/w1/verify"},
 	{http.MethodPost, "/api/v1/workspaces/w1/record"},
 	{http.MethodPost, "/api/v1/workspaces/w1/record/t1/promote-egress"},
-	{http.MethodPost, "/api/v1/workspaces/w1/finalize"},
-	{http.MethodPost, "/api/v1/workspaces/w1/verify/suggest-fix"},
+	{http.MethodPost, "/api/v1/workspaces/w1/env-as-code/write"},
 	// 4. site config
 	{http.MethodPut, "/api/v1/site-config"},
 	// 5. secrets — credential MATERIAL (the LIST is names-only and stays a read).
