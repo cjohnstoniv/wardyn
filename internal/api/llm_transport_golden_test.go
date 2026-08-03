@@ -131,6 +131,14 @@ type llmGoldenCase struct {
 	cfg        Config
 	injections []runner.InjectionGrant
 	mounts     []types.WorkspaceMount
+	// workspaceID + interactive drive the modelRun discriminator: a
+	// workspace-linked NON-interactive run is a scan run (execs wardyn-scan,
+	// never calls a model), so it must not be handed resident Bedrock creds.
+	// A workspace-linked INTERACTIVE run is Record Mode — a human driving a
+	// real agent — so it stays a model run. Without these two fields every
+	// cell was an ordinary run and `modelRun := true` passed the whole suite.
+	workspaceID *uuid.UUID
+	interactive bool
 }
 
 func llmGoldenCases() []llmGoldenCase {
@@ -209,8 +217,93 @@ func llmGoldenCases() []llmGoldenCase {
 				MaskRegistry: secretmask.NewRegistry(),
 			},
 		},
+
+		// (h) SCAN RUN: workspace-linked and non-interactive. It execs
+		// wardyn-scan and never calls a model, so modelRun is false and the
+		// resident SigV4 creds must NOT be placed in the sandbox even though
+		// Bedrock is fully configured. This cell is the discriminator itself:
+		// flip modelRun to an unconditional true and only this cell moves.
+		{
+			name:        "claude-code/scan-run-bedrock-configured",
+			agent:       "claude-code",
+			workspaceID: ptrUUID(),
+			cfg: Config{
+				BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+				Secrets: &memSecrets{m: map[string][]byte{
+					bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
+					bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+				}},
+				MaskRegistry: secretmask.NewRegistry(),
+			},
+		},
+
+		// (i) RECORD RUN: workspace-linked but INTERACTIVE — a human driving a
+		// real agent in an attach shell, so it IS a model run and Bedrock
+		// resolves exactly as it does for an ordinary run. Same inputs as (h)
+		// apart from the interactive flag; the pair pins both sides of the
+		// discriminator, so collapsing it in either direction fails.
+		{
+			name:        "claude-code/record-run-interactive-bedrock-configured",
+			agent:       "claude-code",
+			workspaceID: ptrUUID(),
+			interactive: true,
+			cfg: Config{
+				BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+				Secrets: &memSecrets{m: map[string][]byte{
+					bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
+					bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+				}},
+				MaskRegistry: secretmask.NewRegistry(),
+			},
+		},
+
+		// (j) PRECEDENCE: every lane wired at once — resident subscription
+		// mount, managed blob, Bedrock, and an api-key injection. The
+		// documented order is host-staged mount > managed > Bedrock > api-key,
+		// so the resident mount must win and the rest must stay off. An
+		// inversion anywhere in that chain shows up here and nowhere else.
+		{
+			name:  "claude-code/all-lanes-wired-resident-wins",
+			agent: "claude-code",
+			cfg: Config{
+				SubscriptionToken: fakeSubProvider{tok: subscription.Token{Value: "resident-tok"}},
+				ManagedToken:      fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}},
+				BedrockRegion:     "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+				Secrets: &memSecrets{m: map[string][]byte{
+					bedrockAPIKeySecret: []byte("bedrock-bearer-test"),
+					"anthropic-api-key": []byte("sk-ant-test"),
+				}},
+				MaskRegistry: secretmask.NewRegistry(),
+			},
+			mounts: []types.WorkspaceMount{{Target: claudeCredTarget}},
+			injections: []runner.InjectionGrant{{
+				GrantID: uuid.New(),
+				Rule:    egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s", SecretName: "anthropic-api-key"},
+			}},
+		},
+
+		// (k) MANAGED vs API-KEY opt-out: the managed fallback must NOT
+		// silently replace an operator's explicit api-key injection. Both are
+		// present and no resident mount is staged, so managed stays off.
+		{
+			name:  "claude-code/managed-yields-to-explicit-api-key",
+			agent: "claude-code",
+			cfg: Config{
+				ManagedToken: fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}},
+				Secrets:      &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}},
+			},
+			injections: []runner.InjectionGrant{{
+				GrantID: uuid.New(),
+				Rule:    egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s", SecretName: "anthropic-api-key"},
+			}},
+		},
 	}
 }
+
+// ptrUUID returns a pointer to a fresh UUID — a workspace-linked run's
+// WorkspaceID. The value never reaches the golden (only its presence changes
+// resolveLLMTransport's behavior), so a random id keeps the fixture stable.
+func ptrUUID() *uuid.UUID { id := uuid.New(); return &id }
 
 // TestLLMTransportGolden drives resolveLLMTransport directly (not through the
 // full dispatchRun/CreateSandbox path — this is a unit-level snapshot of one
@@ -224,14 +317,14 @@ func TestLLMTransportGolden(t *testing.T) {
 	got := map[string]llmTransportGoldenCell{}
 	for _, c := range llmGoldenCases() {
 		srv := New(c.cfg)
-		run := types.AgentRun{ID: uuid.New(), Agent: c.agent, CreatedBy: "alice@example.com"}
+		run := types.AgentRun{ID: uuid.New(), Agent: c.agent, CreatedBy: "alice@example.com", WorkspaceID: c.workspaceID}
 		policy := &types.RunPolicySpec{
 			AllowedDomains:  []string{"git.example.com"},
 			WorkspaceMounts: c.mounts,
 		}
 		sandboxEnv := map[string]string{}
 		llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, c.injections,
-			false /* interactive */, "http://wardyn-proxy:3128", nil)
+			c.interactive, "http://wardyn-proxy:3128", nil)
 		if _, dup := got[c.name]; dup {
 			t.Fatalf("duplicate cell name %q", c.name)
 		}

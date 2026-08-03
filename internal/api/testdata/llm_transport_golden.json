@@ -1,4 +1,19 @@
 {
+  "claude-code/all-lanes-wired-resident-wins": {
+    "subscription": true,
+    "inject_sub": true,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+      "CLAUDE_CONFIG_DIR": "/home/agent/.claude-run"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
   "claude-code/anthropic-api-key-injection-present": {
     "subscription": false,
     "inject_sub": false,
@@ -75,6 +90,20 @@
       "git.example.com"
     ]
   },
+  "claude-code/managed-yields-to-explicit-api-key": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
   "claude-code/nothing-configured": {
     "subscription": false,
     "inject_sub": false,
@@ -89,6 +118,29 @@
       "git.example.com"
     ]
   },
+  "claude-code/record-run-interactive-bedrock-configured": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": true,
+    "inject_bedrock_bearer": false,
+    "bedrock_region": "us-east-1",
+    "bedrock_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "sandbox_env": {
+      "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "AWS_ACCESS_KEY_ID": "AKIATESTTESTTESTTEST",
+      "AWS_DEFAULT_REGION": "us-east-1",
+      "AWS_REGION": "us-east-1",
+      "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMItesttesttesttesttesttestKEY",
+      "CLAUDE_CODE_USE_BEDROCK": "1"
+    },
+    "allowed_domains": [
+      "bedrock-runtime.us-east-1.amazonaws.com",
+      "bedrock.us-east-1.amazonaws.com",
+      "git.example.com"
+    ]
+  },
   "claude-code/resident-subscription-token-wired": {
     "subscription": true,
     "inject_sub": true,
@@ -99,6 +151,20 @@
     "sandbox_env": {
       "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
       "CLAUDE_CONFIG_DIR": "/home/agent/.claude-run"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
+  "claude-code/scan-run-bedrock-configured": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected"
     },
     "allowed_domains": [
       "git.example.com"
