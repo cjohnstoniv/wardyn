@@ -89,7 +89,7 @@ const LEGACY_HOST: Record<string, string> = {
   "bitbucket-pat": "bitbucket.org",
 };
 
-interface ProviderOption {
+export interface ProviderOption {
   id: string;
   title: string;
   hint: React.ReactNode;
@@ -579,7 +579,11 @@ function LegacyFooter({
 
 // Panel 1 — pick a provider; a "hosted" pick (GHES / ADO Server / Other host)
 // asks for a hostname and live-previews the git-pat-<slug> name it derives.
-function AddProviderPanel1({
+// Exported so the Integrations "Add integration" dialog can hand off its SCM
+// category to the SAME ladder instead of forking a second copy of it (its own
+// Panel 2/3 shape is AI-provider-specific and doesn't fit the App/PAT/SSH
+// ladder anyway) — see integrations/add-integration-dialog.tsx.
+export function AddProviderPanel1({
   onCancel,
   onContinue,
 }: {
@@ -681,7 +685,7 @@ function AddProviderPanel1({
 // SSH; everything else (GHES / ADO Server / GitLab / Bitbucket / Other host)
 // shares one generic PAT-only rung, matching the reference prototype's actual
 // branching (the static frames just showcase two illustrative instances of it).
-function AddProviderPanel2({
+export function AddProviderPanel2({
   kind,
   host,
   title,

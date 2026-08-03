@@ -198,7 +198,17 @@ export const AI_TYPES: Record<AiType, AiTypeMeta> = {
 
 // ---- Residency (mockup's resChip kinds, generalized into a label+tone+tooltip
 // dictionary any integration's credential can point at) ----
-export type ResidencyKind = "proxy_injected" | "brokered_mint" | "resident_mount" | "resident_env" | "varies";
+// control_plane is the mock's 4th resChip kind ("cp" — "control-plane side"),
+// used only by Azure OpenAI (AddAzure's residencyBlock): distinct from `varies`
+// (which means "more than one lane exists") — Azure has exactly one lane, and
+// it simply never touches the sandbox at all.
+export type ResidencyKind =
+  | "proxy_injected"
+  | "brokered_mint"
+  | "resident_mount"
+  | "resident_env"
+  | "control_plane"
+  | "varies";
 
 export interface ResidencyMeta {
   label: string;
@@ -226,6 +236,11 @@ export const RESIDENCY_META: Record<ResidencyKind, ResidencyMeta> = {
     label: "resident",
     tone: "warning",
     tooltip: "Set as an environment variable in the sandbox — the process running there can read it.",
+  },
+  control_plane: {
+    label: "control-plane side",
+    tone: "neutral",
+    tooltip: "Called from Wardyn's control plane only — no sandbox lane exists for it.",
   },
   varies: {
     label: "varies by lane",
@@ -275,4 +290,41 @@ export const IMPOSSIBLE: Partial<Record<AiType, Partial<Record<AiCapability, str
   bedrock: { codex_cli: T.X_BEDROCK_CODEX },
   openai_api_key: { claude_code: T.X_OPENAI_CLAUDE },
   azure_openai: { claude_code: T.X_AZURE_HARNESS, codex_cli: T.X_AZURE_HARNESS, direct_api: T.X_AZURE_DIRECT },
+};
+
+// ---- Tools tab (mockup's Harnesses frame / toolRow calls, verbatim) ----
+// A tool is installable client software the image carries; an integration is
+// what it connects through (T.LAW) — this copy is the "How Wardyn wires it" /
+// "Image" text for each of the Tools tab's six rows. Not part of CAPS: these
+// are fixed mechanism descriptions, not a capability matrix.
+export type ToolRowId = "git" | "package_managers" | "claude_code" | "codex_cli" | "gh_cli" | "own_tools";
+export interface ToolRowCopy {
+  wire: string;
+  image?: string;
+  /** git's own trailing note ("In every Wardyn image.") — distinct from `image`,
+   *  which names a REQUIREMENT the other rows' images must satisfy. */
+  extra?: string;
+}
+export const TOOLS: Record<ToolRowId, ToolRowCopy> = {
+  git: {
+    wire: "Clone and push rerouted through the broker (App), a credential helper (PAT), or a key file (SSH) — set up at run start.",
+    extra: "In every Wardyn image.",
+  },
+  package_managers: {
+    wire: "Per-tool config files generated at run start (.npmrc, pip.conf, …); the mirror token is injected proxy-side.",
+  },
+  claude_code: {
+    wire: "Sign-in injected proxy-side — a subscription sentinel or a key; never resident.",
+    image: "Must carry the Claude Code CLI — Wardyn's built-in agent image does.",
+  },
+  codex_cli: {
+    wire: "API key only — Wardyn has no Codex login capture.",
+    image: "Must carry the Codex CLI.",
+  },
+  gh_cli: {
+    wire: "Recognized on the host, never wired. Its token is broad; Wardyn never imports it — use an SCM host integration instead.",
+  },
+  own_tools: {
+    wire: "Whatever your image carries. Wardyn wires nothing; your tools authenticate however they like. The self-test still runs, and governed commands skip all wiring entirely.",
+  },
 };

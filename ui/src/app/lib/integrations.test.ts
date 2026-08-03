@@ -13,6 +13,7 @@ import {
   SUBSCRIPTION_LANE_META,
   BEDROCK_LANE_META,
   IMPOSSIBLE,
+  TOOLS,
 } from "./integrations";
 
 // Sentinel byte-exact pins against the approved mock export
@@ -88,11 +89,42 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
     expect(SUBSCRIPTION_LANE_META.resident_host.tooltip).toBe(T.HOSTCLI_LINE);
   });
 
-  it("RESIDENCY_META covers all five kinds with a label + tone + tooltip", () => {
-    for (const kind of ["proxy_injected", "brokered_mint", "resident_mount", "resident_env", "varies"] as const) {
+  it("RESIDENCY_META covers all six kinds with a label + tone + tooltip", () => {
+    for (const kind of [
+      "proxy_injected",
+      "brokered_mint",
+      "resident_mount",
+      "resident_env",
+      "control_plane",
+      "varies",
+    ] as const) {
       expect(RESIDENCY_META[kind].label).toBeTruthy();
       expect(RESIDENCY_META[kind].tooltip).toBeTruthy();
       expect(["success", "warning", "neutral"]).toContain(RESIDENCY_META[kind].tone);
+    }
+  });
+
+  // control_plane is distinct from `varies`: Azure has exactly ONE lane (the
+  // mock's "cp" resChip kind), never "more than one lane" — the two kinds must
+  // not collapse to the same label/tooltip.
+  it("control_plane reads distinctly from varies (Azure has one lane, not several)", () => {
+    expect(RESIDENCY_META.control_plane.label).toBe("control-plane side");
+    expect(RESIDENCY_META.control_plane.label).not.toBe(RESIDENCY_META.varies.label);
+  });
+
+  it("TOOLS covers all six Tools-tab rows, verbatim against the mock's toolRow calls", () => {
+    expect(TOOLS.git.wire).toBe(
+      "Clone and push rerouted through the broker (App), a credential helper (PAT), or a key file (SSH) — set up at run start.",
+    );
+    expect(TOOLS.git.extra).toBe("In every Wardyn image.");
+    expect(TOOLS.package_managers.wire).toBe(
+      "Per-tool config files generated at run start (.npmrc, pip.conf, …); the mirror token is injected proxy-side.",
+    );
+    expect(TOOLS.gh_cli.wire).toBe(
+      "Recognized on the host, never wired. Its token is broad; Wardyn never imports it — use an SCM host integration instead.",
+    );
+    for (const id of ["git", "package_managers", "claude_code", "codex_cli", "gh_cli", "own_tools"] as const) {
+      expect(TOOLS[id].wire).toBeTruthy();
     }
   });
 

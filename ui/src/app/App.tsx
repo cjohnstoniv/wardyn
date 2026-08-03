@@ -63,6 +63,12 @@ const PoliciesScreen = React.lazy(() =>
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({ default: m.SecretsScreen })),
 );
+const IntegrationsScreen = React.lazy(() =>
+  import("./components/screens/integrations/integrations-screen").then((m) => ({ default: m.IntegrationsScreen })),
+);
+const IntegrationDetailScreen = React.lazy(() =>
+  import("./components/screens/integrations/integration-detail").then((m) => ({ default: m.IntegrationDetailScreen })),
+);
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({ default: m.WorkspacesScreen })),
 );
@@ -289,6 +295,22 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <SecretsScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/integrations"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <IntegrationsScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/integrations/:id"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <IntegrationDetailScreen />
                 </React.Suspense>
               }
             />

@@ -8,6 +8,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import {
   Activity,
   AlertTriangle,
+  Cable,
   ChevronsUpDown,
   Fingerprint,
   FolderOpen,
@@ -121,6 +122,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { to: "/policies", label: "Policies", icon: UserCog },
       { to: "/secrets", label: "Secrets", icon: Lock },
+      { to: "/integrations", label: "Integrations", icon: Cable },
       { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
     ],
   },
