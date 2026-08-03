@@ -79,6 +79,10 @@ async function openCorpNetworkStep(page: Page): Promise<Locator> {
 async function passGate(m: Locator) {
   await m.getByRole("button", { name: /^test connectivity$/i }).click();
   await expect(m.getByText(/can't test here/i)).toBeVisible();
+  // Step through the Egress redirection tab — the forward walk passes
+  // through it, so a single "Next:" click afterwards leaves the step.
+  await m.page().getByRole("button", { name: /^next: egress redirection$/i }).click();
+  await expect(m.getByText(/nothing redirected on this host/i)).toBeVisible();
 }
 
 test.describe("Corporate network step", () => {
@@ -196,10 +200,11 @@ test.describe("Corporate network step", () => {
 
     await passGate(m);
 
-    // no_runner is the ladder's one honest bypass — it unlocks Next at once
-    // (no Egress-tab detour), with its standing note in place of the blocker
-    // (T.NORUNNER_NOTE: nothing was PROVEN, and the note keeps saying so).
-    await expect(nextBtn).toBeEnabled();
+    // no_runner is the ladder's one honest bypass — it unlocks the walk at
+    // once, with its standing note in place of the blocker (T.NORUNNER_NOTE:
+    // nothing was PROVEN, and the note keeps saying so). passGate stepped
+    // through Egress redirection, so the footer now offers the exit.
+    await expect(page.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
     await expect(m.getByText(/connectivity isn't proven yet/i)).toHaveCount(0);
     await expect(page.getByText(/nothing to test with/i)).toBeVisible();
     await expect(page.getByText(/nothing was proven here/i)).toBeVisible();

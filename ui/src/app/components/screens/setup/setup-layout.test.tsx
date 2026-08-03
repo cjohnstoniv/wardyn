@@ -124,6 +124,37 @@ describe("SetupLayout", () => {
       expect(screen.queryByRole("button", { name: /should not render/i })).not.toBeInTheDocument();
     });
 
+    it("nextLabel/onNext rename and repoint a rendered Next — the step's own internal stop, not the exit", async () => {
+      const onNext = vi.fn();
+      const onSelect = vi.fn();
+      renderLayout({
+        current: "corp_network",
+        onSelect,
+        nextGate: { blocked: false, nextLabel: "Next: Egress redirection", onNext },
+      });
+      const btn = screen.getByRole("button", { name: /^next: egress redirection$/i });
+      await user.click(btn);
+      expect(onNext).toHaveBeenCalled();
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("the relabel applies to a DISABLED Next too (probe in flight already names where a pass will go)", () => {
+      renderLayout({
+        current: "corp_network",
+        nextGate: { blocked: true, head: "Probe in flight", tone: "neutral", nextLabel: "Next: Egress redirection" },
+      });
+      expect(screen.getByRole("button", { name: /^next: egress redirection$/i })).toBeDisabled();
+    });
+
+    it("backOverride repoints Back (the mirror: Egress redirection returns to Host proxy)", async () => {
+      const backOverride = vi.fn();
+      const onSelect = vi.fn();
+      renderLayout({ current: "corp_network", onSelect, backOverride });
+      await user.click(screen.getByRole("button", { name: /^back$/i }));
+      expect(backOverride).toHaveBeenCalled();
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
     it("the gate never renders on the LAST step (there is no Next to gate)", () => {
       renderLayout({
         current: "launch",

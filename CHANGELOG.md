@@ -83,6 +83,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
     disabled Next, under a bold one-line state headline. One launch point per
     screen: the panel's own button is suppressed while the gate row carries
     the action, and returns as "Test again" once the step is satisfied.
+  - **The forward walk passes through Egress redirection rather than over
+    it.** From Host proxy, a pass unlocks "Next: Egress redirection" — the
+    step's other tab, one more click past its quiet empty line, not the exit;
+    from there, "Next: Integrations" hands off. Back mirrors it. Navigation,
+    not a gate: nothing blocks and empty stays a fine answer — the tab is
+    simply seen once instead of being skippable to the point of invisibility.
   - `no_runner` is the one thing that never blocks. With no runner configured
     Wardyn cannot launch a probe at all, and demanding proof it is structurally
     incapable of collecting would trap an operator in setup with no way out.

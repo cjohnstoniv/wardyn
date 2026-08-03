@@ -149,9 +149,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // click clears the gate for every walkthrough below that isn't exercising
   // the gate itself (that coverage lives in corp-network-step.test.tsx and
   // setup-layout.test.tsx).
+  // …and steps through the Egress redirection tab: the forward walk passes
+  // THROUGH it (navigation, not a gate), so after this helper a single
+  // "Next:" click advances to Integrations, same as before round F.
   const clearCorpNetworkGate = async () => {
     await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText(/can.t test here/i);
+    await user.click(screen.getByRole("button", { name: /^next: egress redirection$/i }));
+    await screen.findByText(/nothing redirected on this host/i);
   };
 
   it("unreachable daemon: shows 'Couldn't reach Wardyn' + Re-check, never the no-runner danger card", async () => {
@@ -265,14 +270,26 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
       await screen.findByText("Reached · via proxy");
 
-      // Zero redirects + reached = DONE outright. No egress detour — nothing
-      // here must be configured (round E: the proof is the only required thing).
-      const next = await screen.findByRole("button", { name: /^next: integrations$/i });
-      expect(next).toBeEnabled();
+      // Zero redirects + reached = the gate is satisfied (nothing here must
+      // be configured), and what the pass unlocks is the step's OTHER tab —
+      // the forward walk passes through Egress redirection, not over it.
+      const toEgress = await screen.findByRole("button", { name: /^next: egress redirection$/i });
+      expect(toEgress).toBeEnabled();
       // The panel's button is back — re-testing stays reachable.
       expect(screen.getByRole("button", { name: /^test again$/i })).toBeInTheDocument();
 
-      await user.click(next);
+      // One more click, not a demand: the quiet empty line, then the exit.
+      await user.click(toEgress);
+      await screen.findByText(/nothing redirected on this host/i);
+      const next = screen.getByRole("button", { name: /^next: integrations$/i });
+      expect(next).toBeEnabled();
+      // Back from here returns to Host proxy — the mirror — without leaving
+      // the step; then forward again.
+      await user.click(screen.getByRole("button", { name: /^back$/i }));
+      expect(await screen.findByText("What Wardyn found on this host")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^next: egress redirection$/i }));
+
+      await user.click(screen.getByRole("button", { name: /^next: integrations$/i }));
       expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
     });
 
@@ -323,12 +340,17 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
 
-      // Back to Corporate network: the step body remounted, but the gate — held
-      // by the orchestrator, not the step — still remembers the no_runner pass.
+      // Back to Corporate network: the step body remounted, but the gate AND
+      // the sub-tab — held by the orchestrator, not the step — still remember
+      // the no_runner pass and that we left from Egress redirection.
       await user.click(screen.getByRole("button", { name: /^back$/i }));
       await screen.findByRole("heading", { name: /^corporate network$/i });
-      expect(screen.getByText("Can't test here")).toBeInTheDocument();
+      expect(screen.getByText(/nothing redirected on this host/i)).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+      // The mirror again: Back inside the step returns to Host proxy, where
+      // the remembered no_runner verdict is still on screen.
+      await user.click(screen.getByRole("button", { name: /^back$/i }));
+      expect(await screen.findByText("Can't test here")).toBeInTheDocument();
     });
   });
 

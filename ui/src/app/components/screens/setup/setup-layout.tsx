@@ -37,6 +37,7 @@ export function SetupLayout({
   onLaunch,
   canLaunch,
   nextGate,
+  backOverride,
   children,
 }: {
   current: SetupStepId;
@@ -60,13 +61,24 @@ export function SetupLayout({
   //    custom-endpoint pass), where it is a neutral standing note.
   //  - action: a fix-it button rendered IN PLACE of the disabled Next (the
   //    gate row is the one launch point, and it names what it will do).
+  //  - nextLabel/onNext: a step whose forward walk has an INTERNAL stop can
+  //    rename and repoint the Next button (Corporate network's Host proxy tab
+  //    forwards to its Egress redirection tab, not the exit). The label
+  //    applies whenever the Next button renders — including disabled — so a
+  //    probe-in-flight footer already names where a pass will go.
   nextGate?: {
     blocked: boolean;
     head?: string;
     reason?: string;
     tone?: "warning" | "neutral";
     action?: { label: string; onClick: () => void };
+    nextLabel?: string;
+    onNext?: () => void;
   };
+  // When set, Back is enabled and calls this instead of stepping to the
+  // previous step — the mirror of nextGate.onNext (Egress redirection's Back
+  // returns to Host proxy).
+  backOverride?: () => void;
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -144,7 +156,11 @@ export function SetupLayout({
                 Skip {skipPhase?.label.toLowerCase()}
               </Button>
             )}
-            <Button variant="outline" disabled={!prev} onClick={() => prev && onSelect(prev)}>
+            <Button
+              variant="outline"
+              disabled={!prev && !backOverride}
+              onClick={() => (backOverride ? backOverride() : prev && onSelect(prev))}
+            >
               <ArrowLeft className="size-4" aria-hidden />
               Back
             </Button>
@@ -179,11 +195,11 @@ export function SetupLayout({
                   <Button onClick={nextGate.action.onClick}>{nextGate.action.label}</Button>
                 ) : (
                   <Button
-                    onClick={() => onSelect(next)}
+                    onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}
                     disabled={!!nextGate?.blocked}
                     title={nextGate?.blocked ? nextGate.reason : undefined}
                   >
-                    Next: {STEP_LABEL[next]}
+                    {nextGate?.nextLabel ?? `Next: ${STEP_LABEL[next]}`}
                     <ArrowRight className="size-4" aria-hidden />
                   </Button>
                 )}

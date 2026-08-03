@@ -108,6 +108,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // the footer's gate action (rendered by SetupLayout, dispatched here) can
   // reach INTO the step. A ref, not state: nothing re-renders on registration.
   const corpActionsRef = React.useRef<CorpStepActions | null>(null);
+  // The step's sub-tab, held HERE so the footer can walk the tabs (Next on
+  // Host proxy forwards to Egress redirection, not the exit — the mock's
+  // gateFor) and so the tab survives leaving/re-entering the step, same as
+  // the gate proof itself.
+  const [corpTab, setCorpTab] = React.useState<"proxy" | "egress">("proxy");
   // Steps navigated AWAY from at least once (per browser) — feeds the rail's
   // "Skipped" badge override below. See selectStep for what counts as leaving.
   const [visitedSteps, setVisitedSteps] = React.useState<Set<SetupStepId>>(
@@ -327,6 +332,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     else if (kind === "open_egress") a.openEgress();
     else a.testRedirects();
   };
+  // The forward walk passes THROUGH Egress redirection rather than over it
+  // (navigation, not a gate — the visit rung stays deleted): from Host proxy
+  // a rendered Next reads "Next: Egress redirection" and switches the tab —
+  // including the disabled one while a probe is in flight, so the footer
+  // already names where a pass will go; from Egress redirection it hands off
+  // to Integrations as usual. Back mirrors it below.
+  const corpOnProxyTab = stepId === "corp_network" && corpTab === "proxy";
   const nextGate = corpGateResult
     ? {
         blocked: !corpGateResult.on,
@@ -336,6 +348,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         action: corpGateResult.action
           ? { label: corpGateResult.action.label, onClick: () => dispatchCorpAction(corpGateResult.action!.kind) }
           : undefined,
+        nextLabel: corpOnProxyTab ? "Next: Egress redirection" : undefined,
+        onNext: corpOnProxyTab ? () => setCorpTab("egress") : undefined,
       }
     : undefined;
 
@@ -354,6 +368,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // the operator drives it over an attached terminal).
         canLaunch={readiness.ready}
         nextGate={nextGate}
+        backOverride={stepId === "corp_network" && corpTab === "egress" ? () => setCorpTab("proxy") : undefined}
       >
         {stepId === "environment" && (
           <EnvironmentStep
@@ -376,6 +391,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             registerActions={(a) => {
               corpActionsRef.current = a;
             }}
+            tab={corpTab}
+            onTabChange={setCorpTab}
           />
         )}
         {stepId === "integrations" && (

@@ -61,6 +61,11 @@ async function passCorpNetworkGate(page: import("@playwright/test").Page) {
   const main = page.getByRole("main");
   await main.getByRole("button", { name: /^test connectivity$/i }).click();
   await expect(main.getByText(/can't test here/i)).toBeVisible();
+  // The forward walk passes THROUGH Egress redirection (navigation, not a
+  // gate) — step through it here so the walks' next "Next:" click advances
+  // to Integrations, same as before.
+  await page.getByRole("button", { name: /^next: egress redirection$/i }).click();
+  await expect(main.getByText(/nothing redirected on this host/i)).toBeVisible();
 }
 
 test.describe("Getting Started funnel", () => {

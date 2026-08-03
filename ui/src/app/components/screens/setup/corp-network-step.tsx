@@ -683,6 +683,8 @@ export function CorpNetworkStep({
   onGateChange,
   gateResult,
   registerActions,
+  tab: tabProp,
+  onTabChange,
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
@@ -702,9 +704,17 @@ export function CorpNetworkStep({
    *  where the panel keeps its button. */
   gateResult?: CorpNetworkGate;
   registerActions?: (a: CorpStepActions | null) => void;
+  /** Controlled sub-tab (the orchestrator owns it so the FOOTER can walk the
+   *  tabs — Next on Host proxy goes to Egress redirection, not the exit; see
+   *  setup-screen.tsx). Standalone renders (tests) omit both and the step
+   *  falls back to its own state. */
+  tab?: "proxy" | "egress";
+  onTabChange?: (t: "proxy" | "egress") => void;
 }) {
   const operator = useOperator();
-  const [tab, setTab] = React.useState<"proxy" | "egress">("proxy");
+  const [innerTab, setInnerTab] = React.useState<"proxy" | "egress">("proxy");
+  const tab = tabProp ?? innerTab;
+  const setTab = onTabChange ?? setInnerTab;
   const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
   // ---- The probe, owned HERE (not in HostProxyTab): the gate row can fire it
