@@ -37,12 +37,13 @@ import {
 } from "../ui/dialog";
 import { Field } from "./new-run/step-shell";
 import { Mono } from "../wardyn/code-block";
-import { Chip, SectionLabel } from "../wardyn/primitives";
+import { Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
 import { StatusChip } from "../wardyn/status-chip";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
-import { CAPABILITY } from "../wardyn/copy";
+import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { useOperator } from "../wardyn/operator-context";
 
 // Secret names are constrained server-side to a safe identifier set; mirror that
 // here so we reject obviously-bad names before the round-trip.
@@ -78,6 +79,7 @@ const STANDING_TOOLTIP =
   "Auto-used by every future clone to this host with no per-run prompt — delete to revoke.";
 
 export function SecretsScreen() {
+  const operator = useOperator();
   const [names, setNames] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -132,9 +134,12 @@ export function SecretsScreen() {
         title="Secrets"
         description={`Write-only: values go in and never come out. ${CAPABILITY.brokerLine} Exception: ${CAPABILITY.gitPatLine}`}
         actions={
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="size-4" /> Add secret
-          </Button>
+          <>
+            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+              <Plus className="size-4" /> Add secret
+            </Button>
+          </>
         }
       />
 
@@ -164,9 +169,13 @@ export function SecretsScreen() {
           <EmptyState
             icon={KeyRound}
             title="No secrets yet."
-            description="Add an API key or access token so runs can reference it by name — the value is stored write-only and is never returned, not even to you."
+            description={
+              operator
+                ? "Add an API key or access token so runs can reference it by name — the value is stored write-only and is never returned, not even to you."
+                : `Add an API key or access token so runs can reference it by name. ${OPERATOR_ONLY_REASON}`
+            }
             action={
-              <Button onClick={() => setAddOpen(true)}>
+              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
                 <Plus className="size-4" /> Add your first LLM key
               </Button>
             }
@@ -218,14 +227,17 @@ export function SecretsScreen() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setRotateName(name)}>
+                        <DropdownMenuItem onClick={() => setRotateName(name)} disabled={!operator}>
                           <RotateCw className="size-4" /> Rotate
+                          {!operator && <OperatorOnlyHint />}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => setToDelete(name)}
+                          disabled={!operator}
                           className="text-danger focus:text-danger"
                         >
                           <Trash2 className="size-4" /> Delete
+                          {!operator && <OperatorOnlyHint />}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -369,6 +381,11 @@ export function AddSecretDialog({
   // caller that already knows the locked name doesn't have to re-derive it.
   lane?: Lane;
 }) {
+  // This dialog is reused everywhere a secret gets written (this screen, the
+  // SCM Provider step, the New Run wizard, the setup funnel) — gating its own
+  // Save is the one chokepoint that covers all of them, so none of those
+  // callers need their own copy of this check.
+  const operator = useOperator();
   const [name, setName] = React.useState(initialName);
   const [value, setValue] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -515,6 +532,11 @@ export function AddSecretDialog({
               {error}
             </div>
           )}
+          {!operator && (
+            <p id="add-secret-operator-reason" className="text-xs font-medium text-warning">
+              {OPERATOR_ONLY_REASON}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
@@ -523,7 +545,8 @@ export function AddSecretDialog({
           </Button>
           <Button
             onClick={save}
-            disabled={saving || !name.trim() || !value}
+            disabled={!operator || saving || !name.trim() || !value}
+            aria-describedby={operator ? undefined : "add-secret-operator-reason"}
             variant={isOverwrite && confirmOverwrite ? "destructive" : "info"}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Lock className="size-4" />}

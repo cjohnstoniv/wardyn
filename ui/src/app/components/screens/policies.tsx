@@ -56,12 +56,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../ui/sheet";
-import { ConfinementChip, Chip, SectionLabel } from "../wardyn/primitives";
+import { ConfinementChip, Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
-import { RESIDUAL_PREFIX } from "../wardyn/copy";
+import { OPERATOR_ONLY_REASON, RESIDUAL_PREFIX } from "../wardyn/copy";
+import { useOperator } from "../wardyn/operator-context";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 // ComposeQuickReview is the composer wizard's CAN/CAN'T projection of a
 // RunPolicySpec — reused here instead of a second prose family, so a stored
@@ -106,6 +107,7 @@ function lifecycleSummary(spec: RunPolicySpec): string {
 }
 
 export function PoliciesScreen() {
+  const operator = useOperator();
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -137,9 +139,12 @@ export function PoliciesScreen() {
         title="Policies"
         description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle — referenced by ID (or supplied inline) when a run is created."
         actions={
-          <Button onClick={() => setEditor({ mode: "create" })}>
-            <Plus className="size-4" /> New policy
-          </Button>
+          <>
+            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            <Button onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
+              <Plus className="size-4" /> New policy
+            </Button>
+          </>
         }
       />
 
@@ -183,7 +188,9 @@ export function PoliciesScreen() {
             description={
               query
                 ? "Try a different search term."
-                : "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run."
+                : operator
+                  ? "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run."
+                  : `A policy overrides the default for specific runs — tighter or looser. ${OPERATOR_ONLY_REASON}`
             }
             action={
               query ? (
@@ -191,7 +198,7 @@ export function PoliciesScreen() {
                   Clear filters
                 </Button>
               ) : (
-                <Button onClick={() => setEditor({ mode: "create" })}>
+                <Button onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
                   <Plus className="size-4" /> Create your first policy
                 </Button>
               )
@@ -281,15 +288,21 @@ export function PoliciesScreen() {
                           <DropdownMenuItem onClick={() => setSelected(p.id)}>
                             <Eye className="size-4" /> View details
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setEditor({ mode: "edit", policy: p })}>
+                          <DropdownMenuItem
+                            onClick={() => setEditor({ mode: "edit", policy: p })}
+                            disabled={!operator}
+                          >
                             <Pencil className="size-4" /> Edit
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             onClick={() => setToDelete(p)}
+                            disabled={!operator}
                             className="text-danger focus:text-danger"
                           >
                             <Trash2 className="size-4" /> Delete
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -346,6 +359,7 @@ function PolicyDetail({
   onEdit: (p: RunPolicy) => void;
 }) {
   const meta = policy ? CC_META[policy.spec.min_confinement_class] : undefined;
+  const operator = useOperator();
 
   return (
     <Sheet open={!!policy} onOpenChange={(o) => !o && onClose()}>
@@ -397,8 +411,9 @@ function PolicyDetail({
               <YamlBlock value={policy.spec} className="m-2 mt-0 rounded-md border-0" />
             </details>
 
-            <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => onEdit(policy)}>
+            <div className="flex items-center justify-end gap-2">
+              {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+              <Button variant="outline" size="sm" onClick={() => onEdit(policy)} disabled={!operator}>
                 <Pencil className="size-4" /> Edit policy
               </Button>
             </div>
@@ -431,6 +446,10 @@ function PolicyEditor({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // Every entry point that opens this editor is already gated (New policy /
+  // row Edit / PolicyDetail's Edit policy), but Save is gated too — the same
+  // defense-in-depth as AddSecretDialog/AddWorkspaceDialog.
+  const operator = useOperator();
   const [name, setName] = React.useState("");
   const [specText, setSpecText] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -522,13 +541,22 @@ function PolicyEditor({
               {error}
             </div>
           )}
+          {!operator && (
+            <p id="policy-editor-operator-reason" className="text-xs font-medium text-warning">
+              {OPERATOR_ONLY_REASON}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={saving || !name.trim()}>
+          <Button
+            onClick={save}
+            disabled={!operator || saving || !name.trim()}
+            aria-describedby={operator ? undefined : "policy-editor-operator-reason"}
+          >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
             {isEdit ? "Save changes" : "Create policy"}
           </Button>

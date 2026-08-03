@@ -40,6 +40,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ErrorBoundary } from "../wardyn/error-boundary";
+import { OperatorProvider } from "../wardyn/operator-context";
 import { health as api } from "../../lib/api/health";
 import { setup as setupApi } from "../../lib/api/setup";
 import type { StatusKind } from "../wardyn/copy";
@@ -56,6 +57,10 @@ export interface ShellMeta {
   identityProvider: string;
   principal: string;
   method: string;
+  // Fail-open (see operator-context.tsx): starts true and stays true unless
+  // /me resolves and explicitly says otherwise — an unresolved or failed
+  // fetch must never read as "viewer".
+  operator: boolean;
 }
 
 function useMeta(): ShellMeta {
@@ -64,6 +69,7 @@ function useMeta(): ShellMeta {
     identityProvider: "…",
     principal: "…",
     method: "",
+    operator: true,
   });
   React.useEffect(() => {
     let alive = true;
@@ -74,6 +80,7 @@ function useMeta(): ShellMeta {
         identityProvider: h.identity_provider || "unknown",
         principal: me?.principal || "unknown",
         method: me?.method || "",
+        operator: me?.operator ?? true,
       });
     });
     return () => {
@@ -306,7 +313,13 @@ export function AppShell({
   React.useEffect(checkReadiness, [checkReadiness]);
   usePoll(checkReadiness, READINESS_POLL_MS, false);
 
+  // Wraps EVERYTHING the shell renders (nav, main/Outlet, and the New Run
+  // dialog mounted below) — not just the Outlet — so every screen AND every
+  // dialog reachable from here (including the wizard's inline Add secret /
+  // Add workspace) sees the real role instead of silently falling back to the
+  // context default.
   return (
+    <OperatorProvider operator={meta.operator}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
@@ -366,6 +379,7 @@ export function AppShell({
         </React.Suspense>
       )}
     </div>
+    </OperatorProvider>
   );
 }
 

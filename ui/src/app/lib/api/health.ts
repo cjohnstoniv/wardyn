@@ -79,12 +79,18 @@ export const health = {
     }
   },
 
-  // GET /api/v1/me — the authenticated principal + auth method.
-  async whoami(): Promise<{ principal: string; method: string } | null> {
+  // GET /api/v1/me — the authenticated principal + auth method + role.
+  // `operator` comes from the SAME predicate (isOperator) that gates the 25
+  // operator-only routes server-side (internal/api/http.go) — never a second,
+  // driftable copy of the rule. A viewer (operator:false) reads everything but
+  // is refused on writes; see wardyn/operator-context.tsx for how the console
+  // uses this to disable those controls instead of letting a viewer discover
+  // the tier as a raw 403.
+  async whoami(): Promise<{ principal: string; method: string; operator: boolean } | null> {
     try {
       const res = await wfetch("/me", { method: "GET" });
       if (!res.ok) return null;
-      return (await res.json()) as { principal: string; method: string };
+      return (await res.json()) as { principal: string; method: string; operator: boolean };
     } catch {
       return null;
     }

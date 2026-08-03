@@ -13,7 +13,8 @@ import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { JsonBlock, Mono } from "../wardyn/code-block";
 import { ConfirmEgressDialog } from "../wardyn/confirm-egress-dialog";
-import { Chip, SectionLabel } from "../wardyn/primitives";
+import { Chip, OperatorOnlyHint, SectionLabel } from "../wardyn/primitives";
+import { useOperator } from "../wardyn/operator-context";
 
 // A single host row in one of WorkspaceNeedsPanel's egress lists — identical
 // shape across "Approved by you" (remove), "Suggested" and "Observed but
@@ -30,15 +31,18 @@ function HostRow({
   onClick: () => void;
 }) {
   const isRemove = action === "remove";
+  // PUT /workspaces/{id}/approved-egress — operator-only (see http.go).
+  const operator = useOperator();
   return (
     <li className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5">
       <Mono className="flex-1 text-foreground">{host}</Mono>
+      {!operator && <OperatorOnlyHint />}
       <Button
         size="sm"
         variant={isRemove ? "ghost" : "outline"}
         className={cn("h-7", isRemove && "text-danger hover:text-danger")}
         onClick={onClick}
-        disabled={busy === host}
+        disabled={!operator || busy === host}
       >
         {busy === host ? (
           <Loader2 className="size-3.5 animate-spin" />

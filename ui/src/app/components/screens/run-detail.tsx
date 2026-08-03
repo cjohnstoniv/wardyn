@@ -71,6 +71,8 @@ import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { useOperator } from "../wardyn/operator-context";
+import { OPERATOR_ONLY_REASON, VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
 import { cn } from "../ui/utils";
 
 // Live refresh cadence for a non-terminal run's detail.
@@ -438,6 +440,7 @@ function OverviewTab({
 }) {
   const pending = approvals.filter((a) => a.state === "PENDING");
   const attachable = !!run.interactive && run.state === "RUNNING";
+  const operator = useOperator();
 
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
@@ -449,11 +452,19 @@ function OverviewTab({
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning" />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-foreground">
-                  Waiting for your confirmation
+                  {operator ? "Waiting for your confirmation" : "Waiting on an operator"}
                 </div>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  This run has {pending.length} pending approval{pending.length === 1 ? "" : "s"}. Review the
-                  exact requested scope before you decide — nothing is minted until you approve.
+                  {operator ? (
+                    <>
+                      This run has {pending.length} pending approval{pending.length === 1 ? "" : "s"}. Review
+                      the exact requested scope before you decide — nothing is minted until you approve.
+                    </>
+                  ) : (
+                    // Said once, here — the one place a viewer feels the consequence of
+                    // their own run tripping an approval (see copy.ts).
+                    VIEWER_APPROVAL_BLOCKS_NOTE
+                  )}
                 </p>
                 <Button size="sm" className="mt-3" onClick={onGoApprovals}>
                   Review approvals <ArrowRight className="size-3.5" />
@@ -715,6 +726,7 @@ function ApprovalsTab({
   approvals: ApprovalRequest[];
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
 }) {
+  const operator = useOperator();
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -753,10 +765,21 @@ function ApprovalsTab({
             )}
             {pending && (
               <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                <Button variant="outline" size="sm" onClick={() => onDecide(a.id, "deny", a.kind)}>
+                {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onDecide(a.id, "deny", a.kind)}
+                  disabled={!operator}
+                >
                   Deny
                 </Button>
-                <Button size="sm" variant="info" onClick={() => onDecide(a.id, "approve", a.kind)}>
+                <Button
+                  size="sm"
+                  variant="info"
+                  onClick={() => onDecide(a.id, "approve", a.kind)}
+                  disabled={!operator}
+                >
                   <Check className="size-4" /> Approve
                 </Button>
               </div>

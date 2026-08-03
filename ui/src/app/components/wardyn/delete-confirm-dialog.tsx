@@ -17,6 +17,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
+import { useOperator } from "./operator-context";
+import { OPERATOR_ONLY_REASON } from "./copy";
 
 // Shared destructive delete-confirm dialog for the list screens (workspaces,
 // policies, secrets): owns the busy spinner and the toast.success /
@@ -42,6 +44,10 @@ export function DeleteConfirmDialog({
   onDeleted: () => void;
 }) {
   const [deleting, setDeleting] = React.useState(false);
+  // Every delete in the console (secret/policy/workspace/SCM host/credential)
+  // routes through this one dialog, so gating it here is the single chokepoint
+  // for all of them — no need to also gate each screen's "Delete" trigger.
+  const operator = useOperator();
 
   const confirmDelete = async () => {
     setDeleting(true);
@@ -64,6 +70,13 @@ export function DeleteConfirmDialog({
             Delete {entity} “{name}”?
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
+          {/* Visible, not hover-only — a viewer sees why before they even reach
+              the (disabled) confirm button, not after a failed click. */}
+          {!operator && (
+            <p id="delete-confirm-operator-reason" className="text-xs font-medium text-warning">
+              {OPERATOR_ONLY_REASON}
+            </p>
+          )}
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -72,6 +85,8 @@ export function DeleteConfirmDialog({
               e.preventDefault();
               confirmDelete();
             }}
+            disabled={!operator}
+            aria-describedby={operator ? undefined : "delete-confirm-operator-reason"}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
             {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}

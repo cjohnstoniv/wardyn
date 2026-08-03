@@ -30,10 +30,12 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { useOperator } from "../wardyn/operator-context";
 import {
   APPROVAL_BANNER_LABEL,
   APPROVAL_KIND_LABEL,
   CAPABILITY,
+  OPERATOR_ONLY_REASON,
   type ApprovalKind as CopyKind,
 } from "../wardyn/copy";
 
@@ -425,6 +427,9 @@ function PendingCard({
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
   const cap = capabilityLabel(item.kind, scope);
   const banner = deriveBanner(item.kind, scope);
+  // Deciding is operator-only; the queue itself stays visible to a viewer (see
+  // http.go's requireOperator comment — reading is a viewer act, deciding isn't).
+  const operator = useOperator();
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
@@ -464,12 +469,13 @@ function PendingCard({
       </details>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
-        <Button size="sm" variant="info" onClick={() => onAct("approve")}>
+        <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!operator}>
           <Check className="size-4" /> Approve
         </Button>
-        <Button variant="outline" size="sm" onClick={() => onAct("deny")}>
+        <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!operator}>
           <X className="size-4" /> Deny
         </Button>
+        {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
         <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
           requested {relativeTime(item.requested_at)}
         </span>

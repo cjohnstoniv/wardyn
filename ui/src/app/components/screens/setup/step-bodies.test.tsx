@@ -74,6 +74,7 @@ import { ModelStep } from "./llm-access";
 import { deriveReadiness } from "../onboarding/intro";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 import { LANE_META } from "../../../lib/scm-provider";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 // This suite's own pin is its `checks` array (gvisor/loopback/kvm/platform_wsl).
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
@@ -193,6 +194,60 @@ describe("step-bodies.tsx — smoke", () => {
       expect(screen.getByRole("button", { name: /add provider/i })).toBeInTheDocument();
       // Honesty canon: nothing server-side exists to verify a provider against.
       expect(screen.queryByRole("button", { name: /verify|test connection/i })).not.toBeInTheDocument();
+    });
+
+    // Role-aware console: every write this step reaches (scm_hosts, secrets,
+    // the GitHub App id/key) is operator-only — "Add provider" is the one
+    // entry point into the whole Panel1/Panel2 flow, so gating it here is
+    // enough to keep a viewer out of the rest.
+    it("viewer: Add provider is disabled and names the reason; operator (default) is unaffected", async () => {
+      const { rerender } = render(
+        <OperatorProvider operator={false}>
+          <ScmProviderStep
+            status={baseStatus()}
+            {...siteConfigProps({ scm_hosts: [] })}
+            onRecheck={vi.fn()}
+            rechecking={false}
+          />
+        </OperatorProvider>,
+      );
+      expect(await screen.findByRole("button", { name: /add provider/i })).toBeDisabled();
+      expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+
+      // Same render, no provider (today's default) — unaffected.
+      rerender(
+        <ScmProviderStep
+          status={baseStatus()}
+          {...siteConfigProps({ scm_hosts: [] })}
+          onRecheck={vi.fn()}
+          rechecking={false}
+        />,
+      );
+      expect(screen.getByRole("button", { name: /add provider/i })).not.toBeDisabled();
+      expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+    });
+
+    it("viewer: a populated row's kebab actions (rotate/delete credential, remove host) are disabled", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      render(
+        <OperatorProvider operator={false}>
+          <ScmProviderStep
+            status={baseStatus({ secrets: { present: ["git-pat-dev-azure-com"], github_app: false } })}
+            {...siteConfigProps({ scm_hosts: ["dev.azure.com"] })}
+            onRecheck={vi.fn()}
+            rechecking={false}
+          />
+        </OperatorProvider>,
+      );
+      const menuBtn = await screen.findByRole("button", { name: /dev.azure.com actions/i });
+      await user.click(menuBtn);
+      const rotate = await screen.findByRole("menuitem", { name: /rotate credential/i });
+      const del = screen.getByRole("menuitem", { name: /delete credential/i });
+      const removeHost = screen.getByRole("menuitem", { name: /remove host/i });
+      for (const item of [rotate, del, removeHost]) {
+        expect(item).toHaveAttribute("data-disabled");
+        expect(within(item).getByText(/requires the operator role/i)).toBeInTheDocument();
+      }
     });
 
     it("derives a populated list from secret names, scm_hosts, and github_app", async () => {

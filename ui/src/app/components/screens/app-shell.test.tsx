@@ -21,7 +21,13 @@ function renderMobileNav() {
         pendingApprovals={2}
         attentionCount={0}
         readiness="ready"
-        meta={{ trustDomain: "example.test", identityProvider: "spiffe", principal: "u@example.test", method: "sso" }}
+        meta={{
+          trustDomain: "example.test",
+          identityProvider: "spiffe",
+          principal: "u@example.test",
+          method: "sso",
+          operator: true,
+        }}
       />
     </MemoryRouter>,
   );

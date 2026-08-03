@@ -54,7 +54,7 @@ import {
 } from "../ui/dialog";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
-import { Chip } from "../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ImportWorkspaceDialog } from "./import-workspace/import-panel";
@@ -65,6 +65,8 @@ import {
   llmCredLabel,
   llmCredTone,
 } from "./workspace-llm-cred";
+import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { useOperator } from "../wardyn/operator-context";
 
 // Exported so the setup wizard's Workspaces step renders the same status
 // vocabulary — the two surfaces can't drift.
@@ -101,6 +103,7 @@ export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: 
 };
 
 export function WorkspacesScreen() {
+  const operator = useOperator();
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -188,9 +191,12 @@ export function WorkspacesScreen() {
         title="Workspaces"
         description="Onboard the local directories and repos your runs may attach. Run-creation only ever offers sources onboarded here — a free-text host path is never accepted."
         actions={
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="size-4" /> Add workspace
-          </Button>
+          <>
+            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+              <Plus className="size-4" /> Add workspace
+            </Button>
+          </>
         }
       />
 
@@ -224,9 +230,13 @@ export function WorkspacesScreen() {
           <EmptyState
             icon={FolderOpen}
             title="No workspaces onboarded yet."
-            description="Add a local directory or repo so runs can attach it. Wardyn scans it once (languages, package managers, egress) and reuses that profile for every run."
+            description={
+              operator
+                ? "Add a local directory or repo so runs can attach it. Wardyn scans it once (languages, package managers, egress) and reuses that profile for every run."
+                : `Add a local directory or repo so runs can attach it. ${OPERATOR_ONLY_REASON}`
+            }
             action={
-              <Button onClick={() => setAddOpen(true)}>
+              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
                 <Plus className="size-4" /> Onboard your first workspace
               </Button>
             }
@@ -295,15 +305,21 @@ export function WorkspacesScreen() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => triggerScan(w)} disabled={scanning.has(w.id)}>
+                          <DropdownMenuItem onClick={() => triggerScan(w)} disabled={!operator || scanning.has(w.id)}>
                             <ScanSearch className="size-4" /> Scan now
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setImportWsId(w.id)}>
+                          <DropdownMenuItem onClick={() => setImportWsId(w.id)} disabled={!operator}>
                             Set up / Resume import
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setEditTarget(w)}>Edit</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setCredTarget(w)}>
+                          <DropdownMenuItem onClick={() => setEditTarget(w)} disabled={!operator}>
+                            Edit
+                            {!operator && <OperatorOnlyHint />}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setCredTarget(w)} disabled={!operator}>
                             <KeyRound className="size-4" /> Model access
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setProfileTarget(w)} disabled={!w.profile}>
                             View profile
@@ -313,9 +329,11 @@ export function WorkspacesScreen() {
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => setToDelete(w)}
+                            disabled={!operator}
                             className="text-danger focus:text-danger"
                           >
                             <Trash2 className="size-4" /> Delete
+                            {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -441,6 +459,9 @@ export function AddWorkspaceDialog({
   initial?: Workspace;
 }) {
   const isEdit = !!initial;
+  // Reused by the New Run wizard's inline "Add workspace" too — gating Save
+  // here is the one chokepoint for every embedding, mirroring AddSecretDialog.
+  const operator = useOperator();
   const [name, setName] = React.useState("");
   const [kind, setKind] = React.useState<WorkspaceKind>("local_dir");
   const [source, setSource] = React.useState("");
@@ -667,13 +688,22 @@ export function AddWorkspaceDialog({
               {error}
             </div>
           )}
+          {!operator && (
+            <p id="add-workspace-operator-reason" className="text-xs font-medium text-warning">
+              {OPERATOR_ONLY_REASON}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={saving || !name.trim() || !source.trim()}>
+          <Button
+            onClick={save}
+            disabled={!operator || saving || !name.trim() || !source.trim()}
+            aria-describedby={operator ? undefined : "add-workspace-operator-reason"}
+          >
             {saving && <Loader2 className="size-4 animate-spin" />}
             {isEdit ? "Save changes" : "Add workspace"}
           </Button>

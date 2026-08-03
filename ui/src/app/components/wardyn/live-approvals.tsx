@@ -22,7 +22,8 @@ import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Button } from "../ui/button";
 import { Mono } from "./code-block";
-import { SectionLabel } from "./primitives";
+import { OperatorOnlyHint, SectionLabel } from "./primitives";
+import { useOperator } from "./operator-context";
 
 const POLL_MS = 2000;
 
@@ -45,6 +46,11 @@ export function LiveApprovals({
   reasonDeny?: string;
   idleHint?: string;
 }) {
+  // Decides here go straight to the API with no ReasonDialog stop, so this is
+  // the one gate for all three mount sites (run detail, demo screen, the
+  // record-mode verify panel) — see approvals.tsx's PendingCard for the
+  // queue-screen equivalent.
+  const operator = useOperator();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
 
@@ -98,9 +104,13 @@ export function LiveApprovals({
       className="space-y-1.5 rounded-lg border border-warning/40 bg-warning-subtle p-2.5"
       data-testid="live-approvals"
     >
-      <SectionLabel>
-        {anyHeld ? "Sandbox is waiting — approve to let it through" : "Approval needed — off-policy egress"}
-      </SectionLabel>
+      <div className="flex items-center gap-2">
+        <SectionLabel>
+          {anyHeld ? "Sandbox is waiting — approve to let it through" : "Approval needed — off-policy egress"}
+        </SectionLabel>
+        {/* Named once for the whole panel, not per row. */}
+        {!operator && <OperatorOnlyHint />}
+      </div>
       {pending.map((a) => {
         const host = String((a.requested_scope?.host as string) ?? "unknown host");
         const held = isHeld(a);
@@ -113,10 +123,22 @@ export function LiveApprovals({
             )}
             <Mono className="flex-1 text-foreground">{host}</Mono>
             {held && <span className="text-[0.625rem] uppercase tracking-wide text-warning">waiting</span>}
-            <Button size="sm" variant="outline" className="h-7" disabled={busy === a.id} onClick={() => decide(a, true)}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7"
+              disabled={!operator || busy === a.id}
+              onClick={() => decide(a, true)}
+            >
               <Check className="size-3.5" /> Approve
             </Button>
-            <Button size="sm" variant="outline" className="h-7" disabled={busy === a.id} onClick={() => decide(a, false)}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7"
+              disabled={!operator || busy === a.id}
+              onClick={() => decide(a, false)}
+            >
               <X className="size-3.5" /> Deny
             </Button>
           </div>

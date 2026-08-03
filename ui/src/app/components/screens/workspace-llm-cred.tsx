@@ -22,6 +22,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
+import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { useOperator } from "../wardyn/operator-context";
 
 // Human label for the current model/harness binding (list/detail display).
 // "" (or absent) => no binding; the run falls back to the global provider
@@ -167,6 +169,8 @@ export function WorkspaceLLMCredDialog({
   onOpenChange: (o: boolean) => void;
   onSaved: (w: Workspace) => void;
 }) {
+  // PUT /workspaces/{id}/llm-cred — operator-only (see http.go).
+  const operator = useOperator();
   const [cred, setCred] = React.useState<WorkspaceLLMCred>({ mode: "" });
   const [saving, setSaving] = React.useState(false);
 
@@ -199,11 +203,20 @@ export function WorkspaceLLMCredDialog({
           </DialogDescription>
         </DialogHeader>
         <LLMCredFields value={cred} onChange={setCred} />
+        {!operator && (
+          <p id="llm-cred-operator-reason" className="text-xs font-medium text-warning">
+            {OPERATOR_ONLY_REASON}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={saving}>
+          <Button
+            onClick={save}
+            disabled={!operator || saving}
+            aria-describedby={operator ? undefined : "llm-cred-operator-reason"}
+          >
             {saving && <Loader2 className="size-4 animate-spin" />}
             Save
           </Button>

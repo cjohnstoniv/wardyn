@@ -6,6 +6,7 @@
 import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
+import { OPERATOR_ONLY_REASON } from "./copy";
 import {
   Archive,
   Bot,
@@ -90,6 +91,19 @@ export function Chip({
           <span className="size-1.5 rounded-full bg-current opacity-80" />
         ))}
       {children}
+    </span>
+  );
+}
+
+/* ---------- operator-only disabled reason ---------- */
+// Trailing note for a disabled operator-only control (a DropdownMenuItem, most
+// often) — VISIBLE text baked into the control's own content, not a
+// hover-only title, so the reason is there whether or not the control can
+// take focus. See wardyn/operator-context.tsx for the role this reads.
+export function OperatorOnlyHint() {
+  return (
+    <span className="ml-auto text-[0.6875rem] font-normal normal-case text-muted-foreground">
+      {OPERATOR_ONLY_REASON}
     </span>
   );
 }

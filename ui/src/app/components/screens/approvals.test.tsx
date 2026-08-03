@@ -58,6 +58,7 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 
 import { ApprovalsScreen } from "./approvals";
+import { OperatorProvider } from "../wardyn/operator-context";
 
 describe("ApprovalsScreen — deny error handling", () => {
   beforeEach(() => {
@@ -92,5 +93,45 @@ describe("ApprovalsScreen — deny error handling", () => {
     const confirmAfter = await screen.findByRole("button", { name: /confirm deny/i });
     await waitFor(() => expect(confirmAfter).not.toBeDisabled());
     expect(denyMock).toHaveBeenCalledWith("apr_1", "bad scope");
+  });
+});
+
+// Role-aware console: the queue itself stays visible to a viewer — only
+// deciding is out of reach (see http.go's requireOperator comment).
+describe("ApprovalsScreen — role-aware decide buttons", () => {
+  beforeEach(() => {
+    denyMock.mockReset();
+    approveMock.mockReset();
+  });
+
+  it("operator (today's default): Approve and Deny are enabled, no reason shown", async () => {
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+  });
+
+  it("viewer: Approve and Deny are disabled and the reason is visible — the queue itself still renders", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    // The request is still readable — a viewer isn't blinded. (scope has no
+    // host/repos/key discriminator, so deriveTitle's generic-credential title
+    // is the deterministic, exact text to assert on.)
+    expect(await screen.findByText("Mint a scoped credential")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    // Clicking a disabled button must never reach the API.
+    expect(approveMock).not.toHaveBeenCalled();
+    expect(denyMock).not.toHaveBeenCalled();
   });
 });

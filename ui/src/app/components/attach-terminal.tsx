@@ -39,6 +39,7 @@ import { getToken } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import { Loader2, TriangleAlert, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "./ui/utils";
+import { useOperator } from "./wardyn/operator-context";
 
 // ---------------------------------------------------------------------------
 // Auth-mode detection
@@ -117,6 +118,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   { runId, onClose, autoRun, onOutput, ptyCols },
   ref,
 ) {
+  // Attach is operator-only on BOTH lanes it can take — the ticket mint
+  // (token-only mode, below) and the WS upgrade itself (cookie mode) — see
+  // http.go. Gating it here, before either is ever attempted, is the one
+  // chokepoint for every mount site (run detail, the demo screen, …): no
+  // failed ticket POST, no WS handshake that the server would refuse anyway.
+  const operator = useOperator();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const termRef = React.useRef<Terminal | null>(null);
   const fitAddonRef = React.useRef<FitAddon | null>(null);
@@ -189,6 +196,16 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   }, []);
 
   React.useEffect(() => {
+    // Fail-open default (operator-context.tsx) means this stays exactly
+    // today's behavior — connects immediately — for every deployment that
+    // never sets WARDYN_OIDC_OPERATOR_EMAILS. Only a confirmed viewer skips
+    // straight to the reason below, before creating a terminal or a socket.
+    if (!operator) {
+      setConnState("error");
+      setErrorMsg("Attaching to a live sandbox requires the operator role.");
+      return;
+    }
+
     const mount = containerRef.current;
     if (!mount) return;
 
@@ -450,7 +467,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-  }, [runId, tokenOnlyMode, refit]);
+    // operator is added deliberately: in the single-operator/default case it
+    // never changes value, so this never causes an extra run there — today's
+    // behavior is untouched. It only matters for the (rare) case where /me
+    // resolves to viewer shortly after an optimistic-operator mount; the
+    // early return above then tears the effect back down via its own cleanup
+    // before running again.
+  }, [runId, tokenOnlyMode, refit, operator]);
 
   // Refit shortly after entering/leaving fullscreen (the box just changed).
   React.useEffect(() => {

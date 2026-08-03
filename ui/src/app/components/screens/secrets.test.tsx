@@ -34,6 +34,7 @@ vi.mock("../../lib/api/compose", () => ({
 
 import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";
+import { OperatorProvider } from "../wardyn/operator-context";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -320,5 +321,76 @@ describe("AddSecretDialog — locked, host-aware mode (L2)", () => {
     );
     expect(screen.getByText(/write-only.*never read back/i)).toBeInTheDocument();
     expect(screen.queryByText(/cleared on save/i)).toBeNull();
+  });
+});
+
+// Role-aware console: a viewer reads Secrets but can't write. Every entry
+// point (screen + the shared AddSecretDialog) must disable, name the reason,
+// and never let a viewer actually reach setSecret/deleteSecret — the server
+// would 403 it anyway, but the point is the console never lets it get there.
+describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", () => {
+  beforeEach(() => {
+    listSecretsMock.mockReset().mockResolvedValue(["anthropic-api-key"]);
+    setSecretMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("operator (today's default, no provider needed): Add secret is enabled with no reason shown", async () => {
+    render(<SecretsScreen />);
+    await screen.findByText("anthropic-api-key");
+    const addBtn = screen.getByRole("button", { name: /add secret/i });
+    expect(addBtn).not.toBeDisabled();
+    expect(screen.queryByText(/requires the operator role/i)).not.toBeInTheDocument();
+  });
+
+  it("viewer: Add secret is disabled and names the reason", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("anthropic-api-key");
+    expect(screen.getByRole("button", { name: /add secret/i })).toBeDisabled();
+    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+  });
+
+  it("viewer: the row's Rotate and Delete actions are disabled, each naming the reason", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    const menuBtn = await screen.findByRole("button", { name: /secret actions/i });
+    await user.click(menuBtn);
+
+    const rotate = await screen.findByRole("menuitem", { name: /rotate/i });
+    const del = screen.getByRole("menuitem", { name: /delete/i });
+    expect(rotate).toHaveAttribute("data-disabled");
+    expect(del).toHaveAttribute("data-disabled");
+    // Radix marks disabled items aria-disabled but keeps them in the a11y tree
+    // (unlike a bare `disabled` attribute) — the reason is real content, not a
+    // hover-only title, so it's there either way.
+    expect(within(rotate).getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(within(del).getByText(/requires the operator role/i)).toBeInTheDocument();
+  });
+
+  it("viewer: AddSecretDialog's own Save stays disabled even with a valid name+value (defense in depth for every other embedding)", () => {
+    render(
+      <OperatorProvider operator={false}>
+        <AddSecretDialog open onOpenChange={() => {}} />
+      </OperatorProvider>,
+    );
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
+    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+    expect(screen.getByText(/requires the operator role/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save secret/i })).toBeDisabled();
+  });
+
+  it("operator: AddSecretDialog saves normally (unchanged from today)", async () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "openai-api-key" } });
+    fireEvent.change(screen.getByLabelText(/value/i), { target: { value: "sk-new" } });
+    fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-new"));
   });
 });

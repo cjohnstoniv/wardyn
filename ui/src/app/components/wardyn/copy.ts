@@ -101,6 +101,20 @@ export const CAPABILITY = {
 // Only High gates an acknowledgment.
 export const RISK_ATTRIBUTION = "Graded by Wardyn's rules, not the model.";
 
+// Viewer/operator role gate (console-side UX only — internal/api/http.go's
+// requireOperator/isOperator is the real enforcement and stays the backstop;
+// this just stops a viewer from discovering the tier as a raw 403 toast).
+// ONE reason string, reused at every disabled operator-only control so it
+// never drifts between screens.
+export const OPERATOR_ONLY_REASON = "Requires the operator role.";
+
+// Said once, where a viewer would actually feel the consequence (the run's
+// own pending-approval banner) — the read/launch/kill viewer tier still means
+// their run blocks on an approval exactly like an operator's does; only the
+// deciding is out of reach.
+export const VIEWER_APPROVAL_BLOCKS_NOTE =
+  "This run is blocked until an operator decides it — you can see the requested scope below, but deciding needs the operator role.";
+
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.

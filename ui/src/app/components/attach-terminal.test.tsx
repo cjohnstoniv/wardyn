@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, act, screen } from "@testing-library/react";
 
 // HIGH fix (terminal reconnect): on an UNEXPECTED WebSocket drop the component
 // must re-attach to the persistent tmux session with a bounded number of
@@ -89,6 +89,7 @@ class FakeWebSocket {
 }
 
 import { AttachTerminal } from "./attach-terminal";
+import { OperatorProvider } from "./wardyn/operator-context";
 
 describe("AttachTerminal reconnect", () => {
   beforeEach(() => {
@@ -192,5 +193,44 @@ describe("AttachTerminal reconnect", () => {
       .filter((m: { type?: string } | null) => m?.type === "resize");
     expect(resizeFrames.length).toBeGreaterThan(0);
     expect(resizeFrames[resizeFrames.length - 1]).toMatchObject({ cols: 512, rows: 30 });
+  });
+});
+
+// Role-aware console: attach is operator-only on BOTH lanes (ticket mint and
+// the WS itself — see http.go). A viewer must never even open the socket.
+describe("AttachTerminal — role-aware attach", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+    if (!("fonts" in document)) {
+      Object.defineProperty(document, "fonts", {
+        configurable: true,
+        value: { ready: Promise.resolve() },
+      });
+    }
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("viewer: never opens a socket, and shows the reason instead of a raw error", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <AttachTerminal runId="run_1" />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(/attaching to a live sandbox requires the operator role/i)).toBeInTheDocument();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("operator (today's default, no provider needed): connects normally", () => {
+    render(<AttachTerminal runId="run_1" />);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

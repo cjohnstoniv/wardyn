@@ -35,7 +35,8 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { getErrorMessage } from "../../../lib/format";
 import { Chip, ConfinementChip, SectionLabel } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
-import { BTN, RUN_MODE } from "../../wardyn/copy";
+import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
+import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
@@ -354,6 +355,8 @@ export function HostProxyStep({
   rechecking: boolean;
 }) {
   const check = status.checks.find((c) => c.id === "host_proxy");
+  // PUT /site-config — operator-only (see http.go).
+  const operator = useOperator();
   const [secretName, setSecretName] = React.useState("");
   const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
@@ -398,7 +401,11 @@ export function HostProxyStep({
       <Field
         label="Upstream proxy secret name"
         htmlFor="host-proxy-secret"
-        hint="Store the proxy URL as a secret (Add secret), then reference its name here."
+        hint={
+          operator
+            ? "Store the proxy URL as a secret (Add secret), then reference its name here."
+            : `Store the proxy URL as a secret (Add secret), then reference its name here. ${OPERATOR_ONLY_REASON}`
+        }
       >
         <div className="flex gap-2">
           <Input
@@ -414,7 +421,7 @@ export function HostProxyStep({
           >
             Add secret
           </Button>
-          <Button variant="outline" onClick={save} disabled={saving || siteConfig === null}>
+          <Button variant="outline" onClick={save} disabled={!operator || saving || siteConfig === null}>
             {saving ? <Loader2 className="size-4 animate-spin" /> : "Save"}
           </Button>
         </div>
@@ -441,6 +448,8 @@ export function ArtifactRepoStep({
   rechecking: boolean;
 }) {
   const check = status.checks.find((c) => c.id === "artifact_repo");
+  // PUT /site-config — operator-only (see http.go).
+  const operator = useOperator();
   const [eco, setEco] = React.useState<string>(ARTIFACT_ECOSYSTEMS[0]);
   const [baseUrl, setBaseUrl] = React.useState("");
   const [tokenRef, setTokenRef] = React.useState("");
@@ -471,6 +480,7 @@ export function ArtifactRepoStep({
       <p className="text-sm leading-relaxed text-muted-foreground">
         Redirect npm/pip/cargo/maven/go/nuget to a corporate Artifactory/Nexus mirror so runs never
         reach the public registries.
+        {!operator && ` ${OPERATOR_ONLY_REASON}`}
       </p>
 
       {check && (
@@ -495,8 +505,9 @@ export function ArtifactRepoStep({
               <button
                 type="button"
                 onClick={() => remove(name)}
+                disabled={!operator}
                 aria-label={`Remove ${name} override`}
-                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
               >
                 <X className="size-3.5" />
               </button>
@@ -544,7 +555,12 @@ export function ArtifactRepoStep({
             className="font-mono"
           />
         </Field>
-        <Button variant="outline" size="sm" onClick={save} disabled={saving || siteConfig === null || !baseUrl.trim()}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={save}
+          disabled={!operator || saving || siteConfig === null || !baseUrl.trim()}
+        >
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Add/Update
         </Button>
       </div>
@@ -598,6 +614,8 @@ export function WorkspacesStep({
   loading: boolean;
   onReload: () => void;
 }) {
+  // Onboard/scan/import are all workspace writes — operator-only (see http.go).
+  const operator = useOperator();
   // "Add workspace" now routes new imports through the guided Import panel (Source
   // → Scan → Configure → Verify → Finalize). importWsId set => resume that
   // workspace's import; undefined => start fresh on the Source step.
@@ -641,6 +659,7 @@ export function WorkspacesStep({
         first run has somewhere to work. A task that needs no repo can still run in an ephemeral scratch
         directory. Importing walks you through scan → configure → an optional Record step that learns
         what each task really uses → verify.
+        {!operator && ` ${OPERATOR_ONLY_REASON}`}
       </p>
 
       {loading ? (
@@ -648,7 +667,7 @@ export function WorkspacesStep({
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6 text-center">
           <p className="text-sm text-muted-foreground">No workspaces onboarded yet.</p>
-          <Button className="mt-3" onClick={() => openImport()}>
+          <Button className="mt-3" onClick={() => openImport()} disabled={!operator}>
             <Plus className="size-4" /> Onboard your first workspace
           </Button>
         </div>
@@ -686,11 +705,16 @@ export function WorkspacesStep({
                   </Chip>
                 )}
                 {w.status === "ready" ? (
-                  <Button variant="ghost" size="sm" onClick={() => scan(w)} disabled={scanning.has(w.id)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => scan(w)}
+                    disabled={!operator || scanning.has(w.id)}
+                  >
                     <ScanSearch className="size-3.5" /> Scan
                   </Button>
                 ) : (
-                  <Button variant="ghost" size="sm" onClick={() => openImport(w.id)}>
+                  <Button variant="ghost" size="sm" onClick={() => openImport(w.id)} disabled={!operator}>
                     <ScanSearch className="size-3.5" /> Resume import
                   </Button>
                 )}
@@ -698,7 +722,7 @@ export function WorkspacesStep({
               );
             })}
           </ul>
-          <Button variant="outline" size="sm" onClick={() => openImport()}>
+          <Button variant="outline" size="sm" onClick={() => openImport()} disabled={!operator}>
             <Plus className="size-4" /> Add workspace
           </Button>
         </>

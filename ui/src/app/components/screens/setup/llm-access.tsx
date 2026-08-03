@@ -19,10 +19,11 @@ import { KeyRound, Loader2, Lock, Plus } from "lucide-react";
 import type { SetupStatus } from "../../../lib/types";
 import { harnessAuth as api } from "../../../lib/api/harness-auth";
 import { Button } from "../../ui/button";
-import { Chip } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { StatusChip } from "../../wardyn/status-chip";
 import type { StatusKind } from "../../wardyn/copy";
-import { BTN } from "../../wardyn/copy";
+import { BTN, OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { useOperator } from "../../wardyn/operator-context";
 import { PROVIDER_GUIDES, type SetupGuide } from "./setup-guide";
 import { HarnessLoginPane } from "./harness-login-pane";
 import { OptionCard } from "../new-run/step-shell";
@@ -117,7 +118,16 @@ const BEDROCK_BEARER_CHIP = (
 
 // SetupOption is one not-yet-configured way to connect the chosen harness — a
 // compact "Set up:" button under the method list (container login, add key, …).
-type SetupOption = { key: string; label: string; onClick: () => void; icon?: React.ReactNode };
+type SetupOption = {
+  key: string;
+  label: string;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  // Only the managed-subscription option sets this (operator-only, see http.go
+  // — POST /setup/harness-login); the API-key/CLI options aren't gated here,
+  // they're gated where they land (AddSecretDialog).
+  disabled?: boolean;
+};
 
 // The "Set up:" button row, identical for every harness.
 function SetupOptionRow({ options }: { options: SetupOption[] }) {
@@ -125,8 +135,9 @@ function SetupOptionRow({ options }: { options: SetupOption[] }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {options.map((o) => (
-        <Button key={o.key} size="sm" variant="outline" onClick={o.onClick}>
+        <Button key={o.key} size="sm" variant="outline" onClick={o.onClick} disabled={o.disabled}>
           {o.icon ?? <Plus className="size-3.5" />} {o.label}
+          {o.disabled && <OperatorOnlyHint />}
         </Button>
       ))}
     </div>
@@ -160,6 +171,11 @@ export function ModelStep({
   // this step (claudeSubDetected reads wardynd's own view, blind to the host by
   // construction). Container login is offered instead under the Claude harness.
   const sealedControlPlane = status.deployment?.host_like === false;
+  // The managed-subscription connect/reconnect/disconnect actions below are the
+  // one operator-only surface on this step (POST harness-login, PUT/DELETE
+  // harness-credential/anthropic — see http.go); everything else here is either
+  // a read or lands on AddSecretDialog, which gates itself.
+  const operator = useOperator();
 
   const present = status.secrets.present;
   const anthropic = hasSecret(present, /anthropic/i);
@@ -467,11 +483,17 @@ export function ModelStep({
         }
         residency={PROXY_INJECTED_CHIP}
         action={
-          <div className="flex flex-wrap gap-1.5">
-            <Button size="sm" variant="outline" onClick={() => setLoginOpen(true)}>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            <Button size="sm" variant="outline" onClick={() => setLoginOpen(true)} disabled={!operator}>
               Reconnect
             </Button>
-            <Button size="sm" variant="ghost" onClick={disconnectManaged} disabled={disconnecting}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={disconnectManaged}
+              disabled={!operator || disconnecting}
+            >
               {disconnecting ? <Loader2 className="size-3.5 animate-spin" /> : null} Disconnect
             </Button>
           </div>
@@ -525,6 +547,7 @@ export function ModelStep({
         label: "Set up Claude subscription",
         icon: <KeyRound className="size-3.5" />,
         onClick: () => setLoginOpen(true),
+        disabled: !operator,
       },
     !anthropic && {
       key: "akey",

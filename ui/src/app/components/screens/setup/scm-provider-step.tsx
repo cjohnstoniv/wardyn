@@ -67,10 +67,12 @@ import {
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Field } from "../new-run/step-shell";
 import { Mono } from "../../wardyn/code-block";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint, SectionLabel } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { AddSecretDialog } from "../secrets";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { useOperator } from "../../wardyn/operator-context";
 import { CheckRow, RecheckButton, useSiteConfigStep } from "./step-bodies";
 
 // Legacy pre-convention names map 1:1 onto the same four well-known SaaS hosts
@@ -145,6 +147,12 @@ export function ScmProviderStep({
 }) {
   const check = status.checks.find((c) => c.id === "scm_provider");
   const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
+  // Every write this step can reach — scm_hosts (site-config), the secret
+  // store, and the GitHub App id/key — is operator-only. Gating "Add
+  // provider" and every row action below is enough to make the whole
+  // Panel1/Panel2 flow unreachable for a viewer, so its internals (Save App
+  // ID, the per-rung CredCta buttons) don't need their own checks.
+  const operator = useOperator();
 
   const addHost = (h: string) => {
     const hosts = Array.from(new Set([...(siteConfig?.scm_hosts ?? []), h]));
@@ -236,9 +244,13 @@ export function ScmProviderStep({
           <EmptyState
             icon={GitBranch}
             title="No providers configured"
-            description="Public repos clone without any credential."
+            description={
+              operator
+                ? "Public repos clone without any credential."
+                : `Public repos clone without any credential. ${OPERATOR_ONLY_REASON}`
+            }
             action={
-              <Button onClick={() => setAddPanel({ step: "panel1" })}>
+              <Button onClick={() => setAddPanel({ step: "panel1" })} disabled={!operator}>
                 <Plus className="size-4" /> Add provider
               </Button>
             }
@@ -249,7 +261,8 @@ export function ScmProviderStep({
           <div className="flex items-center gap-2">
             <SectionLabel>Providers</SectionLabel>
             <span className="flex-1" />
-            <Button size="sm" onClick={() => setAddPanel({ step: "panel1" })}>
+            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            <Button size="sm" onClick={() => setAddPanel({ step: "panel1" })} disabled={!operator}>
               <Plus className="size-4" /> Add provider
             </Button>
           </div>
@@ -389,6 +402,7 @@ function ProviderTableRow({
   const patName = `git-pat-${slug}`;
   const sshName = `ssh-key-${slug}`;
   const credName = presentSecrets.includes(patName) ? patName : sshName;
+  const operator = useOperator();
 
   return (
     <TableRow>
@@ -430,11 +444,16 @@ function ProviderTableRow({
           <DropdownMenuContent align="end">
             {isApp ? (
               <>
-                <DropdownMenuItem onClick={() => onOpenSecret("github-app-key", row.host, "app")}>
+                <DropdownMenuItem
+                  onClick={() => onOpenSecret("github-app-key", row.host, "app")}
+                  disabled={!operator}
+                >
                   <RotateCw className="size-4" /> Rotate PEM
+                  {!operator && <OperatorOnlyHint />}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-danger focus:text-danger"
+                  disabled={!operator}
                   onClick={() =>
                     onDeleteRequest({
                       label: "GitHub App",
@@ -452,15 +471,21 @@ function ProviderTableRow({
                   }
                 >
                   <Trash2 className="size-4" /> Remove App
+                  {!operator && <OperatorOnlyHint />}
                 </DropdownMenuItem>
               </>
             ) : row.lanes.length > 0 ? (
               <>
-                <DropdownMenuItem onClick={() => onOpenSecret(credName, row.host, laneOfName(credName))}>
+                <DropdownMenuItem
+                  onClick={() => onOpenSecret(credName, row.host, laneOfName(credName))}
+                  disabled={!operator}
+                >
                   <RotateCw className="size-4" /> Rotate credential
+                  {!operator && <OperatorOnlyHint />}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-danger focus:text-danger"
+                  disabled={!operator}
                   onClick={() =>
                     onDeleteRequest({
                       label: credName,
@@ -481,16 +506,23 @@ function ProviderTableRow({
                   }
                 >
                   <Trash2 className="size-4" /> Delete credential
+                  {!operator && <OperatorOnlyHint />}
                 </DropdownMenuItem>
               </>
             ) : (
-              <DropdownMenuItem onClick={() => onAddCredential(row)}>
+              <DropdownMenuItem onClick={() => onAddCredential(row)} disabled={!operator}>
                 <Plus className="size-4" /> Add credential
+                {!operator && <OperatorOnlyHint />}
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => onRemoveHost(row)}>
+            <DropdownMenuItem
+              className="text-danger focus:text-danger"
+              disabled={!operator}
+              onClick={() => onRemoveHost(row)}
+            >
               <Trash2 className="size-4" /> Remove host
+              {!operator && <OperatorOnlyHint />}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -508,9 +540,13 @@ function LegacyFooter({
   onReAdd: (name: string) => void;
   onDelete: (name: string) => void;
 }) {
+  const operator = useOperator();
   return (
     <div className="space-y-2.5 border-t border-border pt-4">
-      <SectionLabel>Off-convention names</SectionLabel>
+      <div className="flex items-center gap-2">
+        <SectionLabel>Off-convention names</SectionLabel>
+        {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+      </div>
       <p className="text-[0.6875rem] leading-snug text-muted-foreground">
         Stored names that don&apos;t follow <Mono>git-pat-&lt;slug&gt;</Mono>, so this screen
         can&apos;t place them on a host. Still usable — a run&apos;s git_pat grant can name any
@@ -522,10 +558,16 @@ function LegacyFooter({
           <div key={n} className="flex items-center gap-2.5 py-2">
             <Mono className="text-foreground">{n}</Mono>
             <span className="flex-1" />
-            <Button variant="ghost" size="sm" onClick={() => onReAdd(n)}>
+            <Button variant="ghost" size="sm" onClick={() => onReAdd(n)} disabled={!operator}>
               Re-add under recognized name
             </Button>
-            <Button variant="ghost" size="sm" className="text-danger hover:text-danger" onClick={() => onDelete(n)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-danger hover:text-danger"
+              onClick={() => onDelete(n)}
+              disabled={!operator}
+            >
               Delete
             </Button>
           </div>
