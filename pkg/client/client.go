@@ -231,6 +231,14 @@ type CreateRunRequest struct {
 	// workspace this run does not otherwise attach (via WorkspaceID or a
 	// policy's workspace_mounts/workspace_repos) does nothing.
 	Workspaces []WorkspaceSelection `json:"workspaces,omitempty"`
+	// IntegrationID, when set, pins this run's model/harness credential to a
+	// SPECIFIC ai_provider Integration (SiteConfig.Integrations[i].ID, stored
+	// or a well-known legacy-derived id — see GET /integrations), overriding
+	// any workspace LLMCred binding and the operator's DefaultFor:agent_runs
+	// default. Naming a non-ai_provider integration (an scm_host/
+	// artifact_mirror/host_proxy id — those apply operator-wide already, and
+	// are never run-selectable) is a 400.
+	IntegrationID string `json:"integration_id,omitempty"`
 }
 
 // WorkspaceSelection is one per-run option set for an attached workspace. See

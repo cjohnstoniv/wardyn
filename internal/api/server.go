@@ -677,6 +677,13 @@ func (s *Server) routes() chi.Router {
 			// setup_integrations.go. Read-only, same RBAC posture as
 			// site-config's GET: Credentials only ever holds secret NAMES.
 			r.Get("/integrations", s.handleListIntegrations)
+			// Integration writes: PUT creates-or-replaces a stored row, DELETE
+			// removes one, POST .../adopt persists a derived legacy row
+			// verbatim so it becomes editable. operatorOnly — same corp-wide
+			// blast radius as site-config's PUT (setup_integrations.go).
+			operatorOnly.Put("/integrations/{id}", s.handlePutIntegration)
+			operatorOnly.Delete("/integrations/{id}", s.handleDeleteIntegration)
+			operatorOnly.Post("/integrations/{id}/adopt", s.handleAdoptIntegration)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}
 			if s.cfg.RecordingStore != nil {

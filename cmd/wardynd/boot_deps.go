@@ -28,6 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
@@ -278,9 +279,21 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		slog.Info("wardynd: devcontainer builds enabled")
 	}
 
-	// AI Run Composer (optional): build the backend registry from -composer-config.
-	// Nil when unconfigured, which disables the compose endpoints (fail closed).
-	composerReg, composerReadiness, err := buildComposerRegistry(*f.composerCfg, secrets)
+	// AI Run Composer (optional): build the backend registry from
+	// -composer-config, or (when that's unset) derive it from the operator's
+	// Integrations (Task 3 — see cmd/wardynd/composer.go). The site config read
+	// is best-effort: a fetch failure degrades to the zero value (no stored
+	// integrations), matching effectiveIntegrations' own "never fail, degrade"
+	// discipline (internal/api/integrations.go) rather than failing boot over a
+	// convenience derivation. Nil registry disables the compose endpoints (fail
+	// closed) either way.
+	var siteCfg types.SiteConfig
+	if got, scErr := store.NewPG(pool).GetSiteConfig(bootCtx); scErr == nil {
+		siteCfg = got
+	} else {
+		slog.Warn("wardynd: read site config for composer-registry derivation failed; treating as unconfigured", slog.Any("err", scErr))
+	}
+	composerReg, composerReadiness, err := buildComposerRegistry(*f.composerCfg, secrets, siteCfg, *f.bedrockRegion, *f.bedrockModel)
 	if err != nil {
 		return of, fmt.Errorf("composer: %w", err)
 	}

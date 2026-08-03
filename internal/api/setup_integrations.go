@@ -6,7 +6,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"slices"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // setup_integrations.go wires the Integrations entity (integrations.go) into
@@ -101,6 +107,167 @@ func (s *Server) integrationsWithCapabilities(ctx context.Context) []SetupIntegr
 //	GET /api/v1/integrations
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"integrations": s.integrationsWithCapabilities(r.Context())})
+}
+
+// integrationByID recomputes the live capability matrix for exactly one row of
+// sc.Integrations — the shared response shape the three write handlers below
+// return (the same SetupIntegration GET /integrations uses), built directly
+// from the just-saved SiteConfig rather than a full effectiveIntegrations
+// recompute. Zero value if id is somehow absent (defense only — every caller
+// just wrote or found this exact id).
+func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id string) SetupIntegration {
+	for _, in := range sc.Integrations {
+		if in.ID != id {
+			continue
+		}
+		row := integrationRow{Integration: in, Source: "stored"}
+		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(toIntegrationView(row), s.liveCapEnv(ctx))}
+	}
+	return SetupIntegration{}
+}
+
+// putIntegrationRequest is the wire body for PUT /integrations/{id}: every
+// operator-settable field of a stored Integration. id comes from the URL, not
+// the body (mirrors handleDeleteSecret's path-is-authoritative style) — PUT is
+// a FULL REPLACEMENT (handlePutSiteConfig's own doctrine: no partial merge),
+// so a caller must round-trip a GET first to preserve fields it does not
+// intend to change.
+type putIntegrationRequest struct {
+	Name                 string                    `json:"name"`
+	Category             types.IntegrationCategory `json:"category"`
+	Type                 string                    `json:"type"`
+	Disabled             bool                      `json:"disabled,omitempty"`
+	Credentials          map[string]string         `json:"credentials,omitempty"`
+	Config               json.RawMessage           `json:"config,omitempty"`
+	DisabledCapabilities []string                  `json:"disabled_capabilities,omitempty"`
+	DefaultFor           []string                  `json:"default_for,omitempty"`
+}
+
+// handlePutIntegration creates-or-replaces a STORED Integration. operatorOnly
+// (same corp-wide blast radius as site-config: an ai_provider row here can
+// steer every run's model credential — a strictly larger reach than a single
+// workspace/policy write). Validated by validateIntegrationWrite
+// (integrations.go) before anything is read/written. DefaultFor uses RADIO
+// semantics: naming a mark here CLEARS it from every OTHER stored row in the
+// SAME write (applyDefaultForRadio) — never a 409, per the approved spec.
+//
+//	PUT /api/v1/integrations/{id}
+func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req putIntegrationRequest
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	in := types.Integration{
+		ID: id, Name: req.Name, Category: req.Category, Type: req.Type,
+		Disabled: req.Disabled, Credentials: req.Credentials, Config: req.Config,
+		DisabledCapabilities: req.DisabledCapabilities, DefaultFor: req.DefaultFor,
+	}
+	if err := validateIntegrationWrite(in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid integration: "+err.Error())
+		return
+	}
+	ctx := r.Context()
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return
+	}
+	now := s.cfg.Now().UTC()
+	rows := slices.Clone(sc.Integrations)
+	if idx := slices.IndexFunc(rows, func(x types.Integration) bool { return x.ID == id }); idx >= 0 {
+		in.CreatedAt, in.UpdatedAt = rows[idx].CreatedAt, now
+		rows[idx] = in
+	} else {
+		in.CreatedAt, in.UpdatedAt = now, now
+		rows = append(rows, in)
+	}
+	applyDefaultForRadio(rows, id, in.DefaultFor)
+	sc.Integrations = rows
+	saved, err := s.cfg.Store.PutSiteConfig(ctx, sc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"integration.write", id, "success", mustJSON(map[string]any{
+			"category": string(in.Category), "type": in.Type, "default_for": in.DefaultFor,
+		})))
+	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
+}
+
+// handleDeleteIntegration removes a STORED Integration. 404 when id names no
+// stored row — a legacy-derived row was never persisted, so there is nothing
+// to delete; the operator's underlying secret/config is untouched and the row
+// simply keeps reappearing derived on the next read, exactly as if it had
+// never been adopted.
+//
+//	DELETE /api/v1/integrations/{id}
+func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ctx := r.Context()
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return
+	}
+	idx := slices.IndexFunc(sc.Integrations, func(x types.Integration) bool { return x.ID == id })
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("no stored integration %q", id))
+		return
+	}
+	sc.Integrations = slices.Delete(slices.Clone(sc.Integrations), idx, idx+1)
+	if _, err := s.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
+		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"integration.delete", id, "success", nil))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAdoptIntegration persists a DERIVED legacy row VERBATIM so it becomes
+// editable. 409 when id already names a STORED row (nothing to adopt — it
+// already is one); 404 when id names neither a stored nor a legacy-derived
+// row.
+//
+//	POST /api/v1/integrations/{id}/adopt
+func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ctx := r.Context()
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return
+	}
+	stored := make(map[string]bool, len(sc.Integrations))
+	for _, in := range sc.Integrations {
+		stored[in.ID] = true
+	}
+	if stored[id] {
+		writeError(w, http.StatusConflict, fmt.Sprintf("integration %q is already stored", id))
+		return
+	}
+	legacy := s.legacyIntegrations(ctx, sc, stored)
+	idx := slices.IndexFunc(legacy, func(row integrationRow) bool { return row.ID == id })
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("no derived integration %q to adopt", id))
+		return
+	}
+	now := s.cfg.Now().UTC()
+	in := legacy[idx].Integration
+	in.CreatedAt, in.UpdatedAt = now, now
+	rows := append(slices.Clone(sc.Integrations), in)
+	applyDefaultForRadio(rows, in.ID, in.DefaultFor) // defensive; a derived row never carries DefaultFor today
+	sc.Integrations = rows
+	saved, err := s.cfg.Store.PutSiteConfig(ctx, sc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"integration.adopt", id, "success", mustJSON(map[string]any{"category": string(in.Category), "type": in.Type})))
+	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }
 
 // SetupHarnessTool is one coding-agent harness's static catalog metadata

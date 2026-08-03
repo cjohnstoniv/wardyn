@@ -202,63 +202,220 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 	return injected, warns
 }
 
-// resolveWorkspaceIntegration resolves a workspace's LLMCred.IntegrationRef
-// against SiteConfig.Integrations into concrete model/harness wiring (secret
-// name, host, header format). Not implemented yet: it mutates nothing and
-// always reports itself unresolvable, so a workspace naming an
-// integration_ref today silently falls back to the run's global provider
-// config (or no model access) rather than guessing or erroring.
-// W5: look up ref in SiteConfig.Integrations (IntegrationAIProvider), fold its
-// Credentials/Config into spec the way the old Mode-specific branches
-// (api_key/managed/bedrock) used to.
-func resolveWorkspaceIntegration(ctx context.Context, ref string) (ok bool) {
-	return false
+// subscriptionLane reads an anthropic_subscription integration's Config.lane
+// ("managed" | "resident_host"; "" behaves as "managed" — the same fallback
+// capabilitiesFor's subscriptionCaps documents for an unset/unrecognized
+// value, integrations.go).
+func subscriptionLane(integ types.Integration) string {
+	var cfg struct {
+		Lane string `json:"lane"`
+	}
+	_ = json.Unmarshal(integ.Config, &cfg)
+	return cfg.Lane
 }
 
-// applyWorkspaceCreds folds the PRIMARY workspace/container's operator-owned
-// model/harness cred BINDING (types.WorkspaceLLMCred.IntegrationRef) into the
-// run's policy at create — the credential analogue of unionWorkspaceEgress. A
-// workspace that binds nothing (nil / IntegrationRef="") leaves the run on the
-// global provider config, or a plain governed command that needs no model.
-// Refs/names only — the secret is resolved and injected at dispatch, never
-// resident. Returns the integration ref applied (for audit), or "" when
-// nothing was bound (including today's always-true case: see
-// resolveWorkspaceIntegration).
-func (s *Server) applyWorkspaceCreds(ctx context.Context, spec *types.RunPolicySpec, primary *types.Workspace, agent string) string {
-	if primary == nil || primary.LLMCred == nil || primary.LLMCred.IntegrationRef == "" {
-		return ""
-	}
-	if _, ok := agentLLMProvider(agent); !ok {
-		return "" // non-LLM agent — nothing to bind
-	}
-	if !resolveWorkspaceIntegration(ctx, primary.LLMCred.IntegrationRef) {
-		return "" // W5: not yet resolvable — fall back to the global provider config
-	}
-	return primary.LLMCred.IntegrationRef
-}
-
-// applyPrimaryWorkspaceCreds resolves the run's PRIMARY workspace/container and
-// folds its cred binding into the spec (applyWorkspaceCreds), auditing the ref
-// applied. The primary is the first referenced local_dir/repo workspace. A
-// workspace that binds nothing leaves the run on the global provider config
-// (or a plain governed command).
+// applyIntegrationCreds folds a resolved ai_provider Integration into the
+// run's policy — the Integration-based successor to the pre-Integration
+// Mode-switch (git history: `git show ecc1903~1:internal/api/llmcred.go`,
+// applyWorkspaceCreds's api_key/managed/bedrock cases). Returns the
+// Integration Type actually applied ("" = no-op: a non-LLM agent, an
+// unresolvable/absent credential, or a type with no sandbox lane at all —
+// azure_openai, per capabilitiesFor's reasonXAzureDirect) and, for a bedrock
+// integration with a region/model override, that override for dispatch to
+// resolve against (dispatchParams.BedrockRef).
 //
-// Returns the workspace's Bedrock selection when a Bedrock-backed integration
-// was applied, for dispatch to resolve region/model against
-// (dispatchParams.BedrockRef); nil means "use the global Bedrock config".
-// W5: always nil today — Bedrock-via-Integration resolution isn't wired yet.
-func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) *types.WorkspaceBedrockRef {
-	primary := s.primaryWorkspace(ctx, req, wsRefs)
-	if primary == nil {
-		return nil
+// model_api is deliberately NEVER granted here: resolving an integration for a
+// run grants the TOOL's ability to sign in (the harness), never ambient direct
+// model access for the sandbox WORKLOAD — that comes only from a workspace's
+// secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
+// explicit run grant, never from an integration binding.
+func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
+	if integ.Category != types.IntegrationAIProvider {
+		return "", nil // defense-in-depth; every caller already filters to ai_provider
 	}
-	ref := s.applyWorkspaceCreds(ctx, spec, primary, req.Agent)
+	p, ok := agentLLMProvider(agent)
+	if !ok {
+		return "", nil // non-LLM agent — nothing to bind
+	}
+	switch integ.Type {
+	case "anthropic_api_key", "openai_api_key":
+		secret := integ.Credentials["api_key"]
+		if secret == "" || !s.secretPresent(ctx, secret) {
+			return "", nil // absent secret would fail the proxy closed — fall back rather than hard-fail
+		}
+		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
+			return integ.Type, nil // an api_key grant for this host was already proposed; respect it
+		}
+		scope, _ := json.Marshal(map[string]string{
+			"host": p.host, "header": p.header, "format": p.format, "secret_name": secret,
+		})
+		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
+		})
+		if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
+			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
+		}
+		return integ.Type, nil
+	case "anthropic_subscription":
+		// Both lanes (managed / resident_host) displace a competing api-key
+		// grant and ensure Anthropic egress — the part common to the old
+		// WorkspaceLLMCredManaged case. The resident_host lane ADDITIONALLY
+		// needs the ceiling mount; the caller applies that via
+		// applyLLMCredMount (THE single subscription gate) since only it
+		// knows the ceiling — this function only ever sees the resolved spec.
+		removeAPIKeyGrantForHost(spec, p.host)
+		for _, d := range []string{"*.anthropic.com", p.host} {
+			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
+				spec.AllowedDomains = append(spec.AllowedDomains, d)
+			}
+		}
+		return integ.Type, nil
+	case "bedrock":
+		removeAPIKeyGrantForHost(spec, p.host)
+		var cfg struct {
+			Region string `json:"region"`
+			Model  string `json:"model"`
+		}
+		_ = json.Unmarshal(integ.Config, &cfg)
+		if cfg.Region == "" && cfg.Model == "" {
+			return integ.Type, nil // inherit the global Bedrock config
+		}
+		if !spec.AllowAllEgress {
+			unionAllowedDomains(spec, []string{bedrockRuntimeHost(cfg.Region), bedrockControlHost(cfg.Region)})
+		}
+		return integ.Type, &types.WorkspaceBedrockRef{Region: cfg.Region, Model: cfg.Model}
+	default:
+		// azure_openai (no sandbox lane at all — model_api is a protocol-fact
+		// impossibility) and any unrecognized type: no fold.
+		return "", nil
+	}
+}
+
+// foldIntegration applies a resolved Integration to spec: the credential/
+// egress fold (applyIntegrationCreds) plus, for a resident_host subscription,
+// the ceiling mount via applyLLMCredMount — THE single subscription gate,
+// unchanged. Shared by applyWorkspaceCreds (workspace-ref tier only) and
+// applyPrimaryWorkspaceCreds (the full run-level precedence chain) so the fold
+// can never disagree between them. Returns the kind applied ("" = no-op).
+func (s *Server) foldIntegration(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration, agent string) (string, *types.WorkspaceBedrockRef) {
+	kind, bedrockRef := s.applyIntegrationCreds(ctx, spec, integ, agent)
+	if kind == "anthropic_subscription" && subscriptionLane(integ) == "resident_host" {
+		applyLLMCredMount(spec, s.cfg.DefaultPolicy, agent, true)
+	}
+	return kind, bedrockRef
+}
+
+// resolveWorkspaceIntegration resolves a workspace's LLMCred.IntegrationRef
+// against the EFFECTIVE integration set (stored ∪ legacy-derived —
+// effectiveIntegrations, integrations.go) into the concrete ai_provider
+// Integration it names. ok=false — today's honest "no binding" outcome — for
+// an empty ref, a ref naming nothing at all, or a ref naming something
+// non-ai_provider: a dangling/miscategorized ref falls back silently rather
+// than cascading to the site default (tier 4) or erroring, since the operator
+// who bound THIS workspace explicitly chose a SPECIFIC integration, and a
+// stale binding silently promoting to a different one is a credential
+// surprise, not a convenience.
+//
+// This is precedence tier 3 of the full run-integration resolution order (see
+// resolveRunIntegration below for tiers 1-2 and the tier-4 cascade) — kept as
+// its own function because applyWorkspaceCreds (shared with preflight.go,
+// which has no createRunRequest at its call site) needs exactly this tier
+// alone.
+func (s *Server) resolveWorkspaceIntegration(ctx context.Context, ref string) (types.Integration, bool) {
 	if ref == "" {
+		return types.Integration{}, false
+	}
+	in, ok := s.resolveIntegrationRef(ctx, ref)
+	if !ok || in.Category != types.IntegrationAIProvider {
+		return types.Integration{}, false
+	}
+	return in, true
+}
+
+// resolveRunIntegration resolves the FULL run-level integration precedence:
+//
+//  1. integrationID (run-explicit: createRunRequest.IntegrationID /
+//     composeRequest.IntegrationID) when set — must already be known to name
+//     an ai_provider integration (validated at request time with a 400; see
+//     decodeAndValidateCreateRun / handleComposeRun) or this tier yields
+//     nothing rather than guessing.
+//  2. useSubscription (DEPRECATED ALIAS — composeRequest.UseSubscription;
+//     createRunRequest carries no such field, so a plain create-run always
+//     passes false here): "the default agent_runs integration of a
+//     subscription type".
+//  3. workspaceRef — the primary workspace's LLMCred.IntegrationRef
+//     (resolveWorkspaceIntegration).
+//  4. the operator's DefaultFor:agent_runs default (any ai_provider type).
+//
+// ok=false is today's honest no-model-access / global-provider-config
+// fallback, carried through every tier unchanged.
+func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string, useSubscription bool, workspaceRef string) (types.Integration, bool) {
+	if integrationID != "" {
+		in, ok := s.resolveIntegrationRef(ctx, integrationID)
+		if !ok || in.Category != types.IntegrationAIProvider {
+			return types.Integration{}, false
+		}
+		return in, true
+	}
+	if useSubscription {
+		if in, ok := s.defaultAgentRunsIntegration(ctx, "anthropic_subscription"); ok {
+			return in, true
+		}
+	}
+	if in, ok := s.resolveWorkspaceIntegration(ctx, workspaceRef); ok {
+		return in, true
+	}
+	return s.defaultAgentRunsIntegration(ctx, "")
+}
+
+// applyPrimaryWorkspaceCreds resolves the run's FULL integration precedence
+// (resolveRunIntegration: run-explicit integration_id → workspace binding →
+// operator default → none) and folds the winner into the spec, auditing the
+// integration applied. Unlike the pre-Integration code, this no longer
+// requires a primary workspace at all — an operator's site-wide
+// DefaultFor:agent_runs default (or an explicit integration_id) applies to
+// every run, workspace or not.
+//
+// Returns the winning integration's Bedrock selection when a bedrock
+// integration was applied, for dispatch to resolve region/model against
+// (dispatchParams.BedrockRef); nil means "use the global Bedrock config".
+func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) *types.WorkspaceBedrockRef {
+	integ, kind, bedrockRef := s.foldRunIntegration(ctx, spec, req, wsRefs)
+	if kind == "" {
 		return nil
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
-		runID.String(), "success", mustJSON(map[string]any{"integration_ref": ref})))
-	return nil
+		runID.String(), "success", mustJSON(map[string]any{"integration_ref": integ.ID, "type": kind})))
+	return bedrockRef
+}
+
+// foldRunIntegration is the AUDIT-FREE half of applyPrimaryWorkspaceCreds: it
+// resolves the full precedence chain (run-explicit integration_id → workspace
+// binding → operator default → none) and folds the winner into the spec,
+// returning what was applied so the caller can decide whether to audit.
+//
+// Both launch and preflight call THIS, so Review cannot predict a different
+// model access than launch grants. Preflight used to fold only the workspace
+// tier — it had the createRunRequest all along, so an explicit integration_id
+// or an operator's site-wide default simply went unseen in the checklist, and
+// a run whose model access came from either would preview as having none.
+// kind == "" means nothing was bound (no integration resolved, a non-LLM
+// agent, or a resolved integration whose fold applied nothing).
+func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) (types.Integration, string, *types.WorkspaceBedrockRef) {
+	primary := s.primaryWorkspace(ctx, req, wsRefs)
+	var workspaceRef string
+	if primary != nil && primary.LLMCred != nil {
+		workspaceRef = primary.LLMCred.IntegrationRef
+	}
+	if _, ok := agentLLMProvider(req.Agent); !ok {
+		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
+	}
+	integ, ok := s.resolveRunIntegration(ctx, req.IntegrationID, false, workspaceRef)
+	if !ok {
+		return types.Integration{}, "", nil
+	}
+	kind, bedrockRef := s.foldIntegration(ctx, spec, integ, req.Agent)
+	return integ, kind, bedrockRef
 }
 
 // primaryWorkspace resolves the run's PRIMARY workspace — wsRefs[0] when the

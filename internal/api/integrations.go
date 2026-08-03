@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -607,4 +608,194 @@ func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrati
 		}, Source: "legacy"})
 	}
 	return rows
+}
+
+// ─── Integration WRITES: validation + the run/composer resolution ladder ────
+//
+// Everything below builds ON TOP of effectiveIntegrations/capabilitiesFor
+// above without changing either: validateIntegrationWrite backs the write
+// endpoints (setup_integrations.go); resolveIntegrationRef/
+// defaultAgentRunsIntegration back the run-time resolution ladder
+// (llmcred.go); WardynFeaturesBackend backs the composer-registry boot
+// derivation (cmd/wardynd/composer.go).
+
+// knownIntegrationTypes is the closed type set PER CATEGORY a write may name —
+// a hand-kept mirror of capabilitiesFor's switch above (frozen; see this
+// file's own doc comment) rather than a reflection-based derivation, so a type
+// this list is missing fails LOUD here ("invalid type") instead of silently
+// passing validation and landing on "no capabilities" in the live matrix.
+var knownIntegrationTypes = map[types.IntegrationCategory]map[string]bool{
+	types.IntegrationAIProvider: {
+		"anthropic_api_key": true, "anthropic_subscription": true, "bedrock": true,
+		"openai_api_key": true, "azure_openai": true,
+	},
+	types.IntegrationSCMHost:        {"github_app": true, "git_host": true},
+	types.IntegrationArtifactMirror: {"artifact_mirror": true},
+	types.IntegrationHostProxy:      {"host_proxy": true},
+}
+
+// validIntegrationDefaultFor is DefaultFor's closed value set (see
+// types.Integration's doc comment: "agent_runs" and/or "wardyn_features").
+var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_features": true}
+
+// validateIntegrationWrite enforces an operator-authored Integration's
+// structural + security invariants before it is persisted (PUT
+// /integrations/{id}, and defensively on adopt): id shape (secretNameRE — the
+// same identifier rule secret names use), category/type against the known
+// sets above, every credential value a real non-reserved secret name
+// (validSecretRef — the same rule site-config's *SecretRef fields use),
+// DefaultFor closed to {agent_runs, wardyn_features}, and the two per-type
+// Config checks this codebase already has an established rule for: an
+// artifact_mirror's ecosystems must be the same closed set ArtifactOverrides
+// uses (site_config.go), and a bedrock integration may not half-override
+// region/model — the identical hazard
+// `git show ecc1903~1:internal/api/llmcred.go`'s
+// TestValidateWorkspaceLLMCred_Rejections pinned for the pre-Integration
+// shape (a region-scoped inference profile 403s at invoke with only one set).
+// Other per-type Config knobs (e.g. a subscription's lane) are deliberately
+// left permissive: capabilitiesFor documents an unrecognized value as a
+// graceful fallback, not an error, and this validator should not be stricter
+// than the reader.
+func validateIntegrationWrite(in types.Integration) error {
+	if !secretNameRE.MatchString(in.ID) {
+		return fmt.Errorf("id: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars)", in.ID)
+	}
+	knownTypes, ok := knownIntegrationTypes[in.Category]
+	if !ok {
+		return fmt.Errorf("category: unknown %q", in.Category)
+	}
+	if !knownTypes[in.Type] {
+		return fmt.Errorf("type: %q is not a known %s type", in.Type, in.Category)
+	}
+	for role, ref := range in.Credentials {
+		if ref != "" && !validSecretRef(ref) {
+			return fmt.Errorf("credentials[%s]: invalid or reserved secret name %q", role, ref)
+		}
+	}
+	for _, d := range in.DefaultFor {
+		if !validIntegrationDefaultFor[d] {
+			return fmt.Errorf("default_for: unknown %q (want agent_runs and/or wardyn_features)", d)
+		}
+	}
+	if len(in.Config) == 0 {
+		return nil
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(in.Config, &cfg); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if in.Type == "bedrock" {
+		region, _ := cfg["region"].(string)
+		model, _ := cfg["model"].(string)
+		if (region == "") != (model == "") {
+			return fmt.Errorf("config: bedrock region and model must be set together (a region-scoped inference profile 403s at invoke with only one)")
+		}
+	}
+	if in.Category == types.IntegrationArtifactMirror {
+		for _, eco := range stringSlice(cfg["ecosystems"]) {
+			if !validArtifactEcosystems[eco] {
+				return fmt.Errorf("config.ecosystems: unknown ecosystem %q", eco)
+			}
+		}
+	}
+	return nil
+}
+
+// applyDefaultForRadio enforces DefaultFor's RADIO semantics across rows: each
+// value in newDefaultFor is a single-select mark, so setting it on the row
+// named id CLEARS that same value from every OTHER row's DefaultFor in the
+// same write — never a 409, per the approved spec. Mutates rows in place
+// (mirroring applyDisabled's own in-place style above); a row with nothing to
+// clear is left untouched (including its slice identity, so an unrelated
+// write never appears to "touch" every other row).
+func applyDefaultForRadio(rows []types.Integration, id string, newDefaultFor []string) {
+	if len(newDefaultFor) == 0 {
+		return
+	}
+	marks := make(map[string]bool, len(newDefaultFor))
+	for _, m := range newDefaultFor {
+		marks[m] = true
+	}
+	for i := range rows {
+		if rows[i].ID == id || len(rows[i].DefaultFor) == 0 {
+			continue
+		}
+		cleared := slices.DeleteFunc(slices.Clone(rows[i].DefaultFor), func(m string) bool { return marks[m] })
+		if len(cleared) != len(rows[i].DefaultFor) {
+			rows[i].DefaultFor = cleared
+		}
+	}
+}
+
+// resolveIntegrationRef resolves ref against the EFFECTIVE integration set
+// (stored ∪ legacy-derived — effectiveIntegrations above) into the concrete
+// types.Integration it names. Effective, not stored-only, so a run/workspace
+// binding "just works" against a well-known legacy id (e.g.
+// "anthropic_api_key") with no adoption step required first — the entire
+// point of deriving legacy rows in the first place. ok=false when ref is
+// empty or names nothing at all.
+func (s *Server) resolveIntegrationRef(ctx context.Context, ref string) (types.Integration, bool) {
+	if ref == "" {
+		return types.Integration{}, false
+	}
+	for _, row := range s.effectiveIntegrations(ctx) {
+		if row.ID == ref {
+			return row.Integration, true
+		}
+	}
+	return types.Integration{}, false
+}
+
+// defaultAgentRunsIntegration returns the STORED ai_provider integration
+// marked DefaultFor: agent_runs, optionally narrowed to onlyType (""=any
+// type). Only a STORED row can carry DefaultFor at all (a legacy-derived row
+// is never persisted, so it never has one — see types.Integration's doc
+// comment), which is exactly what keeps this tier a no-op with zero stored
+// integrations regardless of onlyType. ok=false when none is marked.
+func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType string) (types.Integration, bool) {
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+			sc = got
+		}
+	}
+	for _, in := range sc.Integrations {
+		if in.Category != types.IntegrationAIProvider || !slices.Contains(in.DefaultFor, "agent_runs") {
+			continue
+		}
+		if onlyType != "" && in.Type != onlyType {
+			continue
+		}
+		return in, true
+	}
+	return types.Integration{}, false
+}
+
+// WardynFeaturesBackend returns the STORED ai_provider integration marked
+// DefaultFor: wardyn_features whose wardyn_features capability reads
+// "available" right now (capabilitiesFor above — never a needs_setup/off/
+// impossible one), for cmd/wardynd's composer-registry boot derivation
+// (WARDYN_COMPOSER_CONFIG unset — see cmd/wardynd/composer.go). Exported as a
+// plain function of an already-fetched SiteConfig plus the same live signals
+// liveCapEnv folds from Server config, because cmd/wardynd builds the
+// composer registry BEFORE the api.Server exists (Config.Composer is
+// late-bound INTO it once built) — there is no live Server here to read them
+// from. ok=false (no eligible integration) is the signal to keep today's
+// behavior: no registry, compose 404s honestly.
+func WardynFeaturesBackend(sc types.SiteConfig, secretPresent func(string) bool, bedrockRegionSet, bedrockModelSet bool, managedBlobPresent func(string) bool) (types.Integration, bool) {
+	env := capEnv{
+		SecretPresent: secretPresent, BedrockRegionSet: bedrockRegionSet,
+		BedrockModelSet: bedrockModelSet, ManagedBlobPresent: managedBlobPresent,
+	}
+	for _, in := range sc.Integrations {
+		if in.Category != types.IntegrationAIProvider || !slices.Contains(in.DefaultFor, "wardyn_features") {
+			continue
+		}
+		for _, c := range capabilitiesFor(toIntegrationView(integrationRow{Integration: in}), env) {
+			if c.ID == "wardyn_features" && c.State == CapAvailable {
+				return in, true
+			}
+		}
+	}
+	return types.Integration{}, false
 }

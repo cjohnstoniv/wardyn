@@ -105,15 +105,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fold the primary workspace's credential binding into the spec exactly as
-	// launch does AFTER enforcement (runs.go), so the model-access and egress
-	// checklist rows below see the creds the run will really hold. No audit
-	// event — preflight persists nothing (that is applyPrimaryWorkspaceCreds's
-	// launch-only half).
+	// Fold the run's model-access binding into the spec exactly as launch does
+	// AFTER enforcement (runs.go) — the SAME foldRunIntegration, so the
+	// model-access and egress checklist rows below see the creds the run will
+	// really hold across the WHOLE precedence chain (explicit integration_id,
+	// workspace binding, operator default), not just the workspace tier. No
+	// audit event — preflight persists nothing (that is
+	// applyPrimaryWorkspaceCreds's launch-only half).
 	wsRefs := s.referencedWorkspaces(ctx, spec)
-	if primary := s.primaryWorkspace(ctx, req, wsRefs); primary != nil {
-		s.applyWorkspaceCreds(ctx, &spec, primary, req.Agent)
-	}
+	_, _, _ = s.foldRunIntegration(ctx, &spec, req, wsRefs)
 	// Fold each referenced workspace's requirements contract exactly as launch
 	// does (runs.go) — the SAME applyWorkspaceRequirements call, so Review can
 	// never predict a rosier (or stricter) outcome than launch actually applies.

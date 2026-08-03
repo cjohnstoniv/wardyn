@@ -80,6 +80,16 @@ type composeRequest struct {
 	// server stateless, so persistence is via this id correlating the audit trail
 	// across rounds, not a session store). Validated as a UUID by ValidateRequest.
 	SessionID string `json:"session_id,omitempty"`
+
+	// IntegrationID, when set, pins the proposal's model/harness credential to
+	// a SPECIFIC ai_provider Integration (see client.CreateRunRequest.
+	// IntegrationID — same field, same rule: a non-ai_provider id is a 400).
+	// It supersedes UseSubscription for deciding WHICH transport a Claude
+	// proposal previews (resident_host mount vs. managed vs. a named api-key
+	// secret); UseSubscription alone remains a DEPRECATED ALIAS for "the
+	// default agent_runs integration of a subscription type" when no
+	// IntegrationID is given (resolveRunIntegration, llmcred.go).
+	IntegrationID string `json:"integration_id,omitempty"`
 }
 
 // composeModeSkip / composeModeAlways select the clarify behavior; "" / anything
@@ -205,6 +215,15 @@ func (s *Server) handleComposeRun(w http.ResponseWriter, r *http.Request) {
 	if !composerBackendKnown(s.cfg.Composer, req.Backend) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%w: %q", composer.ErrUnknownBackend, req.Backend).Error())
 		return
+	}
+	// Same eager integration_id check create-run applies (runs_create.go):
+	// fail loud on a typo or a non-ai_provider id before any pipeline stage
+	// runs, in BOTH transports.
+	if req.IntegrationID != "" {
+		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
+			return
+		}
 	}
 
 	ctx := r.Context()
@@ -430,16 +449,36 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// reaches no model. Add it BEFORE the clamp (secret-aware + non-breaking); the
 	// truthful "did model access survive?" warning is emitted AFTER the clamp below.
 	presentSecrets := s.presentSecretNames(ctx)
+	// Resolve an explicit run-level integration choice (run-explicit
+	// integration_id, or use_subscription's DEPRECATED-ALIAS meaning: "the
+	// default agent_runs integration of a subscription type") BEFORE the
+	// legacy subscribed/managedSub computation below, so an operator-pinned
+	// Integration steers the SAME two booleans that already drive
+	// ensureLLMGrant/applyLLMCredMount/reconcileLLMAccess — no new pipeline
+	// stage, no change to clamp ordering. Compose has no onboarded-workspace
+	// concept (composer.Workspace is a raw source, never a types.Workspace
+	// id), so the workspace tier of the order never applies here (see
+	// runs_create.go's applyPrimaryWorkspaceCreds for the full 4-tier chain a
+	// real create-run resolves). hasInteg is always false with zero configured
+	// integrations, and subscriptionRequested/managedByChoice then equal
+	// req.UseSubscription exactly — so every line below degrades to TODAY's
+	// behavior whenever nothing is configured.
+	integ, hasInteg := s.resolveRunIntegration(ctx, req.IntegrationID, req.UseSubscription, "")
+	subscriptionRequested, managedByChoice := req.UseSubscription, req.UseSubscription
+	if hasInteg {
+		subscriptionRequested = integ.Type == "anthropic_subscription" && subscriptionLane(integ) == "resident_host"
+		managedByChoice = integ.Type == "anthropic_subscription" && subscriptionLane(integ) != "resident_host"
+	}
 	// Subscription transport engages only on the EXPLICIT per-run opt-in AND a
 	// ceiling-blessed cred mount AND a Claude agent; otherwise api-key (the more
 	// governed default: key never resident, proxy-injected, 1h TTL).
-	subscribed := req.UseSubscription && prop.Run.Agent == "claude-code" &&
+	subscribed := subscriptionRequested && prop.Run.Agent == "claude-code" &&
 		ceilingBlessesClaudeCreds(s.cfg.DefaultPolicy)
 	// Managed subscription: opted in, Claude, no ceiling-blessed mount, but a
 	// Wardyn-managed setup-token IS connected — the compose-mode path (no host
 	// ~/.claude to stage). Treated like subscription for grant purposes (egress
 	// only, no api-key grant); dispatch injects it proxy-side.
-	managedSub := req.UseSubscription && prop.Run.Agent == "claude-code" &&
+	managedSub := managedByChoice && prop.Run.Agent == "claude-code" &&
 		!subscribed && s.managedInjectReady(prop.Run.Agent)
 	// MOUNT GATING and the MODEL-ACCESS VERDICT are different questions, and
 	// conflating them produced a false blocker. managedSub stays opt-in-gated above
@@ -452,7 +491,16 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// connected setup-token and the wizard toggle off).
 	managedForVerdict := managedSub ||
 		(prop.Run.Agent == "claude-code" && !subscribed && s.managedInjectReady(prop.Run.Agent))
-	ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
+	if hasInteg && (integ.Type == "anthropic_api_key" || integ.Type == "openai_api_key") {
+		// An explicit api-key integration overrides ensureLLMGrant's
+		// provider-DEFAULT secret with the INTEGRATION's own —
+		// applyIntegrationCreds is the same grant + exact-host-egress coupling
+		// ensureLLMGrant uses, just keyed to a specific stored secret instead
+		// of the provider convention name.
+		s.applyIntegrationCreds(ctx, &prop.InlinePolicy, integ, prop.Run.Agent)
+	} else {
+		ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
+	}
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "clamp"})
 	// Raise the operator ceiling's confinement floor to include the per-run compose
 	// floor (the operator's Getting Started default tier), capped at the strongest
@@ -494,13 +542,16 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	var injectedCreds bool
 	var credWarns []string
 	if !managedSub {
-		injectedCreds, credWarns = applyLLMCredMount(&clamped, s.cfg.DefaultPolicy, prop.Run.Agent, req.UseSubscription)
+		injectedCreds, credWarns = applyLLMCredMount(&clamped, s.cfg.DefaultPolicy, prop.Run.Agent, subscriptionRequested)
 		clampWarns = append(clampWarns, credWarns...)
 	}
 	// The use_subscription <-> credential-mount PAIR's reconciled verdict, threaded
 	// into the setup checklist (setupSubscriptionMountItem) verbatim — reused, never
 	// recomputed, so that row can never disagree with the Warnings bullets above.
-	subState := composeSubscriptionState{Requested: req.UseSubscription, Injected: injectedCreds, Managed: managedSub, Warnings: credWarns}
+	// subscriptionRequested carries an explicit integration_id's equivalent
+	// "ask" too (see above), so this checklist row reflects it exactly like
+	// req.UseSubscription always did.
+	subState := composeSubscriptionState{Requested: subscriptionRequested, Injected: injectedCreds, Managed: managedSub, Warnings: credWarns}
 	// Structured model-access verdict (not folded into Warnings): a no-access result
 	// is a "this run will do nothing" blocker the review must gate on, not one bullet
 	// among benign clamp notices. reconcileLLMAccess still mutates the spec (drops

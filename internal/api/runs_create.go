@@ -23,10 +23,12 @@ import (
 )
 
 // decodeAndValidateCreateRun decodes the POST /api/v1/runs body and applies the
-// fail-closed request-shape checks that need no store access: agent required,
-// BYOI/devcontainer exclusivity, a known confinement_class, the task_mode enum,
-// and the compose_session_id UUID contract. On any violation it writes the HTTP
-// error itself and returns ok=false. Extracted verbatim from handleCreateRun.
+// fail-closed request-shape checks: agent required, BYOI/devcontainer
+// exclusivity, a known confinement_class, the task_mode enum, the
+// compose_session_id UUID contract, and (the one check that DOES need the
+// store) integration_id naming a real ai_provider integration. On any
+// violation it writes the HTTP error itself and returns ok=false. Extracted
+// verbatim from handleCreateRun.
 func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, types.ConfinementClass, bool) {
 	var req createRunRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
@@ -78,6 +80,18 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if req.ComposeSessionID != "" {
 		if _, err := uuid.Parse(req.ComposeSessionID); err != nil {
 			writeError(w, http.StatusBadRequest, "compose_session_id must be a UUID")
+			return req, "", false
+		}
+	}
+
+	// A run-explicit integration_id must name a real, run-selectable
+	// (ai_provider) integration — checked eagerly, before any run is created,
+	// so a typo or an scm_host/artifact_mirror/host_proxy id (operator-wide,
+	// never run-selectable) fails loud here rather than silently resolving to
+	// nothing at applyPrimaryWorkspaceCreds time (llmcred.go).
+	if req.IntegrationID != "" {
+		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
 			return req, "", false
 		}
 	}

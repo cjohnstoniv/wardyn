@@ -5,50 +5,280 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// applyWorkspaceCreds folds a workspace/container's operator-owned model/harness
-// cred binding (types.WorkspaceLLMCred.IntegrationRef) into a run's policy at
-// create. The old api_key/managed/bedrock Mode-keyed branches this file used to
-// pin (TestApplyWorkspaceCreds_APIKey_*, TestApplyWorkspaceCreds_Managed_*) are
-// GONE — WorkspaceLLMCred carries only IntegrationRef now, and
-// resolveWorkspaceIntegration (llmcred.go) is an explicit W5 stub that always
-// reports itself unresolvable, so EVERY binding is currently a no-op (falls back
-// to the run's global provider config). Nothing today exercises a real
-// resolution, so the only honest behavior left to pin is the no-op contract
-// itself, including the still-live pre-checks (nil binding, empty ref, and the
-// non-LLM-agent short-circuit) that run before resolution would even be
-// attempted.
+// foldRef exercises resolution TIER 3 (the workspace's own binding) through the
+// same foldRunIntegration launch and preflight both call, and returns the
+// applied integration id (or "") so these tests keep asserting exactly what
+// they always did. A bare createRunRequest names no integration_id, so tier 1
+// cannot pre-empt the workspace binding under test.
+func foldRef(s *Server, spec *types.RunPolicySpec, ws *types.Workspace, agent string) string {
+	var refs []types.Workspace
+	if ws != nil {
+		refs = []types.Workspace{*ws}
+	}
+	integ, kind, _ := s.foldRunIntegration(context.Background(), spec, createRunRequest{Agent: agent}, refs)
+	if kind == "" {
+		return ""
+	}
+	return integ.ID
+}
+
+// applyWorkspaceCreds/applyPrimaryWorkspaceCreds fold a workspace/run's
+// resolved ai_provider Integration into a run's policy at create
+// (resolveWorkspaceIntegration / resolveRunIntegration / applyIntegrationCreds,
+// llmcred.go). These restore the coverage deleted in 1e2fda5 ("Eight tests for
+// workspace credential bindings are deleted rather than ported. The binding is
+// inert until integrations resolve it... Keeping green tests over a stub
+// would have been the lie.") against the NEW Integration-ref shape now that
+// resolution is real: api_key binding grants+egress, an absent secret falling
+// back honestly, managed dropping a competing api-key grant, a bedrock ref
+// overriding the global region/model, and no binding staying a no-op.
+
+// integrationTestServer builds a Server whose SiteConfig.Integrations is
+// exactly `rows` (via fakeSiteConfigStore, site_config_test.go) plus the given
+// stored secrets (memSecrets, injection_test.go) — the two ingredients
+// resolveWorkspaceIntegration/resolveRunIntegration/applyIntegrationCreds need
+// to do real work.
+func integrationTestServer(t *testing.T, rows []types.Integration, secretNames ...string) *Server {
+	t.Helper()
+	m := &memSecrets{m: map[string][]byte{}}
+	for _, n := range secretNames {
+		m.m[n] = []byte("x")
+	}
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: rows}}
+	return New(Config{Secrets: m, Store: fake})
+}
+
+func apiKeyIntegration(id, credSecret string) types.Integration {
+	return types.Integration{
+		ID: id, Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+		Credentials: map[string]string{"api_key": credSecret},
+	}
+}
+
+// TestApplyWorkspaceCreds_APIKeyIntegration_AppendsGrantAndEgress restores
+// TestApplyWorkspaceCreds_APIKey_AppendsGrantAndEgress (pre-Integration) —
+// same assertions, now driven by a workspace ref resolving to a STORED
+// ai_provider integration instead of an inline {mode, api_key_secret}.
+func TestApplyWorkspaceCreds_APIKeyIntegration_AppendsGrantAndEgress(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{apiKeyIntegration("acme-anthropic", "acme-anthropic-key")}, "acme-anthropic-key")
+	spec := &types.RunPolicySpec{}
+	ws := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}}
+	if ref := foldRef(s, spec, ws, "claude-code"); ref != "acme-anthropic" {
+		t.Fatalf("ref = %q, want acme-anthropic", ref)
+	}
+	g, ok := apiKeyGrantForHost(spec, "api.anthropic.com")
+	if !ok {
+		t.Fatal("expected an api_key grant for api.anthropic.com")
+	}
+	var scope map[string]string
+	_ = json.Unmarshal(g.Scope, &scope)
+	if scope["secret_name"] != "acme-anthropic-key" {
+		t.Fatalf("grant secret = %q, want the integration's own secret", scope["secret_name"])
+	}
+	if !domainAllowedExact(spec.AllowedDomains, "api.anthropic.com") {
+		t.Fatal("expected api.anthropic.com egress coupled to the grant")
+	}
+}
+
+// TestApplyWorkspaceCreds_APIKeyIntegration_AbsentSecretFallsBack restores
+// TestApplyWorkspaceCreds_APIKey_AbsentSecretFallsBack: an integration naming
+// a secret that isn't actually stored must fall back honestly (no binding),
+// never mint a grant the proxy would fail closed on.
+func TestApplyWorkspaceCreds_APIKeyIntegration_AbsentSecretFallsBack(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{apiKeyIntegration("acme-anthropic", "missing-key")}) // secret NOT stored
+	spec := &types.RunPolicySpec{}
+	ws := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}}
+	if ref := foldRef(s, spec, ws, "claude-code"); ref != "" {
+		t.Fatalf("expected fall-back (no binding) for an absent secret, got %q", ref)
+	}
+	if len(spec.EligibleGrants) != 0 {
+		t.Fatal("must not append a grant whose secret would fail the proxy closed")
+	}
+}
+
+// TestApplyWorkspaceCreds_ManagedIntegration_EnsuresEgressDropsCompetingAPIKey
+// restores TestApplyWorkspaceCreds_Managed_EnsuresEgressDropsCompetingAPIKey.
+func TestApplyWorkspaceCreds_ManagedIntegration_EnsuresEgressDropsCompetingAPIKey(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{{
+		ID: "acme-sub", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+		Config: mustJSON(map[string]any{"lane": "managed"}),
+	}})
+	scope, _ := json.Marshal(map[string]string{"host": "api.anthropic.com", "secret_name": "stray"})
+	spec := &types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope}}}
+	ws := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-sub"}}
+	if ref := foldRef(s, spec, ws, "claude-code"); ref != "acme-sub" {
+		t.Fatalf("ref = %q, want acme-sub", ref)
+	}
+	if _, ok := apiKeyGrantForHost(spec, "api.anthropic.com"); ok {
+		t.Fatal("managed must drop a competing api-key grant so the managed token injects")
+	}
+	if !domainAllowedExact(spec.AllowedDomains, "api.anthropic.com") {
+		t.Fatal("managed must ensure api.anthropic.com egress")
+	}
+}
+
+// TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount covers
+// the OTHER subscription lane: resident_host must go through
+// applyLLMCredMount — THE single subscription gate (unchanged) — rather than
+// the managed (no-mount) path.
+func TestApplyWorkspaceCreds_ResidentHostIntegration_InjectsCeilingMount(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{{
+		ID: "acme-sub-host", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+		Config: mustJSON(map[string]any{"lane": "resident_host"}),
+	}})
+	s.cfg.DefaultPolicy = types.RunPolicySpec{
+		AllowedDomains:  []string{"api.anthropic.com"},
+		WorkspaceMounts: []types.WorkspaceMount{{Source: "/host/.claude", Target: claudeCredTarget}},
+	}
+	spec := &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	ws := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-sub-host"}}
+	if ref := foldRef(s, spec, ws, "claude-code"); ref != "acme-sub-host" {
+		t.Fatalf("ref = %q, want acme-sub-host", ref)
+	}
+	if !specHasMountTarget(spec, claudeCredTarget) {
+		t.Fatal("resident_host lane must inject the ceiling's Claude credential mount (applyLLMCredMount)")
+	}
+}
+
+// TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionModel
+// restores TestCreateRun_WorkspaceBedrockCred_DisplacesAPIKeyGrantAndAllowsRegion's
+// core claim (the workspace's region/model beats the server's global Bedrock
+// config) at the fold level: applyPrimaryWorkspaceCreds is exactly what
+// runs.go calls at create, unchanged in position, so this proves the same
+// thing without re-standing-up the full dispatch harness that commit deleted
+// alongside it.
+func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionModel(t *testing.T) {
+	const wsRegion, wsModel = "eu-central-1", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	s := integrationTestServer(t, []types.Integration{{
+		ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
+		Config: mustJSON(map[string]any{"region": wsRegion, "model": wsModel}),
+	}})
+	s.cfg.BedrockRegion, s.cfg.BedrockModel = "us-east-1", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	spec := &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-bedrock"}}
+	req := createRunRequest{Agent: "claude-code"}
+
+	bedrockRef := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, []types.Workspace{ws})
+	if bedrockRef == nil || bedrockRef.Region != wsRegion || bedrockRef.Model != wsModel {
+		t.Fatalf("bedrockRef = %+v, want region=%s model=%s", bedrockRef, wsRegion, wsModel)
+	}
+	for _, want := range []string{bedrockRuntimeHost(wsRegion), bedrockControlHost(wsRegion)} {
+		if !domainAllowedExact(spec.AllowedDomains, want) {
+			t.Errorf("AllowedDomains missing %q; got %v", want, spec.AllowedDomains)
+		}
+	}
+	if domainAllowedExact(spec.AllowedDomains, bedrockRuntimeHost("us-east-1")) {
+		t.Errorf("AllowedDomains carries the GLOBAL region's bedrock host; the integration override must replace it: %v",
+			spec.AllowedDomains)
+	}
+}
+
+// TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace
+// proves resolution tier 4 (the operator's site-wide default) fires even for
+// a run with NO workspace at all — new behavior an Integration-less world
+// could never offer.
+func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t *testing.T) {
+	in := apiKeyIntegration("acme-anthropic", "acme-anthropic-key")
+	in.DefaultFor = []string{"agent_runs"}
+	s := integrationTestServer(t, []types.Integration{in}, "acme-anthropic-key")
+	spec := &types.RunPolicySpec{}
+	req := createRunRequest{Agent: "claude-code"}
+
+	bedrockRef := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, nil)
+	if bedrockRef != nil {
+		t.Errorf("bedrockRef = %+v, want nil for an api_key integration", bedrockRef)
+	}
+	if _, ok := apiKeyGrantForHost(spec, "api.anthropic.com"); !ok {
+		t.Fatal("expected the DefaultFor:agent_runs integration to apply with zero workspaces attached")
+	}
+}
+
+// TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef
+// pins resolution tier 1 (run-explicit) over tier 3 (workspace ref): an
+// explicit choice at create time overrides whatever the workspace itself
+// bound.
+func TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef(t *testing.T) {
+	s := integrationTestServer(t, []types.Integration{
+		apiKeyIntegration("workspace-pick", "workspace-secret"),
+		apiKeyIntegration("explicit-pick", "explicit-secret"),
+	}, "workspace-secret", "explicit-secret")
+	spec := &types.RunPolicySpec{}
+	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "workspace-pick"}}
+	req := createRunRequest{Agent: "claude-code", IntegrationID: "explicit-pick"}
+
+	s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, []types.Workspace{ws})
+	g, ok := apiKeyGrantForHost(spec, "api.anthropic.com")
+	if !ok {
+		t.Fatal("expected an api_key grant")
+	}
+	var scope map[string]string
+	_ = json.Unmarshal(g.Scope, &scope)
+	if scope["secret_name"] != "explicit-secret" {
+		t.Fatalf("grant secret = %q, want the run-explicit integration's secret (explicit-secret), not the workspace's", scope["secret_name"])
+	}
+}
+
+// TestApplyWorkspaceCreds_NoBindingIsNoOp restores TestApplyWorkspaceCreds_NoBindingIsNoOp
+// (both the original pre-Integration version and its interim W5-stub
+// replacement): nil binding, an empty ref, a non-LLM agent, and — now that
+// resolution is real — a ref that resolves to nothing at all (a bare Server
+// with no stored/derivable integrations) must all stay a no-op.
 func TestApplyWorkspaceCreds_NoBindingIsNoOp(t *testing.T) {
 	s := New(Config{})
 	spec := &types.RunPolicySpec{}
 
 	// nil binding
-	if mode := s.applyWorkspaceCreds(context.Background(), spec, &types.Workspace{}, "claude-code"); mode != "" {
-		t.Fatalf("nil binding: mode = %q, want empty", mode)
+	if ref := foldRef(s, spec, &types.Workspace{}, "claude-code"); ref != "" {
+		t.Fatalf("nil binding: ref = %q, want empty", ref)
 	}
-	// explicit empty ref (the IntegrationRef equivalent of "no binding")
+	// explicit empty ref
 	ws := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: ""}}
-	if mode := s.applyWorkspaceCreds(context.Background(), spec, ws, "claude-code"); mode != "" {
-		t.Fatalf("empty ref: mode = %q, want empty", mode)
+	if ref := foldRef(s, spec, ws, "claude-code"); ref != "" {
+		t.Fatalf("empty ref: ref = %q, want empty", ref)
 	}
 	// non-LLM agent: nothing to bind even with a ref set
 	ws2 := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}}
-	if mode := s.applyWorkspaceCreds(context.Background(), spec, ws2, "some-other-agent"); mode != "" {
-		t.Fatalf("non-LLM agent: mode = %q, want empty", mode)
+	if ref := foldRef(s, spec, ws2, "some-other-agent"); ref != "" {
+		t.Fatalf("non-LLM agent: ref = %q, want empty", ref)
 	}
-	// LLM agent WITH a ref set: still a no-op today (W5: resolveWorkspaceIntegration
-	// is unimplemented). This assertion is expected to start failing the moment W5
-	// lands real resolution — that's the point: it flags this test for an update
-	// instead of silently going stale.
-	ws3 := &types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}}
-	if mode := s.applyWorkspaceCreds(context.Background(), spec, ws3, "claude-code"); mode != "" {
-		t.Fatalf("unresolvable ref: mode = %q, want empty (W5 resolution not wired)", mode)
+	// LLM agent WITH a ref set, but nothing configured anywhere to resolve it
+	// against (a bare Server: no Store, no Secrets) — an unresolvable ref falls
+	// back honestly rather than erroring.
+	if ref := foldRef(s, spec, ws2, "claude-code"); ref != "" {
+		t.Fatalf("unresolvable ref: ref = %q, want empty", ref)
 	}
 	if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
 		t.Fatal("no-op cases must not mutate the spec")
+	}
+}
+
+// TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp is the create-path twin
+// of TestApplyWorkspaceCreds_NoBindingIsNoOp: zero workspaces, zero
+// integrations, no explicit integration_id — must resolve to nothing and
+// never audit a run.workspace.creds event.
+func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
+	audit := &recRecorder{}
+	s := New(Config{Audit: audit})
+	spec := &types.RunPolicySpec{}
+	req := createRunRequest{Agent: "claude-code"}
+
+	if got := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, nil); got != nil {
+		t.Fatalf("bedrockRef = %+v, want nil", got)
+	}
+	if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
+		t.Fatal("no-op case must not mutate the spec")
+	}
+	for _, ev := range audit.events {
+		if ev.Action == "run.workspace.creds" {
+			t.Fatalf("unexpected run.workspace.creds audit event for a no-op resolution: %+v", ev)
+		}
 	}
 }
