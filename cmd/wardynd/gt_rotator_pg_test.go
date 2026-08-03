@@ -107,12 +107,24 @@ func TestGroundtruthRotatorLock_MutualExclusionAndTakeover(t *testing.T) {
 		t.Fatalf("close hijacked connA: %v", err)
 	}
 
-	releaseB, ok, err := db.TryAdvisoryLock(ctx, poolB, db.GroundTruthRotatorLockKey)
-	if err != nil {
-		t.Fatalf("B try-lock after A's session died: %v", err)
-	}
-	if !ok {
-		t.Fatal("standby never took over after the leader's session ended; the rotator would stay dead until manual intervention")
+	// Closing the client end returns before Postgres has finished tearing the
+	// backend down, so the lock is released a moment later — retry rather than
+	// racing it. This mirrors production: a standby does not take over instantly
+	// either, it wins on its next backoff tick. What must hold is that takeover
+	// happens at all, without intervention.
+	var releaseB func()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		var ok bool
+		var err error
+		if releaseB, ok, err = db.TryAdvisoryLock(ctx, poolB, db.GroundTruthRotatorLockKey); err != nil {
+			t.Fatalf("B try-lock after A's session died: %v", err)
+		} else if ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("standby never took over after the leader's session ended; the rotator would stay dead until manual intervention")
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	releaseB()
 }
