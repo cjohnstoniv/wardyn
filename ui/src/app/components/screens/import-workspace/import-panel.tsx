@@ -47,6 +47,7 @@ import {
   activeStepForStatus,
   isTransientStatus,
   isRecording,
+  recordSessions,
   sessionKeyOf,
   newEgressHosts,
   type ImportStepId,
@@ -95,6 +96,9 @@ export function ImportWorkspaceDialog({
   // opens it — the panel owns the drawer so the pane stays free of the profile
   // round-trip).
   const [recordBusyTask, setRecordBusyTask] = React.useState<string | null>(null);
+  // The Record step has two modes: record an OPEN session (learn what the task
+  // reaches), then replay it CONFINED (prove the approved set is enough).
+  const [replayMode, setReplayMode] = React.useState(false);
   const [recordNotice, setRecordNotice] = React.useState<{ status: number; detail?: string } | null>(null);
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
   // Suggested "save as is" policy name (workspace + recording) for the profile drawer.
@@ -234,16 +238,21 @@ export function ImportWorkspaceDialog({
   // any other failure toasts. Reload after so the pane picks up the `recording`
   // state (and the poll gate stays open while it runs). busyTask keys off the
   // predicted slug so a re-record disables the right card.
-  const doRecord = async (name: string) => {
+  // `confined` REPLAYS a recorded session under the approved set (default-deny
+  // egress, off-policy hosts escalate to a live approval) — the least-privilege
+  // proof that survived the verify pipeline's retirement. It is keyed
+  // verify:<slug> server-side (the record store's own prefix), so the busy key
+  // must match or the wrong card spins.
+  const doRecord = async (name: string, confined = false) => {
     if (!wsId) return;
-    setRecordBusyTask(sessionKeyOf(name));
+    setRecordBusyTask((confined ? "verify:" : "") + sessionKeyOf(name));
     setRecordNotice(null);
     try {
-      const r = await workspacesApi.recordTask(wsId, name);
+      const r = await workspacesApi.recordTask(wsId, name, confined);
       if (!r.ok) setRecordNotice({ status: r.status, detail: r.detail });
       await loadWs(wsId);
     } catch (e) {
-      toast.error("Recording failed to start", { description: msg(e) });
+      toast.error(confined ? "Confined replay failed to start" : "Recording failed to start", { description: msg(e) });
     } finally {
       setRecordBusyTask(null);
     }
@@ -388,10 +397,11 @@ export function ImportWorkspaceDialog({
             {step === "record" && ws && (
               <RecordPane
                 ws={ws}
+                confined={replayMode}
                 notice={recordNotice}
                 busyTask={recordBusyTask}
                 modelReady={llmReady}
-                onRecord={doRecord}
+                onRecord={(name: string) => doRecord(name, replayMode)}
                 onDoneRecording={doneRecording}
                 onPromoteEgress={requestPromoteEgress}
                 onApproveHost={requestApproveHost}
@@ -420,7 +430,22 @@ export function ImportWorkspaceDialog({
                 <Button onClick={handleDone}>Done</Button>
               </div>
             )}
-            {step === "record" && <Button onClick={handleDone}>Done</Button>}
+            {step === "record" && (
+              <div className="flex items-center gap-2">
+                {/* Replay confined is the least-privilege proof: re-run a recorded
+                    session with ONLY the approved set, so an off-policy host shows
+                    up as a live decision instead of a silent allow. It needs a
+                    recording to replay, so it stays disabled until there is one. */}
+                <Button
+                  variant="outline"
+                  onClick={() => setReplayMode((r) => !r)}
+                  disabled={!replayMode && recordSessions(ws ?? ({} as never), false).length === 0}
+                >
+                  {replayMode ? "Back to recording" : "Replay confined"}
+                </Button>
+                <Button onClick={handleDone}>Done</Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
