@@ -150,9 +150,9 @@ const createdRun: AgentRun = {
   runner_target: "docker",
 };
 
-// The on-open setup-hint links to "/setup" via react-router's <Link>, which
-// throws without a Router ancestor — wrap every render in one (same pattern as
-// audit.test.tsx / approvals.test.tsx).
+// The on-open setup-hint links to "/integrations" via react-router's <Link>,
+// which throws without a Router ancestor — wrap every render in one (same
+// pattern as audit.test.tsx / approvals.test.tsx).
 function renderDialog(ui: Parameters<typeof render>[0]) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
@@ -484,7 +484,7 @@ describe("NewRunDialog — compose-session id (decision 1/9)", () => {
 });
 
 describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
-  it("shows an amber hint linking to Getting started when model access isn't configured", async () => {
+  it("shows an amber hint linking to Integrations when model access isn't configured", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     // No secret, no CLI login, AND no resolved composer backend — llmReady AND
     // composerReady both false (the dialog's own listComposerBackends() is a
@@ -500,8 +500,8 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
-    const link = await screen.findByRole("link", { name: /finish getting started/i });
-    expect(link).toHaveAttribute("href", "/setup");
+    const link = await screen.findByRole("link", { name: /add an integration/i });
+    expect(link).toHaveAttribute("href", "/integrations");
   });
 
   it("shows no hint when the composer + model access are both already configured", async () => {

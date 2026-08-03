@@ -36,8 +36,144 @@ import type {
   WorkspaceSelection,
 } from "../../../lib/types";
 import { asFirstUseMode, SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
+// The composition-model fields (sources / requirements) aren't on
+// lib/types/workspaces.ts's Workspace type yet — lib/api/workspaces.ts's own
+// header comment explains why (they live next to the functions that need them
+// instead of widening that shared file out from under whoever else is mid-edit
+// on it). Reuse that SAME stopgap here instead of re-declaring a second copy.
+import type {
+  WorkspaceRequirementsMap,
+  WorkspaceSourceInput,
+} from "../../../lib/api/workspaces";
 
 export type { WorkspaceSelection };
+
+// A run-creation-time selection, widened with the per-run requirements-contract
+// options CreateRunRequest.Workspaces carries (pkg/client/client.go's
+// WorkspaceSelection.EnabledOptional/ReadOnly) — lib/types/workspaces.ts's
+// WorkspaceSelection doesn't carry enabledOptional yet, so extend locally like
+// the import above rather than widening the shared type mid-flight.
+export interface RunWorkspaceSelection extends WorkspaceSelection {
+  // Optional-requirement KEYS ("secret:NAME" | "egress:host" | "write:/path")
+  // this run opts into for this workspace. A Required entry never needs to be
+  // listed — it applies automatically. Wire: WorkspaceSelection.enabled_optional.
+  enabledOptional?: string[];
+}
+
+// `Workspace.requirements` isn't on the shared Workspace type yet (see the
+// import comment above) even though the server already returns it — read it
+// through this ONE cast point rather than scattering `as` casts around the
+// New Run UI (mirrors how Workspace.profile is read via a typed cast-read).
+export function workspaceRequirements(ws: Workspace): WorkspaceRequirementsMap {
+  return (ws as unknown as { requirements?: WorkspaceRequirementsMap }).requirements ?? {};
+}
+
+// Same stopgap for Workspace.sources (a workspace's one-or-more local_dir/repo/
+// ephemeral sources) — read-only here, so the request-shaped WorkspaceSourceInput
+// doubles as the response shape (the wire fields are identical either direction).
+function workspaceSources(ws: Workspace): WorkspaceSourceInput[] {
+  return (ws as unknown as { sources?: WorkspaceSourceInput[] }).sources ?? [];
+}
+
+// splitRequirementKey mirrors internal/api/workspaces.go's splitRequirementKey:
+// split on the FIRST colon only — a write:/host/path value may itself legally
+// contain colons, so the type prefix must never be recovered from the last one.
+function splitRequirementKey(key: string): { type: string; name: string } | null {
+  const i = key.indexOf(":");
+  if (i < 0) return null;
+  return { type: key.slice(0, i), name: key.slice(i + 1) };
+}
+
+// One requirements-contract entry as the picker needs it: the bare name/host/path
+// for display, plus the full "<type>:<key>" wire key for enabledOptional.
+export interface RequirementEntry {
+  key: string;
+  name: string;
+}
+
+// A workspace's requirements contract, grouped for display — what
+// workspace-picker.tsx's "Comes with:" summary + optional-toggle checkboxes and
+// step-review.tsx's Review grid both render from, so the two surfaces can't
+// disagree about what a workspace carries. Required entries ride along with
+// every run automatically (never a checkbox); Optional entries are the per-run
+// opt-ins that become buildSpec's enabled_optional.
+export interface RequirementsSummary {
+  requiredSecrets: string[];
+  optionalSecrets: RequirementEntry[];
+  requiredHosts: string[];
+  optionalHosts: RequirementEntry[];
+  requiredWrite: boolean;
+  // Usually 0 or 1 (one write:<path> per local_dir source), but kept as a list
+  // since a multi-source workspace can in principle declare more than one.
+  optionalWriteKeys: string[];
+}
+
+export function summarizeWorkspaceRequirements(ws: Workspace): RequirementsSummary {
+  const out: RequirementsSummary = {
+    requiredSecrets: [],
+    optionalSecrets: [],
+    requiredHosts: [],
+    optionalHosts: [],
+    requiredWrite: false,
+    optionalWriteKeys: [],
+  };
+  const reqs = workspaceRequirements(ws);
+  for (const key of Object.keys(reqs).sort()) {
+    const split = splitRequirementKey(key);
+    if (!split) continue; // defense only — the write endpoint already rejects a bad key
+    const { type, name } = split;
+    const required = reqs[key].level === "required";
+    if (type === "secret") {
+      if (required) out.requiredSecrets.push(name);
+      else out.optionalSecrets.push({ key, name });
+    } else if (type === "egress") {
+      if (required) out.requiredHosts.push(name);
+      else out.optionalHosts.push({ key, name });
+    } else if (type === "write") {
+      if (required) out.requiredWrite = true;
+      else out.optionalWriteKeys.push(key);
+    }
+  }
+  return out;
+}
+
+// The picker/detail "Comes with: …" line (mirrors the approved mock's
+// comesWith()): a short "N secrets · N hosts · write access" summary, or the
+// honest fallback when the contract adds nothing beyond the auto-allowed set.
+export function comesWithLine(ws: Workspace): string {
+  const s = summarizeWorkspaceRequirements(ws);
+  const bits: string[] = [];
+  if (s.requiredSecrets.length) {
+    bits.push(`${s.requiredSecrets.length} secret${s.requiredSecrets.length > 1 ? "s" : ""}`);
+  }
+  if (s.requiredHosts.length) {
+    bits.push(`${s.requiredHosts.length} host${s.requiredHosts.length > 1 ? "s" : ""}`);
+  }
+  if (ws.kind === "local_dir" && s.requiredWrite) bits.push("write access");
+  return bits.length ? bits.join(" · ") : "nothing beyond the auto-allowed set";
+}
+
+// Required secrets this workspace declares that aren't in the stored-secret
+// list — the picker's "⚠ N secrets it requires aren't stored" attention line.
+export function unstoredRequiredSecrets(ws: Workspace, storedSecrets: string[]): string[] {
+  return summarizeWorkspaceRequirements(ws).requiredSecrets.filter((n) => !storedSecrets.includes(n));
+}
+
+// A multi-source workspace's composition ("2 dirs · 1 repo") instead of a
+// single kind label. Returns null for a single-source (or sources-less, i.e.
+// pre-composition) workspace, so the caller falls back to its ordinary
+// single-kind rendering — only a genuinely multi-source workspace needs this.
+export function compositionSummary(ws: Workspace): string | null {
+  const sources = workspaceSources(ws);
+  if (sources.length <= 1) return null;
+  const counts = { local_dir: 0, repo: 0, ephemeral: 0 };
+  for (const s of sources) if (s.type in counts) counts[s.type]++;
+  const bits: string[] = [];
+  if (counts.local_dir) bits.push(`${counts.local_dir} dir${counts.local_dir > 1 ? "s" : ""}`);
+  if (counts.repo) bits.push(`${counts.repo} repo${counts.repo > 1 ? "s" : ""}`);
+  if (counts.ephemeral) bits.push(`${counts.ephemeral} scratch dir${counts.ephemeral > 1 ? "s" : ""}`);
+  return bits.join(" · ");
+}
 
 export type WizardStepId =
   | "basics"
@@ -56,6 +192,9 @@ export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
 
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
 // bug by constraining the picker to exactly these dotted ids.
+// SEAM: there is no harness/tool-catalog endpoint exposed to the UI yet (no GET
+// listing installable agent CLIs) — if one ships, read the picker's options from
+// it instead of hand-adding a third literal here.
 export type WizardAgent = "claude-code" | "codex-cli";
 
 export type RunMode = "interactive" | "batch";
@@ -68,19 +207,12 @@ export type Lifecycle = "never" | "auto";
 // wire) — no agent, no model, the Agent picker is hidden/irrelevant.
 export type RunType = "agent" | "command";
 
-// How the run authenticates to Anthropic (claude-code only). API key is the
-// zero-resident, secure default; subscription mounts the host OAuth creds into
-// the sandbox (reduced isolation); Bedrock is a fast-follow (disabled for now).
-export type AnthropicAuth = "subscription" | "apikey" | "bedrock";
-
-// In subscription mode the wizard collects an ABSOLUTE host path to the resident
-// ~/.claude directory (the wire needs an absolute path, NOT "~/.claude").
-// Empty by default: the operator must type an ABSOLUTE host path. We can't
-// pre-fill a valid default because "~/.claude" isn't expandable to a Docker
-// mount source and the browser can't know the host's home dir. An empty field
-// (with the "/home/you/.claude" placeholder + the absolute-path hint) reads as
-// "needs input", instead of a pre-filled value that silently fails validation.
-export const DEFAULT_CLAUDE_DIR = "";
+// RETIRED: AnthropicAuth ("subscription"|"apikey"|"bedrock") + DEFAULT_CLAUDE_DIR
+// used to let a run pick its own Anthropic auth mode and mount an ad-hoc host
+// ~/.claude path per launch. Model access no longer comes from per-run auth
+// cards — it RESOLVES from integrations (run override -> workspace pin ->
+// server default -> honest none; see step-access.tsx). A subscription is now an
+// ai_provider integration configured once (Integrations), not typed in per run.
 
 // The curated preset egress domains the chips toggle. Custom domains are added
 // separately (see isValidDomain below for what the client does and doesn't check).
@@ -114,8 +246,9 @@ export interface WizardState {
   // nothing else). The FIRST entry is the primary: its kind/source drives the
   // run's `repo` label and (for a repo) the image resolution; buildSpec resolves
   // each selection's workspaceId against the fetched Workspace list into a
-  // workspace_mounts[] (local_dir) or workspace_repos[] (repo) entry.
-  workspaces: WorkspaceSelection[];
+  // workspace_mounts[] (local_dir) or workspace_repos[] (repo) entry, PLUS a
+  // run.workspaces[] entry carrying its enabledOptional/readOnly options.
+  workspaces: RunWorkspaceSelection[];
   mode: RunMode;
   task: string;
   // The Basics "start from" picker's current value — either a recorded profile's
@@ -146,12 +279,11 @@ export interface WizardState {
   gitPatSecretName: string; // stored secret name holding the PAT ("" = none)
   gitPatUsername: string; // optional git username override (ADO=pat, GitLab=oauth2 by default)
   gitPatRequiresApproval: boolean;
-  // Anthropic auth mode (claude-code only). codex-cli always uses the OpenAI
-  // api_key path regardless of this field.
-  anthropicAuth: AnthropicAuth;
-  // Absolute host path to the resident ~/.claude dir, used only in subscription
-  // mode. Mounted at /home/agent/.claude; the sibling .json is derived/mounted too.
-  subscriptionClaudeDir: string;
+  // Run override for model/harness access: pins this run to a SPECIFIC
+  // ai_provider integration (Integration.ID), overriding the workspace pin and
+  // server default — see step-access.tsx's "Override for this run…" peek and
+  // CreateRunRequest.IntegrationID. Unset => resolves normally.
+  integrationId?: string;
 
   // --- Step 3: egress ---
   allowedDomains: string[]; // selected preset + custom domains
@@ -197,9 +329,6 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
     // Default to approval-gated: a PAT is a long-lived, non-expirable secret, so
     // its first use should route through a human approval by default.
     gitPatRequiresApproval: true,
-    // API key is the secure, zero-resident default.
-    anthropicAuth: "apikey",
-    subscriptionClaudeDir: DEFAULT_CLAUDE_DIR,
 
     allowedDomains: ["api.anthropic.com"],
     deniedDomains: [],
@@ -264,6 +393,39 @@ function resolveWorkspace(sel: WorkspaceSelection, workspaces: Workspace[]): Wor
   return workspaces.find((w) => w.id === sel.workspaceId);
 }
 
+// Mirrors internal/api/runs_create.go's applyWriteNarrowing CLIENT-SIDE, so the
+// mount buildSpec composes is ALREADY the true resolved value — Review's "exact
+// policy" JSON must show what will actually be enforced, not a placeholder the
+// server silently rewrites later. Required (or an enabled Optional) grants
+// write by default; sel.readOnly may only narrow that to read-only, never widen
+// a not-granted default to writable (matches the Go doc comment exactly).
+function resolvedMountReadOnly(ws: Workspace, sel: RunWorkspaceSelection): boolean {
+  const s = summarizeWorkspaceRequirements(ws);
+  const enabled = new Set(sel.enabledOptional ?? []);
+  const grantedDefault = s.requiredWrite || s.optionalWriteKeys.some((k) => enabled.has(k));
+  if (!grantedDefault) return true;
+  return sel.readOnly === true;
+}
+
+// One entry of CreateRunRequest.Workspaces (pkg/client/client.go's
+// WorkspaceSelection) — snake_case wire shape, distinct from this module's own
+// camelCase RunWorkspaceSelection (the wizard's per-attachment STATE).
+export interface RunWorkspaceSelectionWire {
+  workspace_id: string;
+  enabled_optional?: string[];
+  read_only?: boolean;
+}
+
+// CreateRunInput (lib/types/runs.ts) doesn't carry `workspaces`/`integration_id`
+// yet — same stopgap as the WorkspaceRequirementsMap import above: extend
+// locally rather than widen the shared type out from under whoever else is
+// mid-edit on it. Mirrors pkg/client/client.go's CreateRunRequest.Workspaces /
+// IntegrationID 1:1.
+export type CreateRunInputWithComposition = CreateRunInput & {
+  workspaces?: RunWorkspaceSelectionWire[];
+  integration_id?: string;
+};
+
 // buildSpec is the contract chokepoint: state in, canonical wire shapes out.
 // `workspaces` is the onboarded-workspace list each selection resolves against
 // (the wizard fetches it via listWorkspaces(); tests that don't touch
@@ -274,13 +436,13 @@ export function buildSpec(
   state: WizardState,
   workspaces: Workspace[] = [],
 ): {
-  run: CreateRunInput;
+  run: CreateRunInputWithComposition;
   inline_policy: RunPolicySpec;
 } {
   const interactive = state.mode === "interactive";
 
   // --- run scalars ---
-  const run: CreateRunInput = {
+  const run: CreateRunInputWithComposition = {
     agent: state.agent as Agent,
     repo: "",
     // An interactive run comes up idle (the backend ignores task for it), but
@@ -298,6 +460,11 @@ export function buildSpec(
   // stays backward-compatible.
   if (state.runType === "command") {
     run.task_mode = "exec";
+  }
+  // Run override: pins model/harness access to one specific integration,
+  // overriding the workspace pin and server default (see step-access.tsx).
+  if (state.integrationId) {
+    run.integration_id = state.integrationId;
   }
 
   // --- onboarded workspace selections -> workspace_mounts[] / workspace_repos[]
@@ -333,7 +500,10 @@ export function buildSpec(
         // start. A workspace's own default_target, or a per-run override,
         // takes precedence.
         target: target || "/home/agent/work",
-        read_only: !!sel.readOnly,
+        // The workspace's requirements contract decides write access now (a
+        // Required write, or an enabled Optional one) — not a bare per-run
+        // flag. See resolvedMountReadOnly.
+        read_only: resolvedMountReadOnly(w, sel),
       });
     }
     if (i === 0) {
@@ -344,32 +514,21 @@ export function buildSpec(
     }
   });
 
-  // Claude-code subscription mode: mount the resident OAuth creds instead of
-  // granting an api_key. The presence of these mounts is how agent-run DETECTS
-  // subscription (it then unsets ANTHROPIC_BASE_URL so claude uses the resident
-  // OAuth creds via the HTTPS_PROXY CONNECT tunnel).
-  const isSubscription =
-    state.agent === "claude-code" && state.anthropicAuth === "subscription";
-
-  if (isSubscription) {
-    const dir = state.subscriptionClaudeDir.trim().replace(/\/+$/, "");
-    if (dir) {
-      workspaceMounts.push({
-        source: dir,
-        target: "/home/agent/.claude",
-        read_only: true,
-      });
-      // Mount the sibling ~/.claude.json (the host stores it next to the dir).
-      const jsonPath = claudeJsonSibling(dir);
-      if (jsonPath) {
-        workspaceMounts.push({
-          source: jsonPath,
-          target: "/home/agent/.claude.json",
-          read_only: true,
-        });
-      }
-    }
-  }
+  // --- per-workspace requirements-contract options (CreateRunRequest.Workspaces)
+  // --- additive to the mounts/repos above: a selection here does nothing unless
+  // its workspace is already attached via one of those (see WorkspaceSelection's
+  // doc comment on the Go side). Only emitted for a selection that actually opts
+  // into something — an all-defaults selection is a no-op the server doesn't need
+  // to see.
+  const runWorkspaces: RunWorkspaceSelectionWire[] = [];
+  state.workspaces.forEach((sel) => {
+    if (!sel.enabledOptional?.length && sel.readOnly === undefined) return;
+    const entry: RunWorkspaceSelectionWire = { workspace_id: sel.workspaceId };
+    if (sel.enabledOptional?.length) entry.enabled_optional = sel.enabledOptional;
+    if (sel.readOnly !== undefined) entry.read_only = sel.readOnly;
+    runWorkspaces.push(entry);
+  });
+  if (runWorkspaces.length) run.workspaces = runWorkspaces;
 
   // --- eligible grants ---
   const grants: GrantSpec[] = [];
@@ -403,9 +562,11 @@ export function buildSpec(
     });
   }
 
-  // The LLM api_key grant. Subscription mode uses resident OAuth creds instead,
-  // so it never adds an api_key grant.
-  if (state.llmSecretName && !isSubscription) {
+  // The LLM api_key grant — carried forward for a hydrated recording/policy
+  // that already names one (see wizardStateFromProposal); there is no longer a
+  // manual picker for it in step-access.tsx (model access resolves from
+  // integrations instead).
+  if (state.llmSecretName) {
     const host = llmHostForSecret(state.agent, state.llmSecretName);
     const { header, format } = apiKeyInjectionFor(host);
     grants.push({
@@ -434,11 +595,9 @@ export function buildSpec(
   // approval. This only unions in hosts the operator already opted into via the
   // Access step — it never broadens beyond the run's own granted capabilities.
   const requiredHosts: string[] = [];
-  if (state.llmSecretName && !isSubscription) {
+  if (state.llmSecretName) {
     requiredHosts.push(llmHostForSecret(state.agent, state.llmSecretName));
   }
-  // Subscription claude needs api.anthropic.com reachable for the OAuth tunnel.
-  if (isSubscription) requiredHosts.push("api.anthropic.com");
   // any repo-kind selection unions the GitHub clone hosts — the
   // overwhelmingly common case. A repo onboarded from a non-GitHub host still
   // works (its clone egress comes from the workspace's own scanned profile
@@ -468,7 +627,7 @@ export function buildSpec(
   // pinned host under allow-all — they're reached via plain egress, not a proxy
   // injection rule — so we only force the api_key host through here.)
   const grantInjectionHosts: string[] = [];
-  if (state.llmSecretName && !isSubscription) {
+  if (state.llmSecretName) {
     grantInjectionHosts.push(llmHostForSecret(state.agent, state.llmSecretName));
   }
 
@@ -505,13 +664,6 @@ function apiKeyInjectionFor(host: string): { header: string; format: string } {
   return { header: "Authorization", format: "Bearer %s" };
 }
 
-// Derive the resident ~/.claude.json path from the ~/.claude dir by stripping a
-// trailing slash and appending ".json" (".../.claude" => ".../.claude.json").
-function claudeJsonSibling(dir: string): string {
-  const cleaned = dir.replace(/\/+$/, "");
-  if (!cleaned) return "";
-  return `${cleaned}.json`;
-}
 
 function dedupe(xs: string[]): string[] {
   return Array.from(new Set(xs.map((x) => x.trim()).filter(Boolean)));
@@ -553,7 +705,7 @@ export function wizardStateFromProposal(
   const matched = workMount
     ? workspaces.find((w) => w.kind === "local_dir" && w.source === workMount.source)
     : workspaces.find((w) => w.kind === "repo" && w.source === run.repo);
-  const workspaceSelections: WorkspaceSelection[] = matched
+  const workspaceSelections: RunWorkspaceSelection[] = matched
     ? [{ workspaceId: matched.id, readOnly: workMount ? !!workMount.read_only : undefined }]
     : [];
 
@@ -561,17 +713,17 @@ export function wizardStateFromProposal(
   const apiKeyGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "api_key");
   const apiKeySecret = (apiKeyGrant?.scope?.secret_name as string) ?? "";
 
-  // Subscription claude is signalled EITHER by the resident ~/.claude mount OR by
-  // an api_key grant naming the subscription OAuth sentinel — the latter is how a
-  // RECORDED profile carries subscription auth (recordings never synthesize the
-  // mount). Recognizing the sentinel here is what stops fromSpec from carrying it
-  // into llmSecretName and re-emitting a broken x-api-key grant to a secret that
-  // doesn't exist (the "references unknown secret" launch failure).
-  const claudeMount = (spec.workspace_mounts ?? []).find(
-    (m) => m.target === "/home/agent/.claude",
-  );
+  // A recorded profile's api_key grant can name the subscription OAuth sentinel
+  // instead of a real stored secret (recordings never synthesize a resident
+  // mount for it) — recognizing it here is what stops it from being carried
+  // into llmSecretName and re-emitted as a broken x-api-key grant to a secret
+  // that doesn't exist (the "references unknown secret" launch failure). The
+  // resident ~/.claude PATH itself is no longer reconstructed (RETIRED —
+  // model access resolves from integrations, not a per-run subscription dir);
+  // a stored/recorded spec's OWN mount there is otherwise carried as an
+  // ordinary, unrecognized workspace_mounts entry — dropped on hydration, same
+  // as any other mount this best-effort inverse doesn't specifically recognize.
   const recordedSubscription = apiKeySecret === SUBSCRIPTION_OAUTH_SECRET;
-  const isSubscription = agent === "claude-code" && (!!claudeMount || recordedSubscription);
   const ghScope = (githubGrant?.scope ?? {}) as {
     repos?: unknown;
     permissions?: Record<string, unknown>;
@@ -597,8 +749,6 @@ export function wizardStateFromProposal(
     // the wizard re-emits the same grant — EXCEPT the subscription sentinel, which
     // is not a real stored secret (it means "subscription auth", handled above).
     llmSecretName: recordedSubscription ? "" : apiKeySecret,
-    anthropicAuth: isSubscription ? "subscription" : "apikey",
-    subscriptionClaudeDir: claudeMount?.source ?? base.subscriptionClaudeDir,
 
     allowedDomains: spec.allowed_domains?.length ? dedupe(spec.allowed_domains) : base.allowedDomains,
     deniedDomains: dedupe(spec.denied_domains ?? []),
@@ -676,12 +826,6 @@ export function validateStep(id: WizardStepId, state: WizardState): string | nul
         return "Add at least one repo for the GitHub token, or disable it.";
       if (state.githubEnabled && state.githubTtlMinutes <= 0)
         return "GitHub token TTL must be a positive number of minutes.";
-      if (state.agent === "claude-code" && state.anthropicAuth === "subscription") {
-        const dir = state.subscriptionClaudeDir.trim();
-        if (!dir) return "Enter the host path to your ~/.claude directory.";
-        if (!dir.startsWith("/"))
-          return "The ~/.claude path must be absolute (e.g. /home/you/.claude).";
-      }
       return null;
     }
     case "egress": {

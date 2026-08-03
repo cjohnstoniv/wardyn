@@ -12,8 +12,134 @@ import {
   wizardStateFromProposal,
 } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
-import type { ComposeRunProposal, RunPolicySpec } from "../../../lib/types";
+import type { ComposeRunProposal, RunPolicySpec, Workspace } from "../../../lib/types";
 import { SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
+
+// Workspace.requirements isn't on the shared Workspace TS type yet (see
+// wizard-types.ts's own import comment) — cast, matching how the module itself
+// reads it.
+function localDirWorkspace(id: string, requirements: Record<string, unknown> = {}): Workspace {
+  return {
+    id,
+    name: id,
+    kind: "local_dir",
+    source: `/home/me/${id}`,
+    status: "ready",
+    created_at: "",
+    updated_at: "",
+    requirements,
+  } as Workspace;
+}
+
+// buildSpec's composition-model additions: run.workspaces[] (enabled_optional +
+// read_only) and run.integration_id, layered ADDITIVELY onto the existing
+// workspace_mounts/repos it already builds (CreateRunRequest.Workspaces is
+// metadata-only — attachment itself still flows through those).
+describe("buildSpec — composition model: workspaces[] + integration_id", () => {
+  it("emits integration_id only when a run override is set", () => {
+    expect(buildSpec(initialWizardState()).run.integration_id).toBeUndefined();
+    const { run } = buildSpec({ ...initialWizardState(), integrationId: "int-1" });
+    expect(run.integration_id).toBe("int-1");
+  });
+
+  it("omits run.workspaces entirely when no selection opts into anything", () => {
+    const ws = localDirWorkspace("ws-1");
+    const { run } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1" }] },
+      [ws],
+    );
+    expect(run.workspaces).toBeUndefined();
+  });
+
+  it("emits one run.workspaces entry per selection that opts into something", () => {
+    const ws1 = localDirWorkspace("ws-1");
+    const ws2 = localDirWorkspace("ws-2");
+    const { run } = buildSpec(
+      {
+        ...initialWizardState(),
+        workspaces: [
+          { workspaceId: "ws-1", enabledOptional: ["egress:api.stripe.com"] },
+          { workspaceId: "ws-2" }, // no-op — must not appear
+        ],
+      },
+      [ws1, ws2],
+    );
+    expect(run.workspaces).toEqual([
+      { workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"] },
+    ]);
+  });
+
+  it("carries read_only through even with no enabled_optional entries", () => {
+    const ws = localDirWorkspace("ws-1");
+    const { run } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1", readOnly: true }] },
+      [ws],
+    );
+    expect(run.workspaces).toEqual([{ workspace_id: "ws-1", read_only: true }]);
+  });
+});
+
+// The mount buildSpec composes must already show the TRUE resolved write
+// access (Review's "exact policy" JSON is this object verbatim) — never a
+// placeholder the server silently rewrites later via applyWorkspaceRequirements.
+describe("buildSpec — write mode resolves honestly into workspace_mounts[].read_only", () => {
+  it("a Required write resolves writable with no enabledOptional/readOnly set", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "write:/home/me/ws-1": { level: "required", provenance: "operator_set" },
+    });
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1" }] },
+      [ws],
+    );
+    expect(inline_policy.workspace_mounts?.[0].read_only).toBe(false);
+  });
+
+  it("a Required write can still be narrowed back to read-only for this run", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "write:/home/me/ws-1": { level: "required", provenance: "operator_set" },
+    });
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1", readOnly: true }] },
+      [ws],
+    );
+    expect(inline_policy.workspace_mounts?.[0].read_only).toBe(true);
+  });
+
+  it("an Optional write NOT enabled stays read-only even if readOnly=false", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "write:/home/me/ws-1": { level: "optional", provenance: "operator_set" },
+    });
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1", readOnly: false }] },
+      [ws],
+    );
+    // A run may never WIDEN an optional it never enabled via enabledOptional.
+    expect(inline_policy.workspace_mounts?.[0].read_only).toBe(true);
+  });
+
+  it("an Optional write that IS enabled resolves writable", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "write:/home/me/ws-1": { level: "optional", provenance: "operator_set" },
+    });
+    const { inline_policy } = buildSpec(
+      {
+        ...initialWizardState(),
+        workspaces: [{ workspaceId: "ws-1", enabledOptional: ["write:/home/me/ws-1"] }],
+      },
+      [ws],
+    );
+    expect(inline_policy.workspace_mounts?.[0].read_only).toBe(false);
+  });
+
+  it("no write requirement declared at all defaults to the safe read-only baseline", () => {
+    const ws = localDirWorkspace("ws-1");
+    const { inline_policy } = buildSpec(
+      { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1" }] },
+      [ws],
+    );
+    expect(inline_policy.workspace_mounts?.[0].read_only).toBe(true);
+  });
+});
 
 // Ephemeral runs: a workspace is OPTIONAL. Basics gates only the batch-needs-a-task
 // rule; an interactive run with zero workspaces is valid and buildSpec degrades to
@@ -39,10 +165,11 @@ describe("validateStep — Basics is workspace-optional (ephemeral runs)", () =>
 
 // Regression for the saved-workspace launch bug: a subscription-recorded profile
 // carries an api_key grant naming the subscription OAuth sentinel (recordings
-// never synthesize the ~/.claude mount). Hydrating it MUST be recognized as
-// subscription auth — NOT carried into llmSecretName and re-emitted as an
-// x-api-key grant to a secret that doesn't exist (the "references unknown secret"
-// launch failure).
+// never synthesize the ~/.claude mount — retired anyway, model access now
+// resolves from integrations, not a per-run subscription dir). Hydrating it
+// must NOT carry the sentinel into llmSecretName and re-emit it as an x-api-key
+// grant to a secret that doesn't exist (the "references unknown secret" launch
+// failure).
 describe("wizardStateFromProposal — subscription sentinel recognition", () => {
   const run = { agent: "claude-code", repo: "org/repo", interactive: true } as ComposeRunProposal;
   const spec: RunPolicySpec = {
@@ -58,24 +185,15 @@ describe("wizardStateFromProposal — subscription sentinel recognition", () => 
     ],
   };
 
-  it("hydrates the sentinel grant as subscription mode, not an api-key secret", () => {
+  it("never carries the sentinel secret name into llmSecretName", () => {
     const state = wizardStateFromProposal(run, spec);
-    expect(state.anthropicAuth).toBe("subscription");
     expect(state.llmSecretName).toBe("");
   });
 
   it("re-building never emits a dangling api_key grant to the sentinel", () => {
     const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
     const apiKey = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "api_key");
-    expect(apiKey).toBeUndefined(); // subscription => proxy-injected, no named-secret grant
-    expect(inline_policy.allowed_domains).toContain("api.anthropic.com");
-  });
-
-  it("reconstructs the resident ~/.claude mount once a subscription dir is set", () => {
-    const state = { ...wizardStateFromProposal(run, spec), subscriptionClaudeDir: "/home/op/.claude" };
-    const { inline_policy } = buildSpec(state);
-    const mount = (inline_policy.workspace_mounts ?? []).find((m) => m.target === "/home/agent/.claude");
-    expect(mount?.source).toBe("/home/op/.claude");
+    expect(apiKey).toBeUndefined(); // no real secret name to re-emit a grant for
   });
 });
 
@@ -91,7 +209,6 @@ describe("buildSpec — allow-all egress + LLM api_key grant", () => {
       ...initialWizardState(),
       // claude-code with an API key => api.anthropic.com injection host.
       agent: "claude-code",
-      anthropicAuth: "apikey",
       llmSecretName: "anthropic-key",
       allowAllEgress: true,
       ...overrides,

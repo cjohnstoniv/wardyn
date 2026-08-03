@@ -465,8 +465,11 @@ export function NewRunDialog({
               <p>
                 Wardyn doesn&apos;t have model access configured yet — Wardyn can still draft a
                 proposal, but a launched run won&apos;t be able to call a model until this is fixed.{" "}
-                <Link to="/setup" className="font-medium underline underline-offset-2 hover:text-warning">
-                  Finish Getting started
+                <Link
+                  to="/integrations"
+                  className="font-medium underline underline-offset-2 hover:text-warning"
+                >
+                  Add an integration
                 </Link>
                 .
               </p>

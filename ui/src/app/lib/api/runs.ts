@@ -91,6 +91,11 @@ export const runs = {
       // Threaded through so `run.create`'s audit row can be correlated back to the
       // compose conversation that produced it — absent for a manually-wizarded run.
       compose_session_id?: string;
+      // Per-run half of the requirements contract: which optional requirements
+      // this run enables, plus any read-only narrowing, per attached workspace.
+      workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+      // Explicit model-access override — tier 1 of the server's resolution chain.
+      integration_id?: string;
     },
   ): Promise<CreateRunResult> {
     const body: Record<string, unknown> = {
@@ -114,6 +119,15 @@ export const runs = {
     // BYOI + governed-command pass-through — previously dropped on the floor here.
     if (input.image) body.image = input.image;
     if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
+    // Composition-model pass-through. This whitelist has dropped a wizard field
+    // on the floor once before (image/task_mode, above) — a selection the
+    // operator made, silently discarded between the form and the wire. These
+    // two carry the per-run half of the requirements contract (which optional
+    // requirements this run enables, and any read-only narrowing) and the
+    // explicit model-access override, so dropping them would launch a run the
+    // Review screen did not describe.
+    if (input.workspaces?.length) body.workspaces = input.workspaces;
+    if (input.integration_id) body.integration_id = input.integration_id;
     const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
   },
@@ -129,6 +143,8 @@ export const runs = {
     input: (Partial<AgentRun> | CreateRunInput) & {
       interactive?: boolean;
       inline_policy?: RunPolicySpec;
+      workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+      integration_id?: string;
     },
   ): Promise<PreflightResult> {
     const body: Record<string, unknown> = {
@@ -146,6 +162,15 @@ export const runs = {
     // Mirror createRun's body exactly, so preflight's verdict matches the real launch.
     if (input.image) body.image = input.image;
     if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
+    // Composition-model pass-through. This whitelist has dropped a wizard field
+    // on the floor once before (image/task_mode, above) — a selection the
+    // operator made, silently discarded between the form and the wire. These
+    // two carry the per-run half of the requirements contract (which optional
+    // requirements this run enables, and any read-only narrowing) and the
+    // explicit model-access override, so dropping them would launch a run the
+    // Review screen did not describe.
+    if (input.workspaces?.length) body.workspaces = input.workspaces;
+    if (input.integration_id) body.integration_id = input.integration_id;
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body) });
     return asJson<PreflightResult>(res);
   },

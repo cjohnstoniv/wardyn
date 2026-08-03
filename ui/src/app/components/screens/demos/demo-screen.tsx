@@ -30,7 +30,7 @@ import { isTerminalRunState, type AuditEvent, type RunState, type SetupStatus } 
 import { deriveReadiness } from "../onboarding/intro";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
-import { CopyPill } from "../import-workspace/record-pane";
+import { CopyPill } from "../workspace-detail/record-pane";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { DEMOS, markDemoLaunched, type Demo, type DemoStep } from "./demo-catalog";

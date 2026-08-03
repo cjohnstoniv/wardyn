@@ -16,9 +16,16 @@ import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { RUN_MODE } from "../../wardyn/copy";
 import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { Field } from "./step-shell";
-import { buildSpec, type WizardState } from "./wizard-types";
+import { buildSpec, comesWithLine, type WizardState } from "./wizard-types";
+// Reused rather than re-derived: the SAME resolution preview step-access.tsx's
+// card computes, so Review can't disagree with Access about what this run's
+// model access resolves to.
+import { resolveModelAccess } from "./step-access";
 import { SetupChecklist } from "./compose-review";
 import { CC_META } from "../../wardyn/cc-meta";
+import { integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
+import { RESIDENCY_META } from "../../../lib/integrations";
+import { RD } from "../../../lib/workspace-copy";
 import type { PreflightResult, RunPolicy, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
 
@@ -61,35 +68,43 @@ export function StepReview({
   // read the stored spec, or Review would show a policy the server won't enforce.
   const inline_policy = attachedPolicy?.spec ?? composed;
   const byId = new Map(workspaces.map((w) => [w.id, w]));
+  const primaryWorkspace = state.workspaces[0] ? byId.get(state.workspaces[0].workspaceId) : undefined;
+  const isGovernedCommand = state.runType === "command";
 
-  const isClaude = state.agent === "claude-code";
-  const isSubscription = isClaude && state.anthropicAuth === "subscription";
-  const authLabel = !isClaude
-    ? "OpenAI API key"
-    : state.anthropicAuth === "subscription"
-      ? "Subscription (OAuth)"
-      : state.anthropicAuth === "bedrock"
-        ? "Bedrock"
-        : "API key";
+  // Self-fetched (Review doesn't otherwise receive the ai_provider integrations
+  // list) — the SAME resolution preview step-access.tsx's card renders, reused
+  // here rather than re-derived so the two steps can't disagree.
+  const [ai, setAi] = React.useState<IntegrationRow[]>([]);
+  React.useEffect(() => {
+    let alive = true;
+    integrationsApi
+      .list()
+      .then((data) => {
+        if (alive) setAi(data.ai);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const resolved = isGovernedCommand
+    ? null
+    : resolveModelAccess(state.agent, state.integrationId, primaryWorkspace, ai);
+  // A resident credential (a "warning"-toned residency, e.g. a host-CLI
+  // subscription mount) means reduced isolation — surfaced the same way
+  // regardless of WHICH integration ended up resolved.
+  const residentAccess = resolved && RESIDENCY_META[resolved.row.residency].tone === "warning";
 
-  // No-model-access surfacing (B3): the api-key path (Claude apikey / Codex) with no
-  // stored secret selected — the run launches but its first model call 404s.
-  // Subscription mounts creds (has access); bedrock is its own path.
-  //
-  // Never contradict the server. An operator-configured transport (Bedrock, a
-  // managed subscription) is applied AT DISPATCH and overrides the per-run
-  // api-key selection, so this local guess would otherwise tell an operator whose
-  // model access demonstrably works — in red — that they have none, and point
-  // them at a secret list that holds no model key. The preflight's llm_access
-  // verdict is the same one launch uses; when it says access is provisioned, it
-  // wins. (Preflight is advisory and may be absent/loading: fall back to the
-  // local guess rather than silently hiding a real gap.)
+  // No-model-access surfacing (B3): nothing resolved for this run, so it will
+  // launch but its first model call 404s. Never contradict the server: the
+  // preflight's llm_access verdict is the same one launch uses, so when it says
+  // access is provisioned, it wins over this local resolution preview.
+  // (Preflight is advisory and may be absent/loading: fall back to the local
+  // resolution rather than silently hiding a real gap.) Irrelevant for a
+  // governed command — there is no agent, so nothing needs to resolve.
   const llmAccessItem = preflight?.setup_items?.find((i) => i.kind === "llm_access");
   const noLlmCred =
-    (!isClaude || state.anthropicAuth === "apikey") &&
-    !state.llmSecretName &&
-    !isSubscription &&
-    llmAccessItem?.status !== "satisfied";
+    !isGovernedCommand && !resolved && llmAccessItem?.status !== "satisfied";
 
   // The run will run at enforced_confinement_class, which the deterministic
   // blast-radius floor can raise ABOVE the operator's pick when the run holds a
@@ -111,7 +126,7 @@ export function StepReview({
 
   return (
     <div className="space-y-5">
-      {isSubscription && (
+      {residentAccess && (
         <Chip tone="warning" dot>
           Reduced isolation: credential resident in sandbox
         </Chip>
@@ -176,14 +191,53 @@ export function StepReview({
           label="Mode"
           value={run.interactive ? RUN_MODE.interactive.label : RUN_MODE.autonomous.label}
         />
-        <Summary label="Repo" value={<Mono className="text-foreground">{run.repo || "—"}</Mono>} />
+        {/* Was mislabeled "Repo" with a local dir leaking through as the
+            synthetic run.repo="local:<basename>" wire label — the primary
+            onboarded workspace is the truth: its own name/kind/source, or
+            "Base image" for a container (an image, not a mount). */}
+        {primaryWorkspace ? (
+          primaryWorkspace.kind === "container" ? (
+            <Summary
+              label="Base image"
+              value={<Mono className="text-foreground">{primaryWorkspace.source}</Mono>}
+            />
+          ) : (
+            <Summary
+              label="Workspace"
+              value={
+                <div>
+                  <div className="text-foreground">{primaryWorkspace.name}</div>
+                  <div className="text-[0.6875rem] text-muted-foreground">
+                    {primaryWorkspace.kind === "repo" ? "repo" : "local dir"} · {primaryWorkspace.source}
+                  </div>
+                </div>
+              }
+            />
+          )
+        ) : (
+          <Summary label="Workspace" value="none (ephemeral scratch)" />
+        )}
         {run.image && (
           <Summary
             label="Image"
             value={<Mono className="break-all text-foreground">{run.image}</Mono>}
           />
         )}
-        <Summary label="Auth" value={authLabel} />
+        <Summary
+          label="Model access"
+          value={
+            isGovernedCommand ? (
+              <span className="text-muted-foreground">{RD.EXEC_LINE}</span>
+            ) : resolved ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-foreground">{resolved.row.name}</span>
+                <Mono className="text-muted-foreground">{resolved.row.typeLabel}</Mono>
+              </div>
+            ) : (
+              <span className="text-warning">{RD.NONE_LINE}</span>
+            )
+          }
+        />
         <Summary
           label="Confinement"
           value={<ConfinementChip value={state.confinementClass} />}
@@ -223,27 +277,42 @@ export function StepReview({
           <Summary
             label="Workspaces"
             value={
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {state.workspaces.map((sel, i) => {
                   const w = byId.get(sel.workspaceId);
+                  // Read the ACTUAL composed mount rather than the raw sel.readOnly
+                  // flag — a workspace's requirements contract can resolve write
+                  // access differently than the flag alone suggests (see
+                  // wizard-types.ts's resolvedMountReadOnly); this is the exact
+                  // value the JSON below will show.
+                  const mount = (inline_policy.workspace_mounts ?? []).find(
+                    (m) => w && m.source === w.source,
+                  );
                   return (
-                    <div key={sel.workspaceId} className="flex items-center gap-1.5">
-                      {i === 0 && (
-                        <Chip tone="primary" className="px-1.5 py-0 text-[0.625rem]">
-                          primary
-                        </Chip>
-                      )}
-                      <Mono className="text-foreground">
-                        {w?.name ?? sel.workspaceId} ({w?.source ?? "unresolved"})
-                        {w?.kind === "local_dir" && ` — ${sel.readOnly ? "ro" : "rw"}`}
-                        {w?.kind === "container" && " — image"}
-                      </Mono>
-                      {/* Surface scan status so a still-pending / errored workspace isn't
-                          attached silently at the final gate. */}
-                      {w && w.status !== "ready" && (
-                        <Chip tone={STATUS_TONE[w.status]} className="px-1.5 py-0 text-[0.625rem]">
-                          {STATUS_LABEL[w.status]}
-                        </Chip>
+                    <div key={sel.workspaceId}>
+                      <div className="flex items-center gap-1.5">
+                        {i === 0 && (
+                          <Chip tone="primary" className="px-1.5 py-0 text-[0.625rem]">
+                            primary
+                          </Chip>
+                        )}
+                        <Mono className="text-foreground">
+                          {w?.name ?? sel.workspaceId} ({w?.source ?? "unresolved"})
+                          {w?.kind === "local_dir" && mount && ` — ${mount.read_only ? "ro" : "rw"}`}
+                          {w?.kind === "container" && " — image"}
+                        </Mono>
+                        {/* Surface scan status so a still-pending / errored workspace isn't
+                            attached silently at the final gate. */}
+                        {w && w.status !== "ready" && (
+                          <Chip tone={STATUS_TONE[w.status]} className="px-1.5 py-0 text-[0.625rem]">
+                            {STATUS_LABEL[w.status]}
+                          </Chip>
+                        )}
+                      </div>
+                      {w && (
+                        <div className="pl-0.5 text-[0.6875rem] text-muted-foreground">
+                          Comes with: {comesWithLine(w)}
+                        </div>
                       )}
                     </div>
                   );

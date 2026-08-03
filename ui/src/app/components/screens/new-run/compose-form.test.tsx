@@ -151,7 +151,7 @@ describe("ComposeForm — file attach enforces the size cap", () => {
 
   it("shows the single backend's provider/model read-only (no dropdown) with one backend", () => {
     renderForm();
-    expect(screen.getByText("Provider")).toBeInTheDocument();
+    expect(screen.getByText("Which integration analyzes your task")).toBeInTheDocument();
     const single = screen.getByTestId("compose-backend-single");
     expect(single).toHaveTextContent("anthropic"); // name + provider
     expect(single).toHaveTextContent("claude"); // model
@@ -165,7 +165,7 @@ describe("ComposeForm — file attach enforces the size cap", () => {
       ],
     });
     expect(screen.queryByTestId("compose-backend-single")).not.toBeInTheDocument();
-    expect(screen.getByText("Provider")).toBeInTheDocument();
+    expect(screen.getByText("Which integration analyzes your task")).toBeInTheDocument();
   });
 
   it("captures the Interactive vs Autonomous run mode UPFRONT in the initial panel", async () => {

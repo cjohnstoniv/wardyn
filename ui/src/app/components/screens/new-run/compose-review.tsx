@@ -20,6 +20,7 @@
 import * as React from "react";
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import {
+  ArrowUpRight,
   ChevronDown,
   Code2,
   GitBranch,
@@ -496,6 +497,14 @@ function SetupChecklistRow({
   // one is never destructive even though it blocks the SAME way a missing secret does.
   const destructive = item.status === "missing" && (item.kind === "llm_access" || item.kind === "secret");
   const residencyNote = item.residency ? SETUP_RESIDENCY_NOTE[item.residency] : undefined;
+  // Deep-link to the workspace this row is about, when one is resolvable — the
+  // SAME "<kind>:<key>" id-fallback new-run-dialog.tsx's own re-flip effect
+  // already leans on for a "workspace" item without an explicit fix.workspace_id
+  // (compose_setup.go's stable id contract). There is no per-id /workspaces/:id
+  // route yet, so this lands on the list — still the right next step, just not a
+  // precise deep link.
+  const workspaceId =
+    fix?.workspace_id ?? (item.kind === "workspace" ? item.id.slice(item.kind.length + 1) : undefined);
   return (
     <li
       className={cn(
@@ -534,6 +543,16 @@ function SetupChecklistRow({
           onClick={() => onFixWorkspace(fix.workspace_id!)}
         >
           <RefreshCw className="size-3.5" /> Scan workspace
+        </Button>
+      )}
+      {workspaceId && (
+        // Plain <a>, not react-router's <Link>: this checklist (SetupChecklist)
+        // is shared with step-review.tsx on the manual-wizard path, which does
+        // not guarantee a Router ancestor in every test/host context.
+        <Button asChild size="sm" variant="ghost" className="shrink-0 gap-1.5">
+          <a href="/workspaces">
+            Open workspace <ArrowUpRight className="size-3.5" />
+          </a>
         </Button>
       )}
     </li>

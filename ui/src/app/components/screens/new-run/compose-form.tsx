@@ -27,6 +27,7 @@ import { AskPopover } from "./ask-popover";
 import { WorkspacePicker } from "./workspace-picker";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
+import { RD } from "../../../lib/workspace-copy";
 import type {
   ComposeAttachment,
   ComposeMode,
@@ -274,14 +275,19 @@ export function ComposeForm({
           workspaces={workspaces}
           loading={workspacesLoading}
           onAddWorkspace={onAddWorkspace}
+          // The Composer's ComposeRequest has no field to carry an optional
+          // requirement's enablement (unlike the manual wizard's
+          // CreateRunRequest.Workspaces) — never show a checkbox that would
+          // silently do nothing.
+          optionalRequirementsEnabled={false}
         />
       </Field>
 
       {backends.length > 0 && (
         <Field
-          label="Provider"
+          label="Which integration analyzes your task"
           htmlFor="compose-backend"
-          hint="Which configured LLM backend analyzes your task. This is advisory only — it never gets the run's credentials."
+          hint={RD.ADVISORY}
         >
           {multipleBackends ? (
             <Select value={backend} onValueChange={onBackendChange}>

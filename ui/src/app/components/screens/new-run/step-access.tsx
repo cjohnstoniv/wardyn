@@ -3,27 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step 2 — Access: a GitHub token grant (repos + permission + approval + TTL)
-// and the LLM API key (an api_key grant resolving a stored secret by NAME).
+// Step 2 — Access: the resolved model-access card (resolution replaced the old
+// per-run Anthropic-auth cards — see below), a GitHub token grant (repos +
+// permission + approval + TTL), and the git PAT grant for a non-GitHub host.
 //
-// Redesign (C9): progressive disclosure. The Anthropic-auth choice is the ONE
-// primary decision up front — three cards, each a full RadioGroup option — and
-// its details (the secret picker, the host path) disclose ONLY inside the
-// selected card, instead of a same-weight "Anthropic API key" card sitting
-// below the radio group repeating the same decision. GitHub token and Git PAT
-// stay switch-gated blocks (already progressive: off = collapsed) with the
-// same card treatment for visual consistency.
+// Model access RESOLVES from integrations (run override -> workspace pin ->
+// server default -> honest none); it is no longer configured on this step. The
+// three Anthropic-auth radio cards and the absolute ~/.claude host-path input
+// are gone. GitHub token and Git PAT stay switch-gated blocks (already
+// progressive: off = collapsed) with the same card treatment as before.
 import * as React from "react";
-import {
-  Check,
-  ChevronsUpDown,
-  Cloud,
-  Fingerprint,
-  GitBranch,
-  KeyRound,
-  Plus,
-  TriangleAlert,
-} from "lucide-react";
+import { Check, ChevronsUpDown, GitBranch, Plus, TriangleAlert } from "lucide-react";
 import { Input } from "../../ui/input";
 import { Switch } from "../../ui/switch";
 import { Button } from "../../ui/button";
@@ -35,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../ui/select";
-import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import {
   Command,
@@ -45,9 +34,27 @@ import {
   CommandItem,
   CommandList,
 } from "../../ui/command";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "../../ui/sheet";
 import { cn } from "../../ui/utils";
+import { Chip } from "../../wardyn/primitives";
+import { Mono } from "../../wardyn/code-block";
 import { Field } from "./step-shell";
-import type { AnthropicAuth, GitHubPermission, WizardState } from "./wizard-types";
+import type { GitHubPermission, WizardState } from "./wizard-types";
+import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import {
+  integrationsApi,
+  type IntegrationRow,
+} from "../../../lib/api/integrations";
+import { IMPOSSIBLE, RESIDENCY_META, type AiCapability } from "../../../lib/integrations";
+import { RD } from "../../../lib/workspace-copy";
+import type { Workspace, WorkspaceLLMCredMode } from "../../../lib/types";
 
 export function StepAccess({
   state,
@@ -62,126 +69,24 @@ export function StepAccess({
   secretsLoading: boolean;
   onAddSecret: () => void;
 }) {
-  const isClaude = state.agent === "claude-code";
+  const isGovernedCommand = state.runType === "command";
 
   return (
     <div className="space-y-5">
-      {/* --- Primary choice: how the agent authenticates to the LLM. Claude Code
-          gets three cards (apikey / subscription / bedrock); Codex CLI only ever
-          uses the OpenAI key, so it gets a single always-open card. --- */}
-      {isClaude ? (
+      {/* --- Model access: resolved from integrations, never configured here.
+          Absent entirely for a governed command (task_mode: exec) — there is
+          no agent, so nothing resolves and nothing should suggest otherwise. --- */}
+      {isGovernedCommand ? (
         <div className="rounded-lg border border-border p-3">
-          <Label className="text-sm font-semibold text-foreground">Anthropic auth</Label>
-          <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-            How Claude Code authenticates to Anthropic. Pick one — its details open below.
-          </p>
-          <RadioGroup
-            className="mt-3 gap-2"
-            value={state.anthropicAuth}
-            onValueChange={(v) => patch({ anthropicAuth: v as AnthropicAuth })}
-          >
-            <AuthOption
-              value="apikey"
-              id="auth-apikey"
-              icon={KeyRound}
-              title="API key"
-              badge="Recommended"
-              hint="Proxy injects a stored key as x-api-key; the agent never sees the raw key."
-              checked={state.anthropicAuth === "apikey"}
-            >
-              <Field
-                className="mt-3 border-t border-border pt-3"
-                label="Stored secret"
-                hint="Proxy-injected — the agent never sees the raw key."
-              >
-                <div className="flex items-center gap-2">
-                  <SecretCombobox
-                    value={state.llmSecretName}
-                    onChange={(name) => patch({ llmSecretName: name })}
-                    secrets={secrets}
-                    loading={secretsLoading}
-                  />
-                  <Button type="button" variant="ghost" size="sm" onClick={onAddSecret}>
-                    <Plus className="size-4" /> Add secret
-                  </Button>
-                </div>
-                {!state.llmSecretName && (
-                  <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[0.6875rem] leading-snug text-warning">
-                    <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-                    No key selected — this run will launch with no model access and its first model call
-                    will 404. Pick a stored key (or Add secret).
-                  </p>
-                )}
-              </Field>
-            </AuthOption>
-
-            <AuthOption
-              value="subscription"
-              id="auth-subscription"
-              icon={Fingerprint}
-              title="Subscription (OAuth)"
-              hint="Mount your host ~/.claude OAuth creds into the sandbox. Reduced isolation."
-              checked={state.anthropicAuth === "subscription"}
-            >
-              <Field
-                className="mt-3 border-t border-border pt-3"
-                label="Host ~/.claude directory"
-                htmlFor="sub-claude-dir"
-                hint="Must be an ABSOLUTE host path (e.g. /home/you/.claude). The sibling .claude.json is mounted too."
-              >
-                <Input
-                  id="sub-claude-dir"
-                  placeholder="/home/you/.claude"
-                  value={state.subscriptionClaudeDir}
-                  onChange={(e) => patch({ subscriptionClaudeDir: e.target.value })}
-                  className="font-mono"
-                />
-              </Field>
-            </AuthOption>
-
-            <AuthOption
-              value="bedrock"
-              id="auth-bedrock"
-              icon={Cloud}
-              title="Bedrock"
-              badge="Auto"
-              badgeTone="neutral"
-              hint="Amazon Bedrock is set up by your operator (Getting started → Connect a model). When configured, Claude runs use it automatically — it isn't a per-run choice."
-              checked={state.anthropicAuth === "bedrock"}
-              disabled
-            />
-          </RadioGroup>
+          <p className="text-[0.8125rem] leading-snug text-muted-foreground">{RD.EXEC_LINE}</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-border p-3">
-          <div className="flex items-center gap-2">
-            <KeyRound className="size-4 text-primary" />
-            <Label className="text-sm font-semibold text-foreground">OpenAI API key</Label>
-          </div>
-          <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-            Pick a stored secret by name. Its value is injected proxy-side as{" "}
-            <span className="font-mono">Authorization: Bearer …</span> — the agent
-            never sees the raw key.
-          </p>
-          <div className="mt-3 flex items-center gap-2">
-            <SecretCombobox
-              value={state.llmSecretName}
-              onChange={(name) => patch({ llmSecretName: name })}
-              secrets={secrets}
-              loading={secretsLoading}
-            />
-            <Button type="button" variant="ghost" size="sm" onClick={onAddSecret}>
-              <Plus className="size-4" /> Add secret
-            </Button>
-          </div>
-          {!state.llmSecretName && (
-            <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5 text-[0.6875rem] leading-snug text-warning">
-              <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-              No key selected — this run will launch with no model access and its first model call will
-              404. Pick a stored key (or Add secret).
-            </p>
-          )}
-        </div>
+        <ModelAccessCard
+          agent={state.agent}
+          integrationId={state.integrationId}
+          primaryWorkspaceId={state.workspaces[0]?.workspaceId}
+          onPatch={patch}
+        />
       )}
 
       {/* --- GitHub token grant --- */}
@@ -340,62 +245,279 @@ export function StepAccess({
   );
 }
 
-// A primary-choice card: radio dot + icon + bold title (+ optional badge) up
-// top, description below, and — only when selected — the disclosed body. This
-// is the "one card, its own details" unit the Anthropic-auth group is built
-// from (C9 progressive disclosure).
-function AuthOption({
-  value,
-  id,
-  icon: Icon,
-  title,
-  badge,
-  badgeTone = "primary",
-  hint,
-  checked,
-  disabled,
-  children,
+// Best-effort client-side approximation of the server's resolution order (run
+// override -> workspace pin -> server default -> none). The server is
+// authoritative at launch/preflight time — this is a PREVIEW so Access can show
+// something honest before that. `ai` is the ai_provider integrations list
+// (integrationsApi.list().ai); `primaryWorkspace` is state.workspaces[0]
+// resolved against the fetched Workspace list, if any.
+export interface ResolvedModelAccess {
+  row: IntegrationRow;
+  because: string;
+}
+
+function agentCapability(agent: WizardState["agent"]): AiCapability {
+  return agent === "codex-cli" ? "codex_cli" : "claude_code";
+}
+
+// A row can drive this agent's tool unless the IMPOSSIBLE map names a reason —
+// the verbatim fact this whole redesign renders instead of a toggle.
+export function incompatibleReason(row: IntegrationRow, capability: AiCapability): string | undefined {
+  return row.aiType ? IMPOSSIBLE[row.aiType]?.[capability] : undefined;
+}
+
+// llm_cred.mode names a MODE, not a stable integration id (no cross-reference
+// exists yet between a workspace's binding and an IntegrationRow — W5 stopgap,
+// same one lib/api/integrations.ts's own header documents) — match by aiType as
+// a best-effort approximation of "this workspace pins it".
+function matchesCredMode(row: IntegrationRow, mode: WorkspaceLLMCredMode): boolean {
+  if (mode === "api_key") return row.aiType === "anthropic_api_key" || row.aiType === "openai_api_key";
+  if (mode === "managed") return row.aiType === "anthropic_subscription";
+  if (mode === "bedrock") return row.aiType === "bedrock";
+  return false;
+}
+
+export function resolveModelAccess(
+  agent: WizardState["agent"],
+  integrationId: string | undefined,
+  primaryWorkspace: Workspace | undefined,
+  ai: IntegrationRow[],
+): ResolvedModelAccess | null {
+  const capability = agentCapability(agent);
+  const compatible = (r: IntegrationRow) => !incompatibleReason(r, capability);
+
+  if (integrationId) {
+    const row = ai.find((r) => r.id === integrationId);
+    if (row) return { row, because: "you overrode it for this run." };
+  }
+  const cred = primaryWorkspace?.llm_cred;
+  if (cred?.mode) {
+    const pinned = ai.find((r) => matchesCredMode(r, cred.mode));
+    if (pinned) return { row: pinned, because: "this workspace pins it." };
+  }
+  const fallback = ai.find(compatible);
+  if (fallback) return { row: fallback, because: "it's the server default for agent runs." };
+  return null;
+}
+
+function ModelAccessCard({
+  agent,
+  integrationId,
+  primaryWorkspaceId,
+  onPatch,
 }: {
-  value: string;
-  id: string;
-  icon: React.ElementType;
-  title: React.ReactNode;
-  badge?: string;
-  badgeTone?: "primary" | "neutral";
-  hint: React.ReactNode;
-  checked: boolean;
-  disabled?: boolean;
-  children?: React.ReactNode;
+  agent: WizardState["agent"];
+  integrationId: string | undefined;
+  primaryWorkspaceId: string | undefined;
+  onPatch: (p: Partial<WizardState>) => void;
+}) {
+  const [ai, setAi] = React.useState<IntegrationRow[]>([]);
+  const [peekOpen, setPeekOpen] = React.useState(false);
+  // Self-fetched (not threaded through wizard.tsx as a new prop) so every
+  // existing StepAccess call site keeps working unchanged; only the id of the
+  // Basics-selected primary comes from the caller (state.workspaces[0]),
+  // resolved against this fetch to find its llm_cred binding. useWorkspaceList
+  // does NOT fetch on its own (every other caller drives it from its own
+  // effect) — reload() here is what actually populates it.
+  const { workspaces, reload } = useWorkspaceList();
+
+  React.useEffect(() => {
+    reload();
+  }, [reload]);
+
+  React.useEffect(() => {
+    let alive = true;
+    integrationsApi
+      .list()
+      .then((data) => {
+        if (alive) setAi(data.ai);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const primaryWorkspace = workspaces.find((w) => w.id === primaryWorkspaceId);
+  const resolved = resolveModelAccess(agent, integrationId, primaryWorkspace, ai);
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-3.5">
+      <div className="flex flex-col gap-2.5">
+        <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+          Model access — resolved from integrations
+        </span>
+        {resolved ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="text-sm font-medium text-foreground">{resolved.row.name}</span>
+              <Mono className="text-[0.6875rem] text-muted-foreground">{resolved.row.typeLabel}</Mono>
+              <Chip tone={RESIDENCY_META[resolved.row.residency].tone} className="text-[0.6875rem]">
+                {RESIDENCY_META[resolved.row.residency].label}
+              </Chip>
+            </div>
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+              Applies because: {resolved.because}
+            </p>
+          </>
+        ) : (
+          <div className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5">
+            <TriangleAlert className="mt-0.5 size-3 shrink-0 text-warning" aria-hidden="true" />
+            <p className="text-[0.75rem] leading-snug text-warning">{RD.NONE_LINE}</p>
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button type="button" size="sm" variant="outline" onClick={() => setPeekOpen(true)}>
+            Override for this run…
+          </Button>
+        </div>
+      </div>
+      <OverridePeek
+        open={peekOpen}
+        onOpenChange={setPeekOpen}
+        agent={agent}
+        ai={ai}
+        integrationId={integrationId}
+        onChoose={(id) => onPatch({ integrationId: id })}
+      />
+    </div>
+  );
+}
+
+function OverridePeek({
+  open,
+  onOpenChange,
+  agent,
+  ai,
+  integrationId,
+  onChoose,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  agent: WizardState["agent"];
+  ai: IntegrationRow[];
+  integrationId: string | undefined;
+  onChoose: (id: string | undefined) => void;
+}) {
+  const DEFAULT_OPTION = "__default__";
+  const [draft, setDraft] = React.useState(integrationId ?? DEFAULT_OPTION);
+  // Reseed the draft from the current pick every time the sheet opens, so a
+  // Cancel from a previous open never leaks into the next one.
+  React.useEffect(() => {
+    if (open) setDraft(integrationId ?? DEFAULT_OPTION);
+  }, [open, integrationId]);
+
+  const capability = agentCapability(agent);
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="flex w-full flex-col sm:max-w-md">
+        <SheetHeader>
+          <SheetTitle>Model access for this run</SheetTitle>
+          <SheetDescription>
+            Integrations that can power {agent === "codex-cli" ? "Codex CLI" : "Claude Code"}. This is a
+            one-off choice for this run only — it changes nothing on the workspace or the server
+            default.
+          </SheetDescription>
+        </SheetHeader>
+        <div className="scroll-thin flex-1 space-y-2 overflow-y-auto px-4">
+          <PeekRow
+            title="Use the server default"
+            selected={draft === DEFAULT_OPTION}
+            onSelect={() => setDraft(DEFAULT_OPTION)}
+          />
+          {ai.map((row) => {
+            const reason = incompatibleReason(row, capability);
+            return (
+              <PeekRow
+                key={row.id}
+                title={row.name}
+                type={row.typeLabel}
+                chip={
+                  !reason && (
+                    <Chip tone={RESIDENCY_META[row.residency].tone} className="text-[0.6875rem]">
+                      {RESIDENCY_META[row.residency].label}
+                    </Chip>
+                  )
+                }
+                selected={draft === row.id}
+                muted={!!reason}
+                reason={reason}
+                onSelect={reason ? undefined : () => setDraft(row.id)}
+              />
+            );
+          })}
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            Muted rows are facts, not absences — the reason is the cell copy from Integrations,
+            verbatim.
+          </p>
+        </div>
+        <SheetFooter className="flex-row justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              onChoose(draft === DEFAULT_OPTION ? undefined : draft);
+              onOpenChange(false);
+            }}
+          >
+            Use this integration
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function PeekRow({
+  title,
+  type,
+  chip,
+  selected,
+  muted,
+  reason,
+  onSelect,
+}: {
+  title: string;
+  type?: string;
+  chip?: React.ReactNode;
+  selected: boolean;
+  muted?: boolean;
+  reason?: string;
+  onSelect?: () => void;
 }) {
   return (
-    <label
-      htmlFor={id}
+    <button
+      type="button"
+      disabled={!onSelect}
+      onClick={onSelect}
       className={cn(
-        "flex flex-col gap-2.5 rounded-lg border p-3 transition-colors",
-        checked ? "border-primary bg-primary/10" : "border-border",
-        disabled && "cursor-not-allowed opacity-60",
+        "flex w-full flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition-colors",
+        selected ? "border-primary bg-primary/10" : "border-border",
+        muted && "opacity-60",
+        !onSelect && "cursor-default",
       )}
     >
-      <div className="flex items-center gap-2.5">
-        <RadioGroupItem value={value} id={id} disabled={disabled} />
-        <span className="text-sm font-semibold text-foreground">{title}</span>
-        {badge && (
+      <div className="flex flex-wrap items-center gap-2">
+        {!muted && (
           <span
             className={cn(
-              "rounded-md border px-1.5 py-0.5 text-[0.625rem] font-semibold tracking-wide uppercase",
-              badgeTone === "primary"
-                ? "border-primary/30 bg-primary/15 text-primary"
-                : "border-border bg-muted text-muted-foreground",
+              "inline-flex size-3.5 shrink-0 items-center justify-center rounded-full border",
+              selected ? "border-primary" : "border-border-strong",
             )}
           >
-            {badge}
+            {selected && <span className="size-1.5 rounded-full bg-primary" />}
           </span>
         )}
-        <Icon className="ml-auto size-4 shrink-0 text-muted-foreground" />
+        <span className="text-[0.8125rem] font-medium text-foreground">{title}</span>
+        {type && <Mono className="text-[0.6875rem] text-muted-foreground">{type}</Mono>}
+        {chip}
       </div>
-      <p className="pl-[26px] text-[0.6875rem] leading-snug text-muted-foreground">{hint}</p>
-      {checked && children && <div className="pl-[26px]">{children}</div>}
-    </label>
+      {reason && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{reason}</p>}
+    </button>
   );
 }
 
