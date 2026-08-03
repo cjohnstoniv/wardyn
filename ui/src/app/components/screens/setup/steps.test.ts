@@ -4,9 +4,21 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
+import type { EgressRedirect, SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
+import type { ProxyTestResult } from "../../../lib/api/health";
 import { deriveReadiness } from "../onboarding/intro";
-import { DEMO_STEP_IDS, OPTIONAL_STEPS, PHASES, STEP_HEADING, STEP_LABEL, STEP_ORDER, stepBadges, stepDone } from "./steps";
+import {
+  DEMO_STEP_IDS,
+  OPTIONAL_STEPS,
+  PHASES,
+  STEP_HEADING,
+  STEP_LABEL,
+  STEP_ORDER,
+  corpNetworkBlockReason,
+  stepBadges,
+  stepDone,
+  type CorpNetworkState,
+} from "./steps";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
@@ -191,66 +203,133 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
   });
 
-  it("corp_network is optional", () => {
-    expect(OPTIONAL_STEPS.has("corp_network")).toBe(true);
+  it("corp_network is required, not optional — proof of internet access gates Next", () => {
+    expect(OPTIONAL_STEPS.has("corp_network")).toBe(false);
   });
 });
 
-describe("corp_network badge — the 4-rung ladder (Optional -> Skipped is an orchestrator override, same as integrations)", () => {
-  const unset = { proxyConfigured: false, proxyDetected: false, redirectCount: 0 };
+describe("corp_network gate — corpNetworkBlockReason drives both the badge and stepDone (no_runner is the one bypass)", () => {
+  const unset: CorpNetworkState = {
+    proxyConfigured: false,
+    proxyDetected: false,
+    redirectCount: 0,
+    egressVisited: false,
+    redirectProbes: {},
+  };
+  const reached: ProxyTestResult = { state: "reached", detail: "reached the public internet in 42ms" };
+  const blocked: ProxyTestResult = { state: "blocked", detail: "connection refused" };
+  const noRunner: ProxyTestResult = { state: "no_runner", detail: "no runner configured" };
+  const bypass: ProxyTestResult = { state: "bypass", detail: "reachable directly too" };
 
-  it("reads Optional/false with nothing detected and nothing configured (the default when corpNetwork is omitted)", () => {
+  it("reads 'Untested'/blocked=false before any probe has run (the default when corpNetwork is omitted)", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    expect(stepBadges(status, readiness, [], 0).corp_network).toEqual({ text: "Optional", tone: "neutral" });
+    expect(stepBadges(status, readiness, [], 0).corp_network).toEqual({ text: "Untested", tone: "warning" });
     expect(stepDone(status, readiness, [], 0).corp_network).toBe(false);
+    expect(corpNetworkBlockReason(unset, [])).toMatch(/prove this host can reach the internet/i);
   });
 
-  it("reads amber 'Detected — not configured' once a proxy was detected but nothing is saved", () => {
+  it("reads amber 'Blocked' once the connectivity probe fails, and still blocks Next", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const corpNetwork = { ...unset, proxyDetected: true };
+    const corpNetwork = { ...unset, proxyProbe: blocked };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Blocked", tone: "warning" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+    expect(corpNetworkBlockReason(corpNetwork, [])).toMatch(/still failing/i);
+  });
+
+  it("no_runner is the ONE honest bypass — neutral badge, counts as done, never a fake pass", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyProbe: noRunner };
     expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
-      text: "Detected — not configured",
+      text: "Not testable on this host — allowed through",
+      tone: "neutral",
+    });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
+    expect(corpNetworkBlockReason(corpNetwork, [])).toBeNull();
+    // The bypass holds even with unconfigured/untested redirects sitting there —
+    // no_runner means NOTHING on this host can be probed, egress included.
+    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    expect(corpNetworkBlockReason(corpNetwork, redirects)).toBeNull();
+  });
+
+  it("reached but the Egress tab was never visited still blocks, even at zero redirects", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyProbe: reached };
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Egress redirection not reviewed",
       tone: "warning",
     });
-    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+    expect(corpNetworkBlockReason(corpNetwork, [])).toMatch(/visit egress redirection/i);
   });
 
-  it("reads 'Ready · proxy' once the proxy is configured, even with zero redirects", () => {
+  it("reached + egress visited + zero redirects reads 'Ready · direct' and is done", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const corpNetwork = { ...unset, proxyConfigured: true };
+    const corpNetwork = { ...unset, proxyProbe: reached, egressVisited: true };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · direct", tone: "success" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
+  });
+
+  it("a configured proxy composes into the Ready text ('proxy', not 'direct')", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyProbe: reached, egressVisited: true, proxyConfigured: true };
     expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · proxy", tone: "success" });
-    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
   });
 
-  it("reads 'Ready · N redirects' (no 'proxy') when only redirects are configured", () => {
+  it("a redirect that exists but was never tested blocks Next and names the row — egressVisited doesn't substitute for a real test", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const corpNetwork = { ...unset, redirectCount: 1 };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · 1 redirect", tone: "success" });
-    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
+    const corpNetwork = { ...unset, proxyProbe: reached, egressVisited: true, redirectCount: 1 };
+    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    expect(stepDone(status, readiness, [], 0, corpNetwork, redirects).corp_network).toBe(false);
+    expect(stepBadges(status, readiness, [], 0, corpNetwork, redirects).corp_network).toEqual({
+      text: "https://registry.npmjs.org not enforced",
+      tone: "warning",
+    });
+    expect(corpNetworkBlockReason(corpNetwork, redirects)).toBe(
+      'The https://registry.npmjs.org redirect must test "Reached" before continuing — it\'s currently not yet tested.',
+    );
+  });
+
+  it("a bypassed redirect (configured but not enforced) blocks too, named and labeled 'not enforced'", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = {
+      ...unset,
+      proxyProbe: reached,
+      redirectCount: 1,
+      redirectProbes: { "https://registry.npmjs.org": bypass },
+    };
+    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    expect(stepDone(status, readiness, [], 0, corpNetwork, redirects).corp_network).toBe(false);
+    expect(corpNetworkBlockReason(corpNetwork, redirects)).toMatch(/currently not enforced/);
   });
 
   // The mock's own self-contradiction (prose says "proxy + 3 redirects" but
   // renders a 4-entry fixture) — the badge must derive the count from the
   // data, never a fixed word, so this reads "+ 4 redirects" here.
-  it("derives the redirect count from the data — proxy + 4 redirects, not a stale '3'", () => {
+  it("derives the redirect count from the data — proxy + 4 redirects once every one reaches, not a stale '3'", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const corpNetwork = { proxyConfigured: true, proxyDetected: false, redirectCount: 4 };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+    const froms = ["a.example.com", "b.example.com", "c.example.com", "d.example.com"];
+    const redirects: EgressRedirect[] = froms.map((from) => ({ from, to: `${from}.mirror.corp.internal` }));
+    const corpNetwork: CorpNetworkState = {
+      ...unset,
+      proxyProbe: reached,
+      proxyConfigured: true,
+      redirectCount: 4,
+      redirectProbes: Object.fromEntries(froms.map((f) => [f, reached])),
+    };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork, redirects).corp_network).toEqual({
       text: "Ready · proxy + 4 redirects",
       tone: "success",
     });
-  });
-
-  it("a configured proxy wins over mere detection (Ready, not the amber Detected line)", () => {
-    const status = baseStatus();
-    const readiness = deriveReadiness(status);
-    const corpNetwork = { proxyConfigured: true, proxyDetected: true, redirectCount: 0 };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network.tone).toBe("success");
+    expect(stepDone(status, readiness, [], 0, corpNetwork, redirects).corp_network).toBe(true);
   });
 });
 

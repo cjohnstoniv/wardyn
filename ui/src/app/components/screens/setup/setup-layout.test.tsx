@@ -63,6 +63,33 @@ describe("SetupLayout", () => {
     expect(screen.queryByRole("button", { name: /^skip .* network$/i })).not.toBeInTheDocument();
   });
 
+  // Generic gate — SetupLayout has no idea which step set this or why (see
+  // steps.ts's corpNetworkBlockReason, the current sole producer of one).
+  describe("nextBlockedReason — a generic Next-button gate", () => {
+    it("Next is enabled and no reason renders when nextBlockedReason is absent", () => {
+      renderLayout({ current: "environment" });
+      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeEnabled();
+    });
+
+    it("disables Next and renders the reason text when nextBlockedReason is set", () => {
+      renderLayout({ current: "environment", nextBlockedReason: "Prove this host can reach the internet first." });
+      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeDisabled();
+      expect(screen.getByText("Prove this host can reach the internet first.")).toBeInTheDocument();
+    });
+
+    it("clicking a disabled Next never calls onSelect", async () => {
+      const onSelect = vi.fn();
+      renderLayout({ current: "environment", onSelect, nextBlockedReason: "Still blocked." });
+      await user.click(screen.getByRole("button", { name: /^next: corporate network$/i }));
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("the reason never renders on the LAST step (there is no Next to gate)", () => {
+      renderLayout({ current: "launch", nextBlockedReason: "Should never appear here." });
+      expect(screen.queryByText("Should never appear here.")).not.toBeInTheDocument();
+    });
+  });
+
   it("last step renders the Launch button disabled when canLaunch is false", () => {
     renderLayout({ current: "launch", canLaunch: false });
     expect(screen.getByRole("button", { name: /launch your first run/i })).toBeDisabled();

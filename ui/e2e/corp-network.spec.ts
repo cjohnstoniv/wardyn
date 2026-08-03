@@ -37,13 +37,21 @@ import type { Page, Locator } from "@playwright/test";
 // proxy URL) never invalidates a precondition a LATER test needs — see the
 // comment on the "Use this" test.
 //
-// The "From" combobox (FromCombobox in corp-network-step.tsx) has no
-// CommandInput — it is select-only from EGRESS_SUGGEST, there is no way to
-// type free text into it today despite the empty-state copy saying "or type
-// anything". A "network only" row is therefore reached the same way the
-// component's own unit tests reach it: pick a "container images" suggestion
-// (ecosystem is nulled for that group in AddRedirectForm.add()), not by
-// typing an arbitrary host.
+// The "From" combobox (FromCombobox in corp-network-step.tsx) got a
+// CommandInput in 3cac71b: typing an arbitrary host now offers it back as a
+// "use as typed" item, and committing it lands the row "network only" (no
+// EGRESS_SUGGEST match means no ecosystem — ecosystemFor in
+// corp-network-step.tsx) exactly like picking a container-registry
+// suggestion does. The egress-redirection test below exercises both paths —
+// the typed one is the newly-fixed behavior worth proving end to end against
+// the real backend.
+//
+// Corporate network's Next is also a hard gate now (steps.ts's
+// corpNetworkBlockReason): proof of internet access, a look at Egress
+// redirection, and every configured redirect testing reached. Most tests
+// below satisfy it for real (a genuine `-runner none` Test-proxy click reports
+// "no_runner", the one honest bypass — see passGate) since they aren't
+// testing the gate itself; one dedicated test below is.
 
 function main(page: Page): Locator {
   return page.getByRole("main");
@@ -63,6 +71,16 @@ async function openCorpNetworkStep(page: Page): Promise<Locator> {
   return m;
 }
 
+// Clears the connectivity gate for real (no route stub): this backend
+// genuinely runs `-runner none`, so clicking Test proxy gets back
+// {state:"no_runner"} from the actual server — corpNetworkBlockReason's one
+// honest bypass, which clears the whole ladder at once (no Egress-tab visit
+// needed). Must be called on the Host proxy tab (the default).
+async function passGate(m: Locator) {
+  await m.getByRole("button", { name: /^test proxy$/i }).click();
+  await expect(m.getByText(/can't test here/i)).toBeVisible();
+}
+
 test.describe("Corporate network step", () => {
   test("reaches Corporate network between Environment and Integrations, and both tabs switch", async ({ page }) => {
     const m = await openCorpNetworkStep(page);
@@ -77,6 +95,10 @@ test.describe("Corporate network step", () => {
 
     await m.getByRole("tab", { name: "Host proxy" }).click();
     await expect(m.getByText("What Wardyn found on this host")).toBeVisible();
+
+    // Next is gated on proof of connectivity (steps.ts's corpNetworkBlockReason)
+    // — satisfy it for real before confirming the step order below.
+    await passGate(m);
 
     // Confirms the order from steps.ts's PHASES: corp_network sits directly
     // before integrations.
@@ -151,7 +173,36 @@ test.describe("Corporate network step", () => {
     await expect(m.getByText("Reached", { exact: true })).toHaveCount(0);
   });
 
-  test("egress redirection: a suggested source is ecosystem-tagged, a container-registry one is network-only, and a row's Test disables + relabels while running", async ({ page }) => {
+  // The gate's pure ladder (steps.ts's corpNetworkBlockReason) is exhaustively
+  // unit-tested in steps.test.ts, and the generic Next-disabling wiring in
+  // setup-layout.test.tsx; setup-screen.test.tsx even walks the full ladder
+  // (egress-visit required, per-redirect required) against a mocked API. What
+  // none of those prove is that the REAL app — this bundle, this backend —
+  // agrees. That's all this test is for, so it stays to the one thing an e2e
+  // uniquely proves rather than re-walking every rung.
+  test("Next stays disabled with a visible reason until the connectivity probe passes, then enables", async ({ page }) => {
+    const m = await openCorpNetworkStep(page);
+    const nextBtn = page.getByRole("button", { name: /^Next:/i });
+
+    // Nothing proven yet: Next is disabled and names why, not just a bare
+    // disabled button. T.CORP_LEDE's own prose also says "prove this host can
+    // reach the internet" (steps.ts's block-reason text starts the same way)
+    // — match the reason specifically, same as setup-screen.test.tsx does.
+    await expect(nextBtn).toBeDisabled();
+    await expect(m.getByText(/run the connectivity test above/i)).toBeVisible();
+
+    await passGate(m);
+
+    // no_runner is the ladder's one honest bypass — it clears the whole gate
+    // at once, no Egress-tab detour required.
+    await expect(nextBtn).toBeEnabled();
+    await expect(m.getByText(/run the connectivity test above/i)).toHaveCount(0);
+
+    await nextBtn.click();
+    await expect(m.getByRole("heading", { name: /connect what's outside wardyn/i })).toBeVisible();
+  });
+
+  test("egress redirection: a suggested source is ecosystem-tagged, a container-registry pick and a typed host are both network-only, and a row's Test disables + relabels while running", async ({ page }) => {
     let resolveTest!: (v: { state: string; detail: string }) => void;
     await page.route("**/api/v1/site-config/test-redirect", async (route) => {
       const result = await new Promise<{ state: string; detail: string }>((r) => {
@@ -188,8 +239,24 @@ test.describe("Corporate network step", () => {
     await expect(ghcrRow).toBeVisible();
     await expect(ghcrRow.getByText("network only")).toBeVisible();
 
+    // A typed, arbitrary host (3cac71b's "use as typed" CommandInput item) —
+    // matches no EGRESS_SUGGEST entry, so it's network-only too, via a
+    // different code path than ghcr.io above (ecosystemFor finds no match at
+    // all here, vs. a matched-but-nulled "container images" group there).
+    // This is the newly-fixed capability the header comment used to say was
+    // impossible.
+    await m.getByRole("combobox").click();
+    await m.getByPlaceholder(/https:\/\/…, host, or IP/i).fill("telemetry.vendor-sdk.io");
+    await m.getByText("use as typed", { exact: true }).click();
+    await m.getByPlaceholder(/artifactory\.corp\.internal/i).fill("https://egress.corp.internal/telemetry-proxy");
+    await m.getByRole("button", { name: /\+ add redirect/i }).click();
+
+    const typedRow = m.getByTitle(/^telemetry\.vendor-sdk\.io →/);
+    await expect(typedRow).toBeVisible();
+    await expect(typedRow.getByText("network only")).toBeVisible();
+
     // Per-row Test: disables + relabels to "Testing…" while running, leaves
-    // the sibling row untouched, then renders its own verdict chip.
+    // a sibling row untouched, then renders its own verdict chip.
     await npmRow.getByRole("button", { name: /^test$/i }).click();
     const runningBtn = npmRow.getByRole("button", { name: /^testing…$/i });
     await expect(runningBtn).toBeDisabled();

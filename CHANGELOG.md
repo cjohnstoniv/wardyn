@@ -62,8 +62,44 @@ and does not yet follow semantic versioning (interfaces are not stable).
   redirection**, with the same compact `from → to` rows, the `network only`
   chip, and per-row Test as the Corporate network step.
 
+- **The Corporate network step is a proof, not a form.** It is no longer
+  optional and no longer skippable: `Next: Integrations` unlocks only once a
+  probe has shown a sandbox on this host can actually reach the internet, and
+  once the Egress redirection tab has been opened — left explicitly empty, or
+  filled in with every redirect testing clean. A redirect in `bypass` blocks
+  too, and the reason names the row rather than saying "a redirect failed".
+  The step already explained that a model provider or git host added first
+  looks broken when it's really the network that's blocked; it now prevents
+  that instead of only warning about it.
+  - `no_runner` is the one thing that never blocks. With no runner configured
+    Wardyn cannot launch a probe at all, and demanding proof it is structurally
+    incapable of collecting would trap an operator in setup with no way out.
+  - A blocked probe can be retried against **a URL you name**. That is the
+    escape for internal-only and air-gapped hosts, where no public endpoint
+    will ever answer: point it at something your network can reach and the
+    check goes back to proving egress works, rather than proving the public
+    internet does. A custom target claims less — Wardyn cannot know what your
+    endpoint should return, so it only proves the request completed, and both
+    the response text and the UI say so.
+
 ### Fixed
 
+- **The connectivity probe no longer tests github.com, and reads the reply
+  rather than the exit code.** Two ways it lied on exactly the networks it
+  exists for. Plenty of organisations block GitHub outright, so a healthy
+  corporate network reported "no internet" — tolerable for a diagnostic, not
+  for something that now gates setup. And it discarded the response body, so a
+  corporate block page (a well-formed HTTP 200) scored as `reached`, waving an
+  operator through while nothing could get out. It now tries the endpoints
+  Windows and Firefox use for their own connectivity detection — blocking those
+  breaks the OS network indicator — and matches their known payloads, the way
+  every captive-portal detector works. A reply that arrives but doesn't match
+  is reported as interception, a state that was previously invisible.
+- **`Test proxy` returned 400 on every click.** The endpoint takes no fields,
+  so the UI POSTs no body, and the strict decoder read that as malformed. It
+  also refused to run at all without a proxy configured — backwards, since "can
+  a sandbox here reach the internet?" matters most where nothing is set up yet.
+  It now runs either way and says which path it took.
 - **A failed request is no longer reported as a `Blocked` probe verdict.** Both
   Test buttons caught every thrown error and rendered it as the state meaning
   "the network would not let this through", so a 403 from lacking the operator

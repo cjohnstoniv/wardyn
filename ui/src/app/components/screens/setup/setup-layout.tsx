@@ -35,6 +35,7 @@ export function SetupLayout({
   onFinish,
   onLaunch,
   canLaunch,
+  nextBlockedReason,
   children,
 }: {
   current: SetupStepId;
@@ -49,6 +50,11 @@ export function SetupLayout({
   onFinish: () => void;
   onLaunch: () => void;
   canLaunch: boolean;
+  // When set, Next is disabled and this reason renders beside it instead of a
+  // bare disabled button (e.g. Corporate network's connectivity gate — see
+  // steps.ts's corpNetworkBlockReason). Generic on purpose: this is shared
+  // layout, not corp-network-specific — it has no idea which step or why.
+  nextBlockedReason?: string;
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -131,10 +137,15 @@ export function SetupLayout({
               Back
             </Button>
             {next ? (
-              <Button onClick={() => onSelect(next)}>
-                Next: {STEP_LABEL[next]}
-                <ArrowRight className="size-4" aria-hidden />
-              </Button>
+              <>
+                {nextBlockedReason && (
+                  <p className="max-w-xs text-right text-xs text-warning">{nextBlockedReason}</p>
+                )}
+                <Button onClick={() => onSelect(next)} disabled={!!nextBlockedReason}>
+                  Next: {STEP_LABEL[next]}
+                  <ArrowRight className="size-4" aria-hidden />
+                </Button>
+              </>
             ) : (
               <>
                 <Button variant="outline" onClick={onLaunch} disabled={!canLaunch}>

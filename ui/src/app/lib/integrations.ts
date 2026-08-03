@@ -33,7 +33,7 @@ export const T = {
   PROXY_BANNER:
     "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
   CORP_LEDE:
-    "Optional, and first for a reason. If this machine reaches the internet through a corporate proxy or an internal registry mirror, set that up before connecting anything else — a model provider or a git host you add first will look broken when it's the network that's blocked.",
+    "Required, and first for a reason. A model provider or a git host you add before this will look broken when it's really the network that's blocked — prove this host can reach the internet below before continuing.",
   EMBED_SCOPE_NOTE:
     "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
   EVIDENCE_HEAD: "What Wardyn found on this host",
@@ -61,6 +61,8 @@ export const T = {
     "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
   TEST_PROXY_HINT:
     "Launches a throwaway confined probe through wardyn-proxy chained to the configured upstream, and reports what actually happened. A real sandbox launch — seconds, not instant.",
+  TEST_CUSTOM_HINT:
+    "No public internet from this host? Point the test at a URL you know you can reach — an internal wiki, an intranet API, anything real. Wardyn can't verify what it should return, only that the request completed.",
   X_KEY_CODEX: "Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.",
   X_SUB_CODEX: "Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting.",
   X_BEDROCK_CODEX: "Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting.",

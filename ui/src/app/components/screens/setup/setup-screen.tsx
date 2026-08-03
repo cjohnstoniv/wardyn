@@ -28,13 +28,14 @@ import { deriveReadiness, lastCheckedLabel } from "../onboarding/intro";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
-import { CorpNetworkStep, isCorpNetworkConfigured, isProxyConfigured, proxyDetected } from "./corp-network-step";
+import { CorpNetworkStep, isProxyConfigured, proxyDetected } from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
 import { LaunchStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
   STEP_ORDER,
+  corpNetworkBlockReason,
   stepBadges,
   stepDone,
   type CorpNetworkState,
@@ -47,11 +48,9 @@ import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 // here: this is still its public home.
 export { dismissSetup, setupDismissed } from "./setup-gate";
 import {
-  corpNetworkSkipped,
   dismissSetup,
   integrationsSkipped,
   loadVisitedSteps,
-  markCorpNetworkSkipped,
   markIntegrationsSkipped,
   markStepVisited,
 } from "./setup-gate";
@@ -84,9 +83,22 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // connected integration supersedes it. Generalized from the old per-step
   // "model-skipped" flag now that the provider picker lives inside Integrations.
   const [skippedIntegrations, setSkippedIntegrations] = React.useState(integrationsSkipped());
-  // Same per-browser skip pattern, for the (optional) Corporate network step —
-  // see setup-gate's markCorpNetworkSkipped.
-  const [skippedCorpNetwork, setSkippedCorpNetwork] = React.useState(corpNetworkSkipped());
+  // Corporate network's gate proof (proxy probe / egress-tab visit / per-redirect
+  // tests) — held HERE, not inside CorpNetworkStep, because that component
+  // unmounts on navigation and this must survive leaving and re-entering the
+  // step (see steps.ts's CorpNetworkState doc). Deliberately in-memory only,
+  // never persisted: a stale "reached" surviving a reload would be exactly the
+  // false reassurance this whole feature exists to prevent.
+  const [corpGate, setCorpGate] = React.useState<Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes">>({
+    egressVisited: false,
+    redirectProbes: {},
+  });
+  const onCorpGateChange = React.useCallback(
+    (patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes">>) => {
+      setCorpGate((g) => ({ ...g, ...patch }));
+    },
+    [],
+  );
   // Steps navigated AWAY from at least once (per browser) — feeds the rail's
   // "Skipped" badge override below. See selectStep for what counts as leaving.
   const [visitedSteps, setVisitedSteps] = React.useState<Set<SetupStepId>>(
@@ -244,13 +256,15 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // them here too would double-count the same configuration under two steps.
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
   const integrationsCount = integrationsData.ai.length + integrationsData.scm.length;
+  const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {
     proxyConfigured: isProxyConfigured(siteConfig),
     proxyDetected: proxyDetected(status.host_proxy),
-    redirectCount: siteConfig?.egress_redirects?.length ?? 0,
+    redirectCount: corpRedirects.length,
+    ...corpGate,
   };
-  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork);
-  const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork);
+  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
+  const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
   for (const id of DEMO_STEP_IDS) {
@@ -267,14 +281,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     done.integrations = true;
     badges.integrations = { text: "Skipped", tone: "neutral" };
   }
-  // Same override, for Corporate network: an explicit skip earns its checkmark
-  // with nothing configured. A real configured value (checked fresh here, not
-  // just the badge/done the pure fns already computed from corpNetwork) always
-  // wins and keeps its own "Ready · proxy + N redirects" badge.
-  if (!isCorpNetworkConfigured(siteConfig) && skippedCorpNetwork) {
-    done.corp_network = true;
-    badges.corp_network = { text: "Skipped", tone: "neutral" };
-  }
+  // Corporate network has no skip override any more: it's mandatory, and
+  // stepDone/stepBadges already read the real gate (corpNetworkBlockReason)
+  // above — no_runner is the only honest bypass, folded into that ladder.
   // A4: an optional step the operator navigated away from without configuring it
   // reads "Skipped" instead of a perpetual, un-acted-on "Optional" — a neutral
   // "you saw this and moved on" marker. Scoped to the exact still-default badge
@@ -293,6 +302,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     }
   }
 
+  // The Next-button gate — only Corporate network produces one today. Computed
+  // fresh from the SAME corpNetwork/corpRedirects stepDone.corp_network above
+  // already read, so the badge, the checkmark, and this can never disagree.
+  const corpNetworkReason = stepId === "corp_network" ? corpNetworkBlockReason(corpNetwork, corpRedirects) : null;
+
   return (
     <>
       <SetupLayout
@@ -307,6 +321,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // A barrier is enough to launch (an interactive run works with no model —
         // the operator drives it over an attached terminal).
         canLaunch={readiness.ready}
+        nextBlockedReason={corpNetworkReason ?? undefined}
       >
         {stepId === "environment" && (
           <EnvironmentStep
@@ -323,15 +338,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             siteConfig={siteConfig}
             reloadSiteConfig={reloadSiteConfig}
             saveSiteConfig={saveSiteConfig}
-            skipped={skippedCorpNetwork}
-            onSkip={() => {
-              markCorpNetworkSkipped();
-              setSkippedCorpNetwork(true);
-              // Advance past the (now-decided) optional step.
-              const i = STEP_ORDER.indexOf("corp_network");
-              const nextStep = STEP_ORDER[i + 1];
-              if (nextStep) selectStep(nextStep);
-            }}
+            gate={corpGate}
+            onGateChange={onCorpGateChange}
           />
         )}
         {stepId === "integrations" && (

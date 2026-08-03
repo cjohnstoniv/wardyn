@@ -54,7 +54,7 @@ describe("integrations — T canon sentinel pins", () => {
       "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
     );
     expect(T.CORP_LEDE).toBe(
-      "Optional, and first for a reason. If this machine reaches the internet through a corporate proxy or an internal registry mirror, set that up before connecting anything else — a model provider or a git host you add first will look broken when it's the network that's blocked.",
+      "Required, and first for a reason. A model provider or a git host you add before this will look broken when it's really the network that's blocked — prove this host can reach the internet below before continuing.",
     );
     expect(T.EMBED_SCOPE_NOTE).toBe(
       "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",

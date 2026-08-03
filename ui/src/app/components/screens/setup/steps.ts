@@ -8,7 +8,8 @@
 // the honest per-step badge/done derivation the orchestrator reads. One
 // badge-semantics delta from the design spec is folded in (see the workspaces
 // case below). No React here by design — data/derivation only.
-import type { SetupStatus, Workspace } from "../../../lib/types";
+import type { EgressRedirect, SetupStatus, Workspace } from "../../../lib/types";
+import type { ProxyTestResult } from "../../../lib/api/health";
 import type { Readiness } from "../onboarding/intro";
 import { DEMOS } from "../demos/demo-catalog";
 import { isUsable } from "../../../lib/workspace-status";
@@ -114,9 +115,11 @@ export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
 // Essentials and two Finish steps). Exported so the layout and its test share
 // one list instead of each hardcoding the same membership.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
-  // Corporate network is OPTIONAL — most hosts reach the internet directly;
-  // it only matters behind a proxy or an internal mirror.
-  "corp_network",
+  // Corporate network is NOT optional (see corpNetworkBlockReason below):
+  // proof of internet access gates Next, on the theory that everything after
+  // it — a model provider, a git host — looks broken when it's really the
+  // network that's blocked. Only its own honest bypasses (no_runner) move you
+  // past it without proof.
   // Integrations is OPTIONAL — every category it covers (model/harness, SCM
   // host) is itself skippable; Wardyn runs with none of them connected. The
   // barrier (Environment) is the sole hard requirement.
@@ -131,28 +134,82 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
 // ------------------------------------------------------------
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
 
-// The three SiteConfig-derived facts Corporate network's badge/done need — see
-// corp-network-step.tsx's isProxyConfigured/proxyDetected, the SAME helpers
-// the step body itself renders from, so the rail can never disagree with it.
+// Corporate network's badge/gate facts. The first three are SiteConfig-derived
+// (see corp-network-step.tsx's isProxyConfigured/proxyDetected, the SAME
+// helpers the step body itself renders from, so the rail can never disagree
+// with it); the rest are THIS-SESSION probe/visit facts the step body reports
+// upward via a callback (see CorpNetworkStep's onGateChange) — lifted here,
+// rather than left as the step's own local state, because the step unmounts
+// on navigation and the gate must survive leaving and re-entering it. Never
+// persisted: a stale "reached" surviving a page reload would be exactly the
+// false reassurance this whole feature exists to prevent.
 export interface CorpNetworkState {
   proxyConfigured: boolean;
   proxyDetected: boolean;
   redirectCount: number;
+  /** Last real test-proxy probe this session (T.TEST_*, never cached/inferred) — undefined until the operator runs one. */
+  proxyProbe?: ProxyTestResult;
+  /** The operator opened the Egress redirection tab at least once this time through the step — the explicit "I looked, there's nothing to redirect" acknowledgement corpNetworkBlockReason requires at zero redirects. */
+  egressVisited: boolean;
+  /** Each configured redirect's last test result this session, keyed by its `from` (a redirect has no server id) — a missing key means untested. Stale keys from a since-removed/edited redirect are harmless: corpNetworkBlockReason only ever looks up a `from` from the CURRENT list. */
+  redirectProbes: Record<string, ProxyTestResult>;
 }
-const CORP_NETWORK_UNSET: CorpNetworkState = { proxyConfigured: false, proxyDetected: false, redirectCount: 0 };
+const CORP_NETWORK_UNSET: CorpNetworkState = {
+  proxyConfigured: false,
+  proxyDetected: false,
+  redirectCount: 0,
+  egressVisited: false,
+  redirectProbes: {},
+};
 
-// Ladder: Optional -> Skipped (orchestrator override, like integrations) ->
-// Detected — not configured (amber; a real corporate proxy is sitting there
-// unconfigured) -> Ready · proxy + N redirects. The count is always DERIVED
-// from redirectCount, never a fixed word — a fixture with 4 redirects reads
-// "+ 4 redirects", not a stale "+ 3".
-function corpNetworkBadge(c: CorpNetworkState): StepBadge {
+// THE gate: null once every rule is satisfied, else the specific, actionable
+// reason Next stays disabled (see setup-layout.tsx's nextBlockedReason). Also
+// the single source of truth corpNetworkBadge and stepDone's corp_network line
+// both read, so the rail badge, the checkmark, and the Next button can never
+// disagree about whether this step is actually done.
+//
+// Ladder: no_runner is the one honest bypass (Wardyn is structurally unable to
+// probe on this host — holding the gate open would trap the operator with no
+// way to ever satisfy it) -> prove reachability (untested/blocked) -> look at
+// Egress redirection at least once when nothing is configured there (an
+// empty list needs an explicit "I looked" same as a configured one) -> every
+// CONFIGURED redirect must itself test reached, named individually so the
+// operator knows exactly which one is still failing.
+export function corpNetworkBlockReason(c: CorpNetworkState, redirects: EgressRedirect[]): string | null {
+  if (c.proxyProbe?.state === "no_runner") return null;
+  if (c.proxyProbe?.state !== "reached") {
+    return c.proxyProbe?.state === "blocked"
+      ? "The connectivity test is still failing — fix network access, or test a URL you know you can reach, before continuing."
+      : "Prove this host can reach the internet — run the connectivity test above before continuing.";
+  }
+  if (redirects.length === 0) {
+    return c.egressVisited ? null : "Visit Egress redirection before continuing — an empty list is fine, but look first.";
+  }
+  const failing = redirects.find((red) => c.redirectProbes[red.from]?.state !== "reached");
+  if (!failing) return null;
+  const state = c.redirectProbes[failing.from]?.state;
+  const label = !state ? "not yet tested" : state === "bypass" ? "not enforced" : state;
+  return `The ${failing.from} redirect must test "Reached" before continuing — it's currently ${label}.`;
+}
+
+// Ladder mirrors corpNetworkBlockReason's (a short label here, a full sentence
+// there) so the badge never claims "Ready" while Next is still disabled, or
+// vice versa. The count is always DERIVED from redirectCount, never a fixed
+// word — a fixture with 4 redirects reads "+ 4 redirects", not a stale "+ 3".
+function corpNetworkBadge(c: CorpNetworkState, redirects: EgressRedirect[]): StepBadge {
+  // Deliberately NOT "Can't test here" — that's the probe chip's own no_runner
+  // label (T.TEST_NORUNNER's tone); this badge needs its own distinct text so
+  // the two never collide in a query when both are on screen at once.
+  if (c.proxyProbe?.state === "no_runner") return { text: "Not testable on this host — allowed through", tone: "neutral" };
+  if (c.proxyProbe?.state === "blocked") return { text: "Blocked", tone: "warning" };
+  if (c.proxyProbe?.state !== "reached") return { text: "Untested", tone: "warning" };
+  if (redirects.length === 0 && !c.egressVisited) return { text: "Egress redirection not reviewed", tone: "warning" };
+  const failing = redirects.find((red) => c.redirectProbes[red.from]?.state !== "reached");
+  if (failing) return { text: `${failing.from} not enforced`, tone: "warning" };
   const parts: string[] = [];
   if (c.proxyConfigured) parts.push("proxy");
   if (c.redirectCount > 0) parts.push(`${c.redirectCount} redirect${c.redirectCount === 1 ? "" : "s"}`);
-  if (parts.length) return { text: `Ready · ${parts.join(" + ")}`, tone: "success" };
-  if (c.proxyDetected) return { text: "Detected — not configured", tone: "warning" };
-  return { text: "Optional", tone: "neutral" };
+  return { text: parts.length ? `Ready · ${parts.join(" + ")}` : "Ready · direct", tone: "success" };
 }
 
 export function stepBadges(
@@ -165,6 +222,10 @@ export function stepBadges(
   // this pure function only needs the resulting number.
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
+  // The redirects corpNetwork's probes above are keyed against — a trailing,
+  // defaulted param so every existing call site (none of which cares about
+  // corp_network) keeps compiling unchanged. See corpNetworkBlockReason.
+  corpNetworkRedirects: EgressRedirect[] = [],
 ): Record<SetupStepId, StepBadge> {
   const readyWorkspaces = workspaces.filter((w) => isUsable(w.status)).length;
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
@@ -177,7 +238,7 @@ export function stepBadges(
     environment: r.barrierReady
       ? { text: `Ready · ${r.barrierCount} of 3 barriers`, tone: "success" }
       : { text: "Needs setup", tone: "warning" },
-    corp_network: corpNetworkBadge(corpNetwork),
+    corp_network: corpNetworkBadge(corpNetwork, corpNetworkRedirects),
     // Ladder: Optional -> Skipped (visited, left unconfigured — applied by the
     // orchestrator's generic visited-steps override, see setup-screen.tsx) ->
     // Ready · N connected.
@@ -227,6 +288,7 @@ export function stepDone(
   workspaces: Workspace[],
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
+  corpNetworkRedirects: EgressRedirect[] = [],
 ): Record<SetupStepId, boolean> {
   // Demos: advisory here (all false). The orchestrator ORs in the per-browser
   // "launched demos" set to earn each demo's checkmark — kept out of this pure fn
@@ -240,10 +302,11 @@ export function stepDone(
     // reads. An unrelated failing check must not blank this dot while the badge
     // stays green (Review owns the whole-checks rollup).
     environment: r.barrierReady,
-    // Configured (proxy OR at least one redirect) — an explicit skip (setup-
-    // gate's markCorpNetworkSkipped, mirroring markIntegrationsSkipped) ORs in
-    // from the orchestrator on top of this, same as integrations below.
-    corp_network: corpNetwork.proxyConfigured || corpNetwork.redirectCount > 0,
+    // Done means the GATE is satisfied — see corpNetworkBlockReason, the same
+    // ladder that disables Next. No separate "explicit skip" override any
+    // more: this step is mandatory, so its only honest bypass is no_runner
+    // (folded into corpNetworkBlockReason itself).
+    corp_network: corpNetworkBlockReason(corpNetwork, corpNetworkRedirects) === null,
     // An explicit "Skip this step" click (see setup-gate's markIntegrationsSkipped)
     // ORs in from the orchestrator, exactly like the old model-skip override —
     // this pure fn only knows about a real connected integration.

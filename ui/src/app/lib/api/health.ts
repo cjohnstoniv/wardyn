@@ -46,8 +46,18 @@ export const health = {
   // actually happened (T.TEST_PROXY_HINT); never a cached/inferred verdict. A
   // 404 means this server build predates the endpoint — that must read as
   // "can't test here" (no_runner), never a fake pass.
-  async testProxy(): Promise<ProxyTestResult> {
-    const res = await wfetch("/site-config/test-proxy", { method: "POST" });
+  //
+  // url is the deliberate escape for a host with no public internet — an
+  // internal-only or air-gapped deployment points the probe at something it
+  // CAN reach instead of failing the default multi-target check forever. Omit
+  // it (the ordinary case) to run the default check; a rejected custom URL
+  // comes back as a 400 (asJson throws), surfaced by the caller like any other
+  // write failure — never papered over.
+  async testProxy(url?: string): Promise<ProxyTestResult> {
+    const res = await wfetch("/site-config/test-proxy", {
+      method: "POST",
+      ...(url ? { body: JSON.stringify({ url }) } : {}),
+    });
     if (res.status === 404) {
       return { state: "no_runner", detail: "This server build has no test-proxy endpoint." };
     }

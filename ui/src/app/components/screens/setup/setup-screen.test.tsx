@@ -21,6 +21,8 @@ const listComposerBackendsMock = vi.fn();
 const listWorkspacesMock = vi.fn();
 const getSiteConfigMock = vi.fn();
 const putSiteConfigMock = vi.fn();
+const testProxyMock = vi.fn();
+const testRedirectMock = vi.fn();
 
 // SetupScreen's tree spans the setup/secrets/health/compose/workspaces/policies/
 // runs/integrations domains (orchestrator + NewRunDialog + step bodies, incl.
@@ -42,6 +44,11 @@ vi.mock("../../../lib/api/health", () => ({
     // unconfigured zero value.
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
+    // Corporate network's connectivity gate (corp-network-step.tsx) — the
+    // walkthroughs below aren't testing the gate itself, so they clear it with
+    // one Test-proxy click against the no_runner default (see beforeEach).
+    testProxy: (...a: unknown[]) => testProxyMock(...a),
+    testRedirect: (...a: unknown[]) => testRedirectMock(...a),
   },
 }));
 vi.mock("../../../lib/api/compose", () => ({
@@ -129,7 +136,23 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // independent one both GET on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    // no_runner (this suite mocks no real sandbox runner) is the honest,
+    // non-blocking default — see clearCorpNetworkGate for why that's the
+    // right fixture for walkthroughs that aren't testing the gate itself.
+    testProxyMock.mockReset().mockResolvedValue({ state: "no_runner", detail: "no runner configured, nothing to launch a probe with" });
+    testRedirectMock.mockReset().mockResolvedValue({ state: "no_runner", detail: "no runner configured, nothing to launch a probe with" });
   });
+
+  // Corporate network (steps.ts's corpNetworkBlockReason) now requires proof
+  // of connectivity before Next unlocks. no_runner is the ONE honest bypass —
+  // Wardyn can't probe in this jsdom suite anyway — so a single Test-proxy
+  // click clears the gate for every walkthrough below that isn't exercising
+  // the gate itself (that coverage lives in corp-network-step.test.tsx and
+  // setup-layout.test.tsx).
+  const clearCorpNetworkGate = async () => {
+    await user.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText(/can.t test here/i);
+  };
 
   it("unreachable daemon: shows 'Couldn't reach Wardyn' + Re-check, never the no-runner danger card", async () => {
     getSetupStatusMock.mockResolvedValue(
@@ -169,6 +192,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // fix for "blocked network reads as bad credential" — see steps.ts).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+    await clearCorpNetworkGate();
 
     // Integrations follows Corporate network — it folds in the model/SCM-host
     // picker (host proxy / egress redirection moved to the step just visited).
@@ -218,6 +242,91 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
   });
 
+  // The gate itself, wired end to end through the real orchestrator — the unit
+  // coverage for each rule lives in steps.test.ts (corpNetworkBlockReason) and
+  // corp-network-step.test.tsx (the step body reporting upward); this proves
+  // setup-screen.tsx actually connects them.
+  describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
+    it("Next is disabled with a reason until the test passes, unlocks once egress is reviewed too", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await screen.findByRole("heading", { name: /^corporate network$/i });
+
+      const next = screen.getByRole("button", { name: /^next: integrations$/i });
+      expect(next).toBeDisabled();
+      // T.CORP_LEDE's own prose also says "prove this host can reach the
+      // internet" — match the REASON text specifically, not the lede.
+      expect(screen.getByText(/run the connectivity test above/i)).toBeInTheDocument();
+
+      testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+      await user.click(screen.getByRole("button", { name: /^test proxy$/i }));
+      await screen.findByText("Reached");
+      // Reached but the Egress tab hasn't been looked at yet — still blocked.
+      expect(next).toBeDisabled();
+      expect(screen.getByText(/visit egress redirection/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+      expect(next).toBeEnabled();
+      expect(screen.queryByText(/visit egress redirection/i)).not.toBeInTheDocument();
+
+      await user.click(next);
+      expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
+    });
+
+    it("no_runner unlocks Next immediately — the one honest bypass, no egress visit required", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await screen.findByRole("heading", { name: /^corporate network$/i });
+
+      await clearCorpNetworkGate();
+      expect(screen.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+    });
+
+    it("a redirect that hasn't tested reached blocks Next and names the row", async () => {
+      getSiteConfigMock.mockResolvedValue({
+        egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
+      });
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await screen.findByRole("heading", { name: /^corporate network$/i });
+
+      testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+      await user.click(screen.getByRole("button", { name: /^test proxy$/i }));
+      await screen.findByText("Reached");
+
+      const next = screen.getByRole("button", { name: /^next: integrations$/i });
+      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+      // Egress was visited, but the configured redirect itself is untested —
+      // that must still block, and name which row.
+      expect(next).toBeDisabled();
+      expect(screen.getByText(/registry\.npmjs\.org redirect must test/i)).toBeInTheDocument();
+
+      testRedirectMock.mockResolvedValueOnce({ state: "reached", detail: "reachable via the mirror" });
+      await user.click(await screen.findByRole("button", { name: /^test$/i }));
+      await screen.findByText("Reached");
+      expect(next).toBeEnabled();
+    });
+
+    it("the gate survives leaving and re-entering the step — no re-test needed", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
+      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+
+      // Back to Corporate network: the step body remounted, but the gate — held
+      // by the orchestrator, not the step — still remembers the no_runner pass.
+      await user.click(screen.getByRole("button", { name: /^back$/i }));
+      await screen.findByRole("heading", { name: /^corporate network$/i });
+      expect(screen.getByText("Can't test here")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
+    });
+  });
+
   it("the Integrations step embeds the real list (not a second copy) and the rail badge counts a connection", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
@@ -227,6 +336,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findByText("Fence");
 
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
     expect(
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i }),
@@ -252,6 +362,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByText("Fence");
 
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
@@ -271,6 +382,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByText("Fence");
 
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
@@ -286,6 +398,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByText("Fence");
 
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(await screen.findByRole("button", { name: /^skip this step$/i }));
@@ -300,6 +413,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       const { unmount } = renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
       await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> first demo, leaves integrations
@@ -369,7 +483,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
     // walk to Review (step 9 of 10) — checks live there now, not the barrier step
-    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -416,7 +532,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByText("Vault")).toBeInTheDocument();
     expect(screen.queryByText("Secret store durability")).not.toBeInTheDocument();
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
-    for (let i = 0; i < 8; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

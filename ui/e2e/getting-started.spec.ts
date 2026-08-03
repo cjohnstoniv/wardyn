@@ -27,6 +27,15 @@ import { test, expect, gotoConsole, navTo } from "./fixtures";
 // barrier is ready and no model is connected, so the launch gate MUST be
 // closed — if this host ever gains a runner, the gating assertions below are
 // the ones to revisit.
+//
+// Corporate network's Next is now a hard gate too (steps.ts's
+// corpNetworkBlockReason) — this walk can no longer blindly Next through it.
+// The seeded `-runner none` backend answers a REAL Test-proxy click with
+// "no_runner", the ladder's one honest bypass, exactly as an operator on a
+// runner-less host would see — so passCorpNetworkGate() below clicks the real
+// button rather than stubbing the endpoint. Without that click the gate stays
+// shut (proxyProbe starts undefined, not no_runner), so every walk below
+// would otherwise stall clicking a disabled Next on step 2.
 
 // Fresh tour every test: the wardyn-onboarding-seen flag is what swaps the
 // tour for the SetupScreen, and specs must not depend on each other's flags.
@@ -39,6 +48,19 @@ async function openSetupFunnel(page: import("@playwright/test").Page) {
   // The SetupScreen funnel replaces the hero.
   await expect(page.getByRole("heading", { name: "Getting started" })).toBeVisible();
   await expect(page.getByText(/step 1 of 10/i)).toBeVisible();
+}
+
+// Clears Corporate network's connectivity gate for real (no route stub): this
+// backend genuinely runs `-runner none`, so clicking Test proxy gets back
+// {state:"no_runner"} from the actual server (internal/api/site_config_probe.go
+// short-circuits on s.cfg.Runner == nil before it ever tries to launch a
+// probe) — corpNetworkBlockReason's one honest bypass, which clears the whole
+// ladder at once (no Egress-tab visit needed). Must be called while the
+// Corporate network step is on screen, on its default Host proxy tab.
+async function passCorpNetworkGate(page: import("@playwright/test").Page) {
+  const main = page.getByRole("main");
+  await main.getByRole("button", { name: /^test proxy$/i }).click();
+  await expect(main.getByText(/can't test here/i)).toBeVisible();
 }
 
 test.describe("Getting Started funnel", () => {
@@ -57,6 +79,7 @@ test.describe("Getting Started funnel", () => {
     // 2 corporate network
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /corporate network/i })).toBeVisible();
+    await passCorpNetworkGate(page);
     // 3 integrations
     await nextBtn.click();
     await expect(
@@ -92,7 +115,12 @@ test.describe("Getting Started funnel", () => {
     // Footer on the last step: the launch button is disabled with the
     // essentials helper visible.
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
-    for (let i = 0; i < 9; i++) await nextBtn.click();
+    // 9 Next clicks total (unchanged from before the gate): 1 to reach
+    // corp_network, then 8 more once its gate is cleared — see
+    // passCorpNetworkGate above.
+    await nextBtn.click();
+    await passCorpNetworkGate(page);
+    for (let i = 0; i < 8; i++) await nextBtn.click();
     await expect(main.getByRole("heading", { name: /launch your first run/i })).toBeVisible();
     for (const btn of await page.getByRole("button", { name: /launch your first run/i }).all()) {
       await expect(btn).toBeDisabled();
@@ -106,9 +134,12 @@ test.describe("Getting Started funnel", () => {
     // operator in setup until the end (this seeded backend is admin-token, not
     // local, so nav itself isn't hidden — but the escape verb is still gone).
     await expect(page.getByRole("button", { name: /finish later/i })).toHaveCount(0);
-    // Walk to the final (Launch) step and complete via "Finish setup".
+    // Walk to the final (Launch) step and complete via "Finish setup". 9 Next
+    // clicks total, same as before the gate — see passCorpNetworkGate above.
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
-    for (let i = 0; i < 9; i++) await nextBtn.click();
+    await nextBtn.click();
+    await passCorpNetworkGate(page);
+    for (let i = 0; i < 8; i++) await nextBtn.click();
     await page.getByRole("button", { name: /^finish setup$/i }).click();
     // Completion lands on Runs...
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();

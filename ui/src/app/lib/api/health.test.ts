@@ -41,3 +41,31 @@ describe("health.logout()", () => {
     await expect(health.logout()).resolves.toBeUndefined();
   });
 });
+
+// testProxy's optional url — the escape for a host with no public internet
+// (see health.ts's doc comment). No url must keep sending a bare POST (the
+// default multi-target check); a url must be the ONLY thing in the body.
+describe("health.testProxy(url?)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ state: "reached", detail: "ok" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no body when called with no url", async () => {
+    await health.testProxy();
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.body).toBeUndefined();
+  });
+
+  it("sends {url} when called with a custom url, and nothing else", async () => {
+    await health.testProxy("https://intranet.example.com");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init!.body as string)).toEqual({ url: "https://intranet.example.com" });
+  });
+});

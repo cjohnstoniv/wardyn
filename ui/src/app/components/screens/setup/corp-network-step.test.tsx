@@ -15,10 +15,10 @@ import {
   CorpNetworkStep,
   compactEndpoint,
   hasUserinfo,
-  isCorpNetworkConfigured,
   isProxyConfigured,
   proxyDetected,
 } from "./corp-network-step";
+import type { CorpNetworkState } from "./steps";
 import { baseStatus } from "./test-fixtures";
 
 const testProxyMock = vi.fn();
@@ -35,6 +35,13 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) },
 }));
 
+// The zero-value gate: nothing probed, tab never visited. Most tests don't
+// care about gate reporting, so this keeps their props terse; the tests that
+// DO care pass their own gate/onGateChange override.
+function unsetGate(): Pick<CorpNetworkState, "proxyProbe" | "egressVisited" | "redirectProbes"> {
+  return { egressVisited: false, redirectProbes: {} };
+}
+
 function renderStep(props: Partial<ComponentProps<typeof CorpNetworkStep>> = {}) {
   const saveSiteConfig = vi.fn().mockResolvedValue(undefined);
   const reloadSiteConfig = vi.fn().mockResolvedValue(undefined);
@@ -46,8 +53,8 @@ function renderStep(props: Partial<ComponentProps<typeof CorpNetworkStep>> = {})
           siteConfig={null}
           reloadSiteConfig={reloadSiteConfig}
           saveSiteConfig={saveSiteConfig}
-          skipped={false}
-          onSkip={vi.fn()}
+          gate={unsetGate()}
+          onGateChange={vi.fn()}
           {...props}
         />
       </OperatorProvider>
@@ -90,12 +97,10 @@ describe("pure helpers", () => {
     expect(hasUserinfo("not a url")).toBe(false);
   });
 
-  it("isProxyConfigured / isCorpNetworkConfigured / proxyDetected read SiteConfig honestly", () => {
+  it("isProxyConfigured / proxyDetected read SiteConfig honestly", () => {
     expect(isProxyConfigured(null)).toBe(false);
     expect(isProxyConfigured({ upstream_proxy_url: "http://p:8080" })).toBe(true);
     expect(isProxyConfigured({ upstream_proxy_secret_ref: "s" })).toBe(true);
-    expect(isCorpNetworkConfigured({ egress_redirects: [{ from: "a", to: "b" }] })).toBe(true);
-    expect(isCorpNetworkConfigured({})).toBe(false);
     expect(proxyDetected(undefined)).toBe(false);
     expect(proxyDetected({ has_credentials: false })).toBe(false);
     expect(
@@ -400,12 +405,15 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
 });
 
 // ------------------------------------------------------------
-// Skip control — mirrors the Integrations step's pattern
+// The gate — no escape but the honest ones (no_runner, or naming what still
+// needs fixing). "Skip this step" and the "Manage in Integrations" link are
+// GONE: this step is mandatory, and the very next step IS Integrations, so
+// the cross-link was noise.
 // ------------------------------------------------------------
-describe("Skip this step", () => {
-  it("offers Skip while unconfigured and not yet skipped; hides once either is true", () => {
-    const { rerender } = renderStep({ skipped: false, siteConfig: null });
-    expect(screen.getByRole("button", { name: /^skip this step$/i })).toBeInTheDocument();
+describe("No skip control, no Integrations cross-link — this step is mandatory", () => {
+  it("never renders a Skip button, configured or not", () => {
+    const { rerender } = renderStep({ siteConfig: null });
+    expect(screen.queryByRole("button", { name: /skip/i })).not.toBeInTheDocument();
 
     rerender(
       <MemoryRouter>
@@ -415,19 +423,143 @@ describe("Skip this step", () => {
             siteConfig={{ upstream_proxy_url: "http://p:8080" }}
             reloadSiteConfig={vi.fn().mockResolvedValue(undefined)}
             saveSiteConfig={vi.fn().mockResolvedValue(undefined)}
-            skipped={false}
-            onSkip={vi.fn()}
+            gate={unsetGate()}
+            onGateChange={vi.fn()}
           />
         </OperatorProvider>
       </MemoryRouter>,
     );
-    expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /skip/i })).not.toBeInTheDocument();
   });
 
-  it("clicking Skip calls onSkip", async () => {
-    const onSkip = vi.fn();
-    renderStep({ onSkip });
-    await userEvent.click(screen.getByRole("button", { name: /^skip this step$/i }));
-    expect(onSkip).toHaveBeenCalledTimes(1);
+  it("never renders a 'Manage in Integrations' link", () => {
+    renderStep();
+    expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
+  });
+});
+
+// ------------------------------------------------------------
+// The gate itself — reporting probe/visit facts upward via onGateChange, and
+// seeding back from a prior visit's gate (the whole point of lifting this
+// state: CorpNetworkStep unmounts when the operator navigates away).
+// ------------------------------------------------------------
+describe("Gate reporting — proxy test, egress visit, and redirect tests all report upward", () => {
+  it("a reached proxy test calls onGateChange with the full result", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+    const onGateChange = vi.fn();
+    renderStep({ onGateChange });
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText("Reached");
+    expect(onGateChange).toHaveBeenCalledWith({ proxyProbe: { state: "reached", detail: "reached in 42ms" } });
+  });
+
+  it("a FAILED REQUEST never reports a gate update — no verdict was actually observed", async () => {
+    testProxyMock.mockRejectedValueOnce(new Error("403 operator role required"));
+    const onGateChange = vi.fn();
+    renderStep({ onGateChange });
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText("Not tested");
+    expect(onGateChange).not.toHaveBeenCalled();
+  });
+
+  it("re-entering the step seeds the proxy panel from gate.proxyProbe instead of a false 'Not tested'", () => {
+    renderStep({ gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: "reached in 42ms" } } });
+    expect(screen.getByText("Reached")).toBeInTheDocument();
+    expect(screen.getByText("reached in 42ms")).toBeInTheDocument();
+    // No re-test needed to see it — the button is idle, not mid-run.
+    expect(screen.getByRole("button", { name: /^test proxy$/i })).toBeEnabled();
+  });
+
+  it("switching to the Egress redirection tab reports egressVisited", async () => {
+    const onGateChange = vi.fn();
+    renderStep({ onGateChange });
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    expect(onGateChange).toHaveBeenCalledWith({ egressVisited: true });
+    expect(onGateChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report egressVisited again when the gate already has it (re-entering an already-visited step)", async () => {
+    const onGateChange = vi.fn();
+    renderStep({ gate: { ...unsetGate(), egressVisited: true }, onGateChange });
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    expect(onGateChange).not.toHaveBeenCalled();
+  });
+
+  it("testing a redirect reports its result upward keyed by `from`, merged with any prior entries", async () => {
+    testRedirectMock.mockResolvedValueOnce({ state: "reached", detail: "reachable via the mirror" });
+    const onGateChange = vi.fn();
+    renderStep({
+      siteConfig: { egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }] },
+      gate: { ...unsetGate(), redirectProbes: { "https://pypi.org/simple": { state: "reached", detail: "old" } } },
+      onGateChange,
+    });
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^test$/i }));
+    await screen.findByText("Reached");
+    expect(onGateChange).toHaveBeenCalledWith({
+      redirectProbes: {
+        "https://pypi.org/simple": { state: "reached", detail: "old" },
+        "https://registry.npmjs.org": { state: "reached", detail: "reachable via the mirror" },
+      },
+    });
+  });
+
+  it("re-entering the step seeds each redirect row from gate.redirectProbes instead of resetting to 'Not tested'", async () => {
+    renderStep({
+      siteConfig: { egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }] },
+      gate: { ...unsetGate(), redirectProbes: { "https://registry.npmjs.org": { state: "bypass", detail: "still reachable directly" } } },
+    });
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    expect(await screen.findByText("Redirect not enforced")).toBeInTheDocument();
+    expect(screen.queryByText("Not tested")).not.toBeInTheDocument();
+  });
+});
+
+// ------------------------------------------------------------
+// Custom-URL retry — the escape for a host with no public internet. Only
+// surfaced after a real failure, never up front (T.TEST_CUSTOM_HINT).
+// ------------------------------------------------------------
+describe("Custom-URL retry — only after a blocked result", () => {
+  it("does not appear before testing, or once the test reaches — only a real 'blocked' surfaces it", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+    renderStep();
+    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText("Reached");
+    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+  });
+
+  it("no_runner does not offer the custom-URL retry either — there is nothing to retry with", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "no_runner", detail: T.TEST_NORUNNER });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText("Can't test here");
+    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+  });
+
+  it("appears after a blocked result, and retrying with a URL calls testProxy(url)", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: T.TEST_BLOCKED });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText("Blocked");
+    expect(screen.getByText(T.TEST_CUSTOM_HINT)).toBeInTheDocument();
+
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "the request completed" });
+    const field = screen.getByPlaceholderText(/an-internal-host-you-can-reach/i);
+    await userEvent.type(field, "https://intranet.example.com");
+    await userEvent.click(screen.getByRole("button", { name: /^test this url instead$/i }));
+
+    expect(await screen.findByText("Reached")).toBeInTheDocument();
+    expect(testProxyMock).toHaveBeenLastCalledWith("https://intranet.example.com");
+    // Fixed now — the retry box goes away with the rest of the blocked-only UI.
+    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+  });
+
+  it("the retry button stays disabled until a URL is typed", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: T.TEST_BLOCKED });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await screen.findByText("Blocked");
+    expect(screen.getByRole("button", { name: /^test this url instead$/i })).toBeDisabled();
   });
 });
