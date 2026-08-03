@@ -55,6 +55,7 @@ import { AddWorkspaceDialog } from "../workspaces";
 import { AddSecretDialog } from "../secrets";
 import { surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
 import { wizardStateFromProposal, type WizardState } from "./wizard-types";
+import { isUsable } from "../../../lib/workspace-status";
 
 type Mode = "choose" | "describe" | "clarify" | "review" | "wizard";
 
@@ -369,7 +370,8 @@ export function NewRunDialog({
       .filter((i) => i.kind === "workspace" && i.status !== "satisfied")
       .filter((i) => {
         const wsId = i.fix?.workspace_id ?? i.id.slice(i.kind.length + 1);
-        return workspaces.find((w) => w.id === wsId)?.status === "ready";
+        const found = workspaces.find((w) => w.id === wsId);
+        return !!found && isUsable(found.status);
       })
       .map((i) => i.id);
     if (ids.length) setSatisfiedOverrides((prev) => new Set([...prev, ...ids]));

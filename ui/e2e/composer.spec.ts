@@ -92,6 +92,12 @@ async function selectWorkspace(
   await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
   await page.getByRole("option", { name: /payments/ }).click();
   await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
+  // The picker states what the workspace carries into every run up front (the
+  // "Comes with" contract line — same WorkspacePicker component the manual
+  // wizard's Basics step uses, see wizard.spec.ts's fillValidBasics). The
+  // seeded "payments" workspace has no requirements contract, so it reads the
+  // honest empty-contract fallback.
+  await expect(dlg.getByText("Comes with:")).toBeVisible();
   if (opts.readOnly) await dlg.getByRole("switch", { name: "Read-only" }).click();
 }
 

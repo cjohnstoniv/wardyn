@@ -28,6 +28,7 @@ import { RESIDENCY_META } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
 import type { PreflightResult, RunPolicy, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
+import { isUsable } from "../../../lib/workspace-status";
 
 export function StepReview({
   state,
@@ -303,7 +304,7 @@ export function StepReview({
                         </Mono>
                         {/* Surface scan status so a still-pending / errored workspace isn't
                             attached silently at the final gate. */}
-                        {w && w.status !== "ready" && (
+                        {w && !isUsable(w.status) && (
                           <Chip tone={STATUS_TONE[w.status]} className="px-1.5 py-0 text-[0.625rem]">
                             {STATUS_LABEL[w.status]}
                           </Chip>

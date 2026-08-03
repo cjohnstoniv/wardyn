@@ -202,7 +202,11 @@ SQL
   # One onboarded workspace so the manual wizard's Basics step has something to
   # attach — the mount gate accepts onboarded sources ONLY, and it checks
   # membership (any status), so pending_scan is fine and the dir need not exist.
-  api POST /api/v1/workspaces '{"name":"payments","kind":"local_dir","source":"/home/me/projects/payments"}' >/dev/null 2>&1 || true
+  # sources[]-shaped (the composition model, migration 0029) — NOT the legacy
+  # kind/source scalar shape decodeWorkspaceRequest still folds for old callers;
+  # this is what the API itself now returns for every workspace, and what the
+  # UI's workspace-wizard/picker render against.
+  api POST /api/v1/workspaces '{"name":"payments","sources":[{"type":"local_dir","path":"/home/me/projects/payments"}]}' >/dev/null 2>&1 || true
   log "Seed complete: $(psql_e2e -tAc 'SELECT count(*) FROM agent_runs') runs"
 }
 

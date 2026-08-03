@@ -105,9 +105,9 @@ func pluralCount(n int, noun string) string {
 // runs over inline, stored and default policies alike. Without this family the
 // gate was only clearable from the console.
 //
-// The interactive import pipeline (approved-egress, llm-cred, setup commands,
-// verify, finalize, suggest-fix) stays console-only: it is a review loop, not a
-// scriptable step.
+// Interactive workspace review — the requirements contract, approved-egress
+// promotion, llm-cred binding, Record sessions and their confined replay, and
+// env-as-code — stays console-only: it is a review loop, not a scriptable step.
 func workspaceCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "workspace",
@@ -157,7 +157,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	create.Flags().StringVar(&req.Source, "source", "", "absolute host path, repo slug/clone URL, or image ref — validated by the same deny-list the run path uses")
 	create.Flags().StringVar(&req.Ref, "ref", "", "git ref (branch/tag/sha); repo kind only")
 	create.Flags().StringVar(&req.DefaultTarget, "target", "", "default in-container mount/clone target (must be under /home/agent, /work or /workspace)")
-	create.Flags().BoolVar(&req.Writable, "writable", false, "mount READ-WRITE for import Record/Verify runs — a sandboxed agent's changes then PERSIST to the host directory (default read-only)")
+	create.Flags().BoolVar(&req.Writable, "writable", false, "mount READ-WRITE so a run attaching this source can PERSIST changes to the host directory (default read-only)")
 	create.Flags().StringArrayVar(&addSources, "add", nil, `add one composition source, repeatable: "dir:/host/path[@/target]", "repo:org/lib[@/target]", or "ephemeral:[@/target]" (mutually exclusive with --kind/--source/--ref/--target/--writable; no per-source --ref/--writable in this form)`)
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the created workspace as JSON")
 

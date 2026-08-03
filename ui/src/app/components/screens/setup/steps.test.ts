@@ -87,6 +87,22 @@ describe("workspaces badge", () => {
     expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(true);
   });
 
+  // The regression that made the product look permanently unfinished: the
+  // terminal-success status moved from `ready` to `scanned`, and this badge
+  // kept comparing against the literal `ready`. A workspace that had finished
+  // scanning could never earn its checkmark. Both spellings must count — the
+  // current one and the legacy rows written before the collapse.
+  it("counts a `scanned` workspace as done, not just the legacy `ready`", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const workspaces = [ws("w1", "scanned"), ws("w2", "ready")];
+    expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
+      text: "Ready · 2 onboarded",
+      tone: "success",
+    });
+    expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(true);
+  });
+
   it("shows an info-tone 'In progress' and done=false with only a pending workspace", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);

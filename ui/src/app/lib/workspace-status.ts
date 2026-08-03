@@ -76,3 +76,15 @@ export function storySentence(ws: Workspace): string {
   }
   return ws.kind === "container" ? `Runs can attach this now. ${C.IMAGE_ENV}` : "Runs can attach this now.";
 }
+
+// isUsable is the ONE predicate for "this workspace is done enough to attach".
+// It exists because the terminal-success status changed from `ready` to
+// `scanned` and four call sites went on comparing against the literal `ready`
+// — so a workspace that was finished never earned its checkmark, never offered
+// its re-scan action, and permanently wore a caution chip. Anything asking
+// "is this workspace finished?" asks HERE, so the next rename moves one line.
+// Legacy values are included for the same reason statusWord includes them: a
+// row written before the collapse still reads correctly.
+export function isUsable(status: WorkspaceStatus): boolean {
+  return statusWord(status) === "Usable";
+}

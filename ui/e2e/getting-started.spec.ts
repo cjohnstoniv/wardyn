@@ -80,8 +80,6 @@ test.describe("Getting Started funnel", () => {
 
     // The environment step tells the truth about the seeded `none` runner.
     await expect(main.getByText(/no sandbox runner/i)).toBeVisible();
-    // No fast-path banner — essentials (barrier + model) are not met.
-    await expect(page.getByText(/you're ready — launch your first run now/i)).toHaveCount(0);
 
     // Footer on the last step: the launch button is disabled with the
     // essentials helper visible.

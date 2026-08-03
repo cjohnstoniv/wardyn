@@ -11,6 +11,7 @@
 import type { SetupStatus, Workspace } from "../../../lib/types";
 import type { Readiness } from "../onboarding/intro";
 import { DEMOS } from "../demos/demo-catalog";
+import { isUsable } from "../../../lib/workspace-status";
 
 // ------------------------------------------------------------
 // Steps — ids/labels FROZEN (e2e tests target them). The single source of truth
@@ -130,7 +131,7 @@ export function stepBadges(
   // this pure function only needs the resulting number.
   integrationsCount: number,
 ): Record<SetupStepId, StepBadge> {
-  const readyWorkspaces = workspaces.filter((w) => w.status === "ready").length;
+  const readyWorkspaces = workspaces.filter((w) => isUsable(w.status)).length;
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
   // "Optional"); the orchestrator upgrades a demo to a green "Done · demo run" once
   // it's been launched (a per-browser signal that doesn't belong in this pure fn).
@@ -210,7 +211,7 @@ export function stepDone(
     // Design delta: done only once a workspace is actually READY, matching the
     // badge above — merely onboarding one (still scanning/building/verifying)
     // no longer earns the stepper checkmark.
-    workspaces: workspaces.some((w) => w.status === "ready"),
+    workspaces: workspaces.some((w) => isUsable(w.status)),
     // Barrier is the only hard requirement; a model is optional (skippable), so
     // Review is done once the barrier is up and no check is failing.
     review: r.ready && !status.checks.some((c) => c.status === "fail"),

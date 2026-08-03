@@ -52,6 +52,7 @@ import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
+import { isUsable } from "../../../lib/workspace-status";
 
 // ------------------------------------------------------------
 // Shared check-row primitives (Review + the corporate steps).
@@ -704,7 +705,7 @@ export function WorkspacesStep({
                     {STATUS_LABEL[w.status]}
                   </Chip>
                 )}
-                {w.status === "ready" ? (
+                {isUsable(w.status) ? (
                   <Button
                     variant="ghost"
                     size="sm"

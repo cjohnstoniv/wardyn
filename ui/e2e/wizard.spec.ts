@@ -15,8 +15,11 @@
 //   Fence (CC1): the Wall (gVisor) and Vault (Kata) cards render disabled with a
 //   StatusChip "Unavailable here" + a concrete hardware reason. Wizard defaults:
 //   claude-code agent, interactive mode (task optional), local workspace
-//   (read-write, empty path), apikey auth, one preset allowed domain
-//   (api.anthropic.com), Fence barrier.
+//   (read-write, empty path), one preset allowed domain (api.anthropic.com),
+//   Fence barrier. Model access is RESOLVED, not configured: the seeded backend
+//   has no ai_provider integration at all (no anthropic-api-key secret, no
+//   subscription), so Access's model-access card always shows the honest "no
+//   integration can drive this agent" line, never an auth choice.
 //
 // The barrier tiers render as the USER labels Fence/Wall/Vault — the wire codes
 // CC1/CC2/CC3 never leak as visible text on the picker (only in title tooltips),
@@ -54,6 +57,12 @@ async function fillValidBasics(dlg: Locator) {
   // The combobox list renders in a portal OUTSIDE the wizard dialog.
   await dlg.page().getByRole("option", { name: /payments/ }).click();
   await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
+  // The picker's other half of the contract: what the workspace carries into
+  // every run, stated up front rather than re-asked. The seeded "payments"
+  // workspace has no requirements contract (never scanned, never PUT), so it
+  // reads the honest empty-contract fallback (wizard-types.ts's comesWithLine).
+  await expect(dlg.getByText("Comes with:")).toBeVisible();
+  await expect(dlg.getByText(/nothing beyond the auto-allowed set/i)).toBeVisible();
 }
 
 async function next(dlg: Locator) {
@@ -106,8 +115,11 @@ test.describe("New Run wizard", () => {
     await fillValidBasics(dlg);
     await next(dlg);
 
-    // Step 2 — Access (defaults are valid: apikey auth, github disabled)
-    await expect(dlg.getByText("Anthropic auth")).toBeVisible();
+    // Step 2 — Access: model access RESOLVES (no auth choice); defaults are
+    // valid regardless (github disabled). The seeded backend has no
+    // ai_provider integration, so the card shows the honest "none" line.
+    await expect(dlg.getByText(/model access — resolved from integrations/i)).toBeVisible();
+    await expect(dlg.getByText(/no integration can drive claude code/i)).toBeVisible();
     await next(dlg);
 
     // Step 3 — Egress (default has api.anthropic.com preset selected → valid)
@@ -133,7 +145,7 @@ test.describe("New Run wizard", () => {
     await next(dlg);
 
     // On Access, enable the GitHub token grant and type repos.
-    await expect(dlg.getByText("Anthropic auth")).toBeVisible();
+    await expect(dlg.getByText(/model access — resolved from integrations/i)).toBeVisible();
     await dlg.getByLabel("GitHub token").click();
     const repos = dlg.getByPlaceholder("acme/payments-service, acme/shared-libs");
     await expect(repos).toBeVisible();
