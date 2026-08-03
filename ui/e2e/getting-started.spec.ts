@@ -29,7 +29,7 @@ import { test, expect, gotoConsole, navTo } from "./fixtures";
 // the ones to revisit.
 //
 // Corporate network's Next is now a hard gate too (steps.ts's
-// corpNetworkBlockReason) — this walk can no longer blindly Next through it.
+// corpNetworkGate) — this walk can no longer blindly Next through it.
 // The seeded `-runner none` backend answers a REAL Test-proxy click with
 // "no_runner", the ladder's one honest bypass, exactly as an operator on a
 // runner-less host would see — so passCorpNetworkGate() below clicks the real
@@ -51,15 +51,15 @@ async function openSetupFunnel(page: import("@playwright/test").Page) {
 }
 
 // Clears Corporate network's connectivity gate for real (no route stub): this
-// backend genuinely runs `-runner none`, so clicking Test proxy gets back
+// backend genuinely runs `-runner none`, so clicking Test connectivity gets back
 // {state:"no_runner"} from the actual server (internal/api/site_config_probe.go
 // short-circuits on s.cfg.Runner == nil before it ever tries to launch a
-// probe) — corpNetworkBlockReason's one honest bypass, which clears the whole
-// ladder at once (no Egress-tab visit needed). Must be called while the
+// probe) — corpNetworkGate's one honest bypass, which clears the whole ladder
+// at once (no Egress-tab visit needed). Must be called while the
 // Corporate network step is on screen, on its default Host proxy tab.
 async function passCorpNetworkGate(page: import("@playwright/test").Page) {
   const main = page.getByRole("main");
-  await main.getByRole("button", { name: /^test proxy$/i }).click();
+  await main.getByRole("button", { name: /^test connectivity$/i }).click();
   await expect(main.getByText(/can't test here/i)).toBeVisible();
 }
 

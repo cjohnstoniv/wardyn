@@ -33,7 +33,7 @@ export const T = {
   PROXY_BANNER:
     "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
   CORP_LEDE:
-    "Required, and first for a reason. A model provider or a git host you add before this will look broken when it's really the network that's blocked — prove this host can reach the internet below before continuing.",
+    "Required, and first for a reason. Every step after this one assumes a sandbox on this host can reach the internet — a model provider or a git host you add first will look broken when it's the network that's blocked. Test it here, through a corporate proxy or an internal mirror if there is one, and the rest of setup can trust the answer.",
   EMBED_SCOPE_NOTE:
     "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
   EVIDENCE_HEAD: "What Wardyn found on this host",
@@ -51,8 +51,14 @@ export const T = {
     "For a URL already in the store, or when policy requires it. The store is write-only — the value can't be read back here.",
   EGRESS_DESC:
     "Point outbound traffic at an internal mirror or appliance instead of the public endpoint. Anything a run fetches — registries, container images, a specific host — can be redirected.",
-  TEST_OK: "Reached artifactory.corp.internal through the proxy in 240ms.",
-  TEST_BLOCKED: "Could not reach it: connection refused through http://proxy.corp.acme.com:8080.",
+  // TEST_OK / TEST_BLOCKED / TEST_OK_CUSTOM are FIXTURE mirrors of the
+  // backend's own detail wording (classifyProxyProbe, site_config_probe.go) —
+  // the real app renders whatever the server said; these exist so tests and
+  // stories exercise the true shape. The mock renders the same sentences.
+  TEST_OK:
+    "Reached www.msftconnecttest.com/connecttest.txt and detectportal.firefox.com/success.txt through wardyn-proxy chained to http://proxy.corp.acme.com:8080 in 240ms — payloads matched, the full chain a run takes.",
+  TEST_BLOCKED:
+    "Could not reach either endpoint (www.msftconnecttest.com, detectportal.firefox.com): connection refused (or the host is unreachable) — probed through wardyn-proxy chained to http://proxy.corp.acme.com:8080.",
   TEST_BYPASS:
     "The mirror answered, but registry.npmjs.org is still reachable from a sandbox — runs can still bypass the mirror.",
   TEST_NORUNNER:
@@ -60,9 +66,46 @@ export const T = {
   TEST_STANDING:
     "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
   TEST_PROXY_HINT:
-    "Launches a throwaway confined probe through wardyn-proxy chained to the configured upstream, and reports what actually happened. A real sandbox launch — seconds, not instant.",
-  TEST_CUSTOM_HINT:
-    "No public internet from this host? Point the test at a URL you know you can reach — an internal wiki, an intranet API, anything real. Wardyn can't verify what it should return, only that the request completed.",
+    "Runs either way — through the configured proxy when there is one, direct when there isn't. Launches a throwaway confined probe and reports what actually happened; a real sandbox launch — seconds, not instant.",
+  // The gate's own sentences (steps.ts's corpNetworkGate): a block reason
+  // while Next is locked, a neutral standing note for the two states that
+  // unlock it without the full builtin proof (no_runner / a custom pass).
+  GATE_UNTESTED:
+    "Test connectivity first — everything after this step assumes the network works. One probe now saves a fake credential failure two steps later.",
+  GATE_EGRESS_UNSEEN:
+    "Open the Egress redirection tab once before moving on — leaving it empty is an answer, but only after you've seen what it's for.",
+  GATE_EGRESS_UNTESTED:
+    "Every configured redirect has to prove reached before this step hands off — test the rows above, or remove them.",
+  GATE_BLOCKED:
+    "The probe came back blocked. Fix the proxy above and test again — or, if no public endpoint will ever answer here, test against a URL of your own.",
+  GATE_INTERCEPTED:
+    "Something intercepted the probe, so egress isn't open yet. Fix the proxy above, or test against a URL of your own if this network has no public egress by design.",
+  GATE_CUSTOM_ON:
+    "Passing on a custom endpoint — the request completed, which is weaker than the built-in check. Good enough to continue; worth re-running against the built-in endpoints if this host ever gets public egress.",
+  NORUNNER_NOTE:
+    "Nothing was proven here — there's no runner to launch a probe with, and Wardyn doesn't demand proof it can't collect. Configure a barrier, then come back and test.",
+  // Intercepted is a variant of blocked, rendered apart — "nothing answered"
+  // and "something answered and it wasn't the endpoint" send an operator to
+  // different people.
+  INTERCEPT_MEANS:
+    "Different problem from a connection failure: the request left the host and something replied. Traffic on this network is being intercepted and inspected — talk to whoever runs the proxy, or point the check at an endpoint you know your network can reach.",
+  PROBE_ENDPOINTS:
+    "Two endpoints are tried — www.msftconnecttest.com/connecttest.txt (Windows NCSI) and detectportal.firefox.com/success.txt (Firefox) — so one blocked endpoint doesn't fail the probe. Each publishes a known fixed payload, and matching it is what catches a block page replying 200 OK; a vendor API has no such payload to match. Blocking these breaks the operating system's own network indicator, which is what makes them close to unblockable. api.anthropic.com and github.com are deliberately not among them: plenty of organisations block them, and a false “no internet” would stop setup dead on a healthy network.",
+  // The custom-URL escape — revealed only after a failure, never on arrival.
+  CUSTOM_URL_HINT:
+    "Something on your network that answers — an internal service, a mirror, your own host. Not stored, and it changes nothing about how later runs reach the network.",
+  CUSTOM_URL_WHY:
+    "No public endpoint will answer on an internal-only or air-gapped host. Point the check at something yours instead, and it goes back to proving egress works rather than that the public internet does.",
+  TEST_OK_CUSTOM:
+    "The request to nexus.corp.internal/repository/health completed through wardyn-proxy chained to http://proxy.corp.acme.com:8080 in 90ms.",
+  CUSTOM_CAVEAT:
+    "Wardyn has no idea what that endpoint should return, so it can only report that the request completed — not that the internet was reached. A weaker proof than the built-in check, and it is recorded as one.",
+  CUSTOM_REJECT_WHY:
+    "Checked server-side before any sandbox starts — schemes, malformed hosts and shell metacharacters are refused there, and the server's own message is what you see.",
+  EGRESS_SEEN_EMPTY:
+    "An explicit answer, not an oversight. Runs fetch from the public endpoints; add a redirect above if that ever changes.",
+  NET_ONLY_TIP:
+    "Redirected at the network layer only — no tool config file is generated. An npm or pip row also gets a .npmrc / pip.conf written at run start; a container registry or bare host has no such file, and needs none: anything fetching this endpoint is rerouted.",
   X_KEY_CODEX: "Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.",
   X_SUB_CODEX: "Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting.",
   X_BEDROCK_CODEX: "Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting.",
@@ -138,6 +181,20 @@ export const ECOSYSTEM_PUBLIC_URL: Readonly<Record<string, string>> = {
   maven: "https://repo.maven.apache.org/maven2/",
   go: "https://proxy.golang.org",
   nuget: "https://api.nuget.org/v3/index.json",
+};
+
+// The per-tool config file an ecosystem-tier redirect generates at run start
+// (the mock's cfgFor) — display-only, for the expanded row's "Runs also get a
+// generated <file> pointing at the mirror" line. A `from` outside
+// ECOSYSTEM_PUBLIC_URL has no entry and renders the network-only tip instead
+// (T.NET_ONLY_TIP).
+export const ECOSYSTEM_CONFIG_FILE: Readonly<Record<string, string>> = {
+  npm: ".npmrc",
+  pip: "pip.conf",
+  cargo: "config.toml",
+  maven: "settings.xml",
+  go: "GOPROXY",
+  nuget: "NuGet.config",
 };
 
 // ============================ CAPABILITY-LINE NOTES (verbatim) ============================

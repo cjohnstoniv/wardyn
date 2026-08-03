@@ -106,17 +106,17 @@ type ProbeUiState = { kind: "idle" } | { kind: "running" } | { kind: "done"; res
 // exports only compactEndpoint (see the import above) — its row/chip
 // components are page-local by design — so this ~5-line twin lives here
 // rather than turning a same-wave reuse into a cross-wave export request.
-function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
-  if (state === "reached")
+function TestVerdictChip({ result }: { result: ProxyTestResult }) {
+  if (result.state === "reached")
     return (
       <Chip tone="success" dot>
         Reached
       </Chip>
     );
-  if (state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
+  if (result.state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
   return (
     <Chip tone="warning" dot>
-      {state === "bypass" ? "Redirect not enforced" : "Blocked"}
+      {result.state === "bypass" ? "Redirect not enforced" : result.intercepted ? "Blocked · intercepted" : "Blocked"}
     </Chip>
   );
 }
@@ -131,7 +131,7 @@ function TestControl({ state, onTest, operator }: { state: ProbeUiState; onTest:
           <Loader2 className="size-3 animate-spin" /> testing…
         </span>
       )}
-      {state.kind === "done" && <TestVerdictChip state={state.result.state} />}
+      {state.kind === "done" && <TestVerdictChip result={state.result} />}
       <Button
         size="sm"
         variant="outline"

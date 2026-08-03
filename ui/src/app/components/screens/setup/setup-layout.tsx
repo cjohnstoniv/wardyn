@@ -36,6 +36,7 @@ export function SetupLayout({
   onLaunch,
   canLaunch,
   nextBlockedReason,
+  nextNote,
   children,
 }: {
   current: SetupStepId;
@@ -52,9 +53,13 @@ export function SetupLayout({
   canLaunch: boolean;
   // When set, Next is disabled and this reason renders beside it instead of a
   // bare disabled button (e.g. Corporate network's connectivity gate — see
-  // steps.ts's corpNetworkBlockReason). Generic on purpose: this is shared
-  // layout, not corp-network-specific — it has no idea which step or why.
+  // steps.ts's corpNetworkGate). Generic on purpose: this is shared layout,
+  // not corp-network-specific — it has no idea which step or why.
   nextBlockedReason?: string;
+  // A NEUTRAL standing note beside an ENABLED Next (corpNetworkGate's
+  // no_runner / custom-pass states): the operator may continue, and the
+  // weaker footing stays said. Ignored whenever nextBlockedReason is set.
+  nextNote?: string;
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
@@ -138,10 +143,16 @@ export function SetupLayout({
             </Button>
             {next ? (
               <>
-                {nextBlockedReason && (
+                {nextBlockedReason ? (
                   <p className="max-w-xs text-right text-xs text-warning">{nextBlockedReason}</p>
-                )}
-                <Button onClick={() => onSelect(next)} disabled={!!nextBlockedReason}>
+                ) : nextNote ? (
+                  <p className="max-w-xs text-right text-xs text-muted-foreground">{nextNote}</p>
+                ) : null}
+                <Button
+                  onClick={() => onSelect(next)}
+                  disabled={!!nextBlockedReason}
+                  title={nextBlockedReason || undefined}
+                >
                   Next: {STEP_LABEL[next]}
                   <ArrowRight className="size-4" aria-hidden />
                 </Button>

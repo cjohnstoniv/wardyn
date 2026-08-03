@@ -64,7 +64,7 @@ describe("SetupLayout", () => {
   });
 
   // Generic gate — SetupLayout has no idea which step set this or why (see
-  // steps.ts's corpNetworkBlockReason, the current sole producer of one).
+  // steps.ts's corpNetworkGate, the current sole producer of one).
   describe("nextBlockedReason — a generic Next-button gate", () => {
     it("Next is enabled and no reason renders when nextBlockedReason is absent", () => {
       renderLayout({ current: "environment" });
@@ -87,6 +87,30 @@ describe("SetupLayout", () => {
     it("the reason never renders on the LAST step (there is no Next to gate)", () => {
       renderLayout({ current: "launch", nextBlockedReason: "Should never appear here." });
       expect(screen.queryByText("Should never appear here.")).not.toBeInTheDocument();
+    });
+
+    // The gate's other half: a standing NOTE beside an ENABLED Next
+    // (corpNetworkGate's no_runner / custom-pass states) — the operator may
+    // continue, and the weaker footing stays said.
+    it("nextNote renders beside an ENABLED Next — a note, not a blocker", async () => {
+      const onSelect = vi.fn();
+      renderLayout({ current: "environment", onSelect, nextNote: "Nothing was proven here." });
+      const next = screen.getByRole("button", { name: /^next: corporate network$/i });
+      expect(next).toBeEnabled();
+      expect(screen.getByText("Nothing was proven here.")).toBeInTheDocument();
+      await user.click(next);
+      expect(onSelect).toHaveBeenCalled();
+    });
+
+    it("a blocked reason wins outright over a note — never both at once", () => {
+      renderLayout({
+        current: "environment",
+        nextBlockedReason: "Still blocked.",
+        nextNote: "Should never appear beside a blocker.",
+      });
+      expect(screen.getByText("Still blocked.")).toBeInTheDocument();
+      expect(screen.queryByText("Should never appear beside a blocker.")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^next: corporate network$/i })).toBeDisabled();
     });
   });
 

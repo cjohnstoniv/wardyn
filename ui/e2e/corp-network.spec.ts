@@ -47,7 +47,7 @@ import type { Page, Locator } from "@playwright/test";
 // the real backend.
 //
 // Corporate network's Next is also a hard gate now (steps.ts's
-// corpNetworkBlockReason): proof of internet access, a look at Egress
+// corpNetworkGate): proof of internet access, a look at Egress
 // redirection, and every configured redirect testing reached. Most tests
 // below satisfy it for real (a genuine `-runner none` Test-proxy click reports
 // "no_runner", the one honest bypass — see passGate) since they aren't
@@ -72,12 +72,12 @@ async function openCorpNetworkStep(page: Page): Promise<Locator> {
 }
 
 // Clears the connectivity gate for real (no route stub): this backend
-// genuinely runs `-runner none`, so clicking Test proxy gets back
-// {state:"no_runner"} from the actual server — corpNetworkBlockReason's one
+// genuinely runs `-runner none`, so clicking Test connectivity gets back
+// {state:"no_runner"} from the actual server — corpNetworkGate's one
 // honest bypass, which clears the whole ladder at once (no Egress-tab visit
 // needed). Must be called on the Host proxy tab (the default).
 async function passGate(m: Locator) {
-  await m.getByRole("button", { name: /^test proxy$/i }).click();
+  await m.getByRole("button", { name: /^test connectivity$/i }).click();
   await expect(m.getByText(/can't test here/i)).toBeVisible();
 }
 
@@ -87,7 +87,7 @@ test.describe("Corporate network step", () => {
 
     // Host proxy is the default tab.
     await expect(m.getByText("What Wardyn found on this host")).toBeVisible();
-    await expect(m.getByRole("button", { name: /^test proxy$/i })).toBeVisible();
+    await expect(m.getByRole("button", { name: /^test connectivity$/i })).toBeVisible();
 
     await m.getByRole("tab", { name: "Egress redirection" }).click();
     await expect(m.getByText(/point outbound traffic at an internal mirror/i)).toBeVisible();
@@ -96,7 +96,7 @@ test.describe("Corporate network step", () => {
     await m.getByRole("tab", { name: "Host proxy" }).click();
     await expect(m.getByText("What Wardyn found on this host")).toBeVisible();
 
-    // Next is gated on proof of connectivity (steps.ts's corpNetworkBlockReason)
+    // Next is gated on proof of connectivity (steps.ts's corpNetworkGate)
     // — satisfy it for real before confirming the step order below.
     await passGate(m);
 
@@ -147,22 +147,23 @@ test.describe("Corporate network step", () => {
     await expect(m.getByText(/chaining through the url in secret/i)).toBeVisible();
   });
 
-  test("Test proxy fires a real request and renders reached vs. blocked distinctly", async ({ page }) => {
+  test("Test connectivity fires a real request and renders reached vs. blocked distinctly", async ({ page }) => {
     let state: "reached" | "blocked" = "reached";
     await page.route("**/api/v1/site-config/test-proxy", (route) =>
       route.fulfill({
         json: {
           state,
+          via: "proxy",
           detail: state === "reached" ? "42ms round trip through the corporate proxy." : "Connection refused after 3 attempts.",
         },
       }),
     );
 
     const m = await openCorpNetworkStep(page);
-    const testBtn = m.getByRole("button", { name: /^test proxy$/i });
+    const testBtn = m.getByRole("button", { name: /^test connectivity$/i });
 
     await testBtn.click();
-    await expect(m.getByText("Reached", { exact: true })).toBeVisible();
+    await expect(m.getByText("Reached · via proxy", { exact: true })).toBeVisible();
     await expect(m.getByText(/42ms round trip/)).toBeVisible();
 
     state = "blocked";
@@ -170,10 +171,10 @@ test.describe("Corporate network step", () => {
     await expect(m.getByText("Blocked", { exact: true })).toBeVisible();
     await expect(m.getByText(/connection refused/i)).toBeVisible();
     // Proves the chip actually re-rendered rather than just appending.
-    await expect(m.getByText("Reached", { exact: true })).toHaveCount(0);
+    await expect(m.getByText("Reached · via proxy", { exact: true })).toHaveCount(0);
   });
 
-  // The gate's pure ladder (steps.ts's corpNetworkBlockReason) is exhaustively
+  // The gate's pure ladder (steps.ts's corpNetworkGate) is exhaustively
   // unit-tested in steps.test.ts, and the generic Next-disabling wiring in
   // setup-layout.test.tsx; setup-screen.test.tsx even walks the full ladder
   // (egress-visit required, per-redirect required) against a mocked API. What
@@ -185,18 +186,20 @@ test.describe("Corporate network step", () => {
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
 
     // Nothing proven yet: Next is disabled and names why, not just a bare
-    // disabled button. T.CORP_LEDE's own prose also says "prove this host can
-    // reach the internet" (steps.ts's block-reason text starts the same way)
-    // — match the reason specifically, same as setup-screen.test.tsx does.
+    // disabled button. The gate sentence (T.GATE_UNTESTED) starts with the
+    // same words as the button's own label, so "first" is the disambiguator —
+    // same as setup-screen.test.tsx does.
     await expect(nextBtn).toBeDisabled();
-    await expect(m.getByText(/run the connectivity test above/i)).toBeVisible();
+    await expect(m.getByText(/test connectivity first/i)).toBeVisible();
 
     await passGate(m);
 
-    // no_runner is the ladder's one honest bypass — it clears the whole gate
-    // at once, no Egress-tab detour required.
+    // no_runner is the ladder's one honest bypass — it unlocks Next at once
+    // (no Egress-tab detour), with its standing note in place of the blocker
+    // (T.NORUNNER_NOTE: nothing was PROVEN, and the note keeps saying so).
     await expect(nextBtn).toBeEnabled();
-    await expect(m.getByText(/run the connectivity test above/i)).toHaveCount(0);
+    await expect(m.getByText(/test connectivity first/i)).toHaveCount(0);
+    await expect(page.getByText(/nothing was proven here/i)).toBeVisible();
 
     await nextBtn.click();
     await expect(m.getByRole("heading", { name: /connect what's outside wardyn/i })).toBeVisible();

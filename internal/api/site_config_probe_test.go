@@ -23,9 +23,18 @@ import (
 
 // ─── classify* pure state-mapping tables ─────────────────────────────────────
 
-// probeHostsLabel is the human-readable host list the classifier embeds; the
-// probe now tries several endpoints, so tests assert against the joined form.
+// probeHostsLabel is the human-readable host list connection-level failure
+// details embed; payload-claim details (reached/intercepted) name the full
+// endpoints (proxyProbeEndpointsLabel) instead.
 var probeHostsLabel = strings.Join(proxyProbeHosts, ", ")
+
+// builtinSubject is the proxyProbeSubject the handler builds for the default
+// multi-target check, chained through an upstream.
+var builtinSubject = proxyProbeSubject{
+	endpoints: proxyProbeEndpointsLabel,
+	hosts:     probeHostsLabel,
+	upstream:  "http://proxy.corp:3128",
+}
 
 func TestClassifyProxyProbe(t *testing.T) {
 	cases := []struct {
@@ -33,28 +42,35 @@ func TestClassifyProxyProbe(t *testing.T) {
 		res        probeRunResult
 		wantState  string
 		wantDetail string
+		// what the detail must name -- the full endpoints for a payload
+		// claim, the hosts for a connection-level failure.
+		wantNames string
 	}{
-		{"reached", probeRunResult{hasExitCode: true, exitCode: 0, elapsed: 250 * time.Millisecond}, "reached", probeHostsLabel},
+		{"reached names endpoints and the payload check",
+			probeRunResult{hasExitCode: true, exitCode: 0, elapsed: 250 * time.Millisecond}, "reached", "payloads matched", proxyProbeEndpointsLabel},
 		{"blocked with a real curl error, never a generic string",
-			probeRunResult{hasExitCode: true, exitCode: 7}, "blocked", "connection refused"},
-		{"blocked: DNS", probeRunResult{hasExitCode: true, exitCode: 6}, "blocked", "DNS resolution failed"},
-		{"blocked: TLS", probeRunResult{hasExitCode: true, exitCode: 35}, "blocked", "TLS handshake failed"},
+			probeRunResult{hasExitCode: true, exitCode: 7}, "blocked", "connection refused", probeHostsLabel},
+		{"blocked: DNS", probeRunResult{hasExitCode: true, exitCode: 6}, "blocked", "DNS resolution failed", probeHostsLabel},
+		{"blocked: TLS", probeRunResult{hasExitCode: true, exitCode: 35}, "blocked", "TLS handshake failed", probeHostsLabel},
 		{"blocked: unmapped code still names the real number, not a generic label",
-			probeRunResult{hasExitCode: true, exitCode: 99}, "blocked", "curl exit code 99"},
+			probeRunResult{hasExitCode: true, exitCode: 99}, "blocked", "curl exit code 99", probeHostsLabel},
 		{"incomplete probe (timeout/launch failure) is blocked, not a distinct state",
-			probeRunResult{incompleteReason: "did not finish within 50s"}, "blocked", "did not finish within 50s"},
+			probeRunResult{incompleteReason: "did not finish within 50s"}, "blocked", "did not finish within 50s", probeHostsLabel},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := classifyProxyProbe(c.res, probeHostsLabel, true)
+			got := classifyProxyProbe(c.res, builtinSubject)
 			if got.State != c.wantState {
 				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
 			}
 			if !strings.Contains(got.Detail, c.wantDetail) {
 				t.Errorf("detail = %q, want it to contain %q", got.Detail, c.wantDetail)
 			}
-			if !strings.Contains(got.Detail, probeHostsLabel) {
-				t.Errorf("detail = %q, want it to name what was probed (%s)", got.Detail, probeHostsLabel)
+			if !strings.Contains(got.Detail, c.wantNames) {
+				t.Errorf("detail = %q, want it to name what was probed (%s)", got.Detail, c.wantNames)
+			}
+			if got.Via != "proxy" {
+				t.Errorf("via = %q, want proxy (an upstream was configured)", got.Via)
 			}
 		})
 	}
@@ -338,8 +354,11 @@ func TestHandleTestSiteConfigProxy_Reached(t *testing.T) {
 	if got.State != "reached" {
 		t.Errorf("state = %q, want reached (detail=%q)", got.State, got.Detail)
 	}
-	if !strings.Contains(got.Detail, probeHostsLabel) {
-		t.Errorf("detail = %q, want it to name %s", got.Detail, probeHostsLabel)
+	if !strings.Contains(got.Detail, proxyProbeEndpointsLabel) || !strings.Contains(got.Detail, "payloads matched") {
+		t.Errorf("detail = %q, want it to name %s and claim the payload check", got.Detail, proxyProbeEndpointsLabel)
+	}
+	if got.Via != "proxy" || got.Custom || got.Intercepted {
+		t.Errorf("qualifiers = via:%q custom:%v intercepted:%v, want a plain via-proxy reached", got.Via, got.Custom, got.Intercepted)
 	}
 
 	events := ps.actionEvents("site_config.test_proxy")
@@ -391,9 +410,14 @@ func TestHandleTestSiteConfigProxy_NoUpstreamConfiguredStillProbes(t *testing.T)
 	if got.State != "reached" {
 		t.Errorf("state = %q, want reached", got.State)
 	}
-	// It must NOT claim a proxy it never chained through.
-	if !strings.Contains(got.Detail, "directly (no upstream proxy configured)") {
-		t.Errorf("detail = %q, want it to say the probe went direct", got.Detail)
+	// It must NOT claim a proxy it never chained through — the direct wording
+	// says so outright (T.TEST_OK_DIRECT), and the via qualifier is the
+	// machine-readable form of the same fact.
+	if !strings.Contains(got.Detail, "No proxy is configured and none was needed") {
+		t.Errorf("detail = %q, want the direct-path wording", got.Detail)
+	}
+	if got.Via != "direct" {
+		t.Errorf("via = %q, want direct", got.Via)
 	}
 	if ps.runCount() != 1 {
 		t.Errorf("runCount = %d, want 1 -- the probe must actually launch", ps.runCount())
@@ -416,9 +440,17 @@ func TestHandleTestSiteConfigProxy_CustomURL(t *testing.T) {
 		t.Fatalf("state = %q, want reached", got.State)
 	}
 	// It must NOT borrow the default targets' credibility: nothing verified the
-	// body, so it cannot claim the public internet was reached.
-	if !strings.Contains(got.Detail, "not checked") {
-		t.Errorf("detail = %q, want it to admit the body was not verified", got.Detail)
+	// body, so the detail claims only that the request COMPLETED (never
+	// "payloads matched", never "Reached"), and the custom qualifier is set so
+	// the UI renders its own caveat (T.CUSTOM_CAVEAT) and the weaker chip.
+	if !strings.Contains(got.Detail, "completed") || strings.Contains(got.Detail, "payloads matched") || strings.Contains(got.Detail, "Reached") {
+		t.Errorf("detail = %q, want the weaker request-completed claim only", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "intranet.corp.internal/health") {
+		t.Errorf("detail = %q, want it to name the custom endpoint", got.Detail)
+	}
+	if !got.Custom {
+		t.Error("custom = false, want true — the UI keys its weaker-claim rendering off this")
 	}
 	if ps.runCount() != 1 {
 		t.Errorf("runCount = %d, want 1", ps.runCount())
@@ -455,12 +487,21 @@ func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
 	// while egress is firmly shut. Now that a green probe UNLOCKS the setup
 	// gate, calling this reached would wave an operator through a network that
 	// cannot actually reach anything.
-	got := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: proxyProbeInterceptedCode}, probeHostsLabel, true)
+	got := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: proxyProbeInterceptedCode}, builtinSubject)
 	if got.State != "blocked" {
 		t.Fatalf("state = %q, want blocked — an intercepted reply is NOT reachability", got.State)
 	}
+	if !got.Intercepted {
+		t.Fatal("intercepted = false, want true — the UI renders this blocked flavor apart (different person to call, not a scarier error)")
+	}
 	if !strings.Contains(got.Detail, "captive portal") || !strings.Contains(got.Detail, "not actually open") {
 		t.Errorf("detail = %q, want it to name interception and say egress is not open", got.Detail)
+	}
+	// The flag exists so no client string-matches; but the plain blocked case
+	// must never set it — same verdict, different flavor, and only the real
+	// sentinel exit may produce the flavor.
+	if plain := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: 7}, builtinSubject); plain.Intercepted {
+		t.Error("a connection-level blocked must never read as intercepted")
 	}
 }
 

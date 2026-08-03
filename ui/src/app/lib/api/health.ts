@@ -18,6 +18,18 @@ export interface ProxyTestResult {
   state: "reached" | "blocked" | "bypass" | "no_runner";
   detail: string;
   elapsed_ms?: number;
+  /** Which path the proxy probe actually traversed. test-proxy only; absent
+   *  from redirect probes and older servers. */
+  via?: "proxy" | "direct";
+  /** state=blocked's captive-portal flavor: something ANSWERED, but not with
+   *  the endpoint's published payload (T.TEST_INTERCEPTED's case). Same
+   *  verdict as blocked, rendered apart — it sends the operator to a
+   *  different person than a refused connection does. */
+  intercepted?: boolean;
+  /** The probe hit a caller-named URL with no known payload to verify — a
+   *  reached here is the deliberately WEAKER "request completed" claim
+   *  (T.CUSTOM_CAVEAT), never the builtin targets' "payloads matched". */
+  custom?: boolean;
 }
 
 export const health = {

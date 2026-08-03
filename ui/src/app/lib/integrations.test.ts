@@ -54,7 +54,7 @@ describe("integrations — T canon sentinel pins", () => {
       "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
     );
     expect(T.CORP_LEDE).toBe(
-      "Required, and first for a reason. A model provider or a git host you add before this will look broken when it's really the network that's blocked — prove this host can reach the internet below before continuing.",
+      "Required, and first for a reason. Every step after this one assumes a sandbox on this host can reach the internet — a model provider or a git host you add first will look broken when it's the network that's blocked. Test it here, through a corporate proxy or an internal mirror if there is one, and the rest of setup can trust the answer.",
     );
     expect(T.EMBED_SCOPE_NOTE).toBe(
       "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
@@ -68,9 +68,20 @@ describe("integrations — T canon sentinel pins", () => {
     expect("EMPTY_MIRROR" in T).toBe(false);
   });
 
-  it("pins the five real Test-probe verdict strings verbatim (T.TEST_STANDING makes clear these are honest, not inferred)", () => {
-    expect(T.TEST_OK).toBe("Reached artifactory.corp.internal through the proxy in 240ms.");
-    expect(T.TEST_BLOCKED).toBe("Could not reach it: connection refused through http://proxy.corp.acme.com:8080.");
+  it("pins the Test-probe verdict strings verbatim (T.TEST_STANDING makes clear these are honest, not inferred)", () => {
+    // TEST_OK/TEST_BLOCKED/TEST_OK_CUSTOM mirror the BACKEND's own wording
+    // (classifyProxyProbe, internal/api/site_config_probe.go) — the payload
+    // check named on a pass, "either endpoint" + the real cause on a failure,
+    // and a custom pass claiming only that the request completed.
+    expect(T.TEST_OK).toBe(
+      "Reached www.msftconnecttest.com/connecttest.txt and detectportal.firefox.com/success.txt through wardyn-proxy chained to http://proxy.corp.acme.com:8080 in 240ms — payloads matched, the full chain a run takes.",
+    );
+    expect(T.TEST_BLOCKED).toBe(
+      "Could not reach either endpoint (www.msftconnecttest.com, detectportal.firefox.com): connection refused (or the host is unreachable) — probed through wardyn-proxy chained to http://proxy.corp.acme.com:8080.",
+    );
+    expect(T.TEST_OK_CUSTOM).toBe(
+      "The request to nexus.corp.internal/repository/health completed through wardyn-proxy chained to http://proxy.corp.acme.com:8080 in 90ms.",
+    );
     expect(T.TEST_BYPASS).toBe(
       "The mirror answered, but registry.npmjs.org is still reachable from a sandbox — runs can still bypass the mirror.",
     );
@@ -80,6 +91,46 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.TEST_STANDING).toBe(
       "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
     );
+  });
+
+  // The gate/custom/intercepted strings the corp-network gating round added —
+  // pinned because a state's SEMANTICS carry a safety claim here: a custom
+  // pass must keep claiming less than a verified one, and intercepted must
+  // never collapse into a generic failure.
+  it("pins the gate ladder + custom-URL + intercepted copy verbatim", () => {
+    expect(T.GATE_UNTESTED).toBe(
+      "Test connectivity first — everything after this step assumes the network works. One probe now saves a fake credential failure two steps later.",
+    );
+    expect(T.GATE_EGRESS_UNSEEN).toBe(
+      "Open the Egress redirection tab once before moving on — leaving it empty is an answer, but only after you've seen what it's for.",
+    );
+    expect(T.GATE_EGRESS_UNTESTED).toBe(
+      "Every configured redirect has to prove reached before this step hands off — test the rows above, or remove them.",
+    );
+    expect(T.GATE_BLOCKED).toBe(
+      "The probe came back blocked. Fix the proxy above and test again — or, if no public endpoint will ever answer here, test against a URL of your own.",
+    );
+    expect(T.GATE_INTERCEPTED).toBe(
+      "Something intercepted the probe, so egress isn't open yet. Fix the proxy above, or test against a URL of your own if this network has no public egress by design.",
+    );
+    expect(T.GATE_CUSTOM_ON).toBe(
+      "Passing on a custom endpoint — the request completed, which is weaker than the built-in check. Good enough to continue; worth re-running against the built-in endpoints if this host ever gets public egress.",
+    );
+    expect(T.NORUNNER_NOTE).toBe(
+      "Nothing was proven here — there's no runner to launch a probe with, and Wardyn doesn't demand proof it can't collect. Configure a barrier, then come back and test.",
+    );
+    expect(T.CUSTOM_CAVEAT).toBe(
+      "Wardyn has no idea what that endpoint should return, so it can only report that the request completed — not that the internet was reached. A weaker proof than the built-in check, and it is recorded as one.",
+    );
+    expect(T.PROBE_ENDPOINTS).toContain("www.msftconnecttest.com/connecttest.txt (Windows NCSI)");
+    expect(T.PROBE_ENDPOINTS).toContain("api.anthropic.com and github.com are deliberately not among them");
+    expect(T.INTERCEPT_MEANS).toContain("the request left the host and something replied");
+    expect(T.EGRESS_SEEN_EMPTY).toBe(
+      "An explicit answer, not an oversight. Runs fetch from the public endpoints; add a redirect above if that ever changes.",
+    );
+    expect(T.NET_ONLY_TIP).toContain("no tool config file is generated");
+    // The one-string hint the custom block replaced — pinned deleted.
+    expect("TEST_CUSTOM_HINT" in T).toBe(false);
   });
 
   it("pins EGRESS_SUGGEST verbatim — 11 entries, label IS the url, including both container-images rows", () => {

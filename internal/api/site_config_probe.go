@@ -87,6 +87,29 @@ var proxyProbeHosts = func() []string {
 	return hosts
 }()
 
+// stripURLScheme is display-only compaction for detail messages -- the mock's
+// endpoint spelling ("www.msftconnecttest.com/connecttest.txt") drops the
+// scheme but keeps the path, because a payload claim is about the full
+// endpoint, not just its host.
+func stripURLScheme(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		return u[i+3:]
+	}
+	return u
+}
+
+// proxyProbeEndpointsLabel names every builtin target, scheme-stripped and
+// "and"-joined, for the detail messages that make a PAYLOAD claim (reached /
+// intercepted). Connection-level failures use the host-only join instead --
+// a refused connection is a host-level fact, the path never got a say.
+var proxyProbeEndpointsLabel = func() string {
+	parts := make([]string, 0, len(proxyProbeTargets))
+	for _, t := range proxyProbeTargets {
+		parts = append(parts, stripURLScheme(t.url))
+	}
+	return strings.Join(parts, " and ")
+}()
+
 // siteConfigProbeWaitTimeout bounds how long a handler waits for the
 // throwaway probe run to reach a terminal state before reclaiming it. The UI
 // shows seconds, not minutes; every curl inside the probe scripts below is
@@ -338,11 +361,25 @@ func probeTargetURL(raw string) string {
 
 // siteConfigProbeResponse is the shared {state, detail, elapsed_ms?} shape
 // both test-proxy and test-redirect return, always HTTP 200 -- the STATE,
-// never the transport, carries a probe's outcome (including no_runner).
+// never the transport, carries a probe's outcome (including no_runner). The
+// last three fields are test-proxy qualifiers the UI renders distinct
+// treatments from (the mock's ok/okdirect/okcustom/intercepted kinds) --
+// machine-readable so no client ever has to string-match a detail sentence:
+//   - via: which path the probe actually traversed ("proxy" | "direct").
+//   - intercepted: state=blocked's captive-portal flavor -- something
+//     ANSWERED, but not with the endpoint's published payload. Same verdict
+//     as blocked (it is NOT reachability), rendered apart because it sends
+//     the operator to a different person than a refused connection does.
+//   - custom: the probe hit a caller-named URL with no known payload to
+//     verify, so a reached here is the deliberately WEAKER "request
+//     completed" claim, never the builtin targets' "payloads matched".
 type siteConfigProbeResponse struct {
-	State     string `json:"state"`
-	Detail    string `json:"detail"`
-	ElapsedMS int64  `json:"elapsed_ms,omitempty"`
+	State       string `json:"state"`
+	Detail      string `json:"detail"`
+	ElapsedMS   int64  `json:"elapsed_ms,omitempty"`
+	Via         string `json:"via,omitempty"`
+	Intercepted bool   `json:"intercepted,omitempty"`
+	Custom      bool   `json:"custom,omitempty"`
 }
 
 // noRunnerResponse is the honest, non-error answer for s.cfg.Runner == nil:
@@ -350,47 +387,86 @@ type siteConfigProbeResponse struct {
 // transport failure).
 var noRunnerResponse = siteConfigProbeResponse{State: "no_runner", Detail: "no runner configured, nothing to launch a probe with"}
 
-// classifyProxyProbe turns what runSiteConfigProbe actually observed into the
-// test-proxy endpoint's {state, detail}. host is what was probed, named in
-// every detail message so "what did we actually try" is always answerable.
-// viaProxy selects the wording only: the probe traverses whatever egress path
-// the host actually has, so with no upstream configured this reports on direct
-// reachability rather than claiming a proxy it never chained through.
-func classifyProxyProbe(res probeRunResult, host string, viaProxy bool) siteConfigProbeResponse {
-	path := "directly (no upstream proxy configured)"
-	if viaProxy {
-		path = "through wardyn-proxy (chained to the configured upstream)"
+// proxyProbeSubject is what classifyProxyProbe words its verdicts about:
+// endpoints for the messages that make a payload claim (reached/intercepted),
+// hosts for connection-level failures (the path never got a say in a refused
+// connection), upstream naming the chain hop the probe traversed ("" = the
+// probe went direct). upstream is always DISPLAY-safe: the plain configured
+// URL (validateSiteConfig rejects userinfo in it) or the secret's NAME --
+// never a resolved secret value (see the NeverLogsCredentialedUpstreamURL
+// test).
+type proxyProbeSubject struct {
+	endpoints string
+	hosts     string
+	upstream  string
+	custom    bool
+}
+
+// via is the wire spelling of which path the probe traversed.
+func (p proxyProbeSubject) via() string {
+	if p.upstream != "" {
+		return "proxy"
 	}
+	return "direct"
+}
+
+// pathClause is the shared "through what" suffix wording ("through
+// wardyn-proxy chained to X" / "directly").
+func (p proxyProbeSubject) pathClause() string {
+	if p.upstream != "" {
+		return "through wardyn-proxy chained to " + p.upstream
+	}
+	return "directly"
+}
+
+// classifyProxyProbe turns what runSiteConfigProbe actually observed into the
+// test-proxy endpoint's {state, detail}, in the mock's own detail shapes
+// (T.TEST_OK / TEST_OK_DIRECT / TEST_BLOCKED / TEST_INTERCEPTED /
+// TEST_OK_CUSTOM -- wardyn-integrations.js). Every message still names what
+// was actually probed, and a custom target's reached is worded as the WEAKER
+// claim it is: "the request completed", never "payloads matched" -- the UI
+// adds its own caveat line (T.CUSTOM_CAVEAT), and this sentence stays honest
+// for any API/CLI consumer that never renders that line.
+func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject) siteConfigProbeResponse {
+	resp := siteConfigProbeResponse{
+		ElapsedMS: res.elapsed.Milliseconds(),
+		Via:       subj.via(),
+		Custom:    subj.custom,
+	}
+	elapsed := res.elapsed.Round(time.Millisecond)
 	switch {
 	case res.hasExitCode && res.exitCode == 0:
-		return siteConfigProbeResponse{
-			State:     "reached",
-			Detail:    fmt.Sprintf("reached the public internet %s in %s (verified against %s)", path, res.elapsed.Round(time.Millisecond), host),
-			ElapsedMS: res.elapsed.Milliseconds(),
+		resp.State = "reached"
+		switch {
+		case subj.custom:
+			resp.Detail = fmt.Sprintf("The request to %s completed %s in %s.", subj.endpoints, subj.pathClause(), elapsed)
+		case subj.upstream != "":
+			resp.Detail = fmt.Sprintf("Reached %s through wardyn-proxy chained to %s in %s — payloads matched, the full chain a run takes.",
+				subj.endpoints, subj.upstream, elapsed)
+		default:
+			resp.Detail = fmt.Sprintf("Reached %s directly in %s — payloads matched. No proxy is configured and none was needed; sandboxes on this host go straight out.",
+				subj.endpoints, elapsed)
 		}
 	case res.hasExitCode && res.exitCode == proxyProbeInterceptedCode:
 		// The single most misleading corporate-network state, and the one an
 		// exit-code-only probe scores as success: something replied, so the
 		// connection worked, but it was not the endpoint we asked for.
-		return siteConfigProbeResponse{
-			State: "blocked",
-			Detail: fmt.Sprintf("something answered %s but it was not the real endpoint — a captive portal or a corporate block page is intercepting. "+
-				"Egress is not actually open, whatever the reply said", path),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "blocked"
+		resp.Intercepted = true
+		resp.Detail = fmt.Sprintf("Something answered at %s, but the payload wasn't the published one — a captive portal or a corporate block page is intercepting. "+
+			"Egress is not actually open, whatever the reply said.", subj.endpoints)
 	case res.hasExitCode:
-		return siteConfigProbeResponse{
-			State:     "blocked",
-			Detail:    fmt.Sprintf("could not reach %s %s: %s", host, path, curlFailureDetail(res.exitCode)),
-			ElapsedMS: res.elapsed.Milliseconds(),
+		resp.State = "blocked"
+		what := "either endpoint (" + subj.hosts + ")"
+		if subj.custom {
+			what = subj.endpoints
 		}
+		resp.Detail = fmt.Sprintf("Could not reach %s: %s — probed %s.", what, curlFailureDetail(res.exitCode), subj.pathClause())
 	default:
-		return siteConfigProbeResponse{
-			State:     "blocked",
-			Detail:    fmt.Sprintf("the probe of %s did not get a clean answer: %s", host, res.incompleteReason),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "blocked"
+		resp.Detail = fmt.Sprintf("The probe of %s did not get a clean answer: %s", subj.hosts, res.incompleteReason)
 	}
+	return resp
 }
 
 // classifyRedirectProbe turns what runSiteConfigProbe actually observed into
@@ -485,22 +561,32 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// upstream, the probe proves direct egress works; with one, it proves the
 	// chain works. Refusing to run without a proxy made the button useless on
 	// exactly the hosts where nothing is wrong yet.
-	viaProxy := siteCfg.UpstreamProxyURL != "" || siteCfg.UpstreamProxySecretRef != ""
+	//
+	// upstream is a DISPLAY name only: the plain configured URL (which
+	// validateSiteConfig guarantees carries no userinfo) or the secret's NAME.
+	// The resolved secret VALUE stays inside dispatch (resolveRunUpstreamProxy)
+	// and must never surface in a detail or audit line.
+	upstream := siteCfg.UpstreamProxyURL
+	if upstream == "" && siteCfg.UpstreamProxySecretRef != "" {
+		upstream = "the upstream proxy in secret " + siteCfg.UpstreamProxySecretRef
+	}
 	if s.cfg.Runner == nil {
 		writeJSON(w, http.StatusOK, noRunnerResponse)
 		return
 	}
 
-	script, hosts, label := proxyProbeScript, proxyProbeHosts, strings.Join(proxyProbeHosts, ", ")
+	script, hosts := proxyProbeScript, proxyProbeHosts
+	subj := proxyProbeSubject{endpoints: proxyProbeEndpointsLabel, hosts: strings.Join(proxyProbeHosts, ", "), upstream: upstream}
 	if custom != "" {
 		// One target, and NO body check: Wardyn has no idea what an operator's
 		// own endpoint is supposed to return, so the honest claim is only "the
-		// request completed" -- the detail below says exactly that rather than
-		// implying the same verification the default targets get. -f makes an
-		// HTTP error status a failure, the closest thing to a correctness
-		// signal available without a known payload.
+		// request completed" -- classifyProxyProbe words it exactly that way
+		// rather than implying the verification the default targets get. -f
+		// makes an HTTP error status a failure, the closest thing to a
+		// correctness signal available without a known payload.
 		script = fmt.Sprintf("curl -fsS -o /dev/null --connect-timeout 5 --max-time 15 %q\n", custom)
-		hosts, label = []string{workspacescan.HostOf(custom)}, workspacescan.HostOf(custom)
+		hosts = []string{workspacescan.HostOf(custom)}
+		subj = proxyProbeSubject{endpoints: stripURLScheme(custom), hosts: workspacescan.HostOf(custom), upstream: upstream, custom: true}
 	}
 
 	actor := principalFromRequest(r)
@@ -509,13 +595,11 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
 	}
-	resp := classifyProxyProbe(res, label, viaProxy)
-	if custom != "" && resp.State == "reached" {
-		resp.Detail += " — the response body was not checked (Wardyn can't know what your endpoint should return), so this proves the request completed, not that it reached the public internet"
-	}
+	resp := classifyProxyProbe(res, subj)
 	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
-			"state": resp.State, "target_host": label, "elapsed_ms": resp.ElapsedMS, "custom_target": custom != "",
+			"state": resp.State, "target_host": strings.Join(hosts, ", "), "elapsed_ms": resp.ElapsedMS,
+			"custom_target": custom != "", "intercepted": resp.Intercepted,
 		})))
 	writeJSON(w, http.StatusOK, resp)
 }

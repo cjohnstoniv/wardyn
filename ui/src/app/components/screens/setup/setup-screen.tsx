@@ -35,7 +35,7 @@ import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
   STEP_ORDER,
-  corpNetworkBlockReason,
+  corpNetworkGate,
   stepBadges,
   stepDone,
   type CorpNetworkState,
@@ -263,7 +263,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     redirectCount: corpRedirects.length,
     ...corpGate,
   };
-  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
+  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork);
   const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
@@ -282,7 +282,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     badges.integrations = { text: "Skipped", tone: "neutral" };
   }
   // Corporate network has no skip override any more: it's mandatory, and
-  // stepDone/stepBadges already read the real gate (corpNetworkBlockReason)
+  // stepDone/stepBadges already read the real gate (corpNetworkGate)
   // above — no_runner is the only honest bypass, folded into that ladder.
   // A4: an optional step the operator navigated away from without configuring it
   // reads "Skipped" instead of a perpetual, un-acted-on "Optional" — a neutral
@@ -305,7 +305,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // The Next-button gate — only Corporate network produces one today. Computed
   // fresh from the SAME corpNetwork/corpRedirects stepDone.corp_network above
   // already read, so the badge, the checkmark, and this can never disagree.
-  const corpNetworkReason = stepId === "corp_network" ? corpNetworkBlockReason(corpNetwork, corpRedirects) : null;
+  // While the gate is OFF its reason blocks Next; while it is ON a reason can
+  // still be present (no_runner / a custom-endpoint pass) and renders as a
+  // neutral standing note beside the ENABLED button — the operator continues,
+  // and the weaker footing stays said (the mock's corpFoot).
+  const corpGateResult = stepId === "corp_network" ? corpNetworkGate(corpNetwork, corpRedirects) : null;
 
   return (
     <>
@@ -321,7 +325,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // A barrier is enough to launch (an interactive run works with no model —
         // the operator drives it over an attached terminal).
         canLaunch={readiness.ready}
-        nextBlockedReason={corpNetworkReason ?? undefined}
+        nextBlockedReason={corpGateResult && !corpGateResult.on ? corpGateResult.reason : undefined}
+        nextNote={corpGateResult?.on ? corpGateResult.reason : undefined}
       >
         {stepId === "environment" && (
           <EnvironmentStep

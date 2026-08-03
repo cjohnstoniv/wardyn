@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import type { EgressRedirect, SiteConfig } from "../../../lib/types";
 import { health as healthApi, type ProxyTestResult } from "../../../lib/api/health";
 import { getErrorMessage } from "../../../lib/format";
-import { T, EGRESS_SUGGEST } from "../../../lib/integrations";
+import { T, EGRESS_SUGGEST, ECOSYSTEM_CONFIG_FILE } from "../../../lib/integrations";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
@@ -52,7 +52,12 @@ export function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) 
 // ------------------------------------------------------------
 // Host proxy tab
 // ------------------------------------------------------------
-export type ProbeUiState = { kind: "idle" } | { kind: "running"; elapsedSec: number } | { kind: "done"; result: ProxyTestResult };
+export type ProbeUiState =
+  | { kind: "idle" }
+  // custom marks a custom-URL retry: the running view skips the builtin
+  // probeLine (it names endpoints this run will not try).
+  | { kind: "running"; elapsedSec: number; custom?: boolean }
+  | { kind: "done"; result: ProxyTestResult };
 
 export function useElapsedTimer(running: boolean): number {
   const [sec, setSec] = React.useState(0);
@@ -81,11 +86,7 @@ function TokenChip({ tokenRef }: { tokenRef: string }) {
 
 function NetworkOnlyChip() {
   return (
-    <Chip
-      tone="neutral"
-      className="shrink-0 text-[0.625rem] opacity-70"
-      title="Network only — egress is substituted and the token is injected, but no per-tool config file is generated (there's no config-file equivalent for this destination)."
-    >
+    <Chip tone="neutral" className="shrink-0 text-[0.625rem] opacity-70" title={T.NET_ONLY_TIP}>
       network only
     </Chip>
   );
@@ -189,6 +190,14 @@ function RedirectRowExpanded({
       <Field label="Token secret name (optional)" htmlFor="eg-edit-token" hint="Injected proxy-side at fetch time — the sandbox never holds it.">
         <Input id="eg-edit-token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="artifactory-token" className="font-mono" />
       </Field>
+      {/* What this row actually DOES at run start — the ecosystem tier also
+          writes a tool config file; everything else is network-only, and
+          needs nothing more (the mock's expanded-row mechanism line). */}
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+        {r.ecosystem && ECOSYSTEM_CONFIG_FILE[r.ecosystem]
+          ? `Runs also get a generated ${ECOSYSTEM_CONFIG_FILE[r.ecosystem]} pointing at the mirror — the network substitution covers anything that ignores it.`
+          : T.NET_ONLY_TIP}
+      </p>
       <div className="flex items-center gap-2">
         <Button size="sm" onClick={() => onSave({ ...r, from: from.trim(), to: to.trim(), token_secret_ref: token.trim() || undefined })}>
           Save
@@ -324,7 +333,7 @@ export function EgressTab({
   operator: boolean;
   /** Each redirect's last result from a PRIOR visit to this step, keyed by `from` (see setup-screen.tsx's corpGate) — seeds each row back to what it last observed. */
   initialProbes: Record<string, ProxyTestResult>;
-  /** Reports a redirect's terminal probe result upward, by `from`, so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkBlockReason). */
+  /** Reports a redirect's terminal probe result upward, by `from`, so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkGate). */
   onProbeResult: (from: string, result: ProxyTestResult) => void;
 }) {
   const redirects = siteConfig?.egress_redirects ?? [];
@@ -404,7 +413,15 @@ export function EgressTab({
           </div>
         </>
       )}
-      {redirects.length === 0 && <p className="text-[0.8125rem] leading-snug text-muted-foreground">{T.EMPTY_EGRESS}</p>}
+      {redirects.length === 0 && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-border px-3 py-2.5">
+          <Check aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-[0.8125rem] text-foreground">No redirects on this network</p>
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EGRESS_SEEN_EMPTY}</p>
+          </div>
+        </div>
+      )}
       <AddRedirectForm operator={operator} onAdd={(r) => setRedirects([...redirects, r])} />
     </div>
   );

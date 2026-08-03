@@ -67,7 +67,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   probe has shown a sandbox on this host can actually reach the internet, and
   once the Egress redirection tab has been opened — left explicitly empty, or
   filled in with every redirect testing clean. A redirect in `bypass` blocks
-  too, and the reason names the row rather than saying "a redirect failed".
+  too; every failing row is named at once ("Fix a and b above…"), and rows
+  merely untested get their own instruction rather than a generic "a redirect
+  failed".
   The step already explained that a model provider or git host added first
   looks broken when it's really the network that's blocked; it now prevents
   that instead of only warning about it.
@@ -81,6 +83,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
     internet does. A custom target claims less — Wardyn cannot know what your
     endpoint should return, so it only proves the request completed, and both
     the response text and the UI say so.
+- **Probe verdicts say what was actually established, in the design's own
+  words, at every altitude.** A builtin pass reads "Reached
+  www.msftconnecttest.com/connecttest.txt and detectportal.firefox.com/success.txt
+  … — payloads matched, the full chain a run takes" (or the no-proxy variant
+  saying none was needed); a connection failure reads "Could not reach either
+  endpoint: <the real cause>"; an interception is rendered apart end to end —
+  its own `Blocked · intercepted` chip, a what-this-means box (the request
+  left the host and something replied — a different person to call than a
+  refused connection), and the why-these-endpoints rationale. A custom-URL
+  pass never wears the verified treatment anywhere: a `Request completed`
+  chip in a dashed frame instead of the success chip, the caveat line beside
+  it, an info-tone `Reached · custom endpoint` rail badge with no redirect
+  arithmetic, and a standing note beside the *enabled* Next saying the proof
+  is weaker — the same note mechanism `no_runner` uses, which now unlocks
+  Next without ticking the step's checkmark, because nothing was proven. The
+  probe response carries `via`/`intercepted`/`custom` so no client
+  string-matches a sentence to know which treatment to render, and a
+  server-rejected custom URL now renders inline where it was typed, with the
+  server's own message, instead of vanishing into a toast.
 
 ### Fixed
 

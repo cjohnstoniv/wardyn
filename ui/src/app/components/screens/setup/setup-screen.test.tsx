@@ -143,14 +143,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     testRedirectMock.mockReset().mockResolvedValue({ state: "no_runner", detail: "no runner configured, nothing to launch a probe with" });
   });
 
-  // Corporate network (steps.ts's corpNetworkBlockReason) now requires proof
+  // Corporate network (steps.ts's corpNetworkGate) now requires proof
   // of connectivity before Next unlocks. no_runner is the ONE honest bypass —
   // Wardyn can't probe in this jsdom suite anyway — so a single Test-proxy
   // click clears the gate for every walkthrough below that isn't exercising
   // the gate itself (that coverage lives in corp-network-step.test.tsx and
   // setup-layout.test.tsx).
   const clearCorpNetworkGate = async () => {
-    await user.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText(/can.t test here/i);
   };
 
@@ -243,7 +243,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   });
 
   // The gate itself, wired end to end through the real orchestrator — the unit
-  // coverage for each rule lives in steps.test.ts (corpNetworkBlockReason) and
+  // coverage for each rule lives in steps.test.ts (corpNetworkGate) and
   // corp-network-step.test.tsx (the step body reporting upward); this proves
   // setup-screen.tsx actually connects them.
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
@@ -255,20 +255,20 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       const next = screen.getByRole("button", { name: /^next: integrations$/i });
       expect(next).toBeDisabled();
-      // T.CORP_LEDE's own prose also says "prove this host can reach the
-      // internet" — match the REASON text specifically, not the lede.
-      expect(screen.getByText(/run the connectivity test above/i)).toBeInTheDocument();
+      // The gate's own sentence (T.GATE_UNTESTED), not the lede — "first"
+      // disambiguates from the Test connectivity button's own label.
+      expect(screen.getByText(/test connectivity first/i)).toBeInTheDocument();
 
       testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
-      await user.click(screen.getByRole("button", { name: /^test proxy$/i }));
-      await screen.findByText("Reached");
+      await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+      await screen.findByText("Reached · via proxy");
       // Reached but the Egress tab hasn't been looked at yet — still blocked.
       expect(next).toBeDisabled();
-      expect(screen.getByText(/visit egress redirection/i)).toBeInTheDocument();
+      expect(screen.getByText(/open the egress redirection tab once/i)).toBeInTheDocument();
 
       await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
       expect(next).toBeEnabled();
-      expect(screen.queryByText(/visit egress redirection/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/open the egress redirection tab once/i)).not.toBeInTheDocument();
 
       await user.click(next);
       expect(await screen.findByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
@@ -294,15 +294,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /^corporate network$/i });
 
       testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
-      await user.click(screen.getByRole("button", { name: /^test proxy$/i }));
-      await screen.findByText("Reached");
+      await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+      await screen.findByText("Reached · via proxy");
 
       const next = screen.getByRole("button", { name: /^next: integrations$/i });
       await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
       // Egress was visited, but the configured redirect itself is untested —
-      // that must still block, and name which row.
+      // that must still block with the prove-them sentence (T.GATE_EGRESS_UNTESTED).
       expect(next).toBeDisabled();
-      expect(screen.getByText(/registry\.npmjs\.org redirect must test/i)).toBeInTheDocument();
+      expect(screen.getByText(/every configured redirect has to prove reached/i)).toBeInTheDocument();
 
       testRedirectMock.mockResolvedValueOnce({ state: "reached", detail: "reachable via the mirror" });
       await user.click(await screen.findByRole("button", { name: /^test$/i }));

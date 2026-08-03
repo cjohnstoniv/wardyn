@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import type { EgressRedirect, SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
 import type { ProxyTestResult } from "../../../lib/api/health";
+import { T } from "../../../lib/integrations";
 import { deriveReadiness } from "../onboarding/intro";
 import {
   DEMO_STEP_IDS,
@@ -14,7 +15,7 @@ import {
   STEP_HEADING,
   STEP_LABEL,
   STEP_ORDER,
-  corpNetworkBlockReason,
+  corpNetworkGate,
   stepBadges,
   stepDone,
   type CorpNetworkState,
@@ -208,7 +209,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
   });
 });
 
-describe("corp_network gate — corpNetworkBlockReason drives both the badge and stepDone (no_runner is the one bypass)", () => {
+describe("corp_network gate — corpNetworkGate drives the note beside Next, the badge, and stepDone (the mock's corpGate ladder)", () => {
   const unset: CorpNetworkState = {
     proxyConfigured: false,
     proxyDetected: false,
@@ -216,104 +217,152 @@ describe("corp_network gate — corpNetworkBlockReason drives both the badge and
     egressVisited: false,
     redirectProbes: {},
   };
-  const reached: ProxyTestResult = { state: "reached", detail: "reached the public internet in 42ms" };
+  const reached: ProxyTestResult = { state: "reached", detail: "Reached … — payloads matched", via: "proxy" };
+  const reachedDirect: ProxyTestResult = { state: "reached", detail: "Reached … directly — payloads matched", via: "direct" };
   const blocked: ProxyTestResult = { state: "blocked", detail: "connection refused" };
+  const intercepted: ProxyTestResult = { state: "blocked", detail: "something answered", intercepted: true };
+  const customPass: ProxyTestResult = { state: "reached", detail: "The request completed", custom: true };
   const noRunner: ProxyTestResult = { state: "no_runner", detail: "no runner configured" };
   const bypass: ProxyTestResult = { state: "bypass", detail: "reachable directly too" };
 
-  it("reads 'Untested'/blocked=false before any probe has run (the default when corpNetwork is omitted)", () => {
+  it("reads 'Untested'/off before any probe has run (the default when corpNetwork is omitted)", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     expect(stepBadges(status, readiness, [], 0).corp_network).toEqual({ text: "Untested", tone: "warning" });
     expect(stepDone(status, readiness, [], 0).corp_network).toBe(false);
-    expect(corpNetworkBlockReason(unset, [])).toMatch(/prove this host can reach the internet/i);
+    expect(corpNetworkGate(unset, [])).toEqual({ on: false, reason: T.GATE_UNTESTED, tone: "warning" });
   });
 
-  it("reads amber 'Blocked' once the connectivity probe fails, and still blocks Next", () => {
+  it("a detected-but-unconfigured proxy reads 'Detected — not configured' pre-probe (evidence, amber)", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyDetected: true };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Detected — not configured",
+      tone: "warning",
+    });
+  });
+
+  it("reads amber 'Blocked' once the connectivity probe fails, and blocks Next with the gate sentence", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const corpNetwork = { ...unset, proxyProbe: blocked };
     expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Blocked", tone: "warning" });
     expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
-    expect(corpNetworkBlockReason(corpNetwork, [])).toMatch(/still failing/i);
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: false, reason: T.GATE_BLOCKED, tone: "warning" });
   });
 
-  it("no_runner is the ONE honest bypass — neutral badge, counts as done, never a fake pass", () => {
+  it("intercepted is a blocked FLAVOR rendered apart — its own badge text and its own gate instruction", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyProbe: intercepted };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Blocked · intercepted",
+      tone: "warning",
+    });
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: false, reason: T.GATE_INTERCEPTED, tone: "warning" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+  });
+
+  it("no_runner UNLOCKS Next with a neutral standing note but never earns the checkmark — nothing was proven", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const corpNetwork = { ...unset, proxyProbe: noRunner };
     expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
-      text: "Not testable on this host — allowed through",
+      text: "Untested · no runner",
       tone: "neutral",
     });
-    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
-    expect(corpNetworkBlockReason(corpNetwork, [])).toBeNull();
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: true, reason: T.NORUNNER_NOTE, tone: "neutral" });
+    // done = gate.on && reached (the mock's own rule): the operator may
+    // continue, but the step never claims a proof Wardyn could not collect.
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
     // The bypass holds even with unconfigured/untested redirects sitting there —
     // no_runner means NOTHING on this host can be probed, egress included.
     const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
-    expect(corpNetworkBlockReason(corpNetwork, redirects)).toBeNull();
+    expect(corpNetworkGate(corpNetwork, redirects).on).toBe(true);
   });
 
-  it("reached but the Egress tab was never visited still blocks, even at zero redirects", () => {
+  it("reached but the Egress tab was never OPENED still blocks — even at zero redirects, and before any row proofs", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const corpNetwork = { ...unset, proxyProbe: reached };
     expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: false, reason: T.GATE_EGRESS_UNSEEN, tone: "warning" });
+    // The visit requirement comes BEFORE per-row proofs in the ladder: rows
+    // derived from legacy config can exist without the tab ever being seen.
+    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    expect(corpNetworkGate(corpNetwork, redirects).reason).toBe(T.GATE_EGRESS_UNSEEN);
+    // The badge stays the connectivity FACT meanwhile (the mock's corpBadge):
+    // the gate note and the egress tab's own dot carry the remaining work.
     expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
-      text: "Egress redirection not reviewed",
-      tone: "warning",
+      text: "Reached · proxy",
+      tone: "success",
     });
-    expect(corpNetworkBlockReason(corpNetwork, [])).toMatch(/visit egress redirection/i);
   });
 
-  it("reached + egress visited + zero redirects reads 'Ready · direct' and is done", () => {
+  it("reached (direct) + egress visited + zero redirects reads 'Reached · direct' and is done", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const corpNetwork = { ...unset, proxyProbe: reached, egressVisited: true };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · direct", tone: "success" });
+    const corpNetwork = { ...unset, proxyProbe: reachedDirect, egressVisited: true };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Reached · direct",
+      tone: "success",
+    });
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: true });
     expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
   });
 
-  it("a configured proxy composes into the Ready text ('proxy', not 'direct')", () => {
+  it("a custom-endpoint pass unlocks with its standing note and the weaker info badge — never the success treatment", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const corpNetwork = { ...unset, proxyProbe: reached, egressVisited: true, proxyConfigured: true };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({ text: "Ready · proxy", tone: "success" });
+    const corpNetwork = { ...unset, proxyProbe: customPass, egressVisited: true };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Reached · custom endpoint",
+      tone: "info",
+    });
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: true, reason: T.GATE_CUSTOM_ON, tone: "neutral" });
+    // A custom pass IS reached — it earns the checkmark; the tone and the
+    // standing note carry the weaker footing.
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(true);
   });
 
-  it("a redirect that exists but was never tested blocks Next and names the row — egressVisited doesn't substitute for a real test", () => {
+  it("a redirect that exists but was never tested blocks with the generic prove-them sentence — egressVisited doesn't substitute for a real test", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const corpNetwork = { ...unset, proxyProbe: reached, egressVisited: true, redirectCount: 1 };
     const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
     expect(stepDone(status, readiness, [], 0, corpNetwork, redirects).corp_network).toBe(false);
-    expect(stepBadges(status, readiness, [], 0, corpNetwork, redirects).corp_network).toEqual({
-      text: "https://registry.npmjs.org not enforced",
+    expect(corpNetworkGate(corpNetwork, redirects)).toEqual({
+      on: false,
+      reason: T.GATE_EGRESS_UNTESTED,
       tone: "warning",
     });
-    expect(corpNetworkBlockReason(corpNetwork, redirects)).toBe(
-      'The https://registry.npmjs.org redirect must test "Reached" before continuing — it\'s currently not yet tested.',
-    );
   });
 
-  it("a bypassed redirect (configured but not enforced) blocks too, named and labeled 'not enforced'", () => {
+  it("failing rows are NAMED, all at once — a bypassed and a blocked redirect both read as rows to fix", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const corpNetwork = {
       ...unset,
       proxyProbe: reached,
-      redirectCount: 1,
-      redirectProbes: { "https://registry.npmjs.org": bypass },
+      egressVisited: true,
+      redirectCount: 2,
+      redirectProbes: { "https://registry.npmjs.org": bypass, "https://pypi.org/simple": blocked },
     };
-    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    const redirects: EgressRedirect[] = [
+      { from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" },
+      { from: "https://pypi.org/simple", to: "https://mirror.corp.internal/pypi" },
+    ];
     expect(stepDone(status, readiness, [], 0, corpNetwork, redirects).corp_network).toBe(false);
-    expect(corpNetworkBlockReason(corpNetwork, redirects)).toMatch(/currently not enforced/);
+    expect(corpNetworkGate(corpNetwork, redirects).reason).toBe(
+      "Fix https://registry.npmjs.org and https://pypi.org/simple above — every configured redirect must prove reached before this step hands off. Or remove the rows.",
+    );
   });
 
   // The mock's own self-contradiction (prose says "proxy + 3 redirects" but
   // renders a 4-entry fixture) — the badge must derive the count from the
   // data, never a fixed word, so this reads "+ 4 redirects" here.
-  it("derives the redirect count from the data — proxy + 4 redirects once every one reaches, not a stale '3'", () => {
+  it("derives the redirect count from the data — Reached · proxy + 4 redirects once every one reaches, not a stale '3'", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const froms = ["a.example.com", "b.example.com", "c.example.com", "d.example.com"];
@@ -322,11 +371,12 @@ describe("corp_network gate — corpNetworkBlockReason drives both the badge and
       ...unset,
       proxyProbe: reached,
       proxyConfigured: true,
+      egressVisited: true,
       redirectCount: 4,
       redirectProbes: Object.fromEntries(froms.map((f) => [f, reached])),
     };
-    expect(stepBadges(status, readiness, [], 0, corpNetwork, redirects).corp_network).toEqual({
-      text: "Ready · proxy + 4 redirects",
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Reached · proxy + 4 redirects",
       tone: "success",
     });
     expect(stepDone(status, readiness, [], 0, corpNetwork, redirects).corp_network).toBe(true);

@@ -22,7 +22,7 @@
 // GATED, unlike the mock: Next won't advance to Integrations without proof of
 // internet access (a passing test-proxy probe), a look at Egress redirection
 // (empty is a fine answer, but it has to be an answered question), and every
-// configured redirect testing reached — see steps.ts's corpNetworkBlockReason,
+// configured redirect testing reached — see steps.ts's corpNetworkGate,
 // the single source of truth setup-layout.tsx's Next button, the rail badge,
 // and this step's own done-ness all read. no_runner is the one honest bypass:
 // Wardyn is structurally unable to probe on this host, so holding the gate
@@ -36,6 +36,7 @@ import { ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { HostProxyDetection, HostProxySetting, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi, type ProxyTestResult } from "../../../lib/api/health";
+import { HttpError } from "../../../lib/api/core";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { getErrorMessage } from "../../../lib/format";
 import { T } from "../../../lib/integrations";
@@ -50,7 +51,7 @@ import { Chip } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { AddSecretDialog } from "../secrets";
 import { useSiteConfigStep } from "./step-bodies";
-import { EgressTab, TestVerdictChip, useElapsedTimer, type ProbeUiState } from "./corp-network-egress";
+import { EgressTab, useElapsedTimer, type ProbeUiState } from "./corp-network-egress";
 
 // compactEndpoint moved with the egress family; re-exported so its tests and
 // any caller keep one import path for this step's helpers.
@@ -200,23 +201,74 @@ function EvidenceBlock({
   );
 }
 
+// The verdict, per the mock's proxyTestBlock kinds: a builtin reached says
+// which path it proved; a custom pass DELIBERATELY avoids the success
+// treatment ("Request completed", info tone — it must never read as a
+// verified one); intercepted is a blocked flavor rendered apart, because it
+// sends the operator to a different person than a refused connection does.
+function ProxyVerdict({ result }: { result: ProxyTestResult }) {
+  if (result.state === "reached") {
+    if (result.custom) {
+      return (
+        <span className="flex flex-wrap items-center gap-2">
+          <Chip tone="info">Request completed</Chip>
+          <span className="text-[0.6875rem] text-muted-foreground">custom endpoint — not verified against a known payload</span>
+        </span>
+      );
+    }
+    return (
+      <Chip tone="success" dot>
+        {result.via === "direct" ? "Reached · direct" : "Reached · via proxy"}
+      </Chip>
+    );
+  }
+  if (result.state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
+  if (result.intercepted) {
+    return (
+      <span className="flex flex-wrap items-center gap-2">
+        <Chip tone="warning" dot>Blocked · intercepted</Chip>
+        <span className="text-[0.6875rem] text-muted-foreground">answered 200 OK — with someone else&apos;s page</span>
+      </span>
+    );
+  }
+  return (
+    <Chip tone="warning" dot>
+      {result.state === "bypass" ? "Redirect not enforced" : "Blocked"}
+    </Chip>
+  );
+}
+
 function ProxyTestBlock({
   state,
   onTest,
   operator,
+  probeLine,
+  customReject,
 }: {
   state: ProbeUiState;
-  /** No arg runs the default multi-target check; a url retries against it instead (see T.TEST_CUSTOM_HINT). */
+  /** No arg runs the default multi-target check; a url retries against it instead (T.CUSTOM_URL_WHY). */
   onTest: (url?: string) => void;
   operator: boolean;
+  /** What the builtin probe is about to do, endpoints and chain named — shown while running. */
+  probeLine: string;
+  /** A rejected custom URL's server message, rendered inline in the custom block (never a toast — T.CUSTOM_REJECT_WHY). */
+  customReject: string | null;
 }) {
   const running = state.kind === "running";
   const [customUrl, setCustomUrl] = React.useState("");
+  const customPass = state.kind === "done" && state.result.state === "reached" && state.result.custom;
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-border p-3">
+    <div
+      className={cn(
+        "flex items-start gap-3 rounded-lg border p-3",
+        // The mock's okcustom container: a dashed info frame, so even the box
+        // around a custom pass reads differently from a verified one.
+        customPass ? "border-dashed border-info/40" : "border-border",
+      )}
+    >
       <Button size="sm" variant="outline" className="shrink-0" disabled={running || !operator} title={!operator ? T.VIEWER_HINT : undefined} onClick={() => onTest()}>
         {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
-        {running ? "Testing…" : "Test proxy"}
+        {running ? "Testing…" : "Test connectivity"}
       </Button>
       <div className="min-w-0 flex-1 space-y-1">
         {state.kind === "idle" && (
@@ -226,28 +278,55 @@ function ProxyTestBlock({
           </>
         )}
         {state.kind === "running" && (
-          <p className="text-[0.75rem] text-info">Starting a throwaway sandbox — {state.elapsedSec}s</p>
+          <>
+            <p className="text-[0.75rem] text-info">Starting a throwaway sandbox — {state.elapsedSec}s</p>
+            {!state.custom && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{probeLine}</p>}
+          </>
         )}
         {state.kind === "done" && (
           <>
-            <TestVerdictChip state={state.result.state} />
-            <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
-            {state.result.state !== "no_runner" && (
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_STANDING}</p>
+            <ProxyVerdict result={state.result} />
+            {state.result.state === "no_runner" ? (
+              // The canon sentence, not the wire detail: it says what to DO
+              // (configure a barrier), which the server's own line doesn't.
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_NORUNNER}</p>
+            ) : (
+              <>
+                <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
+                {state.result.custom && state.result.state === "reached" && (
+                  <p className="text-[0.75rem] leading-snug text-info">{T.CUSTOM_CAVEAT}</p>
+                )}
+                {state.result.intercepted && (
+                  <>
+                    <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
+                      <p className="text-[0.75rem] leading-snug text-foreground">{T.INTERCEPT_MEANS}</p>
+                    </div>
+                    <p className="max-w-[620px] text-[0.6875rem] leading-snug text-muted-foreground">{T.PROBE_ENDPOINTS}</p>
+                  </>
+                )}
+                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_STANDING}</p>
+              </>
             )}
-            {/* Only surfaced after a real failure — the deliberate escape for a
-                host with no public internet. Showing it unconditionally would
-                make it the path of least resistance instead of a fallback. */}
+            {/* Revealed ONLY after a failure — never on arrival, or everyone
+                reaches for it instead of fixing the proxy and the gate goes
+                decorative. A recovery affordance, not configuration. Covers
+                intercepted too (it is a blocked flavor). */}
             {state.result.state === "blocked" && (
-              <div className="mt-1.5 space-y-1.5 rounded-md border border-border bg-muted/30 p-2">
-                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_CUSTOM_HINT}</p>
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    value={customUrl}
-                    onChange={(e) => setCustomUrl(e.target.value)}
-                    placeholder="https://an-internal-host-you-can-reach.example.com"
-                    className="h-7 flex-1 font-mono text-xs"
-                  />
+              <div className="mt-1.5 space-y-2.5 rounded-lg border border-dashed border-border-strong p-3">
+                <div className="space-y-1">
+                  <p className="text-[0.8125rem] font-medium text-foreground">No public endpoint will answer here?</p>
+                  <p className="max-w-[560px] text-[0.6875rem] leading-snug text-muted-foreground">{T.CUSTOM_URL_WHY}</p>
+                </div>
+                <div className="flex items-end gap-2">
+                  <Field label="Test against a URL of your own" htmlFor="corp-custom-url" hint={T.CUSTOM_URL_HINT} className="min-w-0 flex-1">
+                    <Input
+                      id="corp-custom-url"
+                      value={customUrl}
+                      onChange={(e) => setCustomUrl(e.target.value)}
+                      placeholder="https://nexus.corp.internal/repository/health"
+                      className="font-mono"
+                    />
+                  </Field>
                   <Button
                     size="sm"
                     variant="outline"
@@ -255,9 +334,17 @@ function ProxyTestBlock({
                     disabled={!operator || !customUrl.trim()}
                     onClick={() => onTest(customUrl.trim())}
                   >
-                    Test this URL instead
+                    Test this URL
                   </Button>
                 </div>
+                {customReject && (
+                  <div className="space-y-1.5">
+                    <div className="rounded-md border border-danger/30 bg-danger-subtle px-2.5 py-2">
+                      <p className="text-[0.75rem] leading-snug text-danger">{customReject}</p>
+                    </div>
+                    <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.CUSTOM_REJECT_WHY}</p>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -285,7 +372,7 @@ function HostProxyTab({
   onRecheck: () => void;
   /** The last real result the orchestrator remembers from a PRIOR visit to this step (see setup-screen.tsx's corpGate) — seeds the panel back to what it last observed instead of a false "Not tested" the operator would have to redo. */
   initialProbe?: ProxyTestResult;
-  /** Reports every terminal probe result upward so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkBlockReason). Never called for a failed REQUEST (no verdict to report) — see runTest's catch below. */
+  /** Reports every terminal probe result upward so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkGate). Never called for a failed REQUEST (no verdict to report) — see runTest's catch below. */
   onProbeResult: (result: ProxyTestResult) => void;
 }) {
   const [url, setUrl] = React.useState("");
@@ -351,8 +438,11 @@ function HostProxyTab({
     }
   };
 
+  const [customReject, setCustomReject] = React.useState<string | null>(null);
   const runTest = async (customUrl?: string) => {
-    setTest({ kind: "running", elapsedSec: 0 });
+    const before = test;
+    setCustomReject(null);
+    setTest({ kind: "running", elapsedSec: 0, custom: !!customUrl });
     try {
       const result = await healthApi.testProxy(customUrl);
       setTest({ kind: "done", result });
@@ -361,15 +451,32 @@ function HostProxyTab({
       // A request that never produced a probe result is NOT a probe verdict. Rendering
       // it as "blocked" would blame the corporate network for a 403, a restarted
       // wardynd, or a bad payload — sending the operator to debug a firewall that is
-      // working fine. Report the request failure as itself and stay untested. A
-      // rejected custom URL (400) lands here too — the server's specific reason is
-      // the toast description, never papered over.
+      // working fine.
+      if (customUrl && e instanceof HttpError && e.status === 400) {
+        // A rejected custom URL renders INLINE in the block that asked for it,
+        // the server's own message verbatim (T.CUSTOM_REJECT_WHY), and the
+        // failed result that revealed the block stays on screen — a toast
+        // would vanish with the reason while the operator is mid-recovery.
+        setCustomReject(`Rejected: “${customUrl}” — ${getErrorMessage(e)}. Nothing was launched.`);
+        setTest(before);
+        return;
+      }
+      // Anything else: report the request failure as itself and stay untested.
       toast.error("Could not run the proxy test", { description: getErrorMessage(e) });
       setTest({ kind: "idle" });
     }
   };
   const elapsed = useElapsedTimer(test.kind === "running");
-  const liveTest: ProbeUiState = test.kind === "running" ? { kind: "running", elapsedSec: elapsed } : test;
+  const liveTest: ProbeUiState = test.kind === "running" ? { ...test, elapsedSec: elapsed } : test;
+
+  // What the builtin probe is about to traverse, named up front (the mock's
+  // probeLine) — endpoints mirror internal/api/site_config_probe.go's targets.
+  const upstreamLabel =
+    siteConfig?.upstream_proxy_url ||
+    (siteConfig?.upstream_proxy_secret_ref ? `the upstream in secret ${siteConfig.upstream_proxy_secret_ref}` : "");
+  const probeLine = `The probe will try www.msftconnecttest.com and detectportal.firefox.com ${
+    upstreamLabel ? `through wardyn-proxy → ${upstreamLabel}` : "directly"
+  }, match their published payloads, and report what actually happened.`;
 
   const draftHasCreds = !useSecret && hasUserinfo(url);
 
@@ -536,7 +643,7 @@ function HostProxyTab({
         )}
       </div>
 
-      <ProxyTestBlock state={liveTest} onTest={runTest} operator={operator} />
+      <ProxyTestBlock state={liveTest} onTest={runTest} operator={operator} probeLine={probeLine} customReject={customReject} />
 
       <AddSecretDialog
         open={addSecretOpen}
@@ -577,6 +684,15 @@ export function CorpNetworkStep({
   const [tab, setTab] = React.useState<"proxy" | "egress">("proxy");
   const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
+  // The mock's egressDot: connectivity is proven but the egress side still
+  // holds Next (tab never opened, or a configured row not yet proven) — a
+  // quiet pointer at WHERE the remaining work is, mirroring corpNetworkGate's
+  // own ladder (steps.ts) without re-deriving its sentences.
+  const redirectRows = siteConfig?.egress_redirects ?? [];
+  const egressDot =
+    gate.proxyProbe?.state === "reached" &&
+    (!gate.egressVisited || redirectRows.some((r) => gate.redirectProbes[r.from]?.state !== "reached"));
+
   return (
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">{T.CORP_LEDE}</p>
@@ -586,15 +702,18 @@ export function CorpNetworkStep({
         onValueChange={(v) => {
           const next = v as typeof tab;
           setTab(next);
-          // The explicit "I looked" acknowledgement corpNetworkBlockReason
-          // requires at zero redirects — an empty list needs a deliberate
-          // look, same as a configured one (see steps.ts).
+          // The explicit "I looked" acknowledgement corpNetworkGate requires
+          // regardless of row count — an empty list needs a deliberate look,
+          // same as a configured one (see steps.ts).
           if (next === "egress" && !gate.egressVisited) onGateChange({ egressVisited: true });
         }}
       >
         <TabsList>
           <TabsTrigger value="proxy">Host proxy</TabsTrigger>
-          <TabsTrigger value="egress">Egress redirection</TabsTrigger>
+          <TabsTrigger value="egress">
+            Egress redirection
+            {egressDot && <span aria-hidden className="ml-1.5 inline-block size-1.5 rounded-full bg-warning" />}
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 

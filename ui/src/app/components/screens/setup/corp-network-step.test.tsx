@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { HostProxyDetection, SiteConfig } from "../../../lib/types";
 import { T, EGRESS_SUGGEST } from "../../../lib/integrations";
+import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import {
   CorpNetworkStep,
@@ -236,14 +237,14 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     renderStep();
 
     expect(screen.getByText("Not tested")).toBeInTheDocument();
-    const btn = screen.getByRole("button", { name: /^test proxy$/i });
+    const btn = screen.getByRole("button", { name: /^test connectivity$/i });
     await userEvent.click(btn);
 
     const runningBtn = await screen.findByRole("button", { name: /^testing…$/i });
     expect(runningBtn).toBeDisabled();
 
     resolve({ state: "reached", detail: T.TEST_OK });
-    expect(await screen.findByText("Reached")).toBeInTheDocument();
+    expect(await screen.findByText("Reached · via proxy")).toBeInTheDocument();
     expect(screen.getByText(T.TEST_OK)).toBeInTheDocument();
     expect(screen.getByText(T.TEST_STANDING)).toBeInTheDocument();
   });
@@ -251,7 +252,7 @@ describe("Test probes — real states, never a fake pass, running disables+relab
   it("proxy Test: blocked and no_runner read their own real detail, never a generic failure", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: T.TEST_BLOCKED });
     renderStep();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     expect(await screen.findByText("Blocked")).toBeInTheDocument();
     expect(screen.getByText(T.TEST_BLOCKED)).toBeInTheDocument();
   });
@@ -259,7 +260,7 @@ describe("Test probes — real states, never a fake pass, running disables+relab
   it("proxy Test: no_runner (e.g. a 404-mapped older server) never reads as a pass", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "no_runner", detail: T.TEST_NORUNNER });
     renderStep();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     expect(await screen.findByText("Can't test here")).toBeInTheDocument();
     expect(screen.getByText(T.TEST_NORUNNER)).toBeInTheDocument();
     // The "tested from a real sandbox" note only makes sense once a probe
@@ -273,11 +274,11 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     // all, so reporting "Blocked" would blame a firewall that is working fine.
     testProxyMock.mockRejectedValueOnce(new Error("403 operator role required"));
     renderStep();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
 
-    await screen.findByRole("button", { name: /^test proxy$/i });
+    await screen.findByRole("button", { name: /^test connectivity$/i });
     expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
-    expect(screen.queryByText("Reached")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Reached/)).not.toBeInTheDocument();
     // ...and it falls back to untested, so the operator can retry.
     expect(screen.getByText("Not tested")).toBeInTheDocument();
   });
@@ -320,11 +321,12 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     return utils;
   }
 
-  it("shows EMPTY_EGRESS with no redirects, EGRESS_DESC always", async () => {
+  it("zero redirects renders the explicit-answer box (being on the tab IS the look the gate demands), EGRESS_DESC always", async () => {
     renderStep();
     await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
     expect(screen.getByText(T.EGRESS_DESC)).toBeInTheDocument();
-    expect(screen.getByText(T.EMPTY_EGRESS)).toBeInTheDocument();
+    expect(screen.getByText("No redirects on this network")).toBeInTheDocument();
+    expect(screen.getByText(T.EGRESS_SEEN_EMPTY)).toBeInTheDocument();
   });
 
   it("a long endpoint's row elides the middle, and the row's title carries the FULL from/to values", async () => {
@@ -448,8 +450,8 @@ describe("Gate reporting — proxy test, egress visit, and redirect tests all re
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
     const onGateChange = vi.fn();
     renderStep({ onGateChange });
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
-    await screen.findByText("Reached");
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    await screen.findByText("Reached · via proxy");
     expect(onGateChange).toHaveBeenCalledWith({ proxyProbe: { state: "reached", detail: "reached in 42ms" } });
   });
 
@@ -457,17 +459,17 @@ describe("Gate reporting — proxy test, egress visit, and redirect tests all re
     testProxyMock.mockRejectedValueOnce(new Error("403 operator role required"));
     const onGateChange = vi.fn();
     renderStep({ onGateChange });
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText("Not tested");
     expect(onGateChange).not.toHaveBeenCalled();
   });
 
   it("re-entering the step seeds the proxy panel from gate.proxyProbe instead of a false 'Not tested'", () => {
     renderStep({ gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: "reached in 42ms" } } });
-    expect(screen.getByText("Reached")).toBeInTheDocument();
+    expect(screen.getByText("Reached · via proxy")).toBeInTheDocument();
     expect(screen.getByText("reached in 42ms")).toBeInTheDocument();
     // No re-test needed to see it — the button is idle, not mid-run.
-    expect(screen.getByRole("button", { name: /^test proxy$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^test connectivity$/i })).toBeEnabled();
   });
 
   it("switching to the Egress redirection tab reports egressVisited", async () => {
@@ -516,50 +518,92 @@ describe("Gate reporting — proxy test, egress visit, and redirect tests all re
 });
 
 // ------------------------------------------------------------
-// Custom-URL retry — the escape for a host with no public internet. Only
-// surfaced after a real failure, never up front (T.TEST_CUSTOM_HINT).
+// Custom-URL block — the escape for a host with no public internet. Only
+// surfaced after a real failure, never up front (T.CUSTOM_URL_WHY), and a
+// pass through it must never wear the verified treatment (T.CUSTOM_CAVEAT).
 // ------------------------------------------------------------
-describe("Custom-URL retry — only after a blocked result", () => {
+describe("Custom-URL block — only after a blocked result, weaker claim on a pass, inline server reject", () => {
   it("does not appear before testing, or once the test reaches — only a real 'blocked' surfaces it", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
     renderStep();
-    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
-    await screen.findByText("Reached");
-    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/nexus\.corp\.internal/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    await screen.findByText("Reached · via proxy");
+    expect(screen.queryByPlaceholderText(/nexus\.corp\.internal/i)).not.toBeInTheDocument();
   });
 
-  it("no_runner does not offer the custom-URL retry either — there is nothing to retry with", async () => {
+  it("no_runner does not offer the custom-URL block either — there is nothing to retry with", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "no_runner", detail: T.TEST_NORUNNER });
     renderStep();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText("Can't test here");
-    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/nexus\.corp\.internal/i)).not.toBeInTheDocument();
   });
 
-  it("appears after a blocked result, and retrying with a URL calls testProxy(url)", async () => {
+  it("appears after a blocked result; a custom pass renders 'Request completed' + the caveat, never the success chip", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: T.TEST_BLOCKED });
     renderStep();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText("Blocked");
-    expect(screen.getByText(T.TEST_CUSTOM_HINT)).toBeInTheDocument();
+    expect(screen.getByText("No public endpoint will answer here?")).toBeInTheDocument();
+    expect(screen.getByText(T.CUSTOM_URL_WHY)).toBeInTheDocument();
 
-    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "the request completed" });
-    const field = screen.getByPlaceholderText(/an-internal-host-you-can-reach/i);
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: T.TEST_OK_CUSTOM, custom: true });
+    const field = screen.getByPlaceholderText(/nexus\.corp\.internal/i);
     await userEvent.type(field, "https://intranet.example.com");
-    await userEvent.click(screen.getByRole("button", { name: /^test this url instead$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test this url$/i }));
 
-    expect(await screen.findByText("Reached")).toBeInTheDocument();
+    expect(await screen.findByText("Request completed")).toBeInTheDocument();
+    expect(screen.getByText(T.CUSTOM_CAVEAT)).toBeInTheDocument();
+    // The weaker claim must never wear the builtin pass's clothes.
+    expect(screen.queryByText(/^Reached ·/)).not.toBeInTheDocument();
     expect(testProxyMock).toHaveBeenLastCalledWith("https://intranet.example.com");
-    // Fixed now — the retry box goes away with the rest of the blocked-only UI.
-    expect(screen.queryByPlaceholderText(/an-internal-host-you-can-reach/i)).not.toBeInTheDocument();
+    // The retry box goes away with the rest of the blocked-only UI.
+    expect(screen.queryByPlaceholderText(/nexus\.corp\.internal/i)).not.toBeInTheDocument();
   });
 
   it("the retry button stays disabled until a URL is typed", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: T.TEST_BLOCKED });
     renderStep();
-    await userEvent.click(screen.getByRole("button", { name: /^test proxy$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText("Blocked");
-    expect(screen.getByRole("button", { name: /^test this url instead$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^test this url$/i })).toBeDisabled();
+  });
+
+  it("a server-rejected custom URL renders INLINE with the server's own message — the blocked result stays, no gate update", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: T.TEST_BLOCKED });
+    const onGateChange = vi.fn();
+    renderStep({ onGateChange });
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    await screen.findByText("Blocked");
+    onGateChange.mockClear();
+
+    testProxyMock.mockRejectedValueOnce(
+      new HttpError(400, "url: must be a plain http(s) URL with a real host, and no shell metacharacters"),
+    );
+    await userEvent.type(screen.getByPlaceholderText(/nexus\.corp\.internal/i), "ftp://mirror.corp.internal/pub");
+    await userEvent.click(screen.getByRole("button", { name: /^test this url$/i }));
+
+    expect(
+      await screen.findByText(/Rejected: “ftp:\/\/mirror\.corp\.internal\/pub” — url: must be a plain http\(s\) URL/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(T.CUSTOM_REJECT_WHY)).toBeInTheDocument();
+    // The failed result that revealed the block is still on screen — the
+    // operator is mid-recovery, not starting over.
+    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    expect(screen.getByText(T.TEST_BLOCKED)).toBeInTheDocument();
+    // No verdict was observed, so nothing reports upward.
+    expect(onGateChange).not.toHaveBeenCalled();
+  });
+
+  it("an intercepted blocked renders apart — its own chip, the what-it-means box, and the custom escape", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "blocked", detail: "Something answered…", intercepted: true });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    expect(await screen.findByText("Blocked · intercepted")).toBeInTheDocument();
+    expect(screen.getByText(T.INTERCEPT_MEANS)).toBeInTheDocument();
+    expect(screen.getByText(T.PROBE_ENDPOINTS)).toBeInTheDocument();
+    // Intercepted is a blocked flavor: the custom-URL escape applies to it too.
+    expect(screen.getByText("No public endpoint will answer here?")).toBeInTheDocument();
   });
 });
