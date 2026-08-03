@@ -5,10 +5,11 @@
 
 // The first-run funnel's DECISION helpers, split out of setup-screen.tsx so
 // App.tsx can ask "should the funnel open?" on mount without pulling the funnel
-// itself into the entry chunk. setup-screen reaches llm-access →
-// harness-login-pane → attach-terminal → xterm, so importing these two helpers
-// from the screen module dragged the whole terminal stack into the initial
-// bundle and defeated route-level code-splitting.
+// itself into the entry chunk. setup-screen reaches integrations-step →
+// integrations-screen → add-integration-dialog → harness-login-pane →
+// attach-terminal → xterm, so importing these two helpers from the screen
+// module dragged the whole terminal stack into the initial bundle and
+// defeated route-level code-splitting.
 //
 // setup-screen re-exports both, so existing importers/tests are unaffected.
 import { lsGet, lsSet } from "../../../lib/storage";
@@ -28,20 +29,22 @@ export function dismissSetup(): void {
   lsSet(DISMISS_KEY, "1");
 }
 
-// Model-skip flag — the operator explicitly chose to set up NO model/harness
-// provider (they'll bring their own container, or drive an interactive run). It
-// earns the provider step its checkmark without a connected model, so a skipped
-// provider reads as a deliberate decision rather than an unfinished "Optional".
-// Per-browser (like the dismiss + onboarding-seen flags); a real connected model
-// makes it moot. Cleared automatically once llmReady, so reconnecting supersedes.
-const MODEL_SKIPPED_KEY = "wardyn-model-skipped";
+// Integrations-skip flag — the operator explicitly chose to move past the
+// Integrations step with nothing connected (no model/harness, SCM host,
+// artifact mirror, or host proxy). It earns the step its checkmark without any
+// integration, so a deliberate skip reads as a decision rather than an
+// unfinished "Optional". Per-browser (like the dismiss + onboarding-seen
+// flags); a real connected integration makes it moot. Generalized from the old
+// per-step "model-skipped" flag now that the provider step is folded into
+// Integrations.
+const INTEGRATIONS_SKIPPED_KEY = "wardyn-integrations-skipped";
 
-export function modelSkipped(): boolean {
-  return lsGet(MODEL_SKIPPED_KEY) === "1";
+export function integrationsSkipped(): boolean {
+  return lsGet(INTEGRATIONS_SKIPPED_KEY) === "1";
 }
 
-export function markModelSkipped(): void {
-  lsSet(MODEL_SKIPPED_KEY, "1");
+export function markIntegrationsSkipped(): void {
+  lsSet(INTEGRATIONS_SKIPPED_KEY, "1");
 }
 
 // Visited-step set (A4) — steps the operator has navigated AWAY from at least

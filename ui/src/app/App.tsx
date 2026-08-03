@@ -32,14 +32,18 @@ type AuthStatus = "checking" | "authed" | "unauthed";
 const SETUP_POLL_MS = 5000;
 
 // Route guard for the mandatory first-run gate: while the gate is active, every
-// app route redirects to /setup — only Getting started (/setup) and the demos
-// that are part of it (/demos) stay reachable — so a fresh local operator goes
-// through setup before the app opens. Nav groups are hidden in parallel
-// (AppShell). Finishing the flow (dismissSetup), a first run, an onboarded
-// console, SSO mode, or an unreachable daemon all clear the gate.
+// app route redirects to /setup — only Getting started (/setup), the demos
+// that are part of it (/demos), and /integrations stay reachable — so a fresh
+// local operator goes through setup before the app opens. /integrations is
+// exempted because the Getting Started Integrations step embeds and links to
+// it (see setup/integrations-step.tsx's "Manage in Integrations" link and its
+// rows' own "Open" action) — without this, either would bounce straight back
+// to /setup. Nav groups are hidden in parallel (AppShell). Finishing the flow
+// (dismissSetup), a first run, an onboarded console, SSO mode, or an
+// unreachable daemon all clear the gate.
 function RequireSetupComplete({ gated }: { gated: boolean }) {
   const loc = useLocation();
-  if (gated && loc.pathname !== "/setup" && loc.pathname !== "/demos") {
+  if (gated && loc.pathname !== "/setup" && loc.pathname !== "/demos" && !loc.pathname.startsWith("/integrations")) {
     return <Navigate to="/setup" replace />;
   }
   return <Outlet />;

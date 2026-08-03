@@ -25,7 +25,7 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
     ready: true,
     runner: { driver: "docker", confinement_classes: ["CC1"] },
-    providers: [{ tool: "claude", installed: true, logged_in: true }],
+    providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
     age_key: { durable: true },
     platform: { os: "linux", wsl: false },
     ...overrides,
@@ -54,7 +54,10 @@ describe("OnboardingScreen (welcome hero)", () => {
   it("surfaces live readiness from getSetupStatus (barrier tier + connected model)", async () => {
     render(<OnboardingScreen onGetStarted={() => {}} />);
     expect(await screen.findByText(/Barrier: Fence ready/)).toBeInTheDocument();
-    expect(screen.getByText(/Model: Claude connected/)).toBeInTheDocument();
+    // llmLabel now names the resolved default integration row itself (see
+    // intro.tsx's deriveReadiness) rather than an ad hoc "Claude connected"
+    // string — this fixture's host-CLI subscription row is named accordingly.
+    expect(screen.getByText(/Model: Claude subscription \(host CLI\)/)).toBeInTheDocument();
   });
 
   it("is a single forward CTA (onGetStarted) — no skip, no demo side-door", async () => {

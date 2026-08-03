@@ -120,4 +120,42 @@ describe("workspace client methods", () => {
     const res = await workspaces.scanWorkspace("ws-1");
     expect(res).toEqual({ async: true, scanRunId: "run-9" });
   });
+
+  it("createWorkspace() accepts the composition shape (sources + base_image) alongside the legacy fields", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(ws), { status: 201, headers: { "Content-Type": "application/json" } }),
+    );
+    await workspaces.createWorkspace({
+      name: "payments",
+      sources: [{ type: "local_dir", path: "/home/me/payments", target: "/home/agent/work" }],
+      base_image: { kind: "recommended" },
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "payments",
+      sources: [{ type: "local_dir", path: "/home/me/payments", target: "/home/agent/work" }],
+      base_image: { kind: "recommended" },
+    });
+  });
+
+  // setRequirements() — PUT /workspaces/{id}/requirements, wrapping the
+  // desired map under a "requirements" key (internal/api/workspaces.go's
+  // handleSetWorkspaceRequirements decodes `{"requirements": {...}}`, not a
+  // bare map) and returning the server's updated workspace.
+  it("setRequirements() PUTs the map nested under a `requirements` key and returns the updated workspace", async () => {
+    const updated = { ...ws, id: "ws-1" };
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(updated), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const reqs = {
+      "secret:acme-key": { level: "required" as const, provenance: "operator_set" as const },
+      "egress:api.stripe.com": { level: "optional" as const, provenance: "scan_seeded" as const },
+    };
+    const res = await workspaces.setRequirements("ws-1", reqs);
+    expect(res).toEqual(updated);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/v1/workspaces/ws-1/requirements");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ requirements: reqs });
+  });
 });

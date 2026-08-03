@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Getting-started step bodies: the corporate-baseline steps (Host Proxy /
-// SCM Provider / Artifact Redirect), Workspaces, Credentials, Review, and Launch.
-// Mostly presentational — the orchestrator (setup-screen) owns SetupStatus AND
-// the fetched SiteConfig (the sole owner — see the corporate-baseline steps
-// below), while each body owns its OWN writes (setSecret, scanWorkspace, and the
-// SiteConfig saves via the orchestrator-owned saveSiteConfig).
+// Step bodies still standing after the 13->9 Getting Started collapse:
+// Workspaces, Review, and Launch. HostProxyStep/ArtifactRepoStep also live
+// here, but are no longer top-level Getting-started steps — the Integrations
+// "Add integration" dialog embeds them directly for its mirror/proxy
+// categories (see integrations/add-integration-dialog.tsx) instead of
+// forking a second copy of their real SiteConfig writes. Mostly
+// presentational — the caller owns SetupStatus AND the fetched SiteConfig
+// (the sole owner — see the two corporate-baseline steps below), while each
+// body owns its OWN writes (setSecret, scanWorkspace, and the SiteConfig
+// saves via the caller-owned saveSiteConfig).
 import * as React from "react";
 import {
   AlertTriangle,
@@ -736,44 +740,6 @@ export function WorkspacesStep({
         workspaceId={importWsId}
         onReload={onReload}
       />
-    </div>
-  );
-}
-
-// ------------------------------------------------------------
-// Credentials step — Optional (B8): excluded from readiness, never blocks
-// launch. A lead line and a jump to SCM Provider, nothing else.
-//
-// ponytail: the PAT quick-add that used to sit here is DELETED, not fixed. It
-// was a second door to the same AddSecretDialog sitting directly under the
-// button that opens the proper one, and it got the shared facts wrong in two
-// ways the SCM Provider door doesn't: it passed the raw typed string as the
-// host (so "https://GHES.corp.internal/" showed that as the host while
-// deriving the name git-pat-https-ghes-corp-internal), and it never wrote
-// scm_hosts, so the hostname was not registered for egress. Fixing it meant
-// porting panel 1's validator into a duplicate flow; deleting it is the
-// shorter diff and leaves one place where a credential is added.
-// ------------------------------------------------------------
-export function CredentialsStep({ onJump }: { onJump: (id: SetupStepId) => void }) {
-  return (
-    <div className="space-y-5">
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Only needed if a run touches a private repo or a cloud account. Skipping this never blocks a launch —
-        and it doesn&apos;t count against readiness.
-      </p>
-
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Storing a credential doesn&apos;t attach it to anything: each run names the host and the
-        stored secret in its own git_pat / ssh_key grant, in the New Run wizard&apos;s
-        git-credential card.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-sm text-muted-foreground">Per-provider setup lives in SCM Provider.</p>
-        <Button variant="outline" size="sm" onClick={() => onJump("scm_provider")}>
-          Go to SCM Provider
-        </Button>
-      </div>
     </div>
   );
 }

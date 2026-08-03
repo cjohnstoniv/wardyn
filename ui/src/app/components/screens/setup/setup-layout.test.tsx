@@ -31,8 +31,8 @@ describe("SetupLayout", () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
   it("renders the step heading from STEP_HEADING and an Optional chip on an optional step", () => {
-    renderLayout({ current: "host_proxy" });
-    expect(screen.getByRole("heading", { name: /corporate host proxy/i })).toBeInTheDocument();
+    renderLayout({ current: "integrations" });
+    expect(screen.getByRole("heading", { name: /connect what's outside wardyn/i })).toBeInTheDocument();
     expect(screen.getByText("Optional")).toBeInTheDocument();
   });
 
@@ -42,21 +42,23 @@ describe("SetupLayout", () => {
     expect(screen.queryByText("Optional")).not.toBeInTheDocument();
   });
 
-  // Host Proxy now directly follows Environment: the corporate-network steps moved
-  // into Essentials ahead of the model step, because connecting a model needs egress.
-  it("footer renders 'Next: Host Proxy' on the environment step and calls onSelect(\"host_proxy\")", async () => {
+  // Integrations directly follows Environment: the 13->9 collapse folded the old
+  // corporate-network steps and the model picker into this one step, for the
+  // same prerequisite reason they used to lead — connecting a model (or running
+  // a demo) needs egress.
+  it("footer renders 'Next: Integrations' on the environment step and calls onSelect(\"integrations\")", async () => {
     const onSelect = vi.fn();
     renderLayout({ current: "environment", onSelect });
-    const nextBtn = screen.getByRole("button", { name: /^next: host proxy$/i });
+    const nextBtn = screen.getByRole("button", { name: /^next: integrations$/i });
     await user.click(nextBtn);
-    expect(onSelect).toHaveBeenCalledWith("host_proxy");
+    expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 
-  // No phase is collapsible any more (the corporate group was the only one), so the
-  // phase-level skip control never renders — the corporate steps are simply optional
-  // steps you click past, exactly like the model step.
+  // No phase is collapsible in the 9-step rail, so the phase-level skip control
+  // never renders — every optional step (including Integrations) is simply one
+  // you click past, with its own in-step skip control instead.
   it("offers no phase-level skip control now that no phase is collapsible", () => {
-    renderLayout({ current: "host_proxy" });
+    renderLayout({ current: "integrations" });
     expect(screen.queryByRole("button", { name: /skip corporate network/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^skip .* network$/i })).not.toBeInTheDocument();
   });
@@ -82,7 +84,7 @@ describe("SetupLayout", () => {
   });
 });
 
-describe("Optional chip — set-exact across all ten steps", () => {
+describe("Optional chip — set-exact across all nine steps", () => {
   for (const step of STEP_ORDER) {
     it(`${OPTIONAL_STEPS.has(step) ? "shows" : "hides"} the Optional chip on ${step}`, () => {
       renderLayout({ current: step });

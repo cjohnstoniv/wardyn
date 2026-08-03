@@ -73,7 +73,10 @@ describe("DemoScreen", () => {
 
   it("shows the harness demo card, with Start enabled, once a model is connected", async () => {
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+      baseStatus({
+        ready: true,
+        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+      }),
     );
     renderScreen();
     const harness = DEMOS.find((d) => d.needsModel)!;
@@ -83,7 +86,10 @@ describe("DemoScreen", () => {
 
   it("Start on the harness demo posts an interactive run (the operator drives the agent)", async () => {
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ ready: true, providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+      baseStatus({
+        ready: true,
+        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+      }),
     );
     renderScreen();
     const harness = DEMOS.find((d) => d.needsModel)!;

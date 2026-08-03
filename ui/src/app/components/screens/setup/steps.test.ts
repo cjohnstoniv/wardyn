@@ -6,16 +6,7 @@
 import { describe, it, expect } from "vitest";
 import type { SetupStatus, Workspace, WorkspaceStatus } from "../../../lib/types";
 import { deriveReadiness } from "../onboarding/intro";
-import {
-  DEMO_STEP_IDS,
-  PHASES,
-  STEP_HEADING,
-  STEP_LABEL,
-  STEP_ORDER,
-  siteConfigBadge,
-  stepBadges,
-  stepDone,
-} from "./steps";
+import { DEMO_STEP_IDS, PHASES, STEP_HEADING, STEP_LABEL, STEP_ORDER, stepBadges, stepDone } from "./steps";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
@@ -39,15 +30,25 @@ function ws(id: string, status: WorkspaceStatus): Workspace {
   };
 }
 
-describe("credentials — always Optional, never done (honesty law)", () => {
-  it("stays Optional/false even when a git credential is present", () => {
-    const status = baseStatus({ secrets: { present: ["git-pat-github-com"], github_app: true } });
+describe("integrations badge — Optional -> Ready · N connected (Skipped is an orchestrator override)", () => {
+  it("reads Optional/false with zero connected integrations", () => {
+    const status = baseStatus();
     const readiness = deriveReadiness(status);
-    expect(stepBadges(status, readiness, [], null).credentials).toEqual({
+    expect(stepBadges(status, readiness, [], 0).integrations).toEqual({
       text: "Optional",
       tone: "neutral",
     });
-    expect(stepDone(status, readiness, [], null).credentials).toBe(false);
+    expect(stepDone(status, readiness, [], 0).integrations).toBe(false);
+  });
+
+  it("reads 'Ready · N connected' and done=true once the count is > 0", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    expect(stepBadges(status, readiness, [], 3).integrations).toEqual({
+      text: "Ready · 3 connected",
+      tone: "success",
+    });
+    expect(stepDone(status, readiness, [], 3).integrations).toBe(true);
   });
 });
 
@@ -56,8 +57,8 @@ describe("demos — advisory in the pure fns (per-demo checkmark is applied at t
     const status = baseStatus({ has_runs: true });
     const readiness = deriveReadiness(status);
     for (const id of DEMO_STEP_IDS) {
-      expect(stepBadges(status, readiness, [], null)[id]).toEqual({ text: "Optional", tone: "neutral" });
-      expect(stepDone(status, readiness, [], null)[id]).toBe(false);
+      expect(stepBadges(status, readiness, [], 0)[id]).toEqual({ text: "Optional", tone: "neutral" });
+      expect(stepDone(status, readiness, [], 0)[id]).toBe(false);
     }
   });
 });
@@ -66,11 +67,11 @@ describe("environment badge", () => {
   it("reads amber 'Needs setup' (not ready-toned) when zero barriers are ready", () => {
     const status = baseStatus({ runner: { driver: "docker", confinement_classes: [] } });
     const readiness = deriveReadiness(status);
-    expect(stepBadges(status, readiness, [], null).environment).toEqual({
+    expect(stepBadges(status, readiness, [], 0).environment).toEqual({
       text: "Needs setup",
       tone: "warning",
     });
-    expect(stepDone(status, readiness, [], null).environment).toBe(false);
+    expect(stepDone(status, readiness, [], 0).environment).toBe(false);
   });
 });
 
@@ -79,30 +80,40 @@ describe("workspaces badge", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const workspaces = [ws("w1", "ready"), ws("w2", "ready")];
-    expect(stepBadges(status, readiness, workspaces, null).workspaces).toEqual({
+    expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
       text: "Ready · 2 onboarded",
       tone: "success",
     });
-    expect(stepDone(status, readiness, workspaces, null).workspaces).toBe(true);
+    expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(true);
   });
 
   it("shows an info-tone 'In progress' and done=false with only a pending workspace", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
     const workspaces = [ws("w1", "pending_scan")];
-    expect(stepBadges(status, readiness, workspaces, null).workspaces).toEqual({
+    expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
       text: "In progress",
       tone: "info",
     });
-    expect(stepDone(status, readiness, workspaces, null).workspaces).toBe(false);
+    expect(stepDone(status, readiness, workspaces, 0).workspaces).toBe(false);
   });
 
   it("shows 'Optional' with no workspaces at all", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    expect(stepBadges(status, readiness, [], null).workspaces).toEqual({
+    expect(stepBadges(status, readiness, [], 0).workspaces).toEqual({
       text: "Optional",
       tone: "neutral",
+    });
+  });
+
+  it("reads 'Ready · 1 of 2 onboarded' when one of two is still importing", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const workspaces = [ws("a", "ready"), ws("b", "pending_scan")];
+    expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
+      text: "Ready · 1 of 2 onboarded",
+      tone: "success",
     });
   });
 });
@@ -115,45 +126,10 @@ describe("environment done — barrier-only, matching its badge", () => {
     const readiness = deriveReadiness(status);
     // Badge and dot read the same barrier-only signal — no green badge with a
     // blank dot.
-    expect(stepBadges(status, readiness, [], null).environment.tone).toBe("success");
-    expect(stepDone(status, readiness, [], null).environment).toBe(true);
+    expect(stepBadges(status, readiness, [], 0).environment.tone).toBe("success");
+    expect(stepDone(status, readiness, [], 0).environment).toBe(true);
     // review still rolls the failure up.
-    expect(stepDone(status, readiness, [], null).review).toBe(false);
-  });
-});
-
-describe("corporate done — same SiteConfig predicate as the badge", () => {
-  it("badge and rail dot agree: done flips exactly when the step's field is set", () => {
-    const status = baseStatus();
-    const r = deriveReadiness(status);
-    expect(stepDone(status, r, [], null).host_proxy).toBe(false);
-    expect(stepDone(status, r, [], null).scm_provider).toBe(false);
-    expect(stepDone(status, r, [], null).artifact_repo).toBe(false);
-
-    const cfg = {
-      upstream_proxy_secret_ref: "corp-proxy",
-      scm_hosts: ["github.example.com"],
-      artifact_overrides: { npm: { base_url: "https://artifactory.example.com/npm" } },
-    };
-    const done = stepDone(status, r, [], cfg);
-    expect(done.host_proxy).toBe(true);
-    expect(done.scm_provider).toBe(true);
-    expect(done.artifact_repo).toBe(true);
-    expect(siteConfigBadge(cfg, "host_proxy").text).toBe("Configured");
-  });
-});
-
-describe("host_proxy — Configured only once the SiteConfig field is set", () => {
-  it("reads Optional with no SiteConfig", () => {
-    expect(siteConfigBadge(null, "host_proxy")).toEqual({ text: "Optional", tone: "neutral" });
-    expect(siteConfigBadge({}, "host_proxy")).toEqual({ text: "Optional", tone: "neutral" });
-  });
-
-  it("reads Configured once upstream_proxy_secret_ref is set", () => {
-    expect(siteConfigBadge({ upstream_proxy_secret_ref: "corp-proxy" }, "host_proxy")).toEqual({
-      text: "Configured",
-      tone: "success",
-    });
+    expect(stepDone(status, readiness, [], 0).review).toBe(false);
   });
 });
 
@@ -161,60 +137,41 @@ describe("frozen contract — ids, labels, headings, order", () => {
   it("pins the frozen step ids and labels (e2e clicks `Next: {label}`)", () => {
     expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
-      ["provider", "Model/Harness Provider"],
+      ["integrations", "Integrations"],
       // The four Demos sub-steps — labels come from the demo catalog titles.
       ["sealed-box", "The sealed box"],
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
       ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
-      ["host_proxy", "Host Proxy"],
-      ["scm_provider", "SCM Provider"],
-      ["artifact_repo", "Artifact Redirect"],
       ["workspaces", "Workspaces"],
-      ["credentials", "Credentials"],
       ["review", "Review"],
       ["launch", "Launch"],
     ]);
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
+    expect(STEP_HEADING.integrations).toBe("Connect what's outside Wardyn");
   });
 
-  // Prerequisite ordering, twice over:
-  //  · the corporate-network steps sit INSIDE Essentials, BEFORE the model step —
-  //    connecting a model needs egress, and the demos need it too, so meeting them
-  //    later turns an unconfigured proxy into an apparent Wardyn failure.
-  //  · within Your work, credentials precede workspaces — onboarding a private
-  //    repo needs the git credential to clone.
-  it("pins STEP_ORDER to the phase walk (prerequisites first: proxy before model, credentials before workspaces)", () => {
+  // 13 -> 9 collapse: provider/host_proxy/scm_provider/artifact_repo/credentials
+  // are gone (their configuration now lives on /integrations); `integrations`
+  // is the one new step, right after Environment for the same prerequisite
+  // reason the corporate-network steps used to lead the model step — a demo or
+  // a connected model needs egress.
+  it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
-      "host_proxy",
-      "artifact_repo",
-      "provider",
+      "integrations",
       "sealed-box",
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
-      "scm_provider",
-      "credentials",
       "workspaces",
       "review",
       "launch",
     ]);
+    expect(STEP_ORDER).toHaveLength(9);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // The four Demos sub-steps ARE the demos phase, in catalog order.
     expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);
-  });
-});
-
-describe("workspaces badge — honest partial counts", () => {
-  it("reads 'Ready · 1 of 2 onboarded' when one of two is still importing", () => {
-    const status = baseStatus();
-    const readiness = deriveReadiness(status);
-    const workspaces = [ws("a", "ready"), ws("b", "pending_scan")];
-    expect(stepBadges(status, readiness, workspaces, null).workspaces).toEqual({
-      text: "Ready · 1 of 2 onboarded",
-      tone: "success",
-    });
   });
 });
 
@@ -224,36 +181,36 @@ describe("review/launch gate — the BARRIER is the only hard requirement; a mod
     // is enough: a plain governed run / interactive run needs no model.
     const status = baseStatus({ ready: true });
     const r = deriveReadiness(status);
-    const badges = stepBadges(status, r, [], null);
+    const badges = stepBadges(status, r, [], 0);
     expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
     expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
-    expect(stepDone(status, r, [], null).review).toBe(true);
+    expect(stepDone(status, r, [], 0).review).toBe(true);
   });
 
   it("no barrier: review/launch nudge to set up the barrier first (the one requirement)", () => {
     const status = baseStatus({ ready: false, runner: { driver: "none", confinement_classes: [] } });
     const r = deriveReadiness(status);
-    const badges = stepBadges(status, r, [], null);
+    const badges = stepBadges(status, r, [], 0);
     expect(badges.review).toEqual({ text: "Set up the barrier first", tone: "neutral" });
     expect(badges.launch).toEqual({ text: "Set up the barrier first", tone: "neutral" });
-    expect(stepDone(status, r, [], null).review).toBe(false);
+    expect(stepDone(status, r, [], 0).review).toBe(false);
   });
 
   it("a connected model is a bonus, not a gate: same success texts as barrier-only", () => {
     const status = baseStatus({
       ready: true,
-      providers: [{ tool: "claude", installed: true, logged_in: true }],
+      secrets: { present: ["anthropic-api-key"], github_app: false },
     });
     const r = deriveReadiness(status);
-    const badges = stepBadges(status, r, [], null);
+    const badges = stepBadges(status, r, [], 1);
     expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
     expect(badges.launch).toEqual({ text: "Ready to launch", tone: "success" });
-    expect(stepDone(status, r, [], null).review).toBe(true);
+    expect(stepDone(status, r, [], 1).review).toBe(true);
   });
 
-  it("provider step is Optional (neutral), never a 'Needs setup' warning, when no model", () => {
+  it("integrations step is Optional (neutral), never a 'Needs setup' warning, with nothing connected", () => {
     const status = baseStatus({ ready: true });
     const r = deriveReadiness(status);
-    expect(stepBadges(status, r, [], null).provider).toEqual({ text: "Optional", tone: "neutral" });
+    expect(stepBadges(status, r, [], 0).integrations).toEqual({ text: "Optional", tone: "neutral" });
   });
 });

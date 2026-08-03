@@ -8,36 +8,28 @@
 // secret/site-config loads, and every dialog; the SHELL (header, dismissible
 // intro, fast-path banner, phase rail, host-status strip, step heading, footer
 // nav) lives in SetupLayout, the pure step bodies in ./environment-step,
-// ./llm-access, ./step-bodies, and the step/badge data in ./steps.
+// ./integrations-step, ./step-bodies, and the step/badge data in ./steps.
 //
 // Read-only against GET /api/v1/setup/status (the FROZEN SetupStatus contract in
-// lib/types.ts) except for the setSecret()/putSiteConfig() writes each step body
-// owns. It is the MANDATORY first-run gate — there is no early escape; see
+// lib/types.ts) and GET /site-config — every write (secrets, SiteConfig,
+// integrations) now happens inside the embedded Integrations step's own dialogs,
+// not here. It is the MANDATORY first-run gate — there is no early escape; see
 // App.tsx's RequireSetupComplete for everything that clears it.
 import * as React from "react";
 import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
+import { allRows, deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
-import { AddSecretDialog } from "../secrets";
 import { NewRunDialog } from "../new-run/new-run-dialog";
-import { SetupGuideDialog, type SetupGuide } from "./setup-guide";
 import { deriveReadiness, lastCheckedLabel } from "../onboarding/intro";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
-import { ModelStep } from "./llm-access";
-import {
-  ArtifactRepoStep,
-  CredentialsStep,
-  HostProxyStep,
-  LaunchStep,
-  ReviewStep,
-  WorkspacesStep,
-} from "./step-bodies";
-import { ScmProviderStep } from "./scm-provider-step";
+import { IntegrationsStep } from "./integrations-step";
+import { LaunchStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import { DEMO_STEP_IDS, OPTIONAL_STEPS, STEP_ORDER, stepBadges, stepDone, type SetupStepId } from "./steps";
 import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 
@@ -47,10 +39,10 @@ import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 export { dismissSetup, setupDismissed } from "./setup-gate";
 import {
   dismissSetup,
+  integrationsSkipped,
   loadVisitedSteps,
-  markModelSkipped,
+  markIntegrationsSkipped,
   markStepVisited,
-  modelSkipped,
 } from "./setup-gate";
 
 // Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.
@@ -76,10 +68,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [launchedDemos, setLaunchedDemos] = React.useState<Set<string>>(
     () => new Set(loadLaunchedDemos()),
   );
-  // The operator explicitly skipped the (optional) model/harness step — earns it a
-  // checkmark without a connected model. Per-browser (setup-gate); a real model
-  // supersedes it.
-  const [skippedModel, setSkippedModel] = React.useState(modelSkipped());
+  // The operator explicitly skipped the (optional) Integrations step — earns it
+  // a checkmark with nothing connected. Per-browser (setup-gate); a real
+  // connected integration supersedes it. Generalized from the old per-step
+  // "model-skipped" flag now that the provider picker lives inside Integrations.
+  const [skippedIntegrations, setSkippedIntegrations] = React.useState(integrationsSkipped());
   // Steps navigated AWAY from at least once (per browser) — feeds the rail's
   // "Skipped" badge override below. See selectStep for what counts as leaving.
   const [visitedSteps, setVisitedSteps] = React.useState<Set<SetupStepId>>(
@@ -87,14 +80,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   );
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const { workspaces, loading: wsLoading, reload: loadWorkspaces } = useWorkspaceList();
-  // Site config powers the corporate-baseline step badges: the backend's own
-  // host_proxy/scm/artifact checks stay hardcoded "info" forever, so the rail badge
-  // must read the actual SiteConfig fields those steps edit, not the check status.
+  // Site config feeds the Integrations step's own derivation (SCM/mirror/proxy
+  // rows) — read-only here now that the three corporate-baseline steps that
+  // used to write it (Host Proxy / SCM Provider / Artifact Redirect) are gone
+  // from the funnel; they're embedded in the Integrations "Add integration"
+  // dialog instead, which owns its own local copy for editing.
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
-  const [addSecretOpen, setAddSecretOpen] = React.useState(false);
-  const [addSecretName, setAddSecretName] = React.useState("");
   const [newRunOpen, setNewRunOpen] = React.useState(false);
-  const [guide, setGuide] = React.useState<SetupGuide | null>(null);
   // Default-barrier pick (E3). Null until an explicit click — until then the
   // effective selection is the resolved default (persisted pick if this host runs
   // it, else strongest available). Clicking a ready card both selects and persists.
@@ -121,23 +113,21 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     [stepId],
   );
 
-  // Sole SiteConfig owner (V2): the orchestrator holds the one fetched copy and
-  // hands the three corp steps a reload + save pair instead of each keeping its
-  // own mount-time GET synced back up via a callback prop.
+  // Read-only fetch — the orchestrator only needs SiteConfig to derive the
+  // Integrations badge count; every WRITE to it now happens inside the
+  // embedded Integrations step's own "Add integration" dialog, which keeps
+  // its own local copy (see integrations/add-integration-dialog.tsx).
   const reloadSiteConfig = React.useCallback(() => {
     return healthApi.getSiteConfig().then(setSiteConfig).catch(() => {});
   }, []);
 
-  const saveSiteConfig = React.useCallback((next: SiteConfig) => {
-    return healthApi.putSiteConfig(next).then(() => setSiteConfig(next));
-  }, []);
-
   const recheck = React.useCallback(() => {
     setRechecking(true);
-    // Load/resync the corporate-baseline SiteConfig (F2): the rail "Configured"
-    // badges read siteConfig state, so mount (via this recheck) and every manual
-    // Re-check pull it — a failure leaves the last-known config (or the initial
-    // null) in place, never clobbers it. This is the ORCHESTRATOR'S sole GET path.
+    // Resync SiteConfig too (F2): the rail's Integrations badge count is
+    // derived from it (via deriveIntegrations), so mount (via this recheck)
+    // and every manual Re-check pull it — a failure leaves the last-known
+    // config (or the initial null) in place, never clobbers it. This is the
+    // ORCHESTRATOR'S sole GET path.
     reloadSiteConfig();
     return setupApi
       .getSetupStatus()
@@ -166,11 +156,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     dismissSetup();
     onDone();
   }, [onDone]);
-
-  const openAddSecret = (name: string) => {
-    setAddSecretName(name);
-    setAddSecretOpen(true);
-  };
 
   const readiness = status ? deriveReadiness(status) : null;
   // Effective default-barrier selection: the explicit click if any, else the
@@ -225,8 +210,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     );
   }
 
-  const badges = stepBadges(status, readiness, workspaces, siteConfig);
-  const done = stepDone(status, readiness, workspaces, siteConfig);
+  // The one number the rail's Integrations badge and the embedded step body
+  // both need — the same rows /integrations itself derives (lib/api/
+  // integrations.ts), so the funnel can never disagree with that page.
+  const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
+  const integrationsCount = allRows(integrationsData).length;
+  const badges = stepBadges(status, readiness, workspaces, integrationsCount);
+  const done = stepDone(status, readiness, workspaces, integrationsCount);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
   for (const id of DEMO_STEP_IDS) {
@@ -235,22 +225,21 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       badges[id] = { text: "Done · demo run", tone: "success" };
     }
   }
-  // An explicitly-skipped (optional) model step earns its checkmark — a deliberate
-  // "no model" decision reads as done, not as an unfinished "Optional". A real
-  // connected model (llmReady) always wins and shows its own "Ready" badge.
-  if (!readiness.llmReady && skippedModel) {
-    done.provider = true;
-    badges.provider = { text: "Skipped", tone: "neutral" };
+  // An explicitly-skipped (optional) Integrations step earns its checkmark — a
+  // deliberate "nothing connected" decision reads as done, not as an unfinished
+  // "Optional". A real connected integration always wins and shows its own
+  // "Ready · N connected" badge (stepBadges/stepDone already handle that case).
+  if (integrationsCount === 0 && skippedIntegrations) {
+    done.integrations = true;
+    badges.integrations = { text: "Skipped", tone: "neutral" };
   }
   // A4: an optional step the operator navigated away from without configuring it
   // reads "Skipped" instead of a perpetual, un-acted-on "Optional" — a neutral
   // "you saw this and moved on" marker. Scoped to the exact still-default badge
   // (neutral "Optional") so anything the two overrides above (or stepBadges/
   // stepDone themselves) already upgraded — Done · demo run, a connected
-  // model's Ready, workspaces' In progress, a Configured corporate step — wins
-  // outright and is left alone. Never sets `done`: Skipped is a visited marker,
-  // not a checkmark (credentials, honesty-pinned done:false forever, is the
-  // clearest case — it can only ever go Optional -> Skipped, never Configured).
+  // integration's Ready, workspaces' In progress — wins outright and is left
+  // alone.
   for (const id of OPTIONAL_STEPS) {
     if (
       visitedSteps.has(id) &&
@@ -286,23 +275,19 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             rechecking={rechecking}
           />
         )}
-        {stepId === "provider" && (
-          <ModelStep
-            status={status}
-            readiness={readiness}
-            skipped={skippedModel}
-            onAddSecret={openAddSecret}
-            onSetup={setGuide}
-            onRecheck={recheck}
-            rechecking={rechecking}
+        {stepId === "integrations" && (
+          <IntegrationsStep
+            count={integrationsCount}
+            skipped={skippedIntegrations}
             onSkip={() => {
-              markModelSkipped();
-              setSkippedModel(true);
+              markIntegrationsSkipped();
+              setSkippedIntegrations(true);
               // Advance past the (now-decided) optional step.
-              const i = STEP_ORDER.indexOf("provider");
+              const i = STEP_ORDER.indexOf("integrations");
               const nextStep = STEP_ORDER[i + 1];
               if (nextStep) selectStep(nextStep);
             }}
+            onRecheck={recheck}
           />
         )}
         {DEMOS.some((d) => d.id === stepId) && (
@@ -317,41 +302,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             />
           </React.Suspense>
         )}
-        {stepId === "host_proxy" && (
-          <HostProxyStep
-            status={status}
-            siteConfig={siteConfig}
-            reloadSiteConfig={reloadSiteConfig}
-            saveSiteConfig={saveSiteConfig}
-            onAddSecret={openAddSecret}
-            onRecheck={recheck}
-            rechecking={rechecking}
-          />
-        )}
-        {stepId === "scm_provider" && (
-          <ScmProviderStep
-            status={status}
-            siteConfig={siteConfig}
-            reloadSiteConfig={reloadSiteConfig}
-            saveSiteConfig={saveSiteConfig}
-            onRecheck={recheck}
-            rechecking={rechecking}
-          />
-        )}
-        {stepId === "artifact_repo" && (
-          <ArtifactRepoStep
-            status={status}
-            siteConfig={siteConfig}
-            reloadSiteConfig={reloadSiteConfig}
-            saveSiteConfig={saveSiteConfig}
-            onRecheck={recheck}
-            rechecking={rechecking}
-          />
-        )}
         {stepId === "workspaces" && (
           <WorkspacesStep workspaces={workspaces} loading={wsLoading} onReload={loadWorkspaces} />
         )}
-        {stepId === "credentials" && <CredentialsStep onJump={selectStep} />}
         {stepId === "review" && (
           <ReviewStep
             status={status}
@@ -373,16 +326,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         )}
       </SetupLayout>
 
-      <AddSecretDialog
-        open={addSecretOpen}
-        onOpenChange={setAddSecretOpen}
-        existingNames={secretNames}
-        initialName={addSecretName}
-        onSaved={() => {
-          loadSecrets();
-          recheck();
-        }}
-      />
       <NewRunDialog
         open={newRunOpen}
         onOpenChange={setNewRunOpen}
@@ -390,12 +333,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           dismissSetup();
           onDone();
         }}
-      />
-      <SetupGuideDialog
-        guide={guide}
-        onClose={() => setGuide(null)}
-        onRecheck={recheck}
-        rechecking={rechecking}
       />
     </>
   );

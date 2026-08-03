@@ -5,10 +5,10 @@
 
 // Pure data layer for the Getting Started funnel. Holds the frozen step
 // ids/labels (e2e tests target them), the phase grouping the rail renders, and
-// the honest per-step badge/done derivation the orchestrator reads. Two
-// badge-semantics deltas from the design spec are folded in (see the
-// workspaces/credentials cases). No React here by design — data/derivation only.
-import type { SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
+// the honest per-step badge/done derivation the orchestrator reads. One
+// badge-semantics delta from the design spec is folded in (see the workspaces
+// case below). No React here by design — data/derivation only.
+import type { SetupStatus, Workspace } from "../../../lib/types";
 import type { Readiness } from "../onboarding/intro";
 import { DEMOS } from "../demos/demo-catalog";
 
@@ -27,17 +27,12 @@ export const DEMO_STEP_IDS = [
 ] as const;
 export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 
-export type SetupStepId =
-  | "environment"
-  | "provider"
-  | DemoStepId
-  | "host_proxy"
-  | "scm_provider"
-  | "artifact_repo"
-  | "workspaces"
-  | "credentials"
-  | "review"
-  | "launch";
+// 13 -> 9 collapse: `provider` (the two-level harness picker), `host_proxy`,
+// `scm_provider`, `artifact_repo`, and `credentials` are GONE — their
+// configuration now lives on /integrations (see ../integrations). `integrations`
+// is the one new step: an embedded, thin view of that same page, so Getting
+// Started never forks a second copy of that configuration surface.
+export type SetupStepId = "environment" | "integrations" | DemoStepId | "workspaces" | "review" | "launch";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). Scoped
@@ -52,33 +47,25 @@ const DEMO_TITLES = Object.fromEntries(
 // here instead of each rebuilding the same map (F5).
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
-  provider: "Model/Harness Provider",
+  integrations: "Integrations",
   ...DEMO_TITLES,
-  host_proxy: "Host Proxy",
-  scm_provider: "SCM Provider",
-  artifact_repo: "Artifact Redirect",
   workspaces: "Workspaces",
-  credentials: "Credentials",
   review: "Review",
   launch: "Launch",
 };
 
 export const STEP_HEADING: Record<SetupStepId, string> = {
   environment: "Pick your barrier",
-  provider: "Connect a model or agent harness",
+  integrations: "Connect what's outside Wardyn",
   ...DEMO_TITLES,
-  host_proxy: "Corporate host proxy",
-  scm_provider: "Source control provider",
-  artifact_repo: "Artifact registry redirection",
   workspaces: "Onboard a workspace",
-  credentials: "Repo & cloud credentials",
   review: "Review readiness",
   launch: "Launch your first run",
 };
 
 // ------------------------------------------------------------
 // Phases (redesign) — groups the FROZEN steps above for the collapsible funnel
-// layout. Translated 1:1 from the design's PHASES onto the real ids above.
+// layout. Translated 1:1 from the design's PHASES9 onto the real ids above.
 // ------------------------------------------------------------
 export interface PhaseDef {
   id: string;
@@ -88,39 +75,27 @@ export interface PhaseDef {
   collapsible?: boolean;
 }
 
-// Walk order: essentials → demos → your work → finish.
-//
-// The two corporate-network steps live INSIDE Essentials, before the model step,
-// rather than in their own collapsible section. Reason: they are prerequisites for
-// the things that follow, not a niche detour. Connecting a model/harness needs
-// egress (you cannot reach Anthropic/OpenAI/AWS through an unconfigured corporate
-// proxy), and every demo launches a real sandbox that must reach the network — so
-// an operator behind a proxy who meets those later would read an environmental
-// failure as "Wardyn is broken". Both stay in OPTIONAL_STEPS, so everyone else
-// clicks straight past them exactly like the (optional) model step.
-// Step ids/labels above remain frozen — only the phase composition (and therefore
-// STEP_ORDER) moves.
+// Walk order: essentials → demos → your work → finish. Integrations sits right
+// after Environment in Essentials — it carries what used to be three separate
+// prerequisite steps (host proxy / SCM host / artifact mirror) plus the model
+// picker, and the same prerequisite reasoning that put those ahead of the model
+// step still holds: a demo or a connected model needs egress, so an operator
+// behind an unconfigured corporate proxy who meets that later reads an
+// environmental failure as "Wardyn is broken". The conditional proxy-detected
+// banner that used to be the host_proxy step's own check now lives in the
+// embedded integrations list itself (T.PROXY_BANNER) — see integrations-step.tsx.
 export const PHASES: PhaseDef[] = [
-  {
-    id: "essentials",
-    label: "Essentials",
-    steps: ["environment", "host_proxy", "artifact_repo", "provider"],
-  },
+  { id: "essentials", label: "Essentials", steps: ["environment", "integrations"] },
   { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
-  // Within Your work, SCM provider + credentials precede Workspaces for the same
-  // prerequisite reason: onboarding a PRIVATE repo needs the git credential to
-  // clone, so meeting Credentials after Workspaces means hitting an auth failure
-  // that reads as a Wardyn bug. Credentials stays here (not in Essentials) because
-  // nothing earlier needs it — the model step uses model credentials, and the
-  // demos are deliberately keyless.
-  { id: "work", label: "Your work", steps: ["scm_provider", "credentials", "workspaces"] },
+  { id: "work", label: "Your work", steps: ["workspaces"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
 ];
 
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
 
 // First step of the phase AFTER the given phase id (or null if it's the last) —
-// powers the "skip this section" control for the collapsible corporate phase.
+// powers the "skip this section" control for a collapsible phase. No phase is
+// collapsible in the 9-step rail today; kept for the layout that reads it.
 export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
   const i = PHASES.findIndex((p) => p.id === phaseId);
   return i >= 0 ? (PHASES[i + 1]?.steps[0] ?? null) : null;
@@ -130,58 +105,30 @@ export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
 // Essentials and two Finish steps). Exported so the layout and its test share
 // one list instead of each hardcoding the same membership.
 export const OPTIONAL_STEPS = new Set<SetupStepId>([
-  // A model/harness provider is OPTIONAL — it's only needed for the AI Composer
-  // or a managed agent harness. A run works with no model (you drive it, or bring
-  // your own container), so the barrier (Environment) is the sole hard requirement.
-  "provider",
+  // Integrations is OPTIONAL — every category it covers (model/harness, SCM
+  // host, artifact mirror, host proxy) is itself skippable; Wardyn runs with
+  // none of them connected. The barrier (Environment) is the sole hard
+  // requirement.
+  "integrations",
   ...DEMO_STEP_IDS,
-  "host_proxy",
-  "scm_provider",
-  "artifact_repo",
   "workspaces",
-  "credentials",
 ]);
 
 // ------------------------------------------------------------
 // Honest per-step badges (B4) — reflect reality, never a false "Done".
-// stepBadges / stepDone / siteConfigBadge carry two design deltas (see the
-// workspaces/credentials cases below for exactly what they are and why).
+// stepBadges/stepDone carry one design delta (see the workspaces case below).
 // ------------------------------------------------------------
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
-
-// Badge for a corporate-baseline step (Host Proxy / SCM Provider / Artifact
-// Redirect): always non-blocking (B8-style). host_proxy/artifact_repo are
-// hardcoded "info"-tier; scm_provider is GRADED (ok for a GitHub App, warn for
-// a standing ssh-key-* secret, info otherwise — scmProviderCheck in
-// internal/api/setup.go) but still never gates readiness. The badge derives
-// readiness client-side from the actual SiteConfig field each step's own body
-// edits — the honest default stays a neutral "Optional" nudge until that
-// field is genuinely set; the graded check row carries the safety framing.
-export function siteConfigConfigured(
-  cfg: SiteConfig | null,
-  checkId: "host_proxy" | "scm_provider" | "artifact_repo",
-): boolean {
-  return checkId === "host_proxy"
-    ? !!cfg?.upstream_proxy_secret_ref
-    : checkId === "scm_provider"
-      ? !!cfg?.scm_hosts?.length
-      : !!cfg?.artifact_overrides && Object.keys(cfg.artifact_overrides).length > 0;
-}
-
-export function siteConfigBadge(
-  cfg: SiteConfig | null,
-  checkId: "host_proxy" | "scm_provider" | "artifact_repo",
-): StepBadge {
-  return siteConfigConfigured(cfg, checkId)
-    ? { text: "Configured", tone: "success" }
-    : { text: "Optional", tone: "neutral" };
-}
 
 export function stepBadges(
   status: SetupStatus,
   r: Readiness,
   workspaces: Workspace[],
-  siteConfig: SiteConfig | null,
+  // Count of connected integrations (any category) — see
+  // lib/api/integrations.ts's allRows(). The orchestrator owns fetching the
+  // integrations data (siteConfig + secret names) this count derives from;
+  // this pure function only needs the resulting number.
+  integrationsCount: number,
 ): Record<SetupStepId, StepBadge> {
   const readyWorkspaces = workspaces.filter((w) => w.status === "ready").length;
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
@@ -194,13 +141,14 @@ export function stepBadges(
     environment: r.barrierReady
       ? { text: `Ready · ${r.barrierCount} of 3 barriers`, tone: "success" }
       : { text: "Needs setup", tone: "warning" },
-    provider: r.llmReady
-      ? { text: r.llmLabel ? `Ready · ${r.llmLabel}` : "Ready", tone: "success" }
-      : { text: "Optional", tone: "neutral" },
+    // Ladder: Optional -> Skipped (visited, left unconfigured — applied by the
+    // orchestrator's generic visited-steps override, see setup-screen.tsx) ->
+    // Ready · N connected.
+    integrations:
+      integrationsCount > 0
+        ? { text: `Ready · ${integrationsCount} connected`, tone: "success" }
+        : { text: "Optional", tone: "neutral" },
     ...demoBadges,
-    host_proxy: siteConfigBadge(siteConfig, "host_proxy"),
-    scm_provider: siteConfigBadge(siteConfig, "scm_provider"),
-    artifact_repo: siteConfigBadge(siteConfig, "artifact_repo"),
     // Count only READY workspaces, not merely onboarded ones — a workspace stuck
     // mid-import isn't attachable to a run yet, so it earns its own honest "In
     // progress" state instead of a premature green "Ready · N onboarded".
@@ -217,7 +165,6 @@ export function stepBadges(
       : workspaces.length
         ? { text: "In progress", tone: "info" }
         : { text: "Optional", tone: "neutral" },
-    credentials: { text: "Optional", tone: "neutral" },
     // Review rolls up every check. It's "warning" only when a real blocker exists
     // (a failing check), else a neutral/green summary — the readiness verdict, not
     // a per-topic nag (those live on their own steps now). The one hard requirement
@@ -241,7 +188,7 @@ export function stepDone(
   status: SetupStatus,
   r: Readiness,
   workspaces: Workspace[],
-  siteConfig: SiteConfig | null,
+  integrationsCount: number,
 ): Record<SetupStepId, boolean> {
   // Demos: advisory here (all false). The orchestrator ORs in the per-browser
   // "launched demos" set to earn each demo's checkmark — kept out of this pure fn
@@ -255,23 +202,15 @@ export function stepDone(
     // reads. An unrelated failing check must not blank this dot while the badge
     // stays green (Review owns the whole-checks rollup).
     environment: r.barrierReady,
-    provider: r.llmReady,
+    // An explicit "Skip this step" click (see setup-gate's markIntegrationsSkipped)
+    // ORs in from the orchestrator, exactly like the old model-skip override —
+    // this pure fn only knows about a real connected integration.
+    integrations: integrationsCount > 0,
     ...demoDone,
-    // Corporate baseline: done derives from the SAME SiteConfig predicate as the
-    // badge (siteConfigConfigured), so the green "Configured" badge and the rail
-    // checkmark can never disagree. Still honest — the value read is the actual
-    // saved config the step's own body edits, not an inferred guess.
-    host_proxy: siteConfigConfigured(siteConfig, "host_proxy"),
-    scm_provider: siteConfigConfigured(siteConfig, "scm_provider"),
-    artifact_repo: siteConfigConfigured(siteConfig, "artifact_repo"),
     // Design delta: done only once a workspace is actually READY, matching the
     // badge above — merely onboarding one (still scanning/building/verifying)
     // no longer earns the stepper checkmark.
     workspaces: workspaces.some((w) => w.status === "ready"),
-    // Honesty law: credentials is hard-pinned to false, full stop. This step is
-    // advisory-only — a git PAT/GitHub App never earns it a checkmark, so it can
-    // never visually imply it's required or that it gates readiness.
-    credentials: false,
     // Barrier is the only hard requirement; a model is optional (skippable), so
     // Review is done once the barrier is up and no check is failing.
     review: r.ready && !status.checks.some((c) => c.status === "fail"),

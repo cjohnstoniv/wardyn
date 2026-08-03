@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../ui/utils";
 import type { SetupStatus } from "../../../lib/types";
+import { deriveIntegrations, defaultHolder, type IntegrationRow } from "../../../lib/api/integrations";
 
 // The single honest one-liner shown under the Welcome hero and in the funnel
 // shell's intro panel. Platform-first: coding agents are the flagship use, not
@@ -85,27 +86,52 @@ export function HowItWorksStrip() {
 // Readiness derivation from the REAL SetupStatus (B3/B6). barrierCount drives
 // the honest "N of 3 barriers" badge; llmReady/composerReady drive the readiness
 // chips and fast-path. Credentials are deliberately excluded (B8).
+//
+// llmReady/llmLabel/composerReady read the SAME rows /integrations itself
+// derives (lib/api/integrations.ts) instead of a bespoke heuristic over raw
+// SetupStatus fields — one source of truth, so a row that reads "Configured"
+// on the Integrations page can never disagree with the funnel. AI rows never
+// depend on SiteConfig (only SCM/mirror/proxy rows do), so `null` is the right
+// siteConfig to pass into deriveIntegrations here.
+//
+// Honesty guard (unchanged in effect from the old five-way hasLlmPath): a
+// `wire: "fake"` composer backend — the default `make setup` demo config —
+// can never satisfy either check below. deriveAiRows only ever reads
+// status.composer.backends for the Azure provider; every other AI row comes
+// from a real secret, a captured harness login, or Bedrock config. A `fake`
+// backend matches none of those, so it never becomes a row in the first
+// place — counting it would render a green readiness for a config with no
+// model behind it. Do not "fix" this by falling back to raw
+// status.composer.backends.
 // ---------------------------------------------------------------------------
+const AGENT_TOOL_CAPABILITY = /Claude Code|Codex/;
+const WARDYN_FEATURES_CAPABILITY = /^Wardyn features/;
+
+function aiIntegrationRows(status: SetupStatus): IntegrationRow[] {
+  return deriveIntegrations(status, null, status.secrets.present).ai;
+}
+
+// A row's credential is genuinely usable — excludes Bedrock/Azure's
+// region/model-incomplete posture (IntegrationRow's "region_model_unset").
+// Every other AI row deriveAiRows produces is only ever created once its
+// credential is actually present, so this only ever excludes something for
+// those two types.
+function credentialResolved(row: IntegrationRow): boolean {
+  return row.posture.kind !== "region_model_unset";
+}
+
+function agentCapableRows(rows: IntegrationRow[]): IntegrationRow[] {
+  return rows.filter(
+    (r) => credentialResolved(r) && r.chips.some((c) => !c.muted && AGENT_TOOL_CAPABILITY.test(c.label)),
+  );
+}
+
+// Whether a coding agent (Claude Code / Codex CLI) has somewhere to call —
+// ≥1 integration with an agent-tool capability ON and a resolved credential.
+// Used directly by callers that only need the boolean (import-panel.tsx,
+// record-pane.tsx's model-readiness warning) without the rest of Readiness.
 export function hasLlmPath(status: SetupStatus): boolean {
-  if (status.providers.some((p) => p.logged_in)) return true;
-  // A Wardyn-managed subscription (captured via container login) is real model
-  // access even with no resident host login — the compose-mode path.
-  if (status.harness?.some((h) => h.captured)) return true;
-  if (status.secrets.present.some((n) => /anthropic|openai|api[-_]?key/i.test(n))) return true;
-  // Honesty guard (mirrors the backend's llmProvenance): a `fake` composer
-  // backend resolves trivially but calls NO model, so it is not real LLM access.
-  // Counting it would render "LLM ✓ / Composer backend ready" for the default
-  // `make setup` demo config, which has no model behind it.
-  if (status.composer.backends.some((b) => b.key_resolved && b.wire !== "fake")) return true;
-  // AWS Bedrock is a first-class model path (bearer / access-key / ~/.aws mount).
-  // Mirror llm-access.tsx's bedrockReady so the funnel-wide readiness AGREES with
-  // the model step — previously a Bedrock-ready host showed "Connected" on the
-  // model step while the whole funnel read "Needs setup" (split-brain).
-  const b = status.bedrock;
-  if (b && (b.ready ?? (!!b.region && !!b.model && (b.creds_present || !!b.aws_mount || !!b.bearer_present)))) {
-    return true;
-  }
-  return false;
+  return agentCapableRows(aiIntegrationRows(status)).length > 0;
 }
 
 export interface Readiness {
@@ -121,24 +147,25 @@ export interface Readiness {
 
 export function deriveReadiness(status: SetupStatus): Readiness {
   const barrierCount = status.runner?.confinement_classes?.length ?? 0;
-  const claude = status.providers.find((p) => p.tool === "claude" && p.logged_in);
-  let llmLabel = "";
-  if (claude) llmLabel = "Claude connected";
-  else if (status.harness?.some((h) => h.provider === "anthropic" && h.captured))
-    llmLabel = "Claude connected (Wardyn-managed login)";
-  else if (status.secrets.present.some((n) => /anthropic/i.test(n))) llmLabel = "Anthropic key added";
-  else if (status.secrets.present.some((n) => /openai/i.test(n))) llmLabel = "OpenAI key added";
-  else if (status.composer.backends.some((b) => b.key_resolved && b.wire !== "fake"))
-    llmLabel = "Composer backend ready";
-  const composerReady =
-    status.composer.enabled &&
-    status.composer.backends.some((b) => b.enabled && (!b.needs_key || b.key_resolved));
+  const aiRows = aiIntegrationRows(status);
+  const agentRows = agentCapableRows(aiRows);
+  // The row that HOLDS the default for the agent-tool slot, if any type's
+  // matrix marks one (today only anthropic_api_key's Claude Code does — see
+  // defaultHolder's own W5 note in lib/api/integrations.ts); otherwise just
+  // the first connected one, since with a single integration it's trivially
+  // the default.
+  const defaultAgentRow = defaultHolder(agentRows, AGENT_TOOL_CAPABILITY) ?? agentRows[0];
+  // ≥1 integration with the Wardyn-features capability ON and a resolved
+  // credential — powers the AI Composer / Wardyn's own review features.
+  const composerReady = aiRows.some(
+    (r) => credentialResolved(r) && r.chips.some((c) => !c.muted && WARDYN_FEATURES_CAPABILITY.test(c.label)),
+  );
   return {
     ready: status.ready,
     barrierReady: barrierCount > 0,
     barrierCount,
-    llmReady: hasLlmPath(status),
-    llmLabel,
+    llmReady: agentRows.length > 0,
+    llmLabel: defaultAgentRow?.name ?? "",
     composerReady,
   };
 }

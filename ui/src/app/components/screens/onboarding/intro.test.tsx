@@ -28,59 +28,131 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
 }
 
 const fakeBackend = {
-  name: "dev", provider: "fake", model: "demo", wire: "fake",
-  enabled: true, needs_key: false, key_resolved: true,
-};
-const realBackend = {
-  name: "primary", provider: "anthropic", model: "m", wire: "anthropic",
-  enabled: true, needs_key: true, key_secret: "anthropic-api-key", key_resolved: true,
+  name: "dev",
+  provider: "fake",
+  model: "demo",
+  wire: "fake",
+  enabled: true,
+  needs_key: false,
+  key_resolved: true,
 };
 
-describe("hasLlmPath — honesty guard for the fake composer backend", () => {
+// llmReady/llmLabel/composerReady now read the same integration rows
+// /integrations itself derives (lib/api/integrations.ts) instead of a bespoke
+// heuristic over raw SetupStatus fields — see intro.tsx's own header comment
+// for why the fake-backend honesty guard survives this unchanged.
+describe("hasLlmPath — honesty guard for the fake composer backend, now via the integrations adapter", () => {
   it("does NOT count a fake-only backend as LLM access (default make setup config)", () => {
     expect(hasLlmPath(status({ composer: { enabled: true, default: "dev", backends: [fakeBackend] } }))).toBe(false);
   });
-  it("counts a real resolved backend", () => {
-    expect(hasLlmPath(status({ composer: { enabled: true, default: "primary", backends: [realBackend] } }))).toBe(true);
-  });
-  it("counts a logged-in CLI even alongside a fake backend", () => {
+
+  it("counts a logged-in CLI (auth_mode: subscription — deriveAiRows' own signal for a resident login)", () => {
     expect(
       hasLlmPath(
         status({
-          providers: [{ tool: "claude", installed: true, logged_in: true }],
+          providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
           composer: { enabled: true, default: "dev", backends: [fakeBackend] },
         }),
       ),
     ).toBe(true);
   });
+
   it("counts an anthropic key secret", () => {
     expect(hasLlmPath(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }))).toBe(true);
   });
-  it("counts a Bedrock-ready host (server-computed ready) — no split-brain with the model step", () => {
-    expect(hasLlmPath(status({ bedrock: { creds_present: false, ready: true } }))).toBe(true);
+
+  it("counts an openai key secret — Codex CLI is an agent tool too", () => {
+    expect(hasLlmPath(status({ secrets: { present: ["openai-api-key"], github_app: false } }))).toBe(true);
   });
-  it("counts a Bedrock host via the derived criteria when `ready` is absent (older daemon)", () => {
+
+  it("counts a Wardyn-managed subscription captured via container login", () => {
+    expect(hasLlmPath(status({ harness: [{ provider: "anthropic", captured: true }] }))).toBe(true);
+  });
+
+  it("counts a fully-resolved Bedrock lane (region + model + a credential source)", () => {
     expect(
       hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: true } })),
     ).toBe(true);
   });
-  it("does NOT count Bedrock with a region+model but no credential source", () => {
+
+  it("does NOT count Bedrock with no region/model set at all", () => {
+    expect(hasLlmPath(status({ bedrock: { creds_present: true } }))).toBe(false);
+  });
+
+  // Semantic shift from the old five-way heuristic: readiness now agrees with
+  // whatever /integrations itself would show for this row (posture reads
+  // "Configured" once region+model are both set — deriveAiRows doesn't
+  // separately require a credential SOURCE for that specific posture), rather
+  // than re-deriving a stricter, independent check. Single source of truth,
+  // not a split-brain with the real Integrations page.
+  it("counts Bedrock once region+model are set, even with no credential source detected yet", () => {
     expect(
       hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false } })),
+    ).toBe(true);
+  });
+
+  it("Azure never counts — X_AZURE_HARNESS is a stated fact, not a toggle (composer-only capability)", () => {
+    expect(
+      hasLlmPath(
+        status({
+          composer: {
+            enabled: true,
+            default: "az",
+            backends: [
+              { name: "az", provider: "azure", model: "gpt-4o", wire: "azure_openai", enabled: true, needs_key: true, key_secret: "azure-openai-key", key_resolved: true },
+            ],
+          },
+        }),
+      ),
     ).toBe(false);
   });
 });
 
 describe("deriveReadiness — must not overclaim a fake backend as a connected model", () => {
-  it("fake-only: llmReady false and NO 'Composer backend ready' label", () => {
+  it("fake-only: llmReady/composerReady false and no label", () => {
     const r = deriveReadiness(status({ composer: { enabled: true, default: "dev", backends: [fakeBackend] } }));
     expect(r.llmReady).toBe(false);
     expect(r.llmLabel).toBe("");
+    expect(r.composerReady).toBe(false);
   });
-  it("real backend: llmReady true with the composer label", () => {
-    const r = deriveReadiness(status({ composer: { enabled: true, default: "primary", backends: [realBackend] } }));
+
+  it("an Anthropic API key is the default agent-tool + Wardyn-features holder — llmLabel names the row", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
     expect(r.llmReady).toBe(true);
-    expect(r.llmLabel).toBe("Composer backend ready");
+    expect(r.llmLabel).toBe("Anthropic (API key)");
+    expect(r.composerReady).toBe(true);
+  });
+
+  it("a managed (container-login) Claude subscription powers both agent runs and Wardyn features", () => {
+    const r = deriveReadiness(status({ harness: [{ provider: "anthropic", captured: true }] }));
+    expect(r.llmReady).toBe(true);
+    expect(r.llmLabel).toBe("Claude subscription (managed)");
+    expect(r.composerReady).toBe(true);
+  });
+
+  it("a host-CLI Claude subscription powers agent runs but NOT Wardyn features (opt-in, off by default)", () => {
+    const r = deriveReadiness(
+      status({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
+    );
+    expect(r.llmReady).toBe(true);
+    expect(r.llmLabel).toBe("Claude subscription (host CLI)");
+    expect(r.composerReady).toBe(false);
+  });
+
+  it("Azure powers Wardyn features (composerReady) but never counts as an agent-tool path (llmReady)", () => {
+    const r = deriveReadiness(
+      status({
+        composer: {
+          enabled: true,
+          default: "az",
+          backends: [
+            { name: "az", provider: "azure", model: "gpt-4o", wire: "azure_openai", enabled: true, needs_key: true, key_secret: "azure-openai-key", key_resolved: true },
+          ],
+        },
+      }),
+    );
+    expect(r.llmReady).toBe(false);
+    expect(r.composerReady).toBe(true);
   });
 });
 

@@ -173,6 +173,58 @@ describe("IntegrationsScreen — the proxy banner", () => {
   });
 });
 
+describe("IntegrationsScreen — embedded mode (Getting Started's Integrations step)", () => {
+  it("drops the PageHeader and the tab strip but keeps everything else", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+
+    render(
+      <MemoryRouter>
+        <IntegrationsScreen embedded />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Anthropic (API key)");
+    // PageHeader (the h1 title + T.LEDE description) is gone.
+    expect(screen.queryByRole("heading", { name: "Integrations", level: 1 })).not.toBeInTheDocument();
+    expect(screen.queryByText(T.LEDE)).not.toBeInTheDocument();
+    // The Integrations/Tools tab strip is gone — there's only ever the one
+    // (integrations) view embedded.
+    expect(screen.queryByRole("tab", { name: "Tools" })).not.toBeInTheDocument();
+    // Everything else survives: category rows, the footnote.
+    expect(screen.getByText(T.EMPTY_SCM)).toBeInTheDocument();
+    expect(screen.getByText(T.FOOTNOTE)).toBeInTheDocument();
+  });
+
+  it("calls onChanged after a REAL mutation reloads (not the initial mount) — no redundant recheck on every visit", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    deleteSecretMock.mockResolvedValue(undefined);
+    const onChanged = vi.fn();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(
+      <MemoryRouter>
+        <IntegrationsScreen embedded onChanged={onChanged} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Anthropic (API key)");
+    // Just mounting/loading once (visiting the Getting Started step) must NOT
+    // cascade into the caller's own recheck.
+    expect(onChanged).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Anthropic \(API key\) actions/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /delete integration/i }));
+    await user.click(await screen.findByRole("button", { name: /^delete integration$/i }));
+
+    // The delete's own reload (a REAL mutation) does fire it.
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("IntegrationsScreen — Tools tab", () => {
   it("switching tabs shows the Tools table and the LAW footer", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus());

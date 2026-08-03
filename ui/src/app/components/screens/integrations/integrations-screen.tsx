@@ -75,7 +75,20 @@ function Posture({ row }: { row: IntegrationRow }) {
 
 type Loaded = { status: SetupStatus; siteConfig: SiteConfig; secretNames: string[]; data: IntegrationsData };
 
-export function IntegrationsScreen() {
+export function IntegrationsScreen({
+  embedded = false,
+  onChanged,
+}: {
+  /** Thin-embed mode (the Getting Started Integrations step): drops the
+   *  PageHeader and the Integrations/Tools tab strip, keeping everything
+   *  else — proxy banner, category sections with their full row actions,
+   *  empty state, footnote, and the Add/rotate/delete dialogs. */
+  embedded?: boolean;
+  /** Called after a successful (re)load — lets an embedding parent (Getting
+   *  Started) refresh its own copy of status/siteConfig/secrets so the rail's
+   *  "Ready · N connected" badge doesn't go stale right after an in-embed add. */
+  onChanged?: () => void;
+} = {}) {
   const operator = useOperator();
   const navigate = useNavigate();
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
@@ -84,6 +97,11 @@ export function IntegrationsScreen() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<IntegrationRow | null>(null);
+  // Set after the FIRST load completes — onChanged fires only from here on, so
+  // simply mounting the embed (Getting Started visiting the step) doesn't also
+  // cascade into the caller's own recheck (a redundant second status/siteConfig
+  // round trip on every visit); only a REAL in-embed mutation does.
+  const loadedOnceRef = React.useRef(false);
 
   const load = React.useCallback(() => {
     setState("loading");
@@ -91,15 +109,22 @@ export function IntegrationsScreen() {
       .then(([status, siteConfig, secretNames]) => {
         setLoaded({ status, siteConfig, secretNames, data: deriveIntegrations(status, siteConfig, secretNames) });
         setState("ready");
+        if (loadedOnceRef.current) onChanged?.();
+        loadedOnceRef.current = true;
       })
       .catch(() => setState("error"));
-  }, []);
+    // `onChanged` must be a stable (memoized) callback from the caller — it's a
+    // real dependency here (a fresh inline function every render would refire
+    // this effect in a loop), not an omitted one.
+  }, [onChanged]);
   React.useEffect(load, [load]);
+
+  const wrapperClass = embedded ? undefined : "mx-auto max-w-[1400px] px-6 py-6";
 
   if (state === "loading" || !loaded) {
     return (
-      <div className="mx-auto max-w-[1400px] px-6 py-6">
-        <PageHeader title="Integrations" description={T.LEDE} />
+      <div className={wrapperClass}>
+        {!embedded && <PageHeader title="Integrations" description={T.LEDE} />}
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <TableSkeleton rows={4} cols={4} />
         </div>
@@ -108,8 +133,8 @@ export function IntegrationsScreen() {
   }
   if (state === "error") {
     return (
-      <div className="mx-auto max-w-[1400px] px-6 py-6">
-        <PageHeader title="Integrations" description={T.LEDE} />
+      <div className={wrapperClass}>
+        {!embedded && <PageHeader title="Integrations" description={T.LEDE} />}
         <div className="rounded-xl border border-border bg-card">
           <ErrorState onRetry={load} />
         </div>
@@ -125,19 +150,21 @@ export function IntegrationsScreen() {
   const runDelete = async () => deleteIntegration(toDelete!, siteConfig);
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
-      <PageHeader
-        title="Integrations"
-        description={T.LEDE}
-        actions={
-          <>
-            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
-              <Plus className="size-4" /> Add integration
-            </Button>
-          </>
-        }
-      />
+    <div className={wrapperClass}>
+      {!embedded && (
+        <PageHeader
+          title="Integrations"
+          description={T.LEDE}
+          actions={
+            <>
+              {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+                <Plus className="size-4" /> Add integration
+              </Button>
+            </>
+          }
+        />
+      )}
 
       {!operator && (
         <div className="mb-4 flex items-center gap-2">
@@ -148,12 +175,14 @@ export function IntegrationsScreen() {
         </div>
       )}
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="mb-5">
-        <TabsList>
-          <TabsTrigger value="integrations">Integrations</TabsTrigger>
-          <TabsTrigger value="tools">Tools</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      {!embedded && (
+        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="mb-5">
+          <TabsList>
+            <TabsTrigger value="integrations">Integrations</TabsTrigger>
+            <TabsTrigger value="tools">Tools</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
 
       {tab === "tools" ? (
         <ToolsTab data={data} />

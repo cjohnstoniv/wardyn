@@ -223,7 +223,9 @@ describe("ImportWorkspaceDialog — Record model-readiness reflects /setup/statu
   it("shows the connected note when a provider is logged in, even with no composer backend", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ status: "scanned" }));
     getSetupStatusMock.mockResolvedValue(
-      setupStatus({ providers: [{ tool: "claude", installed: true, logged_in: true }] }),
+      setupStatus({
+        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+      }),
     );
     render(<ImportWorkspaceDialog open workspaceId="ws-1" onOpenChange={() => {}} onReload={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
