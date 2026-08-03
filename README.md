@@ -34,7 +34,7 @@ make setup   # brings up the containerized control plane + opens the UI
 `make setup` asks **containerized vs host** (Enter = containerized); set
 `WARDYN_SETUP_MODE=container` to skip the question, `=local` for the host escape
 hatch. Containerized runs `wardynd` in a compose container, so sandbox→control-plane
-callbacks route in-network and workspace **Verify/Record** work even on Docker
+callbacks route in-network and workspace **Record/replay** work even on Docker
 Desktop + WSL2 NAT. Stop with `make compose-down`.
 
 Give it a model — pick any, all first-class at the CLI (or in the UI):

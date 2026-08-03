@@ -44,8 +44,8 @@ A build is two stages:
   RUN) layers Wardyn's runner tools onto PATH and clears ENTRYPOINT, producing
   the local image tag the runner exec's/verifies/records into. The finalize
   stage COPYs everything in the tools dir, so extra tools (e.g. wardyn-scan) may
-  ride along; only these five are contractually required — agent-run,
-  agent-run-lib.sh, wardyn-rec, wardyn-verify, wardyn-git-helper — and a tools
+  ride along; only these four are contractually required — agent-run,
+  agent-run-lib.sh, wardyn-rec, wardyn-git-helper — and a tools
   dir missing any of them fails the build closed (requiredTools /
   validateToolsDir in `internal/envbuild/builder.go`). Without this the built
   image lacks Wardyn's binaries and the runner cannot drive it (H5). Build

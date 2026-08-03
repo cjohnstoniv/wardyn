@@ -4,7 +4,8 @@ The guided walkthrough. It picks up where the [README quickstart](../README.md)
 stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
 `wardyn setup status` says what model access is still missing. Easiest first: a
 **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
-key), **record → verify** to onboard your own work, and the **AI Composer**.
+key), **record → replay confined** to onboard your own work, and the **AI
+Composer**.
 
 The Getting-started page detects this host's real capabilities — which confinement
 tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
@@ -194,7 +195,8 @@ Bedrock access-key path (see below):
     `Authorization: Bearer` into `bedrock-runtime.*`, **never resident** (preferred).
   - or `aws-access-key-id` + `aws-secret-access-key` (+ optional `aws-session-token`)
     → AWS SigV4 signs in-process, so these are **resident** in the sandbox env
-    (masked + withheld from verify/scan runs; scope IAM tightly — see
+    (masked + withheld from scan runs, which never call a model; scope IAM
+    tightly — see
     `threatmodel/THREAT-MODEL.md` "Bedrock credential residency").
 
   Configured Claude runs then use Bedrock automatically.
@@ -205,8 +207,8 @@ The primary way to onboard your own work: in a workspace, **record** a named
 interactive session (with model access), then rerun it governed — the New Run
 dialog's Basics step offers the workspace's recorded sessions as **profiles**;
 picking one fast-tracks you to Review with the recording's observed egress
-already loaded into the allowlist. **Verify** launches a fresh CONFINED session
-for a recording you pick — default-deny egress, live approvals surfaced next to
+already loaded into the allowlist. **Replay confined** launches a fresh CONFINED
+session for a recording you pick — default-deny egress, live approvals surfaced next to
 the attached terminal — so you re-run the same steps under the tightened policy
 and prove the profile works before relying on it. An off-policy host is denied
 in-flight and raised as an approval you can grant, then retry
@@ -224,16 +226,17 @@ so it is much tighter than the open recording, but it is **not minimal**:
   all: it is routed through the Wardyn git-broker (repo-scoped, token minted
   proxy-side), so `github.com` and its bundle are **not** in the confined
   session's egress. The residual is the reverse — the baseline is otherwise the
-  workspace profile's detected registries ∪ `ApprovedEgress`, and Verify proves
-  the steps work under that policy without proving it is the smallest one that
-  works. Content-derived `SuggestedEgress` is deliberately excluded — a build
+  workspace profile's detected registries ∪ `ApprovedEgress`, and the replay
+  proves the steps work under that policy without proving it is the smallest
+  one that works. Content-derived `SuggestedEgress` is deliberately excluded — a build
   that needs a host (including an un-granted GitHub dependency) surfaces as an
   observed denial you can promote.
 
 (It's a live re-run under the tighter policy, not a byte-for-byte replay of the
-captured session. The workspace *import* flow has its own Verify step with
-different semantics: it executes the operator-approved setup commands in a
-governed sandbox to prove the environment builds.)
+captured session. It is also the ONLY environment proof Wardyn offers: the
+old import-flow "verify" step — which executed an operator-approved command
+list to show the environment built — is gone. Detected build commands are now
+documentation (AGENTS.md), because nothing verified them.)
 
 **Workspaces from the CLI:** `wardyn workspace create|list|get|delete|scan`
 manages onboarded workspaces headlessly (`create` is what clears the run-create
@@ -295,7 +298,7 @@ re-run it any time to re-check this host's capabilities.
 | `compose up` fails on network labels | a dead run's sandbox pair still holds `wardyn-internal` | `docker ps -aq --filter name=wardyn- \| xargs -r docker rm -f`, then `docker network rm wardyn-internal` |
 | `docker ps` shows nothing but the UI works | your shell is on a different daemon than Wardyn's scripts picked | `export DOCKER_HOST=unix:///var/run/wardyn-docker.sock` — the socket `wardyn setup wall` configures and the CLI prints (`/run/...` also works where `/var/run` is a symlink), the tier-capable native daemon they prefer over the default socket |
 | Only Fence/CC1 offered | ditto — that daemon registers no `runsc`/`kata` | same; `make doctor` prints the classes it can actually see |
-| Verify/Record hangs forever | host mode under Docker Desktop + WSL2 NAT | use containerized mode (the default) — drop `WARDYN_SETUP_MODE=local` |
+| Record/replay hangs forever | host mode under Docker Desktop + WSL2 NAT | use containerized mode (the default) — drop `WARDYN_SETUP_MODE=local` |
 | Run fails "issue with selected model" | no model access configured, or a stale credential | `claude setup-token \| wardyn subscription connect`, then `wardyn setup status` |
 | Port 5432 in use | another Postgres | stop it, or set `WARDYN_PG_PORT` |
 

@@ -81,7 +81,7 @@ A viewer reads everything and is refused (403) on the writes with the widest
 blast radius: the managed harness credential (`POST /setup/harness-login`,
 `PUT`/`DELETE /setup/harness-credential/{provider}`), policy create/update/delete,
 every mutating `/workspaces` route (including the `approved-egress`, `llm-cred`
-and `setup-commands` writes that widen what a run may do), `PUT /site-config`,
+and `requirements` writes that widen what a run may do), `PUT /site-config`,
 secret write/delete (`PUT`/`DELETE /secrets/{name}` — the name-only list stays
 readable), deciding an approval (`POST /approvals/{id}/approve|deny` — the
 queue stays readable), and attaching to a running sandbox — BOTH lanes to a

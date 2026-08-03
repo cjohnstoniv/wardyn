@@ -25,7 +25,6 @@ the governance target.
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
-| `wardyn-verify` | In-sandbox verify runner: executes the workspace's operator-approved setup commands (install/build/test/lint) in the built devcontainer image under confinement and reports the result — it does NOT replay a recorded PTY session. |
 | `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
@@ -59,10 +58,13 @@ audit streams".
 
 ### Feature surfaces on top of the core loop (all shipped)
 
-- **Workspace onboarding** — clone-and-scan a source (`wardyn-scan` →
-  `internal/workspacescan`; secret/service/egress needs are derived
-  server-side), then prove operator-approved setup commands work under
-  confinement (`wardyn-verify`). Endpoints under `/api/v1/workspaces/`.
+- **Workspace onboarding** — a workspace is a COMPOSITION of one or more
+  sources (local directories, repos, ephemeral scratch) plus a base image.
+  Clone-and-scan each source (`wardyn-scan` → `internal/workspacescan`;
+  secret/service/egress needs are derived server-side), then set the
+  requirements contract: what the workspace carries into every run (Required)
+  versus what a run may enable (Optional). Endpoints under
+  `/api/v1/workspaces/`.
 - **Record Mode** — run a task open once, then synthesize a least-privilege
   policy from its captured audit trail (`internal/recordmode`,
   `POST /api/v1/runs/{id}/profile`) and re-run it confined. The synthesized
