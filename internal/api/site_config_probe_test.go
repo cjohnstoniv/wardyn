@@ -400,6 +400,55 @@ func TestHandleTestSiteConfigProxy_NoUpstreamConfiguredStillProbes(t *testing.T)
 	}
 }
 
+func TestHandleTestSiteConfigProxy_CustomURL(t *testing.T) {
+	// The escape for a host with no public internet: point the probe at
+	// something it CAN reach. Without this a hard gate would trap an
+	// internal-only deployment in setup forever.
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, ps := newProbeHarness(t, types.SiteConfig{}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken,
+		`{"url":"https://intranet.corp.internal/health"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "reached" {
+		t.Fatalf("state = %q, want reached", got.State)
+	}
+	// It must NOT borrow the default targets' credibility: nothing verified the
+	// body, so it cannot claim the public internet was reached.
+	if !strings.Contains(got.Detail, "not checked") {
+		t.Errorf("detail = %q, want it to admit the body was not verified", got.Detail)
+	}
+	if ps.runCount() != 1 {
+		t.Errorf("runCount = %d, want 1", ps.runCount())
+	}
+}
+
+func TestHandleTestSiteConfigProxy_CustomURLRejectsJunk(t *testing.T) {
+	// An operator-only endpoint that dials a caller-named target still validates
+	// it: same rules as any stored site-config URL. A shell metacharacter or a
+	// non-http scheme never reaches the probe sandbox.
+	for _, bad := range []string{
+		"file:///etc/passwd",
+		"https://evil.internal/$(id)",
+		"not a url",
+		"ftp://mirror.corp.internal",
+		"https://host with spaces/x",
+	} {
+		fr := &probeFakeRunner{exitCode: 0}
+		srv, ps := newProbeHarness(t, types.SiteConfig{}, fr)
+		w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken,
+			`{"url":`+mustQuote(bad)+`}`)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("url %q: code = %d, want 400", bad, w.Code)
+		}
+		if ps.runCount() != 0 {
+			t.Errorf("url %q: launched %d probe sandboxes, want 0", bad, ps.runCount())
+		}
+	}
+}
+
 func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
 	// The corporate-network state an exit-code-only probe scores as SUCCESS: a
 	// block page or captive portal replies 200, so the connection "worked"
@@ -665,4 +714,13 @@ func TestHandleTestSiteConfig_OperatorOnly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mustQuote JSON-quotes a string for inline test bodies.
+func mustQuote(v string) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }

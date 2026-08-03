@@ -448,14 +448,29 @@ func findEgressRedirect(sc types.SiteConfig, want string) (types.EgressRedirect,
 // request fields -- there is nothing here for a caller to redirect toward an
 // arbitrary target (see the file doc comment for why that matters).
 func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Request) {
-	// No request fields. An empty body is the ORDINARY client shape — a fetch()
-	// POST with nothing to send transmits no body at all — so EOF is success
+	// The body is OPTIONAL. An absent body is the ordinary client shape — a
+	// fetch() POST with nothing to send transmits none — so EOF is success
 	// here, not a 400. Anything actually sent still decodes strictly, so a
 	// typo'd field can't be silently swallowed.
+	var req testProxyRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&struct{}{}); err != nil && !errors.Is(err, io.EOF) {
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	// A caller-supplied probe target is a deliberate exception to the rule
+	// test-redirect follows, and it is safe for reasons that do NOT hold there.
+	// The dial happens inside the confined probe sandbox, never from the
+	// control plane; the caller is already operator-authenticated and can
+	// configure arbitrary run egress anyway, so naming a URL here escalates
+	// nothing; and the response body is never returned, so this cannot be used
+	// as a read oracle — only reachability is reported. It still has to survive
+	// the same validation every stored site-config URL does.
+	custom := strings.TrimSpace(req.URL)
+	if custom != "" && !validSiteURL(custom) {
+		writeError(w, http.StatusBadRequest,
+			"url: must be a plain http(s) URL with a real host, and no shell metacharacters")
 		return
 	}
 	ctx := r.Context()
@@ -476,19 +491,42 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	script, hosts, label := proxyProbeScript, proxyProbeHosts, strings.Join(proxyProbeHosts, ", ")
+	if custom != "" {
+		// One target, and NO body check: Wardyn has no idea what an operator's
+		// own endpoint is supposed to return, so the honest claim is only "the
+		// request completed" -- the detail below says exactly that rather than
+		// implying the same verification the default targets get. -f makes an
+		// HTTP error status a failure, the closest thing to a correctness
+		// signal available without a known payload.
+		script = fmt.Sprintf("curl -fsS -o /dev/null --connect-timeout 5 --max-time 15 %q\n", custom)
+		hosts, label = []string{workspacescan.HostOf(custom)}, workspacescan.HostOf(custom)
+	}
+
 	actor := principalFromRequest(r)
-	runID, res, perr := s.runSiteConfigProbe(ctx, actor, proxyProbeScript,
-		proxyProbeHosts, nil)
+	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil)
 	if perr != nil {
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
 	}
-	resp := classifyProxyProbe(res, strings.Join(proxyProbeHosts, ", "), viaProxy)
+	resp := classifyProxyProbe(res, label, viaProxy)
+	if custom != "" && resp.State == "reached" {
+		resp.Detail += " — the response body was not checked (Wardyn can't know what your endpoint should return), so this proves the request completed, not that it reached the public internet"
+	}
 	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
-			"state": resp.State, "target_host": strings.Join(proxyProbeHosts, ", "), "elapsed_ms": resp.ElapsedMS,
+			"state": resp.State, "target_host": label, "elapsed_ms": resp.ElapsedMS, "custom_target": custom != "",
 		})))
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// testProxyRequest is the OPTIONAL POST /site-config/test-proxy body. URL lets
+// an operator whose host has no public internet -- an internal-only or
+// air-gapped deployment -- point the probe at something it CAN reach and prove
+// egress genuinely works, instead of clicking past a check it could never pass.
+// Empty (or absent) runs the default multi-target, body-verified check.
+type testProxyRequest struct {
+	URL string `json:"url,omitempty"`
 }
 
 // testRedirectRequest is the POST /site-config/test-redirect body. Both
