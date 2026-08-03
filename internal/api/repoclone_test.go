@@ -167,9 +167,9 @@ func TestGitBrokerWiring(t *testing.T) {
 
 // TestConfineGitBrokerEgress: a BROKERED run's effective egress carries no
 // broker-managed GitHub host — dispatch subtracts them from the allowlist (exact,
-// wildcard, and :port spellings) and denies them, so the /wardyn/gh/ route is the
-// only path to github and the receive-pack branch-namespace parser cannot be
-// routed around. A NON-brokered run is untouched.
+// wildcard, and :port spellings) and denies them, so /wardyn/gh/ is the only path
+// to those four host NAMES and the receive-pack branch-namespace parser cannot be
+// routed around by dialing one of them. A NON-brokered run is untouched.
 func TestConfineGitBrokerEgress(t *testing.T) {
 	grants := map[string]uuid.UUID{"octocat/hello-world": uuid.New()}
 
@@ -192,6 +192,25 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 	for _, want := range gitBrokerManagedHosts {
 		if !slices.Contains(brokered.DeniedDomains, want) {
 			t.Errorf("denied_domains = %v, want it to contain %q", brokered.DeniedDomains, want)
+		}
+	}
+
+	// THE LANE THE FOUR DENIES DO NOT COVER, pinned deliberately. The denies are
+	// EXACT hosts, so an ssh_key grant's ssh.github.com:443 endpoint (added at
+	// create time by unionRunEgress) survives on a brokered run: github.com is
+	// denied, ssh.github.com:443 stays allowed. This is not a bug to fix here —
+	// an ssh_key grant is operator-supplied and operator-bounded — but it is the
+	// exact reason no doc may say "the brokered route is the ONLY route". If this
+	// assertion ever flips, docs/POLICIES.md and threatmodel/THREAT-MODEL.md are
+	// wrong and must change with it.
+	sshLane := types.RunPolicySpec{AllowedDomains: []string{"github.com", "ssh.github.com:443"}}
+	confineGitBrokerEgress(&sshLane, grants)
+	if !slices.Contains(sshLane.AllowedDomains, "ssh.github.com:443") {
+		t.Errorf("ssh.github.com:443 must survive the confinement, got allowed=%v", sshLane.AllowedDomains)
+	}
+	for _, d := range sshLane.DeniedDomains {
+		if d == "ssh.github.com" || d == "ssh.github.com:443" {
+			t.Errorf("ssh.github.com must NOT be denied by the git-broker confinement, got denied=%v", sshLane.DeniedDomains)
 		}
 	}
 

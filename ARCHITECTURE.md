@@ -305,12 +305,19 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > sealed, multi-user shared service with human SSO — **does not exist yet and is
 > not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
-> sign-in lights up when OIDC is configured — but every signed-in user has
-> admin-equivalent powers unless `WARDYN_OIDC_OPERATOR_EMAILS` is set, which buys
-> exactly one tier (unlisted signers-in become read-only viewers on the
-> harness-credential, policy, workspace and site-config writes, secret
-> writes/deletes, approval decisions, and attach-ticket minting — reading, and
-> launching/killing runs, stay open) and is not RBAC.
+> sign-in lights up when OIDC is configured. Authorization is exactly **two
+> tiers**, not RBAC: `WARDYN_OIDC_OPERATOR_EMAILS` names the operators and every
+> other signed-in human is a viewer, 403 on the mutating routes of seven
+> clusters — the managed harness credential, policy CRUD, workspace CRUD and its
+> scoped widening writes, `PUT /site-config`, secret write/delete, deciding an
+> approval, and attaching to a running sandbox (**both** the ticket mint and the
+> attach WebSocket itself, which falls back to session-cookie auth when no ticket
+> is presented). 25 routes in all; reads are never gated and `POST /runs` /
+> `POST /runs/{id}/kill` stay open, because launching a run is a viewer act by
+> design. All-admin is still reachable but no longer by accident: OIDC configured
+> with that list empty **refuses to boot** unless
+> `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`. The admin token and local mode are
+> always operators — one shared credential carries no human to demote.
 > `make setup` asks **containerized vs host** (Enter =
 > containerized; both single-user); team is not a selectable mode
 > (`WARDYN_SETUP_MODE=team` prints a notice and exits).

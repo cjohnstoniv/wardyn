@@ -37,17 +37,63 @@ A run whose `github_token` grant covers at least one repo (from the grant's
 `scope.repos`, or from the run's `--repo` / `workspace_repos` clone set) is
 **brokered**: git traffic goes through the proxy's `/wardyn/gh/<org>/<repo>`
 route, where the installation token is minted server-side and never enters the
-sandbox. To make that the *only* route, dispatch subtracts **and denies**
-`github.com`, `api.github.com`, `codeload.github.com` and `*.githubusercontent.com`
-for that run (`confineGitBrokerEgress`, `internal/api/runs_dispatch.go`).
+sandbox. To make that the only route to those four host **names**, dispatch
+subtracts **and denies** `github.com`, `api.github.com`, `codeload.github.com`
+and `*.githubusercontent.com` for that run (`confineGitBrokerEgress`,
+`internal/api/runs_dispatch.go`).
 
-There is **no escape hatch**, by design: it runs last, after every widening
-phase, and a deny beats `allowed_domains`, beats `allow_all_egress`, beats a
-promoted `ApprovedEgress` entry, and beats a runtime `first_use_approval` — the
-proxy returns on the deny verdict before it ever considers an approval. So a
-brokered run cannot `curl` the GitHub API, `gh pr create`, or fetch a release
-tarball or a raw `githubusercontent.com` file, no matter what the policy says.
-The narrowed envelope is disclosed in the `run.policy.effective` audit event.
+**Nothing in the policy re-opens those four names.** The confinement runs last,
+after every widening phase, and a deny beats `allowed_domains`, beats
+`allow_all_egress`, beats a promoted `ApprovedEgress` entry, and beats a runtime
+`first_use_approval` — the proxy returns on the deny verdict before it ever
+considers an approval, on every port, not just 443. So a brokered run that dials
+any of those names cannot `curl` the GitHub API, `gh pr create`, or fetch a
+release tarball or a raw `githubusercontent.com` file. The narrowed envelope is
+disclosed in the `run.policy.effective` audit event.
+
+**It is a name deny, and that is the whole of its reach.** The proxy keys the
+verdict on the host string the sandbox asked for (`evalHost`), so a `CONNECT` to
+a raw GitHub IP is a different key and these four denies do not see it. Under
+the default posture that changes nothing — an unlisted host is `always_deny` —
+but under `allow_all_egress` a literal public IP is allowed (only private,
+loopback, link-local and metadata ranges are denied unconditionally), and under
+`deny_with_review` / `wait_for_review` it becomes an approvable unknown. If you
+run a brokered policy with `allow_all_egress`, the broker route is the only
+*convenient* route, not the only one.
+
+### …and the one lane those four denies do not cover
+
+The denies are **exact names**, and `ssh.github.com` is not one of them. If the
+same run also carries an `ssh_key` grant for `github.com`, run-create allowlists
+`ssh.github.com:443` for it (`sshOver443Endpoint`, `unionRunEgress`) and the
+confinement neither subtracts nor denies that entry. On such a run
+`github.com:443` is denied and `ssh.github.com:443` is allowed.
+
+That split is deliberate, not a hole in the deny. An `ssh_key` grant exists only
+because the operator stored a private key for that forge and put the grant in
+the policy; Wardyn's position on operator-supplied credentials is that the
+operator bounds them (`threatmodel/THREAT-MODEL.md` §5.1a). But the two lanes buy
+different things, so know which one you are in:
+
+| Lane | Route to the forge | What binds a push |
+|---|---|---|
+| `github_token` with repos (brokered) | `/wardyn/gh/<org>/<repo>` only — the four hosts are denied | Per-repo allowlist **plus** the receive-pack pkt-line parser (`internal/egress/proxy/git_broker.go`), which reads the refs being pushed and refuses any outside `refs/heads/wardyn/<run-id>/`. Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out |
+| The same run **plus** an `ssh_key` grant for `github.com` | Also `ssh.github.com:443`, as a CONNECT tunnel | **Nothing Wardyn enforces.** SSH is opaque to the proxy, so no parser sees the refs: any ref, any branch. The bound is the key's own access on the forge and whatever branch protection the forge applies |
+
+The key is resident for the clone only — `agent-run` mints it, writes it `0400`,
+clones, then shreds it and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
+That is a real narrowing and it is **not** a confinement: the grant id rides the
+sandbox env (`WARDYN_SSH_GRANTS`), an auto-mintable grant is re-mintable by
+design (`MintForGrant` — only `requires_approval: true` makes it single-use), and
+the proxy's mint route refuses only *brokered GitHub* grant ids
+(`isBrokeredGitGrant`) — so the agent process can re-mint the same private key
+for itself at any point in the run. Treat "this run has an `ssh_key` grant for a
+forge" as "this run can push anywhere that key can push."
+
+If you want the brokered lane's branch confinement to be the whole story, do not
+attach an `ssh_key` grant for a forge the run is already brokered for. There is
+no policy field that re-opens the four denied hosts; the SSH lane is a different
+grant, not an escape hatch on this one.
 
 **If the run needs direct GitHub fetches, drop the `github_token` grant** (and
 allowlist the hosts you need). A run with no git grants keeps whatever GitHub

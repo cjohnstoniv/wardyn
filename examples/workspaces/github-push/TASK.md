@@ -87,5 +87,9 @@ demo.json):
    opened from inside the sandbox; open it yourself from the pushed branch.
 6. docker exec <sandbox> env | grep -i token is still empty (token was never in env).
 7. The run's effective policy (audit event `run.policy.effective`) lists NO
-   github host under allowed_domains, and lists them under denied_domains — the
-   brokered route is the only route.
+   broker-managed github host under allowed_domains, and lists all four under
+   denied_domains — the brokered route is the only route to those names. (Those
+   denies are exact names. This scenario carries no `ssh_key` grant; add one for
+   `github.com` and `ssh.github.com:443` appears under allowed_domains as a
+   second, SSH push path the branch-namespace parser cannot see — see
+   docs/POLICIES.md.)

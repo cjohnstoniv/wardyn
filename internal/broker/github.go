@@ -176,9 +176,21 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 
 // splitRepos validates "owner/name" form, requires a single owner across all
 // repos, and returns the owner plus bare repo names for the token request.
+//
+// EXACTLY two segments. A GitHub repo name cannot contain "/", so a deeper
+// "owner/name/extra" is malformed — and it used to be accepted here (SplitN
+// kept "name/extra" as the name) while githubScopeRepos in the api package
+// dropped it. That disagreement decided two different things about one policy:
+// this predicate gates policy-write validation (ValidateGitHubScopeShape, called
+// from validatePolicySpec) and minting, while githubScopeRepos builds the
+// per-run git-broker allowlist that decides whether a run is BROKERED at all. A
+// three-segment scope therefore passed write, produced no broker entry, and
+// dispatched a run that got neither the /wardyn/gh/ route nor the injected deny
+// of the four GitHub hosts. Rejecting the shape at write time is what keeps the
+// two in agreement — it never reaches dispatch.
 func splitRepos(repos []string) (owner string, names []string, err error) {
 	for _, r := range repos {
-		parts := strings.SplitN(r, "/", 2)
+		parts := strings.Split(r, "/")
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", nil, fmt.Errorf("broker: repo %q is not in owner/name form", r)
 		}

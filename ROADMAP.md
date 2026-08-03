@@ -78,13 +78,14 @@ extension phase — each was confirmed real, sized L (multi-day), and left out o
 the final cleanup on purpose:
 
 - **Authorization/RBAC + owner scoping.** A **minimal** viewer/operator gate now
-  ships across 24 routes: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in
+  ships across 25 routes: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in
   human outside that list is a viewer — reads everything, launches and kills
   runs, but is 403'd on configuring the deployment (managed harness credential,
   policies, workspaces, site-config), writing/deleting secrets, deciding an
-  approval, and minting an attach ticket (`internal/api/server.go`,
-  `requireOperator`). Unset (the default) is the old behavior: every
-  authenticated human is admin-equivalent. Configuring OIDC SSO with the list
+  approval, and attaching to a running sandbox — both the ticket mint and the
+  attach WebSocket (`internal/api/server.go`, `requireOperator`;
+  `ticketOrHumanAuth`). Unset with no OIDC configured is the old behavior: every
+  authenticated caller is admin-equivalent. Configuring OIDC SSO with the list
   left empty now REFUSES TO BOOT (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`
   overrides). This is one allowlist, not RBAC. Still open: real
   roles/permissions, a role for the admin token and local mode (both are a
@@ -113,8 +114,12 @@ the final cleanup on purpose:
   testing, and releasing a multi-replica topology, and nothing here has done
   that.
 - **SPIRE identity / OpenBao secretstore** (seams + conformance suites ship).
-- **Team mode:** SAML/SCIM, per-user RBAC on the console (SSO *sign-in* shipped
-  in 0.4.4; authorization did not).
+- **Team mode:** SAML/SCIM, per-user RBAC on the console. SSO *sign-in* shipped
+  in 0.4.4, and so did exactly two authorization tiers —
+  `WARDYN_OIDC_OPERATOR_EMAILS` splits signed-in humans into operator and viewer
+  across 25 routes (`requireOperator`). What has NOT shipped is per-user roles:
+  no custom roles, no per-resource scoping, no separation of duty between
+  operators, and the admin token is unconditionally an operator.
 - **OTLP/OCSF audit sinks**; age-key rotation for the secret store.
 - **react-router 7 → 8 major bump** (a per-advisory pnpm-audit suppression
   covers GHSA-qwww-vcr4-c8h2 until then — needs a UI owner).
@@ -153,11 +158,13 @@ shipped behavior; none is scheduled.
   console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is configured
   (`/healthz` reports `sso`), and the session it mints authenticates the whole API.
   There is exactly ONE role tier: `WARDYN_OIDC_OPERATOR_EMAILS` (above) demotes
-  unlisted signers-in to read-only viewers across 24 routes — configuring the
-  deployment, credential writes, approval decisions, and attach tickets; reading
-  and launching/killing runs stay open to any signed-in human. Unset, or for
-  anything it does not cover, anyone who signs in has the same powers as the admin
-  token.
+  unlisted signers-in to viewers across 25 routes — configuring the deployment,
+  credential writes, approval decisions, and attaching to a running sandbox (the
+  ticket mint *and* the attach WebSocket); reading and launching/killing runs stay
+  open to any signed-in human. Leaving it unset with OIDC configured is refused at
+  boot (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` overrides, and then anyone who
+  signs in has the admin token's powers). For anything those 25 routes do not
+  cover, an operator and the admin token are the same thing.
 
 ## What is not on the roadmap
 

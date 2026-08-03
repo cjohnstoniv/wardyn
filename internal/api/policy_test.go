@@ -35,6 +35,12 @@ func TestValidatePolicySpec_GrantScopeShapes(t *testing.T) {
 		{"github no scope", grant(types.GrantGitHubToken, `null`), false},
 		{"github unknown permission key", grant(types.GrantGitHubToken, `{"repos":[],"permissions":{"totally_bogus":"read"}}`), true},
 		{"github malformed repo", grant(types.GrantGitHubToken, `{"repos":["not-owner-name"],"permissions":{"contents":"read"}}`), true},
+		// A three-segment repo is refused at WRITE time. It has to be: the broker
+		// predicate (splitRepos) and the api-side git-broker allowlist builder
+		// (githubScopeRepos) disagreed about it, so accepting it here shipped a
+		// policy whose run was silently NOT brokered — no /wardyn/gh/ route and
+		// no injected deny of the four GitHub hosts.
+		{"github three-segment repo", grant(types.GrantGitHubToken, `{"repos":["acme/widget/extra"]}`), true},
 		{"github mixed owners", grant(types.GrantGitHubToken, `{"repos":["acme/api","other/web"]}`), true},
 		{"github scope not object", grant(types.GrantGitHubToken, `["contents"]`), true},
 		// cloud_sts: empty object is the only shape; a non-object is rejected.

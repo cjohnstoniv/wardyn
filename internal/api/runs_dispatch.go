@@ -230,7 +230,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		return
 	}
 
-	// BROKERED GIT: make the broker route the ONLY route. Last of the policy
+	// BROKERED GIT: make the broker route the only route to the managed host names.
+	// Last of the policy
 	// phases so nothing above can re-add a managed host. See
 	// confineGitBrokerEgress; the run.policy.effective audit below records the
 	// narrowed envelope, so the removal is disclosed, not silent.
@@ -672,9 +673,21 @@ func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy 
 	}
 }
 
-// confineGitBrokerEgress makes the git-broker route the ONLY route to GitHub for a
-// brokered run: it strips every gitBrokerManagedHosts entry from the allowlist AND
-// denies those hosts outright, returning what it removed (nil = nothing to do).
+// confineGitBrokerEgress makes the git-broker route the only route to the
+// broker-managed GitHub host NAMES for a brokered run: it strips every
+// gitBrokerManagedHosts entry from the allowlist AND denies those hosts outright,
+// returning what it removed (nil = nothing to do).
+//
+// SCOPE, exactly. gitBrokerManagedHosts are EXACT hosts (plus one "*." wildcard),
+// and ssh.github.com is not one of them. A run holding an ssh_key grant for
+// github.com gets ssh.github.com:443 allowlisted at create time (sshOver443Endpoint
+// via unionRunEgress) and this function neither subtracts nor denies it — so on
+// that run github.com:443 is denied while ssh.github.com:443 is allowed. That is
+// deliberate: an ssh_key grant is an operator-supplied credential for that forge,
+// bounded by the operator, and denying its endpoint here would only break the lane
+// without binding it (SSH is opaque to the receive-pack parser either way). Do NOT
+// "fix" it by adding ssh.github.com to gitBrokerManagedHosts. See docs/POLICIES.md
+// "…and the one lane those four denies do not cover".
 //
 // WHY BOTH. The subtraction keeps the effective allowlist honest — it stops
 // claiming a host the run is not meant to dial. The deny is the load-bearing half:

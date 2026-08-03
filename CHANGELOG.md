@@ -23,14 +23,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the operator pinning the convention in task text. Set
   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` per proxy to opt out (for an image
   whose `agent-run` predates the run branch); unrecognized values fail closed.
-- **The brokered git route is now the ONLY route.** Dispatch subtracts the
+- **The brokered git route is now the only route to four GitHub host names.** Dispatch subtracts the
   broker-managed GitHub hosts (`github.com`, `api.github.com`,
   `codeload.github.com`, `*.githubusercontent.com`) from the egress allowlist of
   any run with git grants **and denies them** — deny beats `allow_all_egress`
   too — and `wardyn-git-helper` no longer mints a GitHub App token into a
   brokered sandbox at all (a GitHub host is refused whenever
-  `WARDYN_GIT_BROKER_REPOS` is non-empty — a grant covering no repo is not
-  brokered and still mints via the helper). Previously the direct lane was
+  `WARDYN_GIT_BROKER_REPOS` is non-empty; a grant covering no repo is not
+  brokered, and mints nothing either way — `MintInstallationToken` refuses an
+  empty repo list). Those four are EXACT hosts: a run that also holds an
+  `ssh_key` grant for the same forge keeps `ssh.<forge>:443` allowlisted, an SSH
+  push path the receive-pack parser cannot read — see `docs/POLICIES.md`.
+  Previously the direct lane was
   closed only by shipped-policy convention: no git host is ever TLS-MITM'd, so a
   `github.com:443` CONNECT is an opaque tunnel the ref parser cannot inspect,
   and the helper printed a live token to stdout inside the sandbox. A run with

@@ -360,9 +360,12 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // SCOPE, honestly: this binds the BROKERED path only. It sees git-receive-pack
 // because the sandbox->proxy hop is cleartext on the proxy's own route; a PAT push
 // or an SSH push is an opaque tunnel no pkt-line parser can read, and the
-// installation token itself is repo-scoped but not ref-scoped. Dispatch removes the
-// broker-managed GitHub hosts from a brokered run's egress (confineGitBrokerEgress
-// in internal/api/runs_dispatch.go) so the brokered route is the only route left.
+// installation token itself is repo-scoped but not ref-scoped. Dispatch removes AND
+// denies the broker-managed GitHub host names on a brokered run (confineGitBrokerEgress
+// in internal/api/runs_dispatch.go) so the brokered route is the only route to those
+// names. Those denies are EXACT names and ssh.<forge> is not among them, so a run
+// that also holds an ssh_key grant for that forge keeps ssh.<forge>:443 allowlisted
+// — an SSH push path beside the brokered one, which this parser never sees.
 //
 // Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
 // silently disabling a security control on a typo.

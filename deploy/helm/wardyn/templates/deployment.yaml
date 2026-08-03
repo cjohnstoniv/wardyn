@@ -17,6 +17,9 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
   - liveness/readiness/startup probes on /healthz (wardynd serves it even when
     the admin token is unset — it is the one always-on endpoint)
 */}}
+{{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
+{{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,15 +27,14 @@ metadata:
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 spec:
-  # replicas stays at 1: no shipped topology runs more than one today (this
-  # chart pins the default; compose's container_name rejects --scale). The
-  # per-process defects that used to make >1 drop requests — attach tickets,
-  # compose-result uploads, run watchers, session recordings, and the
-  # ground-truth token rotator — are now closed at the code level (Postgres
-  # state, leases, leader election; see docs/OPERATIONS.md). That does not make
-  # >1 a supported configuration: the value stays templated for a future build
-  # that actually ships it as one; until then the README and
-  # docs/OPERATIONS.md say to leave it at 1.
+  # replicas stays at 1, and the fail above ENFORCES it (allowMultiReplica is the
+  # only way past). Five defects that used to make >1 drop requests — attach
+  # tickets, compose results, the lifecycle reaper, run watchers, session
+  # recordings, and the ground-truth token rotator — are closed at the code level
+  # (Postgres state, leases, leader election). What is NOT closed is the
+  # secret-masking registry, which fails open across replicas; docs/OPERATIONS.md
+  # "One replica, by construction" carries the full remaining list. The value
+  # stays templated for a future build that ships multi-replica for real.
   replicas: {{ .Values.replicas }}
   selector:
     matchLabels:

@@ -66,11 +66,15 @@ func TestSplitRepos(t *testing.T) {
 			wantErr: "owner/name form",
 		},
 		{
-			name:      "name_with_extra_slash_kept_intact",
-			repos:     []string{"acme/widgets/extra"},
-			wantOwner: "acme",
-			// SplitN(_, 2) keeps everything after the first slash as the name.
-			wantNames: []string{"widgets/extra"},
+			// A repo name cannot contain "/", so three segments is malformed.
+			// Rejecting it here is what keeps this predicate agreeing with
+			// githubScopeRepos (the api package's git-broker allowlist builder,
+			// which has always required exactly two): before, this shape passed
+			// policy-write validation and then produced NO broker allowlist entry,
+			// so the run was not brokered and got no injected GitHub deny.
+			name:    "name_with_extra_slash_rejected",
+			repos:   []string{"acme/widgets/extra"},
+			wantErr: "owner/name form",
 		},
 		{
 			name:    "second_repo_malformed_rejected",

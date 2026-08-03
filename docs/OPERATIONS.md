@@ -143,17 +143,53 @@ rebuilds them.
 
 ## One replica, by construction
 
-`replicas` is not a scaling knob, and no shipped topology runs more than one
-today: compose pins `container_name` (`--scale wardynd=N` is rejected outright)
-and the Helm chart pins `replicas: 1`. wardynd still keeps one piece of state
-per-process:
+`replicas` is not a scaling knob, and it is not modesty either — **the pin is a
+safety control.** No shipped topology runs more than one: compose pins
+`container_name` (`--scale wardynd=N` is rejected outright) and the Helm chart
+both defaults `replicas: 1` **and refuses to render above it**
+(`deploy/helm/wardyn/templates/deployment.yaml`; `allowMultiReplica=true` is the
+documented override, and it is an acceptance of everything below, not a fix).
 
+wardynd keeps this state per-process. The first entry is why the pin is a control
+rather than a preference:
+
+- **the secret-masking registry** (`internal/secretmask`) — an in-memory
+  `map[runID][][]byte`, never persisted, and it **fails open**. Secrets are
+  registered by the request that mints or injects them (`Broker.mint` on the
+  mint route, `handleInternalInjection` on the proxy's injection call; the
+  captured AWS SSO token registers process-*globally* via `AddGlobal`), so they
+  land on whichever replica the run's proxy happened to dial. The session-recording upload
+  (`POST /runs/{id}/recording`) and the live-attach relay are DIFFERENT requests
+  that may land anywhere, and both pass the stream through unmasked when the
+  run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). Two replicas is
+  therefore enough to persist an asciicast containing live credentials in
+  cleartext — with a `success` audit event, because nothing in the path can tell
+  "no secrets for this run" from "not my run". There is no cross-replica fix
+  short of moving the registry into shared storage, which has not been built.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: it is the fallback
   for a failed Postgres write, and each pod drains its own back into the
   database once it recovers.
+- **the age identity, when `WARDYN_AGE_KEY` is unset** — each process then mints
+  its own ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret
+  written by one pod cannot be decrypted by any other. Fails closed (a decrypt
+  error, never a wrong plaintext) and surfaces on `Get`, not at boot, so the pod
+  starts healthy and the failure appears at first use. Setting the key removes
+  this one entirely — which you should be doing anyway for restart durability.
+- **the docker driver's sandbox tracking maps** (`agentExecs`, `pending`,
+  `mainProc`, `creating` in `internal/runner/docker/driver.go`) — the process
+  that created a sandbox is the only one that can observe its agent exec
+  (`Wait`), and `creating` is the in-memory tombstone that makes the exec-less
+  (krun) create/teardown handshake atomic. A teardown handled by a pod that did
+  not create the sandbox has neither, so on that path a container can survive the
+  kill it was supposed to die from.
+- **the `/metrics` counters** (`internal/api/metrics.go`) — per-process, so a
+  scrape reports one pod's slice of the fleet, not the fleet.
+- **the decision-ingest `lastTouch` debounce** (`shouldTouch`,
+  `internal/api/internal.go`) — per-process, so N pods can do up to N× the
+  `TouchRun` writes the 30s debounce was sized for. Load, not correctness.
 
-Six pieces that used to be on this list — the actual reason a second replica
+Six OTHER pieces that used to be on this list — the actual reason a second replica
 used to silently drop requests — are now Postgres-backed, so they survive a
 crash and no longer break under a second replica: single-use **attach
 tickets**, delete-on-read **compose results**, and the **lifecycle reaper**
@@ -172,7 +208,9 @@ selects the old per-pod directory); and the **ground-truth token rotator**
 (`cmd/wardynd/gt_rotator.go`, leader-elected via a Postgres advisory lock — a
 standby takes over within one ~30s backoff of the leader's session ending).
 
-None of that makes `replicas > 1` a supported configuration — it removes the
-reasons a second replica used to be actively unsafe, not the requirement to
-stay at one. Keep `replicas: 1`; going beyond it has not been tested or
-released.
+None of that makes `replicas > 1` a supported configuration. It closed the six
+reasons a second replica used to drop *requests*; it did not touch the list
+above, and the masking registry is a worse failure than any of the six was —
+those lost work, this one persists secrets. Keep `replicas: 1`. Going beyond it
+has not been built, tested, or released, and the chart will not render it without
+`allowMultiReplica=true`.

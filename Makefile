@@ -322,14 +322,16 @@ licenses: ## Forbid copyleft/non-permissive Go dependencies (both tag sets)
 
 # Helm chart lint + template-render (must render the load-bearing objects).
 #
-# FIVE renders, because ONE render only ever exercises the default branch of
+# SEVEN renders, because ONE render only ever exercises the default branch of
 # every {{ if }} in templates/ — and every hardening switch this chart has is
 # off/other-side by default:
 #   1. defaults (+ an admin token, which the chart now requires): the
 #      external-Secret / persistence-off / created-ServiceAccount side;
 #   2. ci/all-on-values.yaml — the other side of each of those in one go;
-#   3-5. the three refusals, asserted BY MESSAGE: a render that fails for the
+#   3-6. the four refusals, asserted BY MESSAGE: a render that fails for the
 #      wrong reason is a false green, which is the whole point of these guards.
+#   7. the replicas refusal's documented override, asserted to still RENDER —
+#      a guard with no way past would be a wall, not a guard.
 # No kubeconform: it resolves schemas at runtime from an unpinned upstream ref,
 # which would trade a network-free gate for a flaky one and break the pinning
 # discipline scripts/check-image-pins.sh exists to enforce.
@@ -359,6 +361,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install

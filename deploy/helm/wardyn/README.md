@@ -195,14 +195,19 @@ See `values.yaml` for all options. Key settings:
   `env.WARDYN_RECORDING_STORE=pg` (leave `persistence` off — the `pg` store
   needs no PVC).
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
-- `replicas`: **leave at 1.** No shipped topology runs more than one — this
-  chart pins the default, and `container_name` in the compose stack rejects
-  `--scale` outright. The per-process defects that used to make a second
-  replica drop requests — attach tickets, compose-result uploads, run
-  watchers, session recordings, and the ground-truth token rotator — are now
-  closed at the code level (Postgres-backed state, leases, and leader
-  election). That does not make `replicas > 1` a supported configuration: it
-  has not been built, tested, or released as one. See
-  [docs/OPERATIONS.md](../../../docs/OPERATIONS.md).
+- `replicas`: **leave at 1 — the chart refuses anything higher.** A render with
+  `replicas > 1` fails with an explicit message unless you also set
+  `allowMultiReplica=true`. The pin is a safety control: wardynd's
+  secret-masking registry is in-memory, per-process, and fails OPEN, so a
+  session recording uploaded to a replica that did not handle that run's
+  credential injection is persisted verbatim — live credentials in cleartext,
+  with a `success` audit event. The per-process defects that used to make a
+  second replica drop *requests* — attach tickets, compose-result uploads, run
+  watchers, session recordings, and the ground-truth token rotator — are closed
+  at the code level (Postgres-backed state, leases, and leader election); the
+  masking registry is not, and neither are the other per-process items
+  enumerated in [docs/OPERATIONS.md](../../../docs/OPERATIONS.md) ("One replica,
+  by construction"). `allowMultiReplica` is an acceptance of that, not a fix.
+- `allowMultiReplica`: override for the refusal above. Default `false`.
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

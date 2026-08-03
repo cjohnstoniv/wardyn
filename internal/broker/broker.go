@@ -55,14 +55,17 @@ const defaultMaxTTL = time.Hour
 // ref outside refs/heads/wardyn/<run-id>/. That enforcement is ON BY DEFAULT
 // (WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false opts out): agent-run checks each
 // cloned repo out onto wardyn/<run-id>/work, so a stock run complies without the
-// operator pinning the convention in task text, and dispatch strips the
-// broker-managed GitHub hosts from a brokered run's egress so the brokered route
-// is the only route.
+// operator pinning the convention in task text, and dispatch strips + denies the
+// broker-managed GitHub host names on a brokered run so the brokered route is the
+// only route to those names.
 //
 // STILL NOT COVERED, stated plainly: the property binds the BROKERED App lane
 // only. A git_pat or ssh_key push does not traverse this route (SSH is not
 // smart-HTTP; a PAT push is an opaque CONNECT), so those are bounded by the
-// operator who supplied the credential, not by this namespace. A token
+// operator who supplied the credential, not by this namespace. Those four denies
+// are EXACT hosts, so they do not cover ssh.<forge>:443 — a run holding an
+// ssh_key grant for the same forge keeps a push path beside the brokered one, and
+// this namespace does not reach it. A token
 // exfiltrated from the proxy itself is likewise unconstrained. Token-side
 // confinement — a GitHub-side ruleset that would hold even for a leaked token —
 // is [v0.5+ — planned]. See threatmodel/THREAT-MODEL.md asset #4.

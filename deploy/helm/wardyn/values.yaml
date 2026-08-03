@@ -21,7 +21,15 @@ image:
   pullSecrets: []
 
 # Leave at 1 — wardynd holds per-process state (see README / docs/OPERATIONS.md).
+# Anything higher is REFUSED at render time by templates/deployment.yaml.
 replicas: 1
+
+# Override for the refusal above. The pin is a SAFETY control, not modesty: the
+# secret-masking registry (internal/secretmask) is in-memory per-process and
+# fails OPEN, so a second replica can persist a session recording with live
+# credentials in cleartext. Setting this true renders the manifest anyway and
+# accepts that.
+allowMultiReplica: false
 
 service:
   type: ClusterIP

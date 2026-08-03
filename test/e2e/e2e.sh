@@ -180,7 +180,8 @@ log "(c/d) probing allow/pending/metadata through the auto-launched sidecar"
 # github.com is BROKER-MANAGED for this run: it declares --repo, so dispatch keys
 # the git-broker allowlist from it and confineGitBrokerEgress both removes the
 # github hosts from the allowlist AND denies them, leaving the proxy's
-# /wardyn/gh/ route as the only route. A DIRECT dial must therefore be a HARD
+# /wardyn/gh/ route as the only route to those names (the denies are EXACT names;
+# this run has no ssh_key grant, so ssh.github.com is not in play). A DIRECT dial must therefore be a HARD
 # deny, not a first-use hold — that ordering is the load-bearing half of the
 # confinement (a deny beats allow_all_egress, a promoted ApprovedEgress entry,
 # and first-use review alike). Asserted both ways: refused AND no approval.
@@ -188,7 +189,7 @@ log "(d) brokered github.com is HARD-DENIED on the direct route (deny beats firs
 GH_DIRECT="$(docker exec "${AGENT}" curl -sS -m 20 --connect-timeout 10 \
           -x http://wardyn-proxy:3128 https://github.com/ 2>&1 || true)"
 if echo "${GH_DIRECT}" | grep -q '403'; then
-  ok "(d) direct github.com refused by the proxy (403) — only /wardyn/gh/ remains"
+  ok "(d) direct github.com refused by the proxy (403) — only /wardyn/gh/ remains for that name"
 else
   bad "(d) direct github.com was NOT refused — git-broker confinement not in force: ${GH_DIRECT}"
 fi
