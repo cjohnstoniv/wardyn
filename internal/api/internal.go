@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -431,6 +433,32 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Single-lane, at mint time. A run that also holds a github_token grant may
+	// not mint an ssh_key for the brokered forge (see brokeredSSHMintHost). This
+	// is the residual-only half of a rule already enforced three times over —
+	// policy-write refuses the pair (validateGrantLaneExclusivity), dispatch
+	// denies ssh.<forge> in egress and withholds the grant id from the sandbox
+	// env — and it covers exactly one case: a policy STORED BEFORE that change,
+	// whose ssh_key grant row still exists, minted by a caller who somehow learned
+	// its id. Refusing HERE, before MintForGrant, means no transaction is opened
+	// and no approval-gated grant's single-use minted_jti is consumed.
+	// NOTE: handleInternalInjection (injection.go) also calls MintForGrant and is
+	// deliberately NOT guarded — the sandbox has no network path to it and an
+	// ssh_key never populates Minted.Injection, so it cannot return key material.
+	if host, refuse := s.brokeredSSHMintHost(r.Context(), claims.RunID, body.GrantID); refuse {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
+			body.GrantID.String(), "denied", mustJSON(map[string]any{
+				"grant_id": body.GrantID.String(),
+				"host":     host,
+				"reason":   "brokered_forge_single_lane",
+			})))
+		writeError(w, http.StatusForbidden, "wardyn: this run also holds a github_token grant, and a brokered forge is single-lane — "+
+			"the git-broker route is its only route to "+host+" by name, so every push it carries is parsed and confined to "+
+			"refs/heads/wardyn/<run-id>/, while a resident SSH key gives the same run a second push path SSH makes unparseable. "+
+			"Push through the git broker, or re-run from a policy without the github_token grant to push with your own key")
+		return
+	}
+
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
 	if err != nil {
 		s.writeMintError(w, err)
@@ -446,6 +474,66 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		Injection:  minted.Injection,
 		KnownHosts: minted.KnownHosts,
 	})
+}
+
+// brokeredSSHMintHost reports whether grantID is an ssh_key grant for a brokered
+// forge on a run that ALSO holds a github_token grant, returning the ssh_key's
+// host for the refusal message. It is the mint-time sibling of
+// validateGrantLaneExclusivity (policy.go) and carries the SAME ceiling that
+// comment already states: the run's real broker map (GitGrants) is built
+// in-memory on the create path and handed straight to dispatchRun in the same
+// request — it reaches no store and no persisted type — so "brokered" means only
+// "a github_token grant exists on this run". That is strictly broader than
+// dispatch's brokered-ness — it can OVER-refuse (a github_token whose scope.repos
+// and whose run's clone set never touched github.com) and never under-refuse,
+// which is the correct direction for a defence-in-depth check.
+//
+// FAILS OPEN, twice, on purpose — the opposite of handleInternalTokenRenew's
+// nil-Store guard, which fails closed because it cannot otherwise prove the run's
+// authority still exists. This one proves nothing: the mint's authority checks
+// (ownership, approval, no-widening) all live in the broker transaction below and
+// are unaffected by what happens here. So a missing Store (every newHarness-based
+// test) or a transient list error costs the belt, not the braces, and must not
+// turn a legitimate mint into a 403.
+//
+// A pre-transaction read is as authoritative as one inside the broker's FOR
+// UPDATE lock: credential_grants is INSERT-ONLY (no UPDATE/DELETE anywhere in the
+// tree, no status column), so the set of a run's grants is fixed at run creation.
+func (s *Server) brokeredSSHMintHost(ctx context.Context, runID, grantID uuid.UUID) (host string, refuse bool) {
+	if s.cfg.Store == nil {
+		return "", false
+	}
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not list run grants for the single-lane mint check; allowing the mint (the broker still enforces ownership, approval and scope)",
+			slog.String("run_id", runID.String()), slog.String("error", err.Error()))
+		return "", false
+	}
+	var target *types.GrantSpec
+	brokered := false
+	for i := range grants {
+		if grants[i].ID == grantID {
+			target = &grants[i].Spec
+		}
+		if grants[i].Spec.Kind == types.GrantGitHubToken {
+			brokered = true
+		}
+	}
+	// Unknown or another run's grant id: fall through unguarded — MintForGrant
+	// answers not-found/ownership (ErrGrantNotFound/ErrRunMismatch) and this check
+	// has no business pre-empting it. A malformed scope is likewise not ours.
+	if target == nil || target.Kind != types.GrantSSHKey || !brokered {
+		return "", false
+	}
+	host, _, _, _, derr := sshKeyScopeFields(target.Scope)
+	if derr != nil {
+		return "", false
+	}
+	ep, ok := sshOver443Endpoint(host)
+	if !ok || !slices.Contains(gitBrokerSSHEndpoints(), ep) {
+		return "", false
+	}
+	return host, true
 }
 
 // writeMintError maps broker errors to the documented fail-closed HTTP shape.

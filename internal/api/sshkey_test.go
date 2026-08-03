@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -344,5 +345,93 @@ func TestValidateInlineSecretRefs_SSHKey(t *testing.T) {
 	missing := sshKeyPolicy("github.com", "no-such-key")
 	if code, err := h.srv.validateInlineSecretRefs(ctx, missing); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing ssh_key secret: code=%d err=%v, want (422,err)", code, err)
+	}
+}
+
+// grantsStore serves ListGrantsByRun from a fixed slice; every other method
+// panics if reached, which is the point — the mint guard must read nothing else.
+// (Embedding convention: notFoundStore, scanRunStore.)
+type grantsStore struct {
+	store.Store
+	grants []types.CredentialGrant
+}
+
+func (s grantsStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return s.grants, nil
+}
+
+// TestInternalMint_BrokeredForgeRefusesSSHKey is the MINT-time half of the
+// single-lane rule (policy-write: TestValidateGrantLaneExclusivity; dispatch:
+// TestDispatch_BrokeredSSHDropIsAuditedAndNeverReachesTheSandbox). It covers the
+// residual a policy STORED BEFORE that rule leaves behind: the ssh_key grant row
+// still exists, so a caller holding its id could still ask the control plane to
+// mint it. The refusal must land BEFORE the broker — that is what proves no
+// transaction opened and no approval-gated grant's single-use slot was consumed.
+func TestInternalMint_BrokeredForgeRefusesSSHKey(t *testing.T) {
+	sshGrant := func(runID, id uuid.UUID, host string) types.CredentialGrant {
+		return types.CredentialGrant{ID: id, RunID: runID, Spec: types.GrantSpec{
+			Kind:  types.GrantSSHKey,
+			Scope: mustJSON(map[string]any{"host": host, "key_secret_ref": "deploy-key"}),
+		}}
+	}
+	ghGrant := func(runID uuid.UUID) types.CredentialGrant {
+		return types.CredentialGrant{ID: uuid.New(), RunID: runID, Spec: types.GrantSpec{
+			Kind:  types.GrantGitHubToken,
+			Scope: mustJSON(map[string]any{"repos": []string{"acme/widgets"}}),
+		}}
+	}
+
+	cases := []struct {
+		name     string
+		host     string
+		withGH   bool
+		noStore  bool
+		wantCode int
+	}{
+		{"github ssh_key co-granted with a github_token is refused", "github.com", true, false, http.StatusForbidden},
+		{"an ssh_key for another forge is untouched by a github_token", "dev.azure.com", true, false, http.StatusOK},
+		{"a github ssh_key with no github_token is the unbrokered lane", "github.com", false, false, http.StatusOK},
+		{"no Store fails OPEN — defence in depth, not a gate", "github.com", true, true, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			runID, sshID := uuid.New(), uuid.New()
+			grants := []types.CredentialGrant{sshGrant(runID, sshID, tc.host)}
+			if tc.withGH {
+				grants = append(grants, ghGrant(runID))
+			}
+			if !tc.noStore {
+				h.srv.cfg.Store = grantsStore{grants: grants}
+			}
+			tok := h.mintRunToken(t, runID)
+			w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok,
+				`{"grant_id":"`+sshID.String()+`"}`)
+			if w.Code != tc.wantCode {
+				t.Fatalf("mint code = %d, want %d; body=%s", w.Code, tc.wantCode, w.Body.String())
+			}
+			if tc.wantCode != http.StatusForbidden {
+				if h.broker.lastCall == nil {
+					t.Fatalf("the mint never reached the broker — the guard over-refused")
+				}
+				return
+			}
+			if h.broker.lastCall != nil {
+				t.Errorf("a REFUSED mint still called the broker: an approval-gated grant's single-use slot could have been burned")
+			}
+			ev := findAudit(h.audit.events, runID, "credential.mint", "denied")
+			if ev == nil {
+				t.Fatalf("the refusal was SILENT: no credential.mint/denied event; events=%s", auditDump(h.audit.events, runID))
+			}
+			if ev.ActorType != types.ActorAgent || ev.Actor == "" {
+				t.Errorf("audit attribution = %s/%q, want agent + the caller's SPIFFE id", ev.ActorType, ev.Actor)
+			}
+			if !strings.Contains(string(ev.Data), tc.host) || !strings.Contains(string(ev.Data), sshID.String()) {
+				t.Errorf("audit event names neither the host nor the grant: %s", ev.Data)
+			}
+			if !strings.Contains(w.Body.String(), "github_token") {
+				t.Errorf("refusal body does not name the reason/remedy: %s", w.Body.String())
+			}
+		})
 	}
 }
