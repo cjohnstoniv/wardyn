@@ -11,7 +11,19 @@
 // field traces back to, and for the `// W5:` seams a later wave replaces.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Cable, GitBranch, MoreHorizontal, Network, Plus, RotateCw, Sparkles, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  ArrowLeftRight,
+  Cable,
+  GitBranch,
+  Loader2,
+  MoreHorizontal,
+  Network,
+  Plus,
+  RotateCw,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import {
   deriveIntegrations,
   describePosture,
@@ -21,10 +33,16 @@ import {
   type IntegrationsData,
 } from "../../../lib/api/integrations";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { health } from "../../../lib/api/health";
+import { health, type ProxyTestResult } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { T, type IntegrationCategory } from "../../../lib/integrations";
-import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import type { EgressRedirect, SetupStatus, SiteConfig } from "../../../lib/types";
+import { getErrorMessage } from "../../../lib/format";
+// compactEndpoint is the ONE symbol corp-network-step.tsx exports for reuse
+// here (its own row/chip components are page-local, not exported) — see the
+// ponytail note on TestVerdictChip below for why the rest is a small,
+// deliberate duplicate rather than a cross-wave export ask.
+import { compactEndpoint } from "../setup/corp-network-step";
 import { Button } from "../../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import {
@@ -51,7 +69,7 @@ import { ToolsTab } from "./tools-tab";
 const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
   ai_provider: Sparkles,
   scm_host: GitBranch,
-  artifact_mirror: Box,
+  artifact_mirror: ArrowLeftRight,
   host_proxy: Network,
 };
 
@@ -73,6 +91,59 @@ const POSTURE_CLASS: Record<"success" | "warning" | "muted", string> = {
 function Posture({ row }: { row: IntegrationRow }) {
   const { text, tone } = describePosture(row.posture);
   return <span className={`text-xs whitespace-nowrap ${POSTURE_CLASS[tone]}`}>{text}</span>;
+}
+
+// ---- Test probes (Host proxy row + Egress redirection rows) ----------------
+// The only two Test buttons in the product besides the GitHub ref-confinement
+// check (T.FOOTNOTE) — a real throwaway-sandbox probe, never a cached or
+// inferred verdict. `running` carries no elapsed-seconds tick here (the
+// Corporate network step's own version does); this page only needs to match
+// its "disables and relabels while running" behavior, not reproduce the timer
+// — ponytail: add a tick if this page ever needs live seconds too.
+type ProbeUiState = { kind: "idle" } | { kind: "running" } | { kind: "done"; result: ProxyTestResult };
+
+// ponytail: mirrors corp-network-step.tsx's own TestVerdictChip. That module
+// exports only compactEndpoint (see the import above) — its row/chip
+// components are page-local by design — so this ~5-line twin lives here
+// rather than turning a same-wave reuse into a cross-wave export request.
+function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
+  if (state === "reached")
+    return (
+      <Chip tone="success" dot>
+        Reached
+      </Chip>
+    );
+  if (state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
+  return (
+    <Chip tone="warning" dot>
+      {state === "bypass" ? "Redirect not enforced" : "Blocked"}
+    </Chip>
+  );
+}
+
+function TestControl({ state, onTest, operator }: { state: ProbeUiState; onTest: () => void; operator: boolean }) {
+  const running = state.kind === "running";
+  return (
+    <>
+      {state.kind === "idle" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">Not tested</span>}
+      {running && (
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-info">
+          <Loader2 className="size-3 animate-spin" /> testing…
+        </span>
+      )}
+      {state.kind === "done" && <TestVerdictChip state={state.result.state} />}
+      <Button
+        size="sm"
+        variant="outline"
+        className="shrink-0"
+        disabled={!operator || running}
+        title={!operator ? OPERATOR_ONLY_REASON : undefined}
+        onClick={onTest}
+      >
+        {running ? "Testing…" : "Test"}
+      </Button>
+    </>
+  );
 }
 
 type Loaded = { status: SetupStatus; siteConfig: SiteConfig; secretNames: string[]; data: IntegrationsData };
@@ -109,6 +180,11 @@ export function IntegrationsScreen({
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<IntegrationRow | null>(null);
+  // Test-probe UI state — ephemeral, never persisted; reset on remount like
+  // the Corporate network step's own (ProbeUiState is ONLY ever "idle" until
+  // a click, so there's nothing to seed from siteConfig/status).
+  const [proxyTest, setProxyTest] = React.useState<ProbeUiState>({ kind: "idle" });
+  const [redirectTests, setRedirectTests] = React.useState<Record<string, ProbeUiState>>({});
   // Set after the FIRST load completes — onChanged fires only from here on, so
   // simply mounting the embed (Getting Started visiting the step) doesn't also
   // cascade into the caller's own recheck (a redundant second status/siteConfig
@@ -165,6 +241,46 @@ export function IntegrationsScreen({
 
   const requestDelete = (row: IntegrationRow) => setToDelete(row);
   const runDelete = async () => deleteIntegration(toDelete!, siteConfig);
+
+  const runProxyTest = async () => {
+    setProxyTest({ kind: "running" });
+    try {
+      setProxyTest({ kind: "done", result: await health.testProxy() });
+    } catch (e) {
+      // A request that never produced a probe result is NOT a probe verdict —
+      // see corp-network-step.tsx's identical fix (c5f41cb). Synthesizing
+      // "blocked" here would blame the corporate network for a 403, a
+      // restarted wardynd, or a bad payload. Report the failure as itself and
+      // stay untested so the operator can retry.
+      toast.error("Could not run the proxy test", { description: getErrorMessage(e) });
+      setProxyTest({ kind: "idle" });
+    }
+  };
+
+  const runRedirectTest = async (row: IntegrationRow) => {
+    if (!row.redirect) return;
+    setRedirectTests((s) => ({ ...s, [row.id]: { kind: "running" } }));
+    try {
+      const result = await health.testRedirect(row.redirect.from, row.redirect.to);
+      setRedirectTests((s) => ({ ...s, [row.id]: { kind: "done", result } }));
+    } catch (e) {
+      // See runProxyTest above.
+      toast.error(`Could not test the ${row.redirect.from} redirect`, { description: getErrorMessage(e) });
+      setRedirectTests((s) => ({ ...s, [row.id]: { kind: "idle" } }));
+    }
+  };
+
+  // No confirm dialog — matches the Corporate network step's own × button on
+  // the identical redirect list (a direct removal there too, not routed
+  // through the blast-radius flow the other categories use).
+  const removeRedirect = async (row: IntegrationRow) => {
+    try {
+      await deleteIntegration(row, siteConfig);
+      load();
+    } catch (e) {
+      toast.error("Failed to remove the redirect", { description: getErrorMessage(e) });
+    }
+  };
 
   return (
     <div className={wrapperClass}>
@@ -253,13 +369,16 @@ export function IntegrationsScreen({
               {!hidden.has("artifact_mirror") && (
                 <CategorySection
                   category="artifact_mirror"
-                  label="Artifact mirrors"
+                  label="Egress redirection"
                   rows={data.mirror}
                   operator={operator}
                   onOpen={(r) => navigate(`/integrations/${r.id}`)}
                   onRotate={setRotateName}
                   onReCheck={load}
                   onDelete={requestDelete}
+                  redirectTest={(id) => redirectTests[id] ?? { kind: "idle" }}
+                  onRedirectTest={runRedirectTest}
+                  onRedirectRemove={removeRedirect}
                 />
               )}
               {!hidden.has("host_proxy") && (
@@ -272,6 +391,8 @@ export function IntegrationsScreen({
                   onRotate={setRotateName}
                   onReCheck={load}
                   onDelete={requestDelete}
+                  proxyTest={proxyTest}
+                  onProxyTest={runProxyTest}
                 />
               )}
             </>
@@ -332,6 +453,11 @@ function CategorySection({
   onRotate,
   onReCheck,
   onDelete,
+  proxyTest,
+  onProxyTest,
+  redirectTest,
+  onRedirectTest,
+  onRedirectRemove,
 }: {
   category: IntegrationCategory;
   label: string;
@@ -341,6 +467,13 @@ function CategorySection({
   onRotate: (secretName: string) => void;
   onReCheck: () => void;
   onDelete: (row: IntegrationRow) => void;
+  /** host_proxy only — the one Test control that isn't per-row. */
+  proxyTest?: ProbeUiState;
+  onProxyTest?: () => void;
+  /** artifact_mirror rows sourced from egress_redirects (row.redirect set) only. */
+  redirectTest?: (rowId: string) => ProbeUiState;
+  onRedirectTest?: (row: IntegrationRow) => void;
+  onRedirectRemove?: (row: IntegrationRow) => void;
 }) {
   const Icon = CATEGORY_ICON[category];
   return (
@@ -354,21 +487,129 @@ function CategorySection({
         <p className="pl-6 text-[0.8125rem] leading-snug text-muted-foreground">{CATEGORY_EMPTY[category]}</p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {rows.map((row, i) => (
-            <Row
-              key={row.id}
-              row={row}
-              first={i === 0}
-              operator={operator}
-              onOpen={onOpen}
-              onRotate={onRotate}
-              onReCheck={onReCheck}
-              onDelete={onDelete}
-            />
-          ))}
+          {rows.map((row, i) => {
+            // Current-shape egress redirect: compact from/to + Test + a direct
+            // remove, no kebab — the mock uses this SAME row shape (redirectRow)
+            // for both the Corporate network step and this list.
+            if (row.redirect) {
+              return (
+                <EgressRedirectRow
+                  key={row.id}
+                  redirect={row.redirect}
+                  first={i === 0}
+                  test={redirectTest?.(row.id) ?? { kind: "idle" }}
+                  onTest={() => onRedirectTest?.(row)}
+                  onRemove={() => onRedirectRemove?.(row)}
+                  operator={operator}
+                />
+              );
+            }
+            if (category === "host_proxy") {
+              return (
+                <HostProxyRow
+                  key={row.id}
+                  row={row}
+                  first={i === 0}
+                  test={proxyTest ?? { kind: "idle" }}
+                  onTest={() => onProxyTest?.()}
+                  operator={operator}
+                  onOpen={onOpen}
+                  onRotate={onRotate}
+                  onReCheck={onReCheck}
+                  onDelete={onDelete}
+                />
+              );
+            }
+            return (
+              <Row
+                key={row.id}
+                row={row}
+                first={i === 0}
+                operator={operator}
+                onOpen={onOpen}
+                onRotate={onRotate}
+                onReCheck={onReCheck}
+                onDelete={onDelete}
+              />
+            );
+          })}
         </div>
       )}
     </section>
+  );
+}
+
+// Shared by every row kind that offers a kebab (the generic AI/SCM row and the
+// Host proxy row — egress redirects get a direct Test/remove instead, no
+// kebab, matching the mock). Extracted so the Host proxy row's Open/Rotate/
+// Delete behave identically to every other row's, not a hand-rolled twin.
+function RowKebab({
+  row,
+  operator,
+  onOpen,
+  onRotate,
+  onReCheck,
+  onDelete,
+}: {
+  row: IntegrationRow;
+  operator: boolean;
+  onOpen: (row: IntegrationRow) => void;
+  onRotate: (secretName: string) => void;
+  onReCheck: () => void;
+  onDelete: (row: IntegrationRow) => void;
+}) {
+  const rotateTarget = primarySecretName(row);
+  // AI capabilities only — the mock never offers a default checkbox on an SCM/
+  // mirror/proxy row (their kebabs pass no canAgent/canFeat at all); row.aiType
+  // is undefined for a host_proxy row, so these fall out false for it with no
+  // extra branching needed here.
+  const canAgent = row.aiType && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label));
+  const canFeat = row.aiType && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features"));
+  const defAgent = row.aiType && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label) && c.label.includes("· default"));
+  const defFeat = row.aiType && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features") && c.label.includes("· default"));
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-8" aria-label={`${row.name} actions`}>
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => onOpen(row)}>Open</DropdownMenuItem>
+        {(canRotateInline(row) || row.harnessProvider) && (
+          <DropdownMenuItem
+            disabled={!operator}
+            onClick={() => (canRotateInline(row) && rotateTarget ? onRotate(rotateTarget) : onOpen(row))}
+          >
+            Rotate credential…
+            {!operator && <OperatorOnlyHint />}
+          </DropdownMenuItem>
+        )}
+        {canAgent && (
+          <DropdownMenuCheckboxItem disabled={!operator} checked={!!defAgent} onCheckedChange={() => {}}>
+            Set as default for agent runs
+            {!operator && <OperatorOnlyHint />}
+          </DropdownMenuCheckboxItem>
+        )}
+        {canFeat && (
+          <DropdownMenuCheckboxItem disabled={!operator} checked={!!defFeat} onCheckedChange={() => {}}>
+            Set as default for Wardyn features
+            {!operator && <OperatorOnlyHint />}
+          </DropdownMenuCheckboxItem>
+        )}
+        {row.canReCheck && (
+          <DropdownMenuItem onClick={onReCheck}>
+            <RotateCw className="size-3.5" /> Re-check
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-danger focus:text-danger" disabled={!operator} onClick={() => onDelete(row)}>
+          <Trash2 className="size-4" /> Delete integration…
+          {!operator && <OperatorOnlyHint />}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -390,14 +631,6 @@ function Row({
   onDelete: (row: IntegrationRow) => void;
 }) {
   const res = RESIDENCY_META[row.residency];
-  const rotateTarget = primarySecretName(row);
-  // AI capabilities only — the mock never offers a default checkbox on an SCM/
-  // mirror/proxy row (their kebabs pass no canAgent/canFeat at all).
-  const canAgent = row.aiType && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label));
-  const canFeat = row.aiType && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features"));
-  const defAgent = row.aiType && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label) && c.label.includes("· default"));
-  const defFeat = row.aiType && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features") && c.label.includes("· default"));
-
   return (
     <div
       className={`grid grid-cols-[190px_1fr_130px_160px_36px] items-center gap-3 px-3.5 py-3 ${first ? "" : "border-t border-border"}`}
@@ -427,48 +660,127 @@ function Row({
         <Posture row={row} />
       </div>
       <div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-8" aria-label={`${row.name} actions`}>
-              <MoreHorizontal className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => onOpen(row)}>Open</DropdownMenuItem>
-            {(canRotateInline(row) || row.harnessProvider) && (
-              <DropdownMenuItem
-                disabled={!operator}
-                onClick={() => (canRotateInline(row) && rotateTarget ? onRotate(rotateTarget) : onOpen(row))}
-              >
-                Rotate credential…
-                {!operator && <OperatorOnlyHint />}
-              </DropdownMenuItem>
-            )}
-            {canAgent && (
-              <DropdownMenuCheckboxItem disabled={!operator} checked={!!defAgent} onCheckedChange={() => {}}>
-                Set as default for agent runs
-                {!operator && <OperatorOnlyHint />}
-              </DropdownMenuCheckboxItem>
-            )}
-            {canFeat && (
-              <DropdownMenuCheckboxItem disabled={!operator} checked={!!defFeat} onCheckedChange={() => {}}>
-                Set as default for Wardyn features
-                {!operator && <OperatorOnlyHint />}
-              </DropdownMenuCheckboxItem>
-            )}
-            {row.canReCheck && (
-              <DropdownMenuItem onClick={onReCheck}>
-                <RotateCw className="size-3.5" /> Re-check
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-danger focus:text-danger" disabled={!operator} onClick={() => onDelete(row)}>
-              <Trash2 className="size-4" /> Delete integration…
-              {!operator && <OperatorOnlyHint />}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <RowKebab row={row} operator={operator} onOpen={onOpen} onRotate={onRotate} onReCheck={onReCheck} onDelete={onDelete} />
       </div>
+    </div>
+  );
+}
+
+// Host proxy — a singleton row that now adopts the same compact "from → to"
+// treatment as an egress redirect (mock's hostProxyListRow), plus a Test
+// button, but keeps the standard kebab (Open/Rotate/Delete still apply to it
+// like any other integration).
+function HostProxyRow({
+  row,
+  first,
+  test,
+  onTest,
+  operator,
+  onOpen,
+  onRotate,
+  onReCheck,
+  onDelete,
+}: {
+  row: IntegrationRow;
+  first: boolean;
+  test: ProbeUiState;
+  onTest: () => void;
+  operator: boolean;
+  onOpen: (row: IntegrationRow) => void;
+  onRotate: (secretName: string) => void;
+  onReCheck: () => void;
+  onDelete: (row: IntegrationRow) => void;
+}) {
+  // A plain upstream_proxy_url is real, readable config — show it compacted.
+  // A secret-ref-backed proxy is write-only; there's no URL to show at all
+  // (matches the Corporate network step's own "secret" render state).
+  const target = row.proxyUrl
+    ? { text: compactEndpoint(row.proxyUrl), full: row.proxyUrl }
+    : row.secretNames[0]
+      ? { text: `secret: ${row.secretNames[0]}`, full: "Write-only — the URL can't be shown here." }
+      : { text: "—", full: "" };
+  return (
+    <div
+      className={`flex items-center gap-2.5 px-3.5 py-3 ${first ? "" : "border-t border-border"}`}
+      title={`wardyn-proxy chains through ${target.full || "an unconfigured upstream"}`}
+    >
+      <Mono className="shrink-0 text-xs text-foreground">wardyn-proxy</Mono>
+      <span className="shrink-0 text-[0.6875rem] text-muted-foreground">&rarr;</span>
+      <Mono className="min-w-0 flex-1 truncate text-xs text-foreground">{target.text}</Mono>
+      {row.proxyUrl && (
+        <Chip
+          tone="neutral"
+          className="shrink-0 text-[0.625rem]"
+          title="The URL is readable configuration — topology, not a credential."
+        >
+          plain config
+        </Chip>
+      )}
+      <TestControl state={test} onTest={onTest} operator={operator} />
+      <RowKebab row={row} operator={operator} onOpen={onOpen} onRotate={onRotate} onReCheck={onReCheck} onDelete={onDelete} />
+    </div>
+  );
+}
+
+// Egress redirection — one row per SiteConfig.egress_redirects entry. `from`/
+// `to` are compacted (compactEndpoint: scheme dropped, host never truncated,
+// only the MIDDLE of a long path elided with "…"); the full values live in
+// the row's own title, never just in a truncated span. No kebab: Test + a
+// direct remove, matching the mock's redirectRow (the SAME row shape the
+// Corporate network step uses for this exact list).
+function EgressRedirectRow({
+  redirect,
+  first,
+  test,
+  onTest,
+  onRemove,
+  operator,
+}: {
+  redirect: EgressRedirect;
+  first: boolean;
+  test: ProbeUiState;
+  onTest: () => void;
+  onRemove: () => void;
+  operator: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-2.5 px-3.5 py-3 ${first ? "" : "border-t border-border"}`}
+      title={`${redirect.from} → ${redirect.to}${redirect.token_secret_ref ? ` · token: ${redirect.token_secret_ref}` : ""}`}
+    >
+      <Mono className="shrink-0 text-xs text-foreground">{compactEndpoint(redirect.from)}</Mono>
+      <span className="shrink-0 text-[0.6875rem] text-muted-foreground">&rarr;</span>
+      <Mono className="min-w-0 flex-1 truncate text-xs text-foreground">{compactEndpoint(redirect.to)}</Mono>
+      {!redirect.ecosystem && (
+        <Chip
+          tone="neutral"
+          className="shrink-0 text-[0.625rem] opacity-70"
+          title="Network only — egress is substituted and the token is injected, but no per-tool config file is generated (there's no config-file equivalent for this destination)."
+        >
+          network only
+        </Chip>
+      )}
+      {redirect.token_secret_ref && (
+        <Chip
+          tone="neutral"
+          mono
+          className="shrink-0 text-[0.625rem]"
+          title={`token: ${redirect.token_secret_ref} — injected proxy-side at fetch time; the sandbox never holds it`}
+        >
+          token
+        </Chip>
+      )}
+      <TestControl state={test} onTest={onTest} operator={operator} />
+      <button
+        type="button"
+        aria-label={`Remove ${redirect.from} redirect`}
+        title={!operator ? OPERATOR_ONLY_REASON : "Remove"}
+        disabled={!operator}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        onClick={onRemove}
+      >
+        &times;
+      </button>
     </div>
   );
 }

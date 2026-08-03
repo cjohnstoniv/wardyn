@@ -58,6 +58,28 @@ and does not yet follow semantic versioning (interfaces are not stable).
   · Files & services — matching the approved design. Record leads, because the
   honest answer to "what does this workspace need?" is usually "drive it once
   and find out."
+- The Integrations page's **Artifact mirror** category is now **Egress
+  redirection**, with the same compact `from → to` rows, the `network only`
+  chip, and per-row Test as the Corporate network step.
+
+### Fixed
+
+- **A failed request is no longer reported as a `Blocked` probe verdict.** Both
+  Test buttons caught every thrown error and rendered it as the state meaning
+  "the network would not let this through", so a 403 from lacking the operator
+  role, or a wardynd that restarted mid-click, told the operator their proxy
+  was blocking them and sent them to debug a working firewall. That inverts the
+  reason these buttons are permitted at all. Failed requests now surface as
+  themselves and the control returns to Not tested.
+- **The Integrations page showed nothing for a proxy or redirect saved through
+  the new Corporate network step** — its row derivation still read only the
+  legacy `artifact_overrides` map and the secret-ref-only proxy field, so the
+  two surfaces disagreed about the same stored config.
+- **The Add-integration dialog's registry redirect could not save twice.** Its
+  step body still wrote the deprecated `artifact_overrides` map while sending
+  the whole document back, and the server refuses a body that sets both shapes
+  rather than guessing which one wins — so the second save always 400'd, citing
+  a field the operator never typed. It writes `egress_redirects` now.
 
 ## [0.4.5] — 2026-08-03
 

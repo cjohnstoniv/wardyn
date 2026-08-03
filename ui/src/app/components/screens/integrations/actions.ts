@@ -64,6 +64,17 @@ export async function deleteIntegration(row: IntegrationRow, siteConfig: SiteCon
   }
 
   if (row.category === "artifact_mirror") {
+    // Current shape: row.redirect carries the exact entry to drop, addressed
+    // by its position in SiteConfig.egress_redirects (the id encodes that
+    // index — see lib/api/integrations.ts's egressRedirectRows).
+    if (row.redirect) {
+      const redirects = siteConfig?.egress_redirects ?? [];
+      const i = Number(row.id.slice("mirror:".length));
+      await health.putSiteConfig({ ...(siteConfig ?? {}), egress_redirects: redirects.filter((_, j) => j !== i) });
+      return;
+    }
+    // Legacy shape: a row groups every ecosystem override pointed at the same
+    // destination host — drop them all.
     const overrides = { ...(siteConfig?.artifact_overrides ?? {}) };
     for (const [eco, ov] of Object.entries(overrides)) {
       if (hostnameOf(ov.base_url) === row.name) delete overrides[eco];
@@ -72,6 +83,7 @@ export async function deleteIntegration(row: IntegrationRow, siteConfig: SiteCon
     return;
   }
 
-  // host_proxy — a singleton keyed off upstream_proxy_secret_ref.
-  await health.putSiteConfig({ ...(siteConfig ?? {}), upstream_proxy_secret_ref: undefined });
+  // host_proxy — a singleton keyed off either upstream_proxy_url (plain) or
+  // upstream_proxy_secret_ref (credentialed); clear whichever is set.
+  await health.putSiteConfig({ ...(siteConfig ?? {}), upstream_proxy_url: undefined, upstream_proxy_secret_ref: undefined });
 }

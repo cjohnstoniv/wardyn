@@ -16,10 +16,14 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 
 const getSiteConfigMock = vi.fn();
 const putSiteConfigMock = vi.fn();
+const testProxyMock = vi.fn();
+const testRedirectMock = vi.fn();
 vi.mock("../../../lib/api/health", () => ({
   health: {
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
+    testProxy: (...a: unknown[]) => testProxyMock(...a),
+    testRedirect: (...a: unknown[]) => testRedirectMock(...a),
   },
 }));
 
@@ -109,8 +113,8 @@ describe("IntegrationsScreen — the four category sections", () => {
     expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByText("artifactory.corp.internal")).toBeInTheDocument();
     // "Host proxy" names both the category section AND the singleton row —
-    // assert the row via its distinguishing mono type-line instead.
-    expect(screen.getByText("corporate proxy")).toBeInTheDocument();
+    // assert the row via its own compact "wardyn-proxy → …" mono line instead.
+    expect(screen.getByText("wardyn-proxy")).toBeInTheDocument();
     expect(screen.getByText(T.FOOTNOTE)).toBeInTheDocument();
   });
 
@@ -247,7 +251,7 @@ describe("IntegrationsScreen — embedded mode (Getting Started's Integrations s
     // Both hidden categories have a real row (per the siteConfig above) —
     // their content, and the proxy banner, must not render anyway.
     expect(screen.queryByText("artifactory.corp.internal")).not.toBeInTheDocument();
-    expect(screen.queryByText("corporate proxy")).not.toBeInTheDocument();
+    expect(screen.queryByText("wardyn-proxy")).not.toBeInTheDocument();
     expect(screen.queryByText(T.EMPTY_EGRESS)).not.toBeInTheDocument();
     expect(screen.queryByText(T.EMPTY_PROXY)).not.toBeInTheDocument();
     // AI still renders — hiding two categories must not blank the whole page.
@@ -268,5 +272,189 @@ describe("IntegrationsScreen — Tools tab", () => {
 
     expect(await screen.findByText("git")).toBeInTheDocument();
     expect(screen.getByText(T.LAW)).toBeInTheDocument();
+  });
+});
+
+// BUG FIX (this wave): the category previously derived rows ONLY from the
+// legacy artifact_overrides map, so anything saved through the Corporate
+// network step (which writes egress_redirects) rendered nothing at all.
+describe("IntegrationsScreen — Egress redirection rows (current egress_redirects shape)", () => {
+  it("a redirect saved via the Corporate network step's shape now appears, renamed to 'Egress redirection'", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote", ecosystem: "npm" }],
+    });
+    listSecretsMock.mockResolvedValue([]);
+
+    renderScreen();
+
+    expect(await screen.findByText("Egress redirection")).toBeInTheDocument();
+    // Old label is gone.
+    expect(screen.queryByText("Artifact mirrors")).not.toBeInTheDocument();
+    expect(screen.getByText("registry.npmjs.org")).toBeInTheDocument();
+  });
+
+  it("compacts a long redirect path (host survives, ellipsis appears) but keeps the full from/to/token in the row's title", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    const from = "https://pypi.org/simple";
+    const to = "https://artifactory.corp.internal/api/pypi/pypi-remote/simple";
+    getSiteConfigMock.mockResolvedValue({ egress_redirects: [{ from, to, token_secret_ref: "artifactory-token" }] });
+    listSecretsMock.mockResolvedValue([]);
+
+    renderScreen();
+
+    const row = await screen.findByTitle(`${from} → ${to} · token: artifactory-token`);
+    const toEl = within(row).getByText(/artifactory\.corp\.internal/);
+    // Host survives verbatim in the compacted text…
+    expect(toEl.textContent).toContain("artifactory.corp.internal");
+    // …but it's shorter than the real value, elided with an ellipsis, scheme dropped.
+    expect(toEl.textContent!.length).toBeLessThan(to.length);
+    expect(toEl.textContent).toContain("…");
+    expect(toEl.textContent).not.toContain("https://");
+  });
+
+  it("a redirect with no ecosystem gets the muted 'network only' chip; one WITH an ecosystem does not", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      egress_redirects: [
+        { from: "telemetry.vendor-sdk.io", to: "10.40.2.11:8443" },
+        { from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote", ecosystem: "npm" },
+      ],
+    });
+    listSecretsMock.mockResolvedValue([]);
+
+    renderScreen();
+
+    await screen.findByText("registry.npmjs.org");
+    // Exactly one row (the network-only one) carries the chip.
+    expect(screen.getAllByText("network only")).toHaveLength(1);
+  });
+});
+
+describe("IntegrationsScreen — Test probes (Host proxy row + Egress redirection rows)", () => {
+  it("per-row Test on an egress redirect calls testRedirect(from, to), disables + relabels while running, then shows the real verdict", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
+    });
+    listSecretsMock.mockResolvedValue([]);
+    let resolveTest: (v: { state: "reached" | "blocked" | "bypass" | "no_runner"; detail: string }) => void = () => {};
+    testRedirectMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveTest = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+
+    renderScreen();
+    await screen.findByText("registry.npmjs.org");
+
+    await user.click(screen.getByRole("button", { name: "Test" }));
+
+    expect(testRedirectMock).toHaveBeenCalledWith(
+      "https://registry.npmjs.org",
+      "https://artifactory.corp.internal/api/npm/npm-remote",
+    );
+    // Disables + relabels while running (matches the Corporate network step).
+    expect(await screen.findByRole("button", { name: "Testing…" })).toBeDisabled();
+
+    resolveTest({ state: "reached", detail: "Reached artifactory.corp.internal through the proxy in 240ms." });
+
+    expect(await screen.findByText("Reached")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Test" })).not.toBeDisabled();
+  });
+
+  it("Test on the Host proxy row: the row is real and configured (not permanently empty) for a plain-URL proxy, and Blocked reads as its own verdict", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" });
+    listSecretsMock.mockResolvedValue([]);
+    testProxyMock.mockResolvedValue({ state: "blocked", detail: T.TEST_BLOCKED });
+    const user = userEvent.setup();
+
+    renderScreen();
+    // BUG FIX: a plain-URL proxy used to render as permanently empty here.
+    await screen.findByText("wardyn-proxy");
+    expect(screen.queryByText(T.EMPTY_PROXY)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Test" }));
+
+    expect(testProxyMock).toHaveBeenCalled();
+    expect(await screen.findByText("Blocked")).toBeInTheDocument();
+  });
+
+  it("no_runner and bypass render as their own distinct verdicts, never a generic failure", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      egress_redirects: [{ from: "https://ghcr.io", to: "https://registry.corp.internal/ghcr-remote" }],
+    });
+    listSecretsMock.mockResolvedValue([]);
+    testRedirectMock.mockResolvedValue({ state: "bypass", detail: T.TEST_BYPASS });
+    const user = userEvent.setup();
+
+    renderScreen();
+    await screen.findByText("ghcr.io");
+    await user.click(screen.getByRole("button", { name: "Test" }));
+
+    expect(await screen.findByText("Redirect not enforced")).toBeInTheDocument();
+
+    testRedirectMock.mockResolvedValue({ state: "no_runner", detail: T.TEST_NORUNNER });
+    await user.click(screen.getByRole("button", { name: "Test" }));
+    expect(await screen.findByText("Can't test here")).toBeInTheDocument();
+  });
+
+  it("a FAILED REQUEST is not a probe verdict — it must never render as 'Blocked' (Host proxy row)", async () => {
+    // The whole point of the button is that a result means something. A 403,
+    // a restarted wardynd, or a malformed payload never reached the network at
+    // all, so reporting "Blocked" would blame a firewall that is working fine.
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" });
+    listSecretsMock.mockResolvedValue([]);
+    testProxyMock.mockRejectedValueOnce(new Error("403 operator role required"));
+    const user = userEvent.setup();
+
+    renderScreen();
+    await screen.findByText("wardyn-proxy");
+    await user.click(screen.getByRole("button", { name: "Test" }));
+
+    await screen.findByRole("button", { name: "Test" });
+    expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reached")).not.toBeInTheDocument();
+    // Falls back to untested, so the operator can retry.
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
+  });
+
+  it("a FAILED REQUEST is not a probe verdict — it must never render as 'Blocked' (Egress redirection row)", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
+    });
+    listSecretsMock.mockResolvedValue([]);
+    testRedirectMock.mockRejectedValueOnce(new Error("wardynd restarted mid-request"));
+    const user = userEvent.setup();
+
+    renderScreen();
+    await screen.findByText("registry.npmjs.org");
+    await user.click(screen.getByRole("button", { name: "Test" }));
+
+    await screen.findByRole("button", { name: "Test" });
+    expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
+  });
+
+  it("viewer role disables both the proxy row's and an egress row's Test button", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      upstream_proxy_url: "http://proxy.corp.acme.com:8080",
+      egress_redirects: [{ from: "https://ghcr.io", to: "https://registry.corp.internal/ghcr-remote" }],
+    });
+    listSecretsMock.mockResolvedValue([]);
+
+    renderScreen(false);
+    await screen.findByText("ghcr.io");
+
+    for (const btn of screen.getAllByRole("button", { name: "Test" })) {
+      expect(btn).toBeDisabled();
+    }
   });
 });

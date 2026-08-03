@@ -53,6 +53,7 @@ import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
 import { isUsable } from "../../../lib/workspace-status";
+import { ECOSYSTEM_PUBLIC_URL } from "../../../lib/integrations";
 
 // ------------------------------------------------------------
 // Shared check-row primitives (Review + the corporate steps).
@@ -461,24 +462,35 @@ export function ArtifactRepoStep({
   const [tokenRef, setTokenRef] = React.useState("");
   const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
 
-  const overrides = siteConfig?.artifact_overrides ?? {};
+  // Writes the CURRENT shape (egress_redirects), not the deprecated
+  // artifact_overrides map. It has to: PUT /site-config is a whole-document
+  // replace, so this body always carries back the stored egress_redirects —
+  // and the server REJECTS a document that sets both fields rather than
+  // guessing which is authoritative. Sending the legacy map therefore 400s the
+  // moment any redirect exists, which after the first save is always.
+  const redirects = siteConfig?.egress_redirects ?? [];
+  const ecoRedirects = redirects.filter((r) => r.ecosystem);
 
   const save = async () => {
     const url = baseUrl.trim();
     if (!url) return;
-    const nextOverrides = { ...overrides, [eco]: { base_url: url, token_secret_ref: tokenRef.trim() || undefined } };
-    const next: SiteConfig = { ...(siteConfig ?? {}), artifact_overrides: nextOverrides };
-    if (await mutate(next, "Failed to save the artifact override")) {
+    const token = tokenRef.trim() || undefined;
+    // One redirect per ecosystem — re-picking an ecosystem replaces its row,
+    // which is what the map this replaced did by key assignment.
+    const row = { from: ECOSYSTEM_PUBLIC_URL[eco], to: url, token_secret_ref: token, ecosystem: eco };
+    const next: SiteConfig = {
+      ...(siteConfig ?? {}),
+      egress_redirects: [...redirects.filter((r) => r.ecosystem !== eco), row],
+    };
+    if (await mutate(next, "Failed to save the registry redirect")) {
       setBaseUrl("");
       setTokenRef("");
     }
   };
 
-  const remove = async (name: string) => {
-    const nextOverrides = { ...overrides };
-    delete nextOverrides[name];
-    const next: SiteConfig = { ...(siteConfig ?? {}), artifact_overrides: nextOverrides };
-    await mutate(next, "Failed to remove the artifact override");
+  const remove = async (ecosystem: string) => {
+    const next: SiteConfig = { ...(siteConfig ?? {}), egress_redirects: redirects.filter((r) => r.ecosystem !== ecosystem) };
+    await mutate(next, "Failed to remove the registry redirect");
   };
 
   return (
@@ -495,24 +507,24 @@ export function ArtifactRepoStep({
         </ul>
       )}
 
-      {Object.keys(overrides).length > 0 && (
+      {ecoRedirects.length > 0 && (
         <ul className="space-y-1.5">
-          {Object.entries(overrides).map(([name, ov]) => (
+          {ecoRedirects.map((r) => (
             <li
-              key={name}
+              key={r.ecosystem}
               className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs"
             >
               <span className="min-w-0 truncate font-mono">
-                {name} → {ov.base_url}
-                {ov.token_secret_ref && (
-                  <span className="text-muted-foreground"> · token: {ov.token_secret_ref}</span>
+                {r.ecosystem} → {r.to}
+                {r.token_secret_ref && (
+                  <span className="text-muted-foreground"> · token: {r.token_secret_ref}</span>
                 )}
               </span>
               <button
                 type="button"
-                onClick={() => remove(name)}
+                onClick={() => remove(r.ecosystem!)}
                 disabled={!operator}
-                aria-label={`Remove ${name} override`}
+                aria-label={`Remove ${r.ecosystem} override`}
                 className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
               >
                 <X className="size-3.5" />

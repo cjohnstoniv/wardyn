@@ -8,15 +8,20 @@ import { test, expect, gotoConsole, navTo } from "./fixtures";
 // Getting Started funnel — hermetic walk against the seeded backend (real
 // wardynd + Postgres + `none` runner, admin-token auth). The unit suites cover
 // the branchy per-step logic; this spec proves the real wiring: sidebar entry →
-// onboarding tour → SetupScreen, the full 9-step Next walk in STEP_ORDER
-// (essentials [environment, integrations] → demos [4 sub-steps] → your work
-// [workspaces] → finish [review, launch]), honest not-ready gating on a
-// runner-less host, and the Finish-later dismissal.
+// onboarding tour → SetupScreen, the full 10-step Next walk in STEP_ORDER
+// (essentials [environment, corp_network, integrations] → demos [4 sub-steps]
+// → your work [workspaces] → finish [review, launch]), honest not-ready gating
+// on a runner-less host, and the Finish-later dismissal.
 //
 // 13 -> 9 collapse: the old provider/host_proxy/scm_provider/artifact_repo/
 // credentials steps are gone — that configuration now lives on /integrations,
 // and Getting Started embeds a thin, linked view of it as ONE Integrations
 // step instead.
+//
+// 9 -> 10: `corp_network` came back as its own step, right before
+// Integrations (host proxy + egress redirection moved OFF Integrations onto
+// it) — see steps.ts's PHASES and corp-network.spec.ts for that step's own
+// dedicated coverage; this walk only needs its heading in the right slot.
 //
 // Note the seeded backend's shape is load-bearing here: driver "none" means no
 // barrier is ready and no model is connected, so the launch gate MUST be
@@ -33,28 +38,31 @@ async function openSetupFunnel(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /get started|finish setup/i }).click();
   // The SetupScreen funnel replaces the hero.
   await expect(page.getByRole("heading", { name: "Getting started" })).toBeVisible();
-  await expect(page.getByText(/step 1 of 9/i)).toBeVisible();
+  await expect(page.getByText(/step 1 of 10/i)).toBeVisible();
 }
 
 test.describe("Getting Started funnel", () => {
-  test("walks all nine steps via Next in STEP_ORDER", async ({ page }) => {
+  test("walks all ten steps via Next in STEP_ORDER", async ({ page }) => {
     await openSetupFunnel(page);
     const main = page.getByRole("main");
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
 
-    // STEP_ORDER (steps.ts PHASES): essentials [environment, integrations] →
-    // demos(4) → your work [workspaces] → finish [review, launch]. Integrations
-    // folds in what used to be three separate corporate-network steps plus the
-    // model picker — all four categories (AI provider / SCM host / artifact
-    // mirror / host proxy) now live on one page, embedded here.
+    // STEP_ORDER (steps.ts PHASES): essentials [environment, corp_network,
+    // integrations] → demos(4) → your work [workspaces] → finish [review,
+    // launch]. Corporate network (host proxy + egress redirection) sits
+    // between the barrier and Integrations; Integrations itself keeps only the
+    // model/harness + SCM-host picker.
     // 1 environment
     await expect(main.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
-    // 2 integrations
+    // 2 corporate network
+    await nextBtn.click();
+    await expect(main.getByRole("heading", { name: /corporate network/i })).toBeVisible();
+    // 3 integrations
     await nextBtn.click();
     await expect(
       main.getByRole("heading", { name: /connect what's outside wardyn/i }),
     ).toBeVisible();
-    // 3-6 demos: the four demo sub-steps (heading = the demo title)
+    // 4-7 demos: the four demo sub-steps (heading = the demo title)
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /the sealed box/i })).toBeVisible();
     await nextBtn.click();
@@ -63,15 +71,15 @@ test.describe("Getting Started funnel", () => {
     await expect(main.getByRole("heading", { name: /held at the door/i })).toBeVisible();
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /lines that can't be crossed/i })).toBeVisible();
-    // 7 your work: workspaces
+    // 8 your work: workspaces
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /onboard a workspace/i })).toBeVisible();
-    // 8-9 finish: review → launch
+    // 9-10 finish: review → launch
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /review readiness/i })).toBeVisible();
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /launch your first run/i })).toBeVisible();
-    await expect(page.getByText(/step 9 of 9/i)).toBeVisible();
+    await expect(page.getByText(/step 10 of 10/i)).toBeVisible();
   });
 
   test("launch stays gated on a runner-less host (no fake green)", async ({ page }) => {

@@ -12,7 +12,7 @@
 // existing ArtifactRepoStep / HostProxyStep bodies rather than forking a
 // second copy of their real site-config writes.
 import * as React from "react";
-import { Box, ChevronDown, GitBranch, KeyRound, Network, Sparkles } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, GitBranch, KeyRound, Network, Sparkles } from "lucide-react";
 import {
   AI_TYPES,
   BEDROCK_LANE_META,
@@ -46,7 +46,7 @@ import type { Lane } from "../../../lib/scm-provider";
 const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
   ai_provider: Sparkles,
   scm_host: GitBranch,
-  artifact_mirror: Box,
+  artifact_mirror: ArrowLeftRight,
   host_proxy: Network,
 };
 const CATEGORIES: IntegrationCategory[] = ["ai_provider", "scm_host", "artifact_mirror", "host_proxy"];
@@ -176,7 +176,7 @@ export function AddIntegrationDialog({
       <Dialog open onOpenChange={(o) => !o && close()}>
         <DialogContent className="scroll-thin sm:max-w-xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
           <DialogHeader>
-            <DialogTitle>Add integration — Artifact mirror</DialogTitle>
+            <DialogTitle>Add integration — Egress redirection</DialogTitle>
             <DialogDescription>{CATEGORY_META.artifact_mirror.skipIfLine}</DialogDescription>
           </DialogHeader>
           <ArtifactRepoStep

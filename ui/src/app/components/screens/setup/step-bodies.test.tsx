@@ -159,6 +159,40 @@ describe("step-bodies.tsx — smoke", () => {
     expect(await screen.findByText("Ecosystem")).toBeInTheDocument();
   });
 
+  it("ArtifactRepoStep writes egress_redirects, NEVER the deprecated map — a body with both 400s", async () => {
+    // PUT /site-config is a whole-document replace, so this body carries the
+    // stored egress_redirects back; the server rejects a document setting both
+    // fields. Writing the legacy map therefore fails once ANY redirect exists
+    // — which, after this step's own first save, is always.
+    // A stored pip redirect; the ecosystem select defaults to npm, so saving
+    // ADDS a second row rather than replacing this one.
+    const props = siteConfigProps({
+      egress_redirects: [{ from: "https://pypi.org/simple/", to: "https://nexus.corp/pypi", ecosystem: "pip" }],
+    });
+    const user = userEvent.setup();
+    render(<ArtifactRepoStep status={baseStatus()} {...props} onRecheck={vi.fn()} rechecking={false} />);
+
+    // The already-stored redirect renders from the new shape.
+    expect(await screen.findByText(/pip → https:\/\/nexus\.corp\/pypi/)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/base url/i), "https://nexus.corp/npm");
+    await user.click(screen.getByRole("button", { name: /add\/update/i }));
+
+    const body = props.saveSiteConfig.mock.calls[0][0];
+    // The defect: sending the deprecated map alongside the redirects the server
+    // already stored is exactly the both-fields body it refuses.
+    expect(body.artifact_overrides).toBeUndefined();
+    expect(body.egress_redirects).toHaveLength(2);
+    // The new row carries the canonical public origin as `from` — the same one
+    // the server's own legacy fold synthesizes, so the two dedupe as one row.
+    expect(body.egress_redirects).toContainEqual(
+      expect.objectContaining({ from: "https://registry.npmjs.org/", to: "https://nexus.corp/npm", ecosystem: "npm" }),
+    );
+    // The pre-existing row survives — a whole-document replace that dropped it
+    // would silently unconfigure pip.
+    expect(body.egress_redirects).toContainEqual(expect.objectContaining({ ecosystem: "pip" }));
+  });
+
   it("WorkspacesStep renders the empty-state onboard affordance", () => {
     // WorkspacesStep now navigates to a workspace's detail route (the wizard's
     // onOpenWorkspace and a non-ready row's Open button both call useNavigate),

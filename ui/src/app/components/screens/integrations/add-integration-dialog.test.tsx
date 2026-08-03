@@ -34,7 +34,8 @@ describe("AddIntegrationDialog — Panel 1 (category)", () => {
     expect(screen.getByText(T.CAT_AI)).toBeInTheDocument();
     expect(screen.getByText("SCM host")).toBeInTheDocument();
     expect(screen.getByText(T.CAT_SCM)).toBeInTheDocument();
-    expect(screen.getByText("Artifact mirror")).toBeInTheDocument();
+    // Renamed with the Corporate-network restructure (CATEGORY_META.artifact_mirror.title).
+    expect(screen.getByText("Egress redirection")).toBeInTheDocument();
     expect(screen.getByText(T.CAT_MIRROR)).toBeInTheDocument();
     expect(screen.getByText("Host proxy")).toBeInTheDocument();
     expect(screen.getByText(T.CAT_PROXY)).toBeInTheDocument();

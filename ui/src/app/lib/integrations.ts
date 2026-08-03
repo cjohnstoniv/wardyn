@@ -121,6 +121,23 @@ export const EGRESS_SUGGEST: ReadonlyArray<readonly [url: string, ecosystem: str
   ["https://ghcr.io", "container images"],
 ];
 
+// The public registry each ecosystem redirects AWAY from — the `from` half of
+// an ecosystem-tier EgressRedirect. MIRRORS internal/api/site_config.go's
+// `ecosystemPublicURL` byte for byte (which migration 0030 also copies into
+// SQL, since Postgres can't call Go); all three must stay in sync. Distinct
+// from EGRESS_SUGGEST above: that list is what an operator BROWSES (several
+// hosts per ecosystem, no trailing slashes), this is the single canonical
+// origin the server folds a legacy artifact_overrides entry onto, so a
+// redirect written here and one written by the fold dedupe as the same row.
+export const ECOSYSTEM_PUBLIC_URL: Readonly<Record<string, string>> = {
+  npm: "https://registry.npmjs.org/",
+  pip: "https://pypi.org/simple/",
+  cargo: "https://index.crates.io/",
+  maven: "https://repo.maven.apache.org/maven2/",
+  go: "https://proxy.golang.org",
+  nuget: "https://api.nuget.org/v3/index.json",
+};
+
 // ============================ CAPABILITY-LINE NOTES (verbatim) ============================
 // mockup/wardyn-integrations.js's `CAPS` — one capability table per AI
 // credential type, rendered as ON (note) / OFF (never seen here — the mock has
@@ -208,10 +225,17 @@ export interface CategoryMeta {
   skipIfLine: string;
 }
 
+// artifact_mirror's key stays the wire-stable identifier (setup/integrations-
+// step.tsx's hideCategories=["host_proxy","artifact_mirror"] depends on the
+// literal string, and that file is a different wave's turf this round) — only
+// the user-facing title changed, from the pre-Corporate-network "Artifact
+// mirror" to "Egress redirection" (mockup2/wardyn-integrations.js's RedirIcon
+// + AddCategory card). ArrowLeftRight is lucide's closest stock icon to the
+// mock's hand-drawn RedirIcon glyph (two opposite-facing arrows).
 export const CATEGORY_META: Record<IntegrationCategory, CategoryMeta> = {
   ai_provider: { icon: "Sparkles", title: "AI provider", skipIfLine: T.CAT_AI },
   scm_host: { icon: "GitBranch", title: "SCM host", skipIfLine: T.CAT_SCM },
-  artifact_mirror: { icon: "Box", title: "Artifact mirror", skipIfLine: T.CAT_MIRROR },
+  artifact_mirror: { icon: "ArrowLeftRight", title: "Egress redirection", skipIfLine: T.CAT_MIRROR },
   host_proxy: { icon: "Network", title: "Host proxy", skipIfLine: T.CAT_PROXY },
 };
 
