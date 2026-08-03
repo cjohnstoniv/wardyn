@@ -242,7 +242,7 @@ type managedCredBlob struct {
 // captures a STRUCTURED credential written to a file by `aws sso login`, not a
 // single opaque token printed to the PTY — so managedCredBlob doesn't fit and
 // the capture path is an in-sandbox helper upload (see cmd/wardyn-aws-sso),
-// mirroring wardyn-scan/wardyn-verify rather than terminal scraping.
+// mirroring wardyn-scan rather than terminal scraping.
 const (
 	awsSSOProvider = "aws"     // canonical provider id (secret: wardyn-harness-aws-oauth)
 	awsSSOAgent    = "aws-sso" // agent + image the login sandbox runs

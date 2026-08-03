@@ -373,7 +373,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     until an operator decides it. Leave the list unset and the paragraph below
     is the whole truth. Policy
     CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
-    `setup-commands` writes that widen what a run may do), secret write/delete,
+    `requirements` writes that widen what a run may do), secret write/delete,
     `GET`/`PUT /site-config`, the managed harness credential (`POST
     /setup/harness-login` and `PUT`/`DELETE /setup/harness-credential/{provider}`
     — connects/disconnects the shared subscription EVERY run inherits),

@@ -464,6 +464,112 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 		})
 }
 
+// maxWorkspaceRequirements bounds the requirements-contract map a single PUT
+// may set — a sane ceiling against a hostile/misbehaving request, not a sizing
+// of any real contract.
+const maxWorkspaceRequirements = 256
+
+// validRequirementLevel / validRequirementProvenance are WorkspaceRequirement's
+// two closed enums (types.go documents both on WorkspaceRequirement).
+func validRequirementLevel(l string) bool      { return l == "required" || l == "optional" }
+func validRequirementProvenance(p string) bool { return p == "scan_seeded" || p == "operator_set" }
+
+// splitRequirementKey splits a Workspace.Requirements key on the FIRST colon
+// into its fixed type prefix ("secret"|"egress"|"write") and suffix, per the
+// grammar documented on types.Workspace.Requirements — never the LAST colon: a
+// write:<path> suffix may itself legally contain colons. ok=false when there
+// is no colon, the suffix is empty, or the prefix isn't one of the three known
+// tokens. Shared with the fold this contract feeds (runs_create.go's
+// applyWorkspaceRequirements) and the preflight checklist escalation
+// (compose_setup.go's setupWorkspaceSecretItems).
+func splitRequirementKey(key string) (typ, rest string, ok bool) {
+	typ, rest, found := strings.Cut(key, ":")
+	if !found || rest == "" {
+		return "", "", false
+	}
+	switch typ {
+	case "secret", "egress", "write":
+		return typ, rest, true
+	default:
+		return "", "", false
+	}
+}
+
+// validateWorkspaceRequirement validates one Workspace.Requirements key+value
+// pair before it is ever persisted: the key's grammar (splitRequirementKey),
+// the suffix shape appropriate to its type — egress host via
+// workspacescan.ValidApprovedHost (the SAME rule approved-egress promotion
+// enforces: a plain lowercase host, no scheme/port/wildcard — deliberately
+// stricter than a run policy's AllowedDomains, which also accepts a
+// "*."-wildcard; a requirement is written here through an operator-gated
+// endpoint like approved-egress, so the same conservative rule applies),
+// secret name via the existing secret-name rule (validSecretRef: secretNameRE
+// plus the reserved-platform-name guard), write path via
+// runner.ValidateMountSource (the same host bind-mount deny-list a policy
+// mount is checked against) — and the value's level/provenance enums. A
+// non-empty return is the 400 message.
+func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) string {
+	typ, rest, ok := splitRequirementKey(key)
+	if !ok {
+		return fmt.Sprintf("invalid requirement key %q (want secret:<name>, egress:<host>, or write:<path>)", key)
+	}
+	switch typ {
+	case "secret":
+		if !validSecretRef(rest) {
+			return fmt.Sprintf("requirement %q: invalid secret name", key)
+		}
+	case "egress":
+		if !workspacescan.ValidApprovedHost(rest) {
+			return fmt.Sprintf("requirement %q: invalid egress host (plain lowercase host, no scheme/port/wildcard)", key)
+		}
+	case "write":
+		if err := runner.ValidateMountSource(rest); err != nil {
+			return fmt.Sprintf("requirement %q: invalid write path: %s", key, err.Error())
+		}
+	}
+	if !validRequirementLevel(req.Level) {
+		return fmt.Sprintf("requirement %q: level must be \"required\" or \"optional\"", key)
+	}
+	if !validRequirementProvenance(req.Provenance) {
+		return fmt.Sprintf("requirement %q: provenance must be \"scan_seeded\" or \"operator_set\"", key)
+	}
+	return ""
+}
+
+// handleSetWorkspaceRequirements replaces the workspace's requirements
+// contract — the scoped write behind PUT /workspaces/{id}/requirements. Body:
+// {"requirements": {"<type>:<key>": {"level":"required"|"optional",
+// "provenance":"scan_seeded"|"operator_set"}, ...}}. Every key+value pair is
+// validated (validateWorkspaceRequirement) before the store write; the map
+// itself is capped (maxWorkspaceRequirements). See types.Workspace.Requirements
+// for the key grammar and runs_create.go's applyWorkspaceRequirements for the
+// load-bearing fold this contract feeds into a run's resolved policy.
+func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.Request) {
+	type body struct {
+		Requirements map[string]types.WorkspaceRequirement `json:"requirements"`
+	}
+	scopedWorkspaceWrite(s, w, r, "workspace.requirements.write",
+		func(req body) (map[string]types.WorkspaceRequirement, string) {
+			if len(req.Requirements) > maxWorkspaceRequirements {
+				return nil, fmt.Sprintf("too many requirements (max %d)", maxWorkspaceRequirements)
+			}
+			for _, key := range sortedKeys(req.Requirements) {
+				if msg := validateWorkspaceRequirement(key, req.Requirements[key]); msg != "" {
+					return nil, msg
+				}
+			}
+			return req.Requirements, ""
+		},
+		// Wrapped, not passed as a method value: the store call must not be
+		// resolved until validation has passed.
+		func(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error) {
+			return s.cfg.Store.SetWorkspaceRequirements(ctx, id, reqs)
+		},
+		func(reqs map[string]types.WorkspaceRequirement) map[string]any {
+			return map[string]any{"count": len(reqs)}
+		})
+}
+
 // Observed-egress synthesis bounds: scan the most recent runs that reference
 // this workspace and, for each, at most this many audit events.
 const (

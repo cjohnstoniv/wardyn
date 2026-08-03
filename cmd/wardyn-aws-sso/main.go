@@ -12,7 +12,7 @@
 // (~/.aws/sso/cache/<sha1>.json), so capture here is read-file-then-upload
 // rather than terminal scraping — see harnesscred.go's captureViaHelper doc.
 //
-// Upload contract (mirrors wardyn-scan/wardyn-verify's brokered upload — the
+// Upload contract (mirrors wardyn-scan's brokered upload — the
 // proxy injects the run token, so the sandbox NEVER holds it):
 //
 //	PUT ${WARDYN_PROXY_URL}/wardyn/v1/sso-token/${WARDYN_RUN_ID}
@@ -56,7 +56,7 @@ func main() {
 	if err := run(); err != nil {
 		// Fail loud only on setup errors (missing env, no cache file to read).
 		// Delivery failures are handled non-fatally inside run() (logged, exit
-		// 0), matching wardyn-scan/wardyn-verify: a login run that can't
+		// 0), matching wardyn-scan: a login run that can't
 		// upload leaves nothing connected, an honest signal, without crashing
 		// the throwaway run.
 		fmt.Fprintln(os.Stderr, "wardyn-aws-sso:", err)

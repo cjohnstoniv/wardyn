@@ -107,15 +107,34 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // write REPLACES the whole document (no partial merge — the caller must
 // round-trip a GET first to preserve fields it does not intend to change) and
 // is always audited (site_config.write), mirroring secret.write.
+//
+// integrations are managed through their own endpoints, never through this
+// one: a request body carrying a non-empty integrations is rejected outright
+// (400), and the STORED integrations are carried forward verbatim onto the
+// document this handler persists. Without this, an older client that GETs a
+// config written before `integrations` existed, then PUTs it back unmodified
+// (the documented round-trip above), would silently DELETE every stored
+// integration — this is a whole-document replace, and a client with no
+// knowledge of the field would naturally omit it.
 func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg types.SiteConfig
 	if !decodeStrict(w, r, &cfg) {
+		return
+	}
+	if len(cfg.Integrations) > 0 {
+		writeError(w, http.StatusBadRequest, "integrations are managed through their own endpoints, not PUT /site-config")
 		return
 	}
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
+	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get existing site config: "+err.Error())
+		return
+	}
+	cfg.Integrations = existing.Integrations
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())

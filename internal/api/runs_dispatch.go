@@ -563,7 +563,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 		//   GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles+EXECS
 		//     its test binaries in $TMPDIR → "permission denied". Point it at the
 		//     agent's exec-allowed HOME. (Plain env survives a shell; only PATH is
-		//     reset by a login shell — which wardyn-verify no longer uses.)
+		//     reset by a login shell.)
 		//   MAVEN_OPTS: Maven ALONE ignores HTTP(S)_PROXY (npm/pip/cargo/go/git
 		//     honor it) → "Unknown host repo.maven.apache.org". The JVM proxy
 		//     sysprops route Maven through wardyn-proxy. (The fat image also bakes

@@ -621,6 +621,10 @@ func (s *Server) routes() chi.Router {
 			// Bind (or clear) the workspace/container's model/harness creds — a run
 			// that picks it inherits them (applyWorkspaceCreds). Scoped write.
 			operatorOnly.Put("/workspaces/{id}/llm-cred", s.handleSetWorkspaceLLMCred)
+			// Requirements contract (secrets/egress/write-access a run against
+			// this workspace needs); folded into a run's resolved policy by
+			// runs_create.go's applyWorkspaceRequirements. Scoped write.
+			operatorOnly.Put("/workspaces/{id}/requirements", s.handleSetWorkspaceRequirements)
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
@@ -667,6 +671,12 @@ func (s *Server) routes() chi.Router {
 			// RBAC remains future work (ROADMAP.md).
 			r.Get("/site-config", s.handleGetSiteConfig)
 			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
+
+			// Effective integration set (stored ∪ legacy-derived) with live
+			// capabilities — see internal/api/integrations.go /
+			// setup_integrations.go. Read-only, same RBAC posture as
+			// site-config's GET: Credentials only ever holds secret NAMES.
+			r.Get("/integrations", s.handleListIntegrations)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}
 			if s.cfg.RecordingStore != nil {

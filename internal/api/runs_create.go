@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // decodeAndValidateCreateRun decodes the POST /api/v1/runs body and applies the
@@ -210,6 +211,208 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
 	}
 	return ephemeralDirs, 0, nil
+}
+
+// requirementAuditEntry is one audit-worthy fact applyWorkspaceRequirements
+// produced (an auto-attached secret grant, or a non-empty egress addition).
+// applyWorkspaceRequirements itself never audits — like applyWorkspaceCreds vs.
+// applyPrimaryWorkspaceCreds, "fold" and "fold + audit" are split so preflight
+// (which persists nothing) can call the SAME fold and simply discard these.
+type requirementAuditEntry struct {
+	action string
+	target string
+	data   map[string]any
+}
+
+// resolveWorkspaceSelections builds the per-workspace selection map
+// applyWorkspaceRequirements consults, keyed by workspace id string, from
+// CreateRunRequest.Workspaces PLUS the legacy singular WorkspaceID — kept a
+// "working single-selection alias": a caller using ONLY workspace_id (every
+// pre-existing SDK/CLI/policy caller) must fold IDENTICALLY to explicitly
+// selecting that one workspace with no optional requirement enabled and no
+// write narrowing, which is exactly the zero-value WorkspaceSelection. An
+// explicit Workspaces[] entry for the same id wins over the synthesized alias.
+// Shared by create (runs.go) and preflight so the two can never disagree about
+// which selection a workspace resolves to.
+func resolveWorkspaceSelections(req createRunRequest) map[string]client.WorkspaceSelection {
+	out := make(map[string]client.WorkspaceSelection, len(req.Workspaces)+1)
+	for _, sel := range req.Workspaces {
+		if sel.WorkspaceID != "" {
+			out[sel.WorkspaceID] = sel
+		}
+	}
+	if req.WorkspaceID != nil {
+		id := req.WorkspaceID.String()
+		if _, exists := out[id]; !exists {
+			out[id] = client.WorkspaceSelection{WorkspaceID: id}
+		}
+	}
+	return out
+}
+
+// applyWorkspaceRequirements folds each referenced workspace's requirements
+// contract (types.Workspace.Requirements) into the run's RESOLVED policy — the
+// per-workspace analogue of unionWorkspaceEgress/applyWorkspaceCreds, kept as
+// its OWN function and never inlined into either of those (nor into
+// ensureLLMGrant): a reviewer specifically flagged that a fourth folder
+// inlined among those three is where double-grants and dropped hosts hide.
+//
+// Owner's contract, verbatim: "Any setting that is required always comes by
+// default with the workspace whenever it is used; anything optional is then
+// configurable / enabled when necessary." Concretely, per requirement type:
+//
+//   - egress:<host>  Required unions host into AllowedDomains unconditionally
+//     (mirrors unionWorkspaceEgress's own unconditional append). Optional
+//     unions it ONLY when the run's selection lists the key in
+//     EnabledOptional.
+//   - secret:<NAME>  Required+operator_set mints the SAME api_key-style grant
+//     shape the pre-Integration applyWorkspaceCreds used for a workspace's
+//     api_key binding (git history: `git show ecc1903~1:internal/api/llmcred.go`,
+//     the WorkspaceLLMCredAPIKey case), scoped to the run's agent's own
+//     model-provider host (applyRequiredSecretGrant). Required+scan_seeded
+//     NEVER auto-grants — see the TRUST BOUNDARY comment below. An optional
+//     secret follows the identical rule, gated additionally on the run's
+//     selection enabling the key.
+//   - write:<path>   Resolves the SOURCE's effective writability onto every
+//     already-seeded mount at that path: Required defaults writable, Optional
+//     defaults read-only unless enabled — and the per-run ReadOnly selection
+//     may only NARROW that default (force read-only), never widen it (see
+//     applyWriteNarrowing).
+//
+// A workspace with NO requirements declared is architecturally a no-op here —
+// the loop below only ever visits declared keys — which is exactly what keeps
+// every pre-contract (or simply unconfigured) workspace's resolved spec
+// byte-identical to today's behavior.
+//
+// Must run BEFORE persistRunGrants, which snapshots spec.EligibleGrants into
+// persisted grants + proxy injections, and AFTER the workspace's own
+// mounts/repos are already seeded onto spec (seedRequestWorkspace / an
+// inline/stored policy) so the write-path narrowing below has a mount to
+// adjust.
+//
+// Returns one entry per auto-attached secret grant and one per workspace with
+// a non-empty egress addition, for the CALLER to audit (launch does; preflight
+// discards them — see requirementAuditEntry).
+func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
+	var events []requirementAuditEntry
+	for _, ws := range wsRefs {
+		if len(ws.Requirements) == 0 {
+			continue
+		}
+		sel := selections[ws.ID.String()] // zero value when absent: nothing optional enabled, no narrowing
+		var addedEgress []string
+		// Sorted iteration: map order is otherwise nondeterministic, and this
+		// drives grant-creation and audit-event ordering.
+		for _, key := range sortedKeys(ws.Requirements) {
+			req := ws.Requirements[key]
+			typ, name, ok := splitRequirementKey(key)
+			if !ok {
+				continue // defense only: the write endpoint already rejects a bad key
+			}
+			enabled := req.Level == "required" || slices.Contains(sel.EnabledOptional, key)
+			switch typ {
+			case "egress":
+				if !enabled {
+					continue
+				}
+				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)
+			case "secret":
+				if !enabled {
+					continue
+				}
+				// TRUST BOUNDARY (security-critical — do not relax): a
+				// scan_seeded secret requirement comes from the WORKSPACE
+				// SCANNER reading UNTRUSTED repo content (e.g. a committed
+				// .env template naming a var), never from an operator's own
+				// action. Auto-minting a grant from it would let a hostile,
+				// or simply never-reviewed, workspace route the OPERATOR's
+				// own stored secrets into a run just by naming them in a
+				// dotenv. Only an operator's DIRECT declaration
+				// (operator_set) may ever auto-grant.
+				if req.Provenance != "operator_set" {
+					continue
+				}
+				if ev, ok := s.applyRequiredSecretGrant(ctx, spec, agent, name); ok {
+					events = append(events, ev)
+				}
+			case "write":
+				applyWriteNarrowing(spec, name, enabled, sel.ReadOnly)
+			}
+		}
+		if len(addedEgress) > 0 {
+			events = append(events, requirementAuditEntry{
+				action: "run.workspace.requirement.egress", target: ws.ID.String(),
+				data: map[string]any{"workspace_id": ws.ID.String(), "added_domains": addedEgress},
+			})
+		}
+	}
+	return events
+}
+
+// applyRequiredSecretGrant mints the api_key-style grant an operator-declared
+// required (or enabled-optional) secret requirement promises, coupling it to
+// an exact egress allowlist entry — the SAME grant/injection/egress shape the
+// pre-Integration applyWorkspaceCreds used for a workspace's api_key binding
+// (git history: `git show ecc1903~1:internal/api/llmcred.go`,
+// WorkspaceLLMCredAPIKey case), scoped to the run's AGENT's own
+// model-provider host (agentLLMProvider) — the only host this generic
+// requirement key has any deterministic binding to. ok=false — no grant, no
+// mutation — when: the agent has no LLM-provider convention (nothing to bind
+// to); a grant for that host is already proposed (never double-grant the same
+// host — whichever caller proposed it first wins, mirroring
+// ensureLLMGrant/applyWorkspaceCreds); or the named secret is not actually
+// stored (an auto-mint grant with no resolvable secret would fail the proxy
+// CLOSED at startup — degrade silently to no-model-access instead of bricking
+// the run; compose_setup.go's checklist escalates the gap to blocking styling).
+func (s *Server) applyRequiredSecretGrant(ctx context.Context, spec *types.RunPolicySpec, agent, secretName string) (requirementAuditEntry, bool) {
+	p, ok := agentLLMProvider(agent)
+	if !ok {
+		return requirementAuditEntry{}, false
+	}
+	if _, exists := apiKeyGrantForHost(spec, p.host); exists {
+		return requirementAuditEntry{}, false
+	}
+	if !s.secretPresent(ctx, secretName) {
+		return requirementAuditEntry{}, false
+	}
+	scope, _ := json.Marshal(map[string]string{
+		"host": p.host, "header": p.header, "format": p.format, "secret_name": secretName,
+	})
+	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
+	})
+	if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, p.host) {
+		spec.AllowedDomains = append(spec.AllowedDomains, p.host)
+	}
+	return requirementAuditEntry{
+		action: "run.workspace.requirement.secret", target: secretName,
+		data: map[string]any{"secret_name": secretName, "host": p.host},
+	}, true
+}
+
+// applyWriteNarrowing resolves ONE write:<path> requirement's effective mount
+// writability onto every spec.WorkspaceMounts entry whose Source is path (a
+// no-op when path isn't actually mounted this run — e.g. a multi-source
+// workspace attached only partially). grantedDefault is the contract's own
+// default BEFORE narrowing (true for Required, or an enabled Optional); narrow
+// is the run's OPTIONAL per-source override and is NARROW-ONLY: narrow=true
+// forces read-only regardless of grantedDefault (a run may drop a Required
+// write); narrow=false or nil never WIDENS past grantedDefault (a run may not
+// add an Optional write it never enabled by putting the key in
+// EnabledOptional — only Level/EnabledOptional can grant write, never this
+// field alone).
+func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool) {
+	granted := grantedDefault
+	if narrow != nil && *narrow {
+		granted = false
+	}
+	for i := range spec.WorkspaceMounts {
+		if spec.WorkspaceMounts[i].Source != path {
+			continue
+		}
+		ro := !granted
+		spec.WorkspaceMounts[i].ReadOnly = &ro
+	}
 }
 
 // enforcedConfinement is the PURE confinement math both the launch path and the

@@ -39,6 +39,13 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 		// `sources` entirely is legal — the server onboards the floor (one
 		// ephemeral scratch source) rather than rejecting the request.
 		{"WorkspaceRequest", client.WorkspaceRequest{}, []string{"name"}},
+		// WorkspaceID is the one required field (which workspace this selection
+		// names); EnabledOptional/ReadOnly must both be omitempty so a
+		// selection that enables nothing and narrows nothing doesn't post
+		// `"enabled_optional":null` or `"read_only":null` — which would
+		// override the contract's own resolved default instead of leaving it
+		// alone (ReadOnly's whole point is nil == "no narrowing").
+		{"WorkspaceSelection", client.WorkspaceSelection{}, []string{"workspace_id"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := json.Marshal(tc.req)

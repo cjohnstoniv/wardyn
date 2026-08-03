@@ -65,6 +65,33 @@ func TestSetupStatus_AdminToken(t *testing.T) {
 	}
 }
 
+// The two additive SetupStatus fields (Integrations, Harnesses) are populated
+// alongside the existing checks, never in place of them: Harnesses always
+// echoes the static harness catalog, and Integrations reflects a legacy row
+// derived from a plain stored secret exactly like GET /integrations would.
+func TestSetupStatus_IntegrationsAndHarnessesAdditive(t *testing.T) {
+	srv := New(Config{
+		AdminToken: adminToken,
+		Secrets:    &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}},
+	})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	if len(st.Harnesses) != len(harnessCatalog) {
+		t.Errorf("Harnesses = %d entries, want %d (one per catalog row)", len(st.Harnesses), len(harnessCatalog))
+	}
+	found := false
+	for _, in := range st.Integrations {
+		if in.ID == "anthropic_api_key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Integrations = %+v, want an anthropic_api_key entry derived from the stored secret", st.Integrations)
+	}
+}
+
 // Full assembly: a fake Runner + fake Composer + in-memory Secrets + injected
 // ComposerBackends snapshot + AgeKeyDurable are echoed correctly, and reserved
 // secret names are excluded from secrets.present.

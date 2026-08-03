@@ -292,3 +292,74 @@ func TestHandleGetSiteConfig_StoreError(t *testing.T) {
 		t.Errorf("code = %d, want 500; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// ─── the integrations clobber guard ──────────────────────────────────────────
+//
+// PUT /site-config replaces the whole document. An older client that GETs a
+// config written before `integrations` existed, then PUTs it back, would
+// silently DELETE every stored integration if this guard were missing.
+
+// A request body carrying a non-empty integrations is rejected outright: they
+// are managed through their own endpoints, never through this one.
+func TestHandlePutSiteConfig_RejectsIntegrations(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, audit := newSiteConfigHarness(t, fake)
+	body := `{"integrations":[{"id":"x","name":"X","category":"ai_provider","type":"anthropic_api_key"}]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen != nil {
+		t.Errorf("a rejected write must never reach the store, got %+v", fake.putSeen)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("a rejected write must not audit, got %d events", len(audit.events))
+	}
+}
+
+// A PUT that omits integrations (the common case for any client, old or new)
+// must carry the STORED integrations forward verbatim rather than wiping them.
+func TestHandlePutSiteConfig_CarriesStoredIntegrationsForward(t *testing.T) {
+	existing := types.Integration{
+		ID: "x", Name: "X", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+	}
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{existing}}}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	body := `{"upstream_proxy_secret_ref": "corp-proxy-url"}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got types.SiteConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Integrations) != 1 || got.Integrations[0].ID != "x" {
+		t.Errorf("response Integrations = %+v, want the stored [x] carried forward", got.Integrations)
+	}
+	if fake.putSeen == nil || len(fake.putSeen.Integrations) != 1 || fake.putSeen.Integrations[0].ID != "x" {
+		t.Fatalf("store did not receive the carried-forward integrations: %+v", fake.putSeen)
+	}
+	// The rest of THIS request's write still landed — carrying integrations
+	// forward must not clobber anything else.
+	if fake.putSeen.UpstreamProxySecretRef != "corp-proxy-url" {
+		t.Errorf("UpstreamProxySecretRef = %q, want corp-proxy-url", fake.putSeen.UpstreamProxySecretRef)
+	}
+}
+
+// A failure reading the existing config before carrying its integrations
+// forward must fail the whole PUT (500), never silently proceed with an
+// empty integrations list — that would reintroduce the exact data loss this
+// guard exists to prevent.
+func TestHandlePutSiteConfig_GetExistingErrorFailsClosed(t *testing.T) {
+	fake := &fakeSiteConfigStore{getErr: context.DeadlineExceeded}
+	srv, _ := newSiteConfigHarness(t, fake)
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"upstream_proxy_secret_ref":"corp-proxy-url"}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500 (fail closed rather than risk wiping stored integrations); body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen != nil {
+		t.Errorf("a failed carry-forward read must never reach PutSiteConfig, got %+v", fake.putSeen)
+	}
+}

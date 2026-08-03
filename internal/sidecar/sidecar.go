@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package sidecar holds the small brokered-PUT plumbing shared by Wardyn's
-// in-sandbox result-uploader binaries (wardyn-scan, wardyn-verify): validate
+// in-sandbox result-uploader binaries (wardyn-scan): validate
 // WARDYN_PROXY_URL/WARDYN_RUN_ID, build the brokered result URL, and PUT a
 // JSON body. No Authorization header is ever set here — the wardyn-proxy
 // holds and injects the run token, stripping any sandbox-supplied one.

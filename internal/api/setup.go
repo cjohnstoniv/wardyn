@@ -81,6 +81,18 @@ type SetupStatus struct {
 	// "connected / expiring / reconnect" row that works in compose mode where
 	// there is no resident host login. Empty when no managed credential exists.
 	Harness []SetupHarness `json:"harness,omitempty"`
+	// Integrations is the effective integration set (stored ∪ legacy-derived,
+	// see effectiveIntegrations in integrations.go) with each row's live
+	// capability matrix — the same shape GET /api/v1/integrations returns,
+	// folded in here so the wizard needs one fewer round trip. ADDITIVE field;
+	// omitted when empty.
+	Integrations []SetupIntegration `json:"integrations,omitempty"`
+	// Harnesses is the STATIC coding-agent harness catalog (harnessCatalog,
+	// harness.go) — which tools Wardyn knows how to run and whether it can
+	// wire each one a managed model credential or a container-login
+	// subscription. Distinct from Harness above (a CAPTURED credential's live
+	// readiness). ADDITIVE field; omitted when empty.
+	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -704,21 +716,23 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	writeJSON(w, http.StatusOK, SetupStatus{
-		Ready:      ready,
-		Checks:     checks,
-		Auth:       SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
-		Runner:     rnr,
-		Composer:   comp,
-		Providers:  providers,
-		Secrets:    sec,
-		AgeKey:     SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
-		HasRuns:    hasRuns,
-		Platform:   SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
-		HostProxy:  hostProxy,
-		SCM:        scmPosture,
-		Bedrock:    bedrock,
-		Deployment: SetupDeployment{HostLike: deploymentHostLike(providers)},
-		Harness:    harnessCreds,
+		Ready:        ready,
+		Checks:       checks,
+		Auth:         SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
+		Runner:       rnr,
+		Composer:     comp,
+		Providers:    providers,
+		Secrets:      sec,
+		AgeKey:       SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
+		HasRuns:      hasRuns,
+		Platform:     SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
+		HostProxy:    hostProxy,
+		SCM:          scmPosture,
+		Bedrock:      bedrock,
+		Deployment:   SetupDeployment{HostLike: deploymentHostLike(providers)},
+		Harness:      harnessCreds,
+		Integrations: s.integrationsWithCapabilities(ctx),
+		Harnesses:    setupHarnessTools(),
 	})
 }
 

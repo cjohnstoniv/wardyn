@@ -314,39 +314,69 @@ func setupWorkspaceItems(workspaces []types.Workspace) []SetupItem {
 // operators to ignore it.
 const maxWorkspaceSecretRows = 5
 
-// setupWorkspaceSecretItems surfaces the secret NAMES the referenced
-// workspaces' scanned profiles declare as REQUIRED (RequiredSecrets with
+// setupWorkspaceSecretItems surfaces the secret NAMES a referenced workspace
+// needs: its scanned profile's declared REQUIRED needs (RequiredSecrets with
 // Optional=false — optional/deploy-time needs stay in the workspace needs
-// panel). Advisory only: a workspace-declared secret never blocks launch and
-// never creates a grant — the operator decides whether to store one. The kind
-// is "workspace_secret", NOT "secret": the review panel's destructive ("run
-// will 422") styling is gated to llm_access|secret, and these rows must render
-// neutral. Names are grounded via sanitizeSecretName — the SAME normalization
+// panel) UNIONED with any "secret:<NAME>" entry in its requirements contract
+// (types.Workspace.Requirements) whose Level is "required". The two sources
+// are merged by sanitized name so the same secret never duplicates a row.
+//
+// Kind is normally "workspace_secret" — the review panel's destructive ("run
+// will 422") styling is gated to llm_access|secret, and a scanner-derived
+// advisory row must render neutral (a workspace-declared secret never blocks
+// launch by itself, and the operator decides whether to store one). BUT a
+// name the requirements contract marks Required that is ALSO absent from the
+// store escalates to Kind "secret": under that contract it genuinely will not
+// be there at launch — applyWorkspaceRequirements's trust boundary means even
+// a scan_seeded Required secret never auto-grants — so the row must carry the
+// SAME blocking styling an unmet llm_access/secret row does, not just an
+// advisory note. The run still launches either way; whatever needs the secret
+// fails at that point. A Required name a launch already granted (present +
+// operator_set) needs no escalation HERE: setupSecretItems already renders
+// that as a satisfied "secret:" row from the live grant
+// applyWorkspaceRequirements minted onto the spec.
+//
+// Names are grounded via sanitizeSecretName — the SAME normalization
 // groundAPIKeySecretNames uses — so the add-secret fix can't dead-end on
-// secretNameRE, and presence is checked against the sanitized form. The raw
-// declared name stays in the label with its provenance (these names come from
-// UNTRUSTED workspace content, already charset-capped by DeriveProfile).
+// secretNameRE, and presence is checked against the sanitized form. A
+// contract-declared name is already secretNameRE-shaped
+// (validateWorkspaceRequirement enforces it at write time), so it needs no
+// further sanitizing. The raw scanner-declared name stays in the label with
+// its provenance (those names come from UNTRUSTED workspace content, already
+// charset-capped by DeriveProfile); a contract-required name is labeled as
+// such instead.
 func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
 	type needRow struct {
-		raw, ws string
+		raw, ws  string
+		required bool // Level=="required" in some workspace's requirements contract
 	}
 	bySane := map[string]needRow{}
 	for _, ws := range workspaces {
-		p, ok := workspaceProfile(ws)
-		if !ok {
-			continue
+		if p, ok := workspaceProfile(ws); ok {
+			for _, n := range p.RequiredSecrets {
+				if n.Optional {
+					continue
+				}
+				sane := sanitizeSecretName(n.Name)
+				if sane == "" {
+					continue
+				}
+				if _, seen := bySane[sane]; !seen {
+					bySane[sane] = needRow{raw: n.Name, ws: ws.Name}
+				}
+			}
 		}
-		for _, n := range p.RequiredSecrets {
-			if n.Optional {
+		for _, key := range sortedKeys(ws.Requirements) {
+			typ, name, ok := splitRequirementKey(key)
+			if !ok || typ != "secret" || ws.Requirements[key].Level != "required" {
 				continue
 			}
-			sane := sanitizeSecretName(n.Name)
-			if sane == "" {
-				continue
+			row := bySane[name]
+			if row.raw == "" {
+				row.raw, row.ws = name, ws.Name
 			}
-			if _, seen := bySane[sane]; !seen {
-				bySane[sane] = needRow{raw: n.Name, ws: ws.Name}
-			}
+			row.required = true
+			bySane[name] = row
 		}
 	}
 	if len(bySane) == 0 {
@@ -367,11 +397,12 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 			break
 		}
 		row := bySane[sane]
-		it := SetupItem{
-			Kind: "workspace_secret", ID: "workspace_secret:" + sane,
-			Label:      "Workspace secret: " + row.raw,
-			RequiredBy: "declared by workspace " + row.ws + " (untrusted content, names only)",
+		kind, id := "workspace_secret", "workspace_secret:"+sane
+		requiredBy := "declared by workspace " + row.ws + " (untrusted content, names only)"
+		if row.required {
+			requiredBy = "required by workspace " + row.ws + "'s requirements contract"
 		}
+		it := SetupItem{Label: "Workspace secret: " + row.raw, RequiredBy: requiredBy}
 		if presentSecrets[sane] {
 			it.Status = "satisfied"
 			it.Detail = "a secret named " + sane + " is stored"
@@ -379,7 +410,12 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 			it.Status = "missing"
 			it.Detail = "the workspace's config expects this; store it as " + sane + " if the task needs it"
 			it.Fix = &SetupFix{Action: "add_secret", SecretName: sane}
+			if row.required {
+				// Escalate to the blocking-styled kind — see the doc comment above.
+				kind, id = "secret", "secret:"+sane
+			}
 		}
+		it.Kind, it.ID = kind, id
 		items = append(items, it)
 	}
 	return items

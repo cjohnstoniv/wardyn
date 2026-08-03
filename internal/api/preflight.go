@@ -110,9 +110,16 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// checklist rows below see the creds the run will really hold. No audit
 	// event — preflight persists nothing (that is applyPrimaryWorkspaceCreds's
 	// launch-only half).
-	if primary := s.primaryWorkspace(ctx, req, s.referencedWorkspaces(ctx, spec)); primary != nil {
+	wsRefs := s.referencedWorkspaces(ctx, spec)
+	if primary := s.primaryWorkspace(ctx, req, wsRefs); primary != nil {
 		s.applyWorkspaceCreds(ctx, &spec, primary, req.Agent)
 	}
+	// Fold each referenced workspace's requirements contract exactly as launch
+	// does (runs.go) — the SAME applyWorkspaceRequirements call, so Review can
+	// never predict a rosier (or stricter) outcome than launch actually applies.
+	// Discarded, not audited: preflight persists nothing, mirroring the
+	// applyWorkspaceCreds call just above.
+	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really

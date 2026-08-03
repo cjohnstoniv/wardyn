@@ -49,7 +49,7 @@ func TestBuild_SmokeDockerd(t *testing.T) {
 	}
 	toolsDir := os.Getenv("WARDYN_TEST_TOOLS_DIR")
 	if toolsDir == "" {
-		t.Skip("set WARDYN_TEST_TOOLS_DIR=<dir with agent-run,wardyn-verify,wardyn-git-helper> to run the smoke test")
+		t.Skip("set WARDYN_TEST_TOOLS_DIR=<dir with agent-run,agent-run-lib.sh,wardyn-rec,wardyn-git-helper> to run the smoke test")
 	}
 
 	b, err := New("", cacheRepo) // use default envbuilder image

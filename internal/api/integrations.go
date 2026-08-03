@@ -3,7 +3,17 @@
 
 package api
 
-import "fmt"
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
+)
 
 // integrations.go computes the Integrations screen's capability matrix: for
 // one named connection to a system outside Wardyn (an "integration"), what it
@@ -331,4 +341,270 @@ func stringSlice(v any) []string {
 	default:
 		return nil
 	}
+}
+
+// ─── effectiveIntegrations: stored ∪ derived legacy rows ────────────────────
+//
+// The killer feature of the Integrations entity is that an operator who never
+// opens the surface keeps byte-identical behavior forever: nothing is seeded
+// at boot. Instead, effectiveIntegrations computes the STORED rows union rows
+// DERIVED on the fly from state that already exists (a secret, a boot-config
+// knob, a legacy SiteConfig field) — read-only, nothing here ever persists
+// anything. This section is deliberately NOT pure (it reads Server config,
+// the secret store, the site-config store): capabilitiesFor above stays
+// exactly as it was; this is new code built around it, per the file's own
+// design note.
+
+// integrationRow is one entry of the effective integration set: either a
+// STORED types.Integration or one synthesized from pre-existing config/secret
+// state (Source distinguishes them). Unexported — the derivation's internal
+// currency; the wire shape is SetupIntegration (setup_integrations.go), which
+// adds the live capability matrix.
+type integrationRow struct {
+	types.Integration
+	Source string `json:"source"` // "stored" | "legacy"
+}
+
+// effectiveIntegrations returns the operator's stored integrations union rows
+// derived from state that already exists, deterministically ordered
+// (category, then id) so the API response and any test are stable regardless
+// of map/store iteration order upstream. A nil/erroring Store degrades to
+// "no stored rows, no SiteConfig-derived legacy rows" rather than failing —
+// this is a read surface, never a gate.
+func (s *Server) effectiveIntegrations(ctx context.Context) []integrationRow {
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+			sc = got
+		}
+	}
+	stored := make(map[string]bool, len(sc.Integrations))
+	rows := make([]integrationRow, 0, len(sc.Integrations))
+	for _, in := range sc.Integrations {
+		stored[in.ID] = true
+		rows = append(rows, integrationRow{Integration: in, Source: "stored"})
+	}
+	rows = append(rows, s.legacyIntegrations(ctx, sc, stored)...)
+	slices.SortFunc(rows, func(a, b integrationRow) int {
+		if c := cmp.Compare(a.Category, b.Category); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
+	return rows
+}
+
+// legacyIntegrations derives one row per pre-existing source of truth a
+// pre-Integrations-entity Wardyn already reads at dispatch time, so an
+// operator's existing setup is never invisible on the Integrations surface.
+// stored gates out any id a REAL stored integration already claims (the
+// "stored row wins" rule): an operator who explicitly configures an
+// integration under one of these ids takes over that slot and stops seeing
+// the synthesized duplicate; a stored row under any OTHER id coexists
+// alongside these untouched.
+func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, stored map[string]bool) []integrationRow {
+	present := s.presentSecretNames(ctx) // the ONE present-secret map every other verdict is computed from (secrets.go)
+	var rows []integrationRow
+	add := func(id string, in types.Integration) {
+		if stored[id] {
+			return
+		}
+		in.ID = id
+		rows = append(rows, integrationRow{Integration: in, Source: "legacy"})
+	}
+
+	// ai_provider: direct API keys.
+	if present["anthropic-api-key"] {
+		add("anthropic_api_key", types.Integration{
+			Name: "Anthropic API key", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+			Credentials: map[string]string{"api_key": "anthropic-api-key"},
+		})
+	}
+	if present["openai-api-key"] {
+		add("openai_api_key", types.Integration{
+			Name: "OpenAI API key", Category: types.IntegrationAIProvider, Type: "openai_api_key",
+			Credentials: map[string]string{"api_key": "openai-api-key"},
+		})
+	}
+
+	// ai_provider: the two Claude-subscription lanes. These can coexist (a
+	// host-mode wardynd may also have a managed blob captured), so they get
+	// distinct ids rather than sharing "anthropic_subscription".
+	if s.cfg.SubscriptionToken != nil {
+		if tok, err := s.cfg.SubscriptionToken.Peek(); err == nil && tok.Value != "" {
+			add("anthropic_subscription:resident_host", types.Integration{
+				Name: "Claude subscription (resident host)", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+				Config: mustJSON(map[string]any{"lane": "resident_host"}),
+			})
+		}
+	}
+	if s.managedInjectReady("claude-code") {
+		add("anthropic_subscription:managed", types.Integration{
+			Name: "Claude subscription (managed)", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+			Config: mustJSON(map[string]any{"lane": "managed"}),
+		})
+	}
+
+	// ai_provider: Bedrock — ONE row. Reuses setupBedrock's own "is Bedrock
+	// touched at all" predicate (region/model/AWS profile/any bedrock secret)
+	// rather than re-deriving it a second way.
+	if b := s.setupBedrock(present); b.configured() {
+		add("bedrock", types.Integration{
+			Name: "AWS Bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
+			Config: mustJSON(map[string]any{"lane": "auto", "region": b.Region, "model": b.Model}),
+		})
+	}
+
+	// scm_host: the GitHub App.
+	if present[secretGitHubAppID] && present[secretGitHubAppKey] {
+		add("github_app", types.Integration{
+			Name: "GitHub App", Category: types.IntegrationSCMHost, Type: "github_app",
+			Credentials: map[string]string{"app_id": secretGitHubAppID, "app_key": secretGitHubAppKey},
+			Config:      mustJSON(map[string]any{"host": "github.com"}),
+		})
+	}
+
+	// scm_host: git-pat-<slug>/ssh-key-<slug> secrets, merged with
+	// SiteConfig.ScmHosts by host. Built directly (not through add) because
+	// each row's id depends on the derived host; gitHostRows applies the same
+	// stored-wins gate per row.
+	rows = append(rows, gitHostRows(present, sc.ScmHosts, stored)...)
+
+	// artifact_mirror: one row per corp mirror host.
+	rows = append(rows, artifactMirrorRows(sc, stored)...)
+
+	// host_proxy: the corporate upstream proxy.
+	if sc.UpstreamProxySecretRef != "" {
+		add("host_proxy", types.Integration{
+			Name: "Corporate upstream proxy", Category: types.IntegrationHostProxy, Type: "host_proxy",
+			Credentials: map[string]string{"secret": sc.UpstreamProxySecretRef},
+		})
+	}
+
+	return rows
+}
+
+// gitHostCreds accumulates the pat/ssh-key secret names discovered for one
+// host while scanning the git-pat-<slug>/ssh-key-<slug> secret-name
+// convention (the same convention setup.go's scmProviderCheck documents).
+type gitHostCreds struct{ pat, sshKey string }
+
+// credentials builds the git_host Credentials map capabilitiesFor's git_host
+// case reads ("pat"/"ssh_key"), or nil when neither lane is configured.
+func (c gitHostCreds) credentials() map[string]string {
+	m := map[string]string{}
+	if c.pat != "" {
+		m["pat"] = c.pat
+	}
+	if c.sshKey != "" {
+		m["ssh_key"] = c.sshKey
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+// hostFromSecretSlug reverses the "<host-slug>" naming convention
+// (dots -> hyphens, e.g. git-pat-github-com) documented in setup.go's
+// scmProviderCheck: strip prefix, turn hyphens back into dots.
+//
+// ponytail: lossy for a host whose own name contains a hyphen (e.g.
+// "ghe-prod.corp.com" slugs to "ghe-prod-corp-com" and would round-trip
+// wrong) — the same ambiguity the existing convention already accepts
+// (scmProviderCheck treats these as opaque display names, never a validated
+// host). Upgrade path: store the real host alongside the secret if an exact
+// reverse ever matters.
+func hostFromSecretSlug(name, prefix string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(name, prefix), "-", ".")
+}
+
+// gitHostRows derives one scm_host/git_host row per host named by a
+// git-pat-<slug>/ssh-key-<slug> secret OR a SiteConfig.ScmHosts entry, merged
+// by host: an operator's declared ScmHosts host with no credential yet still
+// gets a row (egress_host only; clone:pat/clone:ssh read needs_setup), and a
+// host that also has a credential carries it.
+func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[string]bool) []integrationRow {
+	byHost := map[string]gitHostCreds{}
+	for n := range secretNames {
+		switch {
+		case strings.HasPrefix(n, "git-pat-"):
+			h := hostFromSecretSlug(n, "git-pat-")
+			c := byHost[h]
+			c.pat = n
+			byHost[h] = c
+		case strings.HasPrefix(n, "ssh-key-"):
+			h := hostFromSecretSlug(n, "ssh-key-")
+			c := byHost[h]
+			c.sshKey = n
+			byHost[h] = c
+		}
+	}
+	for _, h := range scmHosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if _, ok := byHost[h]; !ok {
+			byHost[h] = gitHostCreds{}
+		}
+	}
+	var rows []integrationRow
+	for host, c := range byHost {
+		id := "git_host:" + host
+		if stored[id] {
+			continue
+		}
+		rows = append(rows, integrationRow{Integration: types.Integration{
+			ID: id, Name: host, Category: types.IntegrationSCMHost, Type: "git_host",
+			Credentials: c.credentials(),
+		}, Source: "legacy"})
+	}
+	return rows
+}
+
+// artifactMirrorRows derives one artifact_mirror row per corp mirror HOST
+// (several ecosystems commonly share one Artifactory/Nexus host), mirroring
+// planArtifactRedirect's dedupe-by-host shape (artifact_redirect.go). A row's
+// token credential is the FIRST (sorted-ecosystem-order) configured
+// TokenSecretRef seen for that host — the common case is one token per host;
+// a host with genuinely divergent per-ecosystem tokens still redirects every
+// ecosystem (Config carries all of them), it just reports one representative
+// credential.
+func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrationRow {
+	type hostEcos struct {
+		ecosystems []string
+		token      string
+	}
+	byHost := map[string]*hostEcos{}
+	for _, eco := range slices.Sorted(maps.Keys(sc.ArtifactOverrides)) {
+		ov := sc.ArtifactOverrides[eco]
+		host := strings.ToLower(workspacescan.HostOf(ov.BaseURL))
+		if host == "" {
+			continue
+		}
+		he, ok := byHost[host]
+		if !ok {
+			he = &hostEcos{token: ov.TokenSecretRef}
+			byHost[host] = he
+		}
+		he.ecosystems = append(he.ecosystems, eco)
+	}
+	var rows []integrationRow
+	for host, he := range byHost {
+		id := "artifact_mirror:" + host
+		if stored[id] {
+			continue
+		}
+		var creds map[string]string
+		if he.token != "" {
+			creds = map[string]string{"token": he.token}
+		}
+		rows = append(rows, integrationRow{Integration: types.Integration{
+			ID: id, Name: host, Category: types.IntegrationArtifactMirror, Type: "artifact_mirror",
+			Credentials: creds,
+			Config:      mustJSON(map[string]any{"ecosystems": he.ecosystems}),
+		}, Source: "legacy"})
+	}
+	return rows
 }

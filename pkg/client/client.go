@@ -220,6 +220,36 @@ type CreateRunRequest struct {
 	// whole compose→launch trail. Purely a correlation label: it grants nothing
 	// and is not validated server-side.
 	ComposeSessionID string `json:"compose_session_id,omitempty"`
+	// Workspaces carries PER-WORKSPACE options — which of a workspace's
+	// OPTIONAL requirements (types.Workspace.Requirements, level="optional")
+	// this run enables, and a read-only narrowing — for the workspaces this run
+	// attaches. Additive to WorkspaceID, which stays a working SINGLE-selection
+	// alias: a caller that sets only WorkspaceID (never touching Workspaces)
+	// gets exactly today's behavior — no optional requirement enabled, no
+	// narrowing. A REQUIRED requirement needs no entry here at all; it applies
+	// automatically whenever its workspace is used. A selection naming a
+	// workspace this run does not otherwise attach (via WorkspaceID or a
+	// policy's workspace_mounts/workspace_repos) does nothing.
+	Workspaces []WorkspaceSelection `json:"workspaces,omitempty"`
+}
+
+// WorkspaceSelection is one per-run option set for an attached workspace. See
+// CreateRunRequest.Workspaces.
+type WorkspaceSelection struct {
+	// WorkspaceID is the workspace this selection applies to (string form of
+	// its uuid — matched against the run's referenced workspaces by id).
+	WorkspaceID string `json:"workspace_id"`
+	// EnabledOptional lists the workspace's OPTIONAL requirement KEYS (the
+	// exact "<type>:<key>" form, e.g. "egress:api.stripe.com" or
+	// "write:/home/user/repo") this run opts into. A key not listed here stays
+	// at its safe default (no egress, no grant, read-only mount).
+	EnabledOptional []string `json:"enabled_optional,omitempty"`
+	// ReadOnly, when set, NARROWS this workspace's write:<path> requirements —
+	// true forces every one read-only even if Required or enabled; false is a
+	// no-op (a selection may only narrow what the contract already grants,
+	// never widen it — see the fold in internal/api/runs_create.go). Nil
+	// leaves the contract's own resolved default in effect.
+	ReadOnly *bool `json:"read_only,omitempty"`
 }
 
 // CreateRunResult is the decoded POST /api/v1/runs 201 reply. AgentRun is

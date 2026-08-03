@@ -175,6 +175,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	wsRefs := s.referencedWorkspaces(ctx, spec)
 	bedrockRef := s.applyPrimaryWorkspaceCreds(ctx, runID, &spec, req, wsRefs)
 
+	// Fold each referenced workspace's requirements contract
+	// (types.Workspace.Requirements) into the spec — required secrets/egress/
+	// write-access come with the workspace automatically; optional ones only
+	// when this request's per-workspace selection enables them. MUST run before
+	// persistRunGrants below, which snapshots spec.EligibleGrants into the
+	// persisted grants + proxy injections a secret requirement's auto-mint
+	// grant needs to reach. See runs_create.go's applyWorkspaceRequirements.
+	for _, ev := range s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req)) {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, "success", mustJSON(ev.data)))
+	}
+
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.

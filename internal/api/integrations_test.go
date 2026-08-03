@@ -4,8 +4,13 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // secretSet builds a capEnv.SecretPresent callback that reports true only for
@@ -429,5 +434,325 @@ func TestCapabilitiesFor(t *testing.T) {
 				t.Errorf("capabilitiesFor(%+v, env) =\n  %#v\nwant\n  %#v", tc.v, got, tc.want)
 			}
 		})
+	}
+}
+
+// ─── effectiveIntegrations ───────────────────────────────────────────────────
+
+// integrationsTestConfig builds the Config preamble for effectiveIntegrations
+// tests: admin/identity/audit wiring from newHarness, a fakeSiteConfigStore
+// seeded with sc, and a memSecrets seeded with secrets. Callers needing
+// SubscriptionToken/ManagedToken/Bedrock knobs set them on the returned value
+// before calling New.
+func integrationsTestConfig(t *testing.T, sc types.SiteConfig, secrets map[string][]byte) Config {
+	t.Helper()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &fakeSiteConfigStore{cfg: sc})
+	cfg.Secrets = &memSecrets{m: secrets}
+	return cfg
+}
+
+func findRow(rows []integrationRow, id string) (integrationRow, bool) {
+	for _, r := range rows {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return integrationRow{}, false
+}
+
+func decodeRowConfig(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("decode row config: %v", err)
+	}
+	return m
+}
+
+func TestEffectiveIntegrations_AnthropicAPIKey(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "anthropic_api_key")
+	if !ok {
+		t.Fatal("expected an anthropic_api_key row")
+	}
+	if row.Source != "legacy" || row.Category != types.IntegrationAIProvider || row.Type != "anthropic_api_key" {
+		t.Errorf("row = %+v", row)
+	}
+	if row.Credentials["api_key"] != "anthropic-api-key" {
+		t.Errorf("credentials = %+v, want api_key=anthropic-api-key", row.Credentials)
+	}
+}
+
+func TestEffectiveIntegrations_OpenAIAPIKey(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{"openai-api-key": []byte("sk-oai-x")}))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "openai_api_key")
+	if !ok {
+		t.Fatal("expected an openai_api_key row")
+	}
+	if row.Source != "legacy" || row.Category != types.IntegrationAIProvider || row.Type != "openai_api_key" {
+		t.Errorf("row = %+v", row)
+	}
+	if row.Credentials["api_key"] != "openai-api-key" {
+		t.Errorf("credentials = %+v, want api_key=openai-api-key", row.Credentials)
+	}
+}
+
+func TestEffectiveIntegrations_ResidentSubscriptionLive(t *testing.T) {
+	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
+	cfg.SubscriptionToken = fakeSubProvider{tok: subscription.Token{Value: "live-token"}}
+	srv := New(cfg)
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "anthropic_subscription:resident_host")
+	if !ok {
+		t.Fatal("expected an anthropic_subscription:resident_host row")
+	}
+	if row.Category != types.IntegrationAIProvider || row.Type != "anthropic_subscription" {
+		t.Errorf("row = %+v", row)
+	}
+	if got := decodeRowConfig(t, row.Config); got["lane"] != "resident_host" {
+		t.Errorf("config = %+v, want lane=resident_host", got)
+	}
+}
+
+// A wired SubscriptionToken with no LIVE token (Peek errors, or returns an
+// empty value) must not synthesize a row — "wired" alone is not "live".
+func TestEffectiveIntegrations_ResidentSubscriptionNotLive(t *testing.T) {
+	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
+	cfg.SubscriptionToken = fakeSubProvider{tok: subscription.Token{}}
+	srv := New(cfg)
+	if _, ok := findRow(srv.effectiveIntegrations(context.Background()), "anthropic_subscription:resident_host"); ok {
+		t.Error("expected no row when the wired provider has no live token")
+	}
+}
+
+func TestEffectiveIntegrations_ManagedSubscription(t *testing.T) {
+	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
+	cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}
+	srv := New(cfg)
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "anthropic_subscription:managed")
+	if !ok {
+		t.Fatal("expected an anthropic_subscription:managed row")
+	}
+	if row.Category != types.IntegrationAIProvider || row.Type != "anthropic_subscription" {
+		t.Errorf("row = %+v", row)
+	}
+	if got := decodeRowConfig(t, row.Config); got["lane"] != "managed" {
+		t.Errorf("config = %+v, want lane=managed", got)
+	}
+}
+
+func TestEffectiveIntegrations_Bedrock(t *testing.T) {
+	cfg := integrationsTestConfig(t, types.SiteConfig{}, nil)
+	cfg.BedrockRegion = "us-east-1"
+	cfg.BedrockModel = "us.anthropic.claude-x"
+	srv := New(cfg)
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "bedrock")
+	if !ok {
+		t.Fatal("expected a bedrock row")
+	}
+	if row.Category != types.IntegrationAIProvider || row.Type != "bedrock" {
+		t.Errorf("row = %+v", row)
+	}
+	got := decodeRowConfig(t, row.Config)
+	if got["lane"] != "auto" || got["region"] != "us-east-1" || got["model"] != "us.anthropic.claude-x" {
+		t.Errorf("config = %+v", got)
+	}
+}
+
+func TestEffectiveIntegrations_BedrockNotConfigured(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{}, nil))
+	if _, ok := findRow(srv.effectiveIntegrations(context.Background()), "bedrock"); ok {
+		t.Error("expected no bedrock row when nothing is configured")
+	}
+}
+
+func TestEffectiveIntegrations_GitHubApp(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{
+		secretGitHubAppID: []byte("123"), secretGitHubAppKey: []byte("key"),
+	}))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "github_app")
+	if !ok {
+		t.Fatal("expected a github_app row")
+	}
+	if row.Category != types.IntegrationSCMHost || row.Type != "github_app" {
+		t.Errorf("row = %+v", row)
+	}
+	if row.Credentials["app_id"] != secretGitHubAppID || row.Credentials["app_key"] != secretGitHubAppKey {
+		t.Errorf("credentials = %+v", row.Credentials)
+	}
+	if got := decodeRowConfig(t, row.Config); got["host"] != "github.com" {
+		t.Errorf("config = %+v", got)
+	}
+}
+
+func TestEffectiveIntegrations_GitHubApp_OnlyOneSecret(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{secretGitHubAppID: []byte("123")}))
+	if _, ok := findRow(srv.effectiveIntegrations(context.Background()), "github_app"); ok {
+		t.Error("expected no github_app row with only one of the two required secrets present")
+	}
+}
+
+func TestEffectiveIntegrations_GitPatAndSSHKeySecrets(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{
+		"git-pat-github-com":    []byte("pat"),
+		"ssh-key-github-com":    []byte("key"),
+		"git-pat-dev-azure-com": []byte("pat2"),
+	}))
+	rows := srv.effectiveIntegrations(context.Background())
+
+	gh, ok := findRow(rows, "git_host:github.com")
+	if !ok {
+		t.Fatal("expected a git_host:github.com row")
+	}
+	if gh.Category != types.IntegrationSCMHost || gh.Type != "git_host" || gh.Name != "github.com" {
+		t.Errorf("row = %+v", gh)
+	}
+	if gh.Credentials["pat"] != "git-pat-github-com" || gh.Credentials["ssh_key"] != "ssh-key-github-com" {
+		t.Errorf("credentials = %+v, want both lanes merged onto one row", gh.Credentials)
+	}
+
+	ado, ok := findRow(rows, "git_host:dev.azure.com")
+	if !ok {
+		t.Fatal("expected a git_host:dev.azure.com row")
+	}
+	if ado.Credentials["pat"] != "git-pat-dev-azure-com" || ado.Credentials["ssh_key"] != "" {
+		t.Errorf("credentials = %+v", ado.Credentials)
+	}
+}
+
+func TestEffectiveIntegrations_ScmHostsWithNoCredential(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{ScmHosts: []string{"ghes.corp.example"}}, nil))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "git_host:ghes.corp.example")
+	if !ok {
+		t.Fatal("expected a git_host row for a declared ScmHosts entry with no credential (egress_host only)")
+	}
+	if row.Credentials != nil {
+		t.Errorf("credentials = %+v, want nil", row.Credentials)
+	}
+}
+
+// A host that is BOTH a declared ScmHosts entry AND has a git-pat-<slug>
+// secret must produce exactly ONE row (merged), not two.
+func TestEffectiveIntegrations_ScmHostsMergesWithCredential(t *testing.T) {
+	srv := New(integrationsTestConfig(t,
+		types.SiteConfig{ScmHosts: []string{"github.com"}},
+		map[string][]byte{"git-pat-github-com": []byte("pat")}))
+	rows := srv.effectiveIntegrations(context.Background())
+	var matches []integrationRow
+	for _, r := range rows {
+		if r.ID == "git_host:github.com" {
+			matches = append(matches, r)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly ONE git_host:github.com row (merged), got %d: %+v", len(matches), matches)
+	}
+	if matches[0].Credentials["pat"] != "git-pat-github-com" {
+		t.Errorf("merged row lost its credential: %+v", matches[0])
+	}
+}
+
+func TestEffectiveIntegrations_ArtifactMirror(t *testing.T) {
+	sc := types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{
+		"npm": {BaseURL: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token"},
+		"pip": {BaseURL: "https://artifactory.corp/api/pip/pip-remote/"},
+	}}
+	srv := New(integrationsTestConfig(t, sc, nil))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "artifact_mirror:artifactory.corp")
+	if !ok {
+		t.Fatal("expected one artifact_mirror row for the shared host")
+	}
+	if row.Category != types.IntegrationArtifactMirror || row.Type != "artifact_mirror" {
+		t.Errorf("row = %+v", row)
+	}
+	if row.Credentials["token"] != "npm-token" {
+		t.Errorf("credentials = %+v, want the npm token (first ecosystem alphabetically)", row.Credentials)
+	}
+	cfg := decodeRowConfig(t, row.Config)
+	ecos, _ := cfg["ecosystems"].([]any)
+	if len(ecos) != 2 {
+		t.Errorf("ecosystems = %+v, want both npm and pip on the one shared-host row", ecos)
+	}
+}
+
+func TestEffectiveIntegrations_HostProxy(t *testing.T) {
+	srv := New(integrationsTestConfig(t, types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}, nil))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "host_proxy")
+	if !ok {
+		t.Fatal("expected a host_proxy row")
+	}
+	if row.Category != types.IntegrationHostProxy || row.Type != "host_proxy" {
+		t.Errorf("row = %+v", row)
+	}
+	if row.Credentials["secret"] != "corp-proxy-url" {
+		t.Errorf("credentials = %+v", row.Credentials)
+	}
+}
+
+// A stored integration under an id a legacy rule would also synthesize wins
+// (the legacy duplicate is suppressed); a stored row under any OTHER id
+// coexists alongside the unrelated legacy rows untouched.
+func TestEffectiveIntegrations_StoredRowWinsAndCoexists(t *testing.T) {
+	stored := types.Integration{
+		ID: "anthropic_api_key", Name: "Prod Anthropic key",
+		Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+		Credentials: map[string]string{"api_key": "anthropic-api-key"},
+	}
+	sc := types.SiteConfig{Integrations: []types.Integration{stored}, UpstreamProxySecretRef: "corp-proxy-url"}
+	srv := New(integrationsTestConfig(t, sc, map[string][]byte{"anthropic-api-key": []byte("sk-ant-x")}))
+	rows := srv.effectiveIntegrations(context.Background())
+
+	var anthropicRows []integrationRow
+	for _, r := range rows {
+		if r.ID == "anthropic_api_key" {
+			anthropicRows = append(anthropicRows, r)
+		}
+	}
+	if len(anthropicRows) != 1 {
+		t.Fatalf("expected exactly ONE anthropic_api_key row (stored wins over the legacy derivation), got %d: %+v", len(anthropicRows), anthropicRows)
+	}
+	if anthropicRows[0].Source != "stored" || anthropicRows[0].Name != "Prod Anthropic key" {
+		t.Errorf("row = %+v, want the STORED row to win", anthropicRows[0])
+	}
+
+	if _, ok := findRow(rows, "host_proxy"); !ok {
+		t.Error("expected the unrelated host_proxy legacy row to coexist alongside the stored row")
+	}
+}
+
+// The response must be deterministically ordered (category, then id) across
+// repeated calls, regardless of map iteration order upstream.
+func TestEffectiveIntegrations_DeterministicOrdering(t *testing.T) {
+	sc := types.SiteConfig{
+		UpstreamProxySecretRef: "corp-proxy-url",
+		ScmHosts:               []string{"github.com"},
+	}
+	srv := New(integrationsTestConfig(t, sc, map[string][]byte{
+		"openai-api-key":    []byte("x"),
+		"anthropic-api-key": []byte("x"),
+	}))
+	ctx := context.Background()
+	first := srv.effectiveIntegrations(ctx)
+	if len(first) < 3 {
+		t.Fatalf("expected several rows to actually exercise ordering, got %d", len(first))
+	}
+	for i := 0; i < 5; i++ {
+		got := srv.effectiveIntegrations(ctx)
+		if len(got) != len(first) {
+			t.Fatalf("row count changed across calls: %d vs %d", len(got), len(first))
+		}
+		for j := range got {
+			if got[j].ID != first[j].ID {
+				t.Fatalf("run %d: order not stable at index %d: got %q, want %q", i, j, got[j].ID, first[j].ID)
+			}
+		}
+	}
+	for i := 1; i < len(first); i++ {
+		if first[i-1].Category > first[i].Category {
+			t.Errorf("not sorted by category: %q before %q", first[i-1].Category, first[i].Category)
+		}
 	}
 }
