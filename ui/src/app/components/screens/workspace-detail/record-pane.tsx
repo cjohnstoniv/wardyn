@@ -3,16 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// RecordPane — the import panel's OPEN recording step (recommended, skippable).
-// The operator records one or more NAMED SESSIONS: each spins up an open
-// (allow-all-egress) interactive sandbox with the repo cloned + the configured
-// model provider wired, the operator drives the real activity (build, test, run the
-// agent) in the embedded AttachTerminal, then clicks "Done recording"
-// (api.killRun); capture happens on run termination. Each session's observed egress
-// promotes into the workspace's single ApprovedEgress, so the confined Verify/runs
-// afterward work. There is NO derived build/test taxonomy — sessions are whatever
-// the operator names them. This pane NEVER navigates away (the attach terminal
-// renders inline), preserving the import panel's never-route-away invariant.
+// RecordPane — the workspace detail page's Sessions card body. The operator
+// records one or more NAMED SESSIONS: each spins up an open (allow-all-egress)
+// interactive sandbox with the repo cloned + the configured model provider
+// wired, the operator drives the real activity (build, test, run the agent) in
+// the embedded AttachTerminal, then clicks "Done recording" (capture happens
+// on run termination). Once recorded, a session can be REPLAYED CONFINED
+// (default-deny egress, limited to the approved set) to prove the approved set
+// is enough — the least-privilege proof. Each session card lives through its
+// own lifecycle in place: recording -> recorded -> [Replay confined] ->
+// replaying -> replayed. There is NO derived build/test taxonomy — sessions
+// are whatever the operator names them, and NO separate Record/Verify mode
+// toggle — every session shows whichever stage it's actually in.
+//
+// This pane never navigates away and is never unmounted by its caller for an
+// in-flight session — the detail page keeps sessions running across
+// navigation (see workspace-copy.ts's C.SESSION_SURVIVES); it does not kill
+// any in-flight run on its own unmount, unlike the retired import panel.
 import * as React from "react";
 import {
   Check,
@@ -28,7 +35,17 @@ import {
 } from "lucide-react";
 import type { RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { CopyButton } from "../../wardyn/copy-button";
-import { recordResult, recordSessions, verifyKeyOf, policyNameFor, isEmptyCapture, newEgressHosts } from "./import-types";
+import {
+  recordResult,
+  recordSessions,
+  isRecording,
+  isEmptyCapture,
+  newEgressHosts,
+  policyNameFor,
+  sessionStage,
+  verifyKeyOf,
+  type SessionStage,
+} from "./session-helpers";
 import { Observations } from "../profile-review";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
@@ -38,84 +55,71 @@ import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { C } from "../../../lib/workspace-copy";
 
 export function RecordPane({
   ws,
-  confined = false,
   notice,
   busyTask,
   modelReady,
   onRecord,
+  onReplayConfined,
   onDoneRecording,
   onPromoteEgress,
   onApproveHost,
   onOpenProfile,
 }: {
   ws: Workspace;
-  // Confined mode = the Verify step: default-deny egress limited to the approved
-  // set. Same session/attach machinery as the open Record step; the operator
-  // re-runs the same steps and any off-policy host is blocked live. When false
-  // (default) this is the open learning Record step.
-  confined?: boolean;
-  // Inline record notice (400 bad name; 503 no runner; 409 another import step) —
-  // same shape/handling as VerifyPane.
+  // Inline notice from the last record/replay attempt (400 bad name; 503 no
+  // runner; 409 another session already running).
   notice: { status: number; detail?: string } | null;
-  // The session key currently being kicked (disables its button).
+  // The record_results key currently being kicked — a plain session key for an
+  // open (re-)record, or verifyKeyOf(key) for a confined (re-)replay. Disables
+  // just that session's matching button.
   busyTask: string | null;
-  // fix: whether the operator has ANY working model/LLM path (subscription
-  // login, a stored provider key, or a real composer backend) — a session runs
-  // the agent, so without one the agent's model calls would be denied. Drives
-  // the warning. This is derived from GET /setup/status (hasLlmPath), NOT
-  // composer-backend detection: a composer backend is optional server config,
-  // so its absence must not warn an operator who has a perfectly good
-  // connected subscription or API key.
+  // Whether the operator has ANY working model/LLM path (subscription login, a
+  // stored provider key, or a real composer backend) — a session runs the
+  // agent, so without one the agent's model calls would be denied.
   modelReady: boolean;
-  // Start (or re-start) a session by NAME; the server slugs it to the record key.
+  // Start (or re-start) an OPEN session by name; the server slugs it to the
+  // record key.
   onRecord: (name: string) => void;
-  // Interactive "Done recording" — kills the run; the backend captures on termination.
+  // Replay an existing session CONFINED (default-deny egress, limited to
+  // approved) by its name — first run or a re-run.
+  onReplayConfined: (name: string) => void;
+  // Interactive "Done" — kills whichever run is active (open or confined); the
+  // backend captures on termination.
   onDoneRecording: (runId: string) => void;
-  // Approve the session's observed hosts (promote-egress, 404-tolerant in the panel).
+  // Approve an open session's observed hosts (promote-egress).
   onPromoteEgress: (taskKey: string) => void;
-  // Approve a single off-policy host a confined verify session hit (widens the
-  // workspace's approved egress). Used only by the confined review card.
+  // Approve a single off-policy host a confined replay hit (widens the
+  // workspace's approved egress).
   onApproveHost: (host: string) => void;
-  // Open the existing ProfileReview drawer on the record run (Save session profile).
+  // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
-  // Recordings are the named things the operator made in the Record step. Both
-  // steps list the SAME recordings: Record runs them open (learn), Verify replays a
-  // chosen one confined (validate) — you don't name anything new on Verify.
-  const recordings = recordSessions(ws, false);
-  // The record sandbox runs under the strongest class the host supports; the pane's
-  // best proxy is the operator's persisted default tier (same source SecurityChip
-  // uses). CC1 (Fence) is the loud case: open egress on a shared-kernel box.
+  const sessions = recordSessions(ws);
+  // The record sandbox runs under the strongest class the host supports; the
+  // pane's best proxy is the operator's persisted default tier (same source
+  // SecurityChip uses). CC1 (Fence) is the loud case: open egress on a shared-
+  // kernel box, so its banner always applies — every session still starts as
+  // an open recording, confined replay is a later step in the SAME lifecycle.
   const tier = getDefaultCc() ?? "CC1";
-  const recording = recordings.some((s) => recordResult(ws, s.key)?.status === "recording");
-  // Scan-detected commands become copy-paste hints so a clueless operator knows
-  // what to run in the session — guidance without a taxonomy.
+  // Scan-detected commands become copy-paste hints so a clueless operator
+  // knows what to run in the session — guidance without a taxonomy.
   const detected = ((ws.profile ?? {}) as WorkspaceProfile).setup_commands ?? [];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <SectionLabel>{confined ? "Verify — locked sandbox" : "Record sessions"}</SectionLabel>
-        <Chip tone="info">{confined ? "Confined · re-run your steps" : "Recommended · skippable"}</Chip>
-      </div>
+      {/* No "Sessions" label here — the SectionCard wrapping this pane already
+          titles it; repeating it would show the same word twice on the page. */}
+      <Chip tone="info">Recommended · skippable</Chip>
       <p className="text-sm leading-relaxed text-muted-foreground">
-        {confined ? (
-          <>
-            Pick a recording below and <strong>replay it in a locked sandbox</strong> — default-deny
-            egress, only your approved access. Re-run its steps to prove they work confined; any
-            off-policy host (a new website, cloud metadata) is <strong>blocked live</strong> and one
-            click to approve. Same recording, run in verify mode instead of record mode.
-          </>
-        ) : (
-          <>
-            Record a session for anything this workspace needs to do — build, run tests, drive the
-            agent, deploy. Wardyn opens a sandbox with the repo and your model provider ready, watches
-            what it reaches, and you approve those hosts. Name each session whatever you like.
-          </>
-        )}
+        Record a session for anything this workspace needs to do — build, run tests, drive the agent,
+        deploy. Wardyn opens a sandbox with the repo and your model provider ready, watches what it
+        reaches, and you approve those hosts. Once it&apos;s recorded, <strong>replay it confined</strong> —
+        default-deny egress, only your approved access — to prove the approved set is enough; any
+        off-policy host is <strong>blocked live</strong> and one click to approve.
       </p>
 
       {/* Model-access note: a session runs the agent, so it uses the configured provider. */}
@@ -137,19 +141,9 @@ export function RecordPane({
         </div>
       )}
 
-      {confined ? (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
-          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" />
-          <p>
-            Egress is <strong>default-deny</strong> — limited to the hosts you approved (plus the clone
-            + package registries). Anything else is blocked and shows in Audit / Approvals.
-          </p>
-        </div>
-      ) : (
-        tier === "CC1" && <Cc1Banner />
-      )}
+      {tier === "CC1" && <Cc1Banner />}
 
-      {/* 503: honest no-runner path (can't record; Verify/Finalize still work). */}
+      {/* 503: honest no-runner path. */}
       {notice?.status === 503 && (
         <div
           className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-warning"
@@ -157,8 +151,8 @@ export function RecordPane({
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <p>
-            {confined ? "Verifying" : "Recording"} needs a runner (this control plane runs{" "}
-            <span className="font-mono">-runner none</span>); you can continue to Finalize as configured.
+            Recording or replaying needs a runner (this control plane runs{" "}
+            <span className="font-mono">-runner none</span>).
           </p>
         </div>
       )}
@@ -170,68 +164,42 @@ export function RecordPane({
       )}
       {notice?.status === 409 && (
         <p className="text-xs text-muted-foreground">
-          {notice.detail || "Another import step is already running for this workspace."}
+          {notice.detail || "Another session is already running for this workspace."}
         </p>
       )}
 
-      {confined ? (
-        // VERIFY: pick a recording and replay it confined. No new names here — the
-        // list is the recordings made on the Record step.
-        recordings.length === 0 ? (
-          <div
-            className="flex items-start gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground"
-            data-testid="verify-no-recordings"
-          >
-            <Info className="mt-0.5 size-4 shrink-0" />
-            <p>
-              No recordings to verify yet. Go back to <strong>Record</strong> and record a session
-              first — then replay it here in verify mode.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3" data-testid="verify-recordings">
-            {recordings.map((rec) => (
-              <VerifyRecordingCard
-                key={rec.key}
-                ws={ws}
-                recording={rec}
-                detected={detected.map((c) => c.command)}
-                busy={busyTask === verifyKeyOf(rec.key)}
-                onVerify={onRecord}
-                onDoneRecording={onDoneRecording}
-                onApproveHost={onApproveHost}
-                onOpenProfile={onOpenProfile}
-              />
-            ))}
-          </div>
-        )
-      ) : (
-        <>
-          {recordings.length > 0 && (
-            <div className="space-y-3" data-testid="record-tasks">
-              {recordings.map((session) => (
-                <SessionCard
-                  key={session.key}
-                  ws={ws}
-                  sessionKey={session.key}
-                  label={session.label}
-                  detected={detected.map((c) => c.command)}
-                  busy={busyTask === session.key}
-                  onRecord={onRecord}
-                  onDoneRecording={onDoneRecording}
-                  onPromoteEgress={onPromoteEgress}
-                  onOpenProfile={onOpenProfile}
-                />
-              ))}
-            </div>
-          )}
-          <NewSessionForm
-            existing={recordings.map((s) => s.label)}
-            disabled={recording || notice?.status === 503}
-            onRecord={onRecord}
-          />
-        </>
+      {sessions.length > 0 && (
+        <div className="space-y-3" data-testid="record-tasks">
+          {sessions.map((s) => (
+            <SessionCard
+              key={s.key}
+              ws={ws}
+              sessionKey={s.key}
+              label={s.label}
+              detected={detected.map((c) => c.command)}
+              busyOpen={busyTask === s.key}
+              busyConfined={busyTask === verifyKeyOf(s.key)}
+              onRecord={onRecord}
+              onReplayConfined={onReplayConfined}
+              onDoneRecording={onDoneRecording}
+              onPromoteEgress={onPromoteEgress}
+              onApproveHost={onApproveHost}
+              onOpenProfile={onOpenProfile}
+            />
+          ))}
+        </div>
       )}
+      {sessions.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          Never recorded. A session is the environment-proof: drive the workspace once in an open
+          sandbox, then replay the capture confined.
+        </p>
+      )}
+      <NewSessionForm
+        existing={sessions.map((s) => s.label)}
+        disabled={isRecording(ws) || notice?.status === 503}
+        onRecord={onRecord}
+      />
     </div>
   );
 }
@@ -272,7 +240,7 @@ function NewSessionForm({
       </div>
       <p className="text-[0.6875rem] text-muted-foreground">
         Opens an attached terminal with the repo + your model provider ready. Do the real thing, then
-        click Done recording to capture what it used. You&apos;ll replay it in verify mode next.
+        click Done recording to capture what it used. You can replay it confined once it settles.
       </p>
     </div>
   );
@@ -293,72 +261,114 @@ function Cc1Banner() {
         <p className="leading-snug">
           To learn what a task really uses, this sandbox allows ALL egress. On this host it runs under{" "}
           {cc1.label}: {cc1.metaphor} Combined with allow-all egress, a task that misbehaves could send
-          anything it can read out during the recording window. Only record tasks you trust — Verify
-          re-runs them CONFINED to least privilege afterward.
+          anything it can read out during the recording window. Only record tasks you trust — replaying
+          confined afterward re-runs them at least privilege.
         </p>
       </div>
     </div>
   );
 }
 
+// One session's lifecycle card: recording -> recorded -> [Replay confined] ->
+// replaying -> replayed, all in place (no separate Record/Verify surfaces).
 function SessionCard({
   ws,
   sessionKey,
   label,
   detected,
-  busy,
+  busyOpen,
+  busyConfined,
   onRecord,
+  onReplayConfined,
   onDoneRecording,
   onPromoteEgress,
+  onApproveHost,
   onOpenProfile,
 }: {
   ws: Workspace;
   sessionKey: string;
   label: string;
   detected: string[];
-  busy: boolean;
+  busyOpen: boolean;
+  busyConfined: boolean;
   onRecord: (name: string) => void;
+  onReplayConfined: (name: string) => void;
   onDoneRecording: (runId: string) => void;
   onPromoteEgress: (taskKey: string) => void;
+  onApproveHost: (host: string) => void;
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
-  const rr = recordResult(ws, sessionKey);
+  const stage = sessionStage(ws, sessionKey);
+  const openRR = recordResult(ws, sessionKey);
+  const confinedRR = recordResult(ws, verifyKeyOf(sessionKey));
 
   return (
-    <div className="rounded-lg border border-border p-3" data-testid={`record-task-${sessionKey}`}>
+    <div className="rounded-lg border border-border p-3" data-testid={`session-${sessionKey}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-foreground">{label}</span>
-        {rr?.status === "recording" && (
-          <Chip tone="info" dot pulse className="ml-auto">
-            Recording…
-          </Chip>
-        )}
+        {stageChip(stage)}
       </div>
 
       {/* recording — embed the attach terminal + copy-paste command hints */}
-      {rr?.status === "recording" && (
+      {stage === "recording" && openRR && (
         <div className="mt-3 space-y-2">
           <DetectedHints commands={detected} />
-          <AttachTerminal runId={rr.run_id} />
-          <Button size="sm" variant="outline" onClick={() => onDoneRecording(rr.run_id)}>
+          <AttachTerminal runId={openRR.run_id} />
+          <Button size="sm" variant="outline" onClick={() => onDoneRecording(openRR.run_id)}>
             <Square className="size-3.5" /> Done recording
           </Button>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
         </div>
       )}
 
-      {/* settled — review card + re-record */}
-      {rr && (rr.status === "recorded" || rr.status === "record_failed") && (
+      {/* recorded / record_failed — review card + re-record + (once recorded) Replay confined */}
+      {(stage === "recorded" || stage === "record_failed") && openRR && (
         <div className="mt-3 space-y-3">
-          <RecordReviewCard
-            ws={ws}
-            sessionKey={sessionKey}
-            rr={rr}
-            onPromoteEgress={onPromoteEgress}
-            onOpenProfile={onOpenProfile}
+          <RecordReviewCard ws={ws} sessionKey={sessionKey} rr={openRR} onPromoteEgress={onPromoteEgress} onOpenProfile={onOpenProfile} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => onRecord(label)} disabled={busyOpen}>
+              {busyOpen ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
+              Re-record
+            </Button>
+            {stage === "recorded" && (
+              <Button size="sm" onClick={() => onReplayConfined(label)} disabled={busyConfined}>
+                {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
+                Replay confined
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* replaying — attach + LIVE approvals + Done */}
+      {stage === "replaying" && confinedRR && (
+        <div className="mt-3 space-y-2">
+          <AuthModeLine rr={confinedRR} />
+          <DetectedHints commands={detected} />
+          <AttachTerminal runId={confinedRR.run_id} />
+          {/* Off-policy egress escalates to a pending approval held live — decide it
+              here without leaving the page. */}
+          <LiveApprovals
+            runId={confinedRR.run_id}
+            onApproveHost={onApproveHost}
+            reasonApprove="approved in replay"
+            reasonDeny="rejected in replay"
+            idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
           />
-          <Button size="sm" variant="outline" onClick={() => onRecord(label)} disabled={busy}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-            Re-record
+          <Button size="sm" variant="outline" onClick={() => onDoneRecording(confinedRR.run_id)}>
+            <Square className="size-3.5" /> Done
+          </Button>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
+        </div>
+      )}
+
+      {/* replayed / replay_failed — containment review + re-run */}
+      {(stage === "replayed" || stage === "replay_failed") && confinedRR && (
+        <div className="mt-3 space-y-3">
+          <ConfinedReviewCard ws={ws} rr={confinedRR} onApproveHost={onApproveHost} onOpenProfile={onOpenProfile} />
+          <Button size="sm" variant="outline" onClick={() => onReplayConfined(label)} disabled={busyConfined}>
+            {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
+            Replay again
           </Button>
         </div>
       )}
@@ -366,98 +376,51 @@ function SessionCard({
   );
 }
 
-// VerifyRecordingCard — one recording, replayable in verify (confined) mode. Its
-// confined run lives under verifyKeyOf(recording.key) so it never clobbers the
-// recording's open-mode capture. States: not-yet-verified (Verify button) →
-// verifying (attach + Done) → settled (ConfinedReviewCard + Re-run).
-function VerifyRecordingCard({
-  ws,
-  recording,
-  detected,
-  busy,
-  onVerify,
-  onDoneRecording,
-  onApproveHost,
-  onOpenProfile,
-}: {
-  ws: Workspace;
-  recording: { key: string; label: string };
-  detected: string[];
-  busy: boolean;
-  // Replay THIS recording confined — onVerify(label); the panel routes it to a
-  // confined record run (same name, verify mode).
-  onVerify: (name: string) => void;
-  onDoneRecording: (runId: string) => void;
-  onApproveHost: (host: string) => void;
-  onOpenProfile: (runId: string, suggestedName?: string) => void;
-}) {
-  const crr = recordResult(ws, verifyKeyOf(recording.key));
-  const verifying = crr?.status === "recording";
-  const settled = !!crr && (crr.status === "recorded" || crr.status === "record_failed");
-
+function stageChip(stage: SessionStage) {
+  if (stage === "recording") {
+    return (
+      <Chip tone="info" dot pulse className="ml-auto">
+        Recording…
+      </Chip>
+    );
+  }
+  if (stage === "replaying") {
+    return (
+      <Chip tone="info" dot pulse className="ml-auto">
+        Replaying confined…
+      </Chip>
+    );
+  }
+  if (stage === "record_failed") {
+    return (
+      <Chip tone="danger" className="ml-auto">
+        Record failed
+      </Chip>
+    );
+  }
+  if (stage === "replay_failed") {
+    return (
+      <Chip tone="danger" className="ml-auto">
+        Replay failed
+      </Chip>
+    );
+  }
+  if (stage === "replayed") {
+    return (
+      <Chip tone="success" className="ml-auto">
+        Replayed confined
+      </Chip>
+    );
+  }
   return (
-    <div className="rounded-lg border border-border p-3" data-testid={`verify-recording-${recording.key}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-foreground">{recording.label}</span>
-        {verifying && (
-          <Chip tone="info" dot pulse className="ml-auto">
-            Verifying…
-          </Chip>
-        )}
-      </div>
-
-      {/* not yet verified — offer to replay it confined */}
-      {!crr && (
-        <div className="mt-3 space-y-2">
-          <DetectedHints commands={detected} />
-          <Button size="sm" onClick={() => onVerify(recording.label)} disabled={busy}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
-            Verify this recording
-          </Button>
-          <p className="text-[0.6875rem] text-muted-foreground">
-            Replays it in a locked sandbox (only your approved access). Re-run its steps — off-policy
-            hosts are blocked live.
-          </p>
-        </div>
-      )}
-
-      {/* verifying — attach + LIVE approvals + Done */}
-      {verifying && crr && (
-        <div className="mt-3 space-y-2">
-          <AuthModeLine rr={crr} />
-          <DetectedHints commands={detected} />
-          <AttachTerminal runId={crr.run_id} />
-          {/* Off-policy egress escalates to a pending approval held live — decide it
-              here without leaving the panel (this modal covers the Approvals tab). */}
-          <LiveApprovals
-            runId={crr.run_id}
-            onApproveHost={onApproveHost}
-            reasonApprove="approved in verify"
-            reasonDeny="rejected in verify"
-            idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
-          />
-          <Button size="sm" variant="outline" onClick={() => onDoneRecording(crr.run_id)}>
-            <Square className="size-3.5" /> Done
-          </Button>
-        </div>
-      )}
-
-      {/* settled — containment review + re-run */}
-      {settled && crr && (
-        <div className="mt-3 space-y-3">
-          <ConfinedReviewCard ws={ws} rr={crr} onApproveHost={onApproveHost} onOpenProfile={onOpenProfile} />
-          <Button size="sm" variant="outline" onClick={() => onVerify(recording.label)} disabled={busy}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-            Re-run verify
-          </Button>
-        </div>
-      )}
-    </div>
+    <Chip tone="neutral" className="ml-auto">
+      Recorded
+    </Chip>
   );
 }
 
 // DetectedHints — scan-detected commands as copy pills, guidance for what to run in
-// an attached session (open record or confined verify). No-op when none detected.
+// an attached session (open record or confined replay). No-op when none detected.
 function DetectedHints({ commands }: { commands: string[] }) {
   if (commands.length === 0) return null;
   return (
@@ -471,7 +434,7 @@ function DetectedHints({ commands }: { commands: string[] }) {
 }
 
 // AuthModeLine — the auth the session actually ran with (saved on the record result).
-// Lets the operator SEE that verify uses their configured provider, not a fallback.
+// Lets the operator SEE that a replay uses their configured provider, not a fallback.
 function AuthModeLine({ rr }: { rr: RecordResult }) {
   if (!rr.llm_mode || rr.llm_mode === "none") return null;
   const label =
@@ -490,10 +453,10 @@ function AuthModeLine({ rr }: { rr: RecordResult }) {
   );
 }
 
-// Per-task review card, shown once a recording settles. Renders the SAME
-// Observations block profile-review uses, a one-click egress-promotion diff,
-// secrets proven-used chips, a Save-task-profile hand-off to the ProfileReview
-// drawer, and the three non-negotiable honesty notes.
+// Per-session review card, shown once the OPEN recording settles. Renders the
+// SAME Observations block profile-review uses, a one-click egress-promotion
+// diff, secrets proven-used chips, a Save-profile hand-off to the
+// ProfileReview drawer, and the honesty notes.
 function RecordReviewCard({
   ws,
   sessionKey,
@@ -602,7 +565,7 @@ function RecordReviewCard({
         {(rr.caveats?.length
           ? rr.caveats
           : [
-              "Secret masking is seed-ahead: any secret NOT declared in Configure that this open run touched is not masked in the logs or observations above. Treat anything here as sensitive.",
+              "Secret masking is seed-ahead: any secret NOT declared in Requirements that this open run touched is not masked in the logs or observations above. Treat anything here as sensitive.",
             ]
         ).map((c, i) => (
           <HonestyNote key={i} text={c} />
@@ -612,26 +575,26 @@ function RecordReviewCard({
         )}
       </div>
 
-      {/* --- optional: persist this task's synthesized least-privilege profile --- */}
+      {/* --- optional: persist this session's synthesized least-privilege profile --- */}
       <div className="flex justify-end">
         <Button
           size="sm"
           variant="ghost"
           onClick={() => onOpenProfile(rr.run_id, policyNameFor(ws.name, rr.label ?? "recorded"))}
         >
-          <Save className="size-3.5" /> Save task profile
+          <Save className="size-3.5" /> Save session profile
         </Button>
       </div>
     </div>
   );
 }
 
-// Review card for a settled CONFINED verify session. Unlike the open-record card
+// Review card for a settled CONFINED replay. Unlike the open-record card
 // (which promotes newly-observed hosts), this proves least privilege: it splits
 // what the run reached into ALLOWED (worked within the approved set), BLOCKED
-// (off-policy, denied live — the containment proof), and PENDING (first-use, awaiting
-// approval). Blocked/pending hosts are one click to approve if they're legitimately
-// needed. All counts come straight from the capture — no extra fetch.
+// (off-policy, denied live — the containment proof), and PENDING (first-use,
+// awaiting approval). Blocked/pending hosts are one click to approve if they're
+// legitimately needed. All counts come straight from the capture — no extra fetch.
 function ConfinedReviewCard({
   ws,
   rr,
@@ -652,7 +615,7 @@ function ConfinedReviewCard({
         data-testid="verify-session-failed"
       >
         <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-        <p>{rr.failure_hint || "The verify session captured no egress decisions — fix reachability and re-run."}</p>
+        <p>{rr.failure_hint || "The confined replay captured no egress decisions — fix reachability and re-run."}</p>
       </div>
     );
   }

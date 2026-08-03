@@ -14,6 +14,7 @@
 // body owns its OWN writes (setSecret, scanWorkspace, and the SiteConfig
 // saves via the caller-owned saveSiteConfig).
 import * as React from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   Info,
@@ -46,7 +47,7 @@ import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Field } from "../new-run/step-shell";
 import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
-import { ImportWorkspaceDialog } from "../import-workspace/import-panel";
+import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
@@ -618,17 +619,12 @@ export function WorkspacesStep({
   loading: boolean;
   onReload: () => void;
 }) {
-  // Onboard/scan/import are all workspace writes — operator-only (see http.go).
+  // Onboard/scan are workspace writes — operator-only (see http.go).
   const operator = useOperator();
-  // "Add workspace" now routes new imports through the guided Import panel (Source
-  // → Scan → Configure → Verify → Finalize). importWsId set => resume that
-  // workspace's import; undefined => start fresh on the Source step.
-  const [importOpen, setImportOpen] = React.useState(false);
-  const [importWsId, setImportWsId] = React.useState<string | undefined>(undefined);
-  const openImport = (id?: string) => {
-    setImportWsId(id);
-    setImportOpen(true);
-  };
+  const navigate = useNavigate();
+  // "Add workspace" now routes through the four-step wizard (Sources -> Base
+  // image -> Requirements -> Done) instead of the retired guided Import panel.
+  const [wizardOpen, setWizardOpen] = React.useState(false);
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
 
   // Best-effort scan → always refresh (repo scans run async and return 202, local
@@ -671,7 +667,7 @@ export function WorkspacesStep({
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6 text-center">
           <p className="text-sm text-muted-foreground">No workspaces onboarded yet.</p>
-          <Button className="mt-3" onClick={() => openImport()} disabled={!operator}>
+          <Button className="mt-3" onClick={() => setWizardOpen(true)} disabled={!operator}>
             <Plus className="size-4" /> Onboard your first workspace
           </Button>
         </div>
@@ -718,28 +714,42 @@ export function WorkspacesStep({
                     <ScanSearch className="size-3.5" /> Scan
                   </Button>
                 ) : (
-                  <Button variant="ghost" size="sm" onClick={() => openImport(w.id)} disabled={!operator}>
-                    <ScanSearch className="size-3.5" /> Resume import
+                  // Resuming an import is now the detail page's job (its own
+                  // primary action offers Scan now / Retry scan contextually) —
+                  // this just opens it. Navigation, not a write, so it isn't
+                  // operator-gated.
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => navigate(`/workspaces/${encodeURIComponent(w.id)}`)}
+                  >
+                    <ScanSearch className="size-3.5" /> Open
                   </Button>
                 )}
               </li>
               );
             })}
           </ul>
-          <Button variant="outline" size="sm" onClick={() => openImport()} disabled={!operator}>
+          <Button variant="outline" size="sm" onClick={() => setWizardOpen(true)} disabled={!operator}>
             <Plus className="size-4" /> Add workspace
           </Button>
         </>
       )}
 
-      {/* The guided import overlay — its own Dialog on top; returns here via
-          onReload + onOpenChange(false) (like NewRunDialog returns to SetupScreen). */}
-      <ImportWorkspaceDialog
-        open={importOpen}
-        onOpenChange={setImportOpen}
-        workspaceId={importWsId}
-        onReload={onReload}
-      />
+      {/* The four-step "Add workspace" wizard — its own Dialog on top; returns
+          here via onClose (like NewRunDialog returns to SetupScreen). Mounted
+          only while open (its Dialog is unconditionally open internally). */}
+      {wizardOpen && (
+        <WorkspaceWizard
+          origin="setup"
+          onClose={() => setWizardOpen(false)}
+          onWorkspaceCreated={onReload}
+          onOpenWorkspace={(id) => {
+            setWizardOpen(false);
+            navigate(`/workspaces/${encodeURIComponent(id)}`);
+          }}
+        />
+      )}
     </div>
   );
 }

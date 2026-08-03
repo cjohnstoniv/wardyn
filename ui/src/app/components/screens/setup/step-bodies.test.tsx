@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 
 const getSetupStatusMock = vi.fn();
@@ -61,6 +62,16 @@ vi.mock("../../../lib/api/policies", () => ({
 vi.mock("../../../lib/api/runs", () => ({
   runs: { createRun: vi.fn() },
 }));
+// The wizard WorkspacesStep now mounts (Sources -> Base image -> Requirements
+// -> Done) fetches this on mount too — swallows its own rejection either way
+// (see wizard.tsx), mocked here for parity with wizard.test.tsx's own convention.
+const listIntegrationsMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/integrations")>(
+    "../../../lib/api/integrations",
+  );
+  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+});
 
 import { HostProxyStep, ArtifactRepoStep, WorkspacesStep, ReviewStep, LaunchStep } from "./step-bodies";
 import { deriveReadiness } from "../onboarding/intro";
@@ -149,9 +160,34 @@ describe("step-bodies.tsx — smoke", () => {
   });
 
   it("WorkspacesStep renders the empty-state onboard affordance", () => {
-    render(<WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />);
+    // WorkspacesStep now navigates to a workspace's detail route (the wizard's
+    // onOpenWorkspace and a non-ready row's Open button both call useNavigate),
+    // so it needs a Router in scope even for this render-smoke assertion.
+    render(
+      <MemoryRouter>
+        <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText("No workspaces onboarded yet.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add workspace|onboard your first workspace/i })).toBeInTheDocument();
+  });
+
+  it("WorkspacesStep's 'Onboard your first workspace' opens the new four-step wizard (origin=setup)", async () => {
+    getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <MemoryRouter>
+        <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /onboard your first workspace/i }));
+    expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();
+    expect(screen.getAllByText("Sources").length).toBeGreaterThan(0);
+    // origin="setup": Done's primary action is "Back to setup", not "Open …→".
+    // (Not reached by this smoke test — the step rail assertion above is the
+    // load-bearing check that THIS wizard, not the retired panel, is mounted.)
   });
 
   it("ReviewStep renders the 'About this host' rollup", () => {

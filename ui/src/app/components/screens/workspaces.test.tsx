@@ -6,13 +6,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { Workspace, WorkspaceProfile } from "../../lib/types";
 
-// The "View profile" dialog body (WorkspaceNeedsPanel) turns the untrusted,
-// content-derived scan profile into an operator-legible view. Two invariants under
-// test: (1) declared secrets show as NAMES + advisory badges with the .env warning
-// and NO value affordance anywhere; (2) approving a *suggested* egress host goes
-// through a confirm dialog and PUTs the full approved list.
+// The workspaces LIST: what a row says about a workspace at a glance (its
+// composition, one status word, its model binding, and whether it needs the
+// operator), plus the two dialogs that still live here. The scan profile's own
+// rendering moved to the requirements surfaces (the wizard's step 3 and the
+// detail page's card), which is where its honesty invariants are now tested.
 
 const setApprovedEgressMock = vi.fn();
 const getObservedEgressMock = vi.fn();
@@ -20,6 +21,8 @@ const createWorkspaceMock = vi.fn();
 const setWorkspaceLLMCredMock = vi.fn();
 const listWorkspacesMock = vi.fn();
 const getEnvAsCodeMock = vi.fn();
+const deleteWorkspaceMock = vi.fn();
+const updateWorkspaceMock = vi.fn();
 vi.mock("../../lib/api/workspaces", () => ({
   workspaces: {
     setApprovedEgress: (...a: unknown[]) => setApprovedEgressMock(...a),
@@ -28,19 +31,40 @@ vi.mock("../../lib/api/workspaces", () => ({
     setWorkspaceLLMCred: (...a: unknown[]) => setWorkspaceLLMCredMock(...a),
     listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
     getEnvAsCode: (...a: unknown[]) => getEnvAsCodeMock(...a),
+    deleteWorkspace: (...a: unknown[]) => deleteWorkspaceMock(...a),
+    updateWorkspace: (...a: unknown[]) => updateWorkspaceMock(...a),
   },
 }));
 const listSecretsMock = vi.fn();
 vi.mock("../../lib/api/secrets", () => ({
   secrets: { listSecrets: (...a: unknown[]) => listSecretsMock(...a) },
 }));
+// The wizard mounted from "+ Add workspace" fetches these on mount too — both
+// swallow their own rejection (see wizard.tsx), but mocking them keeps the
+// wizard-opens test quiet and mirrors wizard.test.tsx's own convention.
+const getSetupStatusMock = vi.fn();
+vi.mock("../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+const listIntegrationsMock = vi.fn();
+vi.mock("../../lib/api/integrations", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/api/integrations")>("../../lib/api/integrations");
+  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+});
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { AddWorkspaceDialog, WorkspacesScreen } from "./workspaces";
+import { AddWorkspaceDialog, WorkspacesScreen, attentionItems, modelAccessBroken, sourceSubLine } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
-import { WorkspaceNeedsPanel } from "./workspace-needs-panel";
+
+function renderScreen() {
+  return render(
+    <MemoryRouter>
+      <WorkspacesScreen />
+    </MemoryRouter>,
+  );
+}
 
 function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace {
   return {
@@ -56,240 +80,196 @@ function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace
   };
 }
 
-describe("WorkspaceNeedsPanel — declared secrets (names only)", () => {
-  const profile: WorkspaceProfile = {
-    languages: ["TypeScript", "Go"],
-    package_managers: ["pnpm"],
-    tools: ["docker"],
-    has_devcontainer: true,
-    has_dockerfile: true,
-    needs_review: true,
-    required_secrets: [
-      { name: "DATABASE_URL", kind: "postgres" },
-      { name: "STRIPE_SECRET_KEY", kind: "stripe" },
-      { name: "DEPLOY_TOKEN", kind: "deploy", optional: true },
-    ],
-    services_needed: ["postgres", "redis"],
-    egress_domains: ["api.anthropic.com"],
-    suggested_egress: ["telemetry.acme.io"],
-    secret_files_present: [".env", "config/.env.local"],
-  };
 
-  it("renders secret NAMES + kind/optional badges, the provenance caveat, and the .env warning", () => {
-    const { container } = render(<WorkspaceNeedsPanel workspace={ws(profile)} onWorkspaceUpdated={vi.fn()} />);
-
-    // Names, in monospace, exactly as declared.
-    expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
-    expect(screen.getByText("STRIPE_SECRET_KEY")).toBeInTheDocument();
-    expect(screen.getByText("DEPLOY_TOKEN")).toBeInTheDocument();
-
-    // Kind + optional badges live inside the secrets section ("postgres" also appears
-    // as a *service* chip, so scope the assertion to avoid the duplicate).
-    const secrets = screen.getByTestId("ws-secrets");
-    expect(within(secrets).getByText("postgres")).toBeInTheDocument();
-    expect(within(secrets).getByText("stripe")).toBeInTheDocument();
-    expect(within(secrets).getByText("deploy-time")).toBeInTheDocument();
-
-    // Honest provenance + the never-reads-values caveat.
-    expect(screen.getByText(/values are never read/i)).toBeInTheDocument();
-    expect(screen.getByText(/low-confidence scan/i)).toBeInTheDocument();
-
-    // .env warning: heading, the paths, and the readable-if-mounted copy.
-    expect(screen.getByText("Secret files present")).toBeInTheDocument();
-    expect(screen.getByText(".env")).toBeInTheDocument();
-    expect(screen.getByText("config/.env.local")).toBeInTheDocument();
-    expect(screen.getByText(/readable by the agent if this directory is mounted/i)).toBeInTheDocument();
-
-    // Honesty footer.
-    expect(screen.getByText(/files deeper than 4 levels are not visible/i)).toBeInTheDocument();
-
-    // NO value affordance: the secrets section has no input/textarea, and nothing in
-    // the panel looks like a secret VALUE (api key / connection string with password).
-    expect(secrets.querySelector("input")).toBeNull();
-    expect(secrets.querySelector("textarea")).toBeNull();
-    expect(container.textContent).not.toMatch(/sk[-_]live[-_]|:\/\/[^@\s]+:[^@\s]+@/);
-  });
-});
-
-describe("WorkspaceNeedsPanel — egress tiers + approve/remove", () => {
-  beforeEach(() => setApprovedEgressMock.mockReset());
-
-  const profile: WorkspaceProfile = {
-    egress_domains: ["api.anthropic.com"], // allowed automatically
-    suggested_egress: ["telemetry.acme.io"], // needs review
-  };
-  const workspace = ws(profile, { approved_egress: ["already.example.com"] });
-
-  it("approving a suggested host confirms first, then PUTs the full approved list", async () => {
-    const updated = { ...workspace, approved_egress: ["already.example.com", "telemetry.acme.io"] };
-    setApprovedEgressMock.mockResolvedValue(updated);
-    const onWorkspaceUpdated = vi.fn();
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<WorkspaceNeedsPanel workspace={workspace} onWorkspaceUpdated={onWorkspaceUpdated} />);
-
-    // The suggested row's "Approve" (exact) — not the confirm dialog's "Approve host".
-    await user.click(screen.getByRole("button", { name: "Approve" }));
-
-    // Confirm dialog states the untrusted-content caveat before anything is PUT.
-    expect(await screen.findByText(/untrusted content/i)).toBeInTheDocument();
-    expect(setApprovedEgressMock).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: /approve host/i }));
-
-    await waitFor(() =>
-      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", [
-        "already.example.com",
-        "telemetry.acme.io",
-      ]),
-    );
-    await waitFor(() => expect(onWorkspaceUpdated).toHaveBeenCalledWith(updated));
-  });
-
-  it("removing an approved host PUTs the list minus that host (no confirm)", async () => {
-    setApprovedEgressMock.mockResolvedValue({ ...workspace, approved_egress: [] });
-    const onWorkspaceUpdated = vi.fn();
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<WorkspaceNeedsPanel workspace={workspace} onWorkspaceUpdated={onWorkspaceUpdated} />);
-
-    await user.click(screen.getByRole("button", { name: /remove/i }));
-    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", []));
-  });
-});
-
-describe("WorkspaceNeedsPanel — suspected committed secrets (content-free)", () => {
-  it("lists path:line — kind, the never-shown-or-stored caveat, and NO value affordance", () => {
-    const profile: WorkspaceProfile = {
-      leak_findings: [
-        { path: "config/settings.py", kind: "aws-access-key", line: 42 },
-        { path: "deploy/creds", kind: "private-key-block" }, // no line
-      ],
-    };
-    const { container } = render(<WorkspaceNeedsPanel workspace={ws(profile)} onWorkspaceUpdated={vi.fn()} />);
-
-    const leaks = screen.getByTestId("ws-leaks");
-    expect(within(leaks).getByText(/rotate\/remove before mounting/i)).toBeInTheDocument();
-    // path:line and the detector id (kind), never a value.
-    expect(within(leaks).getByText("config/settings.py:42")).toBeInTheDocument();
-    expect(within(leaks).getByText(/aws-access-key/)).toBeInTheDocument();
-    expect(within(leaks).getByText("deploy/creds")).toBeInTheDocument();
-    expect(within(leaks).getByText(/private-key-block/)).toBeInTheDocument();
-    // Copy makes the content-free provenance explicit.
-    expect(within(leaks).getByText(/never shown or stored/i)).toBeInTheDocument();
-    // No value affordance, and nothing that looks like a secret value.
-    expect(leaks.querySelector("input")).toBeNull();
-    expect(leaks.querySelector("textarea")).toBeNull();
-    expect(container.textContent).not.toMatch(/sk[-_]live[-_]|AKIA[0-9A-Z]{16}|:\/\/[^@\s]+:[^@\s]+@/);
-  });
-});
-
-describe("WorkspaceNeedsPanel — advisory secret provenance badges (code/ci)", () => {
-  it("groups code/ci refs separately from declared secrets, with plain-language badges", () => {
-    const profile: WorkspaceProfile = {
-      required_secrets: [
-        { name: "POSTGRES_PASSWORD", kind: "deploy", optional: true },
-        { name: "SENTRY_DSN", kind: "code", optional: true },
-        { name: "NPM_TOKEN", kind: "ci", optional: true },
-      ],
-    };
-    render(<WorkspaceNeedsPanel workspace={ws(profile)} onWorkspaceUpdated={vi.fn()} />);
-
-    // A real declared credential lives under "Secrets this workspace declares".
-    const secrets = screen.getByTestId("ws-secrets");
-    expect(within(secrets).getByText("POSTGRES_PASSWORD")).toBeInTheDocument();
-    // Code/CI-only refs live under the separate advisory group with translated badges.
-    const codeRefs = screen.getByTestId("ws-code-refs");
-    expect(within(codeRefs).getByText("from source")).toBeInTheDocument();
-    expect(within(codeRefs).getByText("CI-only")).toBeInTheDocument();
-    // The raw detector ids are translated away; no generic "optional" chip piles on.
-    expect(within(codeRefs).queryByText("code")).toBeNull();
-    expect(within(codeRefs).queryByText("ci")).toBeNull();
-    expect(within(codeRefs).queryByText("optional")).toBeNull();
-    // A code/ci ref is NOT double-listed under the real-secrets section.
-    expect(within(secrets).queryByText("SENTRY_DSN")).toBeNull();
-  });
-});
-
-describe("WorkspaceNeedsPanel — observed-but-denied egress", () => {
+describe("WorkspacesScreen — list columns", () => {
   beforeEach(() => {
-    setApprovedEgressMock.mockReset();
-    getObservedEgressMock.mockReset();
+    listWorkspacesMock.mockReset();
+    listSecretsMock.mockReset().mockResolvedValue([]);
   });
 
-  it("fetches lazily on demand and approving a denied host PUTs it into the approved list", async () => {
-    // No suggested/auto egress in the profile, so the ONLY "Approve" button in the
-    // panel is the observed one (unambiguous getByRole below).
-    const workspace = ws({}, { approved_egress: ["already.example.com"] });
-    getObservedEgressMock.mockResolvedValue({ denied: ["metrics.acme.io"], runs_examined: 4 });
-    const updated = { ...workspace, approved_egress: ["already.example.com", "metrics.acme.io"] };
-    setApprovedEgressMock.mockResolvedValue(updated);
-    const onWorkspaceUpdated = vi.fn();
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
+  it("Workspace column: kind icon, name, and the single-source mono sub-line", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments", kind: "repo", source: "acme/payments", ref: "main", status: "scanned" })]);
+    renderScreen();
+    expect(await screen.findByText("payments")).toBeInTheDocument();
+    expect(screen.getByText("acme/payments @main")).toBeInTheDocument();
+  });
 
-    render(<WorkspaceNeedsPanel workspace={workspace} onWorkspaceUpdated={onWorkspaceUpdated} />);
+  it("Workspace column: a multi-source workspace shows the composition summary instead", async () => {
+    const w = ws({}, { status: "scanned" }) as unknown as Workspace & { sources: unknown[] };
+    w.sources = [{ type: "local_dir", path: "/a" }, { type: "local_dir", path: "/b" }, { type: "repo", source: "acme/x" }];
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderScreen();
+    expect(await screen.findByText("2 dirs · 1 repo")).toBeInTheDocument();
+  });
 
-    // Lazy: nothing is fetched until the operator asks.
-    expect(getObservedEgressMock).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /check run history/i }));
-    await waitFor(() => expect(getObservedEgressMock).toHaveBeenCalledWith("ws-1"));
+  it("Status column: ONE chip from the shared statusWord vocabulary", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "error" })]);
+    renderScreen();
+    expect(await screen.findByText("Scan failed")).toBeInTheDocument();
+  });
 
-    expect(await screen.findByText("metrics.acme.io")).toBeInTheDocument();
-    expect(screen.getByText(/from 4 recent runs/i)).toBeInTheDocument();
+  it("Model access column: the binding chip, plus a warning dot when its secret isn't stored", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { status: "scanned", llm_cred: { mode: "api_key", api_key_secret: "missing-key" } }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("API key: missing-key")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /bound secret isn't in the store/i })).toBeInTheDocument();
+  });
 
-    // Approve reuses the same confirm + setApprovedEgress flow the suggested tier uses.
-    await user.click(screen.getByRole("button", { name: "Approve" }));
-    expect(await screen.findByText(/untrusted content/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /approve host/i }));
+  it("Model access column: no warning dot once the bound secret is stored", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { status: "scanned", llm_cred: { mode: "api_key", api_key_secret: "present-key" } }),
+    ]);
+    listSecretsMock.mockResolvedValue(["present-key"]);
+    renderScreen();
+    await screen.findByText("API key: present-key");
+    expect(screen.queryByRole("img", { name: /bound secret isn't in the store/i })).not.toBeInTheDocument();
+  });
 
-    await waitFor(() =>
-      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", [
-        "already.example.com",
-        "metrics.acme.io",
-      ]),
+  it("Needs you: unstored required secrets, hosts awaiting review, then suspected leaks, in that order", async () => {
+    const w = ws(
+      {
+        egress_domains: [],
+        suggested_egress: ["telemetry.acme.io"],
+        leak_findings: [{ path: "src/config.ts", kind: "aws-access-key" }],
+      },
+      { status: "scanned" },
     );
-    await waitFor(() => expect(onWorkspaceUpdated).toHaveBeenCalledWith(updated));
+    (w as unknown as { requirements: Record<string, { level: string; provenance: string }> }).requirements = {
+      "secret:DATABASE_URL": { level: "required", provenance: "scan_seeded" },
+    };
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderScreen();
+    const secretLine = await screen.findByText("1 secret not stored");
+    const cell = secretLine.closest("td")!;
+    expect(within(cell).getByText("1 host awaiting review")).toBeInTheDocument();
+    expect(within(cell).getByText("⚠ 1 suspected committed secret")).toBeInTheDocument();
   });
 
-  it("shows a muted note when no denied egress was observed", async () => {
-    getObservedEgressMock.mockResolvedValue({ denied: [], runs_examined: 3 });
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<WorkspaceNeedsPanel workspace={ws({})} onWorkspaceUpdated={vi.fn()} />);
-    await user.click(screen.getByRole("button", { name: /check run history/i }));
-
-    expect(await screen.findByText(/no denied egress observed/i)).toBeInTheDocument();
-    expect(setApprovedEgressMock).not.toHaveBeenCalled();
+  it("Needs you: an em dash when nothing needs attention", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 });
 
-// The table renders statuses only the guided import can produce (building /
-// build_error / verifying / verify_failed), so the row menu has to reach that
-// pipeline — otherwise a failed row's only remediation is the setup funnel.
-describe("WorkspacesScreen — the row menu reaches the guided import", () => {
-  it("offers 'Set up / Resume import' on a verify_failed row", async () => {
-    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { status: "verify_failed" })]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<WorkspacesScreen />);
-    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
-
-    expect(screen.getByRole("menuitem", { name: /set up \/ resume import/i })).toBeInTheDocument();
+describe("WorkspacesScreen — kebab is Open · Edit source… · Delete… only", () => {
+  beforeEach(() => {
+    listWorkspacesMock.mockReset();
+    listSecretsMock.mockReset().mockResolvedValue([]);
   });
 
-  it("'Env as code' fetches the regenerated files and renders them per filename", async () => {
-    const row = ws({});
-    listWorkspacesMock.mockReset().mockResolvedValue([row]);
-    getEnvAsCodeMock.mockReset().mockResolvedValue({ "AGENTS.md": "# env" });
+  it("offers exactly those three items — no Scan now, Resume import, Model access, or Env as code", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "error" })]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<WorkspacesScreen />);
+    renderScreen();
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
-    await user.click(screen.getByRole("menuitem", { name: /env as code/i }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /edit source/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /delete/i })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /scan/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /resume import/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /model access/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /env as code/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /view profile/i })).not.toBeInTheDocument();
+  });
 
-    expect(await screen.findByText("AGENTS.md")).toBeInTheDocument();
-    expect(screen.getByText("# env")).toBeInTheDocument();
-    expect(getEnvAsCodeMock).toHaveBeenCalledWith(row.id);
+  it("Edit source… still opens the existing edit form (reused, unchanged)", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /edit source/i }));
+    expect(await screen.findByText("Edit workspace")).toBeInTheDocument();
+  });
+
+  it("Delete… deletes via the existing confirm dialog", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
+    deleteWorkspaceMock.mockReset().mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /delete/i }));
+    await user.click(await screen.findByRole("button", { name: /delete workspace/i }));
+    await waitFor(() => expect(deleteWorkspaceMock).toHaveBeenCalledWith("ws-1"));
+  });
+});
+
+describe("WorkspacesScreen — row click navigates to the detail route", () => {
+  it("clicking a row (not the kebab) opens /workspaces/:id", async () => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { id: "ws-42", status: "scanned" })]);
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { Route, Routes } = await import("react-router-dom");
+    render(
+      <MemoryRouter initialEntries={["/workspaces"]}>
+        <Routes>
+          <Route path="/workspaces" element={<WorkspacesScreen />} />
+          <Route path="/workspaces/:id" element={<div>detail for {"{id}"}</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByText("payments"));
+    expect(await screen.findByText("detail for {id}")).toBeInTheDocument();
+  });
+});
+
+describe("WorkspacesScreen — the new wizard opens from both the header button and the empty state", () => {
+  beforeEach(() => {
+    listWorkspacesMock.mockReset();
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    getSetupStatusMock.mockReset().mockResolvedValue({ secrets: { github_app: false } });
+    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
+  });
+
+  it("the empty state's 'Onboard your first workspace' opens the four-step wizard", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /onboard your first workspace/i }));
+    expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();
+    expect(screen.getAllByText("Sources").length).toBeGreaterThan(0);
+  });
+
+  it("the header's '+ Add workspace' opens the SAME wizard", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByText("payments");
+    await user.click(screen.getByRole("button", { name: /add workspace/i }));
+    expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();
+  });
+});
+
+describe("attentionItems / modelAccessBroken / sourceSubLine — pure helpers", () => {
+  it("attentionItems orders unstored secrets, then pending hosts, then leaks", () => {
+    const w = ws({ suggested_egress: ["h.example.com"], leak_findings: [{ path: "x", kind: "y" }] });
+    (w as unknown as { requirements: Record<string, { level: string; provenance: string }> }).requirements = {
+      "secret:A": { level: "required", provenance: "scan_seeded" },
+    };
+    expect(attentionItems(w, [])).toEqual([
+      { text: "1 secret not stored", tone: "warning" },
+      { text: "1 host awaiting review", tone: "neutral" },
+      { text: "⚠ 1 suspected committed secret", tone: "danger" },
+    ]);
+  });
+
+  it("attentionItems is empty once nothing is pending", () => {
+    expect(attentionItems(ws({}), [])).toEqual([]);
+  });
+
+  it("modelAccessBroken is true only for an api_key binding whose secret is missing", () => {
+    expect(modelAccessBroken(ws({}, { llm_cred: { mode: "api_key", api_key_secret: "x" } }), [])).toBe(true);
+    expect(modelAccessBroken(ws({}, { llm_cred: { mode: "api_key", api_key_secret: "x" } }), ["x"])).toBe(false);
+    expect(modelAccessBroken(ws({}, { llm_cred: { mode: "managed" } }), [])).toBe(false);
+  });
+
+  it("sourceSubLine shows the mono source (+ ref for a repo) for a single-source workspace", () => {
+    expect(sourceSubLine(ws({}, { kind: "repo", source: "acme/x", ref: "main" }))).toBe("acme/x @main");
+    expect(sourceSubLine(ws({}, { kind: "local_dir", source: "/srv/x" }))).toBe("/srv/x");
   });
 });
 

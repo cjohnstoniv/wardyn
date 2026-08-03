@@ -186,7 +186,9 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
       />,
     );
     expect(screen.getByText("Base image")).toBeInTheDocument();
-    expect(screen.getByText("ubuntu:24.04")).toBeInTheDocument();
+    // The ref renders twice by design — as the row's value and again in the
+    // policy JSON below it — so assert on the count, not on uniqueness.
+    expect(screen.getAllByText("ubuntu:24.04").length).toBeGreaterThan(0);
     expect(screen.queryByText("Workspace")).toBeNull();
   });
 

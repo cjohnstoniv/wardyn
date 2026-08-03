@@ -3,6 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Ported from the retired import-workspace/record-pane.test.tsx, adapted for
+// the merged per-session lifecycle (no more separate confined/replayMode
+// prop — each session's card shows whichever stage it's actually in: record
+// open -> recorded -> [Replay confined] -> replaying -> replayed). Every test
+// below that exercised meaningful behavior (CC1 banner, model-readiness note,
+// new-session form, open-record lifecycle, settled review card, empty-capture
+// honesty, confined replay + live approvals) survives; only the harness
+// (renderPane) and the confined-mode assertions changed shape.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,8 +22,8 @@ vi.mock("../../attach-terminal", () => ({
   AttachTerminal: ({ runId }: { runId: string }) => <div data-testid="attach-terminal">{runId}</div>,
 }));
 
-// LiveApprovals (verify sessions) polls the approvals API; mock it so the pane's
-// live-approval widget is testable without a server.
+// LiveApprovals (confined replay) polls the approvals API; mock it so the
+// pane's live-approval widget is testable without a server.
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<unknown[]> => Promise.resolve([]));
 const approveMock = vi.fn();
 const denyMock = vi.fn();
@@ -54,20 +62,15 @@ function ws(over: Partial<Workspace> = {}): Workspace {
 }
 
 const noop = () => {};
-function renderPane(
-  over: Partial<Workspace> = {},
-  handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {},
-  modelReady = true,
-  confined = false,
-) {
+function renderPane(over: Partial<Workspace> = {}, handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}, modelReady = true) {
   return render(
     <RecordPane
       ws={ws(over)}
-      confined={confined}
       notice={null}
       busyTask={null}
       modelReady={modelReady}
       onRecord={handlers.onRecord ?? noop}
+      onReplayConfined={handlers.onReplayConfined ?? noop}
       onDoneRecording={handlers.onDoneRecording ?? noop}
       onPromoteEgress={handlers.onPromoteEgress ?? noop}
       onApproveHost={handlers.onApproveHost ?? noop}
@@ -128,9 +131,14 @@ describe("RecordPane — new session", () => {
     await user.click(screen.getByRole("button", { name: /start recording/i }));
     expect(onRecord).toHaveBeenCalledWith("agent dev loop");
   });
+
+  it("shows the never-recorded helper line when there are no sessions yet", () => {
+    renderPane();
+    expect(screen.getByText(/never recorded/i)).toBeInTheDocument();
+  });
 });
 
-describe("RecordPane — session lifecycle", () => {
+describe("RecordPane — open-record session lifecycle", () => {
   it("a recording session embeds the attach terminal, shows detected-command hints, and Done", async () => {
     const onDoneRecording = vi.fn();
     const rr: RecordResult = { run_id: "run-42", label: "build & test", mode: "interactive", status: "recording" };
@@ -144,12 +152,23 @@ describe("RecordPane — session lifecycle", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     expect(screen.getByTestId("attach-terminal")).toHaveTextContent("run-42");
     expect(screen.getByText("npm ci")).toBeInTheDocument(); // detected-command hint pill
+    // Sessions survive navigation — this note is the promise, made while live.
+    expect(screen.getByText(/keeps running until you click done/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /done recording/i }));
     expect(onDoneRecording).toHaveBeenCalledWith("run-42");
   });
+
+  it("survives an unmount — no kill-on-unmount call for an in-flight session", () => {
+    const onDoneRecording = vi.fn();
+    const rr: RecordResult = { run_id: "run-42", label: "build & test", mode: "interactive", status: "recording" };
+    const { unmount } = renderPane({ record_results: { "build-test": rr } }, { onDoneRecording });
+    unmount();
+    // Nothing kills the run just because the page/pane went away.
+    expect(onDoneRecording).not.toHaveBeenCalled();
+  });
 });
 
-describe("RecordPane — settled review card", () => {
+describe("RecordPane — settled review card (open recording)", () => {
   const recorded = (over: Partial<RecordResult> = {}): RecordResult => ({
     run_id: "r1",
     label: "build & test",
@@ -201,7 +220,6 @@ describe("RecordPane — settled review card", () => {
     renderPane({ record_results: { "build-test": recorded() }, profile }, { onOpenProfile });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole("button", { name: /save .*profile/i }));
-    // Now also passes a suggested "save as is" name = workspace-recording.
     expect(onOpenProfile).toHaveBeenCalledWith("r1", "payments-build-test");
   });
 
@@ -229,6 +247,20 @@ describe("RecordPane — settled review card", () => {
     expect(within(review).getByText(/masking is seed-ahead/i)).toBeInTheDocument();
     expect(within(review).getByText(/syscall sensor can't see/i)).toBeInTheDocument();
   });
+
+  it("offers Replay confined once a recording settles, calling onReplayConfined with its label", async () => {
+    const onReplayConfined = vi.fn();
+    renderPane({ record_results: { "build-test": recorded() }, profile }, { onReplayConfined });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^replay confined$/i }));
+    expect(onReplayConfined).toHaveBeenCalledWith("build & test");
+  });
+
+  it("does not offer Replay confined for a failed open capture", () => {
+    renderPane({ record_results: { "build-test": recorded({ status: "record_failed" }) } });
+    expect(screen.queryByRole("button", { name: /^replay confined$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-record/i })).toBeInTheDocument();
+  });
 });
 
 describe("RecordPane — empty capture is an honest failure, never success", () => {
@@ -249,8 +281,9 @@ describe("RecordPane — empty capture is an honest failure, never success", () 
   });
 });
 
-describe("RecordPane — verify mode (replay a recording confined)", () => {
-  // The recording made on the Record step (open). Verify lists THESE, not a name box.
+describe("RecordPane — confined replay (Replay confined -> replaying -> replayed, in place)", () => {
+  // The recording made by the open session. Once it exists, its card offers
+  // Replay confined — no separate name box, no separate step/page.
   const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
   // A settled CONFINED REPLAY of it, keyed verify:build-test: reached an allowed
   // host, an already-approved host, and an off-policy host BLOCKED (deny_count>0).
@@ -269,20 +302,7 @@ describe("RecordPane — verify mode (replay a recording confined)", () => {
     }),
   };
 
-  it("lists the operator's recordings (not a name box) with a Verify action each", async () => {
-    const onRecord = vi.fn();
-    renderPane({ record_results: { "build-test": learning } }, { onRecord }, true, true);
-    // No free-text session naming on Verify.
-    expect(screen.queryByTestId("record-new-session")).not.toBeInTheDocument();
-    // The recording is listed and replayable.
-    const card = screen.getByTestId("verify-recording-build-test");
-    expect(within(card).getByText("build & test")).toBeInTheDocument();
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(within(card).getByRole("button", { name: /verify this recording/i }));
-    expect(onRecord).toHaveBeenCalledWith("build & test"); // panel routes it confined
-  });
-
-  it("shows the containment review once a recording's verify replay settles", async () => {
+  it("shows the containment review once a recording's confined replay settles", async () => {
     const onApproveHost = vi.fn();
     renderPane(
       {
@@ -290,8 +310,6 @@ describe("RecordPane — verify mode (replay a recording confined)", () => {
         approved_egress: ["github.com"],
       },
       { onApproveHost },
-      true,
-      true,
     );
     const blocked = screen.getByTestId("verify-session-blocked");
     expect(within(blocked).getByText("evil.example.com")).toBeInTheDocument();
@@ -300,17 +318,14 @@ describe("RecordPane — verify mode (replay a recording confined)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(within(blocked).getByRole("button", { name: /approve/i }));
     expect(onApproveHost).toHaveBeenCalledWith("evil.example.com");
+    // Settled replay offers a re-run, in the SAME card.
+    expect(screen.getByRole("button", { name: /replay again/i })).toBeInTheDocument();
   });
 
-  it("embeds the attach terminal while a verify replay is recording", () => {
+  it("embeds the attach terminal and live approvals while a confined replay is recording", () => {
     const running: RecordResult = { run_id: "vr9", label: "build & test", mode: "interactive", confined: true, status: "recording" };
-    renderPane({ record_results: { "build-test": learning, "verify:build-test": running } }, {}, true, true);
+    renderPane({ record_results: { "build-test": learning, "verify:build-test": running } });
     expect(screen.getByTestId("attach-terminal")).toHaveTextContent("vr9");
-  });
-
-  it("shows an empty state (record first) when there are no recordings to verify", () => {
-    renderPane({}, {}, true, true);
-    expect(screen.getByTestId("verify-no-recordings")).toBeInTheDocument();
   });
 
   it("surfaces the run's pending off-policy approval live and denies it inline", async () => {
@@ -321,7 +336,7 @@ describe("RecordPane — verify mode (replay a recording confined)", () => {
       { id: "aprX", run_id: "other", kind: "egress_domain", requested_scope: { host: "other.com" }, state: "PENDING", requested_at: "" },
     ]);
     const running: RecordResult = { run_id: "vr9", label: "build & test", mode: "interactive", confined: true, status: "recording" };
-    renderPane({ record_results: { "build-test": learning, "verify:build-test": running } }, {}, true, true);
+    renderPane({ record_results: { "build-test": learning, "verify:build-test": running } });
 
     // Only THIS run's pending approval shows (the other run's is filtered out).
     const panel = await screen.findByTestId("live-approvals");
@@ -331,5 +346,33 @@ describe("RecordPane — verify mode (replay a recording confined)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(within(panel).getByRole("button", { name: /deny/i }));
     expect(denyMock).toHaveBeenCalledWith("apr1", expect.any(String));
+  });
+
+  it("Done on a replaying session calls onDoneRecording with the CONFINED run id", async () => {
+    const onDoneRecording = vi.fn();
+    const running: RecordResult = { run_id: "vr9", label: "build & test", mode: "interactive", confined: true, status: "recording" };
+    renderPane({ record_results: { "build-test": learning, "verify:build-test": running } }, { onDoneRecording });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^done$/i }));
+    expect(onDoneRecording).toHaveBeenCalledWith("vr9");
+  });
+
+  it("disables Replay confined only for the busy session (busyTask keys off verifyKeyOf)", () => {
+    render(
+      <RecordPane
+        ws={ws({ record_results: { "build-test": learning } })}
+        notice={null}
+        busyTask="verify:build-test"
+        modelReady
+        onRecord={noop}
+        onReplayConfined={noop}
+        onDoneRecording={noop}
+        onPromoteEgress={noop}
+        onApproveHost={noop}
+        onOpenProfile={noop}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /re-record/i })).toBeEnabled();
   });
 });

@@ -4,28 +4,30 @@
  */
 
 import * as React from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Box,
-  FileCode2,
   FolderGit2,
   FolderOpen,
-  KeyRound,
   Loader2,
   MoreHorizontal,
   Plus,
   RotateCw,
-  ScanSearch,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
 import { workspaces as api } from "../../lib/api/workspaces";
+import { secrets as secretsApi } from "../../lib/api/secrets";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
+import { statusTone, statusWord } from "../../lib/workspace-status";
+import { compositionSummary, unstoredRequiredSecrets, workspaceRequirements } from "./new-run/wizard-types";
 import type {
   Workspace,
   WorkspaceKind,
   WorkspaceLLMCred,
+  WorkspaceProfile,
 } from "../../lib/types";
+import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -52,19 +54,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { CodeBlock, Mono } from "../wardyn/code-block";
+import { Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
-import { ImportWorkspaceDialog } from "./import-workspace/import-panel";
-import { WorkspaceNeedsPanel } from "./workspace-needs-panel";
-import {
-  LLMCredFields,
-  WorkspaceLLMCredDialog,
-  llmCredLabel,
-  llmCredTone,
-} from "./workspace-llm-cred";
+import { WorkspaceWizard } from "./workspace-wizard/wizard";
+import { llmCredLabel, llmCredTone, LLMCredFields } from "./workspace-llm-cred";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 
@@ -102,44 +98,72 @@ export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: 
   container: { Icon: Box, label: "container" },
 };
 
+// The list's "Workspace" column sub-line: a multi-source composition summary
+// ("2 dirs · 1 repo") or, for a single/pre-composition source, its mono path —
+// exported so the detail page's header renders the identical line (never a
+// second copy of this ternary).
+export function sourceSubLine(ws: Workspace): string {
+  const multi = compositionSummary(ws);
+  if (multi) return multi;
+  return ws.kind === "repo" && ws.ref ? `${ws.source} @${ws.ref}` : ws.source;
+}
+
+export interface AttentionItem {
+  text: string;
+  tone: "warning" | "danger" | "neutral";
+}
+
+// The "Needs you" cell (list) / header attention line (detail) — mirrors the
+// approved mock's attentionFor, minus its scan_failed line (the Status column/
+// chip already says that). Order matches the task's own examples: unstored
+// required secrets, then hosts awaiting review, then suspected leaks.
+export function attentionItems(ws: Workspace, storedSecretNames: string[]): AttentionItem[] {
+  const out: AttentionItem[] = [];
+  const unstored = unstoredRequiredSecrets(ws, storedSecretNames);
+  if (unstored.length) {
+    out.push({ text: `${unstored.length} secret${unstored.length > 1 ? "s" : ""} not stored`, tone: "warning" });
+  }
+  const profile = (ws.profile ?? {}) as WorkspaceProfile;
+  const reqs = workspaceRequirements(ws);
+  const contractHosts = new Set(
+    Object.keys(reqs)
+      .filter((k) => k.startsWith("egress:"))
+      .map((k) => k.slice("egress:".length)),
+  );
+  const autoAllowed = new Set(profile.egress_domains ?? []);
+  const pendingHosts = (profile.suggested_egress ?? []).filter((h) => !contractHosts.has(h) && !autoAllowed.has(h));
+  if (pendingHosts.length) {
+    out.push({ text: `${pendingHosts.length} host${pendingHosts.length > 1 ? "s" : ""} awaiting review`, tone: "neutral" });
+  }
+  const leaks = profile.leak_findings?.length ?? 0;
+  if (leaks) out.push({ text: `⚠ ${leaks} suspected committed secret${leaks > 1 ? "s" : ""}`, tone: "danger" });
+  return out;
+}
+
+// A workspace/container whose bound model access is an api_key pointing at a
+// secret that isn't in the store — the binding silently does nothing.
+export function modelAccessBroken(ws: Workspace, storedSecretNames: string[]): boolean {
+  const cred = ws.llm_cred;
+  return !!(cred?.mode === "api_key" && cred.api_key_secret && !storedSecretNames.includes(cred.api_key_secret));
+}
+
 export function WorkspacesScreen() {
   const operator = useOperator();
+  const navigate = useNavigate();
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
+  const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
   const [addOpen, setAddOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<Workspace | null>(null);
-  const [profileTarget, setProfileTarget] = React.useState<Workspace | null>(null);
-  const [credTarget, setCredTarget] = React.useState<Workspace | null>(null);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
-  // Row whose guided import is open. The statuses this table renders past
-  // `scanned` (building/build_error/verifying/verify_failed) are produced only by
-  // that pipeline, so without this the screen shows import state it can't act on —
-  // a "Verify failed" row had no remediation outside the Getting Started funnel.
-  const [importWsId, setImportWsId] = React.useState<string | null>(null);
-  // Row whose regenerated env-as-code is open. Fetched on open (the GET
-  // regenerates from the stored profile), keyed by workspace so the dialog
-  // title stays right while the fetch is in flight; null string map = loading,
-  // error text rendered from the server's own 422/500 message.
-  const [envTarget, setEnvTarget] = React.useState<Workspace | null>(null);
-  const [envFiles, setEnvFiles] = React.useState<Record<string, string> | null>(null);
-  const [envError, setEnvError] = React.useState<string | null>(null);
-  const openEnvAsCode = (w: Workspace) => {
-    setEnvTarget(w);
-    setEnvFiles(null);
-    setEnvError(null);
-    api.getEnvAsCode(w.id).then(setEnvFiles, (e) => setEnvError(getErrorMessage(e)));
-  };
-  // Rows with a scan in flight — scoped to workspace id so multiple scans (or a
-  // scan alongside other list activity) never fight over one flag.
-  const [scanning, setScanning] = React.useState<Set<string>>(new Set());
 
   const load = React.useCallback(() => {
     setStatus("loading");
-    api
-      .listWorkspaces()
-      .then((ws) => {
+    Promise.all([api.listWorkspaces(), secretsApi.listSecrets()])
+      .then(([ws, secrets]) => {
         setWorkspaces(ws);
+        setSecretNames(secrets);
         setStatus("ready");
       })
       .catch(() => setStatus("error"));
@@ -153,43 +177,13 @@ export function WorkspacesScreen() {
       w.source.toLowerCase().includes(query.toLowerCase()),
   );
 
-  const triggerScan = async (w: Workspace) => {
-    setScanning((s) => new Set(s).add(w.id));
-    try {
-      const { async: isAsync } = await api.scanWorkspace(w.id);
-      if (isAsync) {
-        toast.info(`Scan started for "${w.name}"`, {
-          description:
-            "A governed scan run is analyzing the repo; the status updates when it completes (track it in Runs).",
-        });
-      } else {
-        toast.success(`"${w.name}" scanned — ready`);
-      }
-    } catch (e) {
-      // e.g. a local dir whose path doesn't exist on this host — the server persists
-      // status=error and returns the reason (surfaced here, and shown on the row by
-      // the finally re-read).
-      toast.error(`Failed to scan "${w.name}"`, {
-        description: getErrorMessage(e),
-      });
-    } finally {
-      // Re-read for the authoritative status: the scan response is a profile (local)
-      // or a scan-run stub (repo), never a Workspace, and a failed scan persists
-      // status=error server-side — so trust the list, not the response body.
-      api.listWorkspaces().then(setWorkspaces).catch(() => {});
-      setScanning((s) => {
-        const next = new Set(s);
-        next.delete(w.id);
-        return next;
-      });
-    }
-  };
+  const openDetail = (id: string) => navigate(`/workspaces/${encodeURIComponent(id)}`);
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Workspaces"
-        description="Onboard the local directories and repos your runs may attach. Run-creation only ever offers sources onboarded here — a free-text host path is never accepted."
+        description="Add the directories, repos and images your runs may attach. Run creation only ever offers what's added here — a free-text host path is never accepted."
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
@@ -232,8 +226,8 @@ export function WorkspacesScreen() {
             title="No workspaces onboarded yet."
             description={
               operator
-                ? "Add a local directory or repo so runs can attach it. Wardyn scans it once (languages, package managers, egress) and reuses that profile for every run."
-                : `Add a local directory or repo so runs can attach it. ${OPERATOR_ONLY_REASON}`
+                ? "Add a local directory, repo, or container image so runs can attach it. Wardyn scans it once (languages, package managers, egress) and reuses that profile for every run."
+                : `Add a local directory, repo, or container image so runs can attach it. ${OPERATOR_ONLY_REASON}`
             }
             action={
               <Button onClick={() => setAddOpen(true)} disabled={!operator}>
@@ -255,47 +249,76 @@ export function WorkspacesScreen() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Name</TableHead>
-                <TableHead>Kind</TableHead>
-                <TableHead>Source</TableHead>
+                <TableHead>Workspace</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Model access</TableHead>
+                <TableHead>Needs you</TableHead>
                 <TableHead className="w-[44px]" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map((w) => {
                 const kindMeta = KIND_META[w.kind] ?? KIND_META.local_dir;
+                const tone = statusTone(w.status);
+                const attention = attentionItems(w, secretNames);
+                const brokenModel = modelAccessBroken(w, secretNames);
                 return (
-                  <TableRow key={w.id}>
+                  <TableRow key={w.id} className="cursor-pointer" onClick={() => openDetail(w.id)}>
                     <TableCell>
-                      <span className="inline-flex items-center gap-2">
-                        <kindMeta.Icon className="size-3.5 text-cyan" />
-                        <span className="text-foreground">{w.name}</span>
+                      <span className="inline-flex items-center gap-2.5">
+                        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground">
+                          <kindMeta.Icon className="size-3.5" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-foreground">{w.name}</span>
+                          <Mono className="block max-w-[260px] truncate text-[0.6875rem] text-muted-foreground" title={sourceSubLine(w)}>
+                            {sourceSubLine(w)}
+                          </Mono>
+                        </span>
                       </span>
                     </TableCell>
                     <TableCell>
-                      <Chip tone="neutral">{kindMeta.label}</Chip>
+                      <Chip tone={tone.tone} dot pulse={tone.pulse}>
+                        {statusWord(w.status)}
+                      </Chip>
                     </TableCell>
                     <TableCell>
-                      <Mono className="text-foreground" title={w.source}>
-                        {w.source}
-                      </Mono>
-                      {w.ref && <span className="ml-1.5 text-xs text-muted-foreground">@{w.ref}</span>}
-                    </TableCell>
-                    <TableCell>
-                      {scanning.has(w.id) ? (
-                        <Chip tone="neutral" dot>
-                          <Loader2 className="size-3 animate-spin" /> Scanning…
+                      <span className="inline-flex items-center gap-1.5">
+                        <Chip tone={llmCredTone(w.llm_cred?.mode)} mono={w.llm_cred?.mode === "api_key"}>
+                          {llmCredLabel(w.llm_cred)}
                         </Chip>
+                        {brokenModel && (
+                          <span
+                            className="size-1.5 shrink-0 rounded-full bg-danger"
+                            role="img"
+                            aria-label="Bound secret isn't in the store"
+                            title="Bound secret isn't in the store"
+                          />
+                        )}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      {attention.length ? (
+                        <span className="flex flex-col gap-0.5">
+                          {attention.map((a, i) => (
+                            <span
+                              key={i}
+                              className={cn(
+                                "text-[0.6875rem] leading-snug",
+                                a.tone === "danger"
+                                  ? "text-danger"
+                                  : a.tone === "warning"
+                                    ? "text-warning"
+                                    : "text-muted-foreground",
+                              )}
+                            >
+                              {a.text}
+                            </span>
+                          ))}
+                        </span>
                       ) : (
-                        <Chip tone={STATUS_TONE[w.status]} dot>
-                          {STATUS_LABEL[w.status]}
-                        </Chip>
+                        <span className="text-muted-foreground">—</span>
                       )}
-                    </TableCell>
-                    <TableCell>
-                      <Chip tone={llmCredTone(w.llm_cred?.mode)}>{llmCredLabel(w.llm_cred)}</Chip>
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <DropdownMenu>
@@ -305,34 +328,17 @@ export function WorkspacesScreen() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => triggerScan(w)} disabled={!operator || scanning.has(w.id)}>
-                            <ScanSearch className="size-4" /> Scan now
-                            {!operator && <OperatorOnlyHint />}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setImportWsId(w.id)} disabled={!operator}>
-                            Set up / Resume import
-                            {!operator && <OperatorOnlyHint />}
-                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openDetail(w.id)}>Open</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setEditTarget(w)} disabled={!operator}>
-                            Edit
+                            Edit source…
                             {!operator && <OperatorOnlyHint />}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setCredTarget(w)} disabled={!operator}>
-                            <KeyRound className="size-4" /> Model access
-                            {!operator && <OperatorOnlyHint />}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setProfileTarget(w)} disabled={!w.profile}>
-                            View profile
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => openEnvAsCode(w)} disabled={!w.profile}>
-                            <FileCode2 className="size-4" /> Env as code
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => setToDelete(w)}
                             disabled={!operator}
                             className="text-danger focus:text-danger"
                           >
-                            <Trash2 className="size-4" /> Delete
+                            <Trash2 className="size-4" /> Delete…
                             {!operator && <OperatorOnlyHint />}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -346,16 +352,21 @@ export function WorkspacesScreen() {
         )}
       </div>
 
-      <AddWorkspaceDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} />
-
-      {/* Same guided overlay the setup funnel mounts (Source → Scan → Configure →
-          Verify → Finalize), resumed on the picked row. */}
-      <ImportWorkspaceDialog
-        open={!!importWsId}
-        onOpenChange={(o) => !o && setImportWsId(null)}
-        workspaceId={importWsId ?? undefined}
-        onReload={load}
-      />
+      {/* The new four-step wizard (Sources -> Base image -> Requirements -> Done)
+          replaces the old ImportWorkspaceDialog as the ONE "Add workspace" front
+          door. Mounted only while open (its own Dialog is unconditionally open
+          internally). */}
+      {addOpen && (
+        <WorkspaceWizard
+          origin="library"
+          onClose={() => setAddOpen(false)}
+          onWorkspaceCreated={load}
+          onOpenWorkspace={(id) => {
+            setAddOpen(false);
+            openDetail(id);
+          }}
+        />
+      )}
 
       <AddWorkspaceDialog
         open={!!editTarget}
@@ -366,68 +377,6 @@ export function WorkspacesScreen() {
         }}
         initial={editTarget ?? undefined}
       />
-
-      <WorkspaceLLMCredDialog
-        workspace={credTarget}
-        onOpenChange={(o) => !o && setCredTarget(null)}
-        onSaved={(w) => {
-          setCredTarget(null);
-          setWorkspaces((list) => list.map((x) => (x.id === w.id ? w : x)));
-        }}
-      />
-
-      <Dialog open={!!profileTarget} onOpenChange={(o) => !o && setProfileTarget(null)}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>What this workspace needs — {profileTarget?.name}</DialogTitle>
-            <DialogDescription>
-              Detected by the scan from committed files — deterministic control-plane output, never
-              agent-authored. Names and hosts only; values are never read.
-            </DialogDescription>
-          </DialogHeader>
-          {profileTarget && (
-            <WorkspaceNeedsPanel
-              workspace={profileTarget}
-              onWorkspaceUpdated={(w) => {
-                setProfileTarget(w);
-                setWorkspaces((list) => list.map((x) => (x.id === w.id ? w : x)));
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!envTarget} onOpenChange={(o) => !o && setEnvTarget(null)}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Env as code — {envTarget?.name}</DialogTitle>
-            <DialogDescription>
-              Committable files regenerated from the scanned profile — commit these to keep the
-              environment reproducible. Same output finalize emits; fetch it here any time.
-            </DialogDescription>
-          </DialogHeader>
-          {envError ? (
-            <p className="text-sm text-danger">{envError}</p>
-          ) : envFiles == null ? (
-            <p className="text-sm text-muted-foreground">Generating…</p>
-          ) : Object.keys(envFiles).length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing to emit — this workspace's profile produces no env-as-code files.
-            </p>
-          ) : (
-            <div className="max-h-[60vh] space-y-3 overflow-y-auto">
-              {Object.entries(envFiles).map(([name, content]) => (
-                <div key={name} className="space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                    <FileCode2 className="size-3.5 text-cyan" /> {name}
-                  </div>
-                  <CodeBlock text={content} />
-                </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
 
       <DeleteConfirmDialog
         name={toDelete?.name ?? null}
@@ -446,7 +395,11 @@ export function WorkspacesScreen() {
 
 // Add/Edit dialog for a single onboarded workspace. `initial` set => edit mode
 // (PUT), otherwise create (POST). Exported so the New Run wizard can offer
-// "Add workspace" inline without leaving the flow (mirrors AddSecretDialog).
+// "Add workspace" inline without leaving the flow (mirrors AddSecretDialog),
+// and so this screen's + the detail page's "Edit source…" kebab item can
+// reuse the SAME edit form the wizard doesn't replace (the new wizard's
+// multi-source composition has no update path yet — see workspace-wizard/
+// wizard.tsx's continueFromSources comment).
 export function AddWorkspaceDialog({
   open,
   onOpenChange,
@@ -470,7 +423,7 @@ export function AddWorkspaceDialog({
   const [writable, setWritable] = React.useState(false);
   // Model/harness binding — create-only (the server ignores llm_cred on a
   // generic PUT); editing an existing workspace's binding goes through the
-  // list's "Model access" action (WorkspaceLLMCredDialog) instead.
+  // detail page's Requirements card (WorkspaceLLMCredDialog) instead.
   const [llmCred, setLlmCred] = React.useState<WorkspaceLLMCred>({ mode: "" });
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -641,9 +594,9 @@ export function AddWorkspaceDialog({
           )}
 
           {/* Read-only is the safe default (WorkspaceMount.ReadOnly). Without this
-              opt-in an imported workspace can never be written, so Record/Verify
-              cannot install deps, build, or let the agent edit a file — the whole
-              point of the import flow. Granting it is real: changes land on the host. */}
+              opt-in an imported workspace can never be written, so an agent
+              cannot install deps, build, or edit a file — the whole point of
+              onboarding it. Granting it is real: changes land on the host. */}
           {kind === "local_dir" && (
             <div className="space-y-2 rounded-lg border border-border p-3">
               <label className="flex items-start gap-2.5 text-xs">
@@ -678,9 +631,9 @@ export function AddWorkspaceDialog({
             </div>
           )}
 
-          {/* Create-only: editing an existing workspace's binding uses the list's
-              "Model access" action instead (the server ignores llm_cred on a
-              generic PUT — see WorkspaceLLMCredDialog above). */}
+          {/* Create-only: editing an existing workspace's binding uses the detail
+              page's Requirements card instead (the server ignores llm_cred on a
+              generic PUT — see WorkspaceLLMCredDialog there). */}
           {!isEdit && <LLMCredFields value={llmCred} onChange={setLlmCred} />}
 
           {error && (

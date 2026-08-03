@@ -225,6 +225,17 @@ export const workspaces = {
     return body.emitted_files ?? {};
   },
 
+  // POST /api/v1/workspaces/{id}/env-as-code/write -> { written_files }. Writes
+  // the SAME generated files into the workspace's first local_dir source on
+  // this host. LOCAL-DIR ONLY: a repo/ephemeral-only workspace has no host path
+  // to write into — the server 422s and that surfaces via HttpError's message
+  // (regenerate + commit yourself via getEnvAsCode above instead).
+  async writeEnvAsCode(id: string): Promise<Record<string, string>> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/env-as-code/write`, { method: "POST" });
+    const body = await asJson<{ written_files?: Record<string, string> }>(res);
+    return body.written_files ?? {};
+  },
+
   // DELETE /api/v1/workspaces/{id} -> 204.
   async deleteWorkspace(id: string): Promise<void> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });

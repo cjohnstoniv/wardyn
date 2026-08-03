@@ -76,6 +76,11 @@ const IntegrationDetailScreen = React.lazy(() =>
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({ default: m.WorkspacesScreen })),
 );
+const WorkspaceDetailScreen = React.lazy(() =>
+  import("./components/screens/workspace-detail/workspace-detail").then((m) => ({
+    default: m.WorkspaceDetailScreen,
+  })),
+);
 const AuditScreen = React.lazy(() => import("./components/screens/audit").then((m) => ({ default: m.AuditScreen })));
 const RecordingScreen = React.lazy(() =>
   import("./components/screens/recording").then((m) => ({ default: m.RecordingScreen })),
@@ -323,6 +328,14 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <WorkspacesScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/workspaces/:id"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <WorkspaceDetailScreen />
                 </React.Suspense>
               }
             />
