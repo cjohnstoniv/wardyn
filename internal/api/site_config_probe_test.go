@@ -40,7 +40,7 @@ func TestClassifyProxyProbe(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := classifyProxyProbe(c.res, proxyProbeHost)
+			got := classifyProxyProbe(c.res, proxyProbeHost, true)
 			if got.State != c.wantState {
 				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
 			}
@@ -370,15 +370,43 @@ func TestHandleTestSiteConfigProxy_BlockedWithRealError(t *testing.T) {
 	}
 }
 
-func TestHandleTestSiteConfigProxy_NoUpstreamConfigured(t *testing.T) {
-	fr := &probeFakeRunner{}
-	srv, ps := newProbeHarness(t, types.SiteConfig{}, fr) // nothing configured to test
+func TestHandleTestSiteConfigProxy_NoUpstreamConfiguredStillProbes(t *testing.T) {
+	// An unconfigured proxy is the COMMON case, not an error. The operator's
+	// real question -- can a sandbox reach the internet from this host? -- is
+	// worth answering either way, and refusing to run made the button useless
+	// on exactly the hosts where nothing is wrong yet.
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, ps := newProbeHarness(t, types.SiteConfig{}, fr)
 	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if ps.runCount() != 0 {
-		t.Error("must never launch a probe sandbox when nothing is configured to test")
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "reached" {
+		t.Errorf("state = %q, want reached", got.State)
+	}
+	// It must NOT claim a proxy it never chained through.
+	if !strings.Contains(got.Detail, "directly (no upstream proxy configured)") {
+		t.Errorf("detail = %q, want it to say the probe went direct", got.Detail)
+	}
+	if ps.runCount() != 1 {
+		t.Errorf("runCount = %d, want 1 -- the probe must actually launch", ps.runCount())
+	}
+}
+
+func TestHandleTestSiteConfigProxy_EmptyBodyIsTheOrdinaryCall(t *testing.T) {
+	// The UI POSTs with NO body (fetch sends none when there is nothing to
+	// send). decodeStrict read that as io.EOF and 400'd every click with
+	// "invalid JSON body: EOF" -- the endpoint takes no fields, so an absent
+	// body is the normal shape, not a malformed one.
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 for a body-less POST; body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeProbeResponse(t, w.Body.String()); got.State != "reached" {
+		t.Errorf("state = %q, want reached", got.State)
 	}
 }
 

@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -288,18 +290,25 @@ var noRunnerResponse = siteConfigProbeResponse{State: "no_runner", Detail: "no r
 // classifyProxyProbe turns what runSiteConfigProbe actually observed into the
 // test-proxy endpoint's {state, detail}. host is what was probed, named in
 // every detail message so "what did we actually try" is always answerable.
-func classifyProxyProbe(res probeRunResult, host string) siteConfigProbeResponse {
+// viaProxy selects the wording only: the probe traverses whatever egress path
+// the host actually has, so with no upstream configured this reports on direct
+// reachability rather than claiming a proxy it never chained through.
+func classifyProxyProbe(res probeRunResult, host string, viaProxy bool) siteConfigProbeResponse {
+	path := "directly (no upstream proxy configured)"
+	if viaProxy {
+		path = "through wardyn-proxy (chained to the configured upstream)"
+	}
 	switch {
 	case res.hasExitCode && res.exitCode == 0:
 		return siteConfigProbeResponse{
 			State:     "reached",
-			Detail:    fmt.Sprintf("reached %s through wardyn-proxy (chained to the configured upstream) in %s", host, res.elapsed.Round(time.Millisecond)),
+			Detail:    fmt.Sprintf("reached %s %s in %s", host, path, res.elapsed.Round(time.Millisecond)),
 			ElapsedMS: res.elapsed.Milliseconds(),
 		}
 	case res.hasExitCode:
 		return siteConfigProbeResponse{
 			State:     "blocked",
-			Detail:    fmt.Sprintf("could not reach %s through wardyn-proxy: %s", host, curlFailureDetail(res.exitCode)),
+			Detail:    fmt.Sprintf("could not reach %s %s: %s", host, path, curlFailureDetail(res.exitCode)),
 			ElapsedMS: res.elapsed.Milliseconds(),
 		}
 	default:
@@ -366,7 +375,14 @@ func findEgressRedirect(sc types.SiteConfig, want string) (types.EgressRedirect,
 // request fields -- there is nothing here for a caller to redirect toward an
 // arbitrary target (see the file doc comment for why that matters).
 func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Request) {
-	if !decodeStrict(w, r, &struct{}{}) {
+	// No request fields. An empty body is the ORDINARY client shape — a fetch()
+	// POST with nothing to send transmits no body at all — so EOF is success
+	// here, not a 400. Anything actually sent still decodes strictly, so a
+	// typo'd field can't be silently swallowed.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&struct{}{}); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
 	ctx := r.Context()
@@ -375,10 +391,13 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
 		return
 	}
-	if siteCfg.UpstreamProxyURL == "" && siteCfg.UpstreamProxySecretRef == "" {
-		writeError(w, http.StatusBadRequest, "no upstream proxy is configured in site-config")
-		return
-	}
+	// An unconfigured proxy is not an error, it is the common case — and the
+	// question the operator is actually asking ("can a sandbox reach the
+	// internet from this host?") is worth answering either way. With no
+	// upstream, the probe proves direct egress works; with one, it proves the
+	// chain works. Refusing to run without a proxy made the button useless on
+	// exactly the hosts where nothing is wrong yet.
+	viaProxy := siteCfg.UpstreamProxyURL != "" || siteCfg.UpstreamProxySecretRef != ""
 	if s.cfg.Runner == nil {
 		writeJSON(w, http.StatusOK, noRunnerResponse)
 		return
@@ -391,7 +410,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
 	}
-	resp := classifyProxyProbe(res, proxyProbeHost)
+	resp := classifyProxyProbe(res, proxyProbeHost, viaProxy)
 	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "target_host": proxyProbeHost, "elapsed_ms": resp.ElapsedMS,
