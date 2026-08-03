@@ -32,7 +32,7 @@ import { Input } from "../../ui/input";
 import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "../../ui/command";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../../ui/command";
 import { cn } from "../../ui/utils";
 import { Field } from "../new-run/step-shell";
 import { Mono } from "../../wardyn/code-block";
@@ -676,6 +676,19 @@ function RedirectRowExpanded({
 
 function FromCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = React.useState(false);
+  // The suggestions are a shortcut, not the menu: redirecting a private host or
+  // a bare IP is the whole reason this stopped being "artifact registries".
+  // Without a CommandInput the list is select-only, CommandEmpty can never
+  // render (nothing filters it), and the copy promising "type anything" is a
+  // lie the UI can't keep.
+  const [query, setQuery] = React.useState("");
+  const typed = query.trim();
+  const isNovel = typed !== "" && !EGRESS_SUGGEST.some(([url]) => url === typed);
+  const pick = (v: string) => {
+    onChange(v);
+    setQuery("");
+    setOpen(false);
+  };
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -686,17 +699,28 @@ function FromCombobox({ value, onChange }: { value: string; onChange: (v: string
       </PopoverTrigger>
       <PopoverContent className="w-[420px] p-0" align="start">
         <Command>
+          <CommandInput value={query} onValueChange={setQuery} placeholder="https://…, host, or IP" className="font-mono" />
           <CommandList>
             <CommandEmpty>Or type anything — a full URL, a bare host, or an IP. It&apos;s redirected exactly as entered.</CommandEmpty>
+            {isNovel && (
+              <CommandGroup>
+                {/* forceMount + a value cmdk's filter always keeps: the typed
+                    string must stay selectable even when it matches nothing. */}
+                <CommandItem key="__custom" value={typed} forceMount onSelect={() => pick(typed)} className="font-mono">
+                  <Check className="size-3.5 opacity-0" />
+                  {typed}
+                  <span className="ml-auto font-sans text-[0.6875rem] text-muted-foreground">use as typed</span>
+                </CommandItem>
+              </CommandGroup>
+            )}
             <CommandGroup>
               {EGRESS_SUGGEST.map(([url, eco]) => (
                 <CommandItem
                   key={url}
                   value={url}
-                  onSelect={(v) => {
-                    onChange(v);
-                    setOpen(false);
-                  }}
+                  // pick(url), not pick(v) — cmdk lowercases the value it hands
+                  // back, and a redirect target is dialed verbatim.
+                  onSelect={() => pick(url)}
                   className="justify-between font-mono"
                 >
                   <span className="inline-flex items-center gap-2">

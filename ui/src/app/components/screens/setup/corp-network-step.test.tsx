@@ -350,7 +350,36 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     }
   });
 
-  it("adding a redirect from a suggested npm source auto-sets ecosystem; a free-typed one is network-only", async () => {
+  it("a CUSTOM host can be typed and saved — redirecting a private host or IP is the point of this tab", async () => {
+    // The suggestions are a shortcut, not the menu. Without a CommandInput the
+    // combobox was select-only, so an internal host or a bare IP — the reason
+    // this stopped being "artifact registries" — could not be entered at all.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { saveSiteConfig } = renderStep();
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByRole("combobox"));
+
+    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "telemetry.vendor-sdk.io");
+    await user.click(await screen.findByText("use as typed"));
+
+    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "10.40.2.11:8443");
+    await user.click(screen.getByRole("button", { name: /\+ add redirect/i }));
+
+    await waitFor(() =>
+      expect(saveSiteConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          egress_redirects: [
+            // No ecosystem: nothing writes a tool config for an arbitrary host,
+            // so it lands in the network-only tier rather than silently
+            // claiming a config file it can't generate.
+            expect.objectContaining({ from: "telemetry.vendor-sdk.io", to: "10.40.2.11:8443", ecosystem: undefined }),
+          ],
+        }),
+      ),
+    );
+  });
+
+  it("adding a redirect from a suggested npm source auto-sets its ecosystem", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const { saveSiteConfig } = renderStep();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));

@@ -92,7 +92,7 @@ test.describe("Getting Started funnel", () => {
     // Footer on the last step: the launch button is disabled with the
     // essentials helper visible.
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
-    for (let i = 0; i < 8; i++) await nextBtn.click();
+    for (let i = 0; i < 9; i++) await nextBtn.click();
     await expect(main.getByRole("heading", { name: /launch your first run/i })).toBeVisible();
     for (const btn of await page.getByRole("button", { name: /launch your first run/i }).all()) {
       await expect(btn).toBeDisabled();
@@ -108,7 +108,7 @@ test.describe("Getting Started funnel", () => {
     await expect(page.getByRole("button", { name: /finish later/i })).toHaveCount(0);
     // Walk to the final (Launch) step and complete via "Finish setup".
     const nextBtn = page.getByRole("button", { name: /^Next:/i });
-    for (let i = 0; i < 8; i++) await nextBtn.click();
+    for (let i = 0; i < 9; i++) await nextBtn.click();
     await page.getByRole("button", { name: /^finish setup$/i }).click();
     // Completion lands on Runs...
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
@@ -116,6 +116,6 @@ test.describe("Getting Started funnel", () => {
     // funnel — the tour is one-shot).
     await navTo(page, "Getting started");
     await expect(page.getByRole("heading", { name: "Getting started" })).toBeVisible();
-    await expect(page.getByText(/step 1 of 9/i)).toBeVisible();
+    await expect(page.getByText(/step 1 of 10/i)).toBeVisible();
   });
 });
