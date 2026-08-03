@@ -221,7 +221,11 @@ func run() error {
 		Identity:  idp,
 		Approvals: approvals,
 		Broker:    brk,
-		Audit:     maskedRec,
+		// Same minter, second use: the setup checklist asks it whether GitHub
+		// confines the App to the run branch namespace. nil when no App is
+		// configured, which omits the row.
+		GitHubRulesets: gh,
+		Audit:          maskedRec,
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).

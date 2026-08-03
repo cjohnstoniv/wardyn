@@ -91,6 +91,16 @@ type MintBroker interface {
 	RevokeRun(ctx context.Context, runID uuid.UUID) error
 }
 
+// RefRulesetVerifier answers whether GitHub itself confines the App's writes on
+// a repo to the run branch namespace. Satisfied by broker.GitHubMinter. It is a
+// SEPARATE, optional Config field rather than a method on MintBroker because it
+// is the only thing in the API layer that calls an external network service, and
+// the /setup/status checklist must degrade to "unknown" — never "fail" — when it
+// is absent or errors.
+type RefRulesetVerifier interface {
+	VerifyRefRuleset(ctx context.Context, repo string) (confined bool, detail string, err error)
+}
+
 // ImageBuilder builds a per-run sandbox image from a devcontainer repo. It is
 // target-agnostic (the parity rule): the concrete envbuilder implementation is
 // wired in wardynd behind the "docker" build tag, so the control-plane default
@@ -132,6 +142,11 @@ type Config struct {
 	Approvals ApprovalService
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
+	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
+	// App is ref-confined on a granted repo. Nil omits that row entirely — which
+	// is also what happens when no GitHub App is configured, so the vast majority
+	// of deployments never make the call.
+	GitHubRulesets RefRulesetVerifier
 	// Audit records control-plane-originated audit events. The recorder handed in
 	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
 	// failed durable write is masked, logged loudly, and spooled to the local
@@ -381,6 +396,13 @@ type Server struct {
 	// shouldTouch in internal.go). Zero value is ready to use.
 	lastTouchMu sync.Mutex
 	lastTouch   map[uuid.UUID]time.Time
+	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
+	// so polling /setup/status (which the wizard does) cannot turn into a
+	// per-poll API call or a rate-limit. Zero value is ready to use.
+	refRulesetMu   sync.Mutex
+	refRulesetAt   time.Time
+	refRulesetRow  SetupCheck
+	refRulesetShow bool
 }
 
 // New constructs a Server and builds its router. It does not start listening.

@@ -695,7 +695,7 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 // whose private-repo clone is guaranteed to 403.
 func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now time.Time, cloneURL string) (*uuid.UUID, error) {
 	u, perr := neturl.Parse(cloneURL)
-	if perr != nil || u.Hostname() != "github.com" {
+	if perr != nil || u.Hostname() != "github.com" || !isHTTPScheme(u.Scheme) {
 		return nil, nil
 	}
 	gid := uuid.New()
@@ -1082,13 +1082,24 @@ func scanEgressDomains(cloneURL string) []string {
 // would re-open host-level github egress and defeat the broker's repo-scoping).
 var gitBrokerManagedHosts = []string{"github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com"}
 
+// isHTTPScheme reports whether a clone URL's scheme is one the git broker can
+// actually serve. The broker route is smart-HTTP only, so an ssh:// URL must
+// never key a GitGrants entry: brokering it would deny the forge and withhold
+// the SSH key (single-lane, see confineGitBrokerEgress) while leaving the run no
+// working clone lane at all, because agent-run's insteadOf rewrite only matches
+// bare "<org>/<repo>" slugs. A hostname check alone is NOT enough — url.Parse
+// reads ssh://git@github.com/o/r as Hostname()=="github.com".
+func isHTTPScheme(scheme string) bool {
+	return scheme == "https" || scheme == "http"
+}
+
 // gitBrokerKey returns the canonical lowercased "<org>/<repo>" git-broker allowlist
 // key for a GitHub HTTPS clone URL, or "" when cloneURL isn't a bare github repo
 // path (SSH, non-github, or a deeper path). Used to build the per-run GitGrants
 // map for the scan/verify/record clone.
 func gitBrokerKey(cloneURL string) string {
 	u, err := neturl.Parse(cloneURL)
-	if err != nil || u.Hostname() != "github.com" {
+	if err != nil || u.Hostname() != "github.com" || !isHTTPScheme(u.Scheme) {
 		return ""
 	}
 	p := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")

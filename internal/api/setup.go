@@ -680,6 +680,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
+
+	// github_ref_ruleset: the only row that leaves the machine. Gated on the App
+	// being configured, cached, short-timeout, and never worse than "warn" — see
+	// githubRefRulesetCheck.
+	if chk, ok := s.githubRefRulesetCheck(ctx, sec.GitHubApp); ok {
+		checks = append(checks, chk)
+	}
 	checks = append(checks, platformChecks(plat)...)
 
 	// has_runs: cheap existence check via the store. reuses ListRuns (fine for a
@@ -915,6 +922,88 @@ func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPos
 			Fix:    "Add a secret named git-pat-github-com / git-pat-dev-azure-com (or your GHES/ADO-Server host's slug) under Secrets and reference it from a git_pat grant — or configure a GitHub App.",
 		}
 	}
+}
+
+// refRulesetTTL is how long one github_ref_ruleset answer is reused. The wizard
+// polls /setup/status; without this every poll would be an api.github.com round
+// trip and, on a busy installation, a rate-limit.
+const refRulesetTTL = 5 * time.Minute
+
+// refRulesetTimeout bounds the whole outbound probe (a token mint, up to two
+// rule reads, one ruleset read per ruleset found, and a token revoke). Short on
+// purpose: this row is advisory, and handleSetupStatus is a page load.
+const refRulesetTimeout = 5 * time.Second
+
+// githubRefRulesetCheck asks GitHub whether the App is actually ref-confined on
+// a granted repo, and caches the answer for refRulesetTTL.
+//
+// This is the ONLY setup check that leaves the machine — every other row is
+// local inspection (secret NAMES, env/file detection, the control plane's own
+// Postgres, a runner capability probe). Three things keep that from being a
+// regression:
+//
+//   - It is skipped entirely unless a GitHub App is configured AND a verifier is
+//     wired AND the default policy or a stored one names a concrete repo in a
+//     github_token grant. A deployment without the App never makes the call and
+//     never sees the row.
+//   - Every failure — timeout, rate limit, 403 on the permission, a repo the
+//     installation cannot see — grades "info"/unknown. A network blip must not
+//     read as a security regression.
+//   - The result is cached, so the wizard's polling cannot amplify it.
+//
+// It never grades "fail": like scmProviderCheck, it is not a gate. The gate is
+// the opt-in broker.envRequireRefRuleset, and it lives in the mint path.
+func (s *Server) githubRefRulesetCheck(ctx context.Context, githubApp bool) (SetupCheck, bool) {
+	if !githubApp || s.cfg.GitHubRulesets == nil {
+		return SetupCheck{}, false
+	}
+	s.refRulesetMu.Lock()
+	defer s.refRulesetMu.Unlock()
+	if !s.refRulesetAt.IsZero() && s.cfg.Now().Sub(s.refRulesetAt) < refRulesetTTL {
+		return s.refRulesetRow, s.refRulesetShow
+	}
+
+	repo := s.firstBrokeredRepo(ctx)
+	if repo == "" {
+		s.refRulesetAt, s.refRulesetRow, s.refRulesetShow = s.cfg.Now(), SetupCheck{}, false
+		return SetupCheck{}, false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, refRulesetTimeout)
+	defer cancel()
+	confined, detail, err := s.cfg.GitHubRulesets.VerifyRefRuleset(probeCtx, repo)
+
+	s.refRulesetAt = s.cfg.Now()
+	s.refRulesetRow = refRulesetCheck(repo, confined, detail, err)
+	s.refRulesetShow = true
+	return s.refRulesetRow, true
+}
+
+// firstBrokeredRepo returns the first "owner/name" the default policy, then any
+// stored policy, names in a github_token grant scope — the repos the App can
+// reach through Wardyn. "" when none: shipped example policies carry
+// "repos": [] because eligible_grants are TEMPLATES the run fills in, so a fresh
+// install legitimately has nothing to probe and the row is omitted rather than
+// guessed at.
+func (s *Server) firstBrokeredRepo(ctx context.Context) string {
+	specs := []types.RunPolicySpec{s.cfg.DefaultPolicy}
+	if s.cfg.Store != nil {
+		if pols, err := s.cfg.Store.ListPolicies(ctx); err == nil {
+			for _, p := range pols {
+				specs = append(specs, p.Spec)
+			}
+		}
+	}
+	for _, spec := range specs {
+		for _, g := range spec.EligibleGrants {
+			if g.Kind != types.GrantGitHubToken {
+				continue
+			}
+			if repos := githubScopeRepos(g.Scope); len(repos) > 0 {
+				return repos[0]
+			}
+		}
+	}
+	return ""
 }
 
 // hostProxyCheck summarizes host-proxy detection as a single non-blocking

@@ -19,8 +19,8 @@ write time. A guard test fails if a field here drifts from the struct.
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `allowed_domains` | `[]string` | `[]` (deny all) | L2 egress allowlist: exact hosts or `*.` wildcards. Empty under default-deny means the sandbox reaches nothing. Each entry must be a shape the proxy's matcher can match — a mid-label wildcard, a URL, or a bad `:port` is rejected at write time rather than shipped as a rule that silently matches nothing. |
-| `denied_domains` | `[]string` | `[]` | Always wins over `allowed_domains`, in both egress modes. Same entry-shape validation. **Dispatch appends four of its own** for any run carrying a `github_token` grant with repos — see the note below the table. |
-| `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only: any non-denied **public** host is allowed. The SSRF/private-IP guard is unaffected (metadata, loopback, link-local and private ranges stay denied unconditionally), and credential injection still requires an exact `allowed_domains` entry — allow-all never widens where a secret may go. `first_use_approval` is inert under it. It does **not** re-open the four GitHub hosts a brokered run loses — a deny beats allow-all too. |
+| `denied_domains` | `[]string` | `[]` | Always wins over `allowed_domains`, in both egress modes. Same entry-shape validation. **Dispatch appends its own** (four GitHub HTTPS hosts plus the forge's SSH endpoint) for any run carrying a `github_token` grant with repos — see the note below the table. |
+| `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only: any non-denied **public** host is allowed. The SSRF/private-IP guard is unaffected (metadata, loopback, link-local and private ranges stay denied unconditionally), and credential injection still requires an exact `allowed_domains` entry — allow-all never widens where a secret may go. `first_use_approval` is inert under it. It does **not** re-open the GitHub hosts a brokered run loses — the four HTTPS names plus that forge's SSH endpoint — a deny beats allow-all too. |
 | `first_use_approval` | `string` | `always_deny` | How an unknown domain is handled. See the three modes below. A legacy boolean still decodes (`true`→`deny_with_review`, `false`→`always_deny`). |
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction. |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
@@ -31,73 +31,260 @@ write time. A guard test fails if a field here drifts from the struct.
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
-### Brokered GitHub: four denies you did not write
+### Brokered GitHub: the denies you did not write
 
 A run whose `github_token` grant covers at least one repo (from the grant's
 `scope.repos`, or from the run's `--repo` / `workspace_repos` clone set) is
 **brokered**: git traffic goes through the proxy's `/wardyn/gh/<org>/<repo>`
 route, where the installation token is minted server-side and never enters the
-sandbox. To make that the only route to those four host **names**, dispatch
-subtracts **and denies** `github.com`, `api.github.com`, `codeload.github.com`
-and `*.githubusercontent.com` for that run (`confineGitBrokerEgress`,
-`internal/api/runs_dispatch.go`).
+sandbox. To make that the only route to those host **names**, dispatch
+subtracts **and denies** `github.com`, `api.github.com`, `codeload.github.com`,
+`*.githubusercontent.com` — and the forge's `ssh.<forge>` SSH-over-443 endpoint
+(`ssh.github.com` in v1; the broker is github.com-only) — for that run
+(`confineGitBrokerEgress`, `internal/api/runs_dispatch.go`). All of these are
+added on **every** brokered run, whether or not it holds an `ssh_key` grant at
+all — see "The `ssh_key` lane is closed too" below for what that buys.
 
-**Nothing in the policy re-opens those four names.** The confinement runs last,
+**Nothing in the policy re-opens those names.** The confinement runs last,
 after every widening phase, and a deny beats `allowed_domains`, beats
 `allow_all_egress`, beats a promoted `ApprovedEgress` entry, and beats a runtime
 `first_use_approval` — the proxy returns on the deny verdict before it ever
-considers an approval, on every port, not just 443. So a brokered run that dials
-any of those names cannot `curl` the GitHub API, `gh pr create`, or fetch a
-release tarball or a raw `githubusercontent.com` file. The narrowed envelope is
-disclosed in the `run.policy.effective` audit event.
+considers an approval, on every port, not just 443 (the SSH deny in particular
+is spelled as the bare host: that covers port 22 under `allow_all_egress`,
+where a `:443`-only spelling would not, and it beats a surviving `*.github.com`
+wildcard allow the same way any deny beats any allow — a policy that never
+subtracted that wildcard, because it isn't one of the exact broker-managed
+names, still can't use it to reach `ssh.github.com`). So a brokered run that
+dials any of those names cannot `curl` the GitHub API, `gh pr create`, fetch a
+release tarball or a raw `githubusercontent.com` file, or clone/push over SSH
+to the same forge. The narrowed envelope is disclosed in the
+`run.policy.effective` audit event.
 
 **It is a name deny, and that is the whole of its reach.** The proxy keys the
 verdict on the host string the sandbox asked for (`evalHost`), so a `CONNECT` to
-a raw GitHub IP is a different key and these four denies do not see it. Under
+a raw GitHub IP is a different key and none of these denies see it. Under
 the default posture that changes nothing — an unlisted host is `always_deny` —
 but under `allow_all_egress` a literal public IP is allowed (only private,
 loopback, link-local and metadata ranges are denied unconditionally), and under
 `deny_with_review` / `wait_for_review` it becomes an approvable unknown. If you
 run a brokered policy with `allow_all_egress`, the broker route is the only
-*convenient* route, not the only one.
+*convenient* route, not the only one — it is what git itself uses, since a
+clone/push URL carries a name, never a bare IP.
 
-### …and the one lane those four denies do not cover
+### The `ssh_key` lane is closed too
 
-The denies are **exact names**, and `ssh.github.com` is not one of them. If the
-same run also carries an `ssh_key` grant for `github.com`, run-create allowlists
-`ssh.github.com:443` for it (`sshOver443Endpoint`, `unionRunEgress`) and the
-confinement neither subtracts nor denies that entry. On such a run
-`github.com:443` is denied and `ssh.github.com:443` is allowed.
+An earlier pass over this doc described a real gap here: the GitHub denies
+were exact HTTPS hosts, so a run that also carried an `ssh_key` grant for the
+same forge kept `ssh.<forge>:443` allowlisted — a second, unparseable push path
+beside the brokered one. That gap is now closed, at write time and at dispatch:
 
-That split is deliberate, not a hole in the deny. An `ssh_key` grant exists only
-because the operator stored a private key for that forge and put the grant in
-the policy; Wardyn's position on operator-supplied credentials is that the
-operator bounds them (`threatmodel/THREAT-MODEL.md` §5.1a). But the two lanes buy
-different things, so know which one you are in:
+- **Write time.** `validateGrantLaneExclusivity` (`internal/api/policy.go`, run
+  from `validatePolicySpec` on every policy write — stored `POST`/`PUT
+  /policies`, an inline run policy, `WARDYN_DEFAULT_POLICY`, and the
+  composer/profile clamps) refuses a policy that declares both a `github_token`
+  grant and an `ssh_key` grant for the same forge, with a `400` naming the
+  choice: brokered and branch-confined, or operator-supplied and unbound — not
+  both for one forge. It fires on the DECLARATION, not on whether a run ends up
+  brokered — a `github_token` grant with `"repos": []` still counts, since
+  policy-write cannot know what a later run will `--repo` into.
+- **Dispatch.** For a policy stored before this rule existed,
+  `confineGitBrokerEgress` denies the forge's `ssh.<forge>` endpoint alongside
+  the HTTPS hosts above, and `dropBrokeredSSHGrants` withholds that forge's
+  `ssh_key` grant from the sandbox env entirely — the private key is never
+  minted, not merely unable to reach its forge — logging an `slog` warning and
+  a `run.ssh.brokered_forge` audit event so the withholding is never silent.
 
 | Lane | Route to the forge | What binds a push |
 |---|---|---|
-| `github_token` with repos (brokered) | `/wardyn/gh/<org>/<repo>` only — the four hosts are denied | Per-repo allowlist **plus** the receive-pack pkt-line parser (`internal/egress/proxy/git_broker.go`), which reads the refs being pushed and refuses any outside `refs/heads/wardyn/<run-id>/`. Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out |
-| The same run **plus** an `ssh_key` grant for `github.com` | Also `ssh.github.com:443`, as a CONNECT tunnel | **Nothing Wardyn enforces.** SSH is opaque to the proxy, so no parser sees the refs: any ref, any branch. The bound is the key's own access on the forge and whatever branch protection the forge applies |
+| `github_token` with repos (brokered) | `/wardyn/gh/<org>/<repo>` only — every name above is denied | Per-repo allowlist **plus** the receive-pack pkt-line parser (`internal/egress/proxy/git_broker.go`), which reads the refs being pushed and refuses any outside `refs/heads/wardyn/<run-id>/`. Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out |
+| An `ssh_key` grant for the **same** forge | None | Refused at write (`400`) going forward; for anything already stored, the grant is withheld from the sandbox at dispatch — there is no credential left to push with |
 
-The key is resident for the clone only — `agent-run` mints it, writes it `0400`,
-clones, then shreds it and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
-That is a real narrowing and it is **not** a confinement: the grant id rides the
-sandbox env (`WARDYN_SSH_GRANTS`), an auto-mintable grant is re-mintable by
-design (`MintForGrant` — only `requires_approval: true` makes it single-use), and
-the proxy's mint route refuses only *brokered GitHub* grant ids
-(`isBrokeredGitGrant`) — so the agent process can re-mint the same private key
-for itself at any point in the run. Treat "this run has an `ssh_key` grant for a
-forge" as "this run can push anywhere that key can push."
-
-If you want the brokered lane's branch confinement to be the whole story, do not
-attach an `ssh_key` grant for a forge the run is already brokered for. There is
-no policy field that re-opens the four denied hosts; the SSH lane is a different
-grant, not an escape hatch on this one.
+An `ssh_key` grant for a **different** forge (`dev.azure.com`, say, alongside a
+`github.com` `github_token`) is untouched by either mechanism — both key on the
+same forge. There the old shape still applies: the key is resident for the
+clone only — `agent-run` mints it, writes it `0400`, clones, then shreds it and
+unsets `GIT_SSH_COMMAND` before exec'ing the agent — a real narrowing and not a
+confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), an
+auto-mintable grant is re-mintable by design (`MintForGrant` — only
+`requires_approval: true` makes it single-use), and the proxy's mint route
+refuses only *brokered GitHub* grant ids (`isBrokeredGitGrant`). That forge's
+key is bounded by the operator who supplied it, not by Wardyn
+(`threatmodel/THREAT-MODEL.md` §5.1a) — the honest scope for a non-brokered
+credential, unchanged by any of the above.
 
 **If the run needs direct GitHub fetches, drop the `github_token` grant** (and
 allowlist the hosts you need). A run with no git grants keeps whatever GitHub
 egress its policy grants — the confinement is no-op without one.
+
+### Bound the token itself: a GitHub ruleset
+
+Everything above bounds the **route**. None of it bounds the **token**. A GitHub
+App installation token cannot self-restrict to a ref prefix — the installation-token
+request carries repository names, repository ids and a permission map, and no ref
+or branch field, because the API accepts none — so `refs/heads/wardyn/<run-id>/`
+is enforced by Wardyn's receive-pack parser on the proxy, and a token that
+escaped the proxy would be unbounded on GitHub's side.
+
+A **repository ruleset** changes that. Target every branch, exclude the run
+namespace, restrict creation, update and deletion: the App can then write only
+inside `refs/heads/wardyn/**/*`, and that holds for a leaked token, a
+misconfigured proxy, or any path Wardyn is not on.
+
+**Mind the `/*`.** The exclude pattern is `refs/heads/wardyn/**/*`, not
+`refs/heads/wardyn/**`. GitHub matches these with fnmatch semantics where `*`
+does not cross `/`, and a *trailing* `**` behaves the same as `*` — only `**/`
+is recursive. A run pushes `wardyn/<run-id>/work`, two segments below `wardyn/`,
+so `refs/heads/wardyn/**` excludes nothing a run actually pushes and the ruleset
+refuses every governed push. Measured against GitHub's live evaluator, read-only,
+on public repos that already carry such rulesets: with `refs/heads/**` as the
+*include* (`nodejs/node` #714753), `zzz` gets the rule and `zzz/foo` does not;
+with `refs/heads/dependabot/**/*` as the include (`angular/angular` #9964176),
+`dependabot/foo` and `dependabot/a/b/c/d/e` both get it and bare `dependabot`
+does not; with `refs/heads/copilot/**/*` as the *exclude*
+(`open-telemetry/opentelemetry-collector` #10457348), `copilot/foo` and
+`copilot/a/b/c` are excluded and bare `copilot` is not. GitHub's docs agree: "the
+`*` wildcard does not match directory separators (`/`)" and "you can include any
+number of slashes after `qa` with `qa/**/*`".
+
+Rulesets are what Wardyn can *read back* and therefore the only form it verifies.
+Classic branch protection ("restrict who can push") also bounds a token, but it
+is a different API and does **not** appear in the rules endpoint below — measured:
+repos with heavily protected default branches return `[]` there. A repo protected
+that way is genuinely protected and will still be graded "unconfined" by the check.
+
+`target: "branch"` bounds **branches only**. The target enum is
+`branch|tag|push`, so this ruleset leaves `refs/tags/*` open: a leaked
+`contents:write` token can still create, move or delete any tag. Wardyn's own
+receive-pack parser refuses tags, but the ruleset exists precisely for the case
+where that parser is bypassed. Add a second `target: "tag"` ruleset if tags
+matter to you; Wardyn does not verify one.
+
+Create it (needs **admin on the repo** — Wardyn never has that, which is why this
+is an operator step and not something the control plane can do for you):
+
+```sh
+OWNER=acme REPO=widgets
+
+# bypass actor: a User id (gh api /users/<login> --jq .id) or a Team id
+# (gh api /orgs/$OWNER/teams/<slug> --jq .id). See the note below on roles.
+HUMAN_ID=$(gh api /users/your-login --jq .id)
+
+jq -n --argjson human "$HUMAN_ID" '{
+  name: "wardyn-agent-ref-confinement",
+  target: "branch",
+  enforcement: "active",
+  conditions: { ref_name: { include: ["~ALL"], exclude: ["refs/heads/wardyn/**/*"] } },
+  rules: [
+    { type: "creation" },
+    { type: "update", parameters: { update_allows_fetch_and_merge: false } },
+    { type: "deletion" },
+    { type: "non_fast_forward" }
+  ],
+  bypass_actors: [
+    { actor_id: $human, actor_type: "User", bypass_mode: "always" }
+  ]
+}' | gh api --method POST "/repos/$OWNER/$REPO/rulesets" --input -
+```
+
+Field names, enum values and which fields are required are as published in
+GitHub's OpenAPI description (`github/rest-api-description`,
+`descriptions/api.github.com/api.github.com.json`): `name` and `enforcement` are
+the only required properties; `target` ∈ `branch|tag|push`; `enforcement` ∈
+`disabled|active|evaluate`; `ref_name.include` accepts `~ALL` (all branches) and
+`~DEFAULT_BRANCH`; `bypass_actors[].actor_type` ∈
+`Integration|OrganizationAdmin|RepositoryRole|Team|DeployKey|User` with
+`bypass_mode` ∈ `always|pull_request|exempt`, and `actor_id` is required for
+`Integration`, `RepositoryRole`, `Team` and `User`.
+
+**On `RepositoryRole`.** Bypassing by role ("everyone with write") is a supported
+`actor_type`, but it needs a numeric `actor_id` and **GitHub's published schema
+does not document what the numbers are** — so this recipe uses a `User`/`Team` id
+you can resolve with a command. If you want the role form, create one ruleset in
+the web UI with the bypass you want and read the number back:
+`gh api /repos/$OWNER/$REPO/rulesets/<id> --jq .bypass_actors`.
+
+**What it costs.** Only listed bypass actors can create, update, delete or
+force-push any branch outside `refs/heads/wardyn/**/*` — including the default
+branch, including you, including CI. Grant bypass to the humans and automation
+that need it *before* you set `enforcement: "active"`, or use `"evaluate"` first
+(GitHub Enterprise only) to see what would break. The Wardyn App is deliberately
+**not** a bypass actor; that is the entire point.
+
+**Verify it took on your own repo** — the same reads Wardyn makes, and the same
+reason for each. Outside the namespace `creation`, `update` and `deletion` must
+all appear (each is a write: without `deletion` a leaked token still runs
+`git push --delete origin main`); inside it, `creation` and `update` must not (or
+the ruleset would refuse the run's own pushes). Then each ruleset behind those
+rules must report that you cannot bypass it. The branch does not have to exist —
+GitHub answers for the name — so these create nothing:
+
+```sh
+gh api "/repos/$OWNER/$REPO/rules/branches/probe-wardyn-ref-confinement" --jq '[.[].type]'
+# → a list containing at least "creation", "update" and "deletion"
+
+gh api "/repos/$OWNER/$REPO/rules/branches/wardyn/00000000-0000-0000-0000-000000000000/probe" --jq '[.[].type]'
+# → []   ← this is the line that catches a wrong exclude pattern
+
+# for each distinct ruleset_id in the first response:
+gh api "/repos/$OWNER/$REPO/rules/branches/probe-wardyn-ref-confinement" --jq '[.[].ruleset_id]|unique|.[]' |
+  while read -r id; do gh api "/repos/$OWNER/$REPO/rulesets/$id" --jq '.name + " " + (.current_user_can_bypass // "ABSENT")'; done
+# → "never" for each. Anything else means that ruleset does not bind you, and
+#   ABSENT means it could not be determined — Wardyn treats both as not-confined.
+```
+
+The second read is the one that catches `refs/heads/wardyn/**`: with the wrong
+pattern it returns the same rule list as the first, because nothing two segments
+deep was ever excluded.
+
+GitHub's App-permissions reference lists **both** reads under **Metadata: read** —
+`GET /repos/{owner}/{repo}/rules/branches/{branch}` and
+`GET /repos/{owner}/{repo}/rulesets/{ruleset_id}` are both rows in "Repository
+permissions for Metadata"; the "Administration" rows for that second path are the
+`PUT`, `DELETE` and `/history` variants, not the plain `GET`. Metadata: read is
+the one permission every GitHub App holds mandatorily, so reading a ruleset back
+should cost no new permission grant. **Unverified against a live installation**:
+that is the docs' claim, not a measurement, which is why every read failure
+grades *unknown* instead of *unconfined*. The rules endpoint is readable with no
+authentication at all on a public repo (measured); `current_user_can_bypass`,
+however, is omitted from an unauthenticated read (also measured).
+
+Wardyn grades exactly this on the setup checklist (`github_ref_ruleset`), for the
+first repo the default policy or a stored policy names in a `github_token` grant
+scope — one repo, not all of them; the row says which. The row is omitted
+entirely when no GitHub App is configured or when no policy names a concrete repo
+— shipped example policies carry `"repos": []` because `eligible_grants` are
+templates the run fills in — so a fresh install makes no outbound call at all.
+
+What the check does and does not settle:
+
+- **Bypass is checked**, not assumed away. For every ruleset backing the
+  creation/update/deletion rules, Wardyn reads `current_user_can_bypass` and
+  requires `"never"`; `always`, `pull_requests_only` or `exempt` grade
+  **unconfined**, because a bypassing App writes anywhere despite a perfect rule
+  list. Measured with a plain non-admin user token on 11 rulesets across 7
+  public repos: the field comes back (`"never"`) even though `bypass_actors` is
+  withheld, which GitHub returns only to a caller with write access to the
+  ruleset (and documents that). **Two things
+  remain unknown** and are not asserted: whether GitHub computes that field
+  meaningfully for a GitHub App *installation* token, and what App permission the
+  ruleset read needs. An *unauthenticated* read omits the field entirely
+  (measured) — so an absent field is treated as unknown, never as a pass.
+- **Branches only.** The verified ruleset targets branches, so `refs/tags/*` is
+  not bounded by it and the check does not claim otherwise.
+- **Any error grades unknown** — timeout, rate limit, permission refused, a
+  bypass mode that could not be read — never "unconfined".
+- **`api.github.com` only**, so this does not cover GitHub Enterprise Server
+  (neither does minting — the broker has no GHES base-URL setting).
+
+To make it mandatory rather than advisory, set
+`WARDYN_GITHUB_REQUIRE_REF_RULESET=true` on `wardynd`: the broker runs the same
+verification before every `github_token` mint, for **every** repo in the grant,
+and refuses the mint if any of them is unconfined *or* cannot be verified. It is
+**off by default** — defaulting it on would break every existing deployment on
+its next mint, since the ruleset has to be created per repo by hand. Turn it on
+only once the reads above return what they should on every repo you broker:
+`refs/heads/wardyn/**` instead of `refs/heads/wardyn/**/*` will fail the gate and
+block every governed push at GitHub as well.
 
 ### `first_use_approval` modes
 
@@ -121,11 +308,11 @@ an unrecognised literal is rejected at write time.
 
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
-| `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com` and `*.githubusercontent.com`** — see "Brokered GitHub" above. Drop the grant if the run needs direct GitHub fetches. |
+| `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and the forge's `ssh.<forge>` endpoint** — see "Brokered GitHub" above. Also refuses a co-declared `ssh_key` grant for the same forge at write time (see "The `ssh_key` lane is closed too"). Drop the grant if the run needs direct GitHub fetches. |
 | `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today. |
 | `api_key` | `{"host":"…","header":"…"}` | Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation. `username` defaults by convention (ADO `pat`, GitLab `oauth2`). |
-| `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after. |
+| `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after — except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` lane is closed too"). |
 
 ## `workspace_mounts[]` — `WorkspaceMount`
 

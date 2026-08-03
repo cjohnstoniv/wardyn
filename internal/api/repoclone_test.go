@@ -4,12 +4,15 @@
 package api
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -135,6 +138,23 @@ func TestGitBrokerWiring(t *testing.T) {
 		t.Errorf("githubScopeRepos = %v, want [a/b] (drop malformed/deep entries)", got)
 	}
 
+	// gitBrokerKey itself must reject an ssh:// GitHub URL, not just the slug
+	// wrapper. url.Parse reads ssh://git@github.com/o/r as Hostname()=="github.com",
+	// so a hostname-only check brokers it — and a brokered run denies the forge AND
+	// withholds the ssh_key (single-lane), while agent-run's insteadOf rewrite only
+	// matches bare slugs. The run would end up with no working clone lane at all.
+	for url, want := range map[string]string{
+		"https://github.com/Octo/Repo.git": "octo/repo",
+		"http://github.com/o/r":            "o/r",
+		"ssh://git@github.com/o/r":         "",
+		"ssh://git@github.com/o/r.git":     "",
+		"ssh://github.com/o/r":             "",
+	} {
+		if k := gitBrokerKey(url); k != want {
+			t.Errorf("gitBrokerKey(%q) = %q, want %q", url, k, want)
+		}
+	}
+
 	// gitBrokerKeyFromSlug: bare slug + https github -> lowercased key; ssh/non-github -> "".
 	for slug, want := range map[string]string{
 		"octocat/Hello-World":              "octocat/hello-world",
@@ -166,10 +186,11 @@ func TestGitBrokerWiring(t *testing.T) {
 }
 
 // TestConfineGitBrokerEgress: a BROKERED run's effective egress carries no
-// broker-managed GitHub host — dispatch subtracts them from the allowlist (exact,
-// wildcard, and :port spellings) and denies them, so /wardyn/gh/ is the only path
-// to those four host NAMES and the receive-pack branch-namespace parser cannot be
-// routed around by dialing one of them. A NON-brokered run is untouched.
+// broker-managed GitHub host and no SSH lane to a brokered forge — dispatch
+// subtracts both from the allowlist (exact, wildcard, and :port spellings) and
+// denies them, so /wardyn/gh/ is the only path to those names and the receive-pack
+// branch-namespace parser cannot be routed around by dialing one of them, nor by
+// pushing over SSH. A NON-brokered run is untouched, SSH lane included.
 func TestConfineGitBrokerEgress(t *testing.T) {
 	grants := map[string]uuid.UUID{"octocat/hello-world": uuid.New()}
 
@@ -195,23 +216,36 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		}
 	}
 
-	// THE LANE THE FOUR DENIES DO NOT COVER, pinned deliberately. The denies are
-	// EXACT hosts, so an ssh_key grant's ssh.github.com:443 endpoint (added at
-	// create time by unionRunEgress) survives on a brokered run: github.com is
-	// denied, ssh.github.com:443 stays allowed. This is not a bug to fix here —
-	// an ssh_key grant is operator-supplied and operator-bounded — but it is the
-	// exact reason no doc may say "the brokered route is the ONLY route". If this
-	// assertion ever flips, docs/POLICIES.md and threatmodel/THREAT-MODEL.md are
-	// wrong and must change with it.
+	// BROKERED MEANS SINGLE-LANE — this assertion is the INVERSE of what it pinned
+	// before: it used to require ssh.github.com:443 to SURVIVE the confinement, on
+	// the reasoning that an ssh_key grant is operator-supplied and operator-bounded.
+	// That left a brokered run with github.com:443 denied and ssh.github.com:443
+	// allowed — a second push path the receive-pack branch-namespace parser cannot
+	// read, because SSH is opaque to it. The lane is now closed here (and refused at
+	// policy-write by validateGrantLaneExclusivity), so the brokered route is the
+	// only route to the forge BY NAME — a name-based deny never binds an IP
+	// literal, the standing caveat the four HTTPS denies already carry. The deny
+	// here is the BARE host, which covers every port. If this
+	// assertion ever flips BACK, docs/POLICIES.md and threatmodel/THREAT-MODEL.md
+	// are wrong and must change with it.
 	sshLane := types.RunPolicySpec{AllowedDomains: []string{"github.com", "ssh.github.com:443"}}
 	confineGitBrokerEgress(&sshLane, grants)
-	if !slices.Contains(sshLane.AllowedDomains, "ssh.github.com:443") {
-		t.Errorf("ssh.github.com:443 must survive the confinement, got allowed=%v", sshLane.AllowedDomains)
+	if slices.Contains(sshLane.AllowedDomains, "ssh.github.com:443") {
+		t.Errorf("ssh.github.com:443 must NOT survive the confinement, got allowed=%v", sshLane.AllowedDomains)
 	}
-	for _, d := range sshLane.DeniedDomains {
-		if d == "ssh.github.com" || d == "ssh.github.com:443" {
-			t.Errorf("ssh.github.com must NOT be denied by the git-broker confinement, got denied=%v", sshLane.DeniedDomains)
-		}
+	if !slices.Contains(sshLane.DeniedDomains, "ssh.github.com") {
+		t.Errorf("ssh.github.com must be denied by the git-broker confinement, got denied=%v", sshLane.DeniedDomains)
+	}
+
+	// THE REGRESSION THAT MATTERS: the SSH confinement fires ONLY for a brokered
+	// run. An ssh_key run with no broker map keeps its lane untouched — nothing is
+	// subtracted and nothing is denied.
+	sshOnly := types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com:443", "api.anthropic.com"}}
+	if dropped := confineGitBrokerEgress(&sshOnly, nil); dropped != nil {
+		t.Errorf("non-brokered ssh_key run must be untouched, dropped %v", dropped)
+	}
+	if !slices.Contains(sshOnly.AllowedDomains, "ssh.github.com:443") || len(sshOnly.DeniedDomains) != 0 {
+		t.Errorf("non-brokered ssh_key run lost its SSH lane: allowed=%v denied=%v", sshOnly.AllowedDomains, sshOnly.DeniedDomains)
 	}
 
 	// NON-brokered run: no git grants, so github egress stays the operator's call.
@@ -221,6 +255,25 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 	}
 	if !slices.Equal(plain.AllowedDomains, []string{"github.com", "api.anthropic.com"}) || len(plain.DeniedDomains) != 0 {
 		t.Errorf("non-brokered run mutated: allowed=%v denied=%v", plain.AllowedDomains, plain.DeniedDomains)
+	}
+
+	// THE DEDUP KEY IS THE RAW ENTRY, and this case is the only thing that says so.
+	// A policy that already denies "github.com:443" must STILL get the bare-host
+	// deny: keying the dedup map on egressEntryHost(d) instead looks like tidy-up
+	// now that the helper exists, passes every other test in the repo, and leaves
+	// github.com:22 reachable on a brokered run under allow_all_egress — where the
+	// allowlist subtraction is worth nothing and the deny is the only half left.
+	// Probed through the REAL evaluator, since the bug is a verdict, not a spelling.
+	prePorted := types.RunPolicySpec{AllowAllEgress: true, DeniedDomains: []string{"github.com:443"}}
+	confineGitBrokerEgress(&prePorted, grants)
+	for _, port := range []int{22, 443} {
+		v, err := proxy.NewBuiltinEvaluator(prePorted).EvaluateHost(context.Background(), egress.Request{Host: "github.com", Port: port})
+		if err != nil {
+			t.Fatalf("evaluate github.com:%d: %v", port, err)
+		}
+		if v != egress.VerdictDeny {
+			t.Errorf("github.com:%d = %v, want deny (denied=%v)", port, v, prePorted.DeniedDomains)
+		}
 	}
 
 	// Idempotent + no duplicate deny rows on a policy that already denies a host.

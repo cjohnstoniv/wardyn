@@ -134,9 +134,14 @@ func TestToInstallationPermissions_EmptyIsNil(t *testing.T) {
 // toInstallationPermissions round-trips the clamped ceiling permission set onto
 // the typed struct using go-github's json tags. This asserts the ACTUAL,
 // currently-implemented permission shaping: contents:write + pull_requests:write
-// + metadata:read. (Branch-push confinement is advisory metadata only and is
-// NOT enforced as a permission clamp today — see broker.go branchNamespaceFormat
-// — so we do not assert any push-ref restriction here.)
+// + metadata:read. (branchNamespaceFormat's push-branch namespace is not
+// expressed as a GitHub token PERMISSION — the installation-permission API has
+// no ref/branch field for toInstallationPermissions to set — so we do not
+// assert any push-ref restriction here. It IS enforced, just not that way: the
+// proxy's receive-pack pkt-line parser refuses an out-of-namespace ref by
+// default, and the opt-in GitHub-side ruleset check (VerifyRefRuleset,
+// WARDYN_GITHUB_REQUIRE_REF_RULESET) can bind the token itself. See
+// broker.go branchNamespaceFormat.)
 func TestToInstallationPermissions_CeilingRoundTrip(t *testing.T) {
 	// Feed the clamp output so the test tracks the documented permission set.
 	clamped := clampGitHubPermissions(map[string]string{

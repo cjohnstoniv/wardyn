@@ -23,26 +23,61 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the operator pinning the convention in task text. Set
   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` per proxy to opt out (for an image
   whose `agent-run` predates the run branch); unrecognized values fail closed.
-- **The brokered git route is now the only route to four GitHub host names.** Dispatch subtracts the
-  broker-managed GitHub hosts (`github.com`, `api.github.com`,
-  `codeload.github.com`, `*.githubusercontent.com`) from the egress allowlist of
-  any run with git grants **and denies them** — deny beats `allow_all_egress`
-  too — and `wardyn-git-helper` no longer mints a GitHub App token into a
-  brokered sandbox at all (a GitHub host is refused whenever
+- **The brokered git route is now the only route to those GitHub host names.**
+  Dispatch subtracts the broker-managed GitHub hosts (`github.com`,
+  `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) from the
+  egress allowlist of any run with git grants **and denies them** — deny beats
+  `allow_all_egress` too — and `wardyn-git-helper` no longer mints a GitHub App
+  token into a brokered sandbox at all (a GitHub host is refused whenever
   `WARDYN_GIT_BROKER_REPOS` is non-empty; a grant covering no repo is not
   brokered, and mints nothing either way — `MintInstallationToken` refuses an
-  empty repo list). Those four are EXACT hosts: a run that also holds an
-  `ssh_key` grant for the same forge keeps `ssh.<forge>:443` allowlisted, an SSH
-  push path the receive-pack parser cannot read — see `docs/POLICIES.md`.
-  Previously the direct lane was
-  closed only by shipped-policy convention: no git host is ever TLS-MITM'd, so a
+  empty repo list). Previously the direct lane was closed only by
+  shipped-policy convention: no git host is ever TLS-MITM'd, so a
   `github.com:443` CONNECT is an opaque tunnel the ref parser cannot inspect,
   and the helper printed a live token to stdout inside the sandbox. A run with
   **no** git grants is unaffected, and the `git_pat` lane is unchanged.
   Honest scope: this binds the brokered App lane — a `git_pat` push (opaque
-  CONNECT) and an `ssh_key` push (not smart-HTTP) cannot be bound by a
-  receive-pack parser and remain bounded by the operator who supplied the
-  credential; token-side/GitHub-ruleset confinement is still planned.
+  CONNECT) cannot be bound by a receive-pack parser and remains bounded by the
+  operator who supplied the credential. `ssh_key` used to carry that same
+  honest-scope exception for the SAME forge; it no longer does — see the
+  single-lane entry below.
+- **A brokered forge is now single-lane: `ssh_key` can no longer ride beside a
+  `github_token` grant for it.** Closes the gap the entry above used to carve
+  out. Two mechanisms, write time and dispatch: `validateGrantLaneExclusivity`
+  (`internal/api/policy.go`) refuses a policy that declares both a
+  `github_token` grant and an `ssh_key` grant for the same forge (`400`, on
+  every policy write — stored, inline, `WARDYN_DEFAULT_POLICY`, and the
+  composer/profile clamps); and `confineGitBrokerEgress`
+  (`internal/api/runs_dispatch.go`) now also denies that forge's `ssh.<forge>`
+  SSH-over-443 endpoint — spelled as the bare host, so the deny covers every
+  port, not just 443 — alongside the four managed HTTPS hosts, on every
+  brokered run regardless of whether it holds an `ssh_key` grant. For a policy
+  stored before this rule shipped, `dropBrokeredSSHGrants` withholds that
+  forge's `ssh_key` grant from the sandbox env at dispatch entirely, so the
+  private key is never minted (not merely denied a route), with a `slog`
+  warning and a `run.ssh.brokered_forge` audit event. An `ssh_key` grant for a
+  *different* forge is untouched by either mechanism. This reverses an earlier
+  decision from an earlier pass of this same doc-reconciliation effort, on the
+  owner's call — see `confineGitBrokerEgress` for why. Same standing caveat as
+  the four HTTPS denies: it is a NAME deny, so a raw-IP CONNECT reaches
+  `allow` under `allow_all_egress` (measured) — see `docs/POLICIES.md`.
+- **Token-side confinement: GitHub ref-ruleset verification, plus an opt-in
+  mint gate.** `VerifyRefRuleset` (`internal/broker/ruleset.go`) asks GitHub
+  which rules are in force on a repo outside and inside the run's push
+  namespace — `creation`+`update`+`deletion` required outside, neither inside
+  — and reads each backing ruleset's `current_user_can_bypass`, requiring
+  `"never"`, so an App exempted via bypass still grades unconfined. A
+  `github_ref_ruleset` setup-checklist row grades the first repo a policy
+  names (never `fail`, only `warn`/unknown, and cached so the wizard's polling
+  cannot turn into a rate-limit), and `WARDYN_GITHUB_REQUIRE_REF_RULESET`
+  (opt-in, default off) turns the same check into a pre-mint gate that refuses
+  a `github_token` mint when the repo is unconfined or unverifiable. Branches
+  only — a `target: "branch"` ruleset leaves `refs/tags/*` open — and classic
+  branch protection does not surface in the endpoint this reads, so a repo
+  protected that way still grades unconfined. The recipe to create the
+  ruleset is in `docs/POLICIES.md` ("Bound the token itself: a GitHub
+  ruleset"); Wardyn never creates it (needs repo-admin it deliberately does
+  not request).
 - **wardynd images are published to GHCR** (`.github/workflows/publish-image.yml`:
   main pushes → `:latest` + `:sha-<7>`, `vX.Y.Z` tags → the bare semver the Helm
   chart's default resolves to; `workflow_dispatch` `extra_tag` backfills

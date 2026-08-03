@@ -87,9 +87,16 @@ demo.json):
    opened from inside the sandbox; open it yourself from the pushed branch.
 6. docker exec <sandbox> env | grep -i token is still empty (token was never in env).
 7. The run's effective policy (audit event `run.policy.effective`) lists NO
-   broker-managed github host under allowed_domains, and lists all four under
-   denied_domains — the brokered route is the only route to those names. (Those
-   denies are exact names. This scenario carries no `ssh_key` grant; add one for
-   `github.com` and `ssh.github.com:443` appears under allowed_domains as a
-   second, SSH push path the branch-namespace parser cannot see — see
-   docs/POLICIES.md.)
+   broker-managed github host under allowed_domains, and lists the four HTTPS
+   hosts PLUS `ssh.github.com` under denied_domains — the brokered route is
+   the only route to those names. (Those are exact-name denies — see
+   docs/POLICIES.md for what that does and doesn't cover.)
+8. Try adding an `ssh_key` grant for `github.com` to this same policy
+   (`eligible_grants`) and write it back with `wardyn policy update` (or
+   `create`, for a copy). It is refused with **400**: a brokered forge is
+   single-lane, so a policy may not declare both a `github_token` grant and an
+   `ssh_key` grant for `github.com` at once (`validateGrantLaneExclusivity`).
+   That refusal — not a second push path appearing in `allowed_domains` — is
+   the current behavior; there is no policy shape left that reopens one. (An
+   `ssh_key` grant for a forge this policy is NOT brokered for, e.g.
+   `dev.azure.com`, is unaffected and still allowed.)

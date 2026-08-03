@@ -243,7 +243,7 @@ is decided by grant kind and host, and neither can cover the other's set:
 |---|---|---|
 | `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route at all and the repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work` |
 | `git_pat` (Azure DevOps / GitLab / a plain GitHub PAT), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git` |
-| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1) |
+| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredSSHGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
 
 The broker is structurally github.com-only and App-token-only: it has no host
 parameter and no username plumbing, and authenticates as
@@ -261,7 +261,11 @@ grant id, so the env var is not a way back to it. "Has a grant" and "is brokered
 are NOT the same set: a `github_token` grant covering no repo has no
 `/wardyn/gh/` route and no injected GitHub deny, so the helper is still its
 credential path and mints unchanged. A GitHub host with no App grant at all
-still falls through to a `git_pat` grant.)
+still falls through to a `git_pat` grant. The same exclusivity now reaches
+`ssh_key`: a policy may not declare a `github_token` grant and an `ssh_key`
+grant for the same forge — that would give a brokered run a second,
+unparseable push path — see [docs/POLICIES.md](docs/POLICIES.md) "The
+`ssh_key` lane is closed too".)
 
 ## Layered egress (identical semantics on both targets)
 

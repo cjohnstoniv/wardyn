@@ -433,6 +433,11 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 		{Host: "api.stripe.com", AllowCount: 1},    // genuine app need → promote
 		{Host: "api.anthropic.com", AllowCount: 5}, // harness/model-provider plumbing → never
 		{Host: "github.com", AllowCount: 2},        // baseline clone host → never
+		// Brokered forge's SSH endpoint: confineGitBrokerEgress denies it on every
+		// brokered run, so promoting it grants an entry that is dead where it
+		// matters. Honesty, not confinement — the deny outranks ApprovedEgress
+		// either way (it is a per-run phase after every union).
+		{Host: "ssh.github.com", AllowCount: 3},
 	}}
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w",
 		Status: types.WorkspaceScanned,

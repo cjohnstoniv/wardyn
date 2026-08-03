@@ -361,11 +361,17 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // because the sandbox->proxy hop is cleartext on the proxy's own route; a PAT push
 // or an SSH push is an opaque tunnel no pkt-line parser can read, and the
 // installation token itself is repo-scoped but not ref-scoped. Dispatch removes AND
-// denies the broker-managed GitHub host names on a brokered run (confineGitBrokerEgress
-// in internal/api/runs_dispatch.go) so the brokered route is the only route to those
-// names. Those denies are EXACT names and ssh.<forge> is not among them, so a run
-// that also holds an ssh_key grant for that forge keeps ssh.<forge>:443 allowlisted
-// — an SSH push path beside the brokered one, which this parser never sees.
+// denies the broker-managed GitHub host names on a brokered run — plus that forge's
+// ssh.<forge> endpoint, so a co-granted ssh_key leaves no push path beside the
+// brokered one (confineGitBrokerEgress in internal/api/runs_dispatch.go, and
+// validateGrantLaneExclusivity refuses the combination at policy-write), and the
+// forge's ssh_key grant is withheld from the sandbox entirely at dispatch
+// (dropBrokeredSSHGrants) so no unusable private key is left resident. With one
+// standing caveat, the same one docs/POLICIES.md gives the four HTTPS denies:
+// those are NAME-based denies and a name-based deny does not bind an IP LITERAL
+// (under allow_all_egress a CONNECT to 140.82.114.4:22 is still allowed). The
+// brokered route is the only CONVENIENT route — the one git itself takes, since
+// a clone URL carries a name — not the only conceivable one.
 //
 // Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
 // silently disabling a security control on a typo.

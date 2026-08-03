@@ -151,12 +151,20 @@ repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its
 namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
 
 What that does **not** cover, plainly: the confinement binds the brokered GitHub
-App lane, because that is the only lane the proxy can read (a `git_pat` push is
-an opaque CONNECT tunnel and `ssh_key` is not smart-HTTP — those are bounded by
-the operator who supplied the credential). And the installation token itself is
-repo-scoped but not ref-scoped, so a token leaked out of the proxy is
-unconstrained; GitHub-side rulesets are the fix and are planned, not shipped —
-see `threatmodel/THREAT-MODEL.md` asset #4 and [ROADMAP.md](../ROADMAP.md).
+App lane, because that is the only lane the proxy's receive-pack parser can
+read (a `git_pat` push is an opaque CONNECT tunnel and `ssh_key` is not
+smart-HTTP). For an `ssh_key` grant on the SAME forge Wardyn is brokering,
+that gap is closed a different way — the grant can't even be declared
+alongside the `github_token` grant (`400` at policy write), and dispatch
+denies the forge's SSH endpoint and withholds any already-stored grant from
+the sandbox — see `docs/POLICIES.md`. An `ssh_key` for a forge the run holds
+no `github_token` for stays bounded by the operator who supplied it, same as
+`git_pat`. And the installation token itself is repo-scoped but not
+ref-scoped, so a token leaked out of the proxy is unconstrained by anything
+in the token — unless the repo carries a GitHub ruleset. Wardyn can now read
+that ruleset back and gate on it (`WARDYN_GITHUB_REQUIRE_REF_RULESET`,
+opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
+`threatmodel/THREAT-MODEL.md` asset #4 and [ROADMAP.md](../ROADMAP.md).
 
 ### Model auth: three ways to give Claude Code its LLM access
 

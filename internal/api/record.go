@@ -317,7 +317,17 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 // clone hosts (scanEgressDomains, wired into every scan/verify for free), and the
 // GitHub clone hosts (git-broker-managed — routed through wardyn-proxy, never in a
 // run's egress allowlist; promoting one would re-open host-level github egress and
-// defeat the broker's repo-scoping). None is a workspace-specific need.
+// defeat the broker's repo-scoping) — plus the brokered forges' SSH endpoint hosts,
+// which confineGitBrokerEgress denies on every brokered run, so a promotion of one
+// is guaranteed DEAD there. None is a workspace-specific need.
+//
+// That last one is an honesty rule, not a hole: dispatch's confinement is a
+// per-run phase that runs after every union (ApprovedEgress included), so a
+// durable promotion could never outrank it. Offering it anyway would hand the
+// operator a permanent allowlist entry they believe is granting them something —
+// exactly what proxy.ValidDomainEntry refuses to do at the other write point
+// ("reject the dead entry at write time rather than ship a policy the operator
+// believes is guarding them").
 func (s *Server) promoteSkipHosts(ws types.Workspace) map[string]struct{} {
 	skip := map[string]struct{}{}
 	add := func(hosts []string) {
@@ -328,6 +338,7 @@ func (s *Server) promoteSkipHosts(ws types.Workspace) map[string]struct{} {
 	add(modelProviderEgress(s.cfg.DefaultPolicy))
 	add(scanEgressDomains(repoCloneURL(ws.Source)))
 	add(gitBrokerManagedHosts)
+	add(gitBrokerSSHHosts()) // bare hosts: this map keys on the raw lowercased host
 	return skip
 }
 

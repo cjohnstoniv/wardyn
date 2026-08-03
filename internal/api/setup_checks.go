@@ -163,3 +163,44 @@ func platformChecks(plat setup.Platform) []SetupCheck {
 	}
 	return out
 }
+
+// refRulesetCheck grades one GitHub ref-confinement probe. Pure: the outbound
+// call and its cache live in Server.githubRefRulesetCheck.
+//
+// NEVER "fail" — the row is advisory, and grading a security regression from a
+// network error is exactly the failure mode this check has to avoid. err (any
+// error: timeout, rate limit, a 403 on the read permission, a repo the
+// installation cannot see, a ruleset whose bypass mode could not be read) is
+// "info"/unknown; an unconfined repo is "warn".
+func refRulesetCheck(repo string, confined bool, detail string, err error) SetupCheck {
+	const (
+		id    = "github_ref_ruleset"
+		label = "GitHub ref confinement (token-side)"
+		fix   = "Create the ruleset on the repo — the runnable `gh api` invocation is in docs/POLICIES.md under \"Bound the token itself: a GitHub ruleset\". It needs admin on the repo, which Wardyn does not have."
+	)
+	switch {
+	case err != nil:
+		return SetupCheck{
+			ID: id, Label: label, Status: "info",
+			Detail: "Could not read GitHub's rules for " + repo + ", so ref confinement is UNKNOWN — not known-bad: " + err.Error() +
+				" Both reads it makes — the branch rules and the ruleset's bypass mode — are documented to need only Metadata: read, which every GitHub App holds; Wardyn has not confirmed that against a live installation." +
+				" GHES is not supported here — the broker always talks to api.github.com.",
+			Fix: fix,
+		}
+	case !confined:
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: detail +
+				" Wardyn's own branch-namespace enforcement still holds on the brokered route by default (the receive-pack parser refuses any ref outside refs/heads/wardyn/<run-id>/, unless WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false); a ruleset is what would also hold for a token that escaped the proxy." +
+				" This reads RULESETS only — classic branch protection also bounds a token but does not appear in that endpoint, so a repo protected that way is graded here as unconfined.",
+			Fix: fix,
+		}
+	default:
+		return SetupCheck{
+			ID: id, Label: label, Status: "ok",
+			Detail: detail +
+				" Graded for " + repo + " only — the checklist probes one repo, while the WARDYN_GITHUB_REQUIRE_REF_RULESET gate grades every repo in the grant." +
+				" The bypass part of that verdict is read from current_user_can_bypass, which GitHub returns to the caller making the request; whether it is computed meaningfully for a GitHub App installation token is not something Wardyn has confirmed.",
+		}
+	}
+}

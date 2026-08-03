@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -86,6 +87,9 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 		if err := validateEligibleGrant(i, g); err != nil {
 			return err
 		}
+	}
+	if err := validateGrantLaneExclusivity(spec.EligibleGrants); err != nil {
+		return err
 	}
 	if err := validatePolicyWorkspaces(spec); err != nil {
 		return err
@@ -170,6 +174,71 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		if _, ok := sshOver443Endpoint(host); !ok {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key host %q is not a supported SSH-over-443 provider (github.com / dev.azure.com)", i, host)
 		}
+	}
+	return nil
+}
+
+// validateGrantLaneExclusivity refuses a policy that declares BOTH a
+// github_token grant and an ssh_key grant for the same forge. Brokered means
+// SINGLE-LANE: on a brokered run the git-broker route is the only route to the
+// forge by NAME, so every push is parsed and held inside refs/heads/wardyn/<run-id>/
+// (confineGitBrokerEgress denies the managed hosts AND the forge's SSH endpoint;
+// dropBrokeredSSHGrants withholds the key itself). "By name" is the standing
+// caveat those denies have always carried — see confineGitBrokerEgress; it is not
+// new here. A co-granted ssh_key would hand the same run a second push path that
+// SSH makes unparseable — so the operator picks one lane here, at write time,
+// instead of being silently deprived of the endpoint at dispatch.
+//
+// DELIBERATELY STRICTER THAN DISPATCH. "Brokered" is decided at RUN time — the
+// broker map is seeded from the github_token grant's scope.repos AND from the
+// run's declared clone set (augmentGitBrokerGrants), so a grant with an empty repo
+// scope is not brokered until a run supplies --repo. Policy-write therefore cannot
+// know whether a given run will be brokered; the rule it enforces is DECLARATIVE
+// (you may not declare both lanes to one forge), and the message says so.
+//
+// git_pat is NOT covered, on purpose: on a brokered run a git_pat for a GitHub
+// host is already dead twice over (wardyn-git-helper refuses on isGitHubHost
+// before the PAT fallback when WARDYN_GIT_BROKER_REPOS is set, and github.com is
+// one of the four broker denies), so refusing it would be a behaviour change with
+// no security benefit. SSH is the exception because git's credential-helper seam
+// is HTTP-only: there is no chokepoint to refuse at.
+//
+// Host matching across the two grant shapes: a github_token grant's scope is
+// "<org>/<repo>" repos, so it implies the forge by construction (gitBrokerForges,
+// github.com-only in v1); an ssh_key grant carries an explicit host, folded
+// through sshOver443Endpoint — the same normalization validateEligibleGrant above
+// already applies, and the one that treats "github.com" and "ssh.github.com" as
+// the same forge. Comparing endpoints IS the same-forge test.
+func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
+	brokered := false
+	for _, g := range grants {
+		if g.Kind == types.GrantGitHubToken {
+			brokered = true
+			break
+		}
+	}
+	if !brokered {
+		return nil
+	}
+	for i, g := range grants {
+		if g.Kind != types.GrantSSHKey {
+			continue
+		}
+		// A malformed scope or unsupported host was already rejected above; both
+		// simply fail to match here.
+		host, _, _, _, derr := sshKeyScopeFields(g.Scope)
+		if derr != nil {
+			continue
+		}
+		ep, ok := sshOver443Endpoint(host)
+		if !ok || !slices.Contains(gitBrokerSSHEndpoints(), ep) {
+			continue
+		}
+		return fmt.Errorf("eligible_grants[%d]: this policy declares BOTH a github_token grant and an ssh_key grant for %q — "+
+			"a brokered forge is single-lane: the git-broker route is its only route by name, so every push it carries is parsed and "+
+			"confined to refs/heads/wardyn/<run-id>/, while an ssh_key gives the same run a second push path SSH makes unparseable. Choose one: "+
+			"drop the ssh_key grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with your own "+
+			"key, unbrokered and unbound", i, host)
 	}
 	return nil
 }

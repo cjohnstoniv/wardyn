@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -136,7 +137,22 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// Per-run proxy sidecar (docker hostname) unless the config overrides it.
 	proxyURL := cmp.Or(s.cfg.ProxyURL, "http://wardyn-proxy:3128")
 	sandboxEnv := buildBaseSandboxEnv(run, proxyURL)
-	applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, p.TaskMode, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants)
+	// The withheld ssh_key hosts are NEVER silent: the operator asked for a
+	// credential and is not getting it, so say why — same shape as the codex-cli
+	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
+	// which dispatch has no caller to return one to.
+	if droppedSSH := applyDispatchModeEnv(sandboxEnv, run, verifyPlan, interactive, p.TaskMode, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants); len(droppedSSH) > 0 {
+		slog.WarnContext(ctx, "wardynd: brokered run — withholding ssh_key grant(s) for the brokered forge; a brokered forge is single-lane, push through the git broker",
+			slog.String("run_id", run.ID.String()), slog.Any("hosts", droppedSSH))
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ssh.brokered_forge",
+			run.ID.String(), "failure", mustJSON(map[string]any{
+				"dropped_hosts": droppedSSH,
+				"note": "this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME " +
+					"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not " +
+					"belt-and-braces: those denies are name-keyed, so under allow_all_egress a resident key could still have " +
+					"reached the forge by raw IP. Drop the github_token grant to push with your own key instead",
+			})))
+	}
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	// Caller-supplied non-secret env (p.ExtraEnv): compose-only mode's
 	// WARDYN_COMPOSE_* (discriminator + base64 prompt/schema), or the AWS harness
@@ -591,7 +607,11 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 // Extracted
 // verbatim from dispatchWithVerify — every branch here only decides which keys
 // land in sandboxEnv, none of them change dispatchWithVerify's own control flow.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, verifyPlan json.RawMessage, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) {
+//
+// Returns the ssh_key grant hosts it withheld because the run is BROKERED for
+// that forge (dropBrokeredSSHGrants) — nil in the ordinary case. The caller
+// warns and audits; this must never be silent.
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, verifyPlan json.RawMessage, interactive bool, taskMode string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID) []string {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID uniquely marks a scan run (ordinary runs never
@@ -648,11 +668,55 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, veri
 	// so the key is written to a 0400 file and wiped after the clone). Non-secret
 	// (grant ids, not the key); the key material is returned only via the brokered
 	// mint and never touches env. See GrantSSHKey.
+	sshGrants, droppedSSH := dropBrokeredSSHGrants(sshGrants, gitGrants)
 	if len(sshGrants) > 0 {
 		if b, merr := json.Marshal(sshGrants); merr == nil {
 			sandboxEnv["WARDYN_SSH_GRANTS"] = string(b)
 		}
 	}
+	return droppedSSH
+}
+
+// dropBrokeredSSHGrants withholds the ssh_key grants whose host is a BROKERED
+// forge's, returning the survivors (never the caller's map, which other phases
+// still read) and the hosts dropped, sorted; nil when there is nothing to drop.
+//
+// WHY THE CREDENTIAL AND NOT JUST THE LANE. confineGitBrokerEgress closes the
+// NETWORK path; on its own that leaves the KEY. A pre-existing stored policy can
+// still hold both grants — validateGrantLaneExclusivity refuses new WRITES, and
+// resolveRunPolicy deliberately does not re-validate what is already stored — so
+// without this, a brokered run still exported WARDYN_SSH_GRANTS, agent-run's
+// provision_ssh_grants still minted the key and wrote it 0400, and the proxy's
+// mint route still served it (isBrokeredGitGrant matches github_token grant ids
+// only). The result was a GitHub private key resident in the sandbox that cannot
+// reach its forge, stays re-mintable for the whole run (docs/POLICIES.md:
+// "the agent process can re-mint the same private key for itself at any point in
+// the run"), and is exfiltratable through any other egress the run is allowed.
+// A capability that cannot be used is not a capability, it is only a liability.
+//
+// AT DISPATCH, NOT CREATE, for the same reason confineGitBrokerEgress is here:
+// "brokered" is a RUN-time fact (augmentGitBrokerGrants seeds the broker map from
+// the run's declared clone set, not just the grant scope), so create cannot know
+// it. The two halves therefore key on the SAME map and cannot disagree.
+//
+// Same forge test as everywhere else — sshOver443Endpoint folds "github.com" and
+// "ssh.github.com" onto one endpoint, compared against gitBrokerSSHEndpoints. A
+// non-brokered forge's ssh_key (dev.azure.com) is untouched, and so is EVERY
+// ssh_key on a non-brokered run.
+func dropBrokeredSSHGrants(sshGrants map[string]string, gitGrants map[string]uuid.UUID) (map[string]string, []string) {
+	if len(sshGrants) == 0 || len(gitGrants) == 0 {
+		return sshGrants, nil
+	}
+	kept, dropped := map[string]string{}, []string(nil)
+	for host, grantID := range sshGrants {
+		if ep, ok := sshOver443Endpoint(host); ok && slices.Contains(gitBrokerSSHEndpoints(), ep) {
+			dropped = append(dropped, host)
+			continue
+		}
+		kept[host] = grantID
+	}
+	slices.Sort(dropped)
+	return kept, dropped
 }
 
 // applyRepoCloneEnv surfaces the repo(s) to clone (the legacy single run.Repo
@@ -673,21 +737,78 @@ func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy 
 	}
 }
 
-// confineGitBrokerEgress makes the git-broker route the only route to the
-// broker-managed GitHub host NAMES for a brokered run: it strips every
-// gitBrokerManagedHosts entry from the allowlist AND denies those hosts outright,
-// returning what it removed (nil = nothing to do).
+// gitBrokerForges are the forges Option C's git-broker serves. Distinct from
+// gitBrokerManagedHosts on purpose: that list is the set of host NAMES the
+// /wardyn/gh/ route actually re-originates to, and ssh.github.com is not one of
+// them — the broker speaks smart-HTTP, never SSH. Keep it meaning exactly that.
+// (Both lists now feed promoteSkipHosts, so that consumer no longer distinguishes
+// them; the route it names is what does.) This list is the input to
+// gitBrokerSSHEndpoints, and to the policy-write refusal
+// (validateGrantLaneExclusivity, policy.go), so both halves of the single-lane
+// rule read from ONE place. The broker is github.com-only in v1.
+var gitBrokerForges = []string{"github.com"}
+
+// gitBrokerSSHEndpoints returns the SSH-over-443 endpoints of the brokered forges
+// ("ssh.github.com:443"), via sshOver443Endpoint so the forge→endpoint mapping
+// lives in exactly one place.
+func gitBrokerSSHEndpoints() []string {
+	out := make([]string, 0, len(gitBrokerForges))
+	for _, f := range gitBrokerForges {
+		if ep, ok := sshOver443Endpoint(f); ok {
+			out = append(out, ep)
+		}
+	}
+	return out
+}
+
+// gitBrokerSSHHosts is gitBrokerSSHEndpoints with the ":443" stripped
+// ("ssh.github.com"). Every consumer wants the BARE host — the deny must cover
+// every port (confineGitBrokerEgress), and the promotion skip map keys on a bare
+// host (promoteSkipHosts, record.go) — so strip it once, here.
+func gitBrokerSSHHosts() []string {
+	out := gitBrokerSSHEndpoints()
+	for i, ep := range out {
+		out[i] = egressEntryHost(ep)
+	}
+	return out
+}
+
+// confineGitBrokerEgress makes the git-broker route the ONLY route to a brokered
+// forge: it strips every gitBrokerManagedHosts entry AND each brokered forge's
+// SSH-over-443 endpoint from the allowlist, denies all of them outright, and
+// returns what it removed (nil = nothing to do).
 //
-// SCOPE, exactly. gitBrokerManagedHosts are EXACT hosts (plus one "*." wildcard),
-// and ssh.github.com is not one of them. A run holding an ssh_key grant for
-// github.com gets ssh.github.com:443 allowlisted at create time (sshOver443Endpoint
-// via unionRunEgress) and this function neither subtracts nor denies it — so on
-// that run github.com:443 is denied while ssh.github.com:443 is allowed. That is
-// deliberate: an ssh_key grant is an operator-supplied credential for that forge,
-// bounded by the operator, and denying its endpoint here would only break the lane
-// without binding it (SSH is opaque to the receive-pack parser either way). Do NOT
-// "fix" it by adding ssh.github.com to gitBrokerManagedHosts. See docs/POLICIES.md
-// "…and the one lane those four denies do not cover".
+// SCOPE, exactly. Two sets, deliberately separate (see gitBrokerForges above).
+// The SSH deny added is the BARE host, not the ":443" endpoint, so it covers
+// every port — a ":443"-only deny would leave ssh.github.com:22 reachable under
+// allow_all_egress once the subtraction has removed the allowlist entry.
+//
+// WHY THE SSH LANE IS NOW CLOSED. This REVERSES an earlier decision of this same
+// campaign, on the owner's call; do not restore it. The old rule left
+// ssh.github.com:443 allowed on a brokered run holding an ssh_key grant
+// (unionRunEgress adds it at create time), reasoning that an ssh_key is an
+// operator-supplied, operator-bounded credential and that denying its endpoint
+// would break a lane the operator asked for without binding it, since SSH is
+// opaque to the receive-pack branch-namespace parser either way. The result was a
+// brokered run with github.com:443 denied and ssh.github.com:443 ALLOWED — an
+// uninspectable second push route around the one confinement the broker exists to
+// enforce, and the single finding that pinned the security review at a ceiling.
+//
+// What answers the old objection is that the operator is no longer silently
+// deprived of the capability: validatePolicySpec (validateGrantLaneExclusivity,
+// policy.go) REFUSES a policy declaring both a github_token and an ssh_key grant
+// for the same forge, and names the choice — brokered and branch-confined, or
+// operator-supplied and unbound, not both for one forge. This function is the
+// fail-closed half for anything already stored, and it keys on ACTUAL
+// brokered-ness (a non-empty broker map), which policy-write cannot know.
+//
+// git_pat is deliberately NOT confined beyond the four managed hosts: a git_pat
+// for a GitHub host on a brokered run is already dead twice over —
+// wardyn-git-helper's resolveGrantForHost refuses on isGitHubHost BEFORE reaching
+// the PAT fallback whenever WARDYN_GIT_BROKER_REPOS is set, and github.com is one
+// of the four denies below. SSH is the different one for a structural reason:
+// git's credential-helper seam is HTTP-only, so there is no chokepoint to put a
+// refusal in — agent-run writes the resident key file itself.
 //
 // WHY BOTH. The subtraction keeps the effective allowlist honest — it stops
 // claiming a host the run is not meant to dial. The deny is the load-bearing half:
@@ -704,27 +825,43 @@ func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy 
 // dials through the proxy transport after vetURL (the SSRF/private-IP guard),
 // never through the policy evaluator.
 //
+// WHAT "ONLY ROUTE" MEANS, EXACTLY — the same caveat the four HTTPS denies carry
+// in docs/POLICIES.md, and it applies verbatim to the SSH deny: these are
+// NAME-based denies, and a name-based deny does not bind an IP LITERAL. Under
+// allow_all_egress a CONNECT straight to 140.82.114.4:22 is still allowed
+// (measured). So this is the only CONVENIENT route, not the only conceivable
+// one; it is what git itself will use, since the clone/push URL carries a name.
+// Nothing here creates or worsens that — it predates the SSH deny and binds the
+// HTTPS denies identically — but do not restate "the only route" without it.
+//
 // No-op without git grants — a run with no brokered repo has no broker route, so
 // its GitHub egress is the operator's ordinary policy choice.
 func confineGitBrokerEgress(policy *types.RunPolicySpec, gitGrants map[string]uuid.UUID) []string {
 	if len(gitGrants) == 0 {
 		return nil
 	}
+	sshHosts := gitBrokerSSHHosts()                             // bare, so the deny covers every port
 	kept, dropped := policy.AllowedDomains[:0:0], []string(nil) // :0:0 — never alias the caller's array
 	for _, d := range policy.AllowedDomains {
-		if gitBrokerManaged(d) {
+		if gitBrokerManaged(d) || slices.Contains(sshHosts, egressEntryHost(d)) {
 			dropped = append(dropped, d)
 			continue
 		}
 		kept = append(kept, d)
 	}
 	policy.AllowedDomains = kept
+	// Keyed on the RAW entry, NOT egressEntryHost(d) — do not "tidy" this now that
+	// the helper exists. A policy that already denies "github.com:443" must still
+	// get the stronger bare-host deny added: normalizing the key would suppress it
+	// as a duplicate and leave github.com:22 reachable under allow_all_egress. The
+	// whole suite passes with that one-token edit except TestConfineGitBrokerEgress'
+	// pre-existing-:443-deny case, which exists to catch exactly it.
 	denied := map[string]bool{}
 	for _, d := range policy.DeniedDomains {
 		denied[strings.ToLower(strings.TrimSpace(d))] = true
 	}
 	add := []string(nil)
-	for _, h := range gitBrokerManagedHosts {
+	for _, h := range append(append([]string(nil), gitBrokerManagedHosts...), sshHosts...) {
 		if !denied[h] {
 			add = append(add, h)
 		}
@@ -742,11 +879,7 @@ func confineGitBrokerEgress(policy *types.RunPolicySpec, gitGrants map[string]uu
 // proxy.CompilePolicy (lowercase, trailing dot stripped) so what is subtracted is
 // exactly what the proxy would otherwise have allowed.
 func gitBrokerManaged(entry string) bool {
-	h := strings.ToLower(strings.TrimSpace(entry))
-	if host, _, ok := strings.Cut(h, ":"); ok { // "github.com:443" -> "github.com"
-		h = host
-	}
-	h = strings.TrimSuffix(h, ".")
+	h := egressEntryHost(entry)
 	for _, m := range gitBrokerManagedHosts {
 		if suffix, wild := strings.CutPrefix(m, "*"); wild {
 			if strings.HasSuffix(h, suffix) {
@@ -759,6 +892,29 @@ func gitBrokerManaged(entry string) bool {
 		}
 	}
 	return false
+}
+
+// egressEntryHost normalizes ONE egress-list entry to its bare host: lowercased,
+// ":port" qualifier and trailing dot stripped — the same normalization
+// proxy.classifyDomain applies to the WELL-FORMED entries ValidDomainEntry lets
+// through, which is every entry that can reach here.
+//
+// It is NOT a general re-implementation of classifyDomain, and a new caller must
+// not assume it. classifyDomain splits with net.SplitHostPort and honours only
+// ports 1..65535; this splits at the first ":". They diverge on "github.com:0"
+// (classifyDomain keeps the whole string as a host that matches nothing; this
+// yields "github.com") and on a bracketed IPv6 literal ("[::1]:443" -> "[").
+// Neither is reachable today — the first is rejected at policy write by
+// proxy.ValidDomainEntry, the second is an address, not one of the broker's host
+// NAMES, and is caught by the proxy's private-IP guard — which is why this stays
+// a five-line local helper instead of a second copy of classifyDomain that could
+// drift from the real matcher. Needing either case means calling the proxy.
+func egressEntryHost(entry string) string {
+	h := strings.ToLower(strings.TrimSpace(entry))
+	if host, _, ok := strings.Cut(h, ":"); ok { // "github.com:443" -> "github.com"
+		h = host
+	}
+	return strings.TrimSuffix(h, ".")
 }
 
 // hasAnthropicAPIKeyInjection reports whether the run already carries an api_key

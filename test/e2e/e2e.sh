@@ -179,9 +179,10 @@ else bad "metadata IP REACHABLE (http_code=${MD}) — invariant 3 violated"; fi
 log "(c/d) probing allow/pending/metadata through the auto-launched sidecar"
 # github.com is BROKER-MANAGED for this run: it declares --repo, so dispatch keys
 # the git-broker allowlist from it and confineGitBrokerEgress both removes the
-# github hosts from the allowlist AND denies them, leaving the proxy's
-# /wardyn/gh/ route as the only route to those names (the denies are EXACT names;
-# this run has no ssh_key grant, so ssh.github.com is not in play). A DIRECT dial must therefore be a HARD
+# github hosts (plus ssh.github.com, denied on every brokered run regardless of
+# whether an ssh_key grant is even present) from the allowlist AND denies them,
+# leaving the proxy's /wardyn/gh/ route as the only route to those names (the
+# denies are EXACT names). A DIRECT dial must therefore be a HARD
 # deny, not a first-use hold — that ordering is the load-bearing half of the
 # confinement (a deny beats allow_all_egress, a promoted ApprovedEgress entry,
 # and first-use review alike). Asserted both ways: refused AND no approval.

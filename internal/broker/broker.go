@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -57,18 +58,25 @@ const defaultMaxTTL = time.Hour
 // cloned repo out onto wardyn/<run-id>/work, so a stock run complies without the
 // operator pinning the convention in task text, and dispatch strips + denies the
 // broker-managed GitHub host names on a brokered run so the brokered route is the
-// only route to those names.
+// only route to those names — BY NAME: these are name-keyed denies, so a raw-IP
+// CONNECT is a different key and reaches allow under allow_all_egress (measured);
+// see docs/POLICIES.md.
 //
 // STILL NOT COVERED, stated plainly: the property binds the BROKERED App lane
 // only. A git_pat or ssh_key push does not traverse this route (SSH is not
 // smart-HTTP; a PAT push is an opaque CONNECT), so those are bounded by the
-// operator who supplied the credential, not by this namespace. Those four denies
-// are EXACT hosts, so they do not cover ssh.<forge>:443 — a run holding an
-// ssh_key grant for the same forge keeps a push path beside the brokered one, and
-// this namespace does not reach it. A token
-// exfiltrated from the proxy itself is likewise unconstrained. Token-side
-// confinement — a GitHub-side ruleset that would hold even for a leaked token —
-// is [v0.5+ — planned]. See threatmodel/THREAT-MODEL.md asset #4.
+// operator who supplied the credential, not by this namespace. On a BROKERED run
+// no such second path is left BY NAME (same IP-literal caveat as above):
+// policy-write refuses a github_token grant declared alongside an ssh_key grant
+// for the same forge (api.validateGrantLaneExclusivity), and dispatch subtracts +
+// denies that forge's ssh.<forge> endpoint as well as the four managed hosts
+// (api.confineGitBrokerEgress). An UNBROKERED run's operator-supplied credential
+// is untouched by both. A token
+// exfiltrated from the proxy itself is bounded only by whatever GitHub-side
+// ruleset the operator has created on the repo — nothing in the token itself
+// bounds it. VerifyRefRuleset reads that ruleset back, the setup checklist grades
+// it, and envRequireRefRuleset turns it into a pre-mint gate (opt-in, default
+// off). See threatmodel/THREAT-MODEL.md asset #4.
 //
 // LOCKSTEP: proxy.BranchNSPrefix rebuilds this same prefix from the run id (the
 // namespace does not travel to the proxy — it is a pure function of the run id).
@@ -152,6 +160,16 @@ type Minted struct {
 // permissions on the installation-token request.
 type GitHubMinter interface {
 	MintInstallationToken(ctx context.Context, repos []string, permissions map[string]string, ttl time.Duration) (token string, expiresAt time.Time, err error)
+	// VerifyRefRuleset reports whether GitHub itself confines this App's writes
+	// on repo ("owner/name") to refNamespaceGlob, plus an operator-readable
+	// detail. A non-nil error means UNKNOWN (network, rate limit, permission
+	// refused, a bypass mode that could not be read) and must never be rendered
+	// as "unconfined". It is on the
+	// interface rather than an optional type assertion because
+	// WARDYN_GITHUB_REQUIRE_REF_RULESET turns the answer into a mint gate: an
+	// implementation that silently answered "confined" would open the gate it
+	// was supposed to close. The compiler must ask.
+	VerifyRefRuleset(ctx context.Context, repo string) (confined bool, detail string, err error)
 }
 
 // Querier is the minimal transaction surface the broker needs. It is satisfied
@@ -204,12 +222,47 @@ type Broker struct {
 	// maskReg, when non-nil, receives minted token bytes so they are masked
 	// from PTY captures and asciicast uploads. A nil Registry is a safe no-op.
 	maskReg *secretmask.Registry
+	// requireRefRuleset gates every github_token mint on GitHub-side ref
+	// confinement (see envRequireRefRuleset). Read once at construction so a
+	// garbage value fails at BOOT rather than mid-mint.
+	requireRefRuleset bool
 }
+
+// envRequireRefRuleset opts IN to refusing a github_token mint whose repo is not
+// confined by a GitHub repository ruleset (VerifyRefRuleset).
+//
+// DEFAULT OFF, deliberately. The ruleset has to be created per repo by someone
+// with admin on it, which Wardyn never has; defaulting this on would break every
+// existing deployment on its next mint. What keeps the off state from being
+// silent is the setup checklist row (api.githubRefRulesetCheck), which asks the
+// same question at wizard time and shows the operator, unprompted, that the
+// token is unbounded on GitHub's side.
+const envRequireRefRuleset = "WARDYN_GITHUB_REQUIRE_REF_RULESET"
+
+// ErrRefRulesetRequired is returned when envRequireRefRuleset is set and the
+// repo is not confined by a ruleset (or the verification could not be made).
+var ErrRefRulesetRequired = errors.New("broker: " + envRequireRefRuleset + " is set and the repo is not confined by a GitHub ruleset")
+
+// refRulesetProbeTimeout bounds ONE repo's verification. checkRefRuleset runs
+// inside mint()'s transaction, holding SELECT ... FOR UPDATE on the grant row
+// and a pooled Postgres connection, and VerifyRefRuleset makes several
+// api.github.com round trips (a token mint, two rule reads, one ruleset read per
+// ruleset found, a revoke). Neither github client sets an http.Client timeout
+// and the API server sets no Read/WriteTimeout, so without a deadline here the
+// only bound is the caller's request ctx and a blackholed api.github.com pins
+// the row lock and the connection for as long as it stays black. The advisory
+// /setup/status path already does the same with 5s (api.refRulesetTimeout); this
+// one is longer only because exceeding it fails the mint rather than greying out
+// a checklist row.
+const refRulesetProbeTimeout = 15 * time.Second
 
 // New constructs a Broker. github may be nil if no github_token grants will be
 // minted; a nil minter on a github_token grant fails closed.
 func New(db TxBeginner, secrets secretstore.Store, rec audit.Recorder, idp identity.Provider, gh GitHubMinter) *Broker {
-	return &Broker{db: db, secrets: secrets, audit: rec, identity: idp, github: gh}
+	return &Broker{
+		db: db, secrets: secrets, audit: rec, identity: idp, github: gh,
+		requireRefRuleset: cliutil.EnvBool(envRequireRefRuleset, false),
+	}
 }
 
 // WithMaskRegistry attaches a secret-mask Registry to the Broker. After a
@@ -469,6 +522,10 @@ func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec t
 	// ceiling; anything outside is dropped (fail closed, never widen).
 	clamped := clampGitHubPermissions(sc.Permissions)
 
+	if err := b.checkRefRuleset(ctx, sc.Repos); err != nil {
+		return Minted{}, err
+	}
+
 	token, expiresAt, err := b.github.MintInstallationToken(ctx, sc.Repos, clamped, ttl)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: mint installation token: %w", err)
@@ -488,6 +545,39 @@ func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec t
 			"permissions":      string(clampedJSON),
 		},
 	}, nil
+}
+
+// checkRefRuleset enforces the OPT-IN envRequireRefRuleset gate: every repo in
+// the grant must be confined by a GitHub repository ruleset before the token is
+// minted. No-op (nil) when the gate is off, which is the default.
+//
+// Fails closed on BOTH negative answers — "verified unconfined" and "could not
+// verify". Once an operator has asked for this gate, an unreachable GitHub is
+// not a reason to hand out an unbounded token; that is the opposite trade-off
+// from the setup check, which grades unknown rather than fail so a network blip
+// never reads as a security regression on a checklist nobody opted into.
+//
+// This runs inside the mint transaction, alongside the mint call it guards —
+// the same lane MintInstallationToken already occupies — hence the per-repo
+// deadline (see refRulesetProbeTimeout).
+func (b *Broker) checkRefRuleset(ctx context.Context, repos []string) error {
+	if !b.requireRefRuleset {
+		return nil
+	}
+	for _, r := range repos {
+		probeCtx, cancel := context.WithTimeout(ctx, refRulesetProbeTimeout)
+		confined, detail, err := b.github.VerifyRefRuleset(probeCtx, r)
+		cancel()
+		switch {
+		case err != nil:
+			return fmt.Errorf("%w: could not verify %s: %w. Create the ruleset (see docs/POLICIES.md, \"Bound the token itself\") or unset %s",
+				ErrRefRulesetRequired, r, err, envRequireRefRuleset)
+		case !confined:
+			return fmt.Errorf("%w: %s Create the ruleset (see docs/POLICIES.md, \"Bound the token itself\") or unset %s",
+				ErrRefRulesetRequired, detail, envRequireRefRuleset)
+		}
+	}
+	return nil
 }
 
 // apiKeyScope is the JSON shape of an api_key grant scope.
