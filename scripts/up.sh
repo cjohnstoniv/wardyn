@@ -559,7 +559,7 @@ cmd_up() {
   # throwaway container on the same network; never fatal.
   if docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
        -s -m 5 -o /dev/null "http://wardynd:8080/healthz" >/dev/null 2>&1; then
-    log "Sandbox → control-plane reachability: OK — workspace Verify and Record will complete on this instance."
+    log "Sandbox → control-plane reachability: OK — workspace recordings and confined replays will complete on this instance."
   else
     warn "sandbox → control-plane probe failed (http://wardynd:8080 on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal'."
   fi

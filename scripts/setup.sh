@@ -16,13 +16,13 @@
 #  - CONTAINERIZED mode (default, recommended): the compose stack — wardynd runs
 #    in a container on wardyn-internal, so sandbox→control-plane callbacks route
 #    in-network. This is the fix for Docker Desktop + WSL2 NAT (workspace
-#    Verify/Record). Model access is set up at the CLI after launch (`wardyn
+#    Record/replay). Model access is set up at the CLI after launch (`wardyn
 #    subscription connect`, an API-key secret, or Bedrock). Delegates to
 #    scripts/up.sh up.
 #  - HOST mode (advanced escape hatch): sandbox agents run on YOUR machine with
 #    YOUR Claude login — wardynd runs as you, sees ~/.claude directly (no
 #    re-login), and proxy-injects your live token (never a stale copy). Skips the
-#    container; not recommended on Docker Desktop + WSL2 (Verify/Record won't route).
+#    container; not recommended on Docker Desktop + WSL2 (Record/replay won't route).
 #
 # TEAM mode (that same compose control plane as a shared MULTI-USER service —
 # SSO logins, per-user identity/RBAC) is a COMING-SOON feature;
@@ -128,7 +128,7 @@ if $IS_WSL && $IS_DESKTOP; then
   # land empty. Only warn when the picked daemon actually IS Docker Desktop —
   # firing this on a native in-distro dockerd was a false alarm that taught users
   # to ignore it.
-  warn "Docker Desktop + WSL2 (NAT networking): workspace Verify/Record won't complete in host mode."
+  warn "Docker Desktop + WSL2 (NAT networking): workspace recordings/replays won't complete in host mode."
   warn "Fixes: WSL2 mirrored networking ([wsl2] networkingMode=mirrored in %UserProfile%\\.wslconfig, then 'wsl --shutdown'),"
   warn "or run the containerized stack instead: make compose-up."
 fi
