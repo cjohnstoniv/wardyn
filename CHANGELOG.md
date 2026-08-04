@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-08-04
+
 ### Added
 
 - **Corporate network is its own Getting-started step, and it comes before
@@ -37,6 +39,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (DNS, refused, TLS, timeout) rather than collapsing into "failed". These are
   the only test buttons in the product; everywhere else Wardyn still refuses to
   claim it verified a credential it cannot dial.
+- **An integration is any named external system, not just a model provider or a
+  git host.** The Integrations page defined itself as "named connections to the
+  systems outside Wardyn" and then offered two examples of one. It now covers
+  package & artifact feeds, container registries, cloud providers, data stores,
+  MCP servers, work tracking, observability, and an **Other service** catch-all
+  for anything unlisted. Each integration answers four questions about one
+  system: where it lives (its hosts), what credential it takes, how that
+  credential reaches the request, and what it powers.
+- **`types.Integration` gained `hosts`, `header`, `format` and `docs`**, so a
+  row carries its own contract. The eight new categories derive nothing from
+  their `type` — it is an open slug — which is what lets a system Wardyn has
+  never heard of be added with no backend change, through the generic
+  proxy-injection path that already ships.
+- **A workspace's requirements can name an integration** (`integration:<id>`,
+  alongside `secret:` / `egress:` / `write:`). Its hosts join the run's egress
+  allowlist and its header credential is injected proxy-side, one grant per
+  host. NOTHING IS AMBIENT: configuring an integration grants nothing until a
+  run is granted it, and an operator with fifty configured and a workspace that
+  names none gets a spec byte-identical to having none at all.
+- **A Corporate-network egress redirect can take its token from an
+  integration** (`token_integration_ref`, mutually exclusive with
+  `token_secret_ref`). The integration owns the system and its credential; the
+  redirect owns rerouting a public endpoint to it. It carries the integration's
+  own header and format, so a feed authenticating with something other than
+  `Authorization: Bearer` works through this seam and cannot through the other.
+  The UI control for choosing one is not designed yet; the seam is usable via
+  `PUT /site-config` and `wardyn site-config apply`.
 
 ### Changed
 
@@ -141,6 +170,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A credential header could never carry a port-qualified host, and the run
+  paid for it.** `CompilePolicy` files a `host:port` allowlist entry under
+  `allowedExactPort`, which `AllowedExactHost` never consults — so an injection
+  rule for such a host is refused by `buildInjector`, and that refusal is a hard
+  proxy startup failure rather than a missing header. Writing an integration
+  that pairs a credential header with a wildcard or port-qualified host is now
+  rejected with the reason, and the runtime skips such a host independently for
+  rows stored before the guard.
+- **An operator-authored HTTP header name is validated before it reaches the
+  wire.** An `api_key` grant scope in a stored or inline policy carried its
+  header name to the proxy with no validation at all; it is now checked at every
+  write boundary and again at the injection sink, which fails closed and audits
+  before reading the secret. Go's transport already rejected a malformed field
+  name, so this is defense-in-depth and an earlier, readable failure — a 400 at
+  write time instead of a broken run.
 - **The connectivity probe no longer tests github.com, and reads the reply
   rather than the exit code.** Two ways it lied on exactly the networks it
   exists for. Plenty of organisations block GitHub outright, so a healthy

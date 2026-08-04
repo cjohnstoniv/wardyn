@@ -19,8 +19,14 @@ chains the sandbox proxy through your proxy and redirects package registries
 (or any other host: a container registry, an internal appliance) at an
 internal mirror, each with a live probe that actually tests the path (see
 [OPERATIONS.md](OPERATIONS.md)). **Integrations** (the same page as
-`/integrations`) is where you then connect a model provider and cover GitHub
-Enterprise / Azure DevOps — see [`docs/adoption/`](adoption/).
+`/integrations`) is where you then name the systems outside Wardyn a run has to
+reach — a model provider, GitHub Enterprise / Azure DevOps (see
+[`docs/adoption/`](adoption/)), a private package feed, a container registry, an
+MCP server, a ticket tracker, or anything else under **Other service**. Each one
+bundles where the system lives, what credential it takes, and how that credential
+reaches the request; adding it is what puts its hosts within a run's reach.
+Nothing is ambient — a run gets an integration when the workspace it runs in
+requires it by name, never because it is configured.
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 

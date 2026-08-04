@@ -2,8 +2,8 @@ apiVersion: v2
 name: wardyn
 description: Governance control plane for coding agents
 type: application
-version: 0.4.5
-appVersion: 0.4.5
+version: 0.4.6
+appVersion: 0.4.6
 keywords:
   - governance
   - agents
