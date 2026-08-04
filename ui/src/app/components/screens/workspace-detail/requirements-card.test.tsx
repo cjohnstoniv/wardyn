@@ -23,7 +23,7 @@ vi.mock("../../../lib/api/secrets", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 import { RequirementsCard } from "./requirements-card";
-import { RD } from "../../../lib/workspace-copy";
+import { RD2 } from "../../../lib/workspace-copy";
 
 // Radix Tabs activates a trigger on mousedown (not click) — fireEvent.click
 // alone never fires that, so switching tabs needs real userEvent.
@@ -127,14 +127,13 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
         onSecretStored={vi.fn()}
       />,
     );
-    // The Requirements step opens on its Record tab (step-requirements.tsx) —
-    // Secrets/Egress each need switching to.
+    // The Requirements step opens on Reach now (dependency order — the
+    // record-last redesign); Secrets needs switching to.
+    expect(screen.getByTestId("group-reach")).toBeInTheDocument();
+    expect(screen.getByText("registry.npmjs.org")).toBeInTheDocument();
     await openTab("Secrets");
     expect(screen.getByTestId("group-secrets")).toBeInTheDocument();
     expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
-    await openTab("Egress");
-    expect(screen.getByTestId("group-egress")).toBeInTheDocument();
-    expect(screen.getByText("registry.npmjs.org")).toBeInTheDocument();
   });
 
   it("flipping a lane calls setRequirements immediately (no separate save step)", async () => {
@@ -165,13 +164,13 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
   });
 });
 
-describe("RequirementsCard — Record/Egress tabs reflect the REAL llm_cred binding, not the wizard's PowerSource", () => {
+describe("RequirementsCard — Reach/Record reflect the REAL llm_cred binding, not the wizard's PowerSource", () => {
   const profile: WorkspaceProfile = {
     required_secrets: [{ name: "DATABASE_URL", kind: "postgres" }],
     egress_domains: ["registry.npmjs.org"],
   };
 
-  it("treats an unbound workspace as the server default — Record a session stays enabled", () => {
+  it("treats an unbound workspace as the server default — Record a session stays enabled", async () => {
     render(
       <RequirementsCard
         ws={ws({ profile: profile as unknown as Record<string, unknown> })}
@@ -180,11 +179,15 @@ describe("RequirementsCard — Record/Egress tabs reflect the REAL llm_cred bind
         onSecretStored={vi.fn()}
       />,
     );
+    // Reach's power card states the resolution up front…
+    expect(within(screen.getByTestId("power-source-card")).getByText("server default")).toBeInTheDocument();
+    // …and Record (last tab) offers the agent session.
+    await openTab("Record");
     expect(screen.getByRole("button", { name: "Record a session" })).toBeEnabled();
-    expect(screen.queryByText(RD.RECORD_HINT)).not.toBeInTheDocument();
+    expect(screen.queryByText(RD2.RECORD_NEEDS)).not.toBeInTheDocument();
   });
 
-  it("treats a pinned api_key binding whose secret isn't stored as nothing resolving", () => {
+  it("treats a pinned api_key binding whose secret isn't stored as nothing resolving", async () => {
     render(
       <RequirementsCard
         ws={ws({
@@ -196,11 +199,15 @@ describe("RequirementsCard — Record/Egress tabs reflect the REAL llm_cred bind
         onSecretStored={vi.fn()}
       />,
     );
-    expect(screen.getByText(RD.RECORD_HINT)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record a session" })).toBeDisabled();
+    // Amber on Reach; on Record the agent button is ABSENT with the fact.
+    expect(within(screen.getByTestId("power-source-card")).getByText(/nothing yet/)).toBeInTheDocument();
+    await openTab("Record");
+    expect(screen.getByText(RD2.RECORD_NEEDS)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record a session" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record a terminal session" })).toBeEnabled();
   });
 
-  it("Egress tab seeds the 'from model access' row once the api_key binding's secret IS stored", async () => {
+  it("Reach seeds the 'from model access' row once the api_key binding's secret IS stored", async () => {
     render(
       <RequirementsCard
         ws={ws({
@@ -212,10 +219,9 @@ describe("RequirementsCard — Record/Egress tabs reflect the REAL llm_cred bind
         onSecretStored={vi.fn()}
       />,
     );
-    await openTab("Egress");
-    const egressGroup = within(screen.getByTestId("group-egress"));
+    const egressGroup = within(screen.getByTestId("group-reach"));
     const chip = egressGroup.getByText("from model access");
-    expect(chip).toHaveAttribute("title", RD.EGRESS_TIP);
+    expect(chip).toHaveAttribute("title", RD2.EGRESS_TIP);
     // A pinned binding is named plainly (API key: <secret>) rather than a
     // fabricated hostname — see step-requirements.tsx's ResolvedToken. (The
     // SAME label also appears in the Model access chip above — scope to the

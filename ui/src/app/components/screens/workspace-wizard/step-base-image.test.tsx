@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
 const listIntegrationsMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async () => {
@@ -15,10 +15,9 @@ vi.mock("../../../lib/api/integrations", async () => {
   return { ...actual, integrationsApi: { list: () => listIntegrationsMock() } };
 });
 
-import { BuildStepsEditor, ImageCards, PowerSourcePeek, StepBaseImage } from "./step-base-image";
-import { defaultBaseImageState, newSourceRow, type BaseImageState, type PowerSource, type SourceScanState } from "./wizard-types";
+import { BuildStepsEditor, ImageCards, StepBaseImage } from "./step-base-image";
+import { defaultBaseImageState, newSourceRow, type BaseImageState, type SourceScanState } from "./wizard-types";
 import { C, V2C } from "../../../lib/workspace-copy";
-import type { IntegrationRow } from "../../../lib/api/integrations";
 
 beforeEach(() => {
   listIntegrationsMock.mockReset();
@@ -48,8 +47,6 @@ describe("StepBaseImage — Phase A scan progress", () => {
         harnessAvailable
         state={defaultBaseImageState()}
         onChange={vi.fn()}
-        powerSource={{ kind: "default" }}
-        onPowerSourceChange={vi.fn()}
       />,
     );
     expect(screen.getByText("nothing to scan")).toBeInTheDocument();
@@ -73,8 +70,6 @@ describe("StepBaseImage — Phase A scan progress", () => {
         harnessAvailable
         state={defaultBaseImageState()}
         onChange={vi.fn()}
-        powerSource={{ kind: "default" }}
-        onPowerSourceChange={vi.fn()}
       />,
     );
     expect(screen.getByText("clone failed: terminal prompts disabled")).toBeInTheDocument();
@@ -156,80 +151,40 @@ describe("StepBaseImage — the four base-image cards", () => {
   });
 });
 
-describe("StepBaseImage — the power-source peek", () => {
-  const rows: IntegrationRow[] = [
-    {
-      id: "ai:anthropic_api_key",
-      category: "ai_provider",
-      name: "Anthropic (API key)",
-      typeLabel: "anthropic · api key",
-      chips: [],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: ["anthropic-api-key"],
-      aiType: "anthropic_api_key",
-      checkIds: [],
-    },
-    {
-      id: "ai:openai_api_key",
-      category: "ai_provider",
-      name: "OpenAI (API key)",
-      typeLabel: "openai · api key",
-      chips: [],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: ["openai-api-key"],
-      aiType: "openai_api_key",
-      checkIds: [],
-    },
-  ];
+describe("ImageCards — per-card tool honesty", () => {
+  // The image step answers "can an agent run drive this image"; the powering
+  // integration is chosen on the Requirements step's Reach tab now, so there
+  // is no power row and no peek here — the cards carry the facts instead.
+  it("registry card warns that agent runs can't drive it, only when a harness is configured", () => {
+    render(<CardsHarness harnessAvailable />);
+    expect(screen.getByText(/Claude Code isn't in this image — agent runs can't drive it\./)).toBeInTheDocument();
 
-  it("lists 'Use the server default' first, and mutes a row that can't drive Claude Code with its verbatim reason", async () => {
-    listIntegrationsMock.mockResolvedValue({ ai: rows, scm: [], mirror: [], proxy: [] });
-    const onPick = vi.fn();
-    render(<PowerSourcePeek open onOpenChange={vi.fn()} powerSource={{ kind: "default" }} onPick={onPick} />);
-
-    await screen.findByText("Anthropic (API key)");
-    const buttons = screen.getAllByRole("button");
-    expect(buttons[0]).toHaveTextContent("Use the server default");
-    expect(buttons[0]).toHaveAttribute("aria-pressed", "true");
-
-    const openaiButton = screen.getByRole("button", { name: /OpenAI \(API key\)/ });
-    expect(openaiButton).toBeDisabled();
-    // The verbatim IMPOSSIBLE-map reason for openai_api_key + claude_code.
-    expect(within(openaiButton).getByText(/Claude Code speaks the Anthropic API only/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Anthropic \(API key\)/ }));
-    expect(onPick).toHaveBeenCalledWith({ kind: "pinned", integrationId: "ai:anthropic_api_key", name: "Anthropic (API key)" });
+    cleanup();
+    render(<CardsHarness harnessAvailable={false} />);
+    expect(screen.queryByText(/agent runs can't drive it/)).not.toBeInTheDocument();
   });
 
-  it("picking a source updates the resolved power-source line and closes the peek", async () => {
-    listIntegrationsMock.mockResolvedValue({ ai: rows, scm: [], mirror: [], proxy: [] });
+  it("the BYO card states the no-inject law once expanded", () => {
+    render(<CardsHarness initial={{ choice: "byo" }} />);
+    expect(screen.getByText(V2C.IMG_NO_INJECT)).toBeInTheDocument();
+  });
 
-    function Harness() {
-      const [powerSource, setPowerSource] = React.useState<PowerSource>({ kind: "default" });
-      return (
-        <StepBaseImage
-          sources={[]}
-          scans={{}}
-          phaseA={false}
-          partial={false}
-          onEditSource={vi.fn()}
-          onRescan={vi.fn()}
-          detectedChips={[]}
-          harnessAvailable
-          state={defaultBaseImageState()}
-          onChange={vi.fn()}
-          powerSource={powerSource}
-          onPowerSourceChange={setPowerSource}
-        />
-      );
-    }
-    render(<Harness />);
-    expect(screen.getByText(/server default/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Change…" }));
-    await screen.findByText("Anthropic (API key)");
-    fireEvent.click(screen.getByRole("button", { name: /Anthropic \(API key\)/ }));
-    await waitFor(() => expect(screen.getByText(/pinned to this workspace/)).toBeInTheDocument());
+  it("offers no power-source row and no Change… peek — that choice lives on Reach now", () => {
+    render(
+      <StepBaseImage
+        sources={[]}
+        scans={{}}
+        phaseA={false}
+        partial={false}
+        onEditSource={vi.fn()}
+        onRescan={vi.fn()}
+        detectedChips={[]}
+        harnessAvailable
+        state={defaultBaseImageState()}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Agent runs here use/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change…" })).not.toBeInTheDocument();
   });
 });

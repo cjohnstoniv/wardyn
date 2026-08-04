@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { isFixtureLeak } from "./workspace-wizard/wizard-types";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
@@ -135,8 +136,14 @@ export function attentionItems(ws: Workspace, storedSecretNames: string[]): Atte
   if (pendingHosts.length) {
     out.push({ text: `${pendingHosts.length} host${pendingHosts.length > 1 ? "s" : ""} awaiting review`, tone: "neutral" });
   }
-  const leaks = profile.leak_findings?.length ?? 0;
-  if (leaks) out.push({ text: `⚠ ${leaks} suspected committed secret${leaks > 1 ? "s" : ""}`, tone: "danger" });
+  // Same two-tier split as the requirements step: a fixture in a test file is
+  // not an emergency, and seventeen of them must never bury one real leak.
+  const allLeaks = profile.leak_findings ?? [];
+  const hotLeaks = allLeaks.filter((l) => !isFixtureLeak(l)).length;
+  const fixtureLeaks = allLeaks.length - hotLeaks;
+  if (hotLeaks) out.push({ text: `⚠ ${hotLeaks} suspected committed secret${hotLeaks > 1 ? "s" : ""}`, tone: "danger" });
+  else if (fixtureLeaks)
+    out.push({ text: `${fixtureLeaks} key-shaped string${fixtureLeaks > 1 ? "s" : ""} in test files`, tone: "neutral" });
   return out;
 }
 

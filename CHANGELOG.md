@@ -58,6 +58,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Log in" as though nothing had happened. A capture from an earlier session
   shows as "Already connected — captured 3d ago", presence and age, never a
   live check.
+- **The Requirements step reads in dependency order — Record is last, and it
+  opens with what it will carry.** The tab strip was Record · Egress · Secrets
+  · Files & services, leading with the one tab that consumes everything the
+  others declare. It now reads Reach · Secrets · Files & services · Record:
+  Reach headlines the integrations (an integration is the reason a host is on
+  the allowlist at all) under a display-only power-source card stating what
+  agent runs here resolve to — the choice itself lives where it always really
+  did, on the workspace page's binding dialog — and Record closes the walk as
+  "prove & discover", opening with the power source, riding secrets and egress
+  posture the contract grants it. With nothing resolving, the agent-record
+  button is absent rather than disabled, the stated fact points at Reach, and
+  terminal recording is promoted — it needs no model. Discovery-first survives
+  as one quiet link on an empty Reach tab. The power-source row and its
+  Change… peek left the Base image step, whose cards now carry the tool
+  honesty instead: a registry base warns that agent runs can't drive it, and
+  the BYO card states that Wardyn never inspects an image or injects tools.
+- **The leak banner earns two tiers.** Seventeen red rows of a repo's own test
+  fixtures — fake keys that exist because the tests need key-shaped strings —
+  train an operator to ignore the banner, the exact reflex it exists to
+  prevent. Findings under test-conventional paths (`*_test.go`, `testdata/`,
+  `__tests__/`, `*.test.*`/`*.spec.*`, `fixtures/`) now collapse into one
+  muted, expandable line ("usually fixtures; confirm they're fake — they mount
+  like everything else") on the wizard, the workspace page, the Done step's
+  carry-forward and the list's attention cell; the red headline is reserved
+  for findings outside them. Never suppression: still shown, still counted.
+  And the step's lede stops overclaiming: the scan reads the directory the way
+  a run would mount it — gitignored files included.
 - **One Add flow, search-first.** "Add integration" opens on "type what you're
   connecting" with the categories browsable below it. Picking lands where a
   real question remains and nowhere else: "Anthropic" still splits into API

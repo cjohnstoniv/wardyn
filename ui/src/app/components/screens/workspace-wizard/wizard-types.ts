@@ -401,3 +401,14 @@ export interface WorkspaceWithComposition extends Workspace {
 export function withComposition(ws: Workspace): WorkspaceWithComposition {
   return ws as WorkspaceWithComposition;
 }
+
+// Two-tier leak classification, ported verbatim from the mock's TEST_PATH_RE
+// (wardyn-workspaces.js). A key-shaped string under a test-conventional path is
+// USUALLY a fixture — "rotate" is meaningless advice for one — so those group
+// into a muted, collapsed tier. Never suppression: still shown, still counted.
+export const TEST_PATH_RE =
+  /(^|\/)(testdata|__tests__|fixtures)(\/|$)|_test\.(go|py|rb|js|ts|tsx)$|\.(test|spec)\.[a-z0-9]+$/i;
+
+export function isFixtureLeak(lk: { path: string }): boolean {
+  return TEST_PATH_RE.test(lk.path);
+}

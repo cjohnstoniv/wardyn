@@ -24,10 +24,11 @@ import { Chip } from "../../wardyn/primitives";
 import { JsonBlock, Mono } from "../../wardyn/code-block";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { AddSecretDialog } from "../secrets";
-import { C, RD } from "../../../lib/workspace-copy";
+import { C, RD2 } from "../../../lib/workspace-copy";
 import type { SetupStatus, WorkspaceProfile } from "../../../lib/types";
 import { IntegrationRequirements } from "./integration-requirements";
 import {
+  isFixtureLeak,
   requirementKey,
   setRequirementLane,
   splitRequirementKey,
@@ -78,21 +79,60 @@ function GroupHead({ title, chips }: { title: string; chips?: React.ReactNode })
 }
 
 function LeakBanner({ leaks }: { leaks: { path: string; kind: string; line?: number }[] }) {
+  // Two tiers, path-classified (isFixtureLeak): outside test-conventional
+  // paths the red headline is unchanged; under them, one muted collapsed line —
+  // "rotate" is meaningless advice for a fixture, "confirm they're fake" is the
+  // honest ask. Never suppression: still shown, still counted, still expandable.
+  const hot = leaks.filter((l) => !isFixtureLeak(l));
+  const fixtures = leaks.filter(isFixtureLeak);
   return (
-    <div className="space-y-2 rounded-lg border border-danger/40 bg-danger-subtle p-3" data-testid="leak-banner">
-      <div className="flex items-center gap-2 text-danger">
-        <AlertTriangle className="size-4 shrink-0" />
-        <span className="text-[0.8125rem] font-semibold">Suspected committed secrets — rotate or remove before mounting</span>
-      </div>
-      <div className="space-y-1">
-        {leaks.map((lk, i) => (
-          <Mono key={i} className="block text-xs text-foreground">
-            {lk.path}
-            {lk.line != null ? `:${lk.line}` : ""} — {lk.kind}
-          </Mono>
-        ))}
-      </div>
-      <p className="text-[0.6875rem] leading-snug text-danger/90">{C.LOCATION_ONLY}</p>
+    <div className="space-y-2" data-testid="leak-banner">
+      {hot.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-danger/40 bg-danger-subtle p-3" data-testid="leak-hot">
+          <div className="flex items-center gap-2 text-danger">
+            <AlertTriangle className="size-4 shrink-0" />
+            <span className="text-[0.8125rem] font-semibold">Suspected committed secrets — rotate or remove before mounting</span>
+          </div>
+          <div className="space-y-1">
+            {hot.map((lk, i) => (
+              <Mono key={i} className="block text-xs text-foreground">
+                {lk.path}
+                {lk.line != null ? `:${lk.line}` : ""} — {lk.kind}
+              </Mono>
+            ))}
+          </div>
+          <p className="text-[0.6875rem] leading-snug text-danger/90">{C.LOCATION_ONLY}</p>
+        </div>
+      )}
+      {fixtures.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-2/50 p-3" data-testid="leak-fixtures">
+          <details>
+            <summary className="cursor-pointer select-none text-xs leading-snug text-muted-foreground">
+              {fixtures.length} key-shaped string{fixtures.length > 1 ? "s" : ""} in test files — usually fixtures; confirm
+              they&apos;re fake. They mount like everything else.
+            </summary>
+            <div className="space-y-1 pt-2">
+              {fixtures.map((lk, i) => (
+                <Mono key={i} className="block text-xs text-foreground">
+                  {lk.path}
+                  {lk.line != null ? `:${lk.line}` : ""} — {lk.kind}
+                </Mono>
+              ))}
+            </div>
+          </details>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.LOCATION_ONLY}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One labeled row of the Record tab's carry card.
+function CarryRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[150px_1fr] items-baseline gap-2.5">
+      <span className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-xs leading-snug text-foreground">{children}</span>
     </div>
   );
 }
@@ -108,7 +148,7 @@ function ResolvedToken({ powerSource, fallback }: { powerSource: PowerSource; fa
   return <Mono className="text-xs text-foreground">{fallback}</Mono>;
 }
 
-type ReqTab = "record" | "egress" | "secrets" | "files";
+type ReqTab = "reach" | "secrets" | "files" | "record";
 
 export function StepRequirements({
   profile,
@@ -139,7 +179,7 @@ export function StepRequirements({
 }) {
   const [addSecretName, setAddSecretName] = React.useState<string | null>(null);
   const [pendingHost, setPendingHost] = React.useState<string | null>(null);
-  const [reqTab, setReqTab] = React.useState<ReqTab>("record");
+  const [reqTab, setReqTab] = React.useState<ReqTab>("reach");
 
   const setLane = (key: string, level: RequirementLevel) => onChange(setRequirementLane(requirements, key, level));
   // Removing a row is ABSENCE, not a third lane — the contract has exactly two
@@ -177,15 +217,22 @@ export function StepRequirements({
 
   const unmet = unmetRequiredSecrets(requirements, storedSecretNames);
   const nothingResolves = powerSource.kind === "none";
+  // What the Record tab's carry card states, derived from the contract-so-far —
+  // these are computed facts, not canon strings.
+  const requiredSecretCount = Object.entries(requirements).filter(
+    ([k, v]) => k.startsWith("secret:") && v.level === "required",
+  ).length;
+  const carrySecrets =
+    requiredSecretCount > 0
+      ? `${requiredSecretCount} required secret${requiredSecretCount > 1 ? "s" : ""} ride${requiredSecretCount > 1 ? "" : "s"} proxy-side`
+      : "none yet";
+  const carryEgress =
+    autoAllowed.length > 0
+      ? `${autoAllowed.length} host${autoAllowed.length > 1 ? "s" : ""} allowed — anything else is held at the door`
+      : "only the auto-allowed set — anything else is held at the door";
 
   return (
     <div className="space-y-5">
-      <div className="space-y-1 rounded-lg border border-border bg-surface-2/40 p-3">
-        <p className="text-[0.6875rem] leading-snug text-foreground">{C.REQ_DEF}</p>
-        <p className="text-[0.6875rem] leading-snug text-foreground">{C.OPT_DEF}</p>
-        <p className="text-[0.6875rem] italic leading-snug text-muted-foreground">{C.SEEDED}</p>
-      </div>
-
       {!hasProfile && (
         <div className="rounded-xl border border-border p-4">
           <p className="text-sm font-medium text-foreground">No contract yet</p>
@@ -209,44 +256,43 @@ export function StepRequirements({
 
           <Tabs value={reqTab} onValueChange={(v) => setReqTab(v as ReqTab)}>
             <TabsList>
-              <TabsTrigger value="record">Record</TabsTrigger>
-              <TabsTrigger value="egress">Egress</TabsTrigger>
+              <TabsTrigger value="reach">Reach</TabsTrigger>
               <TabsTrigger value="secrets">Secrets</TabsTrigger>
               <TabsTrigger value="files">Files & services</TabsTrigger>
+              <TabsTrigger value="record">Record</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="record" className="space-y-3 pt-3">
-              {nothingResolves ? (
-                <div className="rounded-lg border border-warning/30 bg-warning-subtle p-2.5">
-                  <p className="text-[0.75rem] leading-snug text-warning">{RD.RECORD_HINT}</p>
+            <TabsContent value="reach" className="space-y-2 pt-3" data-testid="group-reach">
+              {/* The power source, first: recording and every agent run read
+                  this resolution, and nothing on this step re-asks it. The card
+                  is DISPLAY-ONLY here — "its page" is the workspace detail
+                  page, where the real pin control (the llm-cred dialog) lives. */}
+              <div
+                data-testid="power-source-card"
+                className={`space-y-1 rounded-lg border p-3 ${
+                  nothingResolves ? "border-warning/30 bg-warning-subtle" : "border-border bg-surface-2/40"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`text-[0.6875rem] uppercase tracking-wide ${nothingResolves ? "text-warning/80" : "text-muted-foreground"}`}
+                  >
+                    Agent runs here use
+                  </span>
+                  <span className={`text-xs font-medium ${nothingResolves ? "text-warning" : "text-foreground"}`}>
+                    {nothingResolves
+                      ? "nothing yet — this image's agent won't have model access"
+                      : powerSource.kind === "pinned"
+                        ? `${powerSource.name} — pinned to this workspace`
+                        : "server default"}
+                  </span>
+                  {!nothingResolves && <Chip tone="success">resolves</Chip>}
                 </div>
-              ) : (
-                <p className="text-[0.8125rem] leading-snug text-muted-foreground">
-                  Agent-driven recording uses the resolved integration —{" "}
-                  {powerSource.kind === "pinned"
-                    ? `${powerSource.name} (pinned to this workspace).`
-                    : "the server default, Anthropic (API key)."}
+                <p className={`text-[0.6875rem] leading-snug ${nothingResolves ? "text-warning/90" : "text-muted-foreground"}`}>
+                  {nothingResolves ? RD2.POWER_NONE_BODY : RD2.POWER_RESOLVES_BODY}
                 </p>
-              )}
-              {/* ponytail: inert, like the mock's own onClick: noop — launching
-                  a real recording session needs a real sandbox/run, which this
-                  wizard step doesn't have yet (C.STEP_LEAD: recording lives on
-                  the workspace's own page). Wire onClick once that page's
-                  record-launch action grows a prop this step can call. */}
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" disabled={nothingResolves}>
-                  Record a session
-                </Button>
-                <Button type="button" size="sm" variant="outline">
-                  Record a terminal session
-                </Button>
               </div>
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-                Drive it once in an open sandbox to learn what it really reaches, then promote those hosts.
-              </p>
-            </TabsContent>
-
-            <TabsContent value="egress" className="space-y-2 pt-3" data-testid="group-egress">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.REACH_LEAD}</p>
               <IntegrationRequirements
                 status={status ?? null}
                 requirements={requirements}
@@ -276,14 +322,25 @@ export function StepRequirements({
                         <p className="text-[0.6875rem] text-muted-foreground">seeded</p>
                       </div>
                       <span className="ml-auto" />
-                      <Chip tone="info" title={RD.EGRESS_TIP}>
+                      <Chip tone="info" title={RD2.EGRESS_TIP}>
                         from model access
                       </Chip>
                     </div>
                   )}
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">No hosts beyond the auto-allowed set.</p>
+                <p className="text-xs text-muted-foreground">
+                  No hosts beyond the auto-allowed set — the scan found nothing this workspace has to reach.
+                </p>
+              )}
+              {autoAllowed.length === 0 && holding.length === 0 && (
+                <button
+                  type="button"
+                  className="text-[0.6875rem] text-muted-foreground underline"
+                  onClick={() => setReqTab("record")}
+                >
+                  {RD2.ESCAPE}
+                </button>
               )}
               {holding.length > 0 && (
                 <div className="space-y-2 rounded-lg border border-border bg-surface-2/50 p-3" data-testid="holding-block">
@@ -307,6 +364,11 @@ export function StepRequirements({
             </TabsContent>
 
             <TabsContent value="secrets" className="space-y-2 pt-3" data-testid="group-secrets">
+              <div className="space-y-1 rounded-lg border border-border bg-surface-2/40 p-3">
+                <p className="text-[0.6875rem] leading-snug text-foreground">{C.REQ_DEF}</p>
+                <p className="text-[0.6875rem] leading-snug text-foreground">{C.OPT_DEF}</p>
+                <p className="text-[0.6875rem] italic leading-snug text-muted-foreground">{C.SEEDED}</p>
+              </div>
               <div className="flex items-center gap-2">
                 <Chip tone="neutral">names only</Chip>
               </div>
@@ -340,7 +402,7 @@ export function StepRequirements({
                       <ResolvedToken powerSource={powerSource} fallback="anthropic-api-key" />
                       <span className="text-[0.6875rem] text-muted-foreground">managed</span>
                       <span className="ml-auto" />
-                      <Chip tone="info" title={RD.SECRET_TIP}>
+                      <Chip tone="info" title={RD2.SECRET_TIP}>
                         integration
                       </Chip>
                     </div>
@@ -419,6 +481,51 @@ export function StepRequirements({
                   </div>
                 </details>
               </section>
+            </TabsContent>
+
+            <TabsContent value="record" className="space-y-3 pt-3" data-testid="group-record">
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LEAD}</p>
+              <div className="space-y-2 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="record-carry">
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">{RD2.CARRY}</p>
+                <CarryRow label="Power source">
+                  {nothingResolves ? (
+                    <span className="text-warning">nothing resolves — the power source is on Reach</span>
+                  ) : powerSource.kind === "pinned" ? (
+                    `${powerSource.name} — pinned to this workspace`
+                  ) : (
+                    "server default"
+                  )}
+                </CarryRow>
+                <CarryRow label="Required secrets">{carrySecrets}</CarryRow>
+                <CarryRow label="Egress posture">{carryEgress}</CarryRow>
+                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.CARRY_FROM}</p>
+              </div>
+              {nothingResolves && (
+                <div className="space-y-2 rounded-lg border border-warning/30 bg-warning-subtle p-2.5">
+                  <p className="text-[0.75rem] leading-snug text-warning">{RD2.RECORD_NEEDS}</p>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setReqTab("reach")}>
+                    Open the Reach tab →
+                  </Button>
+                </div>
+              )}
+              {/* ponytail: inert, like the mock's own onClick: noop — launching
+                  a real recording session needs a real sandbox/run, which this
+                  wizard step doesn't have yet. Wire onClick once the workspace
+                  page's record-launch action grows a prop this step can call. */}
+              <div className="flex flex-wrap gap-2">
+                {!nothingResolves && (
+                  <Button type="button" size="sm">
+                    Record a session
+                  </Button>
+                )}
+                <Button type="button" size="sm" variant={nothingResolves ? "default" : "outline"}>
+                  Record a terminal session
+                </Button>
+              </div>
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                {nothingResolves ? RD2.TERMINAL_ONLY : RD2.RECORD_SUB}
+              </p>
+              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LOOP}</p>
             </TabsContent>
           </Tabs>
         </div>

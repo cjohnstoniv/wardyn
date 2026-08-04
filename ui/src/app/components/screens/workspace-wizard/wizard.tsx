@@ -44,6 +44,7 @@ import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
 import { StepDone, type DoneVariant } from "./step-done";
 import {
+  isFixtureLeak,
   WIZARD_STEPS,
   canDriveClaudeCode,
   defaultBaseImageState,
@@ -83,7 +84,7 @@ interface WizardState {
   scanning: boolean;
   partial: boolean;
   baseImage: BaseImageState;
-  powerSource: PowerSource;
+
   requirements: WorkspaceRequirementsMap;
   requirementsSeeded: boolean;
   confirmBackToSources: boolean;
@@ -105,7 +106,7 @@ function initialState(): WizardState {
     scanning: false,
     partial: false,
     baseImage: defaultBaseImageState(),
-    powerSource: { kind: "default" },
+
     requirements: {},
     requirementsSeeded: false,
     confirmBackToSources: false,
@@ -155,6 +156,10 @@ export function WorkspaceWizard({
   const [state, setState] = React.useState<WizardState>(initialState);
   const patch = (p: Partial<WizardState>) => setState((s) => ({ ...s, ...p }));
   const s = state;
+  // The wizard no longer pins a power source (that control lives on the
+  // workspace page); it only READS the resolution, derived from whether any
+  // integration can drive this image's agent tool.
+  const powerSource: PowerSource = s.harnessAvailable ? { kind: "default" } : { kind: "none" };
 
   React.useEffect(() => {
     let live = true;
@@ -329,7 +334,9 @@ export function WorkspaceWizard({
       : s.workspace.status === "scanning" || s.workspace.status === "pending_scan"
         ? "scanning"
         : "usable";
-  const leakCount = profile?.leak_findings?.length ?? 0;
+  // HOT leaks only: a fixture in a test file must not read as "rotate before
+  // mounting" on the Done step (same tier split as the requirements banner).
+  const leakCount = (profile?.leak_findings ?? []).filter((l) => !isFixtureLeak(l)).length;
 
   const wsExists = !!s.workspace;
   const blurb =
@@ -386,8 +393,6 @@ export function WorkspaceWizard({
               harnessAvailable={s.harnessAvailable}
               state={s.baseImage}
               onChange={(p) => patch({ baseImage: { ...s.baseImage, ...p } })}
-              powerSource={s.powerSource}
-              onPowerSourceChange={(powerSource) => patch({ powerSource })}
             />
           )}
           {s.step === "reqs" && (
@@ -398,7 +403,7 @@ export function WorkspaceWizard({
               onChange={(requirements) => patch({ requirements })}
               storedSecretNames={s.secretNames}
               onSecretStored={onSecretStored}
-              powerSource={s.powerSource}
+              powerSource={powerSource}
               status={s.setupStatus}
             />
           )}
@@ -409,7 +414,7 @@ export function WorkspaceWizard({
               requirements={s.requirements}
               storedSecretNames={s.secretNames}
               leakCount={leakCount}
-              powerSource={s.powerSource}
+              powerSource={powerSource}
               onOpenDetail={(focus) => {
                 if (s.workspace) onOpenWorkspace?.(s.workspace.id, focus);
               }}

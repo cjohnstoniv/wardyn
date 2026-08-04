@@ -60,7 +60,7 @@ export const C = {
     "A run attaches an added directory, repo or image — never a raw host path. Adding one scans it and makes it attachable straight away. Recording sessions, env-as-code and model access are optional, and live on each workspace's own page.",
   S1_BLURB: "Register a source your runs may attach. Wardyn scans it once and reuses that profile for every run.",
   S3_BLURB:
-    "Set what this workspace always carries, and what a run has to ask for. Everything here was read from committed files; none of it has run.",
+    "Set what this workspace always carries, and what a run has to ask for. The scan read the directory the way a run would mount it — gitignored files included; none of it has run.",
   EMPTY_SCAN: "The scan found nothing this workspace needs. No secrets, no hosts beyond the auto-allowed set.",
   REPO_RO:
     "Repos are cloned fresh into the sandbox — nothing on your machine is touched, so there's nothing to protect with read-only.",
@@ -84,6 +84,8 @@ export const V2C = {
   CRED_WARN:
     "Anything baked into an image can be read by every run that uses it — and by anyone who can pull the image. Prefer a brokered secret instead: it's injected at use time and never stored in the image.",
   HARNESS_ON: "Claude Code configured — recommended images include its CLI.",
+  IMG_NO_INJECT:
+    "Wardyn doesn't inspect the image and never injects tools into it. If Claude Code isn't already in there, agent runs can't drive it — governed commands only.",
   HARNESS_OFF:
     "No AI integration connected — images without agent tools are fine for governed commands. Add one in Integrations for agent runs.",
 };
@@ -97,6 +99,8 @@ export const RD = {
   RECORD_HINT:
     "Nothing resolves for this image's agent tool — agent-driven recording needs model access. Set it on the Base image step, or record a terminal session instead.",
   EGRESS_TIP: "Managed by the resolved integration; change it on the Base image step.",
+  // Superseded on the requirements step by RD2 (the S3 record-last redesign);
+  // kept because New Run's Access step still uses the two lines above verbatim.
   SECRET_TIP: "Managed by the resolved integration — not edited here.",
   ADVISORY: "This is advisory only — it never gets the run's credentials.",
   PIN_NOTE: "Picking one pins it to this workspace.",
@@ -114,3 +118,37 @@ export const POWER_LINE_NONE =
   "Agent runs here use: nothing yet — this image's agent won't have model access.";
 export const POWER_LINE_PINNED = "Agent runs here use: Team API key — pinned to this workspace.";
 export const POWER_LINE_DEFAULT = "Agent runs here use: server default — Anthropic (API key)";
+
+// ============================ S3 record-last canon (verbatim) ============================
+// mockup/wardyn-workspaces.js's `RD2` — the requirements step's dependency-order
+// redesign: Reach · Secrets · Files & services · Record. Record consumes what
+// the other three declare, so it reads last; the power source lives on Reach.
+export const RD2 = {
+  REACH_LEAD:
+    "Everything outside the sandbox this workspace touches. Named systems first — an integration is the reason a host is on the allowlist at all.",
+  POWER_ORDER:
+    "Resolves: run override → workspace pin → server default → honest none. Recording and every agent run here read it; nothing re-asks.",
+  RIDE: "Its hosts and its credential ride along — nothing extra to allow.",
+  EGRESS_TIP: "Managed by the resolved integration; change it on the power-source line above.",
+  SECRET_TIP: "Managed by the resolved integration — not edited here.",
+  OPEN_NET:
+    "A run that reaches a host not listed here is held at the door and asks. Nothing on this tab opens the open internet.",
+  ESCAPE: "Not sure what it needs? Record a session first →",
+  PAIR: "api.stripe.com is in your egress — likely needs a Stripe credential.",
+  PAIR_SUB: "Paired against the hosts on Reach. A suggestion, not a requirement — you set what's required.",
+  CARRY: "What this recording will carry",
+  CARRY_FROM: "Derived from the contract as it stands — Reach, Secrets and Files & services, as of now.",
+  RECORD_LEAD:
+    "Prove it, or discover what you couldn't declare. A session drives the workspace for real and brings back what it actually reached.",
+  RECORD_NEEDS:
+    "Nothing resolves for this image's agent tool, so an agent-driven recording has nothing driving it. The power source lives on the Reach tab. Terminal recording needs no model.",
+  RECORD_LOOP:
+    "What a session observes comes back as \u201cfrom recording\u201d suggestions in Reach, Secrets and Files & services — reviewed row by row, never promoted for you. Replay confined is the verify half.",
+  RECORD_SUB: "Drive it once in an open sandbox to learn what it really reaches, then promote what it reached.",
+  // The wizard reach card's own lines (the proto's power card, display-only —
+  // "its page" = the workspace detail page, where the real pin control lives).
+  POWER_NONE_BODY:
+    "Nothing pinned here and no server default — governed commands still run; an agent-driven session has nothing driving it. Pin one on its page.",
+  POWER_RESOLVES_BODY: "Resolves from Integrations — run override → workspace pin → server default. Pin one on its page.",
+  TERMINAL_ONLY: "Terminal recording drives the sandbox by hand — no model, no agent tool.",
+};

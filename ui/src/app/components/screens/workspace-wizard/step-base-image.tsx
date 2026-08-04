@@ -18,18 +18,13 @@ import { cn } from "../../ui/utils";
 import { Field } from "../new-run/step-shell";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "../../ui/sheet";
-import { integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
-import { IMPOSSIBLE } from "../../../lib/integrations";
-import { C, V2C, RD, POWER_LINE_DEFAULT, POWER_LINE_NONE, POWER_LINE_PINNED } from "../../../lib/workspace-copy";
+import { C, V2C } from "../../../lib/workspace-copy";
 import { SOURCE_META } from "./step-sources";
 import {
-  canDriveClaudeCode,
   credFlags,
   fmtElapsed,
   type BaseImageChoice,
   type BaseImageState,
-  type PowerSource,
   type SourceRow,
   type SourceScanState,
 } from "./wizard-types";
@@ -261,6 +256,11 @@ export function ImageCards({
           <span className="text-[0.8125rem] font-medium text-foreground">A registry image that fits</span>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
+        {harnessAvailable && (
+          <Chip tone="warning" className="self-start">
+            Claude Code isn&apos;t in this image — agent runs can&apos;t drive it.
+          </Chip>
+        )}
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">
           Official language base matching the detected stack.
         </p>
@@ -354,122 +354,12 @@ export function ImageCards({
               />
             </Field>
             <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.IMG_NO_SCAN}</p>
+            <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.IMG_NO_INJECT}</p>
           </div>
         ) : (
           <p className="text-[0.6875rem] leading-snug text-muted-foreground">An image ref Wardyn pulls as-is.</p>
         )}
       </ImageCard>
-    </div>
-  );
-}
-
-// ============================ Resolved power source + peek ============================
-function powerSourceLine(source: PowerSource): string {
-  if (source.kind === "none") return POWER_LINE_NONE;
-  if (source.kind === "pinned") return POWER_LINE_PINNED;
-  return POWER_LINE_DEFAULT;
-}
-
-// The slide-over peek: "Use the server default" first and pre-selected,
-// incompatible rows muted with their verbatim IMPOSSIBLE-map reason.
-export function PowerSourcePeek({
-  open,
-  onOpenChange,
-  powerSource,
-  onPick,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  powerSource: PowerSource;
-  onPick: (source: PowerSource) => void;
-}) {
-  const [rows, setRows] = React.useState<IntegrationRow[] | null>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-    let live = true;
-    integrationsApi
-      .list()
-      .then((data) => {
-        if (live) setRows(data.ai);
-      })
-      .catch(() => {
-        if (live) setRows([]);
-      });
-    return () => {
-      live = false;
-    };
-  }, [open]);
-
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent>
-        <SheetHeader>
-          <SheetTitle>Model access for this image</SheetTitle>
-          <SheetDescription>{RD.PIN_NOTE}</SheetDescription>
-        </SheetHeader>
-        <div className="scroll-thin space-y-1.5 overflow-y-auto px-4 pb-4">
-          <button
-            type="button"
-            aria-pressed={powerSource.kind === "default"}
-            onClick={() => onPick({ kind: "default" })}
-            className={cn(
-              "w-full rounded-lg border p-3 text-left text-sm font-medium text-foreground transition-colors",
-              powerSource.kind === "default" ? "border-primary bg-primary/10" : "border-border hover:border-border-strong",
-            )}
-          >
-            Use the server default
-          </button>
-          {rows === null ? (
-            <p className="p-3 text-xs text-muted-foreground">Loading integrations…</p>
-          ) : rows.length === 0 ? (
-            <p className="p-3 text-xs text-muted-foreground">No integrations configured yet.</p>
-          ) : (
-            rows.map((row) => {
-              const compatible = canDriveClaudeCode(row.aiType);
-              const reason = row.aiType ? IMPOSSIBLE[row.aiType]?.claude_code : undefined;
-              const pinned = powerSource.kind === "pinned" && powerSource.integrationId === row.id;
-              return (
-                <button
-                  key={row.id}
-                  type="button"
-                  disabled={!compatible}
-                  aria-pressed={pinned}
-                  title={compatible ? undefined : reason}
-                  onClick={() => compatible && onPick({ kind: "pinned", integrationId: row.id, name: row.name })}
-                  className={cn(
-                    "w-full space-y-0.5 rounded-lg border p-3 text-left text-sm transition-colors",
-                    !compatible && "cursor-not-allowed opacity-50",
-                    pinned ? "border-primary bg-primary/10" : "border-border hover:border-border-strong",
-                  )}
-                >
-                  <p className="font-medium text-foreground">{row.name}</p>
-                  {!compatible && reason && (
-                    <p className="text-[0.6875rem] leading-snug text-muted-foreground">{reason}</p>
-                  )}
-                </button>
-              );
-            })
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
-  );
-}
-
-export function PowerSourceLine({
-  powerSource,
-  onOpenPeek,
-}: {
-  powerSource: PowerSource;
-  onOpenPeek: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
-      <p className="flex-1 text-xs text-foreground">{powerSourceLine(powerSource)}</p>
-      <Button type="button" size="sm" variant="ghost" onClick={onOpenPeek}>
-        Change…
-      </Button>
     </div>
   );
 }
@@ -486,8 +376,6 @@ export function StepBaseImage({
   harnessAvailable,
   state,
   onChange,
-  powerSource,
-  onPowerSourceChange,
 }: {
   sources: SourceRow[];
   scans: Record<string, SourceScanState>;
@@ -499,11 +387,7 @@ export function StepBaseImage({
   harnessAvailable: boolean;
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
-  powerSource: PowerSource;
-  onPowerSourceChange: (source: PowerSource) => void;
 }) {
-  const [peekOpen, setPeekOpen] = React.useState(false);
-
   if (phaseA) {
     return <ScanProgress sources={sources} scans={scans} onEditSource={onEditSource} onRescan={onRescan} />;
   }
@@ -535,17 +419,6 @@ export function StepBaseImage({
         harnessAvailable={harnessAvailable}
         state={state}
         onChange={onChange}
-      />
-
-      <PowerSourceLine powerSource={powerSource} onOpenPeek={() => setPeekOpen(true)} />
-      <PowerSourcePeek
-        open={peekOpen}
-        onOpenChange={setPeekOpen}
-        powerSource={powerSource}
-        onPick={(source) => {
-          onPowerSourceChange(source);
-          setPeekOpen(false);
-        }}
       />
     </div>
   );

@@ -18,6 +18,7 @@
 // host-shaped candidates warrant the "untrusted content, reachable by every
 // future run" framing that dialog states.
 import * as React from "react";
+import { isFixtureLeak } from "../workspace-wizard/wizard-types";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../../ui/button";
@@ -75,6 +76,9 @@ export function DetectedCard({
     (s) => (s.kind === "code" || s.kind === "ci") && !(`secret:${s.name}` in reqs),
   );
   const leaks = profile.leak_findings ?? [];
+  // The same two-tier split as the wizard's banner (isFixtureLeak).
+  const hotLeaks = leaks.filter((l) => !isFixtureLeak(l));
+  const fixtureLeaks = leaks.filter(isFixtureLeak);
   const nothingPending = leaks.length === 0 && suggested.length === 0 && observedDenied.length === 0 && codeRefs.length === 0;
 
   const [confirmHost, setConfirmHost] = React.useState<{ host: string; level: RequirementLevel } | null>(null);
@@ -99,7 +103,7 @@ export function DetectedCard({
       title="Detected, not required"
       subtitle="Wardyn noticed these but hasn't given them to any run. Add one only if this workspace legitimately needs it."
     >
-      {leaks.length > 0 && (
+      {hotLeaks.length > 0 && (
         <div className="space-y-2 rounded-lg border border-danger/40 bg-danger-subtle p-3" data-testid="detected-leaks">
           <div className="flex items-center gap-2 text-danger">
             <AlertTriangle className="size-4 shrink-0" />
@@ -108,7 +112,7 @@ export function DetectedCard({
             </span>
           </div>
           <div className="space-y-1">
-            {leaks.map((lk, i) => (
+            {hotLeaks.map((lk, i) => (
               <Mono key={`${lk.path}:${lk.line ?? ""}:${i}`} className="block text-xs text-foreground">
                 {lk.path}
                 {lk.line != null ? `:${lk.line}` : ""} — {lk.kind}
@@ -116,6 +120,25 @@ export function DetectedCard({
             ))}
           </div>
           <p className="text-[0.6875rem] leading-snug text-danger/90">{C.LOCATION_ONLY}</p>
+        </div>
+      )}
+      {fixtureLeaks.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-2/50 p-3" data-testid="detected-leak-fixtures">
+          <details>
+            <summary className="cursor-pointer select-none text-xs leading-snug text-muted-foreground">
+              {fixtureLeaks.length} key-shaped string{fixtureLeaks.length > 1 ? "s" : ""} in test files — usually fixtures;
+              confirm they&apos;re fake. They mount like everything else.
+            </summary>
+            <div className="space-y-1 pt-2">
+              {fixtureLeaks.map((lk, i) => (
+                <Mono key={`${lk.path}:${lk.line ?? ""}:${i}`} className="block text-xs text-foreground">
+                  {lk.path}
+                  {lk.line != null ? `:${lk.line}` : ""} — {lk.kind}
+                </Mono>
+              ))}
+            </div>
+          </details>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.LOCATION_ONLY}</p>
         </div>
       )}
 
