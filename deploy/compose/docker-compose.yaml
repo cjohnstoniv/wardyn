@@ -173,6 +173,12 @@ services:
       # gateway CIDR instead of any non-loopback peer.
       WARDYN_LOCAL_TRUST_FORWARDER: "${WARDYN_LOCAL_TRUST_FORWARDER:-true}"
       WARDYN_RUNNER: "docker"
+      # Mirrors the volumes-side WARDYN_WORKSPACES_ROOT mapping below, so wardynd
+      # can NAME the configured root when a local-directory scan misses — "not
+      # found" from a sealed daemon otherwise reads as a lie to an operator whose
+      # directory plainly exists on the host. Empty = no root mounted (the
+      # default), which the error message also states rather than implies.
+      WARDYN_WORKSPACES_ROOT: "${WARDYN_WORKSPACES_ROOT:-}"
       WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:local"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — OPT-IN, OFF by default. Workspace import

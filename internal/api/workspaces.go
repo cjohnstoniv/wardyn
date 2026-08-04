@@ -907,10 +907,8 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 				profiles = append(profiles, workspacescan.Scan(src.Path))
 				continue
 			}
-			detail := "local directory not found on this host: " + src.Path
-			if serr == nil && !fi.IsDir() {
-				detail = "onboarded source is not a directory: " + src.Path
-			}
+			detail := localDirScanFailureDetail(src.Path, serr == nil && !fi.IsDir(),
+				os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
 			ws.Status = types.WorkspaceError
 			if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
 				writeError(w, http.StatusInternalServerError, "persist scan status: "+uerr.Error())
