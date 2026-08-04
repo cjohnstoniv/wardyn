@@ -39,6 +39,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (DNS, refused, TLS, timeout) rather than collapsing into "failed". These are
   the only test buttons in the product; everywhere else Wardyn still refuses to
   claim it verified a credential it cannot dial.
+- **One Add flow, search-first.** "Add integration" opens on "type what you're
+  connecting" with the categories browsable below it. Picking lands where a
+  real question remains and nowhere else: "Anthropic" still splits into API
+  key vs Claude subscription so it opens that choice preselected, Bedrock opens
+  on its credential lanes, an OpenAI key goes straight to connect, and a git
+  host lands on the SCM ladder. The old "AI provider or SCM host?" card grid is
+  gone — by the time anything opens, that question has always been answered by
+  the pick itself.
 - **An integration is any named external system, not just a model provider or a
   git host.** The Integrations page defined itself as "named connections to the
   systems outside Wardyn" and then offered two examples of one. It now covers

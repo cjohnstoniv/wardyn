@@ -273,25 +273,48 @@ export function IntegrationsScreen({
         onOpenChange={setAddServiceOpen}
         onAdded={load}
         onHandoff={(t) => {
-          // The catalog's apiType for a model provider IS an AiType
-          // (anthropic -> anthropic_api_key, and so on); every git host routes
-          // to the one SCM ladder. Anything unmapped falls back to the old
-          // dialog's own picker rather than opening on a guess.
+          // The rule: never re-ask an answered question, never skip a real one.
+          // A pick whose type still has an open sub-choice lands on the AI type
+          // panel PRESELECTED — "Anthropic" still splits into API key vs Claude
+          // subscription, a subscription still chooses managed vs host login,
+          // Bedrock still has four credential lanes. A pick with nothing left
+          // to ask (an OpenAI key is an OpenAI key) lands straight on connect.
           const aiType = t.addLane === "ai" ? (t.apiType as AiType | undefined) : undefined;
-          setAddTarget(aiType ? { s: "ai_connect", type: aiType } : t.addLane === "scm" ? { s: "scm" } : undefined);
+          const OPEN_QUESTION: Partial<Record<AiType, true>> = {
+            anthropic_api_key: true, // the catalog's "Anthropic" is key OR subscription
+            anthropic_subscription: true, // managed vs host login
+            bedrock: true, // four credential lanes
+          };
+          setAddTarget(
+            t.addLane === "scm"
+              ? { s: "scm" }
+              : aiType
+                ? OPEN_QUESTION[aiType]
+                  ? { s: "ai_type", preselect: aiType }
+                  : { s: "ai_connect", type: aiType }
+                : { s: "ai_type" },
+          );
           setAddOpen(true);
         }}
       />
 
-      <AddIntegrationDialog
-        target={addTarget}
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        status={status}
-        siteConfig={siteConfig}
-        existingAiRows={data.ai}
-        reload={load}
-      />
+      {/* Mounted only once a pick handed off a target — there is no
+          target-less way in any more; the category grid is gone. */}
+      {addTarget && (
+        <AddIntegrationDialog
+          target={addTarget}
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          status={status}
+          siteConfig={siteConfig}
+          existingAiRows={data.ai}
+          reload={load}
+          onBackToSearch={() => {
+            setAddOpen(false);
+            setAddServiceOpen(true);
+          }}
+        />
+      )}
 
       <AddSecretDialog
         open={!!rotateName}

@@ -13,7 +13,7 @@
 // setup/step-bodies.tsx's ArtifactRepoStep / HostProxyStep, and with it those
 // two step bodies.
 import * as React from "react";
-import { ChevronDown, GitBranch, KeyRound, Sparkles } from "lucide-react";
+import { ChevronDown, KeyRound } from "lucide-react";
 import {
   AI_TYPES,
   BEDROCK_LANE_META,
@@ -24,7 +24,6 @@ import {
   type AiType,
   type BedrockLane,
   type CapabilityRow,
-  type IntegrationCategory,
   type SubscriptionLane,
 } from "../../../lib/integrations";
 import { aiResidency, aiRowName, defaultHolder, type IntegrationRow } from "../../../lib/api/integrations";
@@ -43,22 +42,26 @@ import { HarnessLoginPane } from "../setup/harness-login-pane";
 import { AddProviderPanel1, AddProviderPanel2, type ProviderOption } from "../setup/scm-provider-step";
 import type { Lane } from "../../../lib/scm-provider";
 
-const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
-  ai_provider: Sparkles,
-  scm_host: GitBranch,
-};
-const CATEGORIES: IntegrationCategory[] = ["ai_provider", "scm_host"];
-
-// Where the search-first Add flow (add-service-dialog.tsx) hands off TO. It
-// picked a concrete type, so this dialog must open on that type's panel — being
-// asked "AI provider or SCM host?" straight after clicking "Anthropic" is a
-// step BACKWARDS from what was already answered.
-export type AddIntegrationTarget = { s: "ai_connect"; type: AiType } | { s: "scm" };
+// Where the search-first Add flow (add-service-dialog.tsx) hands off TO. That
+// flow is the ONLY way in here — the old "AI provider or SCM host?" category
+// grid is gone, because by the time this dialog opens that question has always
+// been answered by the pick itself. Two landings exist for an AI pick:
+//
+//   - ai_connect: the pick left NO open question (an OpenAI key is an OpenAI
+//     key) — land straight on its connect panel.
+//   - ai_type, preselected: the pick left a REAL question — "Anthropic" still
+//     splits into API key vs Claude subscription, Bedrock still has its four
+//     credential lanes, a subscription still chooses managed vs host login.
+//     The type panel is where those sub-choices live, so it opens with the
+//     picked row selected and the siblings one click away.
+export type AddIntegrationTarget =
+  | { s: "ai_connect"; type: AiType }
+  | { s: "ai_type"; preselect?: AiType }
+  | { s: "scm" };
 
 type Step =
-  | { s: "category" }
   | { s: "scm" }
-  | { s: "ai_type" }
+  | { s: "ai_type"; preselect?: AiType }
   | { s: "ai_connect"; type: AiType; hostCli?: boolean; bedrockLane?: BedrockLane };
 
 export function AddIntegrationDialog({
@@ -69,6 +72,7 @@ export function AddIntegrationDialog({
   existingAiRows,
   reload,
   target,
+  onBackToSearch,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -76,18 +80,18 @@ export function AddIntegrationDialog({
   siteConfig: SiteConfig;
   existingAiRows: IntegrationRow[];
   reload: () => void;
-  /** Set when the search-first flow already picked a type; the coarse category
-   *  panel is then skipped entirely. Back still reaches the sibling types. */
-  target?: AddIntegrationTarget;
+  /** What the search-first flow picked — this dialog always opens ON it. */
+  target: AddIntegrationTarget;
+  /** Backing out of the first panel returns to the search dialog, so the walk
+   *  reads as one flow, not two dialogs trading places. */
+  onBackToSearch: () => void;
 }) {
-  const [step, setStep] = React.useState<Step>({ s: "category" });
-  const [category, setCategory] = React.useState<IntegrationCategory>("ai_provider");
+  const [step, setStep] = React.useState<Step>(target);
   const [localSiteConfig, setLocalSiteConfig] = React.useState<SiteConfig>(siteConfig);
 
   React.useEffect(() => {
     if (open) {
-      setStep(target ?? { s: "category" });
-      setCategory(target?.s === "scm" ? "scm_host" : "ai_provider");
+      setStep(target);
       setLocalSiteConfig(siteConfig);
     }
     // Only reset when the dialog transitions open — not on every siteConfig
@@ -98,7 +102,6 @@ export function AddIntegrationDialog({
 
   if (!open) return null;
 
-  const close = () => onOpenChange(false);
   const finish = () => {
     onOpenChange(false);
     reload();
@@ -111,56 +114,13 @@ export function AddIntegrationDialog({
     setLocalSiteConfig(next);
   };
 
-  const advance = () => setStep(category === "ai_provider" ? { s: "ai_type" } : { s: "scm" });
-
-  if (step.s === "category") {
-    return (
-      <Dialog open onOpenChange={(o) => !o && close()}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Add integration</DialogTitle>
-            <DialogDescription>
-              A named connection to a system outside Wardyn. Nothing here is required — every category
-              is skippable.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
-            {CATEGORIES.map((cat) => {
-              const Icon = CATEGORY_ICON[cat];
-              const meta = CATEGORY_META[cat];
-              return (
-                <OptionCard
-                  key={cat}
-                  selected={category === cat}
-                  onClick={() => setCategory(cat)}
-                  title={
-                    <span className="flex items-center gap-2">
-                      <Icon className="size-4 text-muted-foreground" /> {meta.title}
-                    </span>
-                  }
-                  hint={meta.skipIfLine}
-                />
-              );
-            })}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={close}>
-              Cancel
-            </Button>
-            <Button onClick={advance}>Continue</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
   if (step.s === "scm") {
     return (
       <ScmHandoff
         siteConfig={localSiteConfig}
         reloadSiteConfig={reloadSiteConfig}
         saveSiteConfig={saveSiteConfig}
-        onBack={() => setStep({ s: "category" })}
+        onBack={onBackToSearch}
         onDone={finish}
       />
     );
@@ -170,7 +130,8 @@ export function AddIntegrationDialog({
     return (
       <AiTypePanel
         status={status}
-        onBack={() => setStep({ s: "category" })}
+        initialType={step.preselect}
+        onBack={onBackToSearch}
         onContinue={(type, hostCli, bedrockLane) => setStep({ s: "ai_connect", type, hostCli, bedrockLane })}
       />
     );
@@ -182,7 +143,7 @@ export function AddIntegrationDialog({
       hostCli={step.hostCli}
       bedrockLane={step.bedrockLane}
       existingAiRows={existingAiRows}
-      onBack={() => setStep({ s: "ai_type" })}
+      onBack={() => setStep({ s: "ai_type", preselect: step.type })}
       onDone={finish}
     />
   );
@@ -269,14 +230,17 @@ function ScmHandoff({
 
 function AiTypePanel({
   status,
+  initialType,
   onBack,
   onContinue,
 }: {
   status: SetupStatus;
+  /** The search pick this panel opens on; its siblings stay one click away. */
+  initialType?: AiType;
   onBack: () => void;
   onContinue: (type: AiType, hostCli?: boolean, bedrockLane?: BedrockLane) => void;
 }) {
-  const [selected, setSelected] = React.useState<AiType>("anthropic_api_key");
+  const [selected, setSelected] = React.useState<AiType>(initialType ?? "anthropic_api_key");
   const [subLane, setSubLane] = React.useState<SubscriptionLane>("managed");
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [bedrockLane, setBedrockLane] = React.useState<BedrockLane>("bearer");

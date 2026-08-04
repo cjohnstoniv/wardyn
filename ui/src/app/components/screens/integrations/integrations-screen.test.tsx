@@ -8,6 +8,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { baseStatus } from "../setup/test-fixtures";
+import { AI_TYPES, SUBSCRIPTION_LANE_META } from "../../../lib/integrations";
 import { T } from "../../../lib/integrations";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
@@ -258,5 +259,58 @@ describe("IntegrationsScreen — Tools tab", () => {
 
     expect(await screen.findByText("git")).toBeInTheDocument();
     expect(screen.getByText(T.LAW)).toBeInTheDocument();
+  });
+});
+
+// The seam that actually broke, twice, pinned end to end through the screen:
+// Add → search → pick. The first break sent an Anthropic click to the old
+// category grid ("AI provider or SCM host?"); the second sent it to the API-key
+// connect panel with the Claude subscription nowhere in sight. The law both
+// broke: never re-ask an answered question, never skip a real one.
+describe("IntegrationsScreen — the Add handoff seam", () => {
+  it("Add → Anthropic lands on the type panel with Claude subscription visible, never the category grid", async () => {
+    const user = userEvent.setup();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    renderScreen();
+    await screen.findByText(T.EMPTY_TITLE);
+
+    await user.click(screen.getAllByRole("button", { name: /add integration/i })[0]);
+    await user.type(screen.getByRole("textbox", { name: /search integration types/i }), "anthropic");
+    await user.click(await screen.findByText("Anthropic", { exact: true }));
+
+    // The real question Anthropic leaves open — key or subscription — with the
+    // subscription actually offered. And the dead grid stays dead.
+    expect(await screen.findByText(AI_TYPES.anthropic_subscription.title)).toBeInTheDocument();
+    expect(screen.queryByText(T.CAT_AI)).not.toBeInTheDocument();
+    expect(screen.queryByText(T.CAT_SCM)).not.toBeInTheDocument();
+  });
+
+  it("searching 'subscription' finds the Claude subscription directly and opens preselected on it", async () => {
+    const user = userEvent.setup();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    renderScreen();
+    await screen.findByText(T.EMPTY_TITLE);
+
+    await user.click(screen.getAllByRole("button", { name: /add integration/i })[0]);
+    await user.type(screen.getByRole("textbox", { name: /search integration types/i }), "subscription");
+    await user.click(await screen.findByText("Claude subscription"));
+
+    // Preselection makes the managed-vs-host-login lane choice render — it
+    // only exists on the SELECTED row.
+    expect(await screen.findByText(SUBSCRIPTION_LANE_META.managed.title)).toBeInTheDocument();
+  });
+
+  it("Add → OpenAI skips the type panel outright — no question is left to ask", async () => {
+    const user = userEvent.setup();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    renderScreen();
+    await screen.findByText(T.EMPTY_TITLE);
+
+    await user.click(screen.getAllByRole("button", { name: /add integration/i })[0]);
+    await user.type(screen.getByRole("textbox", { name: /search integration types/i }), "codex");
+    await user.click(await screen.findByText("OpenAI", { exact: true }));
+
+    expect(screen.queryByText(AI_TYPES.anthropic_subscription.title)).not.toBeInTheDocument();
+    expect(screen.queryByText(T.CAT_AI)).not.toBeInTheDocument();
   });
 });

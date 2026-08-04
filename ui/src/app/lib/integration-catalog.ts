@@ -221,6 +221,26 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     chips: ["Claude Code", "Direct API", "Wardyn features"],
     powers: "Claude Code runs, direct API calls a sandbox makes itself, and Wardyn's own AI features.",
   },
+  // OWNER-DIRECTED ADDITION (2026-08-04), not in wardyn-int2.js: the round-H
+  // mock's model section lists only the API-key row, but the subscription Add
+  // flow is real and Page-9-approved (the AI type panel, where its managed vs
+  // host-login choice lives). Without this row a subscription is unfindable
+  // from search — the exact gap the owner hit. Delivery is "varies" because
+  // the lane decides residency: managed capture is proxy-injected, the
+  // host-login lane mounts the resident credential.
+  {
+    id: "claude_subscription",
+    group: "model",
+    label: "Claude subscription",
+    hosts: ["api.anthropic.com"],
+    cred: "lanes",
+    delivery: "varies",
+    addLane: "ai",
+    apiType: "anthropic_subscription",
+    chips: ["Claude Code", "Wardyn features"],
+    powers: "Claude Code runs on your Claude plan — no API key. Captured by a container login, or read from this host's own claude login.",
+    note: "Managed capture is proxy-injected; the host-login lane mounts the resident credential.",
+  },
   {
     id: "openai",
     group: "model",
@@ -823,6 +843,7 @@ const SEARCH_ALIAS: Readonly<Record<string, string>> = {
   ado: "azure devops git tfs",
   gitssh: "git ssh key self-hosted gitea forgejo",
   anthropic: "claude api key model llm",
+  claude_subscription: "claude code subscription pro max plan login oauth setup-token managed anthropic",
   openai: "gpt codex api key model llm",
   bedrock: "aws claude model llm",
   azure: "openai model llm entra",
