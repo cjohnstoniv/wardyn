@@ -49,8 +49,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   token write-only, the login sandbox shut down, runs credentialed proxy-side.
   Nothing launches until Start login. The AWS flow keeps its start-URL gate and
   gains the same what-happens-next above it. The login terminal also stops
-  dwarfing its dialog: the Add panel widens for it and the terminal drops from
-  70vh to a fixed compact height.
+  dwarfing or overflowing its dialog: the one dialog that can host a terminal
+  has its sizing pinned inline with horizontal overflow made structurally
+  impossible, and the terminal drops from 70vh to a fixed compact height. And
+  the login now has a memory — after a capture the credential cell says so and
+  offers "Log in again" (backing out of a RE-login keeps what you had; only a
+  first-ever login's cancel leaves the panel), instead of reverting to a bare
+  "Log in" as though nothing had happened. A capture from an earlier session
+  shows as "Already connected — captured 3d ago", presence and age, never a
+  live check.
 - **One Add flow, search-first.** "Add integration" opens on "type what you're
   connecting" with the categories browsable below it. Picking lands where a
   real question remains and nowhere else: "Anthropic" still splits into API
@@ -268,6 +275,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A local-directory scan failure now says WHY when the daemon can't see the
+  host.** On the compose stack wardynd runs sealed and sees only what
+  `WARDYN_WORKSPACES_ROOT` mounts in — nothing, by default — so "local
+  directory not found on this host" fired for directories that plainly exist,
+  reading as a lie and pointing at no fix. The 422 detail (the wizard's failure
+  headline, verbatim) now distinguishes: outside the configured root (names the
+  root), no root configured in a containerized daemon (names the env var and
+  `make setup`), or a plain host-mode miss. Compose passes the root into the
+  daemon's environment so it can name it.
 - **A credential header could never carry a port-qualified host, and the run
   paid for it.** `CompilePolicy` files a `host:port` allowlist entry under
   `allowedExactPort`, which `AllowedExactHost` never consults — so an injection

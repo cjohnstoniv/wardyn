@@ -13,7 +13,7 @@
 // setup/step-bodies.tsx's ArtifactRepoStep / HostProxyStep, and with it those
 // two step bodies.
 import * as React from "react";
-import { ChevronDown, KeyRound } from "lucide-react";
+import { ChevronDown, KeyRound, ShieldCheck } from "lucide-react";
 import {
   AI_TYPES,
   BEDROCK_LANE_META,
@@ -41,6 +41,7 @@ import { AddSecretDialog } from "../secrets";
 import { HarnessLoginPane } from "../setup/harness-login-pane";
 import { AddProviderPanel1, AddProviderPanel2, type ProviderOption } from "../setup/scm-provider-step";
 import type { Lane } from "../../../lib/scm-provider";
+import { relativeTime } from "../../../lib/format";
 
 // Where the search-first Add flow (add-service-dialog.tsx) hands off TO. That
 // flow is the ONLY way in here — the old "AI provider or SCM host?" category
@@ -143,6 +144,7 @@ export function AddIntegrationDialog({
       hostCli={step.hostCli}
       bedrockLane={step.bedrockLane}
       existingAiRows={existingAiRows}
+      status={status}
       onBack={() => setStep({ s: "ai_type", preselect: step.type })}
       onDone={finish}
     />
@@ -438,6 +440,69 @@ function CapabilityTable({ rows, editor }: { rows: CapabilityRow[]; editor?: boo
   );
 }
 
+// The credential cell for the two container-login lanes (Claude subscription,
+// Bedrock SSO). It owns the whole lifecycle the pane hands back — which the
+// panel previously threw away: after a login it showed a bare "Log in" again,
+// no sign anything had happened, no way to tell a relogin from a first login.
+// Three states: the pane itself (opens on its consent gate), captured-just-now,
+// and already-connected-from-an-earlier-capture (SetupStatus.harness — presence
+// and age, never a live check).
+function LoginCredentialCell({
+  provider,
+  status,
+  onCancelAll,
+}: {
+  provider: "anthropic" | "aws";
+  status: SetupStatus;
+  onCancelAll: () => void;
+}) {
+  const [open, setOpen] = React.useState(true);
+  const [freshCapture, setFreshCapture] = React.useState(false);
+  const existing = status.harness?.find((h) => h.provider === provider && h.captured);
+
+  if (open) {
+    return (
+      <HarnessLoginPane
+        provider={provider}
+        onDone={() => {
+          setOpen(false);
+          setFreshCapture(true);
+        }}
+        // Backing out of a RE-login keeps the credential you already have;
+        // only a first-ever login has nothing to fall back to, so only that
+        // cancel leaves the panel.
+        onCancel={freshCapture || existing ? () => setOpen(false) : onCancelAll}
+      />
+    );
+  }
+
+  const line = freshCapture
+    ? provider === "anthropic"
+      ? "Subscription captured — stored write-only. Runs get it injected proxy-side; a run's sandbox never holds it."
+      : "AWS SSO session captured — stored write-only. Bedrock runs exchange it for short-lived role credentials."
+    : existing
+      ? `Already connected — captured ${existing.captured_at ? relativeTime(existing.captured_at) : "earlier"}${existing.aging ? " · reconnect soon" : ""}.`
+      : null;
+
+  return (
+    <div className="space-y-2">
+      {line ? (
+        <p
+          className={`flex items-start gap-2 text-xs leading-snug ${freshCapture ? "text-success" : "text-muted-foreground"}`}
+          data-testid="login-captured-line"
+        >
+          <ShieldCheck className="mt-px size-3.5 shrink-0" /> <span className="min-w-0">{line}</span>
+        </p>
+      ) : (
+        <p className="text-xs leading-snug text-muted-foreground">Not connected yet.</p>
+      )}
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        <KeyRound className="size-3.5" /> {line ? "Log in again" : "Log in"}
+      </Button>
+    </div>
+  );
+}
+
 const AGENT_SLOT = /Claude Code|Codex/;
 const FEATURES_SLOT = /^Wardyn features/;
 
@@ -446,6 +511,7 @@ function ConnectReviewPanel({
   hostCli,
   bedrockLane,
   existingAiRows,
+  status,
   onBack,
   onDone,
 }: {
@@ -453,6 +519,7 @@ function ConnectReviewPanel({
   hostCli?: boolean;
   bedrockLane?: BedrockLane;
   existingAiRows: IntegrationRow[];
+  status: SetupStatus;
   onBack: () => void;
   onDone: () => void;
 }) {
@@ -474,9 +541,6 @@ function ConnectReviewPanel({
   const replacesFeat = checkedFeat ? defaultHolder(existingAiRows, FEATURES_SLOT) : undefined;
 
   const [secretDialogName, setSecretDialogName] = React.useState<string | null>(null);
-  const [loginOpen, setLoginOpen] = React.useState(
-    (type === "anthropic_subscription" && !hostCli) || (type === "bedrock" && bedrockLane === "sso"),
-  );
 
   const keySecretName =
     type === "anthropic_api_key"
@@ -491,15 +555,21 @@ function ConnectReviewPanel({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onBack()}>
-      {/* max-w-3xl, not xl: this panel can host the container-login terminal,
-          and a terminal needs width more than a form does. */}
-      <DialogContent className="scroll-thin sm:max-w-3xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
-        <DialogHeader>
+      {/* This is the one dialog that can host a terminal, so its sizing is
+          pinned INLINE — beyond any stylesheet cascade — and horizontal
+          overflow is structurally impossible: overflowX hidden here, min-w-0
+          on every grid child so no leaf's min-content can widen them, and the
+          terminal scrolls inside its own container. */}
+      <DialogContent
+        className="scroll-thin"
+        style={{ maxWidth: "min(52rem, calc(100vw - 2rem))", maxHeight: "calc(100vh - 96px)", overflowY: "auto", overflowX: "hidden" }}
+      >
+        <DialogHeader className="min-w-0">
           <DialogTitle>Add integration — {AI_TYPES[type].title}</DialogTitle>
           <DialogDescription>Connect &amp; review — what&apos;s stored, what it powers, where it lives.</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-1">
+        <div className="min-w-0 space-y-4 py-1">
           <Field label="Name" htmlFor="int-name" hint="Yours to change — it's how rows read in lists and pickers.">
             <Input id="int-name" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
@@ -514,21 +584,9 @@ function ConnectReviewPanel({
                 this host — there&apos;s nothing to capture here.
               </p>
             ) : type === "anthropic_subscription" ? (
-              loginOpen ? (
-                <HarnessLoginPane provider="anthropic" onDone={() => setLoginOpen(false)} onCancel={onBack} />
-              ) : (
-                <Button size="sm" variant="outline" onClick={() => setLoginOpen(true)}>
-                  <KeyRound className="size-3.5" /> Log in
-                </Button>
-              )
+              <LoginCredentialCell provider="anthropic" status={status} onCancelAll={onBack} />
             ) : type === "bedrock" && bedrockLane === "sso" ? (
-              loginOpen ? (
-                <HarnessLoginPane provider="aws" onDone={() => setLoginOpen(false)} onCancel={onBack} />
-              ) : (
-                <Button size="sm" variant="outline" onClick={() => setLoginOpen(true)}>
-                  <KeyRound className="size-3.5" /> Log in
-                </Button>
-              )
+              <LoginCredentialCell provider="aws" status={status} onCancelAll={onBack} />
             ) : type === "bedrock" && bedrockLane === "static" ? (
               <div className="space-y-2">
                 {["aws-access-key-id", "aws-secret-access-key", "aws-session-token"].map((n) => (
@@ -580,7 +638,7 @@ function ConnectReviewPanel({
           )}
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="min-w-0 flex flex-col gap-2">
           <p className="text-right text-[0.6875rem] text-muted-foreground">{T.STORE_NOTE}</p>
           <DialogFooter>
             <Button variant="outline" onClick={onBack}>

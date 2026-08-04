@@ -10,8 +10,35 @@ import { baseStatus } from "../setup/test-fixtures";
 import { AI_TYPES, SUBSCRIPTION_LANE_META, T } from "../../../lib/integrations";
 import type { IntegrationRow } from "../../../lib/api/integrations";
 import { AddIntegrationDialog, type AddIntegrationTarget } from "./add-integration-dialog";
+import type { SetupStatus } from "../../../lib/types";
 
-function renderDialog(existingAiRows: IntegrationRow[] = [], target: AddIntegrationTarget = { s: "ai_type" }) {
+// The real pane boots a sandbox and a websocket terminal; here the seam under
+// test is what the PANEL does with the pane's outcome, so the pane is two
+// buttons that fire its callbacks.
+// ScmHandoff re-GETs site-config on mount (stale-copy discipline); give it a
+// resolved fake so the two tests that land on the SCM ladder don't leak an
+// unhandled rejection from jsdom's URL-less fetch.
+vi.mock("../../../lib/api/health", () => ({
+  health: {
+    getSiteConfig: vi.fn().mockResolvedValue({}),
+    putSiteConfig: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock("../setup/harness-login-pane", () => ({
+  HarnessLoginPane: (p: { onDone: () => void; onCancel: () => void }) => (
+    <div data-testid="harness-login-pane">
+      <button onClick={p.onDone}>finish-login</button>
+      <button onClick={p.onCancel}>cancel-login</button>
+    </div>
+  ),
+}));
+
+function renderDialog(
+  existingAiRows: IntegrationRow[] = [],
+  target: AddIntegrationTarget = { s: "ai_type" },
+  status: SetupStatus = baseStatus(),
+) {
   const reload = vi.fn();
   const onOpenChange = vi.fn();
   const onBackToSearch = vi.fn();
@@ -19,7 +46,7 @@ function renderDialog(existingAiRows: IntegrationRow[] = [], target: AddIntegrat
     <AddIntegrationDialog
       open
       onOpenChange={onOpenChange}
-      status={baseStatus()}
+      status={status}
       siteConfig={{}}
       existingAiRows={existingAiRows}
       reload={reload}
@@ -153,5 +180,57 @@ describe("AddIntegrationDialog — Panel 3, Azure's features-only framing", () =
 
     expect(await screen.findByText("Default for Wardyn features")).toBeInTheDocument();
     expect(screen.getByText(/replaces Team API key/)).toBeInTheDocument();
+  });
+});
+
+// The login cell's memory — owner report: after logging in "the screen became
+// this… should show that i've logged in and enable me to relogin if i want
+// but not just say login".
+describe("ConnectReviewPanel — the container-login credential cell", () => {
+  const subTarget: AddIntegrationTarget = { s: "ai_connect", type: "anthropic_subscription" };
+
+  it("after the login finishes: says captured, offers Log in again — never a bare Log in", async () => {
+    renderDialog([], subTarget);
+    expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "finish-login" }));
+
+    expect(screen.queryByTestId("harness-login-pane")).not.toBeInTheDocument();
+    expect(screen.getByTestId("login-captured-line")).toHaveTextContent(/Subscription captured — stored write-only/);
+    expect(screen.getByRole("button", { name: /log in again/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^log in$/i })).not.toBeInTheDocument();
+  });
+
+  it("Log in again reopens the pane, and cancelling a RE-login keeps the captured state", async () => {
+    renderDialog([], subTarget);
+    await userEvent.click(screen.getByRole("button", { name: "finish-login" }));
+    await userEvent.click(screen.getByRole("button", { name: /log in again/i }));
+    expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "cancel-login" }));
+    expect(screen.getByTestId("login-captured-line")).toBeInTheDocument();
+  });
+
+  it("a subscription captured in an earlier session shows as already connected, with its age", () => {
+    const captured = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+    renderDialog([], subTarget, baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: captured }] }));
+    // Server-known capture: no pane auto-open... the pane still opens (the cell
+    // opens on it for a login-lane arrival) — cancel collapses to the state.
+    expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+  });
+
+  it("cancelling with a server-known capture collapses to 'Already connected', not out of the panel", async () => {
+    const captured = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+    renderDialog([], subTarget, baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: captured }] }));
+    await userEvent.click(screen.getByRole("button", { name: "cancel-login" }));
+    expect(screen.getByTestId("login-captured-line")).toHaveTextContent(/Already connected — captured/);
+    expect(screen.getByRole("button", { name: /log in again/i })).toBeInTheDocument();
+  });
+
+  it("cancelling a FIRST-ever login leaves the connect panel (nothing to fall back to)", async () => {
+    renderDialog([], subTarget);
+    await userEvent.click(screen.getByRole("button", { name: "cancel-login" }));
+    // onCancelAll = onBack → the AI type panel is up again.
+    expect(screen.queryByTestId("harness-login-pane")).not.toBeInTheDocument();
+    expect(screen.getByText(AI_TYPES.anthropic_subscription.title)).toBeInTheDocument();
   });
 });
