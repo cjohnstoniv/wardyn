@@ -107,6 +107,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	}
 	items = append(items, setupWorkspaceItems(workspaces)...)
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
+	items = append(items, s.setupWorkspaceIntegrationItems(ctx, workspaces, presentSecrets)...)
 	items = append(items, setupRepoCredentialItems(spec, presentSecrets)...)
 	items = append(items, setupEgressDroppedItems(droppedDomains)...)
 	if it, ok := setupEgressWorkspaceItem(spec, workspaces); ok {
@@ -604,4 +605,126 @@ func tierLabel(cc types.ConfinementClass) string {
 	default:
 		return string(cc)
 	}
+}
+
+// maxWorkspaceIntegrationRows caps the integration rows one checklist renders,
+// mirroring maxWorkspaceSecretRows: past a handful the panel stops informing
+// and starts scrolling.
+const maxWorkspaceIntegrationRows = 6
+
+// setupWorkspaceIntegrationItems surfaces the integrations a referenced
+// workspace's requirements contract names as REQUIRED
+// ("integration:<id>", Level "required").
+//
+// It exists because the fold degrades SILENTLY by design: an
+// `integration:<id>` naming a row that isn't configured opens nothing, grants
+// nothing and audits nothing (applyIntegrationRequirement) — deliberately, so
+// a workspace may state an intent before the integration exists and a missing
+// one never bricks a run. But "opens nothing, says nothing" is the wrong
+// answer at PREFLIGHT, which is exactly where an operator is asking what this
+// run will actually get. A required-but-absent SECRET already gets a row here;
+// a required-but-unconfigured INTEGRATION was the one contract requirement
+// that could quietly resolve to nothing.
+//
+// Kind is "workspace_integration", NOT "secret": the review panel's
+// destructive styling is gated to credential absence (llm_access|secret, see
+// compose-review.tsx's decision-4 comment), and this is config state — the
+// same class as the workspace/backend rows that stay plain and let their amber
+// StatusChip carry the signal. The run still launches either way; what it
+// cannot do is reach the system it was promised.
+//
+// Optional requirements are deliberately not rowed: they only apply when a run
+// enables them, so listing every one an operator declined would bury the
+// required set they actually depend on.
+func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
+	// id -> the workspace that requires it (first wins; the row is about the
+	// integration, and naming one workspace is enough provenance).
+	requiredBy := map[string]string{}
+	var ids []string
+	for _, ws := range workspaces {
+		for _, key := range sortedKeys(ws.Requirements) {
+			typ, id, ok := splitRequirementKey(key)
+			if !ok || typ != "integration" || ws.Requirements[key].Level != "required" {
+				continue
+			}
+			if _, seen := requiredBy[id]; !seen {
+				requiredBy[id] = ws.Name
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(ids)
+
+	var items []SetupItem
+	for i, id := range ids {
+		if i >= maxWorkspaceIntegrationRows {
+			items = append(items, SetupItem{
+				Kind: "workspace_integration", ID: "workspace_integration:more",
+				Label:      "+" + strconv.Itoa(len(ids)-maxWorkspaceIntegrationRows) + " more required integrations",
+				RequiredBy: "the referenced workspaces' requirements",
+				Status:     "unverified",
+				Detail:     "see each workspace's requirements for the full list",
+			})
+			break
+		}
+		items = append(items, integrationSetupItem(id, requiredBy[id], s.resolveIntegrationRefWith(ctx, id), presentSecrets))
+	}
+	return items
+}
+
+// resolveIntegrationRefWith is resolveIntegrationRef's checklist-facing form:
+// the same effective-set lookup (stored ∪ legacy-derived), returning a pointer
+// so "not configured" is representable.
+func (s *Server) resolveIntegrationRefWith(ctx context.Context, id string) *types.Integration {
+	if integ, ok := s.resolveIntegrationRef(ctx, id); ok {
+		return &integ
+	}
+	return nil
+}
+
+// integrationSetupItem states what a run will ACTUALLY get from one required
+// integration. Satisfied means everything the row promises is deliverable;
+// anything less is "missing" with a Detail naming precisely which half is
+// absent, because "the path opens but the credential doesn't ride" and "this
+// doesn't exist at all" are different problems with different fixes.
+func integrationSetupItem(id, wsName string, integ *types.Integration, presentSecrets map[string]bool) SetupItem {
+	it := SetupItem{
+		Kind:       "workspace_integration",
+		ID:         "workspace_integration:" + id,
+		Label:      "Integration " + id,
+		RequiredBy: "workspace " + wsName,
+		Status:     "missing",
+	}
+	switch {
+	case integ == nil:
+		it.Detail = "No integration named " + id + " is configured, so this workspace's requirement opens nothing. Add it under Integrations."
+		return it
+	case integ.Disabled:
+		it.Detail = "Integration " + id + " is turned off, so it opens no hosts and delivers no credential."
+		return it
+	case len(integ.Hosts) == 0:
+		it.Detail = "Integration " + id + " names no hosts, so nothing becomes reachable."
+		return it
+	}
+	hosts := strings.Join(integ.Hosts, ", ")
+	secret := integ.Credentials[types.IntegrationCredentialToken]
+	switch {
+	case integ.Header == "":
+		// No header lane is the HONEST state for a system that authenticates
+		// outside HTTP, not a gap — the path opening is the whole value.
+		it.Status, it.Residency = "satisfied", "none"
+		it.Detail = "Opens " + hosts + " for this run. No credential is delivered — this system authenticates outside HTTP."
+	case secret == "":
+		it.Detail = "Opens " + hosts + ", but names no secret to present in " + integ.Header + "."
+	case !presentSecrets[secret]:
+		it.Detail = "Opens " + hosts + ", but the secret " + secret + " is not in the store, so no credential is presented."
+		it.Fix = &SetupFix{Action: "add_secret", SecretName: secret}
+	default:
+		it.Status, it.Residency = "satisfied", "proxy_injected"
+		it.Detail = "Opens " + hosts + " and presents " + secret + " in " + integ.Header + ". The sandbox never holds it."
+	}
+	return it
 }

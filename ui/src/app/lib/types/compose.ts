@@ -194,6 +194,13 @@ export type SetupItemKind =
   // the destructive treatment (see compose-review.tsx): the run still launches —
   // the workspace just may lack a credential it wants, an amber gap, not a red one.
   | "workspace_secret"
+  // An integration a mounted workspace's requirements contract names as
+  // Required. Config state like `backend`, not a credential absence, so a
+  // "missing" row stays amber: the run still launches, it just cannot reach the
+  // system it was promised. The runtime fold degrades silently by design (a
+  // workspace may name an integration before it exists), which is exactly why
+  // preflight has to say so.
+  | "workspace_integration"
   | (string & {});
 export type SetupItemStatus = "satisfied" | "missing" | "unverified" | (string & {});
 export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string & {});

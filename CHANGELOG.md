@@ -58,6 +58,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   host. NOTHING IS AMBIENT: configuring an integration grants nothing until a
   run is granted it, and an operator with fifty configured and a workspace that
   names none gets a spec byte-identical to having none at all.
+- **Preflight names an integration a workspace requires but nobody
+  configured.** The runtime fold degrades silently on purpose — a workspace may
+  state an intent before the integration exists, and a missing one must never
+  brick a run — but "opens nothing, says nothing" is the wrong answer at the
+  point an operator is asking what a run will actually get. The checklist now
+  carries a row per required integration saying what it opens and whether a
+  credential rides, including the case where the path opens and the credential
+  does not. It stays amber rather than red: this is config state, like the
+  backend row, not the credential absence the destructive styling is reserved
+  for.
 - **A Corporate-network egress redirect can take its token from an
   integration** (`token_integration_ref`, mutually exclusive with
   `token_secret_ref`). The integration owns the system and its credential; the
