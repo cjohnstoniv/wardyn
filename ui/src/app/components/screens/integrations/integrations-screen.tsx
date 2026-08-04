@@ -3,18 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Integrations — Screen A of the approved mock (mockup/wardyn-integrations.js,
-// IntegrationsList). A "row" here is not a backend entity: GET /integrations
-// doesn't exist yet, so lib/api/integrations.ts derives every row from the
-// three endpoints that DO exist, exactly the discipline lib/scm-provider.ts
-// already established for the SCM Provider step. See that file for what each
-// field traces back to, and for the `// W5:` seams a later wave replaces.
+// Integrations — the list. Two kinds of row live here, and the difference is
+// worth knowing before editing:
+//
+//   - The two LEGACY categories (AI providers, SCM hosts) are DERIVED
+//     client-side by lib/api/integrations.ts from the endpoints that predate the
+//     entity, exactly the discipline lib/scm-provider.ts established for the SCM
+//     Provider step. They carry lanes, posture and capability chips a generic
+//     row has no notion of.
+//   - The eight GENERIC categories are real entities the server returns on
+//     SetupStatus.integrations, rendered by GenericSections. Such a row carries
+//     its own hosts, header and secret ref — that is the whole contract, and it
+//     is what lets a system Wardyn has never heard of be added with no backend
+//     change.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { Cable, GitBranch, MoreHorizontal, Network, Plus, RotateCw, Sparkles, Trash2 } from "lucide-react";
 import {
   deriveIntegrations,
   describePosture,
+  genericIntegrations,
   proxyBannerNeeded,
   blastRadius,
   type IntegrationRow,
@@ -46,6 +54,8 @@ import { useOperator } from "../../wardyn/operator-context";
 import { AddSecretDialog } from "../secrets";
 import { canRotateInline, deleteIntegration, primarySecretName } from "./actions";
 import { AddIntegrationDialog } from "./add-integration-dialog";
+import { AddServiceDialog } from "./add-service-dialog";
+import { GenericSections } from "./generic-sections";
 import { ToolsTab } from "./tools-tab";
 
 const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
@@ -92,6 +102,7 @@ export function IntegrationsScreen({
   const [loaded, setLoaded] = React.useState<Loaded | null>(null);
   const [tab, setTab] = React.useState<"integrations" | "tools">("integrations");
   const [addOpen, setAddOpen] = React.useState(false);
+  const [addServiceOpen, setAddServiceOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<IntegrationRow | null>(null);
   // Set after the FIRST load completes — onChanged fires only from here on, so
@@ -140,7 +151,10 @@ export function IntegrationsScreen({
   }
 
   const { status, siteConfig, data } = loaded;
-  const totalRows = data.ai.length + data.scm.length;
+  // The eight generic categories come straight from the server; the two legacy
+  // ones are still derived above. Both count toward "connected anything".
+  const generic = genericIntegrations(status);
+  const totalRows = data.ai.length + data.scm.length + generic.length;
   const showBanner = proxyBannerNeeded(status, siteConfig);
 
   const requestDelete = (row: IntegrationRow) => setToDelete(row);
@@ -155,7 +169,7 @@ export function IntegrationsScreen({
           actions={
             <>
               {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+              <Button onClick={() => setAddServiceOpen(true)} disabled={!operator}>
                 <Plus className="size-4" /> Add integration
               </Button>
             </>
@@ -208,7 +222,7 @@ export function IntegrationsScreen({
                 title={T.EMPTY_TITLE}
                 description={operator ? T.EMPTY_BODY : `${T.EMPTY_BODY} ${OPERATOR_ONLY_REASON}`}
                 action={
-                  <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+                  <Button onClick={() => setAddServiceOpen(true)} disabled={!operator}>
                     <Plus className="size-4" /> Add integration
                   </Button>
                 }
@@ -236,6 +250,7 @@ export function IntegrationsScreen({
                 onReCheck={load}
                 onDelete={requestDelete}
               />
+              <GenericSections rows={generic} operator={operator} onAdd={() => setAddServiceOpen(true)} onChanged={load} />
             </>
           )}
 
@@ -248,6 +263,16 @@ export function IntegrationsScreen({
           <p className="max-w-2xl text-[0.6875rem] leading-snug text-muted-foreground">{T.FOOTNOTE}</p>
         </div>
       )}
+
+      {/* One Add button, routed by what you pick: a model provider or a git host
+          hands off to the established AI/SCM dialog below, everything else is
+          written straight through PUT /integrations. */}
+      <AddServiceDialog
+        open={addServiceOpen}
+        onOpenChange={setAddServiceOpen}
+        onAdded={load}
+        onHandoff={() => setAddOpen(true)}
+      />
 
       <AddIntegrationDialog
         open={addOpen}

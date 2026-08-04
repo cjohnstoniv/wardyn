@@ -156,6 +156,35 @@ export interface SCMPosture {
   netrc: boolean;
 }
 
+/** One capability cell as the server computes it (internal/api.Capability). */
+export interface WireCapability {
+  ID: string;
+  State: "available" | "off" | "needs_setup" | "impossible";
+  Reason?: string;
+  Residency?: string;
+}
+
+// An integration exactly as the server returns it (internal/api.SetupIntegration
+// over types.Integration): where it lives, what credential it takes, how that
+// credential reaches the request, and what it powers. `source` discriminates a
+// row an operator WROTE from one derived read-only from pre-existing config — a
+// derived row keeps working untouched and becomes editable only once adopted.
+export interface WireIntegration {
+  id: string;
+  name?: string;
+  category: string;
+  type: string;
+  disabled?: boolean;
+  hosts?: string[];
+  header?: string;
+  format?: string;
+  docs?: string;
+  credentials?: Record<string, string>;
+  default_for?: string[];
+  source?: "stored" | "legacy" | (string & {});
+  capabilities?: WireCapability[] | null;
+}
+
 export interface SetupStatus {
   ready: boolean;
   checks: SetupCheck[];
@@ -191,6 +220,11 @@ export interface SetupStatus {
   // (setup-token). Present per provider that has a stored token; empty/absent
   // when none. Optional for the same fixture-compat reason as `bedrock`.
   harness?: SetupHarness[];
+  // The EFFECTIVE integration set (stored ∪ legacy-derived) with each row's live
+  // capabilities — the server's own answer, as opposed to the rows
+  // lib/api/integrations.ts derives client-side for the two legacy categories.
+  // Optional for the same fixture-compat reason as `bedrock`.
+  integrations?: WireIntegration[];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —

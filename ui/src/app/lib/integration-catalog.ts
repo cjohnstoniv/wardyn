@@ -22,16 +22,7 @@
 
 /** A category section on the surface. Sections, not filters — ordered by how often they matter. */
 export type IntegrationGroupId =
-  | "model"
-  | "scm"
-  | "pkg"
-  | "registry"
-  | "cloud"
-  | "data"
-  | "mcp"
-  | "work"
-  | "obs"
-  | "other";
+  "model" | "scm" | "pkg" | "registry" | "cloud" | "data" | "mcp" | "work" | "obs" | "other";
 
 /** The wire category (types.IntegrationCategory) a group's types are written as. */
 export type ApiIntegrationCategory =
@@ -125,8 +116,7 @@ export const INTEGRATION_GROUPS: readonly IntegrationGroup[] = [
  * How a credential reaches a request. A STATED FACT per type — it follows from
  * how the system authenticates, so it is never an operator's choice.
  */
-export type DeliveryMode =
-  "proxy" | "brokered" | "resident" | "none" | "notbuilt" | "cp" | "varies";
+export type DeliveryMode = "proxy" | "brokered" | "resident" | "none" | "notbuilt" | "cp" | "varies";
 
 export interface DeliveryMeta {
   label: string;
@@ -173,8 +163,7 @@ export const DELIVERY_META: Record<DeliveryMode, DeliveryMeta> = {
 };
 
 /** The credential SHAPE a type takes, which decides what the Add flow asks for. */
-export type CredShape =
-  "header" | "optional" | "lanes" | "resident" | "notbuilt";
+export type CredShape = "header" | "optional" | "lanes" | "resident" | "notbuilt";
 
 /**
  * Which Add path owns a type:
@@ -230,8 +219,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "ai",
     apiType: "anthropic_api_key",
     chips: ["Claude Code", "Direct API", "Wardyn features"],
-    powers:
-      "Claude Code runs, direct API calls a sandbox makes itself, and Wardyn's own AI features.",
+    powers: "Claude Code runs, direct API calls a sandbox makes itself, and Wardyn's own AI features.",
   },
   {
     id: "openai",
@@ -259,8 +247,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "ai",
     apiType: "bedrock",
     chips: ["Claude Code", "Wardyn features"],
-    powers:
-      "Claude models through your AWS account — four credential lanes, switchable later.",
+    powers: "Claude models through your AWS account — four credential lanes, switchable later.",
     note: "Bearer token is proxy-injected; the SSO, host-profile and access-key lanes are resident.",
   },
   {
@@ -276,8 +263,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "ai",
     apiType: "azure_openai",
     chips: ["Wardyn features"],
-    powers:
-      "Wardyn's own AI features only — neither agent tool can be pointed at an Azure deployment.",
+    powers: "Wardyn's own AI features only — neither agent tool can be pointed at an Azure deployment.",
   },
   {
     id: "compat",
@@ -292,8 +278,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     delivery: "proxy",
     addLane: "unsupported",
     chips: ["Codex CLI", "Direct API"],
-    powers:
-      "Anything that speaks the OpenAI API — Ollama, vLLM, a gateway you run.",
+    powers: "Anything that speaks the OpenAI API — Ollama, vLLM, a gateway you run.",
     note: "New: a self-hosted endpoint has no home in Wardyn today.",
   },
   {
@@ -306,8 +291,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "scm",
     apiType: "github_app",
     chips: ["clone", "push & PRs"],
-    powers:
-      "Clone for every run; push and pull requests when a run's grant asks for write.",
+    powers: "Clone for every run; push and pull requests when a run's grant asks for write.",
     note: "App is brokered — a ≤1h scoped token minted per run. PAT and SSH lanes are resident.",
   },
   {
@@ -484,8 +468,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "dockerhub",
     chips: ["image pull"],
-    powers:
-      "Pulling images, and pulling them without the anonymous rate limit.",
+    powers: "Pulling images, and pulling them without the anonymous rate limit.",
   },
   {
     id: "harbor",
@@ -526,8 +509,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "gar",
     chips: ["image pull"],
-    powers:
-      "Reaching Artifact Registry at all; its token comes from a Google OAuth chain.",
+    powers: "Reaching Artifact Registry at all; its token comes from a Google OAuth chain.",
     why: "AWS, GCP and Azure authenticate by signing the request or through an SDK chain — not with a header the proxy can add. Only the bespoke Bedrock lanes exist today.",
   },
   {
@@ -540,8 +522,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "aws",
     chips: ["bucket reads", "SDK calls"],
-    powers:
-      "Reaching AWS endpoints from a run. SigV4 signing means the proxy can't add a header on the run's behalf.",
+    powers: "Reaching AWS endpoints from a run. SigV4 signing means the proxy can't add a header on the run's behalf.",
     why: "AWS, GCP and Azure authenticate by signing the request or through an SDK chain — not with a header the proxy can add. Only the bespoke Bedrock lanes exist today.",
   },
   {
@@ -632,8 +613,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "s3compat",
     chips: ["object reads"],
-    powers:
-      "Reaching the endpoint from a run; SigV4 signing is the same gap AWS has.",
+    powers: "Reaching the endpoint from a run; SigV4 signing is the same gap AWS has.",
     why: "AWS, GCP and Azure authenticate by signing the request or through an SDK chain — not with a header the proxy can add. Only the bespoke Bedrock lanes exist today.",
   },
   {
@@ -650,8 +630,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "mcp",
     chips: ["agent tools"],
-    powers:
-      "An agent in a run connecting to this MCP server and calling its tools.",
+    powers: "An agent in a run connecting to this MCP server and calling its tools.",
   },
   {
     id: "jira",
@@ -696,8 +675,7 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "ghissues",
     chips: ["read issues", "comment"],
-    powers:
-      "Reading and commenting on issues, separately from the clone credential.",
+    powers: "Reading and commenting on issues, separately from the clone credential.",
   },
   {
     id: "slack",
@@ -803,16 +781,14 @@ export const INTEGRATION_TYPES: readonly IntegrationTypeMeta[] = [
     addLane: "generic",
     apiType: "other",
     chips: [],
-    powers:
-      "Whatever your run does with it — Wardyn opens the path and presents the credential.",
+    powers: "Whatever your run does with it — Wardyn opens the path and presents the credential.",
     lead: "A name, its hosts, an optional credential and how to present it. Anything Wardyn hasn't listed is this — and it works today, because the proxy can inject a header for a host it has never heard of.",
   },
 ];
 
 /** Extra search terms per type — what someone types when they don't know the product name. */
 const SEARCH_ALIAS: Readonly<Record<string, string>> = {
-  compat:
-    "ollama vllm llama.cpp gateway litellm openai-compatible self-hosted local model",
+  compat: "ollama vllm llama.cpp gateway litellm openai-compatible self-hosted local model",
   artifactory: "jfrog maven npm registry feed proxy repo",
   nexus: "sonatype maven npm feed repo",
   npmscope: "npm yarn pnpm registry",
@@ -850,8 +826,7 @@ const SEARCH_ALIAS: Readonly<Record<string, string>> = {
   openai: "gpt codex api key model llm",
   bedrock: "aws claude model llm",
   azure: "openai model llm entra",
-  other:
-    "generic custom service webhook api anything else ci deploy kubernetes terraform",
+  other: "generic custom service webhook api anything else ci deploy kubernetes terraform",
 };
 
 /** Copy canon, verbatim from the mock's T object. Do not paraphrase. */
@@ -889,31 +864,25 @@ export const CATALOG_COPY = {
     "No type matches that. Anything Wardyn hasn't listed is an Other service — a name, its hosts, and an optional credential.",
   TYPE_DESC:
     "Pick the system. Each type arrives with its known hosts and its credential shape already filled in; you can change both.",
-  CONNECT_DESC:
-    "Where it lives, what it takes to get in, how that reaches the request, and what it powers.",
+  CONNECT_DESC: "Where it lives, what it takes to get in, how that reaches the request, and what it powers.",
   HOSTS_HEAD: "Hosts",
-  HOSTS_HINT:
-    "What a run is allowed to reach because this integration exists. One per line — wildcards are fine.",
+  HOSTS_HINT: "What a run is allowed to reach because this integration exists. One per line — wildcards are fine.",
   CRED_HEAD: "Credential",
-  CRED_WRITEONLY:
-    "The store is write-only — the value can be replaced or removed, never read back.",
+  CRED_WRITEONLY: "The store is write-only — the value can be replaced or removed, never read back.",
   DELIV_HEAD: "Delivery",
-  DELIV_STATED:
-    "Stated, not chosen — it follows from how this system authenticates.",
+  DELIV_STATED: "Stated, not chosen — it follows from how this system authenticates.",
   POWERS_HEAD: "What this powers",
   EGRESS_HEAD: "Egress",
   EGRESS_LINE:
     "These hosts become reachable from a run that's granted this integration. Nothing is ambient: a run gets it when its workspace requires it or its grant names it.",
-  DOCS_HINT:
-    "Optional. Where whoever comes after you finds out what this system is.",
+  DOCS_HINT: "Optional. Where whoever comes after you finds out what this system is.",
   OTHER_LEAD:
     "A name, its hosts, an optional credential and how to present it. Anything Wardyn hasn't listed is this — and it works today, because the proxy can inject a header for a host it has never heard of.",
   NO_CRED_LABEL: "No credential — the endpoint is read-public",
   HAS_CRED_LABEL: "Takes a credential",
   CHECK_STORED: "is present in the write-only store.",
   CHECK_WIRED: "The egress proxy is set to add ",
-  CHECK_ALLOW:
-    " on this integration's hosts, so a run granted it can reach them.",
+  CHECK_ALLOW: " on this integration's hosts, so a run granted it can reach them.",
   USED_NONE: "No workspace names this integration yet.",
   RUN_LINE:
     "Nothing is ambient. A run gets this integration when the workspace it runs in requires it, or when its grant names it — never automatically.",
@@ -923,15 +892,10 @@ export const CATALOG_COPY = {
 } as const;
 
 export function integrationGroup(id: IntegrationGroupId): IntegrationGroup {
-  return (
-    INTEGRATION_GROUPS.find((g) => g.id === id) ??
-    INTEGRATION_GROUPS[INTEGRATION_GROUPS.length - 1]
-  );
+  return INTEGRATION_GROUPS.find((g) => g.id === id) ?? INTEGRATION_GROUPS[INTEGRATION_GROUPS.length - 1];
 }
 
-export function integrationTypeById(
-  id: string,
-): IntegrationTypeMeta | undefined {
+export function integrationTypeById(id: string): IntegrationTypeMeta | undefined {
   return INTEGRATION_TYPES.find((t) => t.id === id);
 }
 
@@ -948,13 +912,7 @@ export function searchIntegrationTypes(query: string): IntegrationTypeMeta[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   return INTEGRATION_TYPES.filter((t) => {
-    const hay = [
-      t.label,
-      t.group,
-      integrationGroup(t.group).label,
-      ...t.hosts,
-      SEARCH_ALIAS[t.id] ?? "",
-    ]
+    const hay = [t.label, t.group, integrationGroup(t.group).label, ...t.hosts, SEARCH_ALIAS[t.id] ?? ""]
       .join(" ")
       .toLowerCase();
     return hay.includes(q);

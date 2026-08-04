@@ -22,6 +22,15 @@ import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType } from
 import { deriveProviders, LANE_META, slugHost, type Lane } from "../scm-provider";
 import { relativeTime, clockTime } from "../format";
 import type { SetupStatus, SiteConfig } from "../types";
+import {
+  INTEGRATION_GROUPS,
+  integrationTypeById,
+  type DeliveryMode,
+  type IntegrationGroup,
+  type IntegrationTypeMeta,
+} from "../integration-catalog";
+import type { WireIntegration } from "../types/setup";
+import { wfetch, errText } from "./core";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
 import { secrets as secretsApi } from "./secrets";
@@ -433,5 +442,102 @@ export const integrationsApi = {
       secretsApi.listSecrets(),
     ]);
     return deriveIntegrations(status, siteConfig, secretNames);
+  },
+};
+
+// ─── Generic integrations: the server's own rows ─────────────────────────────
+//
+// Everything above derives the two LEGACY categories (AI providers, SCM hosts)
+// client-side from the endpoints that predate the entity. Everything below is
+// the real thing: the server returns the effective set on SetupStatus, and the
+// eight GENERIC categories — package feeds, container registries, cloud, data
+// stores, MCP, work tracking, observability and the catch-all — have no
+// client-side derivation at all, because there is nothing older to derive them
+// from. A row carries its own hosts, header and secret, which is the whole
+// contract.
+
+/** One generic integration ready to render: the wire row plus its catalog facts. */
+export interface GenericIntegrationRow {
+  wire: WireIntegration;
+  group: IntegrationGroup;
+  /** The catalog entry when the type is one Wardyn knows; absent for a hand-named service. */
+  meta?: IntegrationTypeMeta;
+  name: string;
+  hosts: string[];
+  /** Stated fact, derived from the row itself — never an operator's choice. */
+  delivery: DeliveryMode;
+}
+
+/** category -> group, so a wire row finds the section it belongs in. */
+const GROUP_BY_CATEGORY = new Map(INTEGRATION_GROUPS.map((g) => [g.category as string, g]));
+
+// deliveryForRow states how THIS row's credential reaches a request, from the row
+// itself rather than from its type: a header naming a stored secret is
+// proxy-injected, and anything else honestly has no lane. The catalog's own
+// delivery is the fallback for the types with bespoke lanes (varies, brokered)
+// that a generic row never has.
+function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): DeliveryMode {
+  if (wire.header && wire.credentials?.token) return "proxy";
+  if (meta && meta.delivery !== "proxy") return meta.delivery;
+  return "notbuilt";
+}
+
+// genericIntegrations selects the rows belonging to the eight generic categories
+// and pairs each with its section and catalog entry. Rows in the two legacy
+// categories are left out deliberately — they are rendered from the derivation
+// above, which knows about lanes, posture and capability chips a generic row
+// simply doesn't have.
+export function genericIntegrations(status: SetupStatus): GenericIntegrationRow[] {
+  const rows: GenericIntegrationRow[] = [];
+  for (const wire of status.integrations ?? []) {
+    const group = GROUP_BY_CATEGORY.get(wire.category);
+    if (!group || group.id === "model" || group.id === "scm") continue;
+    const meta = integrationTypeById(wire.type);
+    rows.push({
+      wire,
+      group,
+      meta,
+      name: wire.name || meta?.label || wire.id,
+      hosts: wire.hosts ?? [],
+      delivery: deliveryForRow(wire, meta),
+    });
+  }
+  return rows;
+}
+
+/** Rows grouped into their sections, in the catalog's own order, empties dropped. */
+export function genericSections(rows: GenericIntegrationRow[]): { group: IntegrationGroup; rows: GenericIntegrationRow[] }[] {
+  return INTEGRATION_GROUPS.filter((g) => g.id !== "model" && g.id !== "scm")
+    .map((group) => ({ group, rows: rows.filter((r) => r.group.id === group.id) }))
+    .filter((s) => s.rows.length > 0);
+}
+
+/** The body PUT /integrations/{id} takes — every operator-settable field. */
+export interface IntegrationWrite {
+  name: string;
+  category: string;
+  type: string;
+  hosts?: string[];
+  header?: string;
+  format?: string;
+  docs?: string;
+  credentials?: Record<string, string>;
+}
+
+export const genericIntegrationsApi = {
+  // PUT /api/v1/integrations/{id} — create or REPLACE (no partial merge).
+  async put(id: string, body: IntegrationWrite): Promise<void> {
+    const res = await wfetch(`/integrations/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(await errText(res));
+  },
+  // DELETE /api/v1/integrations/{id}. The operator's stored secrets are NOT
+  // deleted — the surface says so where it offers this.
+  async remove(id: string): Promise<void> {
+    const res = await wfetch(`/integrations/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await errText(res));
   },
 };
