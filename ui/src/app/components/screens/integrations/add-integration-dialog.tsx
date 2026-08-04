@@ -49,6 +49,12 @@ const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
 };
 const CATEGORIES: IntegrationCategory[] = ["ai_provider", "scm_host"];
 
+// Where the search-first Add flow (add-service-dialog.tsx) hands off TO. It
+// picked a concrete type, so this dialog must open on that type's panel — being
+// asked "AI provider or SCM host?" straight after clicking "Anthropic" is a
+// step BACKWARDS from what was already answered.
+export type AddIntegrationTarget = { s: "ai_connect"; type: AiType } | { s: "scm" };
+
 type Step =
   | { s: "category" }
   | { s: "scm" }
@@ -62,6 +68,7 @@ export function AddIntegrationDialog({
   siteConfig,
   existingAiRows,
   reload,
+  target,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -69,6 +76,9 @@ export function AddIntegrationDialog({
   siteConfig: SiteConfig;
   existingAiRows: IntegrationRow[];
   reload: () => void;
+  /** Set when the search-first flow already picked a type; the coarse category
+   *  panel is then skipped entirely. Back still reaches the sibling types. */
+  target?: AddIntegrationTarget;
 }) {
   const [step, setStep] = React.useState<Step>({ s: "category" });
   const [category, setCategory] = React.useState<IntegrationCategory>("ai_provider");
@@ -76,8 +86,8 @@ export function AddIntegrationDialog({
 
   React.useEffect(() => {
     if (open) {
-      setStep({ s: "category" });
-      setCategory("ai_provider");
+      setStep(target ?? { s: "category" });
+      setCategory(target?.s === "scm" ? "scm_host" : "ai_provider");
       setLocalSiteConfig(siteConfig);
     }
     // Only reset when the dialog transitions open — not on every siteConfig

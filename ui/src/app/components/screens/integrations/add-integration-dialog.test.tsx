@@ -9,9 +9,9 @@ import userEvent from "@testing-library/user-event";
 import { baseStatus } from "../setup/test-fixtures";
 import { T } from "../../../lib/integrations";
 import type { IntegrationRow } from "../../../lib/api/integrations";
-import { AddIntegrationDialog } from "./add-integration-dialog";
+import { AddIntegrationDialog, type AddIntegrationTarget } from "./add-integration-dialog";
 
-function renderDialog(existingAiRows: IntegrationRow[] = []) {
+function renderDialog(existingAiRows: IntegrationRow[] = [], target?: AddIntegrationTarget) {
   const reload = vi.fn();
   const onOpenChange = vi.fn();
   render(
@@ -22,10 +22,34 @@ function renderDialog(existingAiRows: IntegrationRow[] = []) {
       siteConfig={{}}
       existingAiRows={existingAiRows}
       reload={reload}
+      target={target}
     />,
   );
   return { reload, onOpenChange };
 }
+
+// The search-first Add flow has already asked what you are connecting. Opening
+// on the coarse "AI provider or SCM host?" card grid after that is a step
+// BACKWARDS, and reads as a second, different dialog.
+describe("AddIntegrationDialog — opening on a handed-off target", () => {
+  it("opens straight on the picked provider, skipping the category question", () => {
+    renderDialog([], { s: "ai_connect", type: "anthropic_api_key" });
+    expect(screen.queryByText("SCM host")).not.toBeInTheDocument();
+    expect(screen.queryByText(T.CAT_AI)).not.toBeInTheDocument();
+    // Back still reaches the sibling AI types, so nothing is unreachable.
+    expect(screen.getByRole("button", { name: /back/i })).toBeInTheDocument();
+  });
+
+  it("opens the SCM ladder directly for a git host", () => {
+    renderDialog([], { s: "scm" });
+    expect(screen.queryByText("AI provider")).not.toBeInTheDocument();
+  });
+
+  it("still opens on the category picker when nothing was picked first", () => {
+    renderDialog();
+    expect(screen.getByText("AI provider")).toBeInTheDocument();
+  });
+});
 
 describe("AddIntegrationDialog — Panel 1 (category)", () => {
   it("shows the two category cards, each with its T.CAT_* skip-if hint", () => {

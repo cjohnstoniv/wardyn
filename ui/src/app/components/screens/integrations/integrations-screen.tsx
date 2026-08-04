@@ -31,7 +31,7 @@ import {
 import { setup as setupApi } from "../../../lib/api/setup";
 import { health } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
-import { T, type IntegrationCategory } from "../../../lib/integrations";
+import { T, type AiType, type IntegrationCategory } from "../../../lib/integrations";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
@@ -53,7 +53,7 @@ import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { AddSecretDialog } from "../secrets";
 import { canRotateInline, deleteIntegration, primarySecretName } from "./actions";
-import { AddIntegrationDialog } from "./add-integration-dialog";
+import { AddIntegrationDialog, type AddIntegrationTarget } from "./add-integration-dialog";
 import { AddServiceDialog } from "./add-service-dialog";
 import { GenericSections } from "./generic-sections";
 import { ToolsTab } from "./tools-tab";
@@ -103,6 +103,7 @@ export function IntegrationsScreen({
   const [tab, setTab] = React.useState<"integrations" | "tools">("integrations");
   const [addOpen, setAddOpen] = React.useState(false);
   const [addServiceOpen, setAddServiceOpen] = React.useState(false);
+  const [addTarget, setAddTarget] = React.useState<AddIntegrationTarget | undefined>();
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<IntegrationRow | null>(null);
   // Set after the FIRST load completes — onChanged fires only from here on, so
@@ -271,10 +272,19 @@ export function IntegrationsScreen({
         open={addServiceOpen}
         onOpenChange={setAddServiceOpen}
         onAdded={load}
-        onHandoff={() => setAddOpen(true)}
+        onHandoff={(t) => {
+          // The catalog's apiType for a model provider IS an AiType
+          // (anthropic -> anthropic_api_key, and so on); every git host routes
+          // to the one SCM ladder. Anything unmapped falls back to the old
+          // dialog's own picker rather than opening on a guess.
+          const aiType = t.addLane === "ai" ? (t.apiType as AiType | undefined) : undefined;
+          setAddTarget(aiType ? { s: "ai_connect", type: aiType } : t.addLane === "scm" ? { s: "scm" } : undefined);
+          setAddOpen(true);
+        }}
       />
 
       <AddIntegrationDialog
+        target={addTarget}
         open={addOpen}
         onOpenChange={setAddOpen}
         status={status}

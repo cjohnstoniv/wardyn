@@ -46,11 +46,24 @@ describe("AddServiceDialog", () => {
     expect(await screen.findByText("JFrog Artifactory")).toBeInTheDocument();
   });
 
-  it("hands a model provider off to the AI flow instead of writing a generic row", async () => {
+  // The handoff must carry the PICKED TYPE. Handing over only the lane sent an
+  // operator who clicked "Anthropic" to a dialog asking "AI provider or SCM
+  // host?" — a step backwards from what they had already answered.
+  it("hands a model provider off to the AI flow carrying the type that was picked", async () => {
     const props = renderDialog();
     await userEvent.type(screen.getByRole("textbox", { name: /search integration types/i }), "anthropic");
     await userEvent.click(await screen.findByText("Anthropic"));
-    expect(props.onHandoff).toHaveBeenCalledWith("ai");
+    expect(props.onHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "anthropic", addLane: "ai", apiType: "anthropic_api_key" }),
+    );
+    expect(genericIntegrationsApi.put).not.toHaveBeenCalled();
+  });
+
+  it("hands a git host off with its own lane, not the generic writer", async () => {
+    const props = renderDialog();
+    await userEvent.type(screen.getByRole("textbox", { name: /search integration types/i }), "gitlab");
+    await userEvent.click(await screen.findByText("GitLab"));
+    expect(props.onHandoff).toHaveBeenCalledWith(expect.objectContaining({ id: "gitlab", addLane: "scm" }));
     expect(genericIntegrationsApi.put).not.toHaveBeenCalled();
   });
 

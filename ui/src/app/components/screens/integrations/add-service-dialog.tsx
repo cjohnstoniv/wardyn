@@ -52,15 +52,17 @@ export function AddServiceDialog({
   onAdded: () => void;
   /** Picking a model provider or a git host hands off to their own established
    *  flow — one Add button on the page, routed by what you picked, rather than
-   *  two buttons an operator has to choose between before they know which. */
-  onHandoff: (lane: "ai" | "scm") => void;
+   *  two buttons an operator has to choose between before they know which. The
+   *  picked TYPE travels with it: that flow must open on the thing that was
+   *  clicked, never re-ask the coarser question this panel already answered. */
+  onHandoff: (target: IntegrationTypeMeta) => void;
 }) {
   const [picked, setPicked] = React.useState<IntegrationTypeMeta | null>(null);
 
   const pick = (t: IntegrationTypeMeta) => {
     if (t.addLane === "ai" || t.addLane === "scm") {
       onOpenChange(false);
-      onHandoff(t.addLane);
+      onHandoff(t);
       return;
     }
     setPicked(t);
