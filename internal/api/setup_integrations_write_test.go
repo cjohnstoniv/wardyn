@@ -112,6 +112,41 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 		{"bedrock half-set region only", "acme-bedrock", `{"category":"ai_provider","type":"bedrock","config":{"region":"us-east-1"}}`},
 		{"bedrock half-set model only", "acme-bedrock", `{"category":"ai_provider","type":"bedrock","config":{"model":"anthropic.claude-3"}}`},
 		{"artifact_mirror unknown ecosystem", "acme-mirror", `{"category":"artifact_mirror","type":"artifact_mirror","config":{"ecosystems":["rubygems"]}}`},
+
+		// Generic categories: the type is an open slug, but still a slug.
+		{"generic type not a slug", "acme-feed", `{"category":"package_feed","type":"Not A Slug!"}`},
+
+		// Hosts — the same shape rule every policy allowlist entry runs.
+		{"host is a URL, not a host", "acme-feed", `{"category":"package_feed","type":"artifactory","hosts":["https://artifactory.corp.internal/repo"]}`},
+		{"host has a mid-label wildcard that can never match", "acme-feed", `{"category":"package_feed","type":"artifactory","hosts":["oidc.*.amazonaws.com"]}`},
+		{"host has a malformed port qualifier", "acme-db", `{"category":"data_store","type":"postgres","hosts":["db.corp.internal:not-a-port"]}`},
+
+		// The wildcard/injection interaction: a credential header is only ever
+		// added to an EXACT allowlist entry, so this row would open the path and
+		// silently never present the credential.
+		{"wildcard host on a header-delivering integration", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["*.corp.internal"],"header":"Authorization","credentials":{"token":"acme-anthropic-key"}}`},
+
+		// Header name — the trust boundary. CRLF is the header-splitting shape.
+		{"header name with CRLF", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"X-Tok\r\nX-Evil: 1","credentials":{"token":"acme-anthropic-key"}}`},
+		{"header name with a bare newline", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"X-Tok\nX-Evil: 1","credentials":{"token":"acme-anthropic-key"}}`},
+		{"header name containing a colon", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization: Bearer","credentials":{"token":"acme-anthropic-key"}}`},
+		{"header name containing a space", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"X Tok","credentials":{"token":"acme-anthropic-key"}}`},
+		{"header set but names no secret", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization"}`},
+
+		// Format — the other half of the same wire value.
+		{"format without a header", "acme-feed", `{"category":"package_feed","type":"artifactory","format":"Bearer %s"}`},
+		{"format with no %s drops the credential silently", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization","format":"Bearer","credentials":{"token":"acme-anthropic-key"}}`},
+		{"format with two verbs", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization","format":"Bearer %s %s","credentials":{"token":"acme-anthropic-key"}}`},
+		{"format with a line break", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["artifactory.corp.internal"],"header":"Authorization","format":"Bearer %s\r\nX-Evil: 1","credentials":{"token":"acme-anthropic-key"}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -124,6 +159,92 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 				t.Errorf("a rejected write must persist nothing; got %+v", fake.cfg.Integrations)
 			}
 		})
+	}
+}
+
+// TestHandlePutIntegration_GenericCategoryRoundTrip is the round-H shape: a
+// category Wardyn has no per-type code for, an open type slug, its own hosts,
+// and a header-delivered credential. Everything the runtime needs rides on the
+// row itself — which is what lets a system Wardyn has never heard of be added
+// with no backend change.
+func TestHandlePutIntegration_GenericCategoryRoundTrip(t *testing.T) {
+	srv, fake, audit := integrationWriteHarness(t, nil)
+	body := `{"name":"Corp Artifactory","category":"package_feed","type":"artifactory",` +
+		`"hosts":["artifactory.corp.internal","nexus.corp.internal:8443"],` +
+		`"header":"Authorization","format":"Bearer %s","docs":"https://wiki.corp.internal/artifactory",` +
+		`"credentials":{"token":"acme-anthropic-key"}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/corp-artifactory", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := fake.cfg.Integrations[0]
+	if len(got.Hosts) != 2 || got.Hosts[0] != "artifactory.corp.internal" {
+		t.Errorf("hosts = %v, want both entries persisted verbatim", got.Hosts)
+	}
+	if got.Header != "Authorization" || got.Format != "Bearer %s" {
+		t.Errorf("delivery = %q/%q, want Authorization/Bearer %%s", got.Header, got.Format)
+	}
+	if got.Docs != "https://wiki.corp.internal/artifactory" {
+		t.Errorf("docs = %q, want the submitted link", got.Docs)
+	}
+
+	// The capability matrix must report the two honest facts, not the empty
+	// list an unrecognized type used to get.
+	var resp SetupIntegration
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := map[string]CapState{"egress_host": CapAvailable, "credential": CapAvailable}
+	if len(resp.Capabilities) != len(want) {
+		t.Fatalf("capabilities = %+v, want %d cells", resp.Capabilities, len(want))
+	}
+	for _, c := range resp.Capabilities {
+		if want[c.ID] != c.State {
+			t.Errorf("capability %s = %q, want %q", c.ID, c.State, want[c.ID])
+		}
+	}
+
+	// The audit event carries the blast radius: what a granted run may reach,
+	// and what header presents the credential there.
+	ev := lastAuditEvent(t, audit.events, "integration.write")
+	var detail struct {
+		Hosts  []string `json:"hosts"`
+		Header string   `json:"header"`
+	}
+	if err := json.Unmarshal(ev.Data, &detail); err != nil {
+		t.Fatalf("decode audit detail: %v", err)
+	}
+	if len(detail.Hosts) != 2 || detail.Header != "Authorization" {
+		t.Errorf("audit detail = %+v, want both hosts and the header name", detail)
+	}
+}
+
+// A generic row with NO header is the honest "egress only" case the two groups
+// that authenticate outside HTTP (cloud providers, data stores) land in: the
+// path opens, and the credential cell states the gap rather than showing an
+// empty field. A wildcard host is fine HERE — nothing is being injected.
+func TestHandlePutIntegration_GenericNoHeaderIsEgressOnly(t *testing.T) {
+	srv, _, _ := integrationWriteHarness(t, nil)
+	body := `{"name":"Prod Postgres","category":"data_store","type":"postgres","hosts":["*.db.corp.internal:5432"]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/prod-postgres", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp SetupIntegration
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	for _, c := range resp.Capabilities {
+		switch c.ID {
+		case "egress_host":
+			if c.State != CapAvailable {
+				t.Errorf("egress_host = %q, want available — opening the path is the value here", c.State)
+			}
+		case "credential":
+			if c.State != CapImpossible || c.Reason != reasonNoDeliveryLane {
+				t.Errorf("credential = %q/%q, want impossible with the stated gap", c.State, c.Reason)
+			}
+		}
 	}
 }
 

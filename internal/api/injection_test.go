@@ -93,6 +93,41 @@ func TestInternalInjection_ResolvesFormattedSecret(t *testing.T) {
 	}
 }
 
+// TestInternalInjection_RejectsSplittingHeaderName pins the SINK guard: the
+// header name a grant authored is written verbatim onto a forwarded request by
+// the proxy, so one carrying CR/LF is a header-splitting shape. Every write
+// boundary rejects it first (validateIntegrationWrite,
+// TestValidatePolicySpec_RejectsSplittingApiKeyHeader) — this covers the grant
+// that was RECORDED or written before those guards existed. Fails closed BEFORE
+// the secret is read, and audits the refusal.
+func TestInternalInjection_RejectsSplittingHeaderName(t *testing.T) {
+	for _, bad := range []string{"X-Tok\r\nX-Evil: 1", "X-Tok\nX-Evil: 1", "Authorization: Bearer", ""} {
+		h, _ := newSecretsHarness(t)
+		token := h.mintRunToken(t, uuid.New())
+		h.broker.minted = broker.Minted{
+			Kind: types.GrantAPIKey,
+			JTI:  "jti-bad-header",
+			Injection: &egress.InjectionRule{
+				Host: "api.anthropic.com", Header: bad,
+				SecretName: "anthropic-api-key", Format: "%s",
+			},
+		}
+		rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("header %q: status = %d, want 403; body=%s", bad, rr.Code, rr.Body.String())
+		}
+		// The secret must not have been read on the way to refusing.
+		for _, ev := range h.audit.events {
+			if ev.Action == "secret.read" && ev.Outcome == "success" {
+				t.Errorf("header %q: secret was read despite the refusal", bad)
+			}
+		}
+		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid-header-name") {
+			t.Errorf("header %q: audit data = %s, want the invalid-header-name reason", bad, ev.Data)
+		}
+	}
+}
+
 func TestInternalInjection_FailsClosed(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	runID := uuid.New()

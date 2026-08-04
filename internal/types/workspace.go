@@ -283,13 +283,44 @@ type Workspace struct {
 }
 
 // IntegrationCategory classifies what an Integration connects Wardyn to.
+//
+// The categories split into two kinds, and the difference decides how strictly
+// a write is validated (validateIntegrationWrite, internal/api):
+//
+//   - TYPED categories (ai_provider, scm_host, and the two legacy-derived
+//     topology ones) drive behavior off Type — capabilitiesFor switches on it,
+//     so their type sets are CLOSED and a new type there is a code change.
+//   - GENERIC categories (everything from IntegrationPackageFeed down) derive
+//     nothing from Type: the row carries its own hosts, header and secret ref,
+//     which is everything the runtime needs. Their Type is an open slug, which
+//     is what keeps the catalog from being a closed enum forever — the "Other
+//     service" type is a first-class outcome, not a fallback.
 type IntegrationCategory string
 
 const (
-	IntegrationAIProvider     IntegrationCategory = "ai_provider"
-	IntegrationSCMHost        IntegrationCategory = "scm_host"
+	IntegrationAIProvider IntegrationCategory = "ai_provider"
+	IntegrationSCMHost    IntegrationCategory = "scm_host"
+	// IntegrationArtifactMirror and IntegrationHostProxy are NETWORK TOPOLOGY,
+	// not integrations in the sense the surface uses the word — a corporate
+	// proxy and a mirror substitution are the path everything travels, not a
+	// named account. They live in the Corporate network step, on the same
+	// screen as the probe that proves them, and the Integrations page no longer
+	// renders either. They survive here because legacyIntegrations still DERIVES
+	// read-only rows in these categories from SiteConfig.EgressRedirects /
+	// UpstreamProxySecretRef; nothing writes one.
 	IntegrationArtifactMirror IntegrationCategory = "artifact_mirror"
 	IntegrationHostProxy      IntegrationCategory = "host_proxy"
+
+	// The generic categories. Sections on the surface, ordered by how often
+	// they matter; each is one answer to "what kind of external system is this".
+	IntegrationPackageFeed       IntegrationCategory = "package_feed"
+	IntegrationContainerRegistry IntegrationCategory = "container_registry"
+	IntegrationCloudProvider     IntegrationCategory = "cloud_provider"
+	IntegrationDataStore         IntegrationCategory = "data_store"
+	IntegrationMCPServer         IntegrationCategory = "mcp_server"
+	IntegrationWorkTracking      IntegrationCategory = "work_tracking"
+	IntegrationObservability     IntegrationCategory = "observability"
+	IntegrationOtherService      IntegrationCategory = "other_service"
 )
 
 // Integration is one operator-configured external connection — an AI
@@ -311,9 +342,41 @@ type Integration struct {
 	// Type is the specific provider within Category, e.g. "anthropic"|"bedrock"
 	// (ai_provider), "github"|"gitlab"|"azure_devops" (scm_host). Open-ended on
 	// purpose — a new provider type is just a new string, no schema change.
+	// Closed per category for the TYPED categories only; see
+	// IntegrationCategory.
 	Type string `json:"type"`
 	// Disabled turns the integration off without deleting its configuration.
 	Disabled bool `json:"disabled,omitempty"`
+	// Hosts is WHERE THE SYSTEM LIVES: the host entries a run granted this
+	// integration may reach. This is the reason a host is on a run's egress
+	// allowlist, instead of being hand-listed in every workspace that needs it.
+	// Entries use the policy allowlist's own syntax (proxy.ValidDomainEntry):
+	// an exact host, a leading-"*." wildcard, either optionally ":port".
+	//
+	// A WILDCARD OPENS THE PATH BUT NEVER CARRIES THE CREDENTIAL: proxy-side
+	// injection requires an EXACT allowlist entry (Policy.AllowedExactHost), so
+	// a secret can never leak to a wildcard-matched host. An integration that
+	// sets Header is therefore rejected at write time if any of its hosts is a
+	// wildcard — the alternative is a row that looks credentialed and silently
+	// isn't.
+	Hosts []string `json:"hosts,omitempty"`
+	// Header is the HTTP field name the egress proxy adds to requests bound for
+	// this integration's hosts, e.g. "Authorization" or "x-api-key". Set
+	// together with a Credentials entry: Wardyn holds the secret, the proxy
+	// presents it, the sandbox never holds it and cannot read it. Empty means
+	// this integration delivers no credential proxy-side — either it takes none
+	// (a read-public endpoint) or its credential lane is one of the bespoke
+	// resident/brokered ones, which are hand-written per provider and cannot be
+	// declared here.
+	Header string `json:"header,omitempty"`
+	// Format wraps the secret into the header VALUE, e.g. "Bearer %s" (the
+	// default when Header is set and Format is not). Exactly one %s, which the
+	// resolved secret substitutes into at injection time — the value itself
+	// never lives here.
+	Format string `json:"format,omitempty"`
+	// Docs optionally points at whatever documents this system, so whoever
+	// comes after the operator who added it can find out what it is.
+	Docs string `json:"docs,omitempty"`
 	// Credentials maps a role (e.g. "api_key", "token") to a store secret NAME —
 	// never a value.
 	Credentials map[string]string `json:"credentials,omitempty"`
@@ -330,3 +393,9 @@ type Integration struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
+
+// IntegrationCredentialToken is the Credentials role a HEADER-DELIVERED
+// credential uses — the generic proxy-injected lane every header-authenticating
+// system shares. The typed categories keep their own role names, which encode a
+// lane the runtime treats differently ("api_key", "pat", "ssh_key").
+const IntegrationCredentialToken = "token"

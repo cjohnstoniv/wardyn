@@ -218,3 +218,37 @@ func TestInjectionRuleFormatNeverWidensEgress(t *testing.T) {
 		}
 	}
 }
+
+// TestValidHeaderName pins the trust boundary an operator-authored injection
+// header crosses: the name is written verbatim onto a forwarded request, so
+// the token charset is what stands between an authored header and a
+// header-splitting one. Rejections matter more than acceptances here.
+func TestValidHeaderName(t *testing.T) {
+	valid := []string{
+		"Authorization", "x-api-key", "DD-API-KEY", "api-key",
+		"X_Custom", "a", "Accept.Encoding", "X~Odd|But`Legal!",
+	}
+	for _, name := range valid {
+		if !ValidHeaderName(name) {
+			t.Errorf("ValidHeaderName(%q) = false, want true", name)
+		}
+	}
+
+	invalid := map[string]string{
+		"":                    "empty",
+		"X-Tok\r\nX-Evil: 1":  "CRLF header splitting",
+		"X-Tok\nX-Evil: 1":    "bare LF",
+		"X-Tok\r":             "trailing CR",
+		"Authorization: Bear": "colon is a separator, not a token char",
+		"X Tok":               "space is a separator",
+		"X-Tok\x00":           "NUL",
+		"X-Tok\t":             "tab",
+		"héader":              "non-ASCII",
+		strings.Repeat("x", maxHeaderNameLen+1): "over the length cap",
+	}
+	for name, why := range invalid {
+		if ValidHeaderName(name) {
+			t.Errorf("ValidHeaderName(%q) = true, want false (%s)", name, why)
+		}
+	}
+}

@@ -232,6 +232,38 @@ func TestValidatePolicySpec_RejectsReservedApiKeySecret(t *testing.T) {
 	}
 }
 
+// TestValidatePolicySpec_RejectsSplittingApiKeyHeader is the header-name half of
+// the same write-time guard: an api_key grant's Header is written verbatim onto
+// a forwarded request by the proxy, so a name carrying CR/LF is a
+// header-splitting shape. Rejected here for stored AND inline specs; the
+// injection sink enforces it again defense-in-depth
+// (TestHandleInternalInjection_RejectsSplittingHeaderName).
+func TestValidatePolicySpec_RejectsSplittingApiKeyHeader(t *testing.T) {
+	spec := func(header string) types.RunPolicySpec {
+		return types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			EligibleGrants: []types.GrantSpec{{
+				Kind: types.GrantAPIKey,
+				Scope: mustJSON(map[string]any{
+					"host": "api.anthropic.com", "secret_name": "anthropic-api-key", "header": header,
+				}),
+			}},
+		}
+	}
+	for _, bad := range []string{"X-Tok\r\nX-Evil: 1", "X-Tok\nX-Evil: 1", "Authorization: Bearer", "X Tok", "X-Tok\x00"} {
+		if err := validatePolicySpec(spec(bad)); err == nil {
+			t.Errorf("validatePolicySpec accepted api_key header %q, want rejection", bad)
+		}
+	}
+	// An omitted header defaults to "Authorization" in injectionRuleFromScope,
+	// so the guard must not fail-closed on the ordinary shape.
+	for _, good := range []string{"", "Authorization", "x-api-key", "DD-API-KEY"} {
+		if err := validatePolicySpec(spec(good)); err != nil {
+			t.Errorf("validatePolicySpec rejected valid api_key header %q: %v", good, err)
+		}
+	}
+}
+
 // TestPolicy_RejectsBedrockResidentSecretAtSinks asserts the three RESIDENT
 // AWS SigV4 credential names read directly by resolveBedrockAuth (aws-access-key-id
 // / aws-secret-access-key / aws-session-token) are sink-reserved — an

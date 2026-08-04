@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -33,6 +35,8 @@ import (
 type integrationView struct {
 	ID, Category, Type string
 	Disabled           bool
+	Header             string            // HTTP field the proxy presents this integration's credential in ("" = no proxy-injected lane)
+	Hosts              []string          // where the system lives; empty means this row opens nothing
 	Credentials        map[string]string // credential-slot name -> stored secret ref (e.g. "api_key" -> "anthropic-api-key")
 	Config             map[string]any    // type-specific knobs (e.g. "lane", "ecosystems")
 	DisabledCaps       []string          // capability IDs the operator turned off individually
@@ -127,9 +131,48 @@ func capabilitiesFor(v integrationView, env capEnv) []Capability {
 		caps = artifactMirrorCaps(v, env)
 	case "host_proxy":
 		caps = []Capability{gatedCap("egress_upstream", v.Credentials["secret"], env, "proxy_injected")}
+	default:
+		// Only a GENERIC category derives a matrix from the row itself. An
+		// unrecognized Type in a TYPED category still reads as "no capabilities"
+		// (nil) — the same honest default an unrecognized harness id gets — since
+		// that row's behavior was supposed to come from code that doesn't exist.
+		if genericIntegrationCategories[types.IntegrationCategory(v.Category)] {
+			caps = genericCaps(v, env)
+		}
 	}
 	applyDisabled(caps, v)
 	return caps
+}
+
+// reasonNoDeliveryLane is the honest line for a generic integration that names
+// no header: Wardyn opens the path, and that is genuinely the difference
+// between a run reaching the system and not reaching it at all — but the
+// resident and brokered lanes are hand-written per provider (see
+// types.Integration.Header), so nothing here can deliver a credential.
+const reasonNoDeliveryLane = "Wardyn can open the path to these hosts. Delivering this system's credential into the sandbox isn't built — the resident and brokered lanes are hand-written per provider."
+
+// genericCaps is the matrix for a GENERIC-category integration (see
+// types.IntegrationCategory): one whose behavior is fully described by its own
+// hosts and header rather than by a type this file switches on. Two honest
+// cells, both derived from the stored row:
+//
+//   - egress_host — the hosts become reachable for a run granted this row.
+//     needs_setup while the row names none: an integration with no hosts opens
+//     nothing, and saying "available" there would be the lie this whole file
+//     exists to avoid.
+//   - credential — proxy-injected when a header names a stored secret;
+//     otherwise the stated "egress only" fact, which is what the two groups
+//     that authenticate outside HTTP (cloud providers, data stores) get.
+func genericCaps(v integrationView, env capEnv) []Capability {
+	reach := Capability{ID: "egress_host", State: CapAvailable}
+	if len(v.Hosts) == 0 {
+		reach = Capability{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."}
+	}
+	cred := Capability{ID: "credential", State: CapImpossible, Reason: reasonNoDeliveryLane}
+	if v.Header != "" {
+		cred = gatedCap("credential", v.Credentials[types.IntegrationCredentialToken], env, "proxy_injected")
+	}
+	return []Capability{reach, cred}
 }
 
 // directKeyCaps builds the shared 4-cell matrix for the two direct-api-key ai
@@ -635,6 +678,88 @@ var knownIntegrationTypes = map[types.IntegrationCategory]map[string]bool{
 	types.IntegrationHostProxy:      {"host_proxy": true},
 }
 
+// genericIntegrationCategories are the categories whose behavior does NOT
+// depend on Type (see types.IntegrationCategory): the row's own hosts, header
+// and secret ref are the whole contract, so Type is an open slug validated for
+// shape only. Enumerating ~35 provider types here would buy nothing but a
+// second hand-kept mirror of the UI catalog to drift against.
+var genericIntegrationCategories = map[types.IntegrationCategory]bool{
+	types.IntegrationPackageFeed:       true,
+	types.IntegrationContainerRegistry: true,
+	types.IntegrationCloudProvider:     true,
+	types.IntegrationDataStore:         true,
+	types.IntegrationMCPServer:         true,
+	types.IntegrationWorkTracking:      true,
+	types.IntegrationObservability:     true,
+	types.IntegrationOtherService:      true,
+}
+
+// maxIntegrationHosts bounds one integration's host list. Well under the
+// per-run 64-host egress cap the requirements surface already warns at, so a
+// single integration can never be the thing that blows it.
+const maxIntegrationHosts = 32
+
+// validateIntegrationHosts checks the host list against the SAME shape rule
+// every operator-supplied policy allowlist entry runs (proxy.ValidDomainEntry
+// — exact host, leading-"*." wildcard, optional ":port"), because these
+// entries become exactly that: allowlist entries on a granted run.
+//
+// hasHeader tightens it: proxy-side injection matches EXACT allowlist entries
+// only (Policy.AllowedExactHost, deliberately, so a credential can never leak
+// to a wildcard-matched host), so a wildcard on a header-delivering integration
+// would open the path and silently never present the credential. Reject it at
+// write time and say why, rather than ship a row that lies about being
+// credentialed.
+func validateIntegrationHosts(hosts []string, hasHeader bool) error {
+	if len(hosts) > maxIntegrationHosts {
+		return fmt.Errorf("hosts: %d entries exceeds the %d-host limit", len(hosts), maxIntegrationHosts)
+	}
+	for i, h := range hosts {
+		if err := proxy.ValidDomainEntry(h); err != nil {
+			return fmt.Errorf("hosts[%d]: %w", i, err)
+		}
+		if hasHeader && strings.HasPrefix(strings.TrimSpace(h), "*.") {
+			return fmt.Errorf("hosts[%d]: %q is a wildcard, and a credential header is only added to an EXACT host — "+
+				"the proxy would open the path but never present the credential. Name the hosts individually, or clear the header", i, h)
+		}
+	}
+	return nil
+}
+
+// validateIntegrationCredentialDelivery checks the proxy-injected delivery
+// triple (Header, Format, and the secret the header carries).
+//
+// Header is a trust boundary: it is written verbatim onto a forwarded request,
+// so it must be a real HTTP field-name token (egress.ValidHeaderName — which
+// excludes CR/LF, ':' and space by construction). Format is the other half of
+// the same wire value: fmt.Sprintf substitutes the secret into it, so it needs
+// exactly one %s (a format with none silently DROPS the credential and sends a
+// bare prefix; one with two renders "%!s(MISSING)") and no CR/LF of its own.
+func validateIntegrationCredentialDelivery(in types.Integration) error {
+	if in.Header == "" {
+		if in.Format != "" {
+			return fmt.Errorf("format: set without a header — nothing presents this value")
+		}
+		return nil
+	}
+	if !egress.ValidHeaderName(in.Header) {
+		return fmt.Errorf("header: %q is not a valid HTTP header name "+
+			"(letters, digits and !#$%%&'*+-.^_`|~ only — no spaces, no ':', no line breaks)", in.Header)
+	}
+	if in.Format != "" {
+		if strings.Count(in.Format, "%s") != 1 || strings.Count(in.Format, "%") != 1 {
+			return fmt.Errorf("format: %q must contain exactly one %%s (where the secret goes) and no other verb", in.Format)
+		}
+		if strings.ContainsAny(in.Format, "\r\n") {
+			return fmt.Errorf("format: must not contain a line break")
+		}
+	}
+	if in.Credentials[types.IntegrationCredentialToken] == "" {
+		return fmt.Errorf("credentials[%s]: a header is set but names no secret to present in it", types.IntegrationCredentialToken)
+	}
+	return nil
+}
+
 // validIntegrationDefaultFor is DefaultFor's closed value set (see
 // types.Integration's doc comment: "agent_runs" and/or "wardyn_features").
 var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_features": true}
@@ -661,17 +786,32 @@ func validateIntegrationWrite(in types.Integration) error {
 	if !secretNameRE.MatchString(in.ID) {
 		return fmt.Errorf("id: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars)", in.ID)
 	}
-	knownTypes, ok := knownIntegrationTypes[in.Category]
-	if !ok {
+	switch knownTypes, typed := knownIntegrationTypes[in.Category]; {
+	case typed:
+		if !knownTypes[in.Type] {
+			return fmt.Errorf("type: %q is not a known %s type", in.Type, in.Category)
+		}
+	case genericIntegrationCategories[in.Category]:
+		// Open type set — shape only (see genericIntegrationCategories).
+		if !secretNameRE.MatchString(in.Type) {
+			return fmt.Errorf("type: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars)", in.Type)
+		}
+	default:
 		return fmt.Errorf("category: unknown %q", in.Category)
-	}
-	if !knownTypes[in.Type] {
-		return fmt.Errorf("type: %q is not a known %s type", in.Type, in.Category)
 	}
 	for role, ref := range in.Credentials {
 		if ref != "" && !validSecretRef(ref) {
 			return fmt.Errorf("credentials[%s]: invalid or reserved secret name %q", role, ref)
 		}
+	}
+	if err := validateIntegrationHosts(in.Hosts, in.Header != ""); err != nil {
+		return err
+	}
+	if err := validateIntegrationCredentialDelivery(in); err != nil {
+		return err
+	}
+	if len(in.Docs) > 2048 {
+		return fmt.Errorf("docs: too long (%d bytes, max 2048)", len(in.Docs))
 	}
 	for _, d := range in.DefaultFor {
 		if !validIntegrationDefaultFor[d] {

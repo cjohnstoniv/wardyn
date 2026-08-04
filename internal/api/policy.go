@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -136,9 +137,19 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	// enforces the same invariant defense-in-depth. A scope that does not
 	// decode as an injection rule is left to the broker/sink — this check is
 	// solely the reserved-name deny.
+	//
+	// The same decode also checks the authored HEADER NAME: it is written
+	// verbatim onto a forwarded request by the proxy, so a name carrying CR/LF
+	// is a header-splitting shape rather than a typo. The injection sink
+	// (handleInternalInjection) enforces this too, defense-in-depth.
 	if g.Kind == types.GrantAPIKey {
-		if rule, derr := injectionRuleFromScope(g.Scope); derr == nil && sinkReservedSecret(rule.SecretName) {
-			return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
+		if rule, derr := injectionRuleFromScope(g.Scope); derr == nil {
+			if sinkReservedSecret(rule.SecretName) {
+				return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
+			}
+			if !egress.ValidHeaderName(rule.Header) {
+				return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
+			}
 		}
 	}
 	// A git_pat grant returns the STORED PAT VALUE to the git credential

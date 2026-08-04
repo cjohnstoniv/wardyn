@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -180,6 +181,21 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 			"secret.read", minted.Injection.SecretName, "failure",
 			mustJSON(map[string]any{"reason": "reserved-secret-name", "grant_id": grantID})))
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
+		return
+	}
+
+	// Defense-in-depth at the SINK, same posture as the reserved-name check
+	// above: the header NAME is operator-authored (an integration's credential
+	// header, an api_key grant scope in a stored/inline/recorded policy) and the
+	// proxy writes it verbatim onto a forwarded request, so a name carrying CR/LF
+	// is a header-splitting shape. Every write boundary rejects it first
+	// (validateIntegrationWrite, validateEligibleGrant); this is the one
+	// chokepoint that also covers a row written before those existed.
+	if !egress.ValidHeaderName(minted.Injection.Header) {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(map[string]any{"reason": "invalid-header-name", "grant_id": grantID})))
+		writeError(w, http.StatusForbidden, "injection header name is not a valid HTTP header")
 		return
 	}
 

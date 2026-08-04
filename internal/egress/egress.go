@@ -92,3 +92,57 @@ type InjectionRule struct {
 	// Format wraps the secret, e.g. "Bearer %s".
 	Format string `json:"format"`
 }
+
+// ValidHeaderName reports whether name is a legal HTTP field-name — an RFC 9110
+// token, capped at maxHeaderNameLen.
+//
+// An InjectionRule's Header is OPERATOR-AUTHORED (an integration's credential
+// header, an api_key grant scope in a stored or inline policy) and is written
+// verbatim onto a forwarded request by the proxy, so it is a trust boundary:
+// a name carrying CR or LF is a header-splitting shape, and one carrying ':'
+// or a space is a malformed field-name the peer may parse as something else.
+// The token charset excludes all of those by construction — this function is
+// the single definition of "a header name Wardyn will put on the wire", run at
+// every write boundary AND at the injection sink so no authoring path can
+// reach the proxy with one.
+//
+// Go's own Transport also rejects an invalid field name at request-write time,
+// which makes this defense-in-depth rather than the only thing standing
+// between an authored header and the wire — but that backstop fails the
+// request at run time, after a run has already started. Rejecting at write
+// time turns the same mistake into a 400 the operator reads immediately.
+func ValidHeaderName(name string) bool {
+	if name == "" || len(name) > maxHeaderNameLen {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if !headerNameByte[name[i]] {
+			return false
+		}
+	}
+	return true
+}
+
+// maxHeaderNameLen bounds an authored header name. No real field name comes
+// close; the cap exists so a pathological value cannot ride into logs, audit
+// details and proxy config.
+const maxHeaderNameLen = 128
+
+// headerNameByte is the RFC 9110 `tchar` set: ALPHA / DIGIT / "!#$%&'*+-.^_`|~".
+// Note what it excludes — CR, LF, NUL, space, ':' and every other separator.
+var headerNameByte = func() [256]bool {
+	var ok [256]bool
+	for _, c := range []byte("!#$%&'*+-.^_`|~") {
+		ok[c] = true
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		ok[c] = true
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		ok[c] = true
+	}
+	for c := byte('A'); c <= 'Z'; c++ {
+		ok[c] = true
+	}
+	return ok
+}()

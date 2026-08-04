@@ -42,6 +42,8 @@ func toIntegrationView(row integrationRow) integrationView {
 		Category:     string(row.Category),
 		Type:         row.Type,
 		Disabled:     row.Disabled,
+		Header:       row.Header,
+		Hosts:        row.Hosts,
 		Credentials:  row.Credentials,
 		Config:       cfg,
 		DisabledCaps: row.DisabledCapabilities,
@@ -137,6 +139,10 @@ type putIntegrationRequest struct {
 	Category             types.IntegrationCategory `json:"category"`
 	Type                 string                    `json:"type"`
 	Disabled             bool                      `json:"disabled,omitempty"`
+	Hosts                []string                  `json:"hosts,omitempty"`
+	Header               string                    `json:"header,omitempty"`
+	Format               string                    `json:"format,omitempty"`
+	Docs                 string                    `json:"docs,omitempty"`
 	Credentials          map[string]string         `json:"credentials,omitempty"`
 	Config               json.RawMessage           `json:"config,omitempty"`
 	DisabledCapabilities []string                  `json:"disabled_capabilities,omitempty"`
@@ -160,7 +166,8 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	}
 	in := types.Integration{
 		ID: id, Name: req.Name, Category: req.Category, Type: req.Type,
-		Disabled: req.Disabled, Credentials: req.Credentials, Config: req.Config,
+		Disabled: req.Disabled, Hosts: req.Hosts, Header: req.Header, Format: req.Format, Docs: req.Docs,
+		Credentials: req.Credentials, Config: req.Config,
 		DisabledCapabilities: req.DisabledCapabilities, DefaultFor: req.DefaultFor,
 	}
 	if err := validateIntegrationWrite(in); err != nil {
@@ -189,9 +196,15 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
+	// hosts and header are the two facts an incident review actually needs from
+	// this event: what a granted run may now REACH, and what credential header
+	// gets presented there. Both are non-secret by construction (Credentials
+	// holds names, never values), and neither is recoverable from a later GET
+	// once the row is edited again.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"integration.write", id, "success", mustJSON(map[string]any{
 			"category": string(in.Category), "type": in.Type, "default_for": in.DefaultFor,
+			"hosts": in.Hosts, "header": in.Header,
 		})))
 	writeJSON(w, http.StatusOK, s.integrationByID(ctx, saved, id))
 }
@@ -216,13 +229,21 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, fmt.Sprintf("no stored integration %q", id))
 		return
 	}
+	gone := sc.Integrations[idx]
 	sc.Integrations = slices.Delete(slices.Clone(sc.Integrations), idx, idx+1)
 	if _, err := s.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
+	// Record what stopped being reachable — after the delete the row is gone,
+	// so this event is the only remaining answer to "what did that one open?".
+	// The operator's underlying secrets are NOT deleted (handleDeleteIntegration's
+	// contract), which is why the credential refs are worth keeping too.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"integration.delete", id, "success", nil))
+		"integration.delete", id, "success", mustJSON(map[string]any{
+			"category": string(gone.Category), "type": gone.Type,
+			"hosts": gone.Hosts, "credentials": gone.Credentials,
+		})))
 	w.WriteHeader(http.StatusNoContent)
 }
 
