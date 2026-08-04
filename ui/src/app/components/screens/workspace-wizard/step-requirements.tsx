@@ -25,7 +25,8 @@ import { JsonBlock, Mono } from "../../wardyn/code-block";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { AddSecretDialog } from "../secrets";
 import { C, RD } from "../../../lib/workspace-copy";
-import type { WorkspaceProfile } from "../../../lib/types";
+import type { SetupStatus, WorkspaceProfile } from "../../../lib/types";
+import { IntegrationRequirements } from "./integration-requirements";
 import {
   requirementKey,
   setRequirementLane,
@@ -117,6 +118,7 @@ export function StepRequirements({
   storedSecretNames,
   onSecretStored,
   powerSource,
+  status,
 }: {
   profile: WorkspaceProfile | null | undefined;
   sources: SourceRow[];
@@ -130,12 +132,23 @@ export function StepRequirements({
   // idiom for "does anything resolve for this image's agent tool" everywhere
   // StepRequirements is reused.
   powerSource: PowerSource;
+  // Live setup status, only for the integrations a workspace may name. Optional
+  // so every existing caller (and every fixture) keeps working — absent simply
+  // means the integrations section doesn't render.
+  status?: SetupStatus | null;
 }) {
   const [addSecretName, setAddSecretName] = React.useState<string | null>(null);
   const [pendingHost, setPendingHost] = React.useState<string | null>(null);
   const [reqTab, setReqTab] = React.useState<ReqTab>("record");
 
   const setLane = (key: string, level: RequirementLevel) => onChange(setRequirementLane(requirements, key, level));
+  // Removing a row is ABSENCE, not a third lane — the contract has exactly two
+  // states plus "not in it at all" (see RequiredOptionalToggle).
+  const clearRequirement = (key: string) => {
+    const next = { ...requirements };
+    delete next[key];
+    onChange(next);
+  };
 
   const secrets = profile?.required_secrets ?? [];
   const localDirPaths = sources.filter((s) => s.type === "local_dir").map((s) => s.path).filter(Boolean);
@@ -234,6 +247,12 @@ export function StepRequirements({
             </TabsContent>
 
             <TabsContent value="egress" className="space-y-2 pt-3" data-testid="group-egress">
+              <IntegrationRequirements
+                status={status ?? null}
+                requirements={requirements}
+                setLane={setLane}
+                clear={clearRequirement}
+              />
               {autoAllowed.length > 0 || !nothingResolves ? (
                 <div className="divide-y divide-border rounded-lg border border-border">
                   {autoAllowed.map((host) => {

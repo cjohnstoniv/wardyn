@@ -38,7 +38,7 @@ import { integrationsApi } from "../../../lib/api/integrations";
 import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
-import type { WorkspaceProfile } from "../../../lib/types";
+import type { SetupStatus, WorkspaceProfile } from "../../../lib/types";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -74,6 +74,9 @@ interface WizardState {
   sources: SourceRow[];
   secretNames: string[];
   githubApp: boolean;
+  // The whole setup status, kept so the requirements step can offer the
+  // integrations a workspace may name. null until the fetch lands.
+  setupStatus: SetupStatus | null;
   harnessAvailable: boolean;
   workspace: WorkspaceWithComposition | null;
   scans: Record<string, SourceScanState>;
@@ -95,6 +98,7 @@ function initialState(): WizardState {
     sources: seedFloor(),
     secretNames: [],
     githubApp: false,
+    setupStatus: null,
     harnessAvailable: false,
     workspace: null,
     scans: {},
@@ -155,7 +159,10 @@ export function WorkspaceWizard({
   React.useEffect(() => {
     let live = true;
     secretsApi.listSecrets().then((names) => live && patch({ secretNames: names })).catch(() => {});
-    setupApi.getSetupStatus().then((status) => live && patch({ githubApp: status.secrets.github_app })).catch(() => {});
+    setupApi
+      .getSetupStatus()
+      .then((status) => live && patch({ githubApp: status.secrets.github_app, setupStatus: status }))
+      .catch(() => {});
     integrationsApi
       .list()
       .then((data) => live && patch({ harnessAvailable: data.ai.some((r) => canDriveClaudeCode(r.aiType)) }))
@@ -392,6 +399,7 @@ export function WorkspaceWizard({
               storedSecretNames={s.secretNames}
               onSecretStored={onSecretStored}
               powerSource={s.powerSource}
+              status={s.setupStatus}
             />
           )}
           {s.step === "done" && (

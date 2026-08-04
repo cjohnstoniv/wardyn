@@ -286,7 +286,7 @@ export function canDriveClaudeCode(aiType: AiType | undefined): boolean {
 }
 
 // ============================ Requirements (step ③) ============================
-export function requirementKey(type: "secret" | "egress" | "write", rest: string): string {
+export function requirementKey(type: "secret" | "egress" | "write" | "integration", rest: string): string {
   return `${type}:${rest}`;
 }
 

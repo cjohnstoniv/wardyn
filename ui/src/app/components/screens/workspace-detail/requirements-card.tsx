@@ -19,7 +19,8 @@ import { Mono } from "../../wardyn/code-block";
 import { getErrorMessage } from "../../../lib/format";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { WorkspaceRequirementsMap, WorkspaceSourceInput } from "../../../lib/api/workspaces";
-import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { SetupStatus, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { setup as setupApi } from "../../../lib/api/setup";
 import { C } from "../../../lib/workspace-copy";
 import { StepRequirements } from "../workspace-wizard/step-requirements";
 import type { PowerSource, SourceRow } from "../workspace-wizard/wizard-types";
@@ -91,6 +92,21 @@ export function RequirementsCard({
   onWorkspaceUpdated: (w: Workspace) => void;
   onSecretStored: (name: string) => void;
 }) {
+  // The integrations a workspace may name (StepRequirements renders the
+  // section). Fetched here rather than threaded from the page: this card is the
+  // only consumer, and a failed fetch simply means the section doesn't render.
+  const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    setupApi
+      .getSetupStatus()
+      .then((st) => live && setSetupStatus(st))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const isContainer = ws.kind === "container";
   const profile = (ws.profile ?? null) as WorkspaceProfile | null;
   const recipe = profile?.setup_commands ?? [];
@@ -141,6 +157,7 @@ export function RequirementsCard({
             storedSecretNames={storedSecretNames}
             onSecretStored={onSecretStored}
             powerSource={resolvedPowerSource(ws, storedSecretNames)}
+            status={setupStatus}
           />
         </>
       )}
