@@ -116,9 +116,9 @@ describe("StepBaseImage — the four base-image cards", () => {
   it("selecting Customize the build discloses the tool checklist (from the detected chips) and the Claude Code CLI toggle when available", () => {
     render(<CardsHarness />);
     fireEvent.click(screen.getByText("Customize the build"));
-    expect(screen.getByText("Go 1.22")).toBeInTheDocument();
-    expect(screen.getByText("Node 20")).toBeInTheDocument();
-    expect(screen.getByText("Claude Code CLI")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Go 1.22" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Node 20" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Claude Code CLI" })).toBeInTheDocument();
   });
 
   it("omits the Claude Code CLI toggle when no integration can drive it", () => {
@@ -151,22 +151,30 @@ describe("StepBaseImage — the four base-image cards", () => {
   });
 });
 
-describe("ImageCards — per-card tool honesty", () => {
-  // The image step answers "can an agent run drive this image"; the powering
-  // integration is chosen on the Requirements step's Reach tab now, so there
-  // is no power row and no peek here — the cards carry the facts instead.
-  it("registry card warns that agent runs can't drive it, only when a harness is configured", () => {
+describe("ImageCards — inventory, never consequence (the tools-not-AI law)", () => {
+  // The image doesn't decide whether or which AI is used — the workspace's
+  // requirements do. A card may NAME a tool it carries; only the requirements
+  // and run surfaces say what a tool is for.
+  it("recommended card's Carries lists claude-code as one tool among tools, exactly when the build will include it", () => {
     render(<CardsHarness harnessAvailable />);
-    expect(screen.getByText(/Claude Code isn't in this image — agent runs can't drive it\./)).toBeInTheDocument();
+    expect(screen.getByText("claude-code")).toBeInTheDocument();
 
     cleanup();
     render(<CardsHarness harnessAvailable={false} />);
-    expect(screen.queryByText(/agent runs can't drive it/)).not.toBeInTheDocument();
+    expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
   });
 
-  it("the BYO card states the no-inject law once expanded", () => {
+  it("the registry card carries no warning — its inventory simply lacks the CLI, and no card states an AI consequence", () => {
+    render(<CardsHarness harnessAvailable />);
+    expect(screen.queryByText(/agent runs can't drive it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code configured/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No AI integration connected/)).not.toBeInTheDocument();
+  });
+
+  it("the BYO card states the no-inject law — tools only, no Claude clause", () => {
     render(<CardsHarness initial={{ choice: "byo" }} />);
     expect(screen.getByText(V2C.IMG_NO_INJECT)).toBeInTheDocument();
+    expect(screen.queryByText(/governed commands only/)).not.toBeInTheDocument();
   });
 
   it("offers no power-source row and no Change… peek — that choice lives on Reach now", () => {

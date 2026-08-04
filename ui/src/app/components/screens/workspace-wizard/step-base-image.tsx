@@ -185,6 +185,27 @@ export function BuildStepsEditor({ value, onChange }: { value: string; onChange:
   );
 }
 
+// The per-card inventory: what this image carries, as the same mono chips the
+// needs card speaks in. Inventory may NAME a tool (claude-code is one tool
+// among tools); only the requirements and run surfaces say what a tool is FOR
+// — the tools-not-AI law this step now follows. Empty = say nothing (the BYO
+// card: Wardyn doesn't inspect, so it makes no inventory claim).
+function Carries({ tools }: { tools: string[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Carries</p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tools.map((t) => (
+          <Chip key={t} tone="neutral" mono>
+            {t}
+          </Chip>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ImageCard({
   id,
   selected,
@@ -248,6 +269,7 @@ export function ImageCards({
           <Chip tone="primary">recommended</Chip>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
+        <Carries tools={[...detectedChips, ...(harnessAvailable ? ["claude-code"] : [])]} />
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.REC_SUB}</p>
       </ImageCard>
 
@@ -256,11 +278,7 @@ export function ImageCards({
           <span className="text-[0.8125rem] font-medium text-foreground">A registry image that fits</span>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
-        {harnessAvailable && (
-          <Chip tone="warning" className="self-start">
-            Claude Code isn&apos;t in this image — agent runs can&apos;t drive it.
-          </Chip>
-        )}
+        <Carries tools={detectedChips} />
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">
           Official language base matching the detected stack.
         </p>
@@ -408,9 +426,6 @@ export function StepBaseImage({
             </Chip>
           ))}
         </div>
-        <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-          {harnessAvailable ? V2C.HARNESS_ON : V2C.HARNESS_OFF}
-        </p>
       </div>
 
       <ImageCards

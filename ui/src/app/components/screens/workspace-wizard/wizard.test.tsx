@@ -99,8 +99,10 @@ describe("WorkspaceWizard — the happy path end to end", () => {
 
     expect(createWorkspaceMock).toHaveBeenCalledTimes(1);
     expect(createWorkspaceMock.mock.calls[0][0]).toMatchObject({ name: "payments" });
-    expect(screen.getByText("Go")).toBeInTheDocument();
-    expect(screen.getByText("pnpm")).toBeInTheDocument();
+    // The detected chips render in the needs card AND as each card's Carries
+    // inventory now (the tools-not-AI round) — presence, not uniqueness.
+    expect(screen.getAllByText("Go").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("pnpm").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
     await screen.findByText(C.S3_BLURB);

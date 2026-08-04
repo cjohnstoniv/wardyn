@@ -21,7 +21,14 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
 
   it("pins V2C entries verbatim", () => {
     expect(V2C.FLOOR).toBe("Every workspace has at least one source; this scratch directory is the floor.");
-    expect(V2C.HARNESS_ON).toBe("Claude Code configured — recommended images include its CLI.");
+    // The tools-not-AI round: the step-② blurb ends at "fit" (no agent-tool
+    // clause), the no-inject law carries no Claude clause, and the two
+    // integration-coupling sentences (HARNESS_ON/OFF) are DELETED — pinned
+    // absent so they can't quietly return.
+    expect(V2C.S2_BLURB.endsWith("suggests images that fit.")).toBe(true);
+    expect(V2C.IMG_NO_INJECT).toBe("Wardyn doesn't inspect the image and never injects tools into it.");
+    expect(V2C).not.toHaveProperty("HARNESS_ON");
+    expect(V2C).not.toHaveProperty("HARNESS_OFF");
   });
 
   it("pins RD entries verbatim", () => {

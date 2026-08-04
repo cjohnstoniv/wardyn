@@ -71,9 +71,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   button is absent rather than disabled, the stated fact points at Reach, and
   terminal recording is promoted — it needs no model. Discovery-first survives
   as one quiet link on an empty Reach tab. The power-source row and its
-  Change… peek left the Base image step, whose cards now carry the tool
-  honesty instead: a registry base warns that agent runs can't drive it, and
-  the BYO card states that Wardyn never inspects an image or injects tools.
+  Change… peek left the Base image step entirely — and that step now speaks
+  ONLY in tool inventory: each suggested image lists what it carries as plain
+  chips, with `claude-code` one tool among tools exactly when the build will
+  include it. No sentence on the image step mentions an AI, states an agent
+  consequence, or narrates integration state ("Claude Code configured…" and
+  the registry card's warning chip are gone — the image doesn't decide whether
+  or which AI is used; the workspace's requirements do). The BYO card keeps
+  the law that earns its place on an image surface: Wardyn doesn't inspect
+  the image and never injects tools into it.
 - **The leak banner earns two tiers.** Seventeen red rows of a repo's own test
   fixtures — fake keys that exist because the tests need key-shaped strings —
   train an operator to ignore the banner, the exact reflex it exists to

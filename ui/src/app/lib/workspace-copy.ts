@@ -72,7 +72,7 @@ export const V2C = {
   S1_BLURB:
     "Name it and add what the sandbox should see. A workspace holds one or more sources — directories from this machine, repos cloned fresh, or scratch space that exists only for the run.",
   S2_BLURB:
-    "The sandbox boots from one base image. Wardyn scans your sources to see what the image needs, and suggests images that fit — including the agent tool it should carry.",
+    "The sandbox boots from one base image. Wardyn scans your sources to see what the image needs, and suggests images that fit.",
   FLOOR: "Every workspace has at least one source; this scratch directory is the floor.",
   EPH_HELP:
     "A scratch directory that exists only inside the sandbox — nothing on this machine is used, and it's discarded when the run ends.",
@@ -83,11 +83,7 @@ export const V2C = {
     "Dockerfile instructions appended after the tools above (RUN, ENV, ARG). They execute during the image build, inside the build sandbox — never on this machine.",
   CRED_WARN:
     "Anything baked into an image can be read by every run that uses it — and by anyone who can pull the image. Prefer a brokered secret instead: it's injected at use time and never stored in the image.",
-  HARNESS_ON: "Claude Code configured — recommended images include its CLI.",
-  IMG_NO_INJECT:
-    "Wardyn doesn't inspect the image and never injects tools into it. If Claude Code isn't already in there, agent runs can't drive it — governed commands only.",
-  HARNESS_OFF:
-    "No AI integration connected — images without agent tools are fine for governed commands. Add one in Integrations for agent runs.",
+  IMG_NO_INJECT: "Wardyn doesn't inspect the image and never injects tools into it.",
 };
 
 // ============================ Run-deltas canon (verbatim) ============================
