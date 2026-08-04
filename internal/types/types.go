@@ -575,7 +575,28 @@ type EgressRedirect struct {
 	To string `json:"to"`
 	// TokenSecretRef optionally names a secret whose value is injected
 	// proxy-side as a Bearer token for To's host (the sandbox never holds it).
+	// Mutually exclusive with TokenIntegrationRef — validateSiteConfig rejects a
+	// row that sets both, since they answer the same question two ways.
 	TokenSecretRef string `json:"token_secret_ref,omitempty"`
+	// TokenIntegrationRef optionally names an Integration (SiteConfig.
+	// Integrations[i].ID) to take this redirect's token FROM, instead of naming
+	// a bare secret in TokenSecretRef.
+	//
+	// This is the seam between the two surfaces, and it exists because a private
+	// registry is genuinely both things: a SYSTEM you authenticate to, and
+	// sometimes the DESTINATION a public endpoint is rerouted to. The rule that
+	// keeps them from duplicating each other — the integration owns the system
+	// and its credential; the redirect owns rerouting a public endpoint to it.
+	// So a redirect points AT the integration rather than restating its secret.
+	//
+	// It carries more than the secret name: the integration's Header and Format
+	// come with it, so a feed that authenticates with something other than
+	// "Authorization: Bearer" finally can (the bare-secret path below is
+	// hardcoded to that shape). A ref naming nothing, a disabled row, or one with
+	// no header credential degrades to redirect-WITHOUT-token, exactly as a
+	// dangling TokenSecretRef already does — a redirect that still reroutes is
+	// more useful than a run that fails.
+	TokenIntegrationRef string `json:"token_integration_ref,omitempty"`
 	// Ecosystem, when set, is one of the six package-manager ecosystems
 	// ("npm"|"pip"|"cargo"|"maven"|"go"|"nuget") this redirect ALSO emits a
 	// per-tool config file for, in addition to the egress substitution and

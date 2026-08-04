@@ -1104,7 +1104,10 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 		} else {
 			ecos[r.Ecosystem] = true
 		}
-		if r.TokenSecretRef != "" {
+		// Either token source counts — a redirect taking its token from an
+		// integration injects one exactly like a bare-secret row does, so
+		// counting only the latter would under-report what is wired.
+		if r.TokenSecretRef != "" || r.TokenIntegrationRef != "" {
 			tokened++
 		}
 	}

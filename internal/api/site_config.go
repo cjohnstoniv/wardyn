@@ -168,6 +168,19 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		if red.TokenSecretRef != "" && !validSecretRef(red.TokenSecretRef) {
 			return fmt.Errorf("egress_redirects[%d]: invalid or reserved token_secret_ref %q", i, red.TokenSecretRef)
 		}
+		if red.TokenIntegrationRef != "" {
+			if red.TokenSecretRef != "" {
+				return fmt.Errorf("egress_redirects[%d]: set token_secret_ref OR token_integration_ref, not both — "+
+					"an integration already names the secret it presents", i)
+			}
+			// Shape only; EXISTENCE is deliberately unchecked, matching the
+			// dangling-token_secret_ref posture this row already has: a redirect
+			// naming an integration that isn't configured yet still reroutes,
+			// and simply carries no token until it is.
+			if !secretNameRE.MatchString(red.TokenIntegrationRef) {
+				return fmt.Errorf("egress_redirects[%d]: invalid token_integration_ref %q", i, red.TokenIntegrationRef)
+			}
+		}
 	}
 	for i, h := range cfg.ScmHosts {
 		if !validSiteHost(h) {

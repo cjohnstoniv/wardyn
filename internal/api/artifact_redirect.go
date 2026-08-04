@@ -101,18 +101,19 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	// without needing a sort.
 	seenHost := map[string]bool{}
 	for _, r := range sc.EgressRedirects {
-		if r.TokenSecretRef == "" {
+		if r.TokenSecretRef == "" && r.TokenIntegrationRef == "" {
 			continue // no token configured for this redirect
 		}
 		host := strings.ToLower(workspacescan.HostOf(r.To))
 		if host == "" || seenHost[host] {
 			continue
 		}
-		if !present[r.TokenSecretRef] {
+		tok, why := s.resolveRedirectToken(ctx, r, present)
+		if why != "" {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
-					"detail": "token_secret_ref not found; redirect applied without token injection",
+					"detail": why + "; redirect applied without token injection",
 				})))
 			continue
 		}
@@ -120,9 +121,9 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		grantID := uuid.New()
 		scope, _ := json.Marshal(map[string]string{
 			"host":        host,
-			"header":      "Authorization",
-			"format":      "Bearer %s",
-			"secret_name": r.TokenSecretRef,
+			"header":      tok.header,
+			"format":      tok.format,
+			"secret_name": tok.secretName,
 		})
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: s.cfg.Now().UTC(),
@@ -142,11 +143,66 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		plan.mitmHosts = append(plan.mitmHosts, host)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 			run.ID.String(), "success", mustJSON(map[string]any{
-				"ecosystem": r.Ecosystem, "host": host, "tls_mitm": true, "secret_name": r.TokenSecretRef,
-				"detail": "corporate mirror/relay token injected proxy-side; sandbox never holds it",
+				"ecosystem": r.Ecosystem, "host": host, "tls_mitm": true, "secret_name": tok.secretName,
+				"integration_id": r.TokenIntegrationRef,
+				"detail":         "corporate mirror/relay token injected proxy-side; sandbox never holds it",
 			})))
 	}
 	return plan
+}
+
+// redirectToken is one redirect's resolved credential presentation: which
+// stored secret, in which header, wrapped how.
+type redirectToken struct{ secretName, header, format string }
+
+// resolveRedirectToken resolves a redirect row's token to the three facts the
+// injection scope needs, from whichever of the two sources the row names.
+// A non-empty `why` means no token — the caller applies the redirect WITHOUT
+// injection and audits that reason.
+//
+// The two sources differ in more than where the secret name comes from:
+//
+//   - TokenSecretRef (the original): a bare secret, presented as
+//     "Authorization: Bearer <secret>" because that is the only shape this path
+//     ever supported. Unchanged, byte-for-byte, for every existing row.
+//   - TokenIntegrationRef (the seam): the INTEGRATION owns the system and its
+//     credential, so its own Header and Format come along with the secret name.
+//     That is the actual gain — a feed authenticating with "X-JFrog-Art-Api" or
+//     a bare token finally works, where the hardcoded Bearer above would have
+//     sent a header the server rejects.
+//
+// Every failure degrades to redirect-only rather than failing the run, matching
+// the dangling-secret posture this path already had: an unconfigured or
+// disabled integration, one that delivers no header credential, or a secret
+// that is not in the store.
+func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirect, present map[string]bool) (redirectToken, string) {
+	if r.TokenIntegrationRef != "" {
+		integ, found := s.resolveIntegrationRef(ctx, r.TokenIntegrationRef)
+		switch {
+		case !found:
+			return redirectToken{}, "token_integration_ref names no configured integration"
+		case integ.Disabled:
+			return redirectToken{}, "the integration named by token_integration_ref is disabled"
+		}
+		secretName := integ.Credentials[types.IntegrationCredentialToken]
+		if integ.Header == "" || secretName == "" {
+			return redirectToken{}, "the integration named by token_integration_ref delivers no header credential"
+		}
+		if !present[secretName] {
+			return redirectToken{}, "the integration's secret is not in the store"
+		}
+		// An empty Format means the raw secret IS the header value; it must be
+		// explicit, since injectionRuleFromScope reads "" as "Bearer %s".
+		format := integ.Format
+		if format == "" {
+			format = "%s"
+		}
+		return redirectToken{secretName: secretName, header: integ.Header, format: format}, ""
+	}
+	if !present[r.TokenSecretRef] {
+		return redirectToken{}, "token_secret_ref not found"
+	}
+	return redirectToken{secretName: r.TokenSecretRef, header: "Authorization", format: "Bearer %s"}, ""
 }
 
 // encodeArtifactConfig serialises the per-tool config files into the

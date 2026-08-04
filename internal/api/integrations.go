@@ -615,6 +615,11 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 // redirects every one of them (Config carries every ecosystem it touches), it
 // just reports one representative credential. Ecosystems is empty for a purely
 // network-only host (no package-manager config file, egress substitution only).
+//
+// A redirect whose token comes from an INTEGRATION (TokenIntegrationRef) reports
+// no representative credential here, deliberately: that integration is already
+// its own row on the surface, carrying the credential, and resolving it a second
+// time into this derived topology row would show the same credential twice.
 func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrationRow {
 	type hostEcos struct {
 		ecosystems []string
