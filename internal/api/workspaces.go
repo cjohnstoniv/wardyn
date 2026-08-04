@@ -494,7 +494,7 @@ func splitRequirementKey(key string) (typ, rest string, ok bool) {
 		return "", "", false
 	}
 	switch typ {
-	case "secret", "egress", "write":
+	case "secret", "egress", "write", "integration":
 		return typ, rest, true
 	default:
 		return "", "", false
@@ -517,12 +517,22 @@ func splitRequirementKey(key string) (typ, rest string, ok bool) {
 func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) string {
 	typ, rest, ok := splitRequirementKey(key)
 	if !ok {
-		return fmt.Sprintf("invalid requirement key %q (want secret:<name>, egress:<host>, or write:<path>)", key)
+		return fmt.Sprintf("invalid requirement key %q (want secret:<name>, egress:<host>, write:<path>, or integration:<id>)", key)
 	}
 	switch typ {
 	case "secret":
 		if !validSecretRef(rest) {
 			return fmt.Sprintf("requirement %q: invalid secret name", key)
+		}
+	case "integration":
+		// Shape only — an integration id is the same identifier secret names
+		// use (validateIntegrationWrite). EXISTENCE is deliberately not checked
+		// here: a workspace may name an integration before it is configured
+		// (the contract states an intent), and the fold degrades silently to
+		// "opens nothing" until the row exists. Requiring it to exist first
+		// would make ordering the operator's problem.
+		if !secretNameRE.MatchString(rest) {
+			return fmt.Sprintf("requirement %q: invalid integration id", key)
 		}
 	case "egress":
 		if !workspacescan.ValidApprovedHost(rest) {

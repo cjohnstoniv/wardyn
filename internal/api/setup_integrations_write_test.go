@@ -126,6 +126,12 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 		// silently never present the credential.
 		{"wildcard host on a header-delivering integration", "acme-feed",
 			`{"category":"package_feed","type":"artifactory","hosts":["*.corp.internal"],"header":"Authorization","credentials":{"token":"acme-anthropic-key"}}`},
+		// Worse than the wildcard: a port-qualified entry compiles into
+		// allowedExactPort, which AllowedExactHost never consults, so
+		// buildInjector REFUSES the rule and the proxy fails closed at startup —
+		// a bricked run rather than a merely uncredentialed one.
+		{"port-qualified host on a header-delivering integration", "acme-feed",
+			`{"category":"package_feed","type":"artifactory","hosts":["nexus.corp.internal:8443"],"header":"Authorization","credentials":{"token":"acme-anthropic-key"}}`},
 
 		// Header name — the trust boundary. CRLF is the header-splitting shape.
 		{"header name with CRLF", "acme-feed",
@@ -170,7 +176,7 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 func TestHandlePutIntegration_GenericCategoryRoundTrip(t *testing.T) {
 	srv, fake, audit := integrationWriteHarness(t, nil)
 	body := `{"name":"Corp Artifactory","category":"package_feed","type":"artifactory",` +
-		`"hosts":["artifactory.corp.internal","nexus.corp.internal:8443"],` +
+		`"hosts":["artifactory.corp.internal","nexus.corp.internal"],` +
 		`"header":"Authorization","format":"Bearer %s","docs":"https://wiki.corp.internal/artifactory",` +
 		`"credentials":{"token":"acme-anthropic-key"}}`
 	w := do(t, srv, http.MethodPut, "/api/v1/integrations/corp-artifactory", adminToken, body)

@@ -1,0 +1,121 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// integrations_run.go is the RUNTIME half of the Integrations entity
+// (integrations.go holds the entity, its validation and its capability
+// matrix): what actually happens to a run's resolved policy when it is granted
+// one.
+//
+// Two things happen, and nothing else:
+//
+//   - the integration's hosts join the run's egress allowlist — this is the
+//     whole reason a host is reachable, instead of being hand-listed in every
+//     workspace that needs it;
+//   - a header-delivering integration authors ONE api_key grant per host,
+//     through the SAME generic proxy-side injection mechanism every other
+//     api_key grant already rides. Wardyn holds the secret, the proxy adds the
+//     header, the sandbox never holds it.
+//
+// NOTHING IS AMBIENT. A run gets an integration when the workspace it runs in
+// requires it (a `integration:<id>` requirement key, folded by
+// applyWorkspaceRequirements) — never because the integration merely exists.
+// An operator with fifty integrations configured and a workspace that names
+// none of them gets a run whose spec is byte-identical to having none at all.
+
+// applyIntegrationRequirement folds ONE granted integration into the run's
+// resolved spec, returning the audit entry for the caller to record (launch
+// does; preflight discards — see requirementAuditEntry).
+//
+// ok=false — no grant, no mutation, nothing audited — when the row cannot
+// deliver anything: the id names nothing in the EFFECTIVE set (stored ∪
+// legacy-derived, so a well-known derived id works with no adoption step), or
+// the row is Disabled, or it names no hosts. Those are silent degrades, matching
+// applyRequiredSecretGrant's own rule that a missing/unusable credential must
+// never brick a run — the Integrations surface is where the gap is visible.
+//
+// Hosts are unioned UNCONDITIONALLY, even under AllowAllEgress: the proxy's
+// credential injector requires an explicit exact allowlist entry and
+// deliberately does not honor allow-all (Policy.AllowedExactHost), so without
+// the entry an allow-all run would reach the host and still fail to present the
+// credential.
+func (s *Server) applyIntegrationRequirement(ctx context.Context, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
+	integ, found := s.resolveIntegrationRef(ctx, id)
+	if !found || integ.Disabled || len(integ.Hosts) == 0 {
+		return requirementAuditEntry{}, false
+	}
+	addedEgress := unionAllowedDomains(spec, integ.Hosts)
+	grantedHosts := s.applyIntegrationInjection(ctx, spec, integ)
+	if len(addedEgress) == 0 && len(grantedHosts) == 0 {
+		// Everything this row offers was already on the spec (another workspace
+		// requires the same integration, or a policy already listed its hosts).
+		// Nothing changed, so there is nothing to audit.
+		return requirementAuditEntry{}, false
+	}
+	return requirementAuditEntry{
+		action: "run.workspace.requirement.integration", target: id,
+		data: map[string]any{
+			"integration_id": id, "added_domains": addedEgress,
+			"injected_hosts": grantedHosts, "header": integ.Header,
+		},
+	}, true
+}
+
+// applyIntegrationInjection authors the proxy-side credential grants for a
+// header-delivering integration — one api_key grant per host — and returns the
+// hosts it granted. Empty (and a no-op) for a row that delivers no header, which
+// is the honest state for every system that authenticates outside HTTP.
+//
+// Three guards, each of which drops a host rather than failing the run:
+//
+//   - the named secret must actually be stored. An injection grant with no
+//     resolvable secret fails the proxy CLOSED at startup, so an unstored one
+//     would brick every run granted this integration; degrade to
+//     path-open-no-credential instead, exactly as applyRequiredSecretGrant does.
+//   - the host must be a BARE EXACT host. buildInjector refuses a rule whose
+//     host misses the exact allowlist (a wildcard or ":port" entry compiles
+//     elsewhere), and that refusal is a hard startup failure. The write path
+//     already rejects this combination (validateIntegrationHosts); this covers a
+//     row stored before that guard, or a legacy-derived one.
+//   - a host that already has an api_key grant is left alone — never
+//     double-grant a host, mirroring ensureLLMGrant/applyWorkspaceCreds.
+//     Whichever caller proposed it first wins.
+func (s *Server) applyIntegrationInjection(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration) []string {
+	secretName := integ.Credentials[types.IntegrationCredentialToken]
+	if integ.Header == "" || secretName == "" || !s.secretPresent(ctx, secretName) {
+		return nil
+	}
+	// An empty Format means the raw secret IS the header value — the right
+	// default for a custom credential header (x-api-key, DD-API-KEY). It must be
+	// written explicitly: injectionRuleFromScope defaults an empty format to
+	// "Bearer %s", which would be wrong for every one of those.
+	format := integ.Format
+	if format == "" {
+		format = "%s"
+	}
+	var granted []string
+	for _, host := range integ.Hosts {
+		if !bareExactHost(host) {
+			continue
+		}
+		if _, exists := apiKeyGrantForHost(spec, host); exists {
+			continue
+		}
+		scope, _ := json.Marshal(map[string]string{
+			"host": host, "header": integ.Header, "format": format, "secret_name": secretName,
+		})
+		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
+		})
+		granted = append(granted, host)
+	}
+	return granted
+}

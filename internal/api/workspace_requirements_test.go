@@ -34,9 +34,10 @@ func TestSplitRequirementKey(t *testing.T) {
 		{"write:/home/user/repo", "write", "/home/user/repo", true},
 		// FIRST colon only — a write path may itself legally contain a colon.
 		{"write:/home/user:repo", "write", "/home/user:repo", true},
+		{"integration:corp-artifactory", "integration", "corp-artifactory", true},
 		{"nocolon", "", "", false},
 		{"secret:", "", "", false},   // empty suffix
-		{"unknown:x", "", "", false}, // not one of the three known tokens
+		{"unknown:x", "", "", false}, // not one of the four known tokens
 		{"", "", "", false},
 	}
 	for _, c := range cases {
@@ -60,6 +61,14 @@ func TestValidateWorkspaceRequirement(t *testing.T) {
 		{"valid egress", "egress:api.github.com", valid, true},
 		{"valid write", "write:/home/user/repo", valid, true},
 		{"valid optional/scan_seeded", "secret:acme-key", types.WorkspaceRequirement{Level: "optional", Provenance: "scan_seeded"}, true},
+		{"valid integration", "integration:corp-artifactory", valid, true},
+		// Deliberately accepted: a workspace may name an integration BEFORE it is
+		// configured. The contract states an intent; the fold degrades to
+		// "opens nothing" until the row exists, so ordering isn't the
+		// operator's problem.
+		{"integration that does not exist yet", "integration:not-configured-yet", valid, true},
+		{"bad integration id (uppercase+space)", "integration:Corp Artifactory", valid, false},
+		{"bad integration id (empty)", "integration:", valid, false},
 		{"bad key grammar", "nocolon", valid, false},
 		{"unknown type prefix", "env:FOO", valid, false},
 		{"bad secret name (uppercase+space)", "secret:BAD NAME", valid, false},

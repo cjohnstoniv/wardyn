@@ -704,12 +704,23 @@ const maxIntegrationHosts = 32
 // — exact host, leading-"*." wildcard, optional ":port"), because these
 // entries become exactly that: allowlist entries on a granted run.
 //
-// hasHeader tightens it: proxy-side injection matches EXACT allowlist entries
-// only (Policy.AllowedExactHost, deliberately, so a credential can never leak
-// to a wildcard-matched host), so a wildcard on a header-delivering integration
-// would open the path and silently never present the credential. Reject it at
-// write time and say why, rather than ship a row that lies about being
-// credentialed.
+// hasHeader tightens it to BARE EXACT hosts, for one reason with two shapes:
+// proxy-side injection resolves through Policy.AllowedExactHost, which consults
+// the exact-host set ONLY — deliberately, so a credential can never leak to a
+// wildcard-matched host. A wildcard entry ("*.corp.internal") and a
+// port-qualified one ("nexus.corp.internal:8443") both compile into other sets
+// (allowedWild / allowedExactPort), so neither can ever satisfy it:
+//
+//   - the wildcard row would open the path and silently never present the
+//     credential — a row that looks credentialed and isn't;
+//   - the port-qualified row is worse than silent. buildInjector REFUSES an
+//     injection rule whose host misses the exact allowlist, and that refusal is
+//     a hard proxy startup failure, so the run is bricked rather than
+//     under-credentialed.
+//
+// Reject both at write time and say why. A host with a port or a wildcard is
+// still perfectly fine on an integration that delivers no header — which is
+// exactly the shape the data stores take (db.corp.internal:5432, egress only).
 func validateIntegrationHosts(hosts []string, hasHeader bool) error {
 	if len(hosts) > maxIntegrationHosts {
 		return fmt.Errorf("hosts: %d entries exceeds the %d-host limit", len(hosts), maxIntegrationHosts)
@@ -718,12 +729,22 @@ func validateIntegrationHosts(hosts []string, hasHeader bool) error {
 		if err := proxy.ValidDomainEntry(h); err != nil {
 			return fmt.Errorf("hosts[%d]: %w", i, err)
 		}
-		if hasHeader && strings.HasPrefix(strings.TrimSpace(h), "*.") {
-			return fmt.Errorf("hosts[%d]: %q is a wildcard, and a credential header is only added to an EXACT host — "+
-				"the proxy would open the path but never present the credential. Name the hosts individually, or clear the header", i, h)
+		if hasHeader && !bareExactHost(h) {
+			return fmt.Errorf("hosts[%d]: %q is a wildcard or carries a port, and a credential header is only ever added to a "+
+				"bare exact host — the proxy cannot present the credential there. Name the host without a wildcard or port, "+
+				"or clear the header", i, h)
 		}
 	}
 	return nil
+}
+
+// bareExactHost reports whether h is a plain hostname the proxy's credential
+// injector can actually match (Policy.AllowedExactHost) — no leading-"*."
+// wildcard, no ":port" qualifier. Assumes h already passed
+// proxy.ValidDomainEntry, so the only shapes left to exclude are those two.
+func bareExactHost(h string) bool {
+	h = strings.TrimSpace(h)
+	return !strings.HasPrefix(h, "*.") && !strings.Contains(h, ":")
 }
 
 // validateIntegrationCredentialDelivery checks the proxy-injected delivery

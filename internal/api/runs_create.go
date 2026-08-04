@@ -292,6 +292,11 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 //     defaults read-only unless enabled — and the per-run ReadOnly selection
 //     may only NARROW that default (force read-only), never widen it (see
 //     applyWriteNarrowing).
+//   - integration:<id>  Unions the named integration's hosts into
+//     AllowedDomains and, when it delivers a credential by header, authors the
+//     proxy-side injection grant for each of them
+//     (applyIntegrationRequirement, integrations_run.go). This is the ONLY way
+//     an integration reaches a run: configuring one grants nothing by itself.
 //
 // A workspace with NO requirements declared is architecturally a no-op here —
 // the loop below only ever visits declared keys — which is exactly what keeps
@@ -347,6 +352,20 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 					continue
 				}
 				if ev, ok := s.applyRequiredSecretGrant(ctx, spec, agent, name); ok {
+					events = append(events, ev)
+				}
+			case "integration":
+				if !enabled {
+					continue
+				}
+				// No provenance gate, unlike secret: above. A scan can propose a
+				// HOST it saw, but it cannot propose an INTEGRATION — an
+				// integration id only exists because an operator configured that
+				// row and then named it here, so naming one is already a direct
+				// operator act. The trust boundary that rule protects (untrusted
+				// repo content routing the operator's stored secrets into a run)
+				// has no path here.
+				if ev, ok := s.applyIntegrationRequirement(ctx, spec, name); ok {
 					events = append(events, ev)
 				}
 			case "write":
