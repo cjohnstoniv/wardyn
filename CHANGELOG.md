@@ -39,6 +39,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (DNS, refused, TLS, timeout) rather than collapsing into "failed". These are
   the only test buttons in the product; everywhere else Wardyn still refuses to
   claim it verified a credential it cannot dial.
+- **The container login announces itself before anything launches.** Picking a
+  Claude subscription used to jump: a dialog, then suddenly a terminal, then
+  suddenly a browser tab asking you to authenticate — nothing said what was
+  coming or what would be asked of you. The login pane now opens on a numbered
+  "what happens next": a sandboxed login run and a terminal, a claude.ai tab to
+  sign in and approve (an active subscription is the stated requirement), where
+  a hand-you-a-code login gets pasted, and what is stored at the end — the
+  token write-only, the login sandbox shut down, runs credentialed proxy-side.
+  Nothing launches until Start login. The AWS flow keeps its start-URL gate and
+  gains the same what-happens-next above it. The login terminal also stops
+  dwarfing its dialog: the Add panel widens for it and the terminal drops from
+  70vh to a fixed compact height.
 - **One Add flow, search-first.** "Add integration" opens on "type what you're
   connecting" with the categories browsable below it. Picking lands where a
   real question remains and nowhere else: "Anthropic" still splits into API

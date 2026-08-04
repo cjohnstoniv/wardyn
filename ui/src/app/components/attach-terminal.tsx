@@ -95,6 +95,11 @@ export interface AttachTerminalProps {
    * normal interactive terminal (width follows the visible size).
    */
   ptyCols?: number;
+  /** Non-fullscreen height (any Tailwind h-* class). The default suits a page
+   *  panel; an embed inside a dialog wants something far shorter — a 70vh
+   *  terminal inside an already-height-capped dialog is what blew the Add
+   *  integration login out of its frame. */
+  heightClass?: string;
 }
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -115,7 +120,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]" },
   ref,
 ) {
   // Attach is operator-only on BOTH lanes it can take — the ticket mint
@@ -489,7 +494,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     <div
       className={cn(
         "flex flex-col overflow-hidden border border-border bg-[#0d1117]",
-        fullscreen ? "fixed inset-0 z-[100] rounded-none" : "h-[70vh] rounded-lg",
+        fullscreen ? "fixed inset-0 z-[100] rounded-none" : `${heightClass} rounded-lg`,
       )}
     >
       {/* title bar */}

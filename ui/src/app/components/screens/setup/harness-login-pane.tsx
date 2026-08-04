@@ -28,7 +28,11 @@ import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 
-type Phase = "prompt" | "launching" | "attached" | "saving" | "done" | "error";
+// "intro" is the consent gate: nothing launches until the operator has read
+// what is about to happen and clicked Start. The pane used to fire on mount —
+// a dialog, then suddenly a terminal, then suddenly a browser auth prompt,
+// with nothing saying what was coming or what would be asked of you.
+type Phase = "intro" | "prompt" | "launching" | "attached" | "saving" | "done" | "error";
 
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
@@ -55,6 +59,10 @@ type LoginFlow = {
   // is boot config; the start URL is per-organization and asked for here). The
   // server seeds both into the sandbox before the command is auto-typed.
   needsStartUrl?: boolean;
+  // "What happens next" — shown BEFORE anything launches (the intro phase, or
+  // above the AWS start-URL form), so the terminal and the browser auth prompt
+  // arrive announced. Includes what is required of the operator.
+  expects: React.ReactNode[];
 };
 
 // isLikelyStartUrl mirrors the server's validateSSOStartURL (harnesscred.go) so
@@ -71,6 +79,22 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
     cmd: "claude setup-token",
     title: "Connect a Claude subscription via container login",
     capture: "scrape",
+    expects: [
+      <>
+        A sandboxed login run starts and a terminal appears here, running{" "}
+        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code>. Nothing on this
+        machine is touched.
+      </>,
+      <>
+        A new tab opens on claude.ai asking you to sign in and approve — you&apos;ll need an active Claude
+        subscription. If the pop-up is blocked, a click-through link appears here instead.
+      </>,
+      <>Some logins hand you a code: paste it into the field under the terminal, not the terminal itself.</>,
+      <>
+        The token it prints is captured, stored write-only, and the login sandbox is shut down. Runs get it injected
+        proxy-side — a run&apos;s sandbox never holds it.
+      </>,
+    ],
     blurb: (
       <>
         Wardyn opened a sandbox and is running{" "}
@@ -91,6 +115,21 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
     capture: "helper",
     doneMarker: "wardyn: aws sso credential captured",
     needsStartUrl: true,
+    expects: [
+      <>
+        A sandboxed login run starts and a terminal appears here, running{" "}
+        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">aws sso login</code> — with no credential to
+        start from.
+      </>,
+      <>
+        A browser tab opens the AWS verification page: enter the short code the terminal shows and approve with your
+        IAM Identity Center login.
+      </>,
+      <>
+        The SSO session is uploaded from inside the sandbox and stored write-only; Bedrock runs exchange it for
+        short-lived role credentials.
+      </>,
+    ],
     blurb: (
       <>
         Give Wardyn your organization&apos;s AWS access portal URL and it opens a sandbox, writes a minimal{" "}
@@ -174,6 +213,23 @@ export function extractDeviceVerificationUrl(s: string): string | null {
   return best;
 }
 
+// The numbered "what happens next" — the consent gate's content. Each flow
+// states its own steps and what is required of the operator.
+function ExpectList({ items }: { items: React.ReactNode[] }) {
+  return (
+    <ol className="space-y-1.5">
+      {items.map((item, i) => (
+        <li key={i} className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
+          <span className="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[0.625rem] text-foreground">
+            {i + 1}
+          </span>
+          <span className="min-w-0">{item}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function HarnessLoginPane({
   provider = "anthropic",
   onDone,
@@ -186,7 +242,7 @@ export function HarnessLoginPane({
   onCancel: () => void;
 }) {
   const flow = loginFlow(provider);
-  const [phase, setPhase] = React.useState<Phase>(flow.needsStartUrl ? "prompt" : "launching");
+  const [phase, setPhase] = React.useState<Phase>(flow.needsStartUrl ? "prompt" : "intro");
   const [startUrl, setStartUrl] = React.useState("");
   const [runId, setRunId] = React.useState<string | null>(null);
   const [token, setToken] = React.useState("");
@@ -201,7 +257,6 @@ export function HarnessLoginPane({
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
-  const launchedRef = React.useRef(false);
 
   const launch = React.useCallback(async () => {
     setPhase("launching");
@@ -220,16 +275,6 @@ export function HarnessLoginPane({
       setPhase("error");
     }
   }, [provider, startUrl]);
-
-  // Opening the pane IS the intent to connect — launch the sandbox immediately,
-  // once. (The ref guards React's dev-mode double-invoke of mount effects.)
-  // EXCEPT when the flow needs a start URL first (AWS): there is nothing to
-  // launch until the operator supplies it, so the pane waits on the form below.
-  React.useEffect(() => {
-    if (flow.needsStartUrl || launchedRef.current) return;
-    launchedRef.current = true;
-    void launch();
-  }, [launch, flow.needsStartUrl]);
 
   // saveToken stores a token (explicit from auto-capture, or the pasted field).
   const saveToken = React.useCallback(
@@ -316,7 +361,10 @@ export function HarnessLoginPane({
         <KeyRound className="size-4 shrink-0 text-primary" />
         <span className="text-sm font-medium text-foreground">{flow.title}</span>
       </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb}</p>
+      {/* The blurb narrates the RUNNING flow ("Wardyn opened a sandbox…") — on
+          the intro nothing has launched yet, so the expectations list speaks
+          instead and the blurb would be a lie. */}
+      {phase !== "intro" && <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb}</p>}
 
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
@@ -325,8 +373,23 @@ export function HarnessLoginPane({
         </div>
       )}
 
+      {phase === "intro" && (
+        <div className="space-y-3" data-testid="login-intro">
+          <ExpectList items={flow.expects} />
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => void launch()}>
+              <KeyRound className="size-3.5" /> Start login
+            </Button>
+            <Button size="sm" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
       {phase === "prompt" && (
         <div className="space-y-2">
+          <ExpectList items={flow.expects} />
           <label className="block text-xs font-medium text-foreground" htmlFor="harness-login-start-url">
             Your AWS access portal URL
           </label>
@@ -396,6 +459,7 @@ export function HarnessLoginPane({
             autoRun={flow.cmd}
             onOutput={handleOutput}
             ptyCols={LOGIN_PTY_COLS}
+            heightClass="h-96"
           />
           {autoCaptured ? (
             <p className="flex items-center gap-2 text-xs text-success" data-testid="auto-capture-note">

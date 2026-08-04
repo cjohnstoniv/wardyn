@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
-import { extractSetupToken, extractAuthUrl, isLikelyStartUrl } from "./harness-login-pane";
+import * as React from "react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { extractSetupToken, extractAuthUrl, isLikelyStartUrl, HarnessLoginPane } from "./harness-login-pane";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -84,5 +87,64 @@ describe("isLikelyStartUrl", () => {
     expect(isLikelyStartUrl("http://my-org.awsapps.com/start")).toBe(false);
     // A newline would smuggle extra keys into the generated ~/.aws/config INI.
     expect(isLikelyStartUrl("https://\nsso_region = x")).toBe(false);
+  });
+});
+
+// ─── the consent gate ────────────────────────────────────────────────────────
+//
+// Owner report, verbatim: "you see a dialog then all of a sudden terminal then
+// all of a sudden a popup asking for auth. We should alert the user before
+// this happens what to expect and what's required from them." The pane used to
+// launch the sandbox ON MOUNT; now nothing happens until Start login.
+
+vi.mock("../../attach-terminal", () => ({
+  AttachTerminal: React.forwardRef(function FakeTerminal() {
+    return <div data-testid="fake-terminal" />;
+  }),
+}));
+const harnessLoginMock = vi.fn();
+vi.mock("../../../lib/api/harness-auth", () => ({
+  harnessAuth: {
+    harnessLogin: (...a: unknown[]) => harnessLoginMock(...a),
+    harnessCredentialPaste: vi.fn(),
+  },
+}));
+vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn() } }));
+
+describe("HarnessLoginPane — the consent gate", () => {
+  beforeEach(() => harnessLoginMock.mockReset().mockResolvedValue("run-123"));
+
+  it("launches NOTHING on mount: the intro says what to expect and what's required", () => {
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByTestId("login-intro")).toBeInTheDocument();
+    // The two things the jump never announced: a terminal, and a browser auth.
+    expect(screen.getByText(/a terminal appears here/i)).toBeInTheDocument();
+    expect(screen.getByText(/sign in and approve/i)).toBeInTheDocument();
+    // The requirement on the operator, stated up front.
+    expect(screen.getByText(/active Claude subscription/i)).toBeInTheDocument();
+    expect(harnessLoginMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
+  });
+
+  it("Start login is the ONLY thing that launches the sandbox", async () => {
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    expect(harnessLoginMock).toHaveBeenCalledWith("anthropic", "");
+    expect(await screen.findByTestId("fake-terminal")).toBeInTheDocument();
+  });
+
+  it("Cancel on the intro backs out without ever launching", async () => {
+    const onCancel = vi.fn();
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={onCancel} />);
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(onCancel).toHaveBeenCalled();
+    expect(harnessLoginMock).not.toHaveBeenCalled();
+  });
+
+  it("AWS keeps its start-URL gate and now states what happens next above it", () => {
+    render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
+    expect(screen.getByText(/verification page/i)).toBeInTheDocument();
+    expect(harnessLoginMock).not.toHaveBeenCalled();
   });
 });

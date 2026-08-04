@@ -491,7 +491,9 @@ function ConnectReviewPanel({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onBack()}>
-      <DialogContent className="scroll-thin sm:max-w-2xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
+      {/* max-w-3xl, not xl: this panel can host the container-login terminal,
+          and a terminal needs width more than a form does. */}
+      <DialogContent className="scroll-thin sm:max-w-3xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
         <DialogHeader>
           <DialogTitle>Add integration — {AI_TYPES[type].title}</DialogTitle>
           <DialogDescription>Connect &amp; review — what&apos;s stored, what it powers, where it lives.</DialogDescription>
