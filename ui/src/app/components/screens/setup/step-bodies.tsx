@@ -4,31 +4,18 @@
  */
 
 // Step bodies still standing after the 13->9 Getting Started collapse:
-// Workspaces, Review, and Launch. HostProxyStep/ArtifactRepoStep also live
-// here, but are no longer top-level Getting-started steps — the Integrations
-// "Add integration" dialog embeds them directly for its mirror/proxy
-// categories (see integrations/add-integration-dialog.tsx) instead of
-// forking a second copy of their real SiteConfig writes. Mostly
-// presentational — the caller owns SetupStatus AND the fetched SiteConfig
-// (the sole owner — see the two corporate-baseline steps below), while each
-// body owns its OWN writes (setSecret, scanWorkspace, and the SiteConfig
-// saves via the caller-owned saveSiteConfig).
+// Workspaces, Review, and Launch. HostProxyStep/ArtifactRepoStep used to live
+// here too, kept alive only by the Integrations "Add integration" dialog's
+// mirror/proxy hand-off; that hand-off retired when Corporate network became
+// the single home for both, and the two bodies went with it. Mostly
+// presentational — the caller owns SetupStatus AND the fetched SiteConfig (the
+// sole owner — see useSiteConfigStep below), while each body owns its OWN
+// writes (scanWorkspace, and the SiteConfig saves via the caller-owned
+// saveSiteConfig).
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AlertTriangle,
-  Info,
-  Loader2,
-  Plus,
-  CircleCheck,
-  Rocket,
-  RotateCw,
-  ScanSearch,
-  X,
-} from "lucide-react";
+import { AlertTriangle, Info, Loader2, Plus, CircleCheck, Rocket, RotateCw, ScanSearch } from "lucide-react";
 import type {
-  HostProxyDetection,
-  HostProxySetting,
   SetupCheck,
   SetupCheckStatus,
   SetupStatus,
@@ -43,9 +30,6 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { Field } from "../new-run/step-shell";
 import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import type { Readiness } from "../onboarding/intro";
@@ -53,10 +37,9 @@ import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
 import { isUsable } from "../../../lib/workspace-status";
-import { ECOSYSTEM_PUBLIC_URL } from "../../../lib/integrations";
 
 // ------------------------------------------------------------
-// Shared check-row primitives (Review + the corporate steps).
+// Shared check-row primitives (Review + the Corporate network step).
 // ------------------------------------------------------------
 const CHECK_ICON: Record<SetupCheckStatus, React.ElementType> = {
   ok: CircleCheck,
@@ -194,27 +177,19 @@ export function ReviewStep({
 }
 
 // ------------------------------------------------------------
-// Corporate-baseline steps (Host Proxy / SCM Provider / Artifact Redirect) — all
-// three are non-blocking (see internal/api/setup.go): host_proxy/artifact_repo
-// are "info"-tier; scm_provider is graded ok/warn/info against the safest-path
-// ladder but never gates readiness. They just let an operator wire the
-// SiteConfig baseline every run inherits.
+// SiteConfig writes: ONE owner (V2). The orchestrator (setup-screen) holds the
+// fetched doc and hands each writing surface `siteConfig` + `reloadSiteConfig`/
+// `saveSiteConfig`. HARD CONSTRAINT: every such surface re-GETs
+// (reloadSiteConfig()) in a mount effect, on entry, before any save — the PUT is
+// a shallow merge on top of the CURRENT doc, so a copy that's gone stale since
+// another step's edit would otherwise silently clobber it.
 //
-// SiteConfig has ONE owner (V2): the orchestrator (setup-screen) holds the
-// fetched doc and hands each step `siteConfig` + `reloadSiteConfig`/
-// `saveSiteConfig`. HARD CONSTRAINT: each step below re-GETs (reloadSiteConfig())
-// in a mount effect, on step entry, before any save — the PUT is a shallow merge
-// on top of the CURRENT doc, so a copy that's gone stale since another step's
-// edit would otherwise silently clobber it.
+// This hook is that prologue plus a `saving` flag around each write, written
+// once so the guard can't drift between copies. `mutate` PUTs via the
+// orchestrator-owned saveSiteConfig and reports failure as `false` — toasting
+// the server's reason — so a caller only commits its own local field state once
+// the PUT actually lands. Sole remaining consumer: corp-network-step.tsx.
 // ------------------------------------------------------------
-const ARTIFACT_ECOSYSTEMS = ["npm", "pip", "cargo", "maven", "go", "nuget"] as const;
-
-// The three site-config steps (host proxy / SCM host / artifact repo) share one
-// prologue: the V2 clobber guard (re-GET on step entry) and a `saving` flag
-// around each write. Written once here so the hard-constraint guard can't drift
-// between copies. `mutate` PUTs via the orchestrator-owned saveSiteConfig and
-// reports failure as `false` — toasting the server's reason — so each step only
-// commits its own local field state once the PUT actually lands.
 export function useSiteConfigStep(
   reloadSiteConfig: () => Promise<void>,
   saveSiteConfig: (next: SiteConfig) => Promise<void>,
@@ -240,352 +215,6 @@ export function useSiteConfigStep(
   };
 
   return { saving, mutate };
-}
-
-export function RecheckButton({ onRecheck, rechecking }: { onRecheck: () => void; rechecking: boolean }) {
-  return (
-    <Button variant="ghost" size="sm" onClick={onRecheck} disabled={rechecking}>
-      {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-      {BTN.recheck}
-    </Button>
-  );
-}
-
-function ProxySettingRow({ label, setting }: { label: string; setting: HostProxySetting }) {
-  return (
-    <div className="flex items-center justify-between gap-2 text-xs">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <div className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate font-mono text-foreground" title={setting.value}>
-          {setting.value}
-        </span>
-        <Chip tone="neutral">{setting.source}</Chip>
-        {setting.has_credentials && <Chip tone="warning">creds</Chip>}
-      </div>
-    </div>
-  );
-}
-
-// HostProxyBreakdown renders the masked host-proxy detection (setup.go host_proxy)
-// read-only. Values are already masked server-side. Renders nothing when the host
-// has no proxy configured (Go always emits at least {has_credentials:false}).
-function HostProxyBreakdown({ detection: d }: { detection: HostProxyDetection }) {
-  const envRows: Array<[string, HostProxySetting | undefined]> = [
-    ["HTTP_PROXY", d.http_proxy],
-    ["HTTPS_PROXY", d.https_proxy],
-    ["ALL_PROXY", d.all_proxy],
-    ["NO_PROXY", d.no_proxy],
-  ];
-  const git = d.git_proxy;
-  const hasEnv = envRows.some(([, s]) => s);
-  const hasGit = !!(git && (git.http_proxy || git.https_proxy));
-  const hasTools = !!(d.tool_configs && d.tool_configs.length);
-  const hasMismatch = !!(d.env_case_mismatch && d.env_case_mismatch.length);
-  if (!hasEnv && !hasGit && !hasTools && !d.pac && !hasMismatch) return null;
-
-  return (
-    <div className="space-y-2 rounded-lg border border-border p-3">
-      <p className="text-xs font-medium text-foreground">Detected on this host</p>
-      {hasEnv &&
-        envRows.map(([label, s]) => (s ? <ProxySettingRow key={label} label={label} setting={s} /> : null))}
-      {hasGit && (
-        <>
-          {git!.http_proxy && <ProxySettingRow label="git http.proxy" setting={git!.http_proxy} />}
-          {git!.https_proxy && <ProxySettingRow label="git https.proxy" setting={git!.https_proxy} />}
-        </>
-      )}
-      {hasTools &&
-        d.tool_configs!.map((t, i) => (
-          <div key={`${t.tool}-${i}`} className="flex items-center justify-between gap-2 text-xs">
-            <span className="shrink-0 text-muted-foreground">
-              {t.tool} <span className="opacity-70">({t.path})</span>
-            </span>
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate font-mono text-foreground" title={t.setting.value}>
-                {t.setting.value}
-              </span>
-              <Chip tone="neutral">{t.setting.source}</Chip>
-            </div>
-          </div>
-        ))}
-      {d.pac && (
-        <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="shrink-0 text-muted-foreground">PAC / auto-config</span>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate font-mono text-foreground" title={d.pac.url}>
-              {d.pac.url}
-            </span>
-            <Chip tone="warning" title="Never fetched — resolve the effective proxy manually">
-              manual
-            </Chip>
-          </div>
-        </div>
-      )}
-      {hasMismatch && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">Env case mismatch:</span>
-          {d.env_case_mismatch!.map((m) => (
-            <Chip key={m} tone="warning" mono>
-              {m}
-            </Chip>
-          ))}
-        </div>
-      )}
-      {d.has_credentials && (
-        <div className="flex items-start gap-1.5 text-xs">
-          <Chip tone="warning">credential</Chip>
-          <span className="text-muted-foreground">
-            A proxy credential was detected (masked above). Store it as a secret below so runs can
-            authenticate to the upstream proxy.
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function HostProxyStep({
-  status,
-  siteConfig,
-  reloadSiteConfig,
-  saveSiteConfig,
-  onAddSecret,
-  onRecheck,
-  rechecking,
-}: {
-  status: SetupStatus;
-  siteConfig: SiteConfig | null;
-  reloadSiteConfig: () => Promise<void>;
-  saveSiteConfig: (next: SiteConfig) => Promise<void>;
-  onAddSecret: (name: string) => void;
-  onRecheck: () => void;
-  rechecking: boolean;
-}) {
-  const check = status.checks.find((c) => c.id === "host_proxy");
-  // PUT /site-config — operator-only (see http.go).
-  const operator = useOperator();
-  const [secretName, setSecretName] = React.useState("");
-  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
-
-  // Seed the field from the freshest doc exactly once (matches the old
-  // useSiteConfig onLoad callback) — never again, so a later reload (e.g. from
-  // the header Re-check button) can't stomp an in-progress edit.
-  const seededRef = React.useRef(false);
-  React.useEffect(() => {
-    if (!seededRef.current && siteConfig) {
-      setSecretName(siteConfig.upstream_proxy_secret_ref ?? "");
-      seededRef.current = true;
-    }
-  }, [siteConfig]);
-
-  const save = async () => {
-    const name = secretName.trim();
-    const next: SiteConfig = { ...(siteConfig ?? {}), upstream_proxy_secret_ref: name || undefined };
-    if (await mutate(next, "Failed to save the upstream proxy secret")) {
-      toast.success("Upstream proxy secret saved");
-    }
-  };
-
-  return (
-    <div className="space-y-5">
-      {/* Stays true whether or not anything was detected — the check row below
-          says what was actually found (and, in a container, what couldn't be
-          looked at). Do not reintroduce a "Wardyn detected these settings" lede:
-          it rendered unconditionally, above an empty result. */}
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        The sandbox reaches the internet only through wardyn-proxy, which can chain through your
-        corporate proxy.
-      </p>
-
-      {check && (
-        <ul>
-          <CheckRow check={check} />
-        </ul>
-      )}
-
-      {status.host_proxy && <HostProxyBreakdown detection={status.host_proxy} />}
-
-      <Field
-        label="Upstream proxy secret name"
-        htmlFor="host-proxy-secret"
-        hint={
-          operator
-            ? "Store the proxy URL as a secret (Add secret), then reference its name here."
-            : `Store the proxy URL as a secret (Add secret), then reference its name here. ${OPERATOR_ONLY_REASON}`
-        }
-      >
-        <div className="flex gap-2">
-          <Input
-            id="host-proxy-secret"
-            value={secretName}
-            onChange={(e) => setSecretName(e.target.value)}
-            placeholder="upstream-proxy-url"
-            className="font-mono"
-          />
-          <Button
-            variant="outline"
-            onClick={() => onAddSecret(secretName.trim() || "upstream-proxy-url")}
-          >
-            Add secret
-          </Button>
-          <Button variant="outline" onClick={save} disabled={!operator || saving || siteConfig === null}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : "Save"}
-          </Button>
-        </div>
-      </Field>
-
-      <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
-    </div>
-  );
-}
-
-export function ArtifactRepoStep({
-  status,
-  siteConfig,
-  reloadSiteConfig,
-  saveSiteConfig,
-  onRecheck,
-  rechecking,
-}: {
-  status: SetupStatus;
-  siteConfig: SiteConfig | null;
-  reloadSiteConfig: () => Promise<void>;
-  saveSiteConfig: (next: SiteConfig) => Promise<void>;
-  onRecheck: () => void;
-  rechecking: boolean;
-}) {
-  const check = status.checks.find((c) => c.id === "artifact_repo");
-  // PUT /site-config — operator-only (see http.go).
-  const operator = useOperator();
-  const [eco, setEco] = React.useState<string>(ARTIFACT_ECOSYSTEMS[0]);
-  const [baseUrl, setBaseUrl] = React.useState("");
-  const [tokenRef, setTokenRef] = React.useState("");
-  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
-
-  // Writes the CURRENT shape (egress_redirects), not the deprecated
-  // artifact_overrides map. It has to: PUT /site-config is a whole-document
-  // replace, so this body always carries back the stored egress_redirects —
-  // and the server REJECTS a document that sets both fields rather than
-  // guessing which is authoritative. Sending the legacy map therefore 400s the
-  // moment any redirect exists, which after the first save is always.
-  const redirects = siteConfig?.egress_redirects ?? [];
-  const ecoRedirects = redirects.filter((r) => r.ecosystem);
-
-  const save = async () => {
-    const url = baseUrl.trim();
-    if (!url) return;
-    const token = tokenRef.trim() || undefined;
-    // One redirect per ecosystem — re-picking an ecosystem replaces its row,
-    // which is what the map this replaced did by key assignment.
-    const row = { from: ECOSYSTEM_PUBLIC_URL[eco], to: url, token_secret_ref: token, ecosystem: eco };
-    const next: SiteConfig = {
-      ...(siteConfig ?? {}),
-      egress_redirects: [...redirects.filter((r) => r.ecosystem !== eco), row],
-    };
-    if (await mutate(next, "Failed to save the registry redirect")) {
-      setBaseUrl("");
-      setTokenRef("");
-    }
-  };
-
-  const remove = async (ecosystem: string) => {
-    const next: SiteConfig = { ...(siteConfig ?? {}), egress_redirects: redirects.filter((r) => r.ecosystem !== ecosystem) };
-    await mutate(next, "Failed to remove the registry redirect");
-  };
-
-  return (
-    <div className="space-y-5">
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Redirect npm/pip/cargo/maven/go/nuget to a corporate Artifactory/Nexus mirror so runs never
-        reach the public registries.
-        {!operator && ` ${OPERATOR_ONLY_REASON}`}
-      </p>
-
-      {check && (
-        <ul>
-          <CheckRow check={check} />
-        </ul>
-      )}
-
-      {ecoRedirects.length > 0 && (
-        <ul className="space-y-1.5">
-          {ecoRedirects.map((r) => (
-            <li
-              key={r.ecosystem}
-              className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs"
-            >
-              <span className="min-w-0 truncate font-mono">
-                {r.ecosystem} → {r.to}
-                {r.token_secret_ref && (
-                  <span className="text-muted-foreground"> · token: {r.token_secret_ref}</span>
-                )}
-              </span>
-              <button
-                type="button"
-                onClick={() => remove(r.ecosystem!)}
-                disabled={!operator}
-                aria-label={`Remove ${r.ecosystem} override`}
-                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-              >
-                <X className="size-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="space-y-3 rounded-xl border border-border p-4">
-        <div className="grid grid-cols-[140px_1fr] gap-2.5">
-          <Field label="Ecosystem" htmlFor="artifact-eco">
-            <Select value={eco} onValueChange={setEco}>
-              <SelectTrigger id="artifact-eco">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ARTIFACT_ECOSYSTEMS.map((e) => (
-                  <SelectItem key={e} value={e}>
-                    {e}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Base URL" htmlFor="artifact-url">
-            <Input
-              id="artifact-url"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://artifactory.corp.internal/api/npm/npm-remote"
-              className="font-mono"
-            />
-          </Field>
-        </div>
-        <Field
-          label="Token secret name (optional)"
-          htmlFor="artifact-token"
-          hint="Injected proxy-side at fetch time — the sandbox never holds it."
-        >
-          <Input
-            id="artifact-token"
-            value={tokenRef}
-            onChange={(e) => setTokenRef(e.target.value)}
-            placeholder="artifactory-token"
-            className="font-mono"
-          />
-        </Field>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={save}
-          disabled={!operator || saving || siteConfig === null || !baseUrl.trim()}
-        >
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Add/Update
-        </Button>
-      </div>
-
-      <RecheckButton onRecheck={onRecheck} rechecking={rechecking} />
-    </div>
-  );
 }
 
 // ------------------------------------------------------------

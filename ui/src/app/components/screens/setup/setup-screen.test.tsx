@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -84,8 +84,8 @@ import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 // Integrations" link both call useNavigate() — every render needs a Router
 // ancestor now (react-router throws without one), which SetupScreen didn't
 // require before this step existed.
-function renderScreen(ui: Parameters<typeof render>[0]) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
+function renderScreen(ui: Parameters<typeof render>[0], route = "/setup") {
+  return render(<MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>);
 }
 
 // E2 provenance is additive/optional. The substrate map (in the shared default)
@@ -251,6 +251,18 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // coverage for each rule lives in steps.test.ts (corpNetworkGate) and
   // corp-network-step.test.tsx (the step body reporting upward); this proves
   // setup-screen.tsx actually connects them.
+  // ?step= deep link: the Integrations page's proxy banner hands off to
+  // Corporate network with it, now that the step is the only place a proxy is
+  // configured (see integrations-screen.tsx's "Open Corporate network").
+  it("opens the step named by ?step=, and ignores a bogus one rather than blowing up", async () => {
+    renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=corp_network");
+    expect(await screen.findByRole("heading", { name: /^corporate network$/i })).toBeInTheDocument();
+
+    cleanup();
+    renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=not-a-step");
+    expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
+  });
+
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
     it("the footer's button IS the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);

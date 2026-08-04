@@ -28,17 +28,21 @@ function renderDialog(existingAiRows: IntegrationRow[] = []) {
 }
 
 describe("AddIntegrationDialog — Panel 1 (category)", () => {
-  it("shows the four category cards, each with its T.CAT_* skip-if hint", () => {
+  it("shows the two category cards, each with its T.CAT_* skip-if hint", () => {
     renderDialog();
     expect(screen.getByText("AI provider")).toBeInTheDocument();
     expect(screen.getByText(T.CAT_AI)).toBeInTheDocument();
     expect(screen.getByText("SCM host")).toBeInTheDocument();
     expect(screen.getByText(T.CAT_SCM)).toBeInTheDocument();
-    // Renamed with the Corporate-network restructure (CATEGORY_META.artifact_mirror.title).
-    expect(screen.getByText("Egress redirection")).toBeInTheDocument();
-    expect(screen.getByText(T.CAT_MIRROR)).toBeInTheDocument();
-    expect(screen.getByText("Host proxy")).toBeInTheDocument();
-    expect(screen.getByText(T.CAT_PROXY)).toBeInTheDocument();
+  });
+
+  // Nothing here adds network topology any more: a proxy and an egress redirect
+  // are configured on the Corporate network step, whose gate makes every
+  // redirect prove "reached" — a proof this dialog could never demand.
+  it("offers no Egress redirection or Host proxy card", () => {
+    renderDialog();
+    expect(screen.queryByText("Egress redirection")).not.toBeInTheDocument();
+    expect(screen.queryByText("Host proxy")).not.toBeInTheDocument();
   });
 });
 

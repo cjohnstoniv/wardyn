@@ -61,6 +61,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Integrations page's **Artifact mirror** category is now **Egress
   redirection**, with the same compact `from → to` rows, the `network only`
   chip, and per-row Test as the Corporate network step.
+- **Network topology has exactly one home, and it is Corporate network.** The
+  Integrations page used to carry Host proxy and Egress redirection as two of
+  its four categories — the same stored rows the Corporate network step
+  configures, with a second set of Test buttons and a second Add flow. Both
+  categories are gone from that page, from its Add dialog, and from the
+  derivation behind them. A redirect carries a proof obligation (every
+  configured one must test *reached* before the step hands off) and that gate
+  lives on the step; configuring a row where there is no gate and proving it
+  where there is, is what produced the duplicate. The page keeps what it is
+  for — named connections to systems outside Wardyn: model providers and git
+  hosts — and its proxy-detected banner now offers a button that takes you to
+  Corporate network (`/setup?step=…`) instead of a second editor. Retiring
+  those panels also retired the last two Getting-started step bodies they were
+  still borrowing (`HostProxyStep`, `ArtifactRepoStep`): net ~1,600 lines
+  deleted.
+- **The Integrations step lost its footer.** "Manage in Integrations" linked
+  to the page the step already embeds, and "Skip this step" duplicated Next.
+  The step is optional, so moving forward past it with nothing connected *is*
+  the skip — it earns the Skipped badge and the checkmark exactly as the
+  button did. Backing off it decides nothing.
 
 - **The Corporate network step is a proof, not a form — and only the proof is
   required.** It is not skippable: `Next: Integrations` unlocks only once a

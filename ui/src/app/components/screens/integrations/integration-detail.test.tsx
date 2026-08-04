@@ -115,6 +115,26 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
     expect(screen.getByRole("button", { name: /back to integrations/i })).toBeInTheDocument();
   });
 
+  // A bookmarked mirror:/proxy: link from before the Corporate-network
+  // consolidation. Those rows aren't derived any more, so the honest answer is
+  // not-found — never a resurrected detail page for a category the list no
+  // longer has, and never a danger zone offering to delete site config.
+  it("a pre-consolidation mirror/proxy id is not found, even with that config still present", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({
+      egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/x" }],
+      upstream_proxy_url: "http://proxy.corp.acme.com:8080",
+    });
+    listSecretsMock.mockResolvedValue([]);
+
+    const { unmount } = renderDetail("mirror:0");
+    expect(await screen.findByText(/integration not found/i)).toBeInTheDocument();
+    unmount();
+
+    renderDetail("proxy:host");
+    expect(await screen.findByText(/integration not found/i)).toBeInTheDocument();
+  });
+
   it("renders the GitHub App's ruleset row Unknown (never fabricated) with T.CACHE_CAVEAT", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: [], github_app: true } }));
     getSiteConfigMock.mockResolvedValue({ scm_hosts: ["github.com"] });

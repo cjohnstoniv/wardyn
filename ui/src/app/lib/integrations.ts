@@ -18,9 +18,12 @@
 
 // ============================ COPY CANON (verbatim) ============================
 export const T = {
-  LEDE: "Named connections to systems outside Wardyn — model providers, git hosts, egress redirects, your corporate proxy. Wardyn runs without any of them.",
+  LEDE: "Named connections to systems outside Wardyn — model providers and git hosts. Wardyn runs without any of them.",
+  // One exception now, not three: the Host proxy / Egress redirection Test
+  // buttons left this page with their categories — Corporate network owns both,
+  // and its gate is where a redirect proves itself (T.CORP_POINTER).
   FOOTNOTE:
-    "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
+    "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the one exception is the GitHub App's ref-confinement row, which really asks GitHub.",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
   EMPTY_TITLE: "No integrations",
   EMPTY_BODY:
@@ -28,14 +31,19 @@ export const T = {
   EMPTY_AI:
     "None. Runs work without a model — add one to have a coding agent drive a run, or to use Wardyn's own AI features.",
   EMPTY_SCM: "None. Public repos clone without any credential.",
-  EMPTY_EGRESS: "None. Outbound traffic goes to the public endpoints.",
-  EMPTY_PROXY: "None. The sandbox reaches the internet through wardyn-proxy directly.",
+  // No "…or add it here" alternative any more — there is exactly one place a
+  // proxy is configured, and the banner names it.
   PROXY_BANNER:
-    "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
+    "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, where the connectivity probe proves it.",
   CORP_LEDE:
     "First, and usually ten seconds: prove a sandbox on this host can reach the internet, and every step after this one can trust the answer. On most hosts that's one click — Test connectivity, see Reached, keep moving. Configure something here only if this machine reaches the internet through a corporate proxy, or has to fetch through internal mirrors — the proof then runs through that same path, exactly as a run would.",
+  // The pair of pointers at the SAME consolidation, one per surface: the
+  // Getting Started embed points one step back, the full page points forward
+  // into Getting started. Both verbatim from the mock (round G).
   EMBED_SCOPE_NOTE:
-    "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
+    "This is the whole of it — the full Integrations page shows the same two categories. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
+  CORP_POINTER:
+    "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Corporate network under Getting started, on the same screen as the probe that proves them.",
   EVIDENCE_HEAD: "What Wardyn found on this host",
   EVIDENCE_EXPLAIN:
     "Read from this machine's environment and git config. Wardyn does not use these automatically: a sandbox gets only what you configure below.",
@@ -150,9 +158,6 @@ export const T = {
   ],
   CAT_AI: "Powers a coding agent's model calls, or Wardyn's own AI features. Skip if you run governed commands or drive runs yourself.",
   CAT_SCM: "Lets runs clone from a git host. Skip if your repos are public.",
-  CAT_MIRROR:
-    "Points outbound traffic — registries, container images, a specific host — at an internal mirror or appliance. Skip if the public endpoints are reachable.",
-  CAT_PROXY: "Chains wardyn-proxy through your corporate proxy. Skip if the sandbox reaches the internet directly.",
   TY_KEY: "Drives Claude Code, direct API calls, and Wardyn's features. Never resident.",
   TY_OPENAI: "Drives Codex CLI, direct API calls, and Wardyn's features.",
   TY_AZURE: "Powers Wardyn's own AI features only. Neither agent tool can be pointed at an Azure deployment.",
@@ -285,7 +290,13 @@ export const CAPS = {
 // canon above (referenced, never re-typed) so the two can't drift apart.
 
 // ---- Categories (mockup's AddCategory radio cards) ----
-export type IntegrationCategory = "ai_provider" | "scm_host" | "artifact_mirror" | "host_proxy";
+// TWO, not the mock's four. An integration is a named connection to a system
+// OUTSIDE Wardyn — an account. A corporate proxy and an internal mirror are
+// network topology, and a redirect carries a proof obligation (every one has to
+// test "reached" before the step hands off), so both live on the Corporate
+// network step instead. Nothing here can produce a row for them any more, and
+// the type is what enforces that.
+export type IntegrationCategory = "ai_provider" | "scm_host";
 
 export interface CategoryMeta {
   /** lucide-react export name — a pure module can't import the component itself. */
@@ -295,18 +306,9 @@ export interface CategoryMeta {
   skipIfLine: string;
 }
 
-// artifact_mirror's key stays the wire-stable identifier (setup/integrations-
-// step.tsx's hideCategories=["host_proxy","artifact_mirror"] depends on the
-// literal string, and that file is a different wave's turf this round) — only
-// the user-facing title changed, from the pre-Corporate-network "Artifact
-// mirror" to "Egress redirection" (mockup2/wardyn-integrations.js's RedirIcon
-// + AddCategory card). ArrowLeftRight is lucide's closest stock icon to the
-// mock's hand-drawn RedirIcon glyph (two opposite-facing arrows).
 export const CATEGORY_META: Record<IntegrationCategory, CategoryMeta> = {
   ai_provider: { icon: "Sparkles", title: "AI provider", skipIfLine: T.CAT_AI },
   scm_host: { icon: "GitBranch", title: "SCM host", skipIfLine: T.CAT_SCM },
-  artifact_mirror: { icon: "ArrowLeftRight", title: "Egress redirection", skipIfLine: T.CAT_MIRROR },
-  host_proxy: { icon: "Network", title: "Host proxy", skipIfLine: T.CAT_PROXY },
 };
 
 // ---- AI credential types (mockup's AddTypeAI radio cards) ----

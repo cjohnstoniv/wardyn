@@ -16,6 +16,7 @@
 // not here. It is the MANDATORY first-run gate — there is no early escape; see
 // App.tsx's RequireSetupComplete for everything that clears it.
 import * as React from "react";
+import { useSearchParams } from "react-router-dom";
 import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/types";
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
@@ -66,7 +67,16 @@ const DemoDetail = React.lazy(() => import("./demos-step"));
 // SetupScreen
 // ------------------------------------------------------------
 export function SetupScreen({ onDone }: { onDone: () => void }) {
-  const [stepId, setStepId] = React.useState<SetupStepId>("environment");
+  // ?step=<id> deep-links a specific step — the Integrations page's
+  // proxy-detected banner uses it to hand off to Corporate network, now the
+  // only place a proxy is configured. Read once at mount (an unknown or
+  // absent value just starts at the beginning); the URL is not kept in sync
+  // afterwards, since the rail is the navigation from then on.
+  const [searchParams] = useSearchParams();
+  const [stepId, setStepId] = React.useState<SetupStepId>(() => {
+    const want = searchParams.get("step");
+    return want && (STEP_ORDER as string[]).includes(want) ? (want as SetupStepId) : "environment";
+  });
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [rechecking, setRechecking] = React.useState(false);
   const [lastCheckedAt, setLastCheckedAt] = React.useState<Date | null>(null);

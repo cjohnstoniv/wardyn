@@ -21,7 +21,7 @@ import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integra
 import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType } from "../integrations";
 import { deriveProviders, LANE_META, slugHost, type Lane } from "../scm-provider";
 import { relativeTime, clockTime } from "../format";
-import type { ArtifactOverride, EgressRedirect, SetupStatus, SiteConfig } from "../types";
+import type { SetupStatus, SiteConfig } from "../types";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
 import { secrets as secretsApi } from "./secrets";
@@ -69,25 +69,11 @@ export interface IntegrationRow {
   /** True only for the GitHub App row — the one row with a live check. */
   canReCheck?: boolean;
   isGithubApp?: boolean;
-  /** Present only for an artifact_mirror row sourced from the CURRENT
-   *  SiteConfig.egress_redirects shape (one row per entry, no grouping by
-   *  destination host). Carries the raw entry so the list can render the
-   *  compact from/to/network-only/token treatment straight off real data
-   *  instead of re-parsing name/typeLabel strings. Absent for a legacy
-   *  artifact_overrides-derived row, which stays grouped by host and renders
-   *  through the generic row like any other category. */
-  redirect?: EgressRedirect;
-  /** Present only for the host_proxy row when SiteConfig carries the proxy as
-   *  a plain URL (upstream_proxy_url) rather than a secret ref — lets the row
-   *  show the real target compactly instead of a bare "configured" fact. */
-  proxyUrl?: string;
 }
 
 export interface IntegrationsData {
   ai: IntegrationRow[];
   scm: IntegrationRow[];
-  mirror: IntegrationRow[];
-  proxy: IntegrationRow[];
 }
 
 function hasSecret(present: string[], name: string): boolean {
@@ -356,110 +342,20 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
     });
 }
 
-// ---- Egress redirection (artifact mirrors) ----------------------------------
-// Category key stays `artifact_mirror` — the setup wave's Getting Started
-// Integrations step (integrations-step.tsx) already hides it by this literal
-// string and this wave doesn't touch setup/**; only the user-facing label
-// changed (CATEGORY_META.artifact_mirror.title, in lib/integrations.ts).
-
-function hostnameOf(url: string): string {
-  try {
-    return new URL(url).hostname || url;
-  } catch {
-    return url;
-  }
-}
-
-// @deprecated shape (SiteConfig.artifact_overrides) — a row groups every
-// ecosystem override pointed at the same destination host.
-function legacyMirrorRows(overrides: Record<string, ArtifactOverride>): IntegrationRow[] {
-  const byHost = new Map<string, { ecosystems: string[]; secretRefs: Set<string> }>();
-  for (const [eco, ov] of Object.entries(overrides)) {
-    const host = hostnameOf(ov.base_url);
-    const bucket = byHost.get(host) ?? { ecosystems: [], secretRefs: new Set<string>() };
-    bucket.ecosystems.push(eco);
-    if (ov.token_secret_ref) bucket.secretRefs.add(ov.token_secret_ref);
-    byHost.set(host, bucket);
-  }
-  return Array.from(byHost, ([host, { ecosystems, secretRefs }]) => ({
-    id: `mirror:${host}`,
-    category: "artifact_mirror" as const,
-    name: host,
-    typeLabel: `${ecosystems.join(", ")} → ${host}`,
-    chips: ecosystems.map((eco) => ({ label: `powers ${eco} (mirror)`, tone: "info" as const })),
-    residency: "proxy_injected" as const,
-    posture: { kind: "configured" as const },
-    secretNames: [...secretRefs],
-    checkIds: ["artifact_repo"],
-  }));
-}
-
-// Current shape (SiteConfig.egress_redirects): one row PER redirect, never
-// grouped by destination host — two redirects that happen to land on the same
-// mirror are still two rows (matches the approved mock's own EGRESS_ROWS /
-// redirectRow, which never groups). `redirect` carries the raw entry so the
-// screen can render the compact from/to/network-only/token treatment straight
-// off real data. `name`/`typeLabel` stay populated too, for generic consumers
-// that don't know about `.redirect` (the Tools tab's "Powered by" chip, and
-// this row's own detail-page header if visited directly).
-function egressRedirectRows(redirects: EgressRedirect[]): IntegrationRow[] {
-  return redirects.map((r, i) => ({
-    id: `mirror:${i}`,
-    category: "artifact_mirror" as const,
-    name: hostnameOf(r.to) || r.to,
-    typeLabel: `${r.from} → ${r.to}`,
-    chips: [],
-    residency: "proxy_injected" as const,
-    posture: { kind: "configured" as const },
-    secretNames: r.token_secret_ref ? [r.token_secret_ref] : [],
-    checkIds: ["artifact_repo"],
-    redirect: r,
-  }));
-}
-
-// BUG FIX: this used to read ONLY artifact_overrides, so a redirect saved
-// through the new Corporate network step (which writes egress_redirects)
-// never appeared here at all. Prefers egress_redirects — the current write
-// shape — and falls back to the legacy map so a deployment that hasn't
-// re-saved through that step yet keeps rendering (the server still decodes
-// both — see SiteConfig.artifact_overrides's own doc comment).
-function deriveMirrorRows(siteConfig: SiteConfig | null): IntegrationRow[] {
-  const redirects = siteConfig?.egress_redirects;
-  if (redirects && redirects.length > 0) return egressRedirectRows(redirects);
-  return legacyMirrorRows(siteConfig?.artifact_overrides ?? {});
-}
-
-// ---- Host proxy ---------------------------------------------------------------
-
-// BUG FIX: this used to check ONLY upstream_proxy_secret_ref, so a proxy
-// saved through the new Corporate network step's default path (a plain URL,
-// upstream_proxy_url — see HostProxyTab's saveUrl) rendered as permanently
-// unconfigured here, even though it really was. A URL and a secret ref are
-// mutually exclusive in practice (SiteConfig.upstream_proxy_url's own doc
-// comment); either is enough to call the proxy configured.
-function deriveProxyRows(siteConfig: SiteConfig | null): IntegrationRow[] {
-  const url = siteConfig?.upstream_proxy_url;
-  const ref = siteConfig?.upstream_proxy_secret_ref;
-  if (!url && !ref) return [];
-  return [
-    {
-      id: "proxy:host",
-      category: "host_proxy",
-      name: "Host proxy",
-      typeLabel: "corporate proxy",
-      chips: [{ label: "powers sandbox egress", tone: "info" }],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: ref ? [ref] : [],
-      proxyUrl: url,
-      checkIds: ["host_proxy"],
-    },
-  ];
-}
+// ---- Host proxy / egress redirection: NOT derived here ----------------------
+// Both used to be categories on this page. They aren't integrations: an
+// integration is an account with a system outside Wardyn, while a proxy and an
+// internal mirror are network topology — and a redirect carries a proof
+// obligation the Corporate network step's gate enforces (every configured row
+// must test "reached" before that step hands off). Corporate network is their
+// single home now; nothing below derives a row for either. The one thing that
+// stayed is the detection banner, which points there.
 
 // A corporate proxy was DETECTED on the host but nothing is connected yet —
-// the one condition T.PROXY_BANNER exists for. Same fix as deriveProxyRows
-// above: upstream_proxy_url counts as configured too.
+// the one condition T.PROXY_BANNER exists for. A plain upstream_proxy_url
+// counts as configured just as much as a secret ref does (the two are
+// mutually exclusive in practice — see SiteConfig.upstream_proxy_url's doc
+// comment), so either one silences the banner.
 export function proxyBannerNeeded(status: SetupStatus, siteConfig: SiteConfig | null): boolean {
   if (siteConfig?.upstream_proxy_url || siteConfig?.upstream_proxy_secret_ref) return false;
   const d = status.host_proxy;
@@ -471,13 +367,11 @@ export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig |
   return {
     ai: deriveAiRows(status, present),
     scm: deriveScmRows(status, siteConfig, present),
-    mirror: deriveMirrorRows(siteConfig),
-    proxy: deriveProxyRows(siteConfig),
   };
 }
 
 export function allRows(data: IntegrationsData): IntegrationRow[] {
-  return [...data.ai, ...data.scm, ...data.mirror, ...data.proxy];
+  return [...data.ai, ...data.scm];
 }
 
 export function findRow(data: IntegrationsData, id: string): IntegrationRow | undefined {
@@ -525,14 +419,6 @@ export function blastRadius(row: IntegrationRow, opts: { isDefaultAgent?: boolea
   } else if (row.category === "scm_host") {
     lines.push(`Runs stop inheriting ${row.typeLabel} in their egress allowlist.`);
     if (row.secretNames.length) lines.push(`The stored credential is not deleted — remove it under Secrets.`);
-  } else if (row.category === "artifact_mirror") {
-    lines.push(
-      row.redirect
-        ? `Runs reach ${row.redirect.from} directly again — this redirect stops applying.`
-        : "Runs fetch straight from the public registries again for these ecosystems.",
-    );
-  } else {
-    lines.push("Sandboxes reach the internet through wardyn-proxy directly again.");
   }
   return lines;
 }

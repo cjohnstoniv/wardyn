@@ -11,9 +11,18 @@
 // never wires either, so their "Powered by" column is always "—".
 import { TOOLS, T } from "../../../lib/integrations";
 import type { IntegrationRow, IntegrationsData } from "../../../lib/api/integrations";
+import type { EgressRedirect } from "../../../lib/types";
 import { AgentBadge } from "../../wardyn/primitives";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
 
 // A configured integration's name as a "powered by" chip — `· default` when
 // that row's OWN capability matrix marks it the default lane for `capability`.
@@ -81,7 +90,17 @@ function ToolRow({
   );
 }
 
-export function ToolsTab({ data }: { data: IntegrationsData }) {
+export function ToolsTab({
+  data,
+  redirects,
+}: {
+  data: IntegrationsData;
+  /** SiteConfig.egress_redirects, straight from the caller. Redirects stopped
+   *  being integration rows when Corporate network took them over, but they're
+   *  still what a package manager fetches THROUGH — so the row keeps naming
+   *  the mirror instead of falsely reading "Nothing yet." */
+  redirects: EgressRedirect[];
+}) {
   const claudeCapable = data.ai.filter((r) => r.chips.some((c) => !c.muted && /^Claude Code/.test(c.label)));
   const codexCapable = data.ai.filter((r) => r.chips.some((c) => !c.muted && /^Codex CLI/.test(c.label)));
 
@@ -97,7 +116,7 @@ export function ToolsTab({ data }: { data: IntegrationsData }) {
       <ToolRow
         name="Package managers"
         sub="npm · pip · cargo · maven · go · nuget"
-        powered={data.mirror.map((r) => ({ key: r.id, label: r.name }))}
+        powered={redirects.map((r, i) => ({ key: `redirect:${i}`, label: hostnameOf(r.to) }))}
         poweredNone="Nothing yet."
         wire={TOOLS.package_managers.wire}
       />

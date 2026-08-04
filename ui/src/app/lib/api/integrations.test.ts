@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { baseStatus } from "../../components/screens/setup/test-fixtures";
 import { T } from "../integrations";
 import {
+  allRows,
   deriveIntegrations,
   proxyBannerNeeded,
   describePosture,
@@ -20,8 +21,6 @@ describe("deriveIntegrations — empty inputs", () => {
     const data = deriveIntegrations(baseStatus(), null, []);
     expect(data.ai).toHaveLength(0);
     expect(data.scm).toHaveLength(0);
-    expect(data.mirror).toHaveLength(0);
-    expect(data.proxy).toHaveLength(0);
   });
 });
 
@@ -116,103 +115,41 @@ describe("deriveIntegrations — SCM hosts", () => {
   });
 });
 
-describe("deriveIntegrations — artifact mirrors (legacy artifact_overrides shape)", () => {
-  it("groups ecosystems on the same mirror host into one row", () => {
+// Corporate network is the single home for a proxy and for egress redirects
+// now, so neither is derived as an integration row any more — an integration is
+// an account with an outside system; these are network topology, and a redirect
+// carries a proof obligation only that step's gate can enforce. Pinned as an
+// ABSENCE so re-adding a category can't happen by accident.
+describe("deriveIntegrations — network topology is not an integration", () => {
+  it("derives no rows at all from a proxy or from egress redirects, in either shape", () => {
     const siteConfig: SiteConfig = {
-      artifact_overrides: {
-        npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" },
-        pip: { base_url: "https://artifactory.corp.internal/api/pip/pip-remote", token_secret_ref: "artifactory-token" },
-      },
-    };
-    const [row] = deriveIntegrations(baseStatus(), siteConfig, []).mirror;
-    expect(row.redirect).toBeUndefined();
-    expect(row.name).toBe("artifactory.corp.internal");
-    expect(row.chips.map((c) => c.label).sort()).toEqual(["powers npm (mirror)", "powers pip (mirror)"]);
-    expect(row.secretNames).toEqual(["artifactory-token"]);
-  });
-});
-
-// BUG FIX (this wave): deriveMirrorRows used to read ONLY artifact_overrides,
-// so a redirect saved through the Corporate network step (which writes
-// egress_redirects) never appeared on /integrations at all.
-describe("deriveIntegrations — egress redirects (current SiteConfig.egress_redirects shape)", () => {
-  it("a redirect saved via egress_redirects now appears — one row per entry, never grouped by destination host", () => {
-    const siteConfig: SiteConfig = {
+      upstream_proxy_url: "http://proxy.corp.acme.com:8080",
+      upstream_proxy_secret_ref: "upstream-proxy-url",
       egress_redirects: [
-        {
-          from: "https://registry.npmjs.org",
-          to: "https://artifactory.corp.internal/api/npm/npm-remote",
-          token_secret_ref: "artifactory-token",
-          ecosystem: "npm",
-        },
-        {
-          from: "https://pypi.org/simple",
-          to: "https://artifactory.corp.internal/api/pypi/pypi-remote/simple",
-          token_secret_ref: "artifactory-token",
-          ecosystem: "pip",
-        },
+        { from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote", ecosystem: "npm" },
       ],
     };
-    const { mirror } = deriveIntegrations(baseStatus(), siteConfig, []);
-    // Same destination host, but the current shape never groups (unlike the
-    // legacy artifact_overrides path above) — two redirects, two rows.
-    expect(mirror).toHaveLength(2);
-    expect(mirror[0].redirect).toEqual(siteConfig.egress_redirects![0]);
-    expect(mirror[0].secretNames).toEqual(["artifactory-token"]);
-    expect(mirror[1].redirect?.from).toBe("https://pypi.org/simple");
-    expect(mirror[0].id).not.toBe(mirror[1].id);
+    const data = deriveIntegrations(baseStatus(), siteConfig, []);
+    expect(allRows(data)).toHaveLength(0);
+    expect(Object.keys(data).sort()).toEqual(["ai", "scm"]);
   });
 
-  it("ecosystem left unset (network-only) is preserved verbatim, not defaulted to an empty string or dropped", () => {
-    const siteConfig: SiteConfig = { egress_redirects: [{ from: "telemetry.vendor-sdk.io", to: "10.40.2.11:8443" }] };
-    const [row] = deriveIntegrations(baseStatus(), siteConfig, []).mirror;
-    expect(row.redirect?.ecosystem).toBeUndefined();
-    expect(row.secretNames).toEqual([]);
-  });
-
-  it("prefers egress_redirects over artifact_overrides when a deployment somehow carries both", () => {
-    const siteConfig: SiteConfig = {
-      artifact_overrides: { npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" } },
-      egress_redirects: [{ from: "https://ghcr.io", to: "https://registry.corp.internal/ghcr-remote" }],
-    };
-    const { mirror } = deriveIntegrations(baseStatus(), siteConfig, []);
-    expect(mirror).toHaveLength(1);
-    expect(mirror[0].redirect?.from).toBe("https://ghcr.io");
-  });
-
-  it("falls back to the legacy grouped rendering when egress_redirects is absent — an unmigrated deployment keeps rendering", () => {
+  it("the legacy artifact_overrides map derives nothing either", () => {
     const siteConfig: SiteConfig = {
       artifact_overrides: { npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" } },
     };
-    const [row] = deriveIntegrations(baseStatus(), siteConfig, []).mirror;
-    expect(row.redirect).toBeUndefined();
-    expect(row.name).toBe("artifactory.corp.internal");
+    expect(allRows(deriveIntegrations(baseStatus(), siteConfig, []))).toHaveLength(0);
   });
 });
 
-describe("deriveIntegrations / proxyBannerNeeded — host proxy", () => {
-  it("derives a row only once a secret ref is registered", () => {
-    expect(deriveIntegrations(baseStatus(), null, []).proxy).toHaveLength(0);
-    const [row] = deriveIntegrations(baseStatus(), { upstream_proxy_secret_ref: "upstream-proxy-url" }, []).proxy;
-    expect(row.secretNames).toEqual(["upstream-proxy-url"]);
-    expect(row.proxyUrl).toBeUndefined();
-  });
-
-  // BUG FIX (this wave): deriveProxyRows used to check ONLY
-  // upstream_proxy_secret_ref, so a proxy saved through the Corporate network
-  // step's default path (a plain URL) rendered the category as permanently
-  // empty even though it really was configured.
-  it("also derives a row from a plain upstream_proxy_url, with no secret involved", () => {
-    const [row] = deriveIntegrations(baseStatus(), { upstream_proxy_url: "http://proxy.corp.acme.com:8080" }, []).proxy;
-    expect(row.proxyUrl).toBe("http://proxy.corp.acme.com:8080");
-    expect(row.secretNames).toEqual([]);
-  });
-
-  it("banner fires only when a proxy was detected AND nothing is connected yet", () => {
+// The banner survived the consolidation — it's detection, not configuration,
+// and it points at Corporate network (T.PROXY_BANNER).
+describe("proxyBannerNeeded", () => {
+  it("fires only when a proxy was detected AND nothing is connected yet", () => {
     const detected: SetupStatus = baseStatus({ host_proxy: { has_credentials: false, http_proxy: { value: "proxy.corp:8080", source: "env", has_credentials: false } } });
     expect(proxyBannerNeeded(detected, null)).toBe(true);
     expect(proxyBannerNeeded(detected, { upstream_proxy_secret_ref: "x" })).toBe(false);
-    // Same fix as deriveProxyRows: a plain-URL proxy also counts as connected.
+    // A plain-URL proxy counts as connected too, not just a secret ref.
     expect(proxyBannerNeeded(detected, { upstream_proxy_url: "http://proxy.corp.acme.com:8080" })).toBe(false);
     expect(proxyBannerNeeded(baseStatus(), null)).toBe(false);
   });
@@ -235,22 +172,6 @@ describe("blastRadius", () => {
     expect(lines[0]).toBe("Agent runs that resolve the server default lose model access — their first model call fails.");
     expect(lines.some((l) => l.includes("Composer loses its backend"))).toBe(true);
     expect(lines.at(-1)).toBe("The stored secret anthropic-api-key is not deleted — remove it under Secrets.");
-  });
-
-  it("names the specific redirect for a current-shape (egress_redirects) artifact_mirror row", () => {
-    const row: IntegrationRow = {
-      id: "mirror:0",
-      category: "artifact_mirror",
-      name: "artifactory.corp.internal",
-      typeLabel: "https://registry.npmjs.org → https://artifactory.corp.internal/api/npm/npm-remote",
-      chips: [],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: [],
-      checkIds: [],
-      redirect: { from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" },
-    };
-    expect(blastRadius(row)).toEqual(["Runs reach https://registry.npmjs.org directly again — this redirect stops applying."]);
   });
 
   it("a harness-backed subscription says disconnecting IS the removal, not 'not deleted'", () => {

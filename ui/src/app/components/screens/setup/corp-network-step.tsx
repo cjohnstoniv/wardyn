@@ -423,7 +423,8 @@ function HostProxyTab({
   const [selected, setSelected] = React.useState(0);
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
-  // never stomp an in-progress edit (matches HostProxyStep's own seededRef).
+  // never stomp an in-progress edit. (Inherited from the retired HostProxyStep,
+  // whose seededRef this is; this step is the only proxy surface left.)
   const seededRef = React.useRef(false);
   React.useEffect(() => {
     if (seededRef.current || !siteConfig) return;

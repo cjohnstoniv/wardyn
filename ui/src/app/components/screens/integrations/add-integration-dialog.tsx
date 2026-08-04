@@ -4,15 +4,16 @@
  */
 
 // Add-integration dialog — mockup's AddCategory / AddTypeAI / AddKey / etc.
-// Only the AI-provider category is fully modeled by the approved mock
-// (BUILDERS has no Add-flow frame for SCM/mirror/proxy at all beyond the
-// category card); per the task brief, SCM hands off to the SAME ladder
-// ScmProviderStep already uses (AddProviderPanel1/2, exported from that file
-// for exactly this reuse), and Artifact mirror / Host proxy embed the
-// existing ArtifactRepoStep / HostProxyStep bodies rather than forking a
-// second copy of their real site-config writes.
+// TWO categories: AI provider (fully modeled by the approved mock) and SCM
+// host, which hands off to the SAME ladder ScmProviderStep already uses
+// (AddProviderPanel1/2, exported from that file for exactly this reuse).
+// Egress redirection and Host proxy are NOT addable here — they're network
+// topology, owned by the Corporate network step, where a redirect has to prove
+// itself before the step hands off. That retired this dialog's hand-off to
+// setup/step-bodies.tsx's ArtifactRepoStep / HostProxyStep, and with it those
+// two step bodies.
 import * as React from "react";
-import { ArrowLeftRight, ChevronDown, GitBranch, KeyRound, Network, Sparkles } from "lucide-react";
+import { ChevronDown, GitBranch, KeyRound, Sparkles } from "lucide-react";
 import {
   AI_TYPES,
   BEDROCK_LANE_META,
@@ -40,22 +41,17 @@ import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { AddSecretDialog } from "../secrets";
 import { HarnessLoginPane } from "../setup/harness-login-pane";
 import { AddProviderPanel1, AddProviderPanel2, type ProviderOption } from "../setup/scm-provider-step";
-import { ArtifactRepoStep, HostProxyStep } from "../setup/step-bodies";
 import type { Lane } from "../../../lib/scm-provider";
 
 const CATEGORY_ICON: Record<IntegrationCategory, React.ElementType> = {
   ai_provider: Sparkles,
   scm_host: GitBranch,
-  artifact_mirror: ArrowLeftRight,
-  host_proxy: Network,
 };
-const CATEGORIES: IntegrationCategory[] = ["ai_provider", "scm_host", "artifact_mirror", "host_proxy"];
+const CATEGORIES: IntegrationCategory[] = ["ai_provider", "scm_host"];
 
 type Step =
   | { s: "category" }
   | { s: "scm" }
-  | { s: "mirror" }
-  | { s: "proxy" }
   | { s: "ai_type" }
   | { s: "ai_connect"; type: AiType; hostCli?: boolean; bedrockLane?: BedrockLane };
 
@@ -77,7 +73,6 @@ export function AddIntegrationDialog({
   const [step, setStep] = React.useState<Step>({ s: "category" });
   const [category, setCategory] = React.useState<IntegrationCategory>("ai_provider");
   const [localSiteConfig, setLocalSiteConfig] = React.useState<SiteConfig>(siteConfig);
-  const [proxySecretName, setProxySecretName] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (open) {
@@ -87,7 +82,7 @@ export function AddIntegrationDialog({
     }
     // Only reset when the dialog transitions open — not on every siteConfig
     // prop tick from the parent's own polling, which would stomp an in-flight
-    // edit inside the mirror/proxy hand-off panels.
+    // edit inside the SCM hand-off panels.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -106,17 +101,7 @@ export function AddIntegrationDialog({
     setLocalSiteConfig(next);
   };
 
-  const advance = () => {
-    setStep(
-      category === "ai_provider"
-        ? { s: "ai_type" }
-        : category === "scm_host"
-          ? { s: "scm" }
-          : category === "artifact_mirror"
-            ? { s: "mirror" }
-            : { s: "proxy" },
-    );
-  };
+  const advance = () => setStep(category === "ai_provider" ? { s: "ai_type" } : { s: "scm" });
 
   if (step.s === "category") {
     return (
@@ -168,67 +153,6 @@ export function AddIntegrationDialog({
         onBack={() => setStep({ s: "category" })}
         onDone={finish}
       />
-    );
-  }
-
-  if (step.s === "mirror") {
-    return (
-      <Dialog open onOpenChange={(o) => !o && close()}>
-        <DialogContent className="scroll-thin sm:max-w-xl" style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}>
-          <DialogHeader>
-            <DialogTitle>Add integration — Egress redirection</DialogTitle>
-            <DialogDescription>{CATEGORY_META.artifact_mirror.skipIfLine}</DialogDescription>
-          </DialogHeader>
-          <ArtifactRepoStep
-            status={status}
-            siteConfig={localSiteConfig}
-            reloadSiteConfig={reloadSiteConfig}
-            saveSiteConfig={saveSiteConfig}
-            onRecheck={() => {}}
-            rechecking={false}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStep({ s: "category" })}>
-              Back
-            </Button>
-            <Button onClick={finish}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
-  if (step.s === "proxy") {
-    return (
-      <Dialog open onOpenChange={(o) => !o && close()}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Add integration — Host proxy</DialogTitle>
-            <DialogDescription>{CATEGORY_META.host_proxy.skipIfLine}</DialogDescription>
-          </DialogHeader>
-          <HostProxyStep
-            status={status}
-            siteConfig={localSiteConfig}
-            reloadSiteConfig={reloadSiteConfig}
-            saveSiteConfig={saveSiteConfig}
-            onAddSecret={setProxySecretName}
-            onRecheck={() => {}}
-            rechecking={false}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStep({ s: "category" })}>
-              Back
-            </Button>
-            <Button onClick={finish}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-        <AddSecretDialog
-          open={!!proxySecretName}
-          onOpenChange={(o) => !o && setProxySecretName(null)}
-          initialName={proxySecretName ?? ""}
-          onSaved={() => setProxySecretName(null)}
-        />
-      </Dialog>
     );
   }
 

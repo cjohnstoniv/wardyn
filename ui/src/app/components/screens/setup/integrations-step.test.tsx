@@ -40,16 +40,15 @@ describe("IntegrationsStep", () => {
     expect(screen.getByTestId("embedded-list")).toBeInTheDocument();
   });
 
-  // Corporate-network restructure: host proxy + egress redirection moved out
-  // of this embed and into their own step — the embedded list is told to hide
-  // both categories, and the note explaining where they went always renders
-  // (not just once something's connected — a first, empty visit is exactly
-  // when someone wonders where those two categories are).
-  it("hides the host-proxy and egress-redirection categories from the embed and explains why", () => {
+  // Corporate-network consolidation: host proxy + egress redirection are gone
+  // from the Integrations page itself, so there's nothing for this embed to
+  // hide — it passes no hideCategories at all. The note explaining where they
+  // went always renders (not just once something's connected — a first, empty
+  // visit is exactly when someone wonders where those two categories are).
+  it("passes no hideCategories — the two categories are gone from the page, not hidden from the embed", () => {
     renderStep();
-    expect(integrationsScreenPropsSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ embedded: true, hideCategories: ["host_proxy", "artifact_mirror"] }),
-    );
+    expect(integrationsScreenPropsSpy).toHaveBeenCalledWith(expect.objectContaining({ embedded: true }));
+    expect(integrationsScreenPropsSpy.mock.calls[0][0]).not.toHaveProperty("hideCategories");
     expect(screen.getByText(T.EMBED_SCOPE_NOTE)).toBeInTheDocument();
   });
 

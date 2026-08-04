@@ -15,12 +15,13 @@
 // Host proxy / egress redirection do NOT appear here any more — Corporate
 // network (steps.ts, right before this step) owns both now, and is the actual
 // fix for the old "blocked network reads as bad credential" problem (ORDER,
-// not a banner). hideCategories tells the embedded IntegrationsScreen to drop
-// those two sections (and their totalRows contribution, and the proxy
-// banner) while still showing everything else exactly as before;
-// EMBED_SCOPE_NOTE says where they went — rendered in BOTH the empty and
-// connected states, since a first visit is exactly when someone wonders where
-// those two categories are (the mock only showed the note once connected).
+// not a banner). They aren't hidden from this embed, they're gone from the
+// Integrations page itself, so there's no hideCategories to pass; the embed's
+// only extra is EMBED_SCOPE_NOTE saying where they went — rendered in BOTH the
+// empty and connected states, since a first visit is exactly when someone
+// wonders where those two categories are (the mock only showed the note once
+// connected). The full page renders the forward-pointing half of the same
+// pointer itself (T.NETWORK_SCOPE_NOTE).
 //
 // No footer of its own: "Manage in Integrations" duplicated the embed (this
 // IS that page), and "Skip this step" duplicated Next — the step is optional,
@@ -40,7 +41,7 @@ export function IntegrationsStep({
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">{T.STEP_LEDE}</p>
 
-      <IntegrationsScreen embedded onChanged={onRecheck} hideCategories={["host_proxy", "artifact_mirror"]} />
+      <IntegrationsScreen embedded onChanged={onRecheck} />
       <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EMBED_SCOPE_NOTE}</p>
     </div>
   );

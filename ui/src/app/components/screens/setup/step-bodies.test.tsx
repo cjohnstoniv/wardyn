@@ -6,16 +6,17 @@
 // Smoke-level only: each step body renders with minimal fixtures and shows one
 // signature element; the deep orchestrator assertions live in
 // setup-screen.test.tsx. Mocking conventions mirror setup-screen.test.tsx (same
-// api-module mock shape, same baseStatus()). HostProxyStep/ArtifactRepoStep are
-// no longer top-level Getting-started steps (they're embedded in the
-// Integrations "Add integration" dialog instead — see
-// integrations/add-integration-dialog.test.tsx for that flow's own coverage);
-// their component contract is unchanged, so their render-smoke tests stay here.
+// api-module mock shape, same baseStatus()). HostProxyStep/ArtifactRepoStep
+// USED to be smoke-tested here; both bodies were deleted with the Corporate-
+// network consolidation (their last caller was the Integrations "Add
+// integration" dialog's mirror/proxy hand-off, and that hand-off retired), so
+// their tests went too — the surviving behaviour is covered by
+// setup/corp-network-step.test.tsx.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
 
 const getSetupStatusMock = vi.fn();
 const listSecretsMock = vi.fn();
@@ -73,7 +74,7 @@ vi.mock("../../../lib/api/integrations", async () => {
   return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
 });
 
-import { HostProxyStep, ArtifactRepoStep, WorkspacesStep, ReviewStep, LaunchStep } from "./step-bodies";
+import { WorkspacesStep, ReviewStep, LaunchStep } from "./step-bodies";
 import { deriveReadiness } from "../onboarding/intro";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
@@ -96,18 +97,6 @@ function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
-// V2: the corp steps (Host Proxy / SCM Provider / Artifact Redirect) no longer
-// own their own SiteConfig fetch — the orchestrator does, and hands down
-// siteConfig + reloadSiteConfig/saveSiteConfig. Fresh mocks per call so a test
-// asserting on saveSiteConfig doesn't inherit another test's call history.
-function siteConfigProps(cfg: SiteConfig | null = {}) {
-  return {
-    siteConfig: cfg,
-    reloadSiteConfig: vi.fn().mockResolvedValue(undefined),
-    saveSiteConfig: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
 describe("step-bodies.tsx — smoke", () => {
   beforeEach(() => {
     getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
@@ -120,77 +109,6 @@ describe("step-bodies.tsx — smoke", () => {
     getSiteConfigMock.mockReset().mockResolvedValue({});
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
     scanWorkspaceMock.mockReset().mockResolvedValue({ async: false });
-  });
-
-  it("HostProxyStep renders its upstream-proxy-secret field", async () => {
-    render(
-      <HostProxyStep
-        status={baseStatus()}
-        {...siteConfigProps()}
-        onAddSecret={vi.fn()}
-        onRecheck={vi.fn()}
-        rechecking={false}
-      />,
-    );
-    expect(await screen.findByText("Upstream proxy secret name")).toBeInTheDocument();
-  });
-
-  it("HostProxyStep's Add-secret button opens the flow inline (no dead cross-step pointer)", async () => {
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const onAddSecret = vi.fn();
-    render(
-      <HostProxyStep
-        status={baseStatus()}
-        {...siteConfigProps()}
-        onAddSecret={onAddSecret}
-        onRecheck={vi.fn()}
-        rechecking={false}
-      />,
-    );
-    await user.click(await screen.findByRole("button", { name: /add secret/i }));
-    // Empty field falls back to the conventional name.
-    expect(onAddSecret).toHaveBeenCalledWith("upstream-proxy-url");
-  });
-
-  it("ArtifactRepoStep renders its ecosystem field", async () => {
-    render(
-      <ArtifactRepoStep status={baseStatus()} {...siteConfigProps()} onRecheck={vi.fn()} rechecking={false} />,
-    );
-    expect(await screen.findByText("Ecosystem")).toBeInTheDocument();
-  });
-
-  it("ArtifactRepoStep writes egress_redirects, NEVER the deprecated map — a body with both 400s", async () => {
-    // PUT /site-config is a whole-document replace, so this body carries the
-    // stored egress_redirects back; the server rejects a document setting both
-    // fields. Writing the legacy map therefore fails once ANY redirect exists
-    // — which, after this step's own first save, is always.
-    // A stored pip redirect; the ecosystem select defaults to npm, so saving
-    // ADDS a second row rather than replacing this one.
-    const props = siteConfigProps({
-      egress_redirects: [{ from: "https://pypi.org/simple/", to: "https://nexus.corp/pypi", ecosystem: "pip" }],
-    });
-    const user = userEvent.setup();
-    render(<ArtifactRepoStep status={baseStatus()} {...props} onRecheck={vi.fn()} rechecking={false} />);
-
-    // The already-stored redirect renders from the new shape.
-    expect(await screen.findByText(/pip → https:\/\/nexus\.corp\/pypi/)).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText(/base url/i), "https://nexus.corp/npm");
-    await user.click(screen.getByRole("button", { name: /add\/update/i }));
-
-    const body = props.saveSiteConfig.mock.calls[0][0];
-    // The defect: sending the deprecated map alongside the redirects the server
-    // already stored is exactly the both-fields body it refuses.
-    expect(body.artifact_overrides).toBeUndefined();
-    expect(body.egress_redirects).toHaveLength(2);
-    // The new row carries the canonical public origin as `from` — the same one
-    // the server's own legacy fold synthesizes, so the two dedupe as one row.
-    expect(body.egress_redirects).toContainEqual(
-      expect.objectContaining({ from: "https://registry.npmjs.org/", to: "https://nexus.corp/npm", ecosystem: "npm" }),
-    );
-    // The pre-existing row survives — a whole-document replace that dropped it
-    // would silently unconfigure pip.
-    expect(body.egress_redirects).toContainEqual(expect.objectContaining({ ecosystem: "pip" }));
   });
 
   it("WorkspacesStep renders the empty-state onboard affordance", () => {
@@ -270,30 +188,4 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.queryByText(/no model connected/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/a sandbox barrier is required first/i)).not.toBeInTheDocument();
   });
-
-  // V2: a successful save PUTs through the orchestrator-owned saveSiteConfig
-  // (the single SiteConfig owner) instead of the step's own local hook.
-  it("HostProxyStep saves via the orchestrator-owned saveSiteConfig", async () => {
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const saveSiteConfig = vi.fn().mockResolvedValue(undefined);
-    render(
-      <HostProxyStep
-        status={baseStatus()}
-        {...siteConfigProps()}
-        saveSiteConfig={saveSiteConfig}
-        onAddSecret={vi.fn()}
-        onRecheck={vi.fn()}
-        rechecking={false}
-      />,
-    );
-    const input = await screen.findByPlaceholderText("upstream-proxy-url");
-    await user.type(input, "corp-proxy");
-    const saveBtn = screen.getByRole("button", { name: /^save$/i });
-    await waitFor(() => expect(saveBtn).toBeEnabled());
-    await user.click(saveBtn);
-    await waitFor(() =>
-      expect(saveSiteConfig).toHaveBeenCalledWith({ upstream_proxy_secret_ref: "corp-proxy" }),
-    );
-  });
-
 });

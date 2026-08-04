@@ -33,7 +33,7 @@ import {
   type BedrockLane,
   type CapabilityRow,
 } from "../../../lib/integrations";
-import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Switch } from "../../ui/switch";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
@@ -198,7 +198,7 @@ function ToolCompatibilityRegion({ row }: { row: IntegrationRow }) {
   return null;
 }
 
-type Loaded = { status: SetupStatus; siteConfig: SiteConfig; data: IntegrationsData };
+type Loaded = { status: SetupStatus; data: IntegrationsData };
 
 export function IntegrationDetailScreen() {
   const { id } = useParams<{ id: string }>();
@@ -214,7 +214,7 @@ export function IntegrationDetailScreen() {
     setState("loading");
     Promise.all([setupApi.getSetupStatus(), health.getSiteConfig(), secretsApi.listSecrets()])
       .then(([status, siteConfig, secretNames]) => {
-        setLoaded({ status, siteConfig, data: deriveIntegrations(status, siteConfig, secretNames) });
+        setLoaded({ status, data: deriveIntegrations(status, siteConfig, secretNames) });
         setState("ready");
       })
       .catch(() => setState("error"));
@@ -236,7 +236,7 @@ export function IntegrationDetailScreen() {
     );
   }
 
-  const { status, siteConfig, data } = loaded;
+  const { status, data } = loaded;
   const row = id ? findRow(data, id) : undefined;
 
   if (!row) {
@@ -427,7 +427,7 @@ export function IntegrationDetailScreen() {
           </ul>
         }
         onOpenChange={(o) => !o && setConfirmDelete(false)}
-        onDelete={() => deleteIntegration(row, siteConfig)}
+        onDelete={() => deleteIntegration(row)}
         onDeleted={() => navigate("/integrations")}
       />
     </div>

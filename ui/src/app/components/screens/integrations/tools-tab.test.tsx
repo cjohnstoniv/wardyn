@@ -9,11 +9,11 @@ import { T } from "../../../lib/integrations";
 import type { IntegrationsData } from "../../../lib/api/integrations";
 import { ToolsTab } from "./tools-tab";
 
-const EMPTY: IntegrationsData = { ai: [], scm: [], mirror: [], proxy: [] };
+const EMPTY: IntegrationsData = { ai: [], scm: [] };
 
 describe("ToolsTab — the six rows + LAW footer", () => {
   it("renders all six tool rows and the LAW footer, verbatim", () => {
-    render(<ToolsTab data={EMPTY} />);
+    render(<ToolsTab data={EMPTY} redirects={[]} />);
 
     expect(screen.getByText("git")).toBeInTheDocument();
     expect(screen.getByText("Package managers")).toBeInTheDocument();
@@ -44,7 +44,7 @@ describe("ToolsTab — the six rows + LAW footer", () => {
         },
       ],
     };
-    render(<ToolsTab data={data} />);
+    render(<ToolsTab data={data} redirects={[]} />);
     // Claude Code is now wiring-derived (shows the integration's name)…
     expect(screen.getByText("Anthropic (API key) · default")).toBeInTheDocument();
     // …but gh CLI / Your own tools still read "—" regardless of what's configured.
@@ -68,7 +68,21 @@ describe("ToolsTab — the six rows + LAW footer", () => {
         },
       ],
     };
-    render(<ToolsTab data={data} />);
+    render(<ToolsTab data={data} redirects={[]} />);
     expect(screen.getByText("GitHub")).toBeInTheDocument();
+  });
+
+  // An egress redirect stopped being an integration row when Corporate network
+  // took the category over, but it's still what a package manager fetches
+  // THROUGH — so this row reads it straight off the site config rather than
+  // falsely reporting "Nothing yet."
+  it("Package managers' Powered-by names the mirror host from egress_redirects, not an integration row", () => {
+    render(
+      <ToolsTab
+        data={EMPTY}
+        redirects={[{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }]}
+      />,
+    );
+    expect(screen.getByText("artifactory.corp.internal")).toBeInTheDocument();
   });
 });

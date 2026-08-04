@@ -26,9 +26,6 @@ import {
 // sentinels are the fast, in-repo tripwire for the same class of drift.
 describe("integrations — T canon sentinel pins", () => {
   it("pins plain entries verbatim, em-dashes included", () => {
-    expect(T.LEDE).toBe(
-      "Named connections to systems outside Wardyn — model providers, git hosts, egress redirects, your corporate proxy. Wardyn runs without any of them.",
-    );
     expect(T.LAW).toBe(
       "A tool is what the image carries. An integration is what it connects through. Wardyn never installs tools into your image — it only wires them at run time.",
     );
@@ -37,21 +34,25 @@ describe("integrations — T canon sentinel pins", () => {
     );
   });
 
-  // The 13->10 Corporate-network restructure's changed/new copy — a corporate
-  // proxy is now ordered BEFORE integrations in Getting Started (steps.ts), so
-  // the banner points there instead of just offering an inline add, and the
-  // embed note explains why host proxy / egress redirection stop appearing
-  // once that step exists. EMPTY_MIRROR is GONE (superseded by EMPTY_EGRESS) —
-  // asserting `in` rather than a value pins the deletion itself.
-  it("pins the corp-network-restructure copy (changed + new), and confirms EMPTY_MIRROR is deleted", () => {
-    expect(T.PROXY_BANNER).toBe(
-      "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, or add the Host proxy integration here.",
+  // The Corporate-network consolidation's changed/new copy. Corporate network
+  // is now the SINGLE home for a corporate proxy and for egress redirection —
+  // both categories left /integrations entirely — so the banner offers no
+  // "…or add it here" alternative, the footnote names one exception rather
+  // than three, and the two surfaces carry the two halves of one pointer
+  // (EMBED_SCOPE_NOTE back a step, CORP_POINTER forward into Getting
+  // started). Retired copy is DELETED, and asserting `in` pins each deletion.
+  it("pins the consolidation copy (changed + new), and confirms the retired lines are deleted", () => {
+    expect(T.LEDE).toBe(
+      "Named connections to systems outside Wardyn — model providers and git hosts. Wardyn runs without any of them.",
     );
-    expect(T.CAT_MIRROR).toBe(
-      "Points outbound traffic — registries, container images, a specific host — at an internal mirror or appliance. Skip if the public endpoints are reachable.",
+    expect(T.PROXY_BANNER).toBe(
+      "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, where the connectivity probe proves it.",
     );
     expect(T.FOOTNOTE).toBe(
-      "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the exceptions: the GitHub App's ref-confinement row (really asks GitHub) and the Test buttons on Host proxy and Egress redirection (really launch a throwaway probe).",
+      "Wardyn doesn't test-connect a stored credential. Everything here is what's stored and what Wardyn can see locally — the one exception is the GitHub App's ref-confinement row, which really asks GitHub.",
+    );
+    expect(T.CORP_POINTER).toBe(
+      "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Corporate network under Getting started, on the same screen as the probe that proves them.",
     );
     // Round E: the step must never CLAIM to be required — the proof is the
     // only required thing, and most hosts pass it in one click.
@@ -60,15 +61,21 @@ describe("integrations — T canon sentinel pins", () => {
     );
     expect(T.CORP_LEDE).not.toContain("Required");
     expect(T.EMBED_SCOPE_NOTE).toBe(
-      "Host proxy and egress redirection live one step back — Corporate network. On the full Integrations page all four categories appear.",
+      "This is the whole of it — the full Integrations page shows the same two categories. Your corporate proxy and any egress redirects live one step back, in Corporate network.",
     );
-    expect(T.EMPTY_EGRESS).toBe("None. Outbound traffic goes to the public endpoints.");
+    // …and NOT the old tail claiming the full page still shows all four.
+    expect(T.EMBED_SCOPE_NOTE).not.toContain("all four categories");
     expect(T.NOPROXY_NOTE).toBe("Not applied — Wardyn's own egress allowlist decides what a sandbox may reach.");
     expect(T.NOT_CONFIGURED).toBe("Not configured — sandboxes go direct");
     expect(T.CRED_URL_NOTE).toBe(
       "This URL has a username and password in it. Wardyn will store it as a secret so it isn't displayed or logged; the sandbox never holds it either way.",
     );
-    expect("EMPTY_MIRROR" in T).toBe(false);
+    // Copy that lost its surface is deleted, not left lying around: EMPTY_MIRROR
+    // went with the pre-Corporate-network rename, and these four went with the
+    // two categories themselves.
+    for (const gone of ["EMPTY_MIRROR", "EMPTY_EGRESS", "EMPTY_PROXY", "CAT_MIRROR", "CAT_PROXY"]) {
+      expect(gone in T).toBe(false);
+    }
   });
 
   it("pins the Test-probe verdict strings verbatim (T.TEST_STANDING makes clear these are honest, not inferred)", () => {
@@ -185,8 +192,12 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
   it("CATEGORY_META's skip-if line IS T.CAT_* (same string, not a re-typed copy)", () => {
     expect(CATEGORY_META.ai_provider.skipIfLine).toBe(T.CAT_AI);
     expect(CATEGORY_META.scm_host.skipIfLine).toBe(T.CAT_SCM);
-    expect(CATEGORY_META.artifact_mirror.skipIfLine).toBe(T.CAT_MIRROR);
-    expect(CATEGORY_META.host_proxy.skipIfLine).toBe(T.CAT_PROXY);
+  });
+
+  // Two categories, not the mock's four: an integration is an account with a
+  // system outside Wardyn, and Corporate network owns the network topology.
+  it("CATEGORY_META has exactly the two surviving categories", () => {
+    expect(Object.keys(CATEGORY_META).sort()).toEqual(["ai_provider", "scm_host"]);
   });
 
   it("AI_TYPES.desc IS the matching T.TY_* for the three single-lane key types", () => {

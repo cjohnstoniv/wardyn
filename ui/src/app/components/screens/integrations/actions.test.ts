@@ -3,122 +3,87 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// actions.ts had no dedicated test file before this wave — its deleteIntegration
-// branching grew real logic this round (current-shape egress_redirects removal
-// by index, legacy artifact_overrides removal by host, host_proxy now clearing
-// two mutually-exclusive fields instead of one), so it earns its own checks
-// rather than only being exercised indirectly through the screen's dialogs.
+// deleteIntegration's site-config branches (egress_redirects removal by index,
+// legacy artifact_overrides removal by host, clearing the two mutually-exclusive
+// proxy fields) went with the categories that needed them — Corporate network
+// owns a proxy and a redirect now, including their removal. What's left is one
+// rule for every remaining row, and these tests pin BOTH halves of it plus the
+// absence of any site-config write.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { IntegrationRow } from "../../../lib/api/integrations";
-import type { SiteConfig } from "../../../lib/types";
 
 const putSiteConfigMock = vi.fn();
 vi.mock("../../../lib/api/health", () => ({
   health: { putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a) },
 }));
 
+const deleteSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
-  secrets: { deleteSecret: vi.fn() },
+  secrets: { deleteSecret: (...a: unknown[]) => deleteSecretMock(...a) },
 }));
 
+const harnessDisconnectMock = vi.fn();
 vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: { harnessDisconnect: vi.fn() },
+  harnessAuth: { harnessDisconnect: (...a: unknown[]) => harnessDisconnectMock(...a) },
 }));
 
 import { canRotateInline, deleteIntegration, primarySecretName } from "./actions";
 
-function mirrorRow(overrides: Partial<IntegrationRow> = {}): IntegrationRow {
+function scmRow(overrides: Partial<IntegrationRow> = {}): IntegrationRow {
   return {
-    id: "mirror:artifactory.corp.internal",
-    category: "artifact_mirror",
-    name: "artifactory.corp.internal",
-    typeLabel: "npm → artifactory.corp.internal",
+    id: "scm:github.com",
+    category: "scm_host",
+    name: "GitHub",
+    typeLabel: "github.com",
     chips: [],
-    residency: "proxy_injected",
+    residency: "resident_env",
     posture: { kind: "configured" },
-    secretNames: [],
+    secretNames: ["git-pat-github-com"],
     checkIds: [],
     ...overrides,
   };
 }
 
-describe("deleteIntegration — artifact_mirror", () => {
-  beforeEach(() => putSiteConfigMock.mockReset().mockResolvedValue(undefined));
-
-  it("current shape: removes exactly the redirect at row.id's index from egress_redirects, leaving the rest", async () => {
-    const siteConfig: SiteConfig = {
-      egress_redirects: [
-        { from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" },
-        { from: "https://pypi.org/simple", to: "https://artifactory.corp.internal/api/pypi/pypi-remote/simple" },
-      ],
-    };
-    const row = mirrorRow({ id: "mirror:0", redirect: siteConfig.egress_redirects![0] });
-
-    await deleteIntegration(row, siteConfig);
-
-    expect(putSiteConfigMock).toHaveBeenCalledWith({
-      ...siteConfig,
-      egress_redirects: [siteConfig.egress_redirects![1]],
-    });
+describe("deleteIntegration", () => {
+  beforeEach(() => {
+    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    deleteSecretMock.mockReset().mockResolvedValue(undefined);
+    harnessDisconnectMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("legacy shape (no row.redirect): drops every ecosystem override pointed at the row's host, keeps other hosts", async () => {
-    const siteConfig: SiteConfig = {
-      artifact_overrides: {
-        npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" },
-        pip: { base_url: "https://artifactory.corp.internal/api/pip/pip-remote" },
-        go: { base_url: "https://other.corp.internal/api/go/go-remote" },
-      },
-    };
-    const row = mirrorRow();
+  it("deletes every backing secret, and never touches the site config", async () => {
+    await deleteIntegration(scmRow({ secretNames: ["github-app-id", "github-app-key"] }));
 
-    await deleteIntegration(row, siteConfig);
+    expect(deleteSecretMock.mock.calls.flat()).toEqual(["github-app-id", "github-app-key"]);
+    expect(putSiteConfigMock).not.toHaveBeenCalled();
+  });
 
-    expect(putSiteConfigMock).toHaveBeenCalledWith({
-      artifact_overrides: { go: siteConfig.artifact_overrides!.go },
-    });
+  it("a harness login is disconnected instead — its session is not a secret-store entry", async () => {
+    await deleteIntegration(
+      scmRow({ id: "ai:anthropic_subscription:managed", category: "ai_provider", harnessProvider: "anthropic", secretNames: [] }),
+    );
+
+    expect(harnessDisconnectMock).toHaveBeenCalledWith("anthropic");
+    expect(deleteSecretMock).not.toHaveBeenCalled();
+  });
+
+  it("one rejected secret delete surfaces, it isn't swallowed by the others", async () => {
+    deleteSecretMock.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("403 operator role required"));
+
+    await expect(deleteIntegration(scmRow({ secretNames: ["a", "b"] }))).rejects.toThrow(/operator role/);
   });
 });
 
-describe("deleteIntegration — host_proxy", () => {
-  beforeEach(() => putSiteConfigMock.mockReset().mockResolvedValue(undefined));
-
-  // BUG FIX (this wave, alongside the derivation fix): the old code cleared
-  // only upstream_proxy_secret_ref, so deleting a plain-URL proxy row left
-  // upstream_proxy_url in place — the row would silently come right back.
-  it("clears BOTH upstream_proxy_url and upstream_proxy_secret_ref, whichever was actually set", async () => {
-    const row: IntegrationRow = {
-      id: "proxy:host",
-      category: "host_proxy",
-      name: "Host proxy",
-      typeLabel: "corporate proxy",
-      chips: [],
-      residency: "proxy_injected",
-      posture: { kind: "configured" },
-      secretNames: [],
-      checkIds: [],
-      proxyUrl: "http://proxy.corp.acme.com:8080",
-    };
-    const siteConfig: SiteConfig = { upstream_proxy_url: "http://proxy.corp.acme.com:8080", scm_hosts: ["github.com"] };
-
-    await deleteIntegration(row, siteConfig);
-
-    expect(putSiteConfigMock).toHaveBeenCalledWith({
-      scm_hosts: ["github.com"],
-      upstream_proxy_url: undefined,
-      upstream_proxy_secret_ref: undefined,
-    });
-  });
-});
-
-describe("canRotateInline / primarySecretName — an egress redirect row", () => {
-  it("a network-only redirect (no token) cannot be rotated inline", () => {
-    expect(canRotateInline(mirrorRow())).toBe(false);
+describe("canRotateInline / primarySecretName", () => {
+  it("a row with no stored secret cannot be rotated inline", () => {
+    expect(canRotateInline(scmRow({ secretNames: [] }))).toBe(false);
   });
 
-  it("a redirect WITH a token can be rotated inline, targeting that token secret", () => {
-    const row = mirrorRow({ secretNames: ["artifactory-token"] });
-    expect(canRotateInline(row)).toBe(true);
-    expect(primarySecretName(row)).toBe("artifactory-token");
+  it("a row WITH a secret can be, targeting the first one — except the GitHub App, which targets the PEM", () => {
+    expect(canRotateInline(scmRow())).toBe(true);
+    expect(primarySecretName(scmRow())).toBe("git-pat-github-com");
+    expect(primarySecretName(scmRow({ isGithubApp: true, secretNames: ["github-app-id", "github-app-key"] }))).toBe(
+      "github-app-key",
+    );
   });
 });
