@@ -5,6 +5,9 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,4 +119,61 @@ type errTicketStore struct{ store.Store }
 
 func (errTicketStore) ConsumeAttachTicket(context.Context, string, time.Time) (store.AttachTicket, bool, error) {
 	return store.AttachTicket{}, false, context.DeadlineExceeded
+}
+
+// TestAttachWS_TicketRoleAuthorization pins item 3's WS-handler-side re-check
+// (attach.go's handleAttachWS): the ticket lane bypasses humanOrAdminAuth /
+// requireOperator entirely, so the ticket's OWN stamped role/principal
+// (captured at MINT time) is the only authorization signal left when the
+// WebSocket route is reached via ?ticket=. This complements
+// authz_test.go's matrix, which only exercises the ticket-LESS fallback
+// lane (classAdmin) — chi.Walk reports one route regardless of which lane a
+// request takes, so this property needs its own test.
+//
+// The check runs BEFORE websocket.Accept, so a denial is a plain HTTP 403 —
+// testable with httptest, no real WebSocket client needed. An ALLOWED
+// scenario is asserted by absence of that specific 403 (the plain
+// httptest.ResponseRecorder this test drives cannot complete a real
+// WebSocket upgrade — coder/websocket's Accept fails for its OWN unrelated
+// reason once past this check, same as any non-WS httptest client hitting a
+// WS route).
+func TestAttachWS_TicketRoleAuthorization(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{} // past the "no runner configured" 503 into the ticket-role check
+	srv := New(cfg)
+
+	ownedRun := uuid.New()
+	ast.mu.Lock()
+	ast.runs[ownedRun] = types.AgentRun{ID: ownedRun, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Unlock()
+
+	const deniedMsg = "attach ticket does not authorize this run"
+
+	mint := func(principal, role string) string {
+		t.Helper()
+		tok, err := mintAttachTicket(context.Background(), ast, ownedRun, types.ActorHuman, principal, role, time.Now())
+		if err != nil {
+			t.Fatalf("mint(%s, %s): %v", principal, role, err)
+		}
+		return tok
+	}
+	attach := func(tok string) *httptest.ResponseRecorder {
+		return do(t, srv, http.MethodGet, "/api/v1/runs/"+ownedRun.String()+"/attach?ticket="+tok, "", "")
+	}
+
+	// The owning member's ticket must get PAST the ticket-role check.
+	if w := attach(mint("alice", oidc.RoleMember)); w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), deniedMsg) {
+		t.Fatalf("owning member's ticket was refused by the ticket-role check: %s", w.Body.String())
+	}
+	// A non-owning member's ticket must be refused BY THE TICKET-ROLE CHECK
+	// specifically (not merely fail for some unrelated reason).
+	if w := attach(mint("mallory", oidc.RoleMember)); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), deniedMsg) {
+		t.Fatalf("non-owning member's ticket: code=%d body=%q, want 403 %q", w.Code, w.Body.String(), deniedMsg)
+	}
+	// An admin-role ticket authorizes the run regardless of who minted it.
+	if w := attach(mint("root-admin", oidc.RoleAdmin)); w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), deniedMsg) {
+		t.Fatalf("admin-role ticket was refused by the ticket-role check: %s", w.Body.String())
+	}
 }
