@@ -751,9 +751,13 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Delete("/integrations/{id}", s.handleDeleteIntegration)
 			operatorOnly.Post("/integrations/{id}/adopt", s.handleAdoptIntegration)
 
-			// Recording replay: GET /api/v1/runs/{id}/recording/{id}
+			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin
+			// (item 4): recordingAuthorizer is the SAME ownership rule
+			// getRunAuthorized enforces, applied INSIDE the handler (the outer {id}
+			// here only selects a chi sub-route, so the authorization decision
+			// belongs to the mounted handler, not this registration).
 			if s.cfg.RecordingStore != nil {
-				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore))
+				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore, s.recordingAuthorizer))
 			}
 		})
 
