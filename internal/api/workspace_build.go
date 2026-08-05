@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -158,9 +159,25 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithoutCancel(r.Context())
 		built, okBuild := s.resolveWorkspaceImage(ctx, buildID, ws)
 		if !okBuild {
-			// resolveWorkspaceImage audited the specific failure; the tracker
-			// carries the honest headline for the wizard's poll.
-			s.builds.finish(ws.ID, "", "build failed — see the run.build audit trail for the reason")
+			// resolveWorkspaceImage audited the specific failure under buildID —
+			// read it back so the wizard shows the REAL reason, not a pointer
+			// at the audit trail.
+			detail := "build failed — see the run.build audit trail for the reason"
+			if evs, qerr := s.cfg.Store.QueryAuditEvents(ctx, buildID, 5); qerr == nil {
+				for _, ev := range evs {
+					if ev.Action != "run.build" || ev.Outcome != "failure" {
+						continue
+					}
+					var d struct {
+						Error string `json:"error"`
+					}
+					if json.Unmarshal(ev.Data, &d) == nil && d.Error != "" {
+						detail = d.Error
+					}
+					break
+				}
+			}
+			s.builds.finish(ws.ID, "", detail)
 			return
 		}
 		s.builds.finish(ws.ID, built, "")

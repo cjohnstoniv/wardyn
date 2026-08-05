@@ -364,6 +364,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # The devcontainer-build registry rides along with wardynd: every
+      # bring-up path names services explicitly (`up -d postgres dex wardynd`),
+      # and a sidecar outside that list simply never starts — the build step
+      # then fails with "dial tcp 127.0.0.1:5010: connection refused".
+      registry:
+        condition: service_started
       # required: false — dex is opt-in (profile "sso"); without it, Compose
       # would otherwise refuse to start wardynd at all when dex isn't part of
       # the active profile set ("depends on undefined service"). With SSO on,
