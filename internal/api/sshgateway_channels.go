@@ -181,13 +181,24 @@ func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) {
 // documented-safe no-op (ssh.Channel.Close on an already-closed channel just
 // returns an error, never panics).
 //
+// Also keeps runID's idle clock reset for the life of the stream (TouchRun +
+// attachKeepalive, cancelled when this function returns) — a long scp, a
+// held -L tunnel, or a slow `ssh run 'make build'` must not be reaped by
+// auto_stop mid-flight, same as bridgeSSHShell's own (separate) keepalive
+// for the interactive shell path.
+//
 // Returns the exit code (1 when Wait is absent or errors — clampExitCode's
 // same fold) and the total bytes copied Stdout->channel: what ssh.sftp's and
 // ssh.forward's "bytes" audit field means — the direction that matters for a
 // download/forward is what came OUT of the sandbox.
-func (s *Server) sshBridgeExecSession(channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
+func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
 	defer channel.Close()
 	drainExecStderr(channel, sess)
+
+	keepCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	_ = s.cfg.Store.TouchRun(keepCtx, runID)
+	go s.attachKeepalive(keepCtx, runID)
 
 	if sess.Stdin != nil {
 		go func() {
@@ -260,8 +271,12 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			_ = req.Reply(true, nil)
 
 		case "env":
+			// Bounded on two axes: !started (no point capturing env after
+			// exec/shell/subsystem already dispatched — nothing reads it
+			// again) and len(env) < sshMaxEnvVars (an unbounded client could
+			// otherwise grow this slice forever pre-dispatch).
 			var m sshEnvMsg
-			if err := ssh.Unmarshal(req.Payload, &m); err == nil && sshEnvAllowed(m.Name) {
+			if !started && len(env) < sshMaxEnvVars && ssh.Unmarshal(req.Payload, &m) == nil && sshEnvAllowed(m.Name) {
 				env = append(env, m.Name+"="+m.Value)
 			}
 			_ = req.Reply(true, nil)
@@ -293,10 +308,10 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
-			go func(done chan struct{}, c, r uint16) {
-				defer close(done)
-				s.bridgeSSHShell(ctx, runID, principal, channel, c, r, resizeCh)
-			}(bridgeDone, cols, rows)
+			sshGo(func() {
+				defer close(bridgeDone)
+				s.bridgeSSHShell(ctx, runID, principal, channel, cols, rows, resizeCh)
+			})
 
 		case "exec":
 			if started {
@@ -311,10 +326,11 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
-			go func(done chan struct{}, command string, e []string) {
-				defer close(done)
-				s.bridgeSSHExec(ctx, runID, principal, channel, command, e)
-			}(bridgeDone, m.Command, env)
+			command := m.Command
+			sshGo(func() {
+				defer close(bridgeDone)
+				s.bridgeSSHExec(ctx, runID, principal, channel, command, env)
+			})
 
 		case "subsystem":
 			if started {
@@ -329,10 +345,10 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
-			go func(done chan struct{}) {
-				defer close(done)
+			sshGo(func() {
+				defer close(bridgeDone)
 				s.bridgeSSHSFTP(ctx, runID, principal, channel)
-			}(bridgeDone)
+			})
 
 		default:
 			// Everything else — agent forwarding (auth-agent-req@openssh.com),
@@ -366,10 +382,6 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	run, msg := s.sshFreshRun(ctx, runID)
 	if msg != "" {
 		sendChannelError(channel, msg)
-		return
-	}
-	if s.cfg.Runner == nil {
-		sendChannelError(channel, "no runner configured; ssh unavailable")
 		return
 	}
 	opts := runner.AttachOptions{Cols: cols, Rows: rows}
@@ -522,7 +534,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
 	}
-	exit, _ := s.sshBridgeExecSession(channel, sess, true)
+	exit, _ := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 		runID.String(), "success", mustJSON(map[string]any{"argv": command, "exit": exit})))
 }
@@ -550,7 +562,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, reason)
 		return
 	}
-	_, bytesOut := s.sshBridgeExecSession(channel, sess, true)
+	_, bytesOut := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp",
 		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut})))
 }
@@ -605,7 +617,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	go ssh.DiscardRequests(reqs)
 
-	_, bytesOut := s.sshBridgeExecSession(channel, sess, false)
+	_, bytesOut := s.sshBridgeExecSession(ctx, runID, channel, sess, false)
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
 		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))

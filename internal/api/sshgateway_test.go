@@ -441,6 +441,19 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 		if err == nil {
 			t.Fatal("dial for a non-owned run succeeded, want owner-only rejection")
 		}
+		// The key itself is genuine (alice's), just not authorized for
+		// bob's run — the audit trail must name alice, not "unknown", and
+		// must carry the caller's source IP.
+		ev := waitForAudit(t, h.audit, otherRun, "ssh.auth", "failure")
+		if ev == nil {
+			t.Fatalf("no failed ssh.auth event for the owner-mismatch case; events=%s", auditDump(h.audit.snapshot(), otherRun))
+		}
+		if ev.Actor != "alice@example.com" {
+			t.Errorf("ssh.auth failure actor = %q, want alice@example.com (a real, known principal — not \"unknown\")", ev.Actor)
+		}
+		if ev.SourceIP == "" {
+			t.Error("ssh.auth failure has no SourceIP recorded")
+		}
 	})
 
 	t.Run("malformed username (not a run id) is rejected", func(t *testing.T) {
@@ -456,6 +469,14 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 			t.Fatalf("owner dial failed: %v", err)
 		}
 		defer client.Close()
+
+		ev := waitForAudit(t, h.audit, ownRun, "ssh.auth", "success")
+		if ev == nil {
+			t.Fatalf("no successful ssh.auth event; events=%s", auditDump(h.audit.snapshot(), ownRun))
+		}
+		if ev.SourceIP == "" {
+			t.Error("ssh.auth success has no SourceIP recorded")
+		}
 	})
 
 	// Every case above left a trail: at least one failure and one success.
@@ -757,6 +778,179 @@ func TestSSHGateway_RemoteForwardRejected(t *testing.T) {
 
 	if _, err := client.Listen("tcp", "127.0.0.1:0"); err == nil {
 		t.Error("remote forward (-R / tcpip-forward) succeeded, want refused")
+	}
+}
+
+// TestSSHGateway_ShellChannelDrivesFakeSession drives an actual "shell"
+// channel through fakeShellSession end to end: the client's bytes reach
+// Runner.Attach's returned Session and echo back, and the bridge goes
+// through the SAME recorder call path as the browser terminal
+// (newSessionRecorder — a nil RecordingStore here makes it a documented
+// no-op, but the call itself, and the session.attach{transport:ssh} audit
+// it wraps, are exercised exactly as they would be in production).
+func TestSSHGateway_ShellChannelDrivesFakeSession(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{attachFn: func() (runner.Session, error) { return newFakeShellSession(), nil }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	in, err := sess.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	out, err := sess.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+
+	payload := []byte("echo hi\n")
+	if _, err := in.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(out, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(buf) != string(payload) {
+		t.Errorf("echoed = %q, want %q (fakeShellSession echoes verbatim)", buf, payload)
+	}
+
+	ev := waitForAudit(t, h.audit, run.ID, "session.attach", "success")
+	if ev == nil {
+		t.Fatalf("no successful session.attach audit event; events=%s", auditDump(h.audit.snapshot(), run.ID))
+	}
+	if !strings.Contains(string(ev.Data), `"transport":"ssh"`) {
+		t.Errorf("session.attach data = %s, want transport:ssh", ev.Data)
+	}
+}
+
+// TestSSHGateway_MaxSessionsPerRunEnforced pins the per-run channel cap
+// (maxSSHSessionsPerRun): the run's owner may hold that many concurrent
+// "session" channels open, and the NEXT one is rejected at channel-open time
+// (client.NewSession() itself errors — the cap bites before any shell/exec/
+// subsystem request is even sent).
+func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{attachFn: func() (runner.Session, error) { return newFakeShellSession(), nil }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	var sessions []*ssh.Session
+	defer func() {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+	}()
+	for i := 0; i < maxSSHSessionsPerRun; i++ {
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("session %d: %v", i, err)
+		}
+		// A real (never-written, never-closed) StdinPipe — NOT a bare
+		// Shell() with no Stdin configured. Session.Shell wires an EMPTY
+		// bytes.Buffer as Stdin when none is set, and the client's own
+		// background copy goroutine hits that buffer's immediate EOF and
+		// sends channel EOF right back — which tears the session down
+		// server-side (and frees its cap slot) before this loop even reaches
+		// its next iteration, so EVERY session "succeeds" and the cap looks
+		// unenforced. StdinPipe keeps the channel genuinely open.
+		if _, err := sess.StdinPipe(); err != nil {
+			t.Fatalf("session %d stdin pipe: %v", i, err)
+		}
+		if err := sess.Shell(); err != nil {
+			t.Fatalf("session %d shell: %v", i, err)
+		}
+		sessions = append(sessions, sess)
+	}
+
+	if _, err := client.NewSession(); err == nil {
+		t.Errorf("session over maxSSHSessionsPerRun=%d succeeded, want rejected", maxSSHSessionsPerRun)
+	}
+}
+
+// TestSSHGateway_MaxConnectionsEnforced pins the total concurrent-connection
+// cap (maxSSHConnections): a connection accepted over the cap is closed
+// immediately, before any handshake byte is exchanged — checked at the raw
+// TCP level (no auth needed to observe it; the cap bites before
+// NewServerConn is even called).
+func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
+	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{})
+
+	var conns []net.Conn
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < maxSSHConnections; i++ {
+		c, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
+		if err != nil {
+			t.Fatalf("conn %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+
+	over, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial over cap: %v", err)
+	}
+	defer over.Close()
+	_ = over.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1)
+	n, rerr := over.Read(buf)
+	if n > 0 || rerr == nil {
+		t.Errorf("connection over maxSSHConnections got a byte / no error (n=%d, err=%v), want the server to close it immediately", n, rerr)
+	}
+}
+
+// TestSSHGateway_HandshakeTimeoutFires pins the pre-auth DoS bound itself: a
+// connection that never sends the SSH version string is closed by the
+// server on its own within sshHandshakeTimeout, not held open forever —
+// ssh.NewServerConn has no default timeout, so this deadline is the only
+// thing that bounds it. Slow by design (waits out the real constant).
+func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
+	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{})
+
+	conn, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	// Never send a client version string — the handshake can never
+	// complete. This is NOT "zero bytes ever arrive": unlike the over-cap
+	// case above (closed before ssh.NewServerConn is even called), an
+	// under-cap connection DOES reach NewServerConn, which sends the
+	// server's OWN version banner immediately as part of the protocol —
+	// drain and discard it. What is under test is whether the connection
+	// EVER closes on its own: a read deadline well past sshHandshakeTimeout
+	// distinguishes "closed by the server's own deadline" (io.Copy reaches
+	// EOF/an error before ours fires) from "held open forever" (ours fires
+	// first, surfacing as a Timeout() net.Error).
+	_ = conn.SetReadDeadline(time.Now().Add(sshHandshakeTimeout + 5*time.Second))
+	_, rerr := io.Copy(io.Discard, conn)
+	var netErr net.Error
+	if errors.As(rerr, &netErr) && netErr.Timeout() {
+		t.Fatalf("connection stayed open past sshHandshakeTimeout+5s margin — the server-side deadline never closed it")
 	}
 }
 

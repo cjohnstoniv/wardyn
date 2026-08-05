@@ -128,4 +128,22 @@ describe("ConnectSSHCard — content", () => {
     await screen.findByText("Connect via SSH");
     expect(screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example`)).toBeInTheDocument();
   });
+
+  it("splits a bracketed IPv6 advertise_addr into host + port, not a mangled fragment", async () => {
+    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "[2001:db8::1]:2222" } });
+    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
+    renderCard();
+
+    await screen.findByText("Connect via SSH");
+    expect(screen.getByText(`ssh ${baseRun.id}@2001:db8::1 -p 2222`)).toBeInTheDocument();
+  });
+
+  it("treats a bare (unbracketed) IPv6 advertise_addr as host-only — no port to split off", async () => {
+    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "2001:db8::1" } });
+    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
+    renderCard();
+
+    await screen.findByText("Connect via SSH");
+    expect(screen.getByText(`ssh ${baseRun.id}@2001:db8::1`)).toBeInTheDocument();
+  });
 });

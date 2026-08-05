@@ -730,8 +730,18 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 // splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)
 // into its parts for the command/config rendering above. A bare host with no
 // port renders with no `-p` flag / a conventional default Port 22 — honest
-// either way, never a guessed port.
+// either way, never a guessed port. Handles a bracketed IPv6 host+port
+// ("[::1]:2222") and a BARE (unbracketed) IPv6 literal with no port
+// ("::1", "2001:db8::1") — lastIndexOf(":") alone mangles both: the former
+// needs the brackets stripped, not just the last colon split off, and the
+// latter has no port to split at all (naive lastIndexOf would carve a
+// fragment off the address itself).
 function splitHostPort(addr: string): [host: string, port: string] {
+  const bracketed = addr.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (bracketed) return [bracketed[1], bracketed[2] ?? ""];
+  // More than one colon, unbracketed: a bare IPv6 literal (always has 2+
+  // colons), never a "host:port" pair (a hostname/IPv4 host has none).
+  if ((addr.match(/:/g)?.length ?? 0) > 1) return [addr, ""];
   const i = addr.lastIndexOf(":");
   if (i < 0) return [addr, ""];
   return [addr.slice(0, i), addr.slice(i + 1)];

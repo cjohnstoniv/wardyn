@@ -207,9 +207,10 @@ the canary, never merely claimed because a policy object was applied.
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research area; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
-| Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B8 |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin/operator reaching another human's run still uses the web terminal (`requireOperator`-gated), never SSH. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`. | B8, AU |
-| SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH session (shell/exec/sftp) channels, independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells, not just how many strangers can knock. | B8 |
+| Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers the gap the handshake deadline structurally cannot: it is a `net.Conn` deadline, so it does nothing while `PublicKeyCallback` (`sshAuth`) is blocked on a store call or an audit write rather than on socket I/O — `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a stuck backend call can no longer let an unauthenticated client park a connection slot indefinitely. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B8 |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin/operator reaching another human's run still uses the web terminal (`requireOperator`-gated), never SSH. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B8, AU |
+| SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells or forwards, not just how many strangers can knock. | B8 |
+| Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine (session dispatch, direct-tcpip dispatch, shell/exec/sftp bridge) runs through one shared `sshGo` wrapper with `recover()` — a bug in any one SSH session is contained to that session, never the process. Structurally distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode) instead of dereferencing a nil interface. | B1, B8 |
 | SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B8 |
 
 ---
@@ -434,6 +435,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`internal/api/sshgateway.go`'s `sshAuth`) rather than built now — no
     deployment has asked for it, and the narrower behavior is safe by
     construction, not merely unfinished.
+
+16. **SSH key fingerprint squatting has no self-service remediation.** The
+    `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a given
+    key must authenticate to exactly one principal, so two rows for the same
+    fingerprint would be a genuine ambiguity, not a feature. That correctness
+    property has a griefing residual: whoever `POST`s a given public key
+    FIRST owns that fingerprint forever, so a malicious (or merely
+    first-mover) registrant can squat a key someone else also holds — most
+    plausibly one whose public half is already posted somewhere public, like
+    a GitHub profile — permanently 409-ing the rightful holder's own
+    registration attempt. The 409 message is deliberately generic (does not
+    confirm the key exists under a different account, so probing "does
+    Wardyn have this key" is not free reconnaissance), but that is a
+    disclosure mitigation, not a fix: the squat itself is not detected or
+    prevented, only made harder to CONFIRM from outside. The only
+    remediation is operator-side, out of band (identity-verify the rightful
+    owner, then delete the squatted row directly — `docs/SSH.md`'s
+    "Reclaiming a squatted fingerprint") — there is no automated
+    dispute/ownership-transfer flow, and the freed fingerprint can be
+    re-squatted by anyone, including the original squatter, the instant it's
+    deleted. Low severity (SSH access to a specific run someone already owns
+    is the blast radius, not a broader compromise) but worth stating plainly
+    rather than leaving "why did my key registration 409 forever" unanswered.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

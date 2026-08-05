@@ -12,6 +12,7 @@ package api
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,6 +23,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// sshMaxKeysPerPrincipal bounds how many keys one human may register — a
+// small, generous cap against an accidental (or scripted) unbounded-add loop;
+// remove an old key first past this.
+const sshMaxKeysPerPrincipal = 20
 
 // addSSHKeyRequest is the POST /api/v1/me/ssh-keys body.
 type addSSHKeyRequest struct {
@@ -60,6 +66,18 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		name = comment
 	}
 	principal := principalFromRequest(r)
+
+	existing, err := s.cfg.Store.ListSSHKeysByPrincipal(r.Context(), principal)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list ssh keys: "+err.Error())
+		return
+	}
+	if len(existing) >= sshMaxKeysPerPrincipal {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("too many registered keys (max %d) — remove one first", sshMaxKeysPerPrincipal))
+		return
+	}
+
 	k := types.SSHPublicKey{
 		// FingerprintSHA256 + MarshalAuthorizedKey are both computed from the
 		// PARSED key, never echoing the caller's raw bytes back into storage —
@@ -72,7 +90,14 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	added, err := s.cfg.Store.AddSSHKey(r.Context(), k)
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, "this key is already registered")
+		// Generic on purpose: the fingerprint PK is GLOBAL (correct — a key
+		// must map to exactly one principal), so this 409 can legitimately
+		// mean "you already added it" OR "someone else holds it". Naming
+		// "already registered" would confirm the SECOND case to a caller who
+		// does not own it — key-squatting reconnaissance. See docs/SSH.md's
+		// remediation section and THREAT-MODEL.md's residual for the
+		// operator-side fix (there is no self-service one by design).
+		writeError(w, http.StatusConflict, "unable to register this key")
 		return
 	}
 	if err != nil {
@@ -129,7 +154,7 @@ func parseSSHAuthorizedKeyLine(raw string) (pk ssh.PublicKey, comment, msg strin
 	if trimmed == "" {
 		return nil, "", "public_key is required"
 	}
-	if strings.Contains(trimmed, "PRIVATE KEY") {
+	if strings.Contains(trimmed, "PRIVATE KEY") || strings.Contains(trimmed, "PuTTY-User-Key-File") {
 		return nil, "", "this looks like a PRIVATE key — paste your PUBLIC key instead (e.g. the contents of ~/.ssh/id_ed25519.pub)"
 	}
 	parsed, cmt, _, rest, err := ssh.ParseAuthorizedKey([]byte(trimmed))

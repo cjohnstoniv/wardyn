@@ -32,6 +32,30 @@ the console) is the `SHA256:…` form `ssh-keygen -lf` prints; it is **public
 by design** — it identifies the server/key, it authenticates no one, so
 showing it is not a disclosure.
 
+Registration is first-come, first-served, max `20` keys per principal, and a
+duplicate add (`POST` of a key already registered — by you or by someone
+else) 409s with a deliberately generic message: it does not confirm the key
+exists under a DIFFERENT account, only that this exact `POST` didn't take.
+
+### Reclaiming a squatted fingerprint
+
+The fingerprint primary key is **global** — correct for auth, since a key
+must map to exactly one principal, never two. That means it is also, by
+construction, possible for someone else to register a public key you also
+hold before you do (e.g. a key whose public half you've posted somewhere,
+like a GitHub profile), after which your own `POST` 409s indefinitely — the
+API never confirms who holds it, so there is no self-service resolution.
+An operator can free the slot at the database directly, once the rightful
+owner is verified out-of-band:
+
+```sql
+DELETE FROM ssh_public_keys WHERE fingerprint = 'SHA256:...';
+```
+
+The freed fingerprint can then be re-registered by anyone — including,
+again, whoever squatted it — so pair this with actually identifying who the
+key belongs to, not just running the query.
+
 ## 2. Connect
 
 The run detail page's "Connect via SSH" card shows the exact command for a
@@ -94,6 +118,11 @@ unaffected by this feature: no new network path is opened, forwarding rides
 inside the existing sandbox network namespace). `-R` (remote/reverse
 forwarding) and agent/X11 forwarding are refused outright — see
 [Bounds](#bounds).
+
+The forward dials `127.0.0.1` specifically (IPv4) — a service inside the
+sandbox that binds only an IPv6 loopback (`::1`) or a v6-only wildcard is
+not reached this way. Bind `127.0.0.1` (or `0.0.0.0`) for anything you want
+to reach over `-L`.
 
 ## 5. VS Code Remote-SSH
 
@@ -173,13 +202,18 @@ surface, not a nuisance:
   established session is never killed by it);
 - a bounded total concurrent-connection count (a connection over the cap is
   closed immediately, before any handshake byte is exchanged);
-- a small, documented cap on concurrent SSH sessions (shell/exec/sftp
-  channels) per run, so one run cannot exhaust the daemon's own resources
-  by opening unbounded parallel shells.
+- a small, documented cap on concurrent SSH channels — `session` (shell/
+  exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME per-run
+  counter — so one run cannot exhaust the daemon's own resources by opening
+  unbounded parallel shells OR unbounded forwards.
 
-**Idle auto-stop.** An active SSH session keeps the run's idle clock reset
-(`TouchRun`), exactly like the browser terminal — `auto_stop_after_sec`
-governs an SSH session identically to any other activity.
+**Idle auto-stop.** A shell, a running `exec`, an open sftp subsystem, and a
+held `-L` forward ALL keep the run's idle clock reset (`TouchRun`) for as
+long as they're open — a long `scp`, a slow `ssh run 'make build'`, or a
+tunnel held open in another terminal is exactly as protected as the
+interactive shell is. `auto_stop_after_sec` governs an SSH session
+identically to any other activity, on every channel kind, not just the
+shell.
 
 **Env allowlist.** A non-interactive `ssh <run-id>@host <cmd>` forwards only
 `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing

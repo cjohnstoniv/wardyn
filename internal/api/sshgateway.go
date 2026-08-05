@@ -43,12 +43,44 @@ const (
 	// immediately — before any handshake byte is read or written — so the
 	// bound bites before a goroutine or a NewServerConn call is spent on it.
 	maxSSHConnections = 64
-	// maxSSHSessionsPerRun bounds concurrent "session" channels (shell/exec/
-	// subsystem) a single run may have open across every SSH connection
-	// combined. A resource-exhaustion bound, not a product limit — raise it if
-	// a real workflow needs more concurrent shells into one run.
+	// maxSSHSessionsPerRun bounds concurrent SSH channels — "session" (shell/
+	// exec/sftp) AND "direct-tcpip" (-L forwards) both draw from the SAME
+	// per-run counter — a single run may have open across every SSH
+	// connection combined. A resource-exhaustion bound, not a product limit —
+	// raise it if a real workflow needs more concurrent shells/forwards into
+	// one run.
 	maxSSHSessionsPerRun = 4
+	// sshMaxEnvVars bounds how many "env" requests a single session channel
+	// accepts before dispatch (shell/exec/subsystem) — an unbounded client
+	// could otherwise grow the env slice forever pre-dispatch.
+	sshMaxEnvVars = 32
+	// sshAuthTimeout bounds sshAuth's own store lookups + synchronous audit
+	// write. The pre-auth handshake deadline (sshHandshakeTimeout) cannot
+	// interrupt a blocked call INSIDE PublicKeyCallback — NewServerConn is
+	// what owns the deadline, not the callback — so a slow/blocked backend
+	// call here would otherwise let an unauthenticated client park a
+	// connection slot indefinitely.
+	sshAuthTimeout = 5 * time.Second
 )
+
+// sshGo runs fn in a new goroutine with panic recovery — the ONE place that
+// containment lives, used at every per-connection and per-channel spawn site
+// in this file and sshgateway_channels.go. cmd/wardynd's goSafe (the same
+// contract) lives in package main and can't be imported here, but an
+// unrecovered panic in ANY of these goroutines would still crash the whole
+// daemon — and with it the kill switch every other run depends on, not just
+// this one SSH session — so every spawn site needs this, not only the
+// connection-level one.
+func sshGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("wardynd: PANIC in ssh goroutine (contained)", slog.Any("panic", r))
+			}
+		}()
+		fn()
+	}()
+}
 
 // ServeSSHGateway blocks running the SSH gateway's accept loop until ctx is
 // cancelled or the listener fails unrecoverably. A no-op (nil error) when the
@@ -95,19 +127,10 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 		}
 		select {
 		case sem <- struct{}{}:
-			go func() {
+			sshGo(func() {
 				defer func() { <-sem }()
-				// goSafe's contract, inlined: cmd/wardynd's goSafe lives in
-				// package main and cannot be imported here, but an unrecovered
-				// panic in this per-connection goroutine would still take down
-				// the whole daemon, so it gets the same containment.
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("wardynd: PANIC in ssh connection handler (contained)", slog.Any("panic", r))
-					}
-				}()
 				s.handleSSHConn(ctx, conn, cfg)
-			}()
+			})
 		default:
 			// Over the concurrent-connection cap: reject before any handshake
 			// byte is read/written — the DoS bound has to bite here, not after
@@ -161,18 +184,27 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 //
 // Every rejection is audited under ssh.auth — including an unknown key or an
 // unparseable/unknown run id — so a scan against the gateway leaves a trail.
+//
+// sshAuthTimeout-bounded: this runs INSIDE ssh.NewServerConn's handshake,
+// which has no deadline of its own over callback-internal work — the
+// pre-auth net.Conn deadline (sshHandshakeTimeout, handleSSHConn) only fires
+// on the NEXT socket I/O, so it does nothing while this function is blocked
+// on a store call or an audit write. Without its own bound, a slow/stuck
+// backend call here lets an UNAUTHENTICATED client park a connection slot
+// (one of maxSSHConnections) indefinitely.
 func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-	ctx := s.cfg.BaseCtx
+	ctx, cancel := context.WithTimeout(s.cfg.BaseCtx, sshAuthTimeout)
+	defer cancel()
 	fp := ssh.FingerprintSHA256(key)
 
 	runID, err := uuid.Parse(conn.User())
 	if err != nil {
-		s.sshAuditAuthFailure(ctx, nil, fp, "invalid username (want a run id)")
+		s.sshAuditAuthFailure(ctx, conn, nil, "unknown", fp, "invalid username (want a run id)")
 		return nil, errors.New("ssh: username must be the run id")
 	}
 	rec, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
 	if err != nil {
-		s.sshAuditAuthFailure(ctx, &runID, fp, "unregistered key")
+		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unregistered key")
 		return nil, errors.New("ssh: unknown key")
 	}
 	// Defense in depth: re-verify byte-equality against the STORED key
@@ -181,29 +213,37 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// implementation bug in the index, not a cryptographic one.
 	stored, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(rec.PublicKey))
 	if perr != nil || stored == nil || !bytes.Equal(stored.Marshal(), key.Marshal()) {
-		s.sshAuditAuthFailure(ctx, &runID, fp, "stored key mismatch")
+		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "stored key mismatch")
 		return nil, errors.New("ssh: unknown key")
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		s.sshAuditAuthFailure(ctx, &runID, fp, "unknown run")
+		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unknown run")
 		return nil, errors.New("ssh: unknown run")
 	}
 	if run.CreatedBy != rec.Principal {
-		s.sshAuditAuthFailure(ctx, &runID, fp, "not the run owner")
+		// The key itself is genuine (owned by rec.Principal) — just not
+		// authorized for THIS run — so, unlike the other failures above, a
+		// real principal is known here and worth recording instead of
+		// "unknown".
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "not the run owner")
 		return nil, errors.New("ssh: not authorized for this run")
 	}
 
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, rec.Principal, "ssh.auth", fp, "success", nil))
+	successEv := s.auditEvent(&runID, types.ActorHuman, rec.Principal, "ssh.auth", fp, "success", nil)
+	successEv.SourceIP = conn.RemoteAddr().String()
+	s.recordAudit(ctx, successEv)
 	return &ssh.Permissions{Extensions: map[string]string{
 		"principal": rec.Principal,
 		"run_id":    runID.String(),
 	}}, nil
 }
 
-func (s *Server) sshAuditAuthFailure(ctx context.Context, runID *uuid.UUID, fingerprint, reason string) {
-	s.recordAudit(ctx, s.auditEvent(runID, types.ActorHuman, "unknown", "ssh.auth", fingerprint, "failure",
-		mustJSON(map[string]any{"reason": reason})))
+func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {
+	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.auth", fingerprint, "failure",
+		mustJSON(map[string]any{"reason": reason}))
+	ev.SourceIP = conn.RemoteAddr().String()
+	s.recordAudit(ctx, ev)
 }
 
 // handleSSHConn completes the handshake (bounded by sshHandshakeTimeout, then
@@ -246,18 +286,31 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 
 	for newCh := range chans {
 		switch newCh.ChannelType() {
+		// "session" (shell/exec/sftp) and "direct-tcpip" (-L forwards) share
+		// ONE per-run cap (sshAcquireSession/maxSSHSessionsPerRun) — a single
+		// owner opening unbounded forwards is exactly the same resource-
+		// exhaustion shape as unbounded shells, so both draw from the same
+		// counter rather than needing a second one.
 		case "session":
 			if !s.sshAcquireSession(runID) {
 				_ = newCh.Reject(ssh.ResourceShortage,
-					fmt.Sprintf("too many concurrent SSH sessions for this run (max %d)", maxSSHSessionsPerRun))
+					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", maxSSHSessionsPerRun))
 				continue
 			}
-			go func(nc ssh.NewChannel) {
+			sshGo(func() {
 				defer s.sshReleaseSession(runID)
-				s.handleSSHSessionChannel(connCtx, runID, principal, nc)
-			}(newCh)
+				s.handleSSHSessionChannel(connCtx, runID, principal, newCh)
+			})
 		case "direct-tcpip":
-			go s.handleSSHDirectTCPIP(connCtx, runID, principal, newCh)
+			if !s.sshAcquireSession(runID) {
+				_ = newCh.Reject(ssh.ResourceShortage,
+					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", maxSSHSessionsPerRun))
+				continue
+			}
+			sshGo(func() {
+				defer s.sshReleaseSession(runID)
+				s.handleSSHDirectTCPIP(connCtx, runID, principal, newCh)
+			})
 		default:
 			// Structurally refuses everything else too — notably
 			// "auth-agent@openssh.com" and "x11", the channel TYPES agent/X11
@@ -271,8 +324,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	}
 }
 
-// sshAcquireSession reports whether runID may open one more concurrent
-// "session" channel, incrementing its count on success (maxSSHSessionsPerRun).
+// sshAcquireSession reports whether runID may open one more concurrent SSH
+// channel — "session" (shell/exec/sftp) OR "direct-tcpip" (-L forward), same
+// counter — incrementing its count on success (maxSSHSessionsPerRun).
 // Callers that get true MUST call sshReleaseSession exactly once when that
 // channel's handling ends.
 func (s *Server) sshAcquireSession(runID uuid.UUID) bool {
@@ -299,13 +353,24 @@ func (s *Server) sshReleaseSession(runID uuid.UUID) {
 
 // sshFreshRun re-fetches run fresh (state may have changed since the SSH
 // connection authenticated — auth checks OWNERSHIP, which is immutable, but
-// not liveness) and fails closed unless it is RUNNING with a live sandbox —
-// the same precondition handleAttachWS enforces before every attach. Returns
-// a non-empty, caller-facing message on failure; callers must return
+// not liveness) and fails closed unless a Runner is wired AND the run is
+// RUNNING with a live sandbox — the same precondition handleAttachWS
+// enforces before every attach. The nil-Runner guard lives HERE, not in each
+// of the four callers (bridgeSSHShell/bridgeSSHExec/bridgeSSHSFTP/
+// handleSSHDirectTCPIP all call this first): under the supported `-runner
+// none` (headless) mode, s.cfg.Runner is a nil INTERFACE value, and calling
+// ANY method on it — Attach, ExecStream — panics immediately (no concrete
+// type to dispatch to); one guard here closes that for every bridge instead
+// of three call sites that could individually forget it.
+//
+// Returns a non-empty, caller-facing message on failure; callers must return
 // immediately and surface it however fits their channel's lifecycle stage
 // (sendChannelError on an already-accepted channel, NewChannel.Reject
 // otherwise).
 func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID) (types.AgentRun, string) {
+	if s.cfg.Runner == nil {
+		return types.AgentRun{}, "no runner configured; ssh unavailable"
+	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return types.AgentRun{}, "run not found"
