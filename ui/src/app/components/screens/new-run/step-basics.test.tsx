@@ -8,6 +8,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StepBasics } from "./step-basics";
 import { initialWizardState } from "./wizard-types";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import type { Workspace } from "../../../lib/types";
 
 // Basics must (1) offer "Agent run" vs "Governed command" as a first-class
@@ -58,6 +59,26 @@ describe("StepBasics — run type + sandbox image", () => {
     const { container } = renderStep();
     expect(screen.getByLabelText("Sandbox image")).toBeInTheDocument();
     expect(container.querySelector("details")).toBeNull();
+  });
+
+  // B3: the server denies a member's BYOI/base-image choice outright
+  // (denyMemberCustomImage) — the field must not be offered at all.
+  it("hides the sandbox image field in member mode (server denies BYOI)", () => {
+    render(
+      <OperatorProvider operator={false}>
+        <StepBasics
+          state={initialWizardState()}
+          patch={() => {}}
+          workspaces={[] as Workspace[]}
+          workspacesLoading={false}
+          profileLoading={false}
+          onSelectProfile={() => {}}
+          onClearProfile={() => {}}
+          onAddWorkspace={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByLabelText("Sandbox image")).toBeNull();
   });
 
   it("relabels the task field as Command for a governed command", () => {

@@ -54,3 +54,23 @@ export function useOperator(): boolean {
 export function usePrincipal(): string {
   return React.useContext(PrincipalContext);
 }
+
+// The B1/B2-derived Wardyn role (GET /api/v1/me's `role`) — "admin" or
+// "member". `operator` above stays the legacy boolean every existing gate
+// reads (member === !operator); Role is additive, for UX that needs the named
+// tier itself (nav filtering, the account-menu chip) rather than a yes/no.
+export type Role = "admin" | "member";
+
+// Default "admin": the SAME fail-open rationale as OperatorContext above (an
+// unresolved /me, a failed fetch, or a component mounted with no
+// <RoleProvider> at all — every existing test — must never read as a
+// restricted member).
+const RoleContext = React.createContext<Role>("admin");
+
+export function RoleProvider({ role, children }: { role: Role; children: React.ReactNode }) {
+  return <RoleContext.Provider value={role}>{children}</RoleContext.Provider>;
+}
+
+export function useRole(): Role {
+  return React.useContext(RoleContext);
+}

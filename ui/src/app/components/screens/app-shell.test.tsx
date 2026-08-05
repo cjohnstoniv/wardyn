@@ -14,7 +14,7 @@ import { ThemeProvider } from "../wardyn/theme-provider";
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
 // items, or loses its aria-expanded/Escape wiring.
-function renderMobileNav() {
+function renderMobileNav(role: "admin" | "member" = "admin") {
   return render(
     <MemoryRouter>
       <MobileNav
@@ -26,7 +26,8 @@ function renderMobileNav() {
           identityProvider: "spiffe",
           principal: "u@example.test",
           method: "sso",
-          operator: true,
+          operator: role === "admin",
+          role,
         }}
       />
     </MemoryRouter>,
@@ -106,5 +107,33 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
     expect(screen.queryByRole("link", { name: "Runs" })).toBeNull();
+  });
+});
+
+// B3: member nav is Runs · Approvals · Recordings, nothing else — no
+// Policies/Secrets/Workspaces/Audit/Getting started. Hiding is cosmetic (the
+// server is the real boundary); this pins the UI half of that contract.
+describe("SidebarNav (member role — B3)", () => {
+  it("shows only Runs, Approvals, Recordings — admin-only items and Getting started are absent", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("member");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+
+    for (const label of ["Runs", "Approvals", "Recordings"]) {
+      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+    }
+    for (const label of ["Policies", "Secrets", "Integrations", "Workspaces", "Audit", "Getting started"]) {
+      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
+    }
+  });
+
+  it("admin nav is unchanged: every item including Getting started is present", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+
+    for (const label of ["Runs", "Approvals", "Policies", "Secrets", "Workspaces", "Audit", "Recordings", "Getting started"]) {
+      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+    }
   });
 });

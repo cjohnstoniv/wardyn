@@ -68,6 +68,7 @@ import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
 
 // Runs is the eager landing route, so an eager wizard import would park the
@@ -226,11 +227,19 @@ export function RunsScreen() {
     setRepoFacet("all");
   };
 
+  // Member console (B3, prompt-v2 point 2): the list itself is already scoped
+  // server-side (handleListRuns's creator-pager branch) — this is copy only,
+  // saying plainly what's already true rather than re-deriving/re-filtering
+  // anything client-side.
+  const role = useRole();
+  const description =
+    role === "member" ? `Your runs · ${runs.length}` : "Every run, live — each confined behind its own barrier.";
+
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Runs"
-        description="Every run, live — each confined behind its own barrier."
+        description={description}
         actions={
           <div className="inline-flex gap-1 rounded-lg border border-border bg-surface-2/60 p-1">
             <DensityButton active={mode === "board"} onClick={() => setMode("board")} Icon={LayoutGrid}>

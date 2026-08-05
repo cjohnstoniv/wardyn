@@ -26,22 +26,20 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  AgentRun,
-  ApprovalRequest,
-  AuditEvent,
-  CredentialGrant,
-  EgressDecision,
-  Recording,
-  SSHPublicKey,
+import {
+  canDecideApproval,
+  type AgentRun,
+  type ApprovalRequest,
+  type AuditEvent,
+  type CredentialGrant,
+  type EgressDecision,
+  type Recording,
 } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { audit as auditApi, egressFromAudit, exitCodeFromAudit } from "../../lib/api/audit";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
-import { health as healthApi } from "../../lib/api/health";
-import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
@@ -67,16 +65,17 @@ import {
 } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
-import { CodeBlock, JsonBlock, Mono } from "../wardyn/code-block";
+import { JsonBlock, Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useOperator } from "../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON, VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
 import { cn } from "../ui/utils";
+import { ConnectSSHCard } from "./run-detail-ssh";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -444,6 +443,14 @@ function OverviewTab({
   const pending = approvals.filter((a) => a.state === "PENDING");
   const attachable = !!run.interactive && run.state === "RUNNING";
   const operator = useOperator();
+  // This page is already owner-scoped (getRunAuthorized — a foreign run
+  // 404s), so a member viewing it owns every approval shown. canDecideSome
+  // asks only the KIND question canDecideApproval answers: at least one
+  // pending row here is an egress_domain approval, decidable by its owner
+  // (decide() in approvals.go) — credential/tool_call stay admin-only
+  // regardless of ownership. Per-row gating on the Approvals tab itself still
+  // applies canDecideApproval exactly; this only picks the banner's headline.
+  const canDecideSome = operator || pending.some((p) => canDecideApproval(false, p.kind));
 
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
@@ -455,10 +462,10 @@ function OverviewTab({
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning" />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-foreground">
-                  {operator ? "Waiting for your confirmation" : "Waiting on an operator"}
+                  {canDecideSome ? "Waiting for your confirmation" : "Waiting on an operator"}
                 </div>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  {operator ? (
+                  {canDecideSome ? (
                     <>
                       This run has {pending.length} pending approval{pending.length === 1 ? "" : "s"}. Review
                       the exact requested scope before you decide — nothing is minted until you approve.
@@ -610,143 +617,6 @@ function OverviewTab({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Connect via SSH (prompt-v3-ssh-pane.md)
-// ---------------------------------------------------------------------------
-// Owner-only, same as the gateway itself (sshgateway.go's sshAuth): a run's
-// creator is the only human this card ever shows itself to, matching the
-// server's own owner-only authorization rather than merely hiding a control
-// the server would refuse anyway. Absent entirely — not disabled, not a
-// placeholder — when the run isn't RUNNING, when the deployment has SSH off
-// (/healthz's `ssh` field absent/disabled), or the run isn't the caller's own.
-// Exported for run-detail.test.tsx: standalone-testable without mounting the
-// whole screen's run/grants/egress/approvals/audit/recording fetch graph.
-export function ConnectSSHCard({ run }: { run: AgentRun }) {
-  const principal = usePrincipal();
-  const owned = !!principal && run.created_by === principal;
-  const running = run.state === "RUNNING";
-
-  const [ssh, setSSH] = React.useState<{
-    enabled?: boolean;
-    advertise_addr?: string;
-    host_key_fingerprint?: string;
-  } | null>(null);
-  // null = not loaded yet (treated as "assume keys exist" below, so a human
-  // who HAS keys never sees the no-keys lead-in flash before the real answer
-  // arrives).
-  const [keys, setKeys] = React.useState<SSHPublicKey[] | null>(null);
-
-  React.useEffect(() => {
-    if (!owned || !running) return; // nothing to show either way — skip the fetch
-    let alive = true;
-    healthApi.health().then((h) => {
-      if (alive) setSSH(h.ssh ?? null);
-    });
-    sshKeysApi
-      .listKeys()
-      .then((k) => {
-        if (alive) setKeys(k);
-      })
-      .catch(() => {
-        if (alive) setKeys([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [owned, running]);
-
-  if (!owned || !running || !ssh?.enabled) return null;
-
-  const [host, port] = splitHostPort(ssh.advertise_addr ?? "");
-  const shortId = run.id.replace(/^run_/, "").slice(0, 8);
-  const portFlag = port ? ` -p ${port}` : "";
-  const command = `ssh ${run.id}@${host || "…"}${portFlag}`;
-  const sshConfig = [
-    `Host wardyn-${shortId}`,
-    `  HostName ${host || "…"}`,
-    `  Port ${port || "22"}`,
-    `  User ${run.id}`,
-  ].join("\n");
-  const hasKeys = keys === null || keys.length > 0;
-
-  return (
-    <SectionCard title="Connect via SSH" Icon={KeyRound}>
-      {!hasKeys && (
-        <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
-          <p className="text-[0.75rem] font-medium text-foreground">Add your SSH key first</p>
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
-            The command below is real, but no key is registered to connect with yet.
-          </p>
-          <Button asChild size="sm" className="mt-2">
-            <Link to="/ssh-keys">
-              <KeyRound className="size-3.5" /> Manage SSH keys
-            </Link>
-          </Button>
-        </div>
-      )}
-
-      <div className={cn(!hasKeys && "opacity-50")}>
-        <CodeBlock text={command} />
-
-        <details className="mt-2.5">
-          <summary className="cursor-pointer text-[0.75rem] text-muted-foreground hover:text-foreground">
-            ssh config
-          </summary>
-          <CodeBlock text={sshConfig} className="mt-1.5" />
-        </details>
-
-        {ssh.host_key_fingerprint && (
-          <div className="mt-2.5 text-[0.7188rem]">
-            <Mono className="text-foreground">ED25519 {ssh.host_key_fingerprint}</Mono>
-            <p className="mt-0.5 text-muted-foreground">Verify this against your client's prompt on first connect.</p>
-          </div>
-        )}
-
-        <details className="mt-2.5">
-          <summary className="cursor-pointer text-[0.75rem] text-muted-foreground hover:text-foreground">
-            VS Code Remote-SSH
-          </summary>
-          <div className="mt-1.5 space-y-1.5 text-[0.7188rem] text-muted-foreground">
-            <p>
-              Remote-SSH → Connect to Host → <Mono className="text-foreground">wardyn-{shortId}</Mono>. One setting is
-              required first, in VS Code's <Mono className="text-foreground">settings.json</Mono>:
-            </p>
-            <CodeBlock text={'"remote.SSH.localServerDownload": "always"'} />
-            <p>
-              Why: the sandbox has no internet; VS Code must upload its server through SSH instead of the remote
-              host fetching it.
-            </p>
-          </div>
-        </details>
-      </div>
-
-      <Link to="/ssh-keys" className="mt-3 inline-block text-[0.7813rem] font-medium text-primary hover:underline">
-        Manage SSH keys
-      </Link>
-    </SectionCard>
-  );
-}
-
-// splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)
-// into its parts for the command/config rendering above. A bare host with no
-// port renders with no `-p` flag / a conventional default Port 22 — honest
-// either way, never a guessed port. Handles a bracketed IPv6 host+port
-// ("[::1]:2222") and a BARE (unbracketed) IPv6 literal with no port
-// ("::1", "2001:db8::1") — lastIndexOf(":") alone mangles both: the former
-// needs the brackets stripped, not just the last colon split off, and the
-// latter has no port to split at all (naive lastIndexOf would carve a
-// fragment off the address itself).
-function splitHostPort(addr: string): [host: string, port: string] {
-  const bracketed = addr.match(/^\[([^\]]+)\](?::(\d+))?$/);
-  if (bracketed) return [bracketed[1], bracketed[2] ?? ""];
-  // More than one colon, unbracketed: a bare IPv6 literal (always has 2+
-  // colons), never a "host:port" pair (a hostname/IPv4 host has none).
-  if ((addr.match(/:/g)?.length ?? 0) > 1) return [addr, ""];
-  const i = addr.lastIndexOf(":");
-  if (i < 0) return [addr, ""];
-  return [addr.slice(0, i), addr.slice(i + 1)];
-}
-
 // Credential grants — HONEST (audit finding #15). Grants are ELIGIBILITY
 // records (what the run MAY request), NOT live/active credentials. Active
 // credentials are driven ONLY from `credential.mint` audit events.
@@ -884,6 +754,10 @@ function ApprovalsTab({
     <div className="flex max-w-3xl flex-col gap-3">
       {approvals.map((a) => {
         const pending = a.state === "PENDING";
+        // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
+        // the KIND question: egress_domain is a member act on an owned run,
+        // credential/tool_call stay admin-only regardless (see its doc).
+        const canDecide = canDecideApproval(operator, a.kind);
         return (
           <div key={a.id} className="rounded-xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -907,12 +781,12 @@ function ApprovalsTab({
             )}
             {pending && (
               <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+                {!canDecide && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => onDecide(a.id, "deny", a.kind)}
-                  disabled={!operator}
+                  disabled={!canDecide}
                 >
                   Deny
                 </Button>
@@ -920,7 +794,7 @@ function ApprovalsTab({
                   size="sm"
                   variant="info"
                   onClick={() => onDecide(a.id, "approve", a.kind)}
-                  disabled={!operator}
+                  disabled={!canDecide}
                 >
                   <Check className="size-4" /> Approve
                 </Button>
@@ -1055,7 +929,8 @@ function RecordingTab({
 // ---------------------------------------------------------------------------
 // Small shared bits
 // ---------------------------------------------------------------------------
-function SectionCard({
+// Exported: run-detail-ssh.tsx's ConnectSSHCard reuses this exact card shell.
+export function SectionCard({
   title,
   Icon,
   right,

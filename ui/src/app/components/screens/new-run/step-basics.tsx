@@ -20,6 +20,7 @@ import { Label } from "../../ui/label";
 import { Field } from "./step-shell";
 import { Loader2 } from "lucide-react";
 import { WorkspacePicker } from "./workspace-picker";
+import { useOperator } from "../../wardyn/operator-context";
 import type { RunPolicy, Workspace } from "../../../lib/types";
 import {
   workspaceProfileOptions,
@@ -66,6 +67,11 @@ export function StepBasics({
     : undefined;
   const profiles = workspaceProfileOptions(primary);
   const savedPolicies = onSelectPolicy ? policies : [];
+  // Member new-run (B3): the server denies a member's req.image/devcontainer_repo
+  // outright (denyMemberCustomImage, runs_create.go) — don't offer a field that
+  // will just be refused. The workspace picker below is unchanged: it's the
+  // member's actual model-access path (an admin-onboarded container workspace).
+  const operator = useOperator();
 
   return (
     <div className="space-y-5">
@@ -114,18 +120,20 @@ export function StepBasics({
         </Field>
       )}
 
-      <Field
-        label="Sandbox image"
-        hint="Bring your own base image, or leave blank for the built-in agent image. Wardyn layers its runner tools onto it and clears its entrypoint before use, and runs a self-test before the task. Egress policy, confinement, and secret brokering apply regardless of image contents. Your image needs a shell (and, for an agent run, the agent's CLI). Pre-pull private images on the host; pin a @sha256: digest to avoid tag drift."
-      >
-        <Input
-          placeholder="e.g. myco/dev:latest or ghcr.io/org/image@sha256:…"
-          value={state.image}
-          onChange={(e) => patch({ image: e.target.value })}
-          className="font-mono"
-          aria-label="Sandbox image"
-        />
-      </Field>
+      {operator && (
+        <Field
+          label="Sandbox image"
+          hint="Bring your own base image, or leave blank for the built-in agent image. Wardyn layers its runner tools onto it and clears its entrypoint before use, and runs a self-test before the task. Egress policy, confinement, and secret brokering apply regardless of image contents. Your image needs a shell (and, for an agent run, the agent's CLI). Pre-pull private images on the host; pin a @sha256: digest to avoid tag drift."
+        >
+          <Input
+            placeholder="e.g. myco/dev:latest or ghcr.io/org/image@sha256:…"
+            value={state.image}
+            onChange={(e) => patch({ image: e.target.value })}
+            className="font-mono"
+            aria-label="Sandbox image"
+          />
+        </Field>
+      )}
 
       <Field
         label="Workspaces"

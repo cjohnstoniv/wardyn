@@ -6,7 +6,8 @@
 // ConnectSSHCard (prompt-v3-ssh-pane.md): owner-only, running-only,
 // gateway-enabled-only visibility, and the no-keys-yet lead-in. Standalone
 // (ConnectSSHCard is exported for exactly this) rather than mounting the
-// whole RunDetailScreen's fetch graph.
+// whole RunDetailScreen's fetch graph. Moved out of run-detail.test.tsx
+// alongside the component (B4 file-size gate) — zero behavior change.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -22,7 +23,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   sshKeys: { listKeys: (...a: unknown[]) => listKeysMock(...a) },
 }));
 
-import { ConnectSSHCard } from "./run-detail";
+import { ConnectSSHCard } from "./run-detail-ssh";
 import { OperatorProvider } from "../wardyn/operator-context";
 
 const OWNER = "alice@example.com";
