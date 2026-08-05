@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -306,6 +306,18 @@ test-e2e-subscription: ## Live SUBSCRIPTION e2e: inject-on attach + inject-off e
 test-e2e-byoi: ## Live BYOI e2e: wrap stock/harness/hostile bases + selftest gate
 	@echo "Running live BYOI e2e (wrap + selftest gate; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-byoi.sh
+
+# Live SSH gateway e2e: exec exit-code propagation, sftp put/get byte-compare,
+# a -L forward against an in-sandbox loopback listener, the ssh.exec/ssh.sftp/
+# ssh.forward audit rows, a saved ssh-<session> recording, a foreign-key
+# denial, and the concurrency case (sftp transfer + a second exec, same run).
+# Brings up its OWN dedicated compose stack (project "wardynv05e2e", ports
+# 18080/15432/12222) and tears it down after — never touches another stack.
+# Needs Docker + real ssh/sftp/jq clients; the script self-skips without
+# WARDYN_TEST_DOCKER=1.
+test-e2e-ssh: ## Live SSH gateway e2e: exec/sftp/-L forward/recording/denial/concurrency
+	@echo "Running live SSH gateway e2e (dedicated compose stack; requires Docker)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ssh.sh
 
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
