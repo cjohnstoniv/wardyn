@@ -5,7 +5,6 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -68,7 +67,7 @@ func (f *fakeSubstrate) Attach(context.Context, string, runner.AttachOptions) (r
 	return nil, nil
 }
 func (f *fakeSubstrate) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
-	return nil, errors.New("not implemented")
+	return nil, runner.ErrExecStreamUnsupported
 }
 func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, error) {
 	f.rec(&f.statuses, ref)

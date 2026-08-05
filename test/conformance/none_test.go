@@ -70,7 +70,7 @@ func (noneRunner) Attach(context.Context, string, runner.AttachOptions) (runner.
 	return nil, errNoneNotImplemented
 }
 func (noneRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
-	return nil, errNoneNotImplemented
+	return nil, runner.ErrExecStreamUnsupported
 }
 func (noneRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{}, errNoneNotImplemented
@@ -107,7 +107,7 @@ func (downgradingRunner) Attach(context.Context, string, runner.AttachOptions) (
 	return nil, errors.New("downgrading: no attach")
 }
 func (downgradingRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
-	return nil, errors.New("downgrading: no exec stream")
+	return nil, runner.ErrExecStreamUnsupported
 }
 func (downgradingRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil

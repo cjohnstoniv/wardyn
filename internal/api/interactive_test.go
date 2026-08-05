@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"os"
 	"sync"
@@ -69,7 +68,7 @@ func (f *fakeRunner) Attach(context.Context, string, runner.AttachOptions) (runn
 	return nil, context.Canceled
 }
 func (f *fakeRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
-	return nil, errors.New("not implemented")
+	return nil, runner.ErrExecStreamUnsupported
 }
 func (f *fakeRunner) Status(context.Context, string) (runner.Status, error) {
 	return runner.Status{State: types.RunRunning}, nil

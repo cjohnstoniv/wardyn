@@ -25,8 +25,13 @@
 //     is. See ClassSupport.NetworkPolicy.
 //   - A substrate that can prove NEITHER MUST advertise no Confinement Classes
 //     at all (fail closed, never overclaim) — the sole documented exception is
-//     an explicit, operator-set opt-out env var read by that substrate, which
-//     is itself an admission of unconfined egress, not a third proof.
+//     an explicit, operator-set opt-out env var read by that substrate. That
+//     opt-out is itself an admission of unconfined egress, not a third proof,
+//     and it MUST NOT be an invisible downgrade: the substrate (a) emits a
+//     warning at construction or CreateSandbox naming what is going
+//     unconfined, and (b) still advertises StructuralEgress=false AND
+//     NetworkPolicy=false regardless — an opted-out substrate must never read
+//     identical to a genuinely confined one on /healthz.
 //   - Fail closed: CreateSandbox MUST error (never silently downgrade) when the
 //     demanded Confinement Class cannot be enforced, before creating anything.
 //   - The run token / secrets NEVER enter the agent's environment.
@@ -87,16 +92,30 @@ type Substrate interface {
 	// ephemeral-container list can only grow, never be replaced), so a k8s
 	// substrate cannot honour a second Exec on the same ref the way the
 	// docker substrate's "latest Exec wins" re-exec does today. Callers MUST
-	// NOT re-Exec a ref expecting replace semantics — treat Exec as one-shot
-	// per sandbox going forward.
+	// NOT re-Exec a ref expecting replace semantics — treat Exec as
+	// one-shot per sandbox. A substrate that cannot honour a second Exec on
+	// ref MUST return an error: never silently no-op, and never return the
+	// PRIOR exec's id — a stale agentExecID would point AgentStatus at the
+	// wrong process (fail closed; don't misreport liveness).
+	//
+	// This one-shot constraint is EXEC-SPECIFIC. ExecStream (below) is the
+	// opposite: a substrate MUST support repeated ExecStream calls against
+	// the same ref.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process for ref exits and returns its code.
 	Wait(ctx context.Context, ref string) (int, error)
 	// Attach opens an interactive PTY session inside ref.
 	Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error)
 	// ExecStream launches spec.Argv inside ref as a fresh, streamable exec.
-	// See runner.ExecSpec/runner.ExecSession for the streaming and TTY-merge
-	// contract, and Exec's doc above for the one-Exec-per-ref caution.
+	// See runner.ExecStream's doc for the streaming, TTY-merge, and
+	// invariant-3/4 security contract.
+	//
+	// UNLIKE Exec, ExecStream MUST be repeatable against the SAME ref: a
+	// substrate MUST support many ExecStream calls against one long-lived
+	// sandbox (e.g. one per SSH/SFTP channel). A k8s substrate implements
+	// ExecStream on the streaming exec subresource (pods/<name>/exec —
+	// repeatable, leaves no pod-spec residue), NOT an ephemeral container
+	// (add-only — that limit is what makes Exec one-shot, not ExecStream).
 	ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error)
 	// Status reports the sandbox lifecycle state.
 	Status(ctx context.Context, ref string) (runner.Status, error)

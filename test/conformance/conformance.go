@@ -20,6 +20,7 @@ package conformance
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -366,11 +367,13 @@ func testInteractiveAttach(t *testing.T, r runner.Runner, opts Options) {
 // binary protocol riding stdout is never corrupted).
 //
 // The case is skipped when the driver declares no ConfinementClasses (honest
-// stub: it cannot create a sandbox) or when ExecStream returns an error — a
-// driver that has not implemented it yet skips rather than fails, mirroring
-// testInteractiveAttach's Attach skip. The exec shell is assumed to be
-// /bin/sh (the driver's documented default), present in every minimal
-// SandboxImage — the same assumption testInteractiveAttach makes.
+// stub: it cannot create a sandbox) or when ExecStream returns
+// runner.ErrExecStreamUnsupported (not implemented yet). Any OTHER error from
+// ExecStream FAILS the case — unlike a bare "returns an error => skip" check,
+// this means an implemented-but-broken ExecStream cannot skip green by
+// returning some unrelated error. The exec shell is assumed to be /bin/sh
+// (the driver's documented default), present in every minimal SandboxImage —
+// the same assumption testInteractiveAttach makes.
 func testExecStream(t *testing.T, r runner.Runner, opts Options) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout())
@@ -391,8 +394,11 @@ func testExecStream(t *testing.T, r runner.Runner, opts Options) {
 		Argv: []string{"sh", "-c", "cat; echo wardyn-execstream-stderr >&2; exit 7"},
 	}
 	sess, err := r.ExecStream(ctx, sb.Ref, spec)
+	if errors.Is(err, runner.ErrExecStreamUnsupported) {
+		t.Skipf("ExecStream not implemented (driver %q): %v", r.Name(), err)
+	}
 	if err != nil {
-		t.Skipf("ExecStream not available (driver %q): %v", r.Name(), err)
+		t.Fatalf("ExecStream: %v", err)
 	}
 
 	// Drain Stdout/Stderr concurrently so neither pipe can block the exec while

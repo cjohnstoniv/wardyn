@@ -825,15 +825,15 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 				return insp.ExitCode, nil
 			}
 		case isNotFound(err):
-			return 0, fmt.Errorf("docker: wait: exec inspect: %w", err)
+			return 0, fmt.Errorf("docker: exec wait: exec inspect: %w", err)
 		default:
 			if errs++; errs >= waitMaxProbeErrors {
-				return 0, fmt.Errorf("docker: wait: exec inspect (%d consecutive errors): %w", errs, err)
+				return 0, fmt.Errorf("docker: exec wait: exec inspect (%d consecutive errors): %w", errs, err)
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return 0, fmt.Errorf("docker: wait: %w", ctx.Err())
+			return 0, fmt.Errorf("docker: exec wait: %w", ctx.Err())
 		case <-time.After(pollInterval):
 		}
 	}
