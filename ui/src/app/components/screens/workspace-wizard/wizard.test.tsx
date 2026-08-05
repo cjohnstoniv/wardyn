@@ -8,6 +8,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const createWorkspaceMock = vi.fn();
+const updateWorkspaceMock = vi.fn();
 const scanWorkspaceMock = vi.fn();
 const getWorkspaceMock = vi.fn();
 const setRequirementsMock = vi.fn();
@@ -17,7 +18,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
     scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
     getWorkspace: (...a: unknown[]) => getWorkspaceMock(...a),
     setRequirements: (...a: unknown[]) => setRequirementsMock(...a),
-    updateWorkspace: vi.fn(),
+    updateWorkspace: (...a: unknown[]) => updateWorkspaceMock(...a),
   },
 }));
 
@@ -64,6 +65,12 @@ function baseWorkspace(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   createWorkspaceMock.mockReset();
+  // Step ② persists the base-image pick via updateWorkspace; echo back the
+  // workspace the test created (profile intact) so the walk keeps its state.
+  updateWorkspaceMock.mockReset().mockImplementation(async () => {
+    const last = createWorkspaceMock.mock.results.at(-1);
+    return last ? await last.value : baseWorkspace();
+  });
   scanWorkspaceMock.mockReset();
   getWorkspaceMock.mockReset();
   setRequirementsMock.mockReset();

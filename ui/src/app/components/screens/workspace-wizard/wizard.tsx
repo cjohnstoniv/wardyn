@@ -56,6 +56,8 @@ import {
   parseRepoSource,
   removeSource,
   seedFloor,
+  suggestedRegistryImage,
+  toBaseImageInput,
   toSourceInput,
   type BaseImageState,
   type PowerSource,
@@ -90,6 +92,7 @@ interface WizardState {
   requirementsSeeded: boolean;
   confirmBackToSources: boolean;
   creating: boolean;
+  savingImage: boolean;
   savingRequirements: boolean;
 }
 
@@ -112,6 +115,7 @@ function initialState(): WizardState {
     requirementsSeeded: false,
     confirmBackToSources: false,
     creating: false,
+    savingImage: false,
     savingRequirements: false,
   };
 }
@@ -342,6 +346,30 @@ export function WorkspaceWizard({
     }
   };
 
+  // Leaving step ②: PERSIST the base-image choice (it used to be wizard-local
+  // and silently thrown away — a picked golang image never reached the
+  // workspace, so verify booted the stock agent image and `go` was "command
+  // not found"). Image-only updates keep the contract server-side; a failed
+  // save stays on the step with the error in a toast.
+  const continueFromImage = async () => {
+    if (!s.workspace) {
+      patch({ step: "integrations" });
+      return;
+    }
+    patch({ savingImage: true });
+    try {
+      const updated = await workspacesApi.updateWorkspace(s.workspace.id, {
+        name: s.name || s.workspace.name,
+        sources: s.sources.map((r) => toSourceInput(r, s.sources)),
+        base_image: toBaseImageInput(s.baseImage, detectedChips),
+      });
+      patch({ workspace: updated, savingImage: false, step: "integrations" });
+    } catch (e) {
+      patch({ savingImage: false });
+      toast.error("Failed to save the base-image choice", { description: getErrorMessage(e) });
+    }
+  };
+
   // After a verify session ends: the decide() hook may have written rows into
   // the WORKSPACE's contract server-side (approved hosts, required/operator_set).
   // Refetch and absorb them — new keys join the wizard's map; a key the
@@ -357,6 +385,23 @@ export function WorkspaceWizard({
     }
     patch({ workspace: fresh, requirements: merged });
   };
+
+  // What a verify session will boot, stated honestly: an explicit image pick
+  // boots verbatim; "recommended" boots the BUILT image when one exists, and
+  // on a host without devcontainer builds it falls back to the stock agent
+  // image — say so up front instead of letting "command not found" say it.
+  const carryImage =
+    s.baseImage.choice === "catalog" && s.baseImage.catalog
+      ? s.baseImage.catalog.image
+      : s.baseImage.choice === "byo"
+        ? s.baseImage.byoRef.trim() || "bring-your-own — no ref yet"
+        : s.baseImage.choice === "registry"
+          ? suggestedRegistryImage(detectedChips)
+          : s.baseImage.choice === "custom"
+            ? s.baseImage.customBase.trim()
+            : s.workspace?.image_ref
+              ? s.workspace.image_ref
+              : "recommended build — built on first use; without devcontainer builds on this host, sessions boot the stock agent image";
 
   // ---------- Done (step ⑤) ----------
   const doneVariant: DoneVariant = !s.workspace
@@ -444,6 +489,7 @@ export function WorkspaceWizard({
           )}
           {s.step === "reqs" && (
             <StepRequirements
+              carryImage={carryImage}
               verifyPanel={
                 s.workspace ? (
                   <WizardVerifySession
@@ -511,15 +557,7 @@ export function WorkspaceWizard({
                 <Button type="button" variant="ghost" onClick={goToSources}>
                   Back
                 </Button>
-                {/* ponytail: the chosen base image stays wizard-local state for
-                    this pass — updateWorkspace's client type doesn't accept
-                    base_image yet (only createWorkspace was widened for it),
-                    and a multi-source workspace's legacy kind/source mirror
-                    fields are blank, so calling updateWorkspace here would
-                    send garbage rather than the real choice. Persisting it is
-                    a small follow-up once that client function grows the same
-                    base_image field createWorkspace already has. */}
-                <Button type="button" onClick={() => patch({ step: "integrations" })}>
+                <Button type="button" disabled={s.savingImage} onClick={() => void continueFromImage()}>
                   Continue →
                 </Button>
               </>

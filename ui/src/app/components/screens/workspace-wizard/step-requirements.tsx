@@ -160,6 +160,7 @@ export function StepRequirements({
   powerSource,
   status,
   verifyPanel,
+  carryImage,
 }: {
   profile: WorkspaceProfile | null | undefined;
   sources: SourceRow[];
@@ -181,6 +182,10 @@ export function StepRequirements({
   // launch against). Absent — the detail page, fixtures — keeps the plain
   // buttons, whose real launcher lives elsewhere on that page.
   verifyPanel?: React.ReactNode;
+  // What a verify session will BOOT — stated on the carry card so "go:
+  // command not found" is never the first hint that the recommended build
+  // isn't available on this host.
+  carryImage?: string;
 }) {
   const [addSecretName, setAddSecretName] = React.useState<string | null>(null);
   const [pendingHost, setPendingHost] = React.useState<string | null>(null);
@@ -501,6 +506,7 @@ export function StepRequirements({
                     "server default"
                   )}
                 </CarryRow>
+                {carryImage && <CarryRow label="Image">{carryImage}</CarryRow>}
                 <CarryRow label="Required secrets">{carrySecrets}</CarryRow>
                 <CarryRow label="Egress posture">{carryEgress}</CarryRow>
                 <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.CARRY_FROM}</p>

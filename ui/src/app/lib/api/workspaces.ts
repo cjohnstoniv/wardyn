@@ -68,15 +68,21 @@ export const workspaces = {
   },
 
   // PUT /api/v1/workspaces/{id}  same body shape -> updated workspace.
+  // Accepts the composition shape too (sources/base_image), like create: the
+  // wizard persists its step-② base-image pick through here. Server-side, a
+  // SOURCES change resets the reviewed state; an image-only change clears
+  // just the build cache.
   async updateWorkspace(
     id: string,
     input: {
       name: string;
-      kind: WorkspaceKind;
-      source: string;
+      kind?: WorkspaceKind;
+      source?: string;
       ref?: string;
       default_target?: string;
       writable?: boolean;
+      sources?: WorkspaceSourceInput[];
+      base_image?: WorkspaceBaseImageInput;
     },
   ): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, {
