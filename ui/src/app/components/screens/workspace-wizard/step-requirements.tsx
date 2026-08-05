@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step ③ Requirements — four tabs (Record · Egress · Secrets · Files &
+// Step ④ Requirements — four tabs (Reach · Secrets · Files & services ·
 // services), matching mockup2/wardyn-workspaces.js's AddWorkspaceWizardV2
 // bodyReqs2/RD2 (V2S3Reqs / V2S3ReqsEgress / V2S3ReqsNone fixtures). The tab
 // design existed on paper before any mock drew it, so an earlier pass shipped
@@ -259,7 +259,7 @@ export function StepRequirements({
               <TabsTrigger value="reach">Reach</TabsTrigger>
               <TabsTrigger value="secrets">Secrets</TabsTrigger>
               <TabsTrigger value="files">Files & services</TabsTrigger>
-              <TabsTrigger value="record">Record</TabsTrigger>
+              <TabsTrigger value="record">Verify</TabsTrigger>
             </TabsList>
 
             <TabsContent value="reach" className="space-y-2 pt-3" data-testid="group-reach">
@@ -515,11 +515,11 @@ export function StepRequirements({
               <div className="flex flex-wrap gap-2">
                 {!nothingResolves && (
                   <Button type="button" size="sm">
-                    Record a session
+                    Verify with a session
                   </Button>
                 )}
                 <Button type="button" size="sm" variant={nothingResolves ? "default" : "outline"}>
-                  Record a terminal session
+                  Verify in a terminal
                 </Button>
               </div>
               <p className="text-[0.6875rem] leading-snug text-muted-foreground">

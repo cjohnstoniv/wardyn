@@ -93,7 +93,7 @@ export const V2C = {
 // → honest none; it is never configured on these surfaces).
 export const RD = {
   RECORD_HINT:
-    "Nothing resolves for this image's agent tool — agent-driven recording needs model access. Set it on the Base image step, or record a terminal session instead.",
+    "Nothing resolves for this image's agent tool — an agent-driven verify session needs model access. Set it on the Base image step, or verify in a terminal instead.",
   EGRESS_TIP: "Managed by the resolved integration; change it on the Base image step.",
   // Superseded on the requirements step by RD2 (the S3 record-last redesign);
   // kept because New Run's Access step still uses the two lines above verbatim.
@@ -117,34 +117,38 @@ export const POWER_LINE_DEFAULT = "Agent runs here use: server default — Anthr
 
 // ============================ S3 record-last canon (verbatim) ============================
 // mockup/wardyn-workspaces.js's `RD2` — the requirements step's dependency-order
-// redesign: Reach · Secrets · Files & services · Record. Record consumes what
+// redesign: Reach · Secrets · Files & services · Verify. Verify consumes what
 // the other three declare, so it reads last; the power source lives on Reach.
+// "Verify" is the owner's reframe of Record: a session drives the real
+// container, anything not already in the contract is HELD at the door for a
+// live approve/deny (approve writes the row into THIS workspace immediately —
+// the decide() hook), adjust and retry as needed, then save.
 export const RD2 = {
   REACH_LEAD:
     "Everything outside the sandbox this workspace touches. Named systems first — an integration is the reason a host is on the allowlist at all.",
   POWER_ORDER:
-    "Resolves: run override → workspace pin → server default → honest none. Recording and every agent run here read it; nothing re-asks.",
+    "Resolves: run override → workspace pin → server default → honest none. Verify sessions and every agent run here read it; nothing re-asks.",
   RIDE: "Its hosts and its credential ride along — nothing extra to allow.",
   EGRESS_TIP: "Managed by the resolved integration; change it on the power-source line above.",
   SECRET_TIP: "Managed by the resolved integration — not edited here.",
   OPEN_NET:
     "A run that reaches a host not listed here is held at the door and asks. Nothing on this tab opens the open internet.",
-  ESCAPE: "Not sure what it needs? Record a session first →",
+  ESCAPE: "Not sure what it needs? Verify with a session first →",
   PAIR: "api.stripe.com is in your egress — likely needs a Stripe credential.",
   PAIR_SUB: "Paired against the hosts on Reach. A suggestion, not a requirement — you set what's required.",
-  CARRY: "What this recording will carry",
+  CARRY: "What a verify session will carry",
   CARRY_FROM: "Derived from the contract as it stands — Reach, Secrets and Files & services, as of now.",
   RECORD_LEAD:
-    "Prove it, or discover what you couldn't declare. A session drives the workspace for real and brings back what it actually reached.",
+    "Verify what you've set up — and discover what you couldn't declare. A session drives the workspace for real; anything not already in the contract is held at the door for you to approve or deny, live.",
   RECORD_NEEDS:
-    "Nothing resolves for this image's agent tool, so an agent-driven recording has nothing driving it. The power source lives on the Reach tab. Terminal recording needs no model.",
+    "Nothing resolves for this image's agent tool, so an agent-driven verify session has nothing driving it. The power source lives on the Reach tab. A terminal session needs no model.",
   RECORD_LOOP:
-    "What a session observes comes back as \u201cfrom recording\u201d suggestions in Reach, Secrets and Files & services — reviewed row by row, never promoted for you. Replay confined is the verify half.",
-  RECORD_SUB: "Drive it once in an open sandbox to learn what it really reaches, then promote what it reached.",
+    "Approving a held host writes it into this workspace's contract immediately. Everything else a session observes comes back as \u201cfrom session\u201d suggestions in Reach, Secrets and Files & services — reviewed row by row, never promoted for you.",
+  RECORD_SUB: "Drive it once; approve or deny what it asks for at the door, adjust, retry — then save.",
   // The wizard reach card's own lines (the proto's power card, display-only —
   // "its page" = the workspace detail page, where the real pin control lives).
   POWER_NONE_BODY:
     "Nothing pinned here and no server default — governed commands still run; an agent-driven session has nothing driving it. Pin one on its page.",
   POWER_RESOLVES_BODY: "Resolves from Integrations — run override → workspace pin → server default. Pin one on its page.",
-  TERMINAL_ONLY: "Terminal recording drives the sandbox by hand — no model, no agent tool.",
+  TERMINAL_ONLY: "A terminal verify session drives the sandbox by hand — no model, no agent tool.",
 };

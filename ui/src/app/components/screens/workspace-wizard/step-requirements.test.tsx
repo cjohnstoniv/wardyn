@@ -249,19 +249,19 @@ describe("StepRequirements — Record, LAST: prove & discover", () => {
   it("is the last tab, not the first — Reach opens by default", async () => {
     render(<Harness profile={profile} />);
     const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
-    expect(tabs).toEqual(["Reach", "Secrets", "Files & services", "Record"]);
+    expect(tabs).toEqual(["Reach", "Secrets", "Files & services", "Verify"]);
     expect(screen.getByRole("tab", { name: "Reach", selected: true })).toBeInTheDocument();
   });
 
   it("opens with what the recording will carry, derived from the contract-so-far", async () => {
     render(<Harness profile={profile} />);
-    await openTab("Record");
+    await openTab("Verify");
     const carry = screen.getByTestId("record-carry");
     expect(within(carry).getByText(RD2.CARRY)).toBeInTheDocument();
     expect(within(carry).getByText(/server default/)).toBeInTheDocument();
     expect(within(carry).getByText(/1 host allowed — anything else is held at the door/)).toBeInTheDocument();
     expect(within(carry).getByText(RD2.CARRY_FROM)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record a session" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Verify with a session" })).toBeEnabled();
   });
 
   // The owner's exact complaint: a live-looking button whose dependency was
@@ -269,10 +269,10 @@ describe("StepRequirements — Record, LAST: prove & discover", () => {
   // disabled — the fact says why, and terminal recording is promoted.
   it("with nothing resolving: no agent button at all, the stated fact, and a working path to Reach", async () => {
     render(<Harness profile={profile} powerSource={{ kind: "none" }} />);
-    await openTab("Record");
+    await openTab("Verify");
     expect(screen.getByText(RD2.RECORD_NEEDS)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Record a session" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record a terminal session" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Verify with a session" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Verify in a terminal" })).toBeEnabled();
     expect(screen.getByText(RD2.TERMINAL_ONLY)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /open the reach tab/i }));
@@ -281,7 +281,7 @@ describe("StepRequirements — Record, LAST: prove & discover", () => {
 
   it("names the pinned integration in the carry card", async () => {
     render(<Harness profile={profile} powerSource={{ kind: "pinned", integrationId: "i1", name: "Team API key" }} />);
-    await openTab("Record");
+    await openTab("Verify");
     expect(within(screen.getByTestId("record-carry")).getByText(/Team API key — pinned to this workspace/)).toBeInTheDocument();
   });
 });
@@ -311,7 +311,7 @@ describe("StepRequirements — the Reach power-source card", () => {
     // state carries the one quiet discovery link.
     render(<Harness profile={{ required_secrets: [{ name: "DATABASE_URL", kind: "postgres" }] }} />);
     fireEvent.click(screen.getByText(RD2.ESCAPE));
-    expect(screen.getByRole("tab", { name: "Record", selected: true })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Verify", selected: true })).toBeInTheDocument();
 
     // And with hosts on Reach, no escape link — it is for the lost only.
     cleanup();
