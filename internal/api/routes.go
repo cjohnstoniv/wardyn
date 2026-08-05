@@ -200,6 +200,11 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Put("/workspaces/{id}", s.handleUpdateWorkspace)
 			operatorOnly.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
 			operatorOnly.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
+			// Workspace image build (the wizard's Build step): status is a
+			// member-tier read like the other workspace GETs; kicking a build
+			// is an operator action (workspace_build.go).
+			r.Get("/workspaces/{id}/build", s.handleGetWorkspaceBuild)
+			operatorOnly.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)

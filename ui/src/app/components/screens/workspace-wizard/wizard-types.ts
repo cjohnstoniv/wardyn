@@ -29,11 +29,21 @@ export type {
 };
 
 // ============================ Rail ============================
-export type WizardStepId = "sources" | "image" | "reqs" | "done";
+export type WizardStepId = "sources" | "image" | "integrations" | "build" | "reqs" | "verify" | "done";
 export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
   { id: "sources", label: "Sources" },
   { id: "image", label: "Base image" },
+  // Integrations sit BEFORE Requirements: what a workspace connects through
+  // (AI, git hosts, feeds) joins its sources + base image in shaping what the
+  // Requirements step shows.
+  { id: "integrations", label: "Integrations" },
+  // The image build is its OWN, followable step — it used to hide inside the
+  // first session launch and freeze that click for minutes.
+  { id: "build", label: "Build" },
   { id: "reqs", label: "Requirements" },
+  // Verify is its own step: always walk through it — drive the workspace,
+  // approve/deny at the door, adjust — before Done.
+  { id: "verify", label: "Verify" },
   { id: "done", label: "Done" },
 ];
 
@@ -199,15 +209,6 @@ export interface CatalogPick {
 export interface BaseImageState {
   choice: BaseImageChoice;
   customBase: string;
-  // Keyed by the detected tool/language chip it toggles (e.g. "Go 1.22") — the
-  // real profile's own vocabulary, never a hardcoded Go/Node/TS list.
-  customTools: Record<string, boolean>;
-  // The agent-tool (Claude Code CLI) toggle — separate from customTools since
-  // its very presence in the checklist depends on harnessAvailable, unlike an
-  // ordinary detected language/package-manager tool.
-  harnessTool: boolean;
-  extraTools: string[];
-  toolDraft: string;
   buildSteps: string;
   byoRef: string;
   // Set iff choice === "catalog".
@@ -217,10 +218,6 @@ export function defaultBaseImageState(): BaseImageState {
   return {
     choice: "recommended",
     customBase: "ubuntu:24.04",
-    customTools: {},
-    harnessTool: true,
-    extraTools: [],
-    toolDraft: "",
     buildSteps: "",
     byoRef: "",
     catalog: null,

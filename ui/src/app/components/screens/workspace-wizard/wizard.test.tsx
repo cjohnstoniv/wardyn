@@ -8,6 +8,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const createWorkspaceMock = vi.fn();
+const updateWorkspaceMock = vi.fn();
+const buildWorkspaceMock = vi.fn();
 const scanWorkspaceMock = vi.fn();
 const getWorkspaceMock = vi.fn();
 const setRequirementsMock = vi.fn();
@@ -17,7 +19,9 @@ vi.mock("../../../lib/api/workspaces", () => ({
     scanWorkspace: (...a: unknown[]) => scanWorkspaceMock(...a),
     getWorkspace: (...a: unknown[]) => getWorkspaceMock(...a),
     setRequirements: (...a: unknown[]) => setRequirementsMock(...a),
-    updateWorkspace: vi.fn(),
+    updateWorkspace: (...a: unknown[]) => updateWorkspaceMock(...a),
+    buildWorkspace: (...a: unknown[]) => buildWorkspaceMock(...a),
+    getWorkspaceBuild: (...a: unknown[]) => buildWorkspaceMock(...a),
   },
 }));
 
@@ -40,7 +44,8 @@ vi.mock("../../../lib/api/integrations", async () => {
 });
 
 import { WorkspaceWizard } from "./wizard";
-import { C } from "../../../lib/workspace-copy";
+import { C, RD2 } from "../../../lib/workspace-copy";
+import { INTEGRATIONS_BLURB } from "./step-integrations";
 
 function baseWorkspace(overrides: Record<string, unknown> = {}) {
   return {
@@ -63,6 +68,13 @@ function baseWorkspace(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   createWorkspaceMock.mockReset();
+  buildWorkspaceMock.mockReset().mockResolvedValue({ state: "done", image: "wardyn-workspace/test:abc" });
+  // Step ② persists the base-image pick via updateWorkspace; echo back the
+  // workspace the test created (profile intact) so the walk keeps its state.
+  updateWorkspaceMock.mockReset().mockImplementation(async () => {
+    const last = createWorkspaceMock.mock.results.at(-1);
+    return last ? await last.value : baseWorkspace();
+  });
   scanWorkspaceMock.mockReset();
   getWorkspaceMock.mockReset();
   setRequirementsMock.mockReset();
@@ -105,6 +117,13 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     expect(screen.getAllByText("pnpm").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    // Step ③ Integrations — what the workspace connects through joins
+    // sources+image in shaping Requirements.
+    await screen.findByText(INTEGRATIONS_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    // Step ④ Build — the image build is its own followable step now.
+    expect(await screen.findByText("Image ready")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
     await screen.findByText(C.S3_BLURB);
     // The Requirements step opens on its Record tab (step-requirements.tsx) —
     // DATABASE_URL lives under Secrets. Radix Tabs activates on mousedown, so
@@ -113,7 +132,11 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     // Seeded from the profile — DATABASE_URL defaults to required.
     expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /accept & finish/i }));
+    // Step ⑤ saves the contract (the verify session reads the STORED rows),
+    // then step ⑥ Verify carries the session affordance; Finish lands on Done.
+    fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
+    await screen.findByText(RD2.CARRY);
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
     await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
     expect(setRequirementsMock.mock.calls[0][1]).toMatchObject({
       "secret:DATABASE_URL": { level: "required" },
@@ -227,8 +250,14 @@ describe("WorkspaceWizard — Done's primary action follows `origin`", () => {
     render(<WorkspaceWizard origin={origin} onClose={onClose} onAttach={onAttach} onOpenWorkspace={onOpenWorkspace} />);
     await driveToBaseImage();
     fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText("Image ready");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
     await screen.findByText(C.S3_BLURB);
-    fireEvent.click(screen.getByRole("button", { name: /accept & finish/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
+    await screen.findByText(RD2.CARRY);
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
     await screen.findByText("payments is usable.");
     return { onClose, onAttach, onOpenWorkspace };
   }

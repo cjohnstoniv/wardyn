@@ -33,7 +33,9 @@ func (fakePullResponse) Wait(context.Context) error { return nil }
 // fakeEnvbuilderDocker is an in-memory envbuilderDockerAPI for unit tests.
 // It simulates a Docker daemon without requiring one to be present.
 type fakeEnvbuilderDocker struct {
-	mu sync.Mutex
+	copiedTo   []string
+	copiedTars []int
+	mu         sync.Mutex
 
 	// imagesPresent maps image tag -> present. If nil, behaves as if
 	// all images are absent (triggering a pull).
@@ -172,6 +174,18 @@ func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.Co
 		f.lastStorageOpt = opts.HostConfig.StorageOpt
 	}
 	return client.ContainerCreateResult{ID: "fake-build-container"}, nil
+}
+
+// CopyToContainer records the staged build-context tar (drained so callers'
+// buffers can be asserted against) and succeeds — the fake's containers are
+// never started for real.
+func (f *fakeEnvbuilderDocker) CopyToContainer(_ context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	if options.Content != nil {
+		b, _ := io.ReadAll(options.Content)
+		f.copiedTars = append(f.copiedTars, len(b))
+	}
+	f.copiedTo = append(f.copiedTo, containerID)
+	return client.CopyToContainerResult{}, nil
 }
 
 func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {

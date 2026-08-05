@@ -51,7 +51,7 @@ func TestPG_HydrateAttachments_DerivedViewAndFold(t *testing.T) {
 		"write:/home/me/other-repo": {Level: "required", Provenance: "operator_set"}, // cross-path: must drop
 	})
 	prof, _ := json.Marshal(map[string]any{"languages": []string{"go"}, "confidence": "high"})
-	if _, err := s.SetSourceScanResultUnfenced(ctx, src.ID, prof, types.WorkspaceScanned); err != nil {
+	if _, err := s.SetSourceScanResultUnfenced(ctx, src.ID, prof, types.WorkspaceScanned, nil); err != nil {
 		t.Fatalf("set source scan: %v", err)
 	}
 
@@ -118,6 +118,56 @@ func TestPG_HydrateAttachments_DerivedViewAndFold(t *testing.T) {
 	// The overlay itself stays JUST the overlay.
 	if len(ws.Requirements) != 1 {
 		t.Errorf("Requirements (overlay) = %+v, want only the workspace's own row", ws.Requirements)
+	}
+}
+
+// A scan's discoveries land on the SOURCE's own contract — fill-missing-only:
+// scan_seeded rows appear, an operator's existing row is NEVER overwritten by
+// a re-scan (level OR provenance), and the workspace level only ever
+// aggregates via the fold.
+func TestPG_SourceScanSeedsOwnContract(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+
+	src := mkSource(t, s, types.SourceLocalDir, "/home/me/payments", map[string]types.WorkspaceRequirement{
+		// The operator already declared this secret OPTIONAL — a scan that
+		// detects it as required must not flip it.
+		"secret:STRIPE_KEY": {Level: "optional", Provenance: "operator_set"},
+	})
+	prof, _ := json.Marshal(map[string]any{"confidence": "high"})
+	seed := map[string]types.WorkspaceRequirement{
+		"secret:STRIPE_KEY":       {Level: "required", Provenance: "scan_seeded"},
+		"egress:api.stripe.com":   {Level: "required", Provenance: "scan_seeded"},
+		"write:/home/me/payments": {Level: "optional", Provenance: "scan_seeded"},
+	}
+	got, err := s.SetSourceScanResultUnfenced(ctx, src.ID, prof, types.WorkspaceScanned, seed)
+	if err != nil {
+		t.Fatalf("scan write: %v", err)
+	}
+	if row := got.Requirements["secret:STRIPE_KEY"]; row.Level != "optional" || row.Provenance != "operator_set" {
+		t.Errorf("operator row overwritten by scan seed: %+v", row)
+	}
+	if row := got.Requirements["egress:api.stripe.com"]; row.Level != "required" || row.Provenance != "scan_seeded" {
+		t.Errorf("scan-discovered egress row missing: %+v", got.Requirements)
+	}
+	if row := got.Requirements["write:/home/me/payments"]; row.Level != "optional" || row.Provenance != "scan_seeded" {
+		t.Errorf("dir write row missing: %+v", got.Requirements)
+	}
+
+	// The FENCED lane seeds identically (the governed repo-scan upload path).
+	repo := mkSource(t, s, types.SourceRepo, "github.com/acme/lib", nil)
+	runID := uuid.New()
+	if err := s.ClaimSourceActiveRun(ctx, repo.ID, runID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	got, err = s.SetSourceScanResult(ctx, repo.ID, prof, types.WorkspaceScanned, runID, map[string]types.WorkspaceRequirement{
+		"egress:proxy.golang.org": {Level: "required", Provenance: "scan_seeded"},
+	})
+	if err != nil {
+		t.Fatalf("fenced scan write: %v", err)
+	}
+	if got.Requirements["egress:proxy.golang.org"].Provenance != "scan_seeded" {
+		t.Errorf("fenced lane did not seed: %+v", got.Requirements)
 	}
 }
 

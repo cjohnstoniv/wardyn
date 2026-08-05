@@ -445,6 +445,9 @@ type Server struct {
 	// assumes (see secretmask.Registry's residual in THREAT-MODEL.md).
 	sshSessionsMu sync.Mutex
 	sshSessions   map[uuid.UUID]int
+	// builds tracks per-workspace image builds (the wizard's Build step).
+	// Zero value is ready to use.
+	builds buildTracker
 }
 
 // New constructs a Server and builds its router. It does not start listening.

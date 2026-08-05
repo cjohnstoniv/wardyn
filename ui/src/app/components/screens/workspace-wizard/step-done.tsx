@@ -20,8 +20,8 @@ export type DoneVariant = "usable" | "scanning" | "failed";
 const STRENGTHEN_CARDS: { focus: "record" | "env" | "model"; title: string; desc: string }[] = [
   {
     focus: "record",
-    title: "Record a session",
-    desc: "Drive it once in an open sandbox to learn what it really reaches, then promote those hosts.",
+    title: "Verify with a session",
+    desc: "Drive it once; approve what it asks for at the door, adjust, retry — then save.",
   },
   { focus: "env", title: "Env as code", desc: "Generate a devcontainer.json / AGENTS.md you can commit." },
   { focus: "model", title: "Model access", desc: "Bind a model this workspace's runs use." },

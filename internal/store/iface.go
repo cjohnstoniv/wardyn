@@ -81,8 +81,8 @@ type Store interface {
 	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error
 	ClaimSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
-	SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID) (types.Source, error)
-	SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus) (types.Source, error)
+	SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error)
+	SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error)
 
 	// Base-image catalog (tier 2). Upsert dedupes on (kind, image, steps);
 	// "recommended" is structurally excluded (CHECK) — it is a per-workspace

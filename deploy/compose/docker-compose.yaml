@@ -29,6 +29,21 @@
 # shell environment for anything beyond a laptop demo.
 
 services:
+  # Local OCI registry backing devcontainer builds: envbuilder is daemonless
+  # and can only PUSH its result, so the recommended per-workspace build needs
+  # a registry to round-trip through. Publishing on host LOOPBACK is the whole
+  # trick — Docker exempts 127.0.0.1 registries from TLS, so the daemon pulls
+  # and a host-networked build container pushes with zero certificate or
+  # insecure-registry configuration. Not reachable off-host by construction.
+  registry:
+    image: registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
+    container_name: ${WARDYN_NS:-wardyn}-registry
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+
   postgres:
     # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
     # so the digest freezes the exact image; bump both together on a version move.
@@ -182,15 +197,23 @@ services:
       WARDYN_WORKSPACES_ROOT: "${WARDYN_WORKSPACES_ROOT:-}"
       WARDYN_PROXY_IMAGE: "wardyn/wardyn-proxy:local"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
-      # Devcontainer image builds — OPT-IN, OFF by default. Workspace import
-      # VERIFY needs the detected toolchain (Go/Node/…) present in the image; the
-      # base agent image has none, so without a built devcontainer a verify of a
-      # real repo fails "command not found" (exit 127). Enable with WARDYN_ENVBUILD=true
-      # PLUS WARDYN_ENVBUILD_CACHE_REPO=<oci-ref> — cache-repo required: envbuilder
-      # pushes to the registry and Wardyn finalizes the image locally; there is no
-      # local-daemon commit path (the old docker.sock knob was retired).
-      WARDYN_ENVBUILD: "${WARDYN_ENVBUILD:-false}"
-      WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-}"
+      # Devcontainer image builds — ON by default on the compose stack: the
+      # wizard's DEFAULT card is "Recommended — built for this workspace", and a
+      # default the deployment can't honor reads as "command not found" inside
+      # the first verify session. The registry sidecar above supplies the
+      # round-trip envbuilder needs (daemonless: push-then-finalize; the old
+      # docker.sock commit knob stays retired), and the build container runs
+      # host-network by default HERE — it must reach ghcr.io for features and
+      # 127.0.0.1 for the registry. The recommended recipe is Wardyn-generated
+      # (not repo content); a repo's OWN devcontainer build carries the usual
+      # build-step network caveat (docs/ENVBUILD.md "Residual"). Opt out with
+      # WARDYN_ENVBUILD=false; host-mode setups keep the explicit knobs.
+      WARDYN_ENVBUILD: "${WARDYN_ENVBUILD:-true}"
+      WARDYN_ENVBUILD_CACHE_REPO: "${WARDYN_ENVBUILD_CACHE_REPO:-127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}/wardyn/devcontainers}"
+      WARDYN_ENVBUILD_BUILD_NETWORK: "${WARDYN_ENVBUILD_BUILD_NETWORK:-host}"
+      # Runner tools the finalize stage layers onto built images — shipped IN
+      # the wardynd image (Dockerfile.wardynd), so this is zero-config too.
+      WARDYN_ENVBUILD_TOOLS_DIR: "${WARDYN_ENVBUILD_TOOLS_DIR:-/wardyn-tools}"
       # CC1 (runc) demo policy: plain Docker hosts without gVisor (CC2) can still
       # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json
       # on a CC2-capable host (the default.json policy demands CC2).
@@ -358,6 +381,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # The devcontainer-build registry rides along with wardynd: every
+      # bring-up path names services explicitly (`up -d postgres dex wardynd`),
+      # and a sidecar outside that list simply never starts — the build step
+      # then fails with "dial tcp 127.0.0.1:5010: connection refused".
+      registry:
+        condition: service_started
       # required: false — dex is opt-in (profile "sso"); without it, Compose
       # would otherwise refuse to start wardynd at all when dex isn't part of
       # the active profile set ("depends on undefined service"). With SSO on,
@@ -526,6 +555,7 @@ services:
     command: ["sleep", "infinity"]
 
 volumes:
+  registry_data:
   postgres_data:
   # Shared host-sensor token file: wardynd's rotator writes it, the tetragon-ingest
   # sidecar reads it, so the ground-truth stream survives the ~1h token TTL.

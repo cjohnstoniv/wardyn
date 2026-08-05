@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step ③ Requirements — four tabs (Record · Egress · Secrets · Files &
+// Step ④ Requirements — four tabs (Reach · Secrets · Files & services ·
 // services), matching mockup2/wardyn-workspaces.js's AddWorkspaceWizardV2
 // bodyReqs2/RD2 (V2S3Reqs / V2S3ReqsEgress / V2S3ReqsNone fixtures). The tab
 // design existed on paper before any mock drew it, so an earlier pass shipped
@@ -159,6 +159,9 @@ export function StepRequirements({
   onSecretStored,
   powerSource,
   status,
+  showVerifyTab = true,
+  verifyPanel,
+  carryImage,
 }: {
   profile: WorkspaceProfile | null | undefined;
   sources: SourceRow[];
@@ -176,6 +179,17 @@ export function StepRequirements({
   // so every existing caller (and every fixture) keeps working — absent simply
   // means the integrations section doesn't render.
   status?: SetupStatus | null;
+  // The LIVE verify-session panel (wizard only: it owns a real workspace to
+  // launch against). Absent — the detail page, fixtures — keeps the plain
+  // buttons, whose real launcher lives elsewhere on that page.
+  // The wizard renders Verify as its OWN STEP; it hides this tab (false).
+  // The detail page keeps the tab (default).
+  showVerifyTab?: boolean;
+  verifyPanel?: React.ReactNode;
+  // What a verify session will BOOT — stated on the carry card so "go:
+  // command not found" is never the first hint that the recommended build
+  // isn't available on this host.
+  carryImage?: string;
 }) {
   const [addSecretName, setAddSecretName] = React.useState<string | null>(null);
   const [pendingHost, setPendingHost] = React.useState<string | null>(null);
@@ -217,19 +231,6 @@ export function StepRequirements({
 
   const unmet = unmetRequiredSecrets(requirements, storedSecretNames);
   const nothingResolves = powerSource.kind === "none";
-  // What the Record tab's carry card states, derived from the contract-so-far —
-  // these are computed facts, not canon strings.
-  const requiredSecretCount = Object.entries(requirements).filter(
-    ([k, v]) => k.startsWith("secret:") && v.level === "required",
-  ).length;
-  const carrySecrets =
-    requiredSecretCount > 0
-      ? `${requiredSecretCount} required secret${requiredSecretCount > 1 ? "s" : ""} ride${requiredSecretCount > 1 ? "" : "s"} proxy-side`
-      : "none yet";
-  const carryEgress =
-    autoAllowed.length > 0
-      ? `${autoAllowed.length} host${autoAllowed.length > 1 ? "s" : ""} allowed — anything else is held at the door`
-      : "only the auto-allowed set — anything else is held at the door";
 
   return (
     <div className="space-y-5">
@@ -259,7 +260,7 @@ export function StepRequirements({
               <TabsTrigger value="reach">Reach</TabsTrigger>
               <TabsTrigger value="secrets">Secrets</TabsTrigger>
               <TabsTrigger value="files">Files & services</TabsTrigger>
-              <TabsTrigger value="record">Record</TabsTrigger>
+              {showVerifyTab && <TabsTrigger value="record">Verify</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="reach" className="space-y-2 pt-3" data-testid="group-reach">
@@ -483,50 +484,18 @@ export function StepRequirements({
               </section>
             </TabsContent>
 
-            <TabsContent value="record" className="space-y-3 pt-3" data-testid="group-record">
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LEAD}</p>
-              <div className="space-y-2 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="record-carry">
-                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">{RD2.CARRY}</p>
-                <CarryRow label="Power source">
-                  {nothingResolves ? (
-                    <span className="text-warning">nothing resolves — the power source is on Reach</span>
-                  ) : powerSource.kind === "pinned" ? (
-                    `${powerSource.name} — pinned to this workspace`
-                  ) : (
-                    "server default"
-                  )}
-                </CarryRow>
-                <CarryRow label="Required secrets">{carrySecrets}</CarryRow>
-                <CarryRow label="Egress posture">{carryEgress}</CarryRow>
-                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.CARRY_FROM}</p>
-              </div>
-              {nothingResolves && (
-                <div className="space-y-2 rounded-lg border border-warning/30 bg-warning-subtle p-2.5">
-                  <p className="text-[0.75rem] leading-snug text-warning">{RD2.RECORD_NEEDS}</p>
-                  <Button type="button" size="sm" variant="outline" onClick={() => setReqTab("reach")}>
-                    Open the Reach tab →
-                  </Button>
-                </div>
-              )}
-              {/* ponytail: inert, like the mock's own onClick: noop — launching
-                  a real recording session needs a real sandbox/run, which this
-                  wizard step doesn't have yet. Wire onClick once the workspace
-                  page's record-launch action grows a prop this step can call. */}
-              <div className="flex flex-wrap gap-2">
-                {!nothingResolves && (
-                  <Button type="button" size="sm">
-                    Record a session
-                  </Button>
-                )}
-                <Button type="button" size="sm" variant={nothingResolves ? "default" : "outline"}>
-                  Record a terminal session
-                </Button>
-              </div>
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-                {nothingResolves ? RD2.TERMINAL_ONLY : RD2.RECORD_SUB}
-              </p>
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LOOP}</p>
-            </TabsContent>
+            {showVerifyTab && (
+              <TabsContent value="record" className="space-y-3 pt-3" data-testid="group-record">
+                <VerifyBody
+                  requirements={requirements}
+                  storedSecretNames={storedSecretNames}
+                  powerSource={powerSource}
+                  carryImage={carryImage}
+                  verifyPanel={verifyPanel}
+                  onOpenReach={() => setReqTab("reach")}
+                />
+              </TabsContent>
+            )}
           </Tabs>
         </div>
       )}
@@ -553,6 +522,91 @@ export function StepRequirements({
           setPendingHost(null);
         }}
       />
+    </div>
+  );
+}
+
+// VerifyBody is the verify surface itself — the carry card, the session
+// affordance (live panel when the caller has one), and the loop copy. Shared
+// by the detail page's Verify TAB and the wizard's Verify STEP so the two can
+// never drift.
+export function VerifyBody({
+  requirements,
+  storedSecretNames,
+  powerSource,
+  carryImage,
+  verifyPanel,
+  onOpenReach,
+}: {
+  requirements: WorkspaceRequirementsMap;
+  storedSecretNames: string[];
+  powerSource: PowerSource;
+  carryImage?: string;
+  verifyPanel?: React.ReactNode;
+  onOpenReach: () => void;
+}) {
+  void storedSecretNames;
+  const nothingResolves = powerSource.kind === "none";
+  const requiredSecretCount = Object.entries(requirements).filter(
+    ([k, v]) => k.startsWith("secret:") && v.level === "required",
+  ).length;
+  const carrySecrets =
+    requiredSecretCount > 0
+      ? `${requiredSecretCount} required secret${requiredSecretCount > 1 ? "s" : ""} ride${requiredSecretCount > 1 ? "" : "s"} proxy-side`
+      : "none yet";
+  const allowedHosts = Object.entries(requirements).filter(
+    ([k, v]) => k.startsWith("egress:") && v.level === "required",
+  ).length;
+  const carryEgress =
+    allowedHosts > 0
+      ? `${allowedHosts} host${allowedHosts > 1 ? "s" : ""} allowed — anything else is held at the door`
+      : "only the auto-allowed set — anything else is held at the door";
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LEAD}</p>
+      <div className="space-y-2 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="record-carry">
+        <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">{RD2.CARRY}</p>
+        <CarryRow label="Power source">
+          {nothingResolves ? (
+            <span className="text-warning">nothing resolves — the power source is on Reach</span>
+          ) : powerSource.kind === "pinned" ? (
+            `${powerSource.name} — pinned to this workspace`
+          ) : (
+            "server default"
+          )}
+        </CarryRow>
+        {carryImage && <CarryRow label="Image">{carryImage}</CarryRow>}
+        <CarryRow label="Required secrets">{carrySecrets}</CarryRow>
+        <CarryRow label="Egress posture">{carryEgress}</CarryRow>
+        <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.CARRY_FROM}</p>
+      </div>
+      {nothingResolves && (
+        <div className="space-y-2 rounded-lg border border-warning/30 bg-warning-subtle p-2.5">
+          <p className="text-[0.75rem] leading-snug text-warning">{RD2.RECORD_NEEDS}</p>
+          <Button type="button" size="sm" variant="outline" onClick={onOpenReach}>
+            Open the Reach tab →
+          </Button>
+        </div>
+      )}
+      {verifyPanel ?? (
+        <>
+          <div className="flex flex-wrap gap-2">
+            {!nothingResolves && (
+              <Button type="button" size="sm">
+                Verify with a session
+              </Button>
+            )}
+            <Button type="button" size="sm" variant={nothingResolves ? "default" : "outline"}>
+              Verify in a terminal
+            </Button>
+          </div>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            {nothingResolves ? RD2.TERMINAL_ONLY : RD2.RECORD_SUB}
+          </p>
+        </>
+      )}
+      <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LOOP}</p>
     </div>
   );
 }

@@ -137,7 +137,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Deleting a source or image that workspaces still use answers 409 *naming
   them* (`?force=1` detaches — for an image that honestly means "fall back to
   the derived recommended build"; for a source it un-mounts code, which is why
-  the refusal is loud instead of tolerated). **The tiers are first-class in
+  the refusal is loud instead of tolerated). **A source's scan seeds the source's own
+  contract** — detected secrets, auto-allowed hosts, and (for a directory)
+  its own write path land as `scan_seeded` rows on the tier-1 entry itself,
+  fill-missing-only in the same atomic write, so an operator's edits always
+  win and a re-scan never flips a decision; the workspace level only ever
+  aggregates the fold. **The tiers are first-class in
   the UI**: the Workspaces page (and the Getting-started Workspaces step)
   now carries three tabs — Workspaces · Directories & repos · Base images —
   each with its own add/delete dialogs, per-source scan and contract summary,
@@ -483,6 +488,42 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **"Recommended — built for this workspace" now works out of the box on the
+  compose stack.** The default card required four hand-set knobs and still
+  failed: devcontainer builds were opt-in (`WARDYN_ENVBUILD=false`), needed an
+  external registry, a build-network opt-in, and a hand-staged runner-tools
+  directory — and even fully configured, two latent bugs killed every real
+  build from a containerized control plane. The stack now ships a loopback
+  registry sidecar (Docker trusts `127.0.0.1` registries without TLS or
+  daemon config), builds default ON with the registry/network/tools knobs
+  pre-wired, and the runner tools ride inside the wardynd image. The two
+  bugs: the generated build context was staged in the control plane's own
+  /tmp and bind-mounted by path — a path the host daemon can't see, so
+  envbuilder built an empty workspace (delivery is now a tar streamed into
+  the build container, host-agnostic); and the build container's blanket
+  capability drop broke rootfs extraction for any featureful build ("chown
+  /etc/gshadow: operation not permitted") — it now grants exactly the
+  file-ownership set an image builder needs, keeping the network- and
+  syscall-shaped capabilities dropped. Build output also streams into
+  wardynd's log now; a failed build used to leave nothing but "exit code 1".
+  Proven end to end: a Go+JS workspace's recommended image built, pushed
+  through the sidecar, finalized, and a verify session booted it with
+  go/node/pnpm present.
+- **`make setup` asks which folder Wardyn may onboard.** `WARDYN_WORKSPACES_ROOT`
+  had to be exported by hand on every setup run or local-directory onboarding
+  failed against the sealed daemon. The containerized front door now prompts
+  for it (default: the previous answer, else the current directory), refuses
+  `$HOME` outright, remembers the choice in deploy/compose/.env, and an
+  explicit env var still wins silently for scripts and CI.
+- **The base-image cards stopped claiming tools they never carry.** The
+  Recommended card appended a `claude-code` chip whenever an AI integration
+  existed — but the recommended build is generated from the scan profile and
+  never bakes the agent CLI (it arrives at run time, as a tool choice). The
+  chip is gone: Carries lists exactly what the scan detected. The custom
+  card's "Tools & features" checklist — including a default-checked "Claude
+  Code CLI" toggle — is deleted outright: none of those checkboxes ever
+  reached the build (only the base image and build steps are sent), so the
+  honest surface is the base + the steps editor, which is what remains.
 - **An ephemeral-only workspace lost its Requirements tabs.** The hydrate
   pass derived a workspace's profile from its attached library sources — and
   an ephemeral-only composition has none, so it derived *nil* where the old

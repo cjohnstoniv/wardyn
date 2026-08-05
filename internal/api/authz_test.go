@@ -113,6 +113,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/workspaces/{id}":                               {class: classAdmin},
 	"DELETE /api/v1/workspaces/{id}":                            {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/scan":                         {class: classAdmin},
+	"POST /api/v1/workspaces/{id}/build":                        {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/llm-cred":                      {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/requirements":                  {class: classAdmin},
@@ -154,6 +155,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/sources/{id}":                    {class: classMember},
 	"GET /api/v1/workspaces":                      {class: classMember},
 	"GET /api/v1/workspaces/{id}":                 {class: classMember},
+	"GET /api/v1/workspaces/{id}/build":           {class: classMember},
 	"GET /api/v1/workspaces/{id}/env-as-code":     {class: classMember},
 	"GET /api/v1/workspaces/{id}/observed-egress": {class: classMember},
 	"POST /api/v1/auth/logout":                    {class: classMember},
@@ -641,10 +643,10 @@ func (s *authzStore) WorkspacesAttaching(context.Context, uuid.UUID) ([]string, 
 func (s *authzStore) DeleteSource(context.Context, uuid.UUID, bool) error              { return nil }
 func (s *authzStore) ClaimSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (s *authzStore) ClearSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error { return nil }
-func (s *authzStore) SetSourceScanResult(context.Context, uuid.UUID, []byte, types.WorkspaceStatus, uuid.UUID) (types.Source, error) {
+func (s *authzStore) SetSourceScanResult(context.Context, uuid.UUID, []byte, types.WorkspaceStatus, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return types.Source{}, store.ErrNotFound
 }
-func (s *authzStore) SetSourceScanResultUnfenced(context.Context, uuid.UUID, []byte, types.WorkspaceStatus) (types.Source, error) {
+func (s *authzStore) SetSourceScanResultUnfenced(context.Context, uuid.UUID, []byte, types.WorkspaceStatus, map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return types.Source{}, store.ErrNotFound
 }
 

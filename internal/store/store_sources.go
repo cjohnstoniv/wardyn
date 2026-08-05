@@ -215,27 +215,47 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	return nil
 }
 
+// seedParam marshals a scan's seed rows for the requirements-fill SQL below.
+// nil/empty => '{}' (no-op under ||).
+func seedParam(seed map[string]types.WorkspaceRequirement) []byte {
+	if len(seed) == 0 {
+		return []byte("{}")
+	}
+	b, err := json.Marshal(seed)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
 // SetSourceScanResult persists a scan outcome FENCED on the claiming run —
 // SetWorkspaceScanResult's shape one table over: only the run that holds
 // active_run_id may write, so a stale upload from a superseded run can never
-// clobber a fresher result.
-func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID) (types.Source, error) {
+// clobber a fresher result. `seed` is the scan's requirement discovery for
+// the SOURCE's OWN contract, applied fill-missing-only in the same statement:
+// jsonb `||` lets the RIGHT side win, so an existing row — an operator's
+// edit, or an earlier scan's — is never overwritten by a re-scan.
+func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
 		UPDATE sources
-		SET profile=$1, status=$2, active_run_id=NULL, updated_at=now()
+		SET profile=$1, status=$2, requirements=$5::jsonb || COALESCE(requirements, '{}'::jsonb),
+		    active_run_id=NULL, updated_at=now()
 		WHERE id=$3 AND active_run_id=$4
 		RETURNING `+sourceCols,
-		profile, string(status), id, runID))
+		profile, string(status), id, runID, seedParam(seed)))
 }
 
 // SetSourceScanResultUnfenced persists a SYNCHRONOUS (inline local_dir) scan,
 // which never claimed a run slot — there is no concurrent writer to fence
 // against on that path, exactly as the workspace inline scan wrote directly.
-func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus) (types.Source, error) {
+// Same fill-missing-only seed semantics as the fenced writer.
+func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
-		UPDATE sources SET profile=$1, status=$2, updated_at=now()
+		UPDATE sources
+		SET profile=$1, status=$2, requirements=$4::jsonb || COALESCE(requirements, '{}'::jsonb),
+		    updated_at=now()
 		WHERE id=$3 RETURNING `+sourceCols,
-		profile, string(status), id))
+		profile, string(status), id, seedParam(seed)))
 }
 
 // ─── Base images (tier 2) ───────────────────────────────────────────────────

@@ -641,7 +641,7 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 			return
 		}
 		if src.Status == types.WorkspaceScanning {
-			_, _ = s.cfg.Store.SetSourceScanResult(ctx, src.ID, src.Profile, types.WorkspaceError, runID)
+			_, _ = s.cfg.Store.SetSourceScanResult(ctx, src.ID, src.Profile, types.WorkspaceError, runID, nil)
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "source.scan",
 				src.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_facts_uploaded"})))
 		}

@@ -114,7 +114,9 @@ COPY . .
 # on why both by default costs nothing at runtime).
 ARG GO_BUILD_TAGS=docker,k8s
 RUN CGO_ENABLED=0 GOOS=linux go build -tags "${GO_BUILD_TAGS}" -o /out/wardynd ./cmd/wardynd \
- && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn \
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/tools/wardyn-rec ./cmd/wardyn-rec \
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/tools/wardyn-git-helper ./cmd/wardyn-git-helper
 
 # A HOST-NATIVE `wardyn` for scripts/up.sh's host-side proxy detection. The
 # containerized wardynd cannot see the host's shell profiles, git/tool configs or
@@ -149,6 +151,15 @@ COPY --from=builder /build/examples/policies /examples/policies
 ENV WARDYN_DEFAULT_POLICY=/examples/policies/default.json
 # Ship the built UI and serve it by default (overridable via WARDYN_UI_DIR).
 COPY --from=ui /ui/dist /srv/ui
+# Runner tools for the devcontainer-build finalize stage (envbuild layers
+# these onto every built image so the runner can exec it — H5). Shipping them
+# IN the wardynd image makes recommended builds zero-config: no host-side
+# tools staging, nothing to re-assemble after a reset. Same set ci-run.sh
+# stages from the agent image; agent-run comes from the claude-code image
+# source (the default agent), the lib is shared.
+COPY --from=builder /out/tools/ /wardyn-tools/
+COPY --from=builder /build/deploy/images/claude-code/agent-run /wardyn-tools/agent-run
+COPY --from=builder /build/deploy/images/common/agent-run-lib.sh /wardyn-tools/agent-run-lib.sh
 ENV WARDYN_UI_DIR=/srv/ui
 
 EXPOSE 8080

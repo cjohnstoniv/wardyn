@@ -181,8 +181,8 @@ describe("RequirementsCard — Reach/Record reflect the REAL llm_cred binding, n
     // Reach's power card states the resolution up front…
     expect(within(screen.getByTestId("power-source-card")).getByText("server default")).toBeInTheDocument();
     // …and Record (last tab) offers the agent session.
-    await openTab("Record");
-    expect(screen.getByRole("button", { name: "Record a session" })).toBeEnabled();
+    await openTab("Verify");
+    expect(screen.getByRole("button", { name: "Verify with a session" })).toBeEnabled();
     expect(screen.queryByText(RD2.RECORD_NEEDS)).not.toBeInTheDocument();
   });
 

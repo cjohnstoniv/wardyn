@@ -17,6 +17,7 @@ import { sourcesApi } from "../../lib/api/sources";
 import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import { statusTone, statusWord } from "../../lib/workspace-status";
+import { usePoll } from "../../lib/use-poll";
 import type { Source, Workspace } from "../../lib/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -315,27 +316,39 @@ export function SourcesLibrary({
   const [toDelete, setToDelete] = React.useState<Source | null>(null);
   const [scanning, setScanning] = React.useState<string | null>(null);
 
-  const load = React.useCallback(() => {
-    setStatus("loading");
+  const load = React.useCallback((quiet = false) => {
+    if (!quiet) setStatus("loading");
     sourcesApi
       .listSources()
       .then((rows) => {
         setSources(rows);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => {
+        if (!quiet) setStatus("error");
+      });
   }, []);
-  React.useEffect(load, [load]);
+  React.useEffect(() => load(), [load]);
+
+  // A repo's scan is a governed run (202) — poll quietly until no row is mid-
+  // scan, so "Setting up" settles into Usable / Scan failed on its own.
+  usePoll(() => load(true), 4000, !sources.some((s) => s.status === "scanning"));
 
   const usage = sourceUsage(workspaces);
 
   const scan = async (src: Source) => {
     setScanning(src.id);
     try {
-      await sourcesApi.scanSource(src.id);
-      load();
+      const res = (await sourcesApi.scanSource(src.id)) as { scan_run_id?: string } | null;
+      if (res && typeof res === "object" && res.scan_run_id) {
+        toast.info(`Scan started for "${src.name}"`, {
+          description: "A governed run is analyzing the repo; the row updates when it completes.",
+        });
+      }
+      load(true);
     } catch (e) {
       toast.error(`Scan failed for "${src.name}"`, { description: getErrorMessage(e) });
+      load(true); // the row's status=error chip is the durable signal
     } finally {
       setScanning(null);
     }
@@ -442,7 +455,14 @@ export function SourcesLibrary({
         </div>
       )}
 
-      <AddSourceDialog open={addOpen} onOpenChange={setAddOpen} onSaved={() => load()} />
+      <AddSourceDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onSaved={(src) => {
+          load(true);
+          void scan(src);
+        }}
+      />
       <DeleteSourceDialog target={toDelete} onOpenChange={(o) => !o && setToDelete(null)} onDeleted={load} />
     </div>
   );

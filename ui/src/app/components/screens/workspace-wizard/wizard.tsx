@@ -39,6 +39,11 @@ import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
 import type { SetupStatus, Source as SdkSource, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { BUILD_BLURB, StepBuild } from "./step-build";
+import { StepIntegrations, INTEGRATIONS_BLURB } from "./step-integrations";
+import { VerifyBody } from "./step-requirements";
+import { WizardVerifySession } from "./verify-session";
+import type { WorkspaceBuildState } from "../../../lib/api/workspaces";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -54,6 +59,8 @@ import {
   parseRepoSource,
   removeSource,
   seedFloor,
+  suggestedRegistryImage,
+  toBaseImageInput,
   toSourceInput,
   type BaseImageState,
   type PowerSource,
@@ -63,6 +70,7 @@ import {
   type WizardStepId,
   type WorkspaceRequirementsMap,
   type WorkspaceSourceKind,
+  setRequirementLane,
 } from "./wizard-types";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,7 +95,9 @@ interface WizardState {
   requirementsSeeded: boolean;
   confirmBackToSources: boolean;
   creating: boolean;
+  savingImage: boolean;
   savingRequirements: boolean;
+  buildState: WorkspaceBuildState | null;
 }
 
 function initialState(): WizardState {
@@ -109,7 +119,9 @@ function initialState(): WizardState {
     requirementsSeeded: false,
     confirmBackToSources: false,
     creating: false,
+    savingImage: false,
     savingRequirements: false,
+    buildState: null,
   };
 }
 
@@ -327,19 +339,79 @@ export function WorkspaceWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.step, s.requirementsSeeded]);
 
-  const acceptAndFinish = async () => {
+  // Leaving Requirements SAVES the contract first — the verify session's
+  // egress posture is computed server-side from the STORED rows, so an
+  // unsaved contract would verify against yesterday's.
+  const saveAndContinue = async () => {
     if (!s.workspace) return;
     patch({ savingRequirements: true });
     try {
       const updated = await workspacesApi.setRequirements(s.workspace.id, s.requirements);
-      patch({ savingRequirements: false, workspace: updated, step: "done" });
+      patch({ savingRequirements: false, workspace: updated, step: "verify" });
     } catch (e) {
       patch({ savingRequirements: false });
       toast.error("Failed to save requirements", { description: getErrorMessage(e) });
     }
   };
 
-  // ---------- Done (step ④) ----------
+  // Leaving step ②: PERSIST the base-image choice (it used to be wizard-local
+  // and silently thrown away — a picked golang image never reached the
+  // workspace, so verify booted the stock agent image and `go` was "command
+  // not found"). Image-only updates keep the contract server-side; a failed
+  // save stays on the step with the error in a toast.
+  const continueFromImage = async () => {
+    if (!s.workspace) {
+      patch({ step: "integrations" });
+      return;
+    }
+    patch({ savingImage: true });
+    try {
+      const updated = await workspacesApi.updateWorkspace(s.workspace.id, {
+        name: s.name || s.workspace.name,
+        sources: s.sources.map((r) => toSourceInput(r, s.sources)),
+        base_image: toBaseImageInput(s.baseImage, detectedChips),
+      });
+      patch({ workspace: updated, savingImage: false, step: "integrations" });
+    } catch (e) {
+      patch({ savingImage: false });
+      toast.error("Failed to save the base-image choice", { description: getErrorMessage(e) });
+    }
+  };
+
+  // After a verify session ends: the decide() hook may have written rows into
+  // the WORKSPACE's contract server-side (approved hosts, required/operator_set).
+  // Refetch and absorb them — new keys join the wizard's map; a key the
+  // operator already edited locally keeps the local value (their unsaved edit
+  // wins until Accept & finish PUTs the map).
+  const absorbServerContract = async () => {
+    if (!s.workspace) return;
+    const fresh = await workspacesApi.getWorkspace(s.workspace.id).catch(() => null);
+    if (!fresh) return;
+    const merged = { ...s.requirements };
+    for (const [k, v] of Object.entries(fresh.requirements ?? {})) {
+      if (!(k in merged)) merged[k] = v;
+    }
+    patch({ workspace: fresh, requirements: merged });
+  };
+
+  // What a verify session will boot, stated honestly: an explicit image pick
+  // boots verbatim; "recommended" boots the BUILT image when one exists, and
+  // on a host without devcontainer builds it falls back to the stock agent
+  // image — say so up front instead of letting "command not found" say it.
+  const carryImage =
+    s.baseImage.choice === "catalog" && s.baseImage.catalog
+      ? s.baseImage.catalog.image
+      : s.baseImage.choice === "byo"
+        ? s.baseImage.byoRef.trim() || "bring-your-own — no ref yet"
+        : s.baseImage.choice === "registry"
+          ? suggestedRegistryImage(detectedChips)
+          : s.baseImage.choice === "custom"
+            ? s.baseImage.customBase.trim()
+            : s.workspace?.image_ref
+              ? s.workspace.image_ref
+              : "recommended build — built on first use; without devcontainer builds on this host, sessions boot the stock agent image";
+
+  // ---------- Done (step ⑤) ----------
   const doneVariant: DoneVariant = !s.workspace
     ? "scanning"
     : s.workspace.status === "error"
@@ -357,9 +429,15 @@ export function WorkspaceWizard({
       ? V2C.S1_BLURB
       : s.step === "image"
         ? V2C.S2_BLURB
-        : s.step === "reqs"
-          ? C.S3_BLURB
-          : undefined;
+        : s.step === "integrations"
+          ? INTEGRATIONS_BLURB
+          : s.step === "build"
+            ? BUILD_BLURB
+            : s.step === "reqs"
+              ? C.S3_BLURB
+              : s.step === "verify"
+                ? "Drive the workspace for real. Anything not in the contract is held at the door — approve or deny it live, adjust, retry, then finish."
+                : undefined;
 
   return (
     <Dialog open onOpenChange={(o) => !o && close()}>
@@ -375,7 +453,10 @@ export function WorkspaceWizard({
             onJump={(id) => {
               if (id === "sources") goToSources();
               else if (id === "image" && wsExists) patch({ step: "image" });
+              else if (id === "integrations" && wsExists) patch({ step: "integrations" });
+              else if (id === "build" && wsExists) patch({ step: "build" });
               else if (id === "reqs" && wsExists && profile) patch({ step: "reqs" });
+              else if (id === "verify" && wsExists && profile) patch({ step: "verify" });
             }}
           />
         </div>
@@ -404,13 +485,45 @@ export function WorkspaceWizard({
               onEditSource={() => goToSources()}
               onRescan={() => s.workspace && void startScan(s.workspace)}
               detectedChips={detectedChips}
-              harnessAvailable={s.harnessAvailable}
               state={s.baseImage}
               onChange={(p) => patch({ baseImage: { ...s.baseImage, ...p } })}
             />
           )}
+          {s.step === "integrations" && (
+            <StepIntegrations
+              status={s.setupStatus ?? null}
+              requirements={s.requirements}
+              setLane={(key, level) => patch({ requirements: setRequirementLane(s.requirements, key, level) })}
+              clear={(key) => {
+                const next = { ...s.requirements };
+                delete next[key];
+                patch({ requirements: next });
+              }}
+            />
+          )}
+          {s.step === "build" && s.workspace && (
+            <StepBuild workspaceId={s.workspace.id} onStateChange={(b) => patch({ buildState: b })} />
+          )}
+          {s.step === "verify" && s.workspace && (
+            <VerifyBody
+              requirements={s.requirements}
+              storedSecretNames={s.secretNames}
+              powerSource={powerSource}
+              carryImage={carryImage}
+              onOpenReach={() => patch({ step: "reqs" })}
+              verifyPanel={
+                <WizardVerifySession
+                  ws={s.workspace}
+                  nothingResolves={powerSource.kind === "none"}
+                  onContractChanged={() => void absorbServerContract()}
+                />
+              }
+            />
+          )}
           {s.step === "reqs" && (
             <StepRequirements
+              carryImage={carryImage}
+              showVerifyTab={false}
               profile={profile}
               sources={s.sources}
               requirements={s.requirements}
@@ -418,7 +531,10 @@ export function WorkspaceWizard({
               storedSecretNames={s.secretNames}
               onSecretStored={onSecretStored}
               powerSource={powerSource}
-              status={s.setupStatus}
+              // No status: the wizard's step ③ OWNS the integrations picker;
+              // passing it here would render the same section twice. The
+              // workspace DETAIL page still passes its status — that surface
+              // has no step ③, so its Reach keeps the inline section.
             />
           )}
           {s.step === "done" && (
@@ -466,26 +582,52 @@ export function WorkspaceWizard({
                 <Button type="button" variant="ghost" onClick={goToSources}>
                   Back
                 </Button>
-                {/* ponytail: the chosen base image stays wizard-local state for
-                    this pass — updateWorkspace's client type doesn't accept
-                    base_image yet (only createWorkspace was widened for it),
-                    and a multi-source workspace's legacy kind/source mirror
-                    fields are blank, so calling updateWorkspace here would
-                    send garbage rather than the real choice. Persisting it is
-                    a small follow-up once that client function grows the same
-                    base_image field createWorkspace already has. */}
-                <Button type="button" onClick={() => patch({ step: "reqs" })}>
+                <Button type="button" disabled={s.savingImage} onClick={() => void continueFromImage()}>
                   Continue →
+                </Button>
+              </>
+            )}
+            {s.step === "integrations" && (
+              <>
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "image" })}>
+                  Back
+                </Button>
+                <Button type="button" onClick={() => patch({ step: "build" })}>
+                  Continue →
+                </Button>
+              </>
+            )}
+            {s.step === "build" && (
+              <>
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "integrations" })}>
+                  Back
+                </Button>
+                {/* Continue never hard-blocks: a failed/absent build falls back
+                    to the stock agent image at session time, stated honestly on
+                    the Verify step's carry card — but while a build RUNS, moving
+                    on just means arriving before the image does. */}
+                <Button type="button" onClick={() => patch({ step: "reqs" })}>
+                  {s.buildState?.state === "building" ? "Continue without waiting" : "Continue →"}
                 </Button>
               </>
             )}
             {s.step === "reqs" && (
               <>
-                <Button type="button" variant="outline" onClick={close}>
-                  Close
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "build" })}>
+                  Back
                 </Button>
-                <Button type="button" disabled={s.savingRequirements} onClick={() => void acceptAndFinish()}>
-                  Accept &amp; finish
+                <Button type="button" disabled={s.savingRequirements} onClick={() => void saveAndContinue()}>
+                  Save &amp; continue →
+                </Button>
+              </>
+            )}
+            {s.step === "verify" && (
+              <>
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "reqs" })}>
+                  Back
+                </Button>
+                <Button type="button" onClick={() => patch({ step: "done" })}>
+                  Finish
                 </Button>
               </>
             )}

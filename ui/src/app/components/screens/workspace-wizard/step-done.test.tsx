@@ -69,7 +69,7 @@ describe("StepDone — usable (happy path)", () => {
       />,
     );
     expect(screen.getByText(/Bound: Anthropic \(API key\)/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Record a session"));
+    fireEvent.click(screen.getByText("Verify with a session"));
     expect(onOpenDetail).toHaveBeenCalledWith("record");
     fireEvent.click(screen.getByText("Env as code"));
     expect(onOpenDetail).toHaveBeenCalledWith("env");

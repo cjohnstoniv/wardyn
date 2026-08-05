@@ -112,8 +112,9 @@ describe("SourcesLibrary", () => {
     expect(screen.getByText("1 workspace")).toBeInTheDocument();
   });
 
-  it("adds a repo to the library through the dialog", async () => {
+  it("adds a repo through the dialog AND scans it immediately — never parked at Setting up", async () => {
     createSourceMock.mockResolvedValue(src({ id: "s-9", name: "lib" }));
+    scanSourceMock.mockResolvedValue({ scan_run_id: "r-1" });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(<SourcesLibrary workspaces={[]} />);
 
@@ -131,6 +132,9 @@ describe("SourcesLibrary", () => {
         name: undefined,
       }),
     );
+    // Adding IS scanning: a dir resolves inline in the same motion; a repo
+    // launches its governed run and the quiet poll settles the row.
+    await waitFor(() => expect(scanSourceMock).toHaveBeenCalledWith("s-9"));
   });
 
   it("delete-in-use surfaces the server's 409 naming workspaces, then forces on the explicit escape", async () => {

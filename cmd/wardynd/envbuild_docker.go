@@ -6,7 +6,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/envbuild"
@@ -46,10 +49,31 @@ func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag 
 // `-tags docker`. The builder runs daemonless: envbuilder pushes to the registry
 // (cacheRepo) and Wardyn finalizes the image locally, so a missing cacheRepo
 // fails closed.
+// slogLineWriter forwards build output lines to slog so a failed build's
+// reason lands in wardynd's own logs instead of vanishing with the removed
+// container (the old behavior left only "exit code 1").
+type slogLineWriter struct{ buf []byte }
+
+func (w *slogLineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		if line := strings.TrimSpace(string(w.buf[:i])); line != "" {
+			slog.Info("envbuild: " + line)
+		}
+		w.buf = w.buf[i+1:]
+	}
+	return len(p), nil
+}
+
 func newEnvBuilder(envbuilderImage, cacheRepo string) (api.ImageBuilder, error) {
 	b, err := envbuild.New(envbuilderImage, cacheRepo)
 	if err != nil {
 		return nil, err
 	}
+	b.DefaultLogSink = &slogLineWriter{}
 	return envBuilderAdapter{b: b}, nil
 }

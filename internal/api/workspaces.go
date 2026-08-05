@@ -376,7 +376,8 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// this GET→mutate→UPDATE can race an async repo-scan upload and
 	// write back a stale profile; identity edits are rare and the remedy is a
 	// re-scan — add an optimistic updated_at guard if it ever bites for real.
-	rescan := !slices.Equal(ws.Sources, req.Sources) || !baseImageEqual(ws.BaseImage, req.BaseImage)
+	sourcesChanged := !slices.Equal(ws.Sources, req.Sources)
+	imageChanged := !baseImageEqual(ws.BaseImage, req.BaseImage)
 	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, req.BaseImage
 	// Three-tier: the edited composition upserts+attaches through the library
 	// exactly as create does — the hydrated read makes attachments
@@ -387,17 +388,23 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.Attachments, ws.BaseImageID = atts, baseImageID
-	if rescan {
+	if sourcesChanged {
+		// New CONTENT: everything reviewed against the old sources is stale.
+		// (Tier-1 contracts are untouched — they live on the sources.)
 		ws.Profile = nil
-		ws.ImageRef = ""
-		ws.BuiltProfileHash = ""
 		ws.ApprovedEgress = nil
-		// Operator approvals and recorded evidence were reviewed against the OLD
-		// content too: stale requirements/record results must not read as proof
-		// for the new composition.
 		ws.Requirements = nil
 		ws.RecordResults = nil
 		ws.Status = types.WorkspacePendingScan
+	}
+	if sourcesChanged || imageChanged {
+		// The build cache keys on the old profile/base — a different base
+		// image alone invalidates it, but does NOT wipe the contract: in the
+		// three-tier model requirements come from the sources + integrations,
+		// and the wizard persists its step-② image choice through here — a
+		// first-time pick must not destroy the overlay it just helped shape.
+		ws.ImageRef = ""
+		ws.BuiltProfileHash = ""
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws)
 	if notFoundIf(w, err, "workspace") {
@@ -409,7 +416,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.update", id.String(), "success", mustJSON(map[string]any{
-			"name": updated.Name, "sources": len(updated.Sources), "rescan_required": rescan,
+			"name": updated.Name, "sources": len(updated.Sources), "rescan_required": sourcesChanged, "image_changed": imageChanged,
 		})))
 	writeJSON(w, http.StatusOK, updated)
 }

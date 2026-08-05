@@ -6,12 +6,13 @@
 package envbuild
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
-	"maps"
-	"os"
-	"path/filepath"
-	"slices"
+	"io"
+	"path"
+	"sort"
 	"strings"
 )
 
@@ -62,22 +63,50 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 		return "", err
 	}
 
-	// Stage the generated files into a throwaway host directory that becomes the
-	// build context. It holds only our own generated, trusted content and is
-	// always removed on return.
-	ctxDir, err := os.MkdirTemp("", "wardyn-envbuild-ctx-")
+	// Deliver the generated files as a TAR streamed into the created build
+	// container (CopyToContainer) rather than a bind mount: a bind names a
+	// HOST path, and this code may run inside a containerized wardynd whose
+	// own /tmp the host daemon cannot see — the old MkdirTemp+bind staged an
+	// empty workspace there and every containerized build died with exit 1.
+	// The tar is our own generated, trusted content, assembled in memory.
+	tarCtx, err := generatedFilesTar(files, localContextWorkspaceFolder)
 	if err != nil {
-		return "", fmt.Errorf("envbuild: create build context dir: %w", err)
-	}
-	defer os.RemoveAll(ctxDir)
-	if err := writeGeneratedFiles(ctxDir, files); err != nil {
 		return "", err
 	}
+	return b.runBuildAndFinalize(ctx, localBuildEnv(b.CacheRepo), nil, tarCtx, "/", nil, outputTag)
+}
 
-	// Bind the generated build context (no socket is ever bound). The host path is
-	// a throwaway temp dir of our own generated content, so mounting it does not
-	// widen the untrusted-code blast radius the way a real host path would.
-	return b.runBuildAndFinalize(ctx, localBuildEnv(b.CacheRepo), []string{ctxDir + ":" + localContextWorkspaceFolder}, nil, outputTag)
+// generatedFilesTar packs the generated files under destDir into an in-memory
+// tar suitable for CopyToContainer at "/" (paths are destDir-relative inside
+// the archive so extraction lands them at destDir).
+func generatedFilesTar(files map[string]string, destDir string) (io.Reader, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	base := strings.TrimPrefix(destDir, "/")
+	// Deterministic order — nice for tests and reproducible archives.
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		content := files[name]
+		hdr := &tar.Header{
+			Name: path.Join(base, name),
+			Mode: 0o644,
+			Size: int64(len(content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, fmt.Errorf("envbuild: tar build context: %w", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			return nil, fmt.Errorf("envbuild: tar build context: %w", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("envbuild: tar build context: %w", err)
+	}
+	return &buf, nil
 }
 
 // localBuildEnv builds the envbuilder environment for a git-free local-context
@@ -142,26 +171,6 @@ func validateGeneratedFiles(files map[string]string) error {
 	}
 	if !buildable {
 		return fmt.Errorf("envbuild: generated files contain no devcontainer.json or Dockerfile for envbuilder to build")
-	}
-	return nil
-}
-
-// writeGeneratedFiles materialises the validated files under root. Paths are
-// already validated as repo-relative and traversal-free; the extra containment
-// check is defense-in-depth against a path that slips past validation.
-func writeGeneratedFiles(root string, files map[string]string) error {
-	cleanRoot := filepath.Clean(root)
-	for _, p := range slices.Sorted(maps.Keys(files)) { // sorted for deterministic writes
-		full := filepath.Join(cleanRoot, filepath.FromSlash(p))
-		if full != cleanRoot && !strings.HasPrefix(full, cleanRoot+string(filepath.Separator)) {
-			return fmt.Errorf("envbuild: generated file %q escapes the build context", p)
-		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return fmt.Errorf("envbuild: create dir for %q: %w", p, err)
-		}
-		if err := os.WriteFile(full, []byte(files[p]), 0o644); err != nil {
-			return fmt.Errorf("envbuild: write %q: %w", p, err)
-		}
 	}
 	return nil
 }

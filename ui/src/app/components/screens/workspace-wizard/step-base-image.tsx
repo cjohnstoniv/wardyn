@@ -13,7 +13,6 @@ import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
-import { Checkbox } from "../../ui/checkbox";
 import { cn } from "../../ui/utils";
 import { Field } from "../new-run/step-shell";
 import { baseImagesApi } from "../../../lib/api/sources";
@@ -252,13 +251,11 @@ function stopPropagation(e: React.MouseEvent) {
 export function ImageCards({
   detectedChips,
   partial,
-  harnessAvailable,
   state,
   onChange,
 }: {
   detectedChips: string[];
   partial: boolean;
-  harnessAvailable: boolean;
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
 }) {
@@ -285,7 +282,7 @@ export function ImageCards({
           <Chip tone="primary">recommended</Chip>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
-        <Carries tools={[...detectedChips, ...(harnessAvailable ? ["claude-code"] : [])]} />
+        <Carries tools={detectedChips} />
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.REC_SUB}</p>
       </ImageCard>
 
@@ -343,54 +340,6 @@ export function ImageCards({
                 onChange={(e) => onChange({ customBase: e.target.value })}
               />
             </Field>
-            <div className="space-y-1.5">
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                Tools &amp; features
-              </p>
-              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {detectedChips.map((chip) => (
-                  <label key={chip} className="flex items-center gap-2 text-xs text-foreground">
-                    <Checkbox
-                      checked={state.customTools[chip] ?? true}
-                      onCheckedChange={(v) => onChange({ customTools: { ...state.customTools, [chip]: !!v } })}
-                    />
-                    {chip}
-                  </label>
-                ))}
-                {harnessAvailable && (
-                  <label className="flex items-center gap-2 text-xs text-foreground">
-                    <Checkbox checked={state.harnessTool} onCheckedChange={(v) => onChange({ harnessTool: !!v })} />
-                    Claude Code CLI
-                  </label>
-                )}
-              </div>
-            </div>
-            {state.extraTools.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {state.extraTools.map((t) => (
-                  <Chip key={t} tone="neutral" mono>
-                    {t}
-                  </Chip>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                className="h-8 w-56 font-mono text-xs"
-                placeholder="Add a tool (e.g. protoc)"
-                value={state.toolDraft}
-                onChange={(e) => onChange({ toolDraft: e.target.value })}
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={!state.toolDraft.trim()}
-                onClick={() => onChange({ extraTools: [...state.extraTools, state.toolDraft.trim()], toolDraft: "" })}
-              >
-                Add
-              </Button>
-            </div>
             <BuildStepsEditor value={state.buildSteps} onChange={(v) => onChange({ buildSteps: v })} />
             <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.CUSTOM_SUB}</p>
           </div>
@@ -430,7 +379,6 @@ export function StepBaseImage({
   onEditSource,
   onRescan,
   detectedChips,
-  harnessAvailable,
   state,
   onChange,
 }: {
@@ -441,7 +389,6 @@ export function StepBaseImage({
   onEditSource: (id: string) => void;
   onRescan: (id: string) => void;
   detectedChips: string[];
-  harnessAvailable: boolean;
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
 }) {
@@ -470,7 +417,6 @@ export function StepBaseImage({
       <ImageCards
         detectedChips={detectedChips}
         partial={partial}
-        harnessAvailable={harnessAvailable}
         state={state}
         onChange={onChange}
       />
