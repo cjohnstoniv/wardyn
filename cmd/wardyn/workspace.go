@@ -103,6 +103,33 @@ func pluralCount(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+// resolveAttachSources turns --attach SOURCE-ID[@TARGET][:ro|:rw] arguments
+// into composition entries by resolving each LIBRARY source — the server's
+// upsert dedupes on canonical identity, so the attachment lands on the SAME
+// library row (contract and all), never a duplicate.
+func resolveAttachSources(cmd *cobra.Command, client clientFn, args []string) ([]sdk.WorkspaceSource, error) {
+	var out []sdk.WorkspaceSource
+	for _, a := range args {
+		id, target, writable, err := parseAttachArg(a)
+		if err != nil {
+			return nil, err
+		}
+		src, err := client().GetSource(cmd.Context(), id)
+		if err != nil {
+			return nil, fmt.Errorf("resolve --attach %s: %w", id, err)
+		}
+		entry := sdk.WorkspaceSource{Type: sdk.WorkspaceSourceType(src.Kind), Ref: src.Ref, Target: target}
+		switch src.Kind {
+		case sdk.SourceLocalDir:
+			entry.Path, entry.Writable = src.Locator, writable
+		case sdk.SourceRepo:
+			entry.Source = src.Locator
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
 // workspaceCmd onboards and inspects workspaces. `create` is the load-bearing
 // verb: a run whose policy names workspace_mounts/workspace_repos is refused
 // (422) unless that source is already ONBOARDED — an un-bypassable gate that
@@ -122,8 +149,9 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	var req sdk.WorkspaceRequest
 	var createJSON bool
 	var addSources []string
+	var attachSources []string
 	create := &cobra.Command{
-		Use:   "create --kind local_dir --source <path> [--add TYPE:VALUE[@TARGET] ...]",
+		Use:   "create --kind local_dir --source <path> [--add TYPE:VALUE[@TARGET] ...] [--attach SOURCE-ID[@TARGET][:ro|:rw] ...]",
 		Short: "Onboard a workspace (this is what clears the run-create onboarding gate)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -134,6 +162,11 @@ func workspaceCmd(client clientFn) *cobra.Command {
 				}
 				req.Sources = append(req.Sources, src)
 			}
+			attached, err := resolveAttachSources(cmd, client, attachSources)
+			if err != nil {
+				return err
+			}
+			req.Sources = append(req.Sources, attached...)
 			// Default the name to the source (legacy shape) or the first --add
 			// source: onboarding one directory should not require inventing a
 			// label for it.
@@ -163,6 +196,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	create.Flags().StringVar(&req.DefaultTarget, "target", "", "default in-container mount/clone target (must be under /home/agent, /work or /workspace)")
 	create.Flags().BoolVar(&req.Writable, "writable", false, "mount READ-WRITE so a run attaching this source can PERSIST changes to the host directory (default read-only)")
 	create.Flags().StringArrayVar(&addSources, "add", nil, `add one composition source, repeatable: "dir:/host/path[@/target]", "repo:org/lib[@/target]", or "ephemeral:[@/target]" (mutually exclusive with --kind/--source/--ref/--target/--writable; no per-source --ref/--writable in this form)`)
+	create.Flags().StringArrayVar(&attachSources, "attach", nil, `attach one LIBRARY source by id, repeatable: "SOURCE-ID[@/target][:ro|:rw]" (ids from `+"`wardyn source list`"+`; default read-only, ":rw" opts a dir into read-write)`)
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the created workspace as JSON")
 
 	var listJSON bool

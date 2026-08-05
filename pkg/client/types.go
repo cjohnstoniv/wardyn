@@ -74,6 +74,12 @@ type (
 	// but the type is kept nameable for that resolution's future wiring.
 	WorkspaceBedrockRef = types.WorkspaceBedrockRef
 
+	// Source is one tier-1 library entry: a repo/dir configured once (its own
+	// contract + scan) and attached to many workspaces.
+	Source = types.Source
+	// SourceKind discriminates a library source: local_dir | repo.
+	SourceKind = types.SourceKind
+
 	// WorkspaceSource is one entry in a Workspace's composition, carried in
 	// WorkspaceRequest.Sources and returned in Workspace.Sources.
 	WorkspaceSource = types.WorkspaceSource
@@ -139,6 +145,12 @@ type (
 	// WorkspaceSourceType discriminates a WorkspaceSource's kind (local_dir |
 	// repo | ephemeral).
 	WorkspaceSourceType = types.WorkspaceSourceType
+)
+
+// SourceKind values (the tier-1 library's two onboardable kinds).
+const (
+	SourceLocalDir = types.SourceLocalDir
+	SourceRepo     = types.SourceRepo
 )
 
 // ApprovalState values. ListApprovals accepts one of these (or "" for all

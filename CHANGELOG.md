@@ -42,7 +42,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Deleting a source or image that workspaces still use answers 409 *naming
   them* (`?force=1` detaches — for an image that honestly means "fall back to
   the derived recommended build"; for a source it un-mounts code, which is why
-  the refusal is loud instead of tolerated).
+  the refusal is loud instead of tolerated). The CLI speaks the library too:
+  `wardyn source list|create|scan|rm` manages tier 1, and `wardyn workspace
+  create --attach SOURCE-ID[@target][:ro|:rw]` composes a workspace from
+  already-configured sources (idempotent by canonical identity, per-attachment
+  read-only default).
 - **Record's verify loop closes: approving a held host writes the contract
   row, immediately, on the right tier.** A confined verify session now holds
   an off-policy host at the door (`wait_for_review`), and the operator's

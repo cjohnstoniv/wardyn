@@ -102,6 +102,71 @@ func (c *Client) ScanWorkspace(ctx context.Context, id uuid.UUID) (json.RawMessa
 	return out, err
 }
 
+// ── Sources (tier 1: the shared library) ────────────────────────────────────
+
+// SourceRequest is the body for POST /api/v1/sources — one repo/dir configured
+// ONCE (its own requirements contract, its own scan profile) and attached to
+// any number of workspaces. The server dedupes on canonical identity
+// (kind, locator, ref): re-creating an existing source answers 200 with the
+// existing row, contract and all, rather than a duplicate.
+type SourceRequest struct {
+	Kind types.SourceKind `json:"kind"`
+	// Locator is a host directory path (local_dir) or repo slug/clone URL (repo).
+	Locator string `json:"locator"`
+	// Ref is an optional git ref; repo only. Part of the identity — the same
+	// repo at two refs is two sources with two contracts.
+	Ref  string `json:"ref,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Requirements seeds the source's own contract (secret:/egress:/write:
+	// keys; integration: keys are tier-3-only and rejected here).
+	Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitempty"`
+}
+
+// ListSources returns the whole library. GET /api/v1/sources.
+func (c *Client) ListSources(ctx context.Context) ([]types.Source, error) {
+	var out struct {
+		Sources []types.Source `json:"sources"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v1/sources", nil, &out)
+	return out.Sources, err
+}
+
+// CreateSource upserts a library source by canonical identity (201 new,
+// 200 existing row). POST /api/v1/sources.
+func (c *Client) CreateSource(ctx context.Context, req SourceRequest) (types.Source, error) {
+	var out types.Source
+	err := c.do(ctx, http.MethodPost, "/api/v1/sources", req, &out)
+	return out, err
+}
+
+// GetSource fetches one library source. GET /api/v1/sources/{id}.
+func (c *Client) GetSource(ctx context.Context, id uuid.UUID) (types.Source, error) {
+	var out types.Source
+	err := c.do(ctx, http.MethodGet, "/api/v1/sources/"+id.String(), nil, &out)
+	return out, err
+}
+
+// ScanSource scans one source — a dir inline (200 with the profile), a repo as
+// a governed run (202 with scan_run_id). The reply shape varies, so it is
+// returned raw. POST /api/v1/sources/{id}/scan.
+func (c *Client) ScanSource(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodPost, "/api/v1/sources/"+id.String()+"/scan", nil, &out)
+	return out, err
+}
+
+// DeleteSource removes a library source. In use → 409 APIError naming the
+// attaching workspaces; force detaches them first (their runs then 422 at the
+// mount gate for the missing attachment — loud, not silent).
+// DELETE /api/v1/sources/{id}[?force=1].
+func (c *Client) DeleteSource(ctx context.Context, id uuid.UUID, force bool) error {
+	path := "/api/v1/sources/" + id.String()
+	if force {
+		path += "?force=1"
+	}
+	return c.do(ctx, http.MethodDelete, path, nil, nil)
+}
+
 // GetSiteConfig returns the operator-wide site config. GET /api/v1/site-config.
 func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 	var out types.SiteConfig

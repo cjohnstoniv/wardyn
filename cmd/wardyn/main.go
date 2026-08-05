@@ -162,6 +162,7 @@ func rootCmd() *cobra.Command {
 		auditCmd(client),
 		policyCmd(client),
 		workspaceCmd(client),
+		sourceCmd(client),
 		secretCmd(client),
 		attachCmd(client),
 		recordCmd(client),
