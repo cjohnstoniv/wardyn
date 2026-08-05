@@ -30,10 +30,9 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
+import { STATUS_TONE, STATUS_LABEL, TierTabRail, type WorkspaceTier } from "../workspaces";
 import { SourcesLibrary } from "../sources-library";
 import { ImageCatalog } from "../image-catalog";
-import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
@@ -271,7 +270,9 @@ export function WorkspacesStep({
   // image -> Requirements -> Done) instead of the retired guided Import panel.
   const [wizardOpen, setWizardOpen] = React.useState(false);
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
-  const [tier, setTier] = React.useState<"workspaces" | "sources" | "images">("workspaces");
+  // Landing on tier 1: dirs/repos are configured FIRST, then images, then
+  // the workspace that composes them — the dependency order IS the walk.
+  const [tier, setTier] = React.useState<WorkspaceTier>("sources");
 
   // Best-effort scan → always refresh (repo scans run async and return 202, local
   // dirs resolve inline) so the row reflects the latest status either way.
@@ -308,18 +309,13 @@ export function WorkspacesStep({
         {!operator && ` ${OPERATOR_ONLY_REASON}`}
       </p>
 
-      <Tabs value={tier} onValueChange={(v) => setTier(v as typeof tier)}>
-        <TabsList>
-          <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
-          <TabsTrigger value="sources">Directories &amp; repos</TabsTrigger>
-          <TabsTrigger value="images">Base images</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="flex items-start gap-4">
+        <TierTabRail value={tier} onChange={setTier} />
+        <div className="min-w-0 flex-1">
+          {tier === "sources" && <SourcesLibrary workspaces={workspaces} embedded />}
+          {tier === "images" && <ImageCatalog workspaces={workspaces} embedded />}
 
-      {tier === "sources" && <SourcesLibrary workspaces={workspaces} embedded />}
-      {tier === "images" && <ImageCatalog workspaces={workspaces} embedded />}
-
-      {tier !== "workspaces" ? null : loading ? (
+          {tier !== "workspaces" ? null : loading ? (
         <p className="text-sm text-muted-foreground">Loading workspaces…</p>
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6 text-center">
@@ -392,6 +388,8 @@ export function WorkspacesStep({
           </Button>
         </>
       )}
+        </div>
+      </div>
 
       {/* The four-step "Add workspace" wizard — its own Dialog on top; returns
           here via onClose (like NewRunDialog returns to SetupScreen). Mounted

@@ -140,6 +140,41 @@ export function attentionItems(ws: Workspace, storedSecretNames: string[]): Atte
   return out;
 }
 
+// The three tiers in DEPENDENCY order: directories & repos are configured
+// first, base images second, and a workspace — the aggregate — composes them.
+// One rail component for both surfaces (this page + the Getting-started
+// Workspaces step) so the order and placement can never drift.
+export type WorkspaceTier = "sources" | "images" | "workspaces";
+
+export function TierTabRail({
+  value,
+  onChange,
+}: {
+  value: WorkspaceTier;
+  onChange: (tier: WorkspaceTier) => void;
+}) {
+  return (
+    <Tabs
+      orientation="vertical"
+      value={value}
+      onValueChange={(v) => onChange(v as WorkspaceTier)}
+      className="shrink-0"
+    >
+      <TabsList className="h-auto w-44 flex-col items-stretch gap-1 bg-transparent p-0">
+        <TabsTrigger className="h-8 justify-start" value="sources">
+          Directories &amp; repos
+        </TabsTrigger>
+        <TabsTrigger className="h-8 justify-start" value="images">
+          Base images
+        </TabsTrigger>
+        <TabsTrigger className="h-8 justify-start" value="workspaces">
+          Workspaces
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+}
+
 export function WorkspacesScreen() {
   const operator = useOperator();
   const navigate = useNavigate();
@@ -150,7 +185,7 @@ export function WorkspacesScreen() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<Workspace | null>(null);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
-  const [tier, setTier] = React.useState<"workspaces" | "sources" | "images">("workspaces");
+  const [tier, setTier] = React.useState<WorkspaceTier>("workspaces");
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -190,19 +225,14 @@ export function WorkspacesScreen() {
         }
       />
 
-      <Tabs value={tier} onValueChange={(v) => setTier(v as typeof tier)} className="mb-4">
-        <TabsList>
-          <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
-          <TabsTrigger value="sources">Directories &amp; repos</TabsTrigger>
-          <TabsTrigger value="images">Base images</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="flex items-start gap-5">
+        <TierTabRail value={tier} onChange={setTier} />
+        <div className="min-w-0 flex-1">
+          {tier === "sources" && <SourcesLibrary workspaces={workspaces} />}
+          {tier === "images" && <ImageCatalog workspaces={workspaces} />}
 
-      {tier === "sources" && <SourcesLibrary workspaces={workspaces} />}
-      {tier === "images" && <ImageCatalog workspaces={workspaces} />}
-
-      {tier === "workspaces" && (
-        <>
+          {tier === "workspaces" && (
+            <>
       {status === "ready" && workspaces.length > 0 && (
         <div className="mb-4 flex items-center gap-3">
           <Input
@@ -351,8 +381,10 @@ export function WorkspacesScreen() {
           </Table>
         )}
       </div>
-        </>
-      )}
+            </>
+          )}
+        </div>
+      </div>
 
       {/* The new four-step wizard (Sources -> Base image -> Requirements -> Done)
           replaces the old ImportWorkspaceDialog as the ONE "Add workspace" front

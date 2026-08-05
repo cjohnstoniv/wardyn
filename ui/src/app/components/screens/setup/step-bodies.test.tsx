@@ -63,6 +63,10 @@ vi.mock("../../../lib/api/policies", () => ({
 vi.mock("../../../lib/api/runs", () => ({
   runs: { createRun: vi.fn() },
 }));
+vi.mock("../../../lib/api/sources", () => ({
+  sourcesApi: { listSources: () => Promise.resolve([]) },
+  baseImagesApi: { listBaseImages: () => Promise.resolve([]) },
+}));
 // The wizard WorkspacesStep now mounts (Sources -> Base image -> Requirements
 // -> Done) fetches this on mount too — swallows its own rejection either way
 // (see wizard.tsx), mocked here for parity with wizard.test.tsx's own convention.
@@ -111,7 +115,7 @@ describe("step-bodies.tsx — smoke", () => {
     scanWorkspaceMock.mockReset().mockResolvedValue({ async: false });
   });
 
-  it("WorkspacesStep renders the empty-state onboard affordance", () => {
+  it("WorkspacesStep lands on tier 1 with the rail in dependency order", () => {
     // WorkspacesStep now navigates to a workspace's detail route (the wizard's
     // onOpenWorkspace and a non-ready row's Open button both call useNavigate),
     // so it needs a Router in scope even for this render-smoke assertion.
@@ -120,11 +124,14 @@ describe("step-bodies.tsx — smoke", () => {
         <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
       </MemoryRouter>,
     );
-    expect(screen.getByText("No workspaces onboarded yet.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /add workspace|onboard your first workspace/i })).toBeInTheDocument();
+    // Dirs/repos are configured FIRST, then images, then the aggregate — the
+    // rail order IS the dependency order, and tier 1 is the landing tab.
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(tabs).toEqual(["Directories & repos", "Base images", "Workspaces"]);
+    expect(screen.getByRole("tab", { name: /directories & repos/i })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("WorkspacesStep's 'Onboard your first workspace' opens the new four-step wizard (origin=setup)", async () => {
+  it("WorkspacesStep's Workspaces tab holds the onboard affordance, which opens the four-step wizard (origin=setup)", async () => {
     getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
     listSecretsMock.mockReset().mockResolvedValue([]);
     listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
@@ -134,6 +141,8 @@ describe("step-bodies.tsx — smoke", () => {
         <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
       </MemoryRouter>,
     );
+    await user.click(screen.getByRole("tab", { name: /workspaces/i }));
+    expect(screen.getByText("No workspaces onboarded yet.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /onboard your first workspace/i }));
     expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();
     expect(screen.getAllByText("Sources").length).toBeGreaterThan(0);
