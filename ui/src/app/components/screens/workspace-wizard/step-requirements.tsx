@@ -159,6 +159,7 @@ export function StepRequirements({
   onSecretStored,
   powerSource,
   status,
+  verifyPanel,
 }: {
   profile: WorkspaceProfile | null | undefined;
   sources: SourceRow[];
@@ -176,6 +177,10 @@ export function StepRequirements({
   // so every existing caller (and every fixture) keeps working — absent simply
   // means the integrations section doesn't render.
   status?: SetupStatus | null;
+  // The LIVE verify-session panel (wizard only: it owns a real workspace to
+  // launch against). Absent — the detail page, fixtures — keeps the plain
+  // buttons, whose real launcher lives elsewhere on that page.
+  verifyPanel?: React.ReactNode;
 }) {
   const [addSecretName, setAddSecretName] = React.useState<string | null>(null);
   const [pendingHost, setPendingHost] = React.useState<string | null>(null);
@@ -512,19 +517,23 @@ export function StepRequirements({
                   a real recording session needs a real sandbox/run, which this
                   wizard step doesn't have yet. Wire onClick once the workspace
                   page's record-launch action grows a prop this step can call. */}
-              <div className="flex flex-wrap gap-2">
-                {!nothingResolves && (
-                  <Button type="button" size="sm">
-                    Verify with a session
-                  </Button>
-                )}
-                <Button type="button" size="sm" variant={nothingResolves ? "default" : "outline"}>
-                  Verify in a terminal
-                </Button>
-              </div>
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-                {nothingResolves ? RD2.TERMINAL_ONLY : RD2.RECORD_SUB}
-              </p>
+              {verifyPanel ?? (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {!nothingResolves && (
+                      <Button type="button" size="sm">
+                        Verify with a session
+                      </Button>
+                    )}
+                    <Button type="button" size="sm" variant={nothingResolves ? "default" : "outline"}>
+                      Verify in a terminal
+                    </Button>
+                  </div>
+                  <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                    {nothingResolves ? RD2.TERMINAL_ONLY : RD2.RECORD_SUB}
+                  </p>
+                </>
+              )}
               <p className="text-[0.6875rem] leading-snug text-muted-foreground">{RD2.RECORD_LOOP}</p>
             </TabsContent>
           </Tabs>

@@ -40,6 +40,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
 import type { SetupStatus, Source as SdkSource, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { StepIntegrations, INTEGRATIONS_BLURB } from "./step-integrations";
+import { WizardVerifySession } from "./verify-session";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -341,7 +342,23 @@ export function WorkspaceWizard({
     }
   };
 
-  // ---------- Done (step ④) ----------
+  // After a verify session ends: the decide() hook may have written rows into
+  // the WORKSPACE's contract server-side (approved hosts, required/operator_set).
+  // Refetch and absorb them — new keys join the wizard's map; a key the
+  // operator already edited locally keeps the local value (their unsaved edit
+  // wins until Accept & finish PUTs the map).
+  const absorbServerContract = async () => {
+    if (!s.workspace) return;
+    const fresh = await workspacesApi.getWorkspace(s.workspace.id).catch(() => null);
+    if (!fresh) return;
+    const merged = { ...s.requirements };
+    for (const [k, v] of Object.entries(fresh.requirements ?? {})) {
+      if (!(k in merged)) merged[k] = v;
+    }
+    patch({ workspace: fresh, requirements: merged });
+  };
+
+  // ---------- Done (step ⑤) ----------
   const doneVariant: DoneVariant = !s.workspace
     ? "scanning"
     : s.workspace.status === "error"
@@ -427,6 +444,15 @@ export function WorkspaceWizard({
           )}
           {s.step === "reqs" && (
             <StepRequirements
+              verifyPanel={
+                s.workspace ? (
+                  <WizardVerifySession
+                    ws={s.workspace}
+                    nothingResolves={powerSource.kind === "none"}
+                    onContractChanged={() => void absorbServerContract()}
+                  />
+                ) : undefined
+              }
               profile={profile}
               sources={s.sources}
               requirements={s.requirements}
