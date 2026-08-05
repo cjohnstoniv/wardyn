@@ -190,12 +190,18 @@ var gatedRoutes = []struct{ method, path string }{
 
 // readRoutes are the reads in those same clusters. A member keeps all of them —
 // this gate refuses writes, it does not blind anyone.
+//
+// NOT here: GET /api/v1/approvals. B2 made it OWNERSHIP-scoped for a member
+// (item 2) rather than a flat pass-through, which needs a store/Approvals
+// fake that can answer "which runs did this principal create" — rbacServer's
+// fakeApprovals models approvals only, not run ownership. Its real (scoped,
+// non-500) behavior is covered by the chi.Walk-enumerated matrix in
+// authz_test.go instead, same reasoning as the gatedRoutes note above.
 var readRoutes = []string{
 	"/api/v1/policies",
 	"/api/v1/workspaces",
 	"/api/v1/site-config",
 	"/api/v1/secrets",
-	"/api/v1/approvals",
 }
 
 // TestRequireOperator_ViewerRefusedOnEveryGatedRoute is the finding's regression:

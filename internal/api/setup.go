@@ -725,7 +725,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// credentials are warnings, not readiness gates.
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
-	writeJSON(w, http.StatusOK, SetupStatus{
+	resp := SetupStatus{
 		Ready:        ready,
 		Checks:       checks,
 		Auth:         SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
@@ -743,7 +743,30 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harness:      harnessCreds,
 		Integrations: s.integrationsWithCapabilities(ctx),
 		Harnesses:    setupHarnessTools(),
-	})
+	}
+	if !s.isOperator(ctx) {
+		resp = redactSetupStatusForMember(resp)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
+// a member has no route to act on — the environment/credential checklist rows,
+// resident-CLI login detection, and secret NAMES (item 2's explicit drop list:
+// checks/providers/secret names/runner detail) — while keeping everything a
+// member's own console needs: Ready/Auth (App.tsx's reachability gate) and
+// HasRuns, plus every field the run-launch/compose UI reads (Composer,
+// Bedrock, Deployment, Harness*, Integrations, Platform, HostProxy, SCM,
+// AgeKey) so a member can still launch and compose runs normally. This only
+// ZEROES fields on an already-computed, already-200 response — it can never
+// itself produce an error state (no non-401 error is possible for a member
+// here, by construction).
+func redactSetupStatusForMember(st SetupStatus) SetupStatus {
+	st.Checks = []SetupCheck{}
+	st.Providers = []SetupProvider{}
+	st.Secrets = SetupSecrets{Present: []string{}}
+	st.Runner = SetupRunner{ConfinementClasses: []string{}}
+	return st
 }
 
 // setupProviders detects the resident coding-agent CLIs and returns them plus

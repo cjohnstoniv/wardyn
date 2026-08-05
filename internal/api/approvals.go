@@ -38,6 +38,13 @@ type decisionRequest struct {
 // list is requested_at DESC and capped at maxListLimit, so filtering after the
 // window would drop a run older than the newest 1000 approvals from its own
 // detail page — silently, with a PENDING badge of 0.
+//
+// Ownership scoping (item 2): a member's ?run_id= must name an owned run —
+// checked via the SAME getRunAuthorized gate GET/kill/profile/grants use, so a
+// foreign or unknown run_id answers with the byte-identical 404 (no existence
+// oracle). A member's UNSCOPED list (no run_id) is narrowed to approvals on
+// runs they created (store.ApprovalsByRunCreatorPager) — fail CLOSED, never an
+// unscoped fallback, when the backend does not implement it.
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
@@ -58,6 +65,28 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	if !s.isOperator(r.Context()) {
+		if runID == uuid.Nil {
+			pager, capable := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
+			if !capable {
+				writeError(w, http.StatusInternalServerError, "approval listing is not scoped for members on this backend")
+				return
+			}
+			principal := principalFromRequest(r)
+			servePage(w, page, func(p store.Page) ([]types.ApprovalRequest, error) {
+				return pager.ListApprovalsPageByRunCreator(r.Context(), principal, state, p)
+			}, nil)
+			return
+		}
+		// ?run_id= given: prove ownership up front. Once proven, the fetch-all +
+		// filter-by-runID path below is exactly as scoped as the admin path — it
+		// can only ever surface THIS one, now-owned run's approvals.
+		if _, ok := s.getRunAuthorized(w, r, runID); !ok {
+			return
+		}
+	}
+
 	var pageFn func(store.Page) ([]types.ApprovalRequest, error)
 	if pl, ok := s.cfg.Approvals.(approvalPageLister); ok && runID == uuid.Nil {
 		pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {

@@ -88,6 +88,79 @@ type Pager interface {
 // Compile-time assertion: PG satisfies Pager (the paginated read surface).
 var _ Pager = PG{}
 
+// RunsByCreatorPager is the ownership-scoped analogue of Pager.ListRunsPage: a
+// member's GET /runs is scoped to created_by = the caller (internal/api's
+// isOperator decides who is a member). Kept OUT of Pager for the same reason
+// Pager is kept out of Store (widening either silently reroutes a test fake's
+// embedded-but-not-overridden method to the wrong behavior) — AND for a second,
+// stronger reason specific to this one: Pager's own absence falls back to a
+// SAFE fetch-all + in-Go window (nothing is scoped, so an unscoped fallback
+// changes nothing). This interface's absence must never fall back that way — an
+// unscoped list IS the vulnerability for a member — so the api-layer call site
+// fails closed (a clear 500) when a store does not implement it, rather than
+// silently serving every run.
+type RunsByCreatorPager interface {
+	ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error)
+}
+
+// Compile-time assertion: PG satisfies RunsByCreatorPager.
+var _ RunsByCreatorPager = PG{}
+
+// ListRunsPageByCreator is ListRunsPage narrowed to one creator, same order.
+// ponytail: no dedicated (created_by, created_at) index yet — agent_runs is
+// small enough per-operator that the existing created_at index plus a filter
+// scan is fine; add one if a member's run list ever gets slow.
+func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
+	q, args := p.appendTo(`
+		SELECT id, created_at, updated_at, created_by, agent, repo, task,
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id
+		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
+	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
+}
+
+// ApprovalsByRunCreatorPager is the ownership-scoped analogue of
+// Pager.ListApprovalsPage: a member's GET /approvals (no ?run_id=) is scoped to
+// approvals raised on runs THEY created. Approvals carry no created_by of their
+// own (they belong to a run, not a human directly), so this JOINs agent_runs.
+// Same fail-closed contract as RunsByCreatorPager — an absent implementation
+// must never fall back to the unscoped list.
+//
+// PRODUCTION WIRING NOTE: api.Config.Approvals is wardynd's approvalService
+// wrapper (cmd/wardynd/adapters.go), not a bare store.PG — like its existing
+// ListApprovalsPage, this method needs a matching delegation method added there
+// before a member's unscoped GET /approvals is actually served from the store
+// rather than the fail-closed 500. That wiring is out of this lane's scope
+// (internal/api, internal/store, internal/composer call sites only); until it
+// lands, the api-layer call site's fail-closed fallback is what a deployment
+// actually observes for THIS ONE case (?run_id= of an owned run is unaffected —
+// it never needs this interface).
+type ApprovalsByRunCreatorPager interface {
+	ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
+}
+
+// Compile-time assertion: PG satisfies ApprovalsByRunCreatorPager.
+var _ ApprovalsByRunCreatorPager = PG{}
+
+// ListApprovalsPageByRunCreator is ListApprovalsPage narrowed to approvals on
+// runs createdBy owns, via a JOIN on agent_runs (approvals has no created_by of
+// its own). Same state filter and ordering as ListApprovalsPage.
+func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
+	q := `
+		SELECT a.id, a.run_id, a.grant_id, a.kind, a.requested_scope, a.state, a.requested_at,
+			a.decided_at, a.decided_by, a.minted_jti, a.reason
+		FROM approvals a
+		JOIN agent_runs r ON r.id = a.run_id
+		WHERE r.created_by = $1`
+	args := []any{createdBy}
+	if stateFilter != "" {
+		q += ` AND a.state = $2`
+		args = append(args, string(stateFilter))
+	}
+	q += ` ORDER BY a.requested_at DESC`
+	q, args = p.appendTo(q, args)
+	return collect(ctx, s.Pool, "list", "approvals by run creator", q, args, scanApproval)
+}
+
 // ListRunsPage returns runs in reverse creation order, bounded by p. The
 // agent_runs_created_at_idx (0020) makes the ORDER BY + LIMIT an index scan.
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {
