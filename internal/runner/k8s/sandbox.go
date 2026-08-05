@@ -231,8 +231,52 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, agentPod, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
+	rollback = append(rollback, func() {
+		_ = d.clientset.CoreV1().Pods(ns).Delete(context.Background(), agentPodName(spec.RunID), metav1.DeleteOptions{})
+	})
+
+	// (6) Wait for the main container to actually be Running before handing
+	// the sandbox out. A k8s Pod Create is purely declarative (accepted, not
+	// yet scheduled/pulled/started) — unlike docker's ContainerStart, which
+	// blocks until the container's init process is actually running. Without
+	// this wait, a caller racing straight into Attach/ExecStream immediately
+	// after CreateSandbox returns (exactly what the conformance suite does)
+	// hits "container not found" against a pod still Pending — a REAL gap a
+	// live-cluster conformance run surfaced (a fake-clientset unit test
+	// can't: nothing simulates the kubelet).
+	if err := d.waitContainerRunning(ctx, agentPodName(spec.RunID), mainContainerName); err != nil {
+		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
+	}
 
 	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+}
+
+// waitContainerRunning polls podName until its named container reports
+// Running. canaryWaitTimeout (not the tighter podIPWaitTimeout): the agent
+// image is whatever the run specifies, not the proxy image the canary (or a
+// prior run) has likely already pulled onto this node — a first pull of an
+// arbitrary, possibly large agent image needs the same generous budget the
+// canary itself gets.
+func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string) error {
+	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		if gerr != nil {
+			return false, gerr
+		}
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name != containerName {
+				continue
+			}
+			if cs.State.Running != nil {
+				return true, nil
+			}
+			if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
+				return false, fmt.Errorf("%s container stuck waiting (%s): %s", containerName, w.Reason, w.Message)
+			}
+			break
+		}
+		return false, nil
+	})
 }
 
 // resolveRuntimeClassName is CreateSandbox's fail-closed enforcement

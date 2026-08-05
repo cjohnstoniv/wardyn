@@ -49,6 +49,33 @@ func installProxyIPReactor(t *testing.T, cs *fake.Clientset, ip string) {
 	})
 }
 
+// installAgentRunningReactor scripts the agent pod's Get to report its main
+// container Running immediately (no real polling latency in tests) —
+// "wardyn-agent-" is a prefix ONLY the agent pod name carries among objects
+// routed through a "pods" reactor. Mirrors installProxyIPReactor's shape
+// (overlay onto the REAL stored pod via cs.Tracker(), never a bare
+// synthesized stub) so a caller that Gets the same pod again later still
+// sees everything CreateSandbox actually set.
+func installAgentRunningReactor(t *testing.T, cs *fake.Clientset) {
+	t.Helper()
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(clienttesting.GetAction)
+		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-agent-") {
+			return false, nil, nil
+		}
+		obj, err := cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		pod := obj.(*corev1.Pod).DeepCopy()
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name:  mainContainerName,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		}}
+		return true, pod, nil
+	})
+}
+
 func testSandboxSpec() runner.SandboxSpec {
 	return runner.SandboxSpec{
 		RunID:            uuid.New(),
@@ -91,6 +118,7 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 func TestCreateSandbox_OrderAndRef(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
@@ -162,6 +190,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
 	sb, err := d.CreateSandbox(context.Background(), spec)
@@ -327,6 +356,31 @@ func TestCreateSandbox_RollbackOnProxyIPTimeout(t *testing.T) {
 			return false, nil, nil
 		}
 		return true, nil, errors.New("simulated: proxy pod IP never resolves")
+	})
+
+	spec := testSandboxSpec()
+	_, err := d.CreateSandbox(context.Background(), spec)
+	if err == nil {
+		t.Fatal("CreateSandbox: want an error, got nil")
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+}
+
+// TestCreateSandbox_RollbackOnAgentRunningTimeout covers the agent-pod
+// readiness wait's failure path: the pod is created, but its main container
+// never reports Running (here: the reactor errors on every Get, aborting the
+// poll immediately rather than exhausting the real canaryWaitTimeout) —
+// CreateSandbox must still roll back the agent pod itself + the proxy pod +
+// both netpols + the secret. Mirrors TestCreateSandbox_RollbackOnProxyIPTimeout.
+func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(clienttesting.GetAction)
+		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-agent-") {
+			return false, nil, nil
+		}
+		return true, nil, errors.New("simulated: agent pod's main container never starts")
 	})
 
 	spec := testSandboxSpec()

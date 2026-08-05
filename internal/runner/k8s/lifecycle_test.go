@@ -114,6 +114,7 @@ func TestTeardown_GhostRefIsIdempotent(t *testing.T) {
 func TestTeardown_SweepsEverySiblingByLabel(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.9")
+	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
 	sb, err := d.CreateSandbox(context.Background(), spec)
@@ -143,6 +144,7 @@ func TestTeardown_SweepsEverySiblingByLabel(t *testing.T) {
 func TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.9")
+	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
 	sb, err := d.CreateSandbox(context.Background(), spec)
@@ -186,6 +188,7 @@ func TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols(t *testing.T) {
 func TestTeardown_WaitPodsGoneTimeoutIsAnError(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.9")
+	installAgentRunningReactor(t, cs)
 	spec := testSandboxSpec()
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
