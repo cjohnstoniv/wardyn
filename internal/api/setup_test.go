@@ -292,21 +292,22 @@ func (r k8sRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 	}, nil
 }
 
-// TestSetupStatus_K8sNetworkPolicyProven: setupRunnerInfo derives
-// runner.network_policy_proven from the k8s substrate's aggregated
-// Capabilities.NetworkPolicy, and handleSetupStatus's checks list carries the
-// matching k8s_egress_containment row — proving the two stay in sync end to
-// end, not just at the pure-function level (see TestK8sEgressContainmentCheck
-// in setup_checks_test.go for that).
-func TestSetupStatus_K8sNetworkPolicyProven(t *testing.T) {
+// TestSetupStatus_K8sEgressContainmentCheck: handleSetupStatus's checks list
+// carries a k8s_egress_containment row matching the k8s substrate's
+// aggregated Capabilities.NetworkPolicy verdict — proving setupRunnerInfo's
+// local netpol computation (a local return value, not a wire field — see L2
+// review: SetupRunner.NetworkPolicyProven was dropped as unconsumed; the
+// graded check IS the wire surface) reaches handleSetupStatus correctly, not
+// just at the pure-function level (see TestK8sEgressContainmentCheck in
+// setup_checks_test.go for that).
+func TestSetupStatus_K8sEgressContainmentCheck(t *testing.T) {
 	cases := []struct {
 		name       string
 		netpol     bool
-		wantProven string
 		wantStatus string
 	}{
-		{"canary proved enforced", true, "enforced", "ok"},
-		{"canary proved unenforced (opted out — the only live non-enforced verdict)", false, "unenforced", "fail"},
+		{"canary proved enforced", true, "ok"},
+		{"canary proved unenforced (opted out — the only live non-enforced verdict)", false, "fail"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,9 +318,6 @@ func TestSetupStatus_K8sNetworkPolicyProven(t *testing.T) {
 			}
 			if st.Runner.Driver != "k8s" {
 				t.Fatalf("runner.driver = %q, want k8s", st.Runner.Driver)
-			}
-			if st.Runner.NetworkPolicyProven != tc.wantProven {
-				t.Errorf("runner.network_policy_proven = %q, want %q", st.Runner.NetworkPolicyProven, tc.wantProven)
 			}
 			var found *SetupCheck
 			for i := range st.Checks {
@@ -337,16 +335,13 @@ func TestSetupStatus_K8sNetworkPolicyProven(t *testing.T) {
 	}
 }
 
-// A docker-shaped (non-k8s) runner must never carry the field or the row —
-// it is L0 structural, not L1 packet-filter, and has nothing to prove here.
-func TestSetupStatus_NonK8sRunnerOmitsNetworkPolicyProven(t *testing.T) {
+// A docker-shaped (non-k8s) runner must never carry the row — it is L0
+// structural, not L1 packet-filter, and has nothing to prove here.
+func TestSetupStatus_NonK8sRunnerOmitsEgressContainmentRow(t *testing.T) {
 	srv := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}})
 	code, st := decodeSetup(t, srv, adminToken)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", code)
-	}
-	if st.Runner.NetworkPolicyProven != "" {
-		t.Errorf("non-k8s runner.network_policy_proven = %q, want empty", st.Runner.NetworkPolicyProven)
 	}
 	for _, c := range st.Checks {
 		if c.ID == "k8s_egress_containment" {

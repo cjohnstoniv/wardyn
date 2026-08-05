@@ -262,20 +262,6 @@ type SetupRunner struct {
 	Driver                string            `json:"driver"`
 	ConfinementClasses    []string          `json:"confinement_classes"`
 	ConfinementSubstrates map[string]string `json:"confinement_substrates,omitempty"`
-	// NetworkPolicyProven is the k8s substrate's boot-time egress-canary
-	// verdict (ClassSupport.NetworkPolicy, orchestrator-aggregated into
-	// runner.Capabilities.NetworkPolicy): "enforced" once the canary proved a
-	// deny-all NetworkPolicy actually blocks egress, "unenforced" when it
-	// proved the CNI does NOT enforce it and the operator explicitly accepted
-	// that risk (WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1) — the ONLY way a LIVE
-	// wardynd can be reporting an unenforced verdict at all: an unenforced
-	// canary WITHOUT that override, or a genuinely indeterminate one, both
-	// refuse to boot entirely (internal/runner/k8s's newWithClient), so
-	// neither state ever reaches this handler. "" on a non-k8s driver, or a
-	// k8s daemon build that predates this field — the k8s Environment/Review
-	// rows render that absence as Indeterminate, never as Enforcing: an
-	// honest "can't tell you", not a claim either way.
-	NetworkPolicyProven string `json:"network_policy_proven,omitempty"`
 }
 
 // SetupComposer is the composer enablement plus each configured backend's
@@ -627,7 +613,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		authMode = "disabled"
 	}
 
-	rnr := setupRunnerInfo(ctx, s.cfg.Runner)
+	rnr, k8sNetpolProven := setupRunnerInfo(ctx, s.cfg.Runner)
 
 	// composer: enablement + boot-snapshot backends.
 	comp := SetupComposer{Backends: s.cfg.ComposerBackends}
@@ -710,7 +696,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
-	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, rnr.NetworkPolicyProven); ok {
+	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := bedrockProviderCheck(bedrock); ok {
@@ -935,15 +921,28 @@ func (s *Server) setupHarnessCreds(ctx context.Context) ([]SetupHarness, string)
 // handleHealthz's Capabilities pattern: a nil runner (or one whose Capabilities
 // call fails) reads honestly as "none" with no classes rather than claiming
 // isolation this host cannot deliver.
-func setupRunnerInfo(ctx context.Context, rn runner.Runner) SetupRunner {
+//
+// The second return value is the k8s substrate's boot-time egress-canary
+// verdict ("enforced"/"unenforced"/"") — computed here (it needs the SAME
+// Capabilities() call this function already makes) but deliberately NOT part
+// of the SetupRunner struct: nothing on the wire reads it, only the caller's
+// k8sEgressContainmentCheck (setup_checks.go), fed directly, a local value is
+// enough. "" covers three real cases, not two: a non-k8s driver; a k8s daemon
+// build that predates this computation; AND a genuine k8s driver whose
+// Capabilities() call itself just errored (the `err != nil` return below) —
+// that third case is not hypothetical, it is this very function's own
+// early-return path, which already leaves Driver "k8s" with nothing else
+// filled in. k8sEgressContainmentCheck grades all three the same honest way
+// (Indeterminate/FAIL, never a silent Enforcing).
+func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string) {
 	out := SetupRunner{Driver: "none", ConfinementClasses: []string{}}
 	if rn == nil {
-		return out
+		return out, ""
 	}
 	out.Driver = rn.Name()
 	c, err := rn.Capabilities(ctx)
 	if err != nil {
-		return out
+		return out, ""
 	}
 	for _, cc := range c.ConfinementClasses {
 		out.ConfinementClasses = append(out.ConfinementClasses, string(cc))
@@ -954,19 +953,20 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) SetupRunner {
 			out.ConfinementSubstrates[string(k)] = v
 		}
 	}
-	// k8s-only: c.NetworkPolicy is the orchestrator-aggregated ClassSupport
-	// signal (see SetupRunner.NetworkPolicyProven's doc for why "unenforced"
-	// is the only non-enforced verdict a live daemon can ever report here).
-	// Left "" on every other driver — docker proves L0 (StructuralEgress),
-	// never L1, and has no NetworkPolicy row to report.
+	netpolProven := ""
 	if out.Driver == "k8s" {
+		// c.NetworkPolicy is the orchestrator-aggregated ClassSupport signal;
+		// "unenforced" is the only non-enforced verdict a LIVE daemon can ever
+		// report here — an unenforced-without-override or a genuinely
+		// indeterminate canary both refuse to boot entirely
+		// (internal/runner/k8s's newWithClient).
 		if c.NetworkPolicy {
-			out.NetworkPolicyProven = "enforced"
+			netpolProven = "enforced"
 		} else {
-			out.NetworkPolicyProven = "unenforced"
+			netpolProven = "unenforced"
 		}
 	}
-	return out
+	return out, netpolProven
 }
 
 // refRulesetTTL is how long one github_ref_ruleset answer is reused. The wizard

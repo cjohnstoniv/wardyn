@@ -62,6 +62,7 @@ import {
   ConfinementChip,
   EgressDecisionChip,
   RunStateBadge,
+  SectionCard,
 } from "../wardyn/primitives";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
@@ -929,30 +930,6 @@ function RecordingTab({
 // ---------------------------------------------------------------------------
 // Small shared bits
 // ---------------------------------------------------------------------------
-// Exported: run-detail-ssh.tsx's ConnectSSHCard reuses this exact card shell.
-export function SectionCard({
-  title,
-  Icon,
-  right,
-  children,
-}: {
-  title: string;
-  Icon?: React.ElementType;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
-        {Icon && <Icon className="size-4 text-muted-foreground" />}
-        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
-        {right && <div className="ml-auto">{right}</div>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function KV({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>

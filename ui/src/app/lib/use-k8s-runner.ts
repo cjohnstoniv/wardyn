@@ -25,6 +25,17 @@ import { setup as setupApi } from "./api/setup";
 // (the "hiding is cosmetic" rule applies here too — nothing server-side reads
 // this hook), so a slow probe must never hide a legitimate option.
 //
+// MEMBER COUPLING: redactSetupStatusForMember zeroes runner (Driver becomes
+// "", the Go zero value, not "k8s") — so for a signed-in member this hook
+// ALWAYS reads false, on k8s or not, and would offer local directories to a
+// member on a real k8s deployment. That is harmless ONLY because both of
+// today's callers are already operator-gated one level up (SourcesLibrary's
+// "Add directory or repo" / WorkspacesStep's "Add workspace" buttons carry
+// their own disabled={!operator}), so a member can never reach the point of
+// submitting one. A future caller of this hook that ISN'T already
+// operator-gated MUST add its own operator check — don't rely on this hook
+// to know the caller's role.
+//
 // `enabled` (default true) defers the fetch: AddSourceDialog is mounted
 // (closed) for as long as its parent SourcesLibrary is on screen, not just
 // while actually open — an unconditional fetch here fired one extra

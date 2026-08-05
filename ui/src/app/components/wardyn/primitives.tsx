@@ -345,3 +345,32 @@ export function AgentBadge({ agent, withLabel = true }: { agent: Agent; withLabe
     </span>
   );
 }
+
+/* ---------- section card shell ---------- */
+// Shared by run-detail.tsx (Identity/Egress/Grants/etc.) and
+// run-detail-ssh.tsx's ConnectSSHCard — lives here, not in either screen
+// file, so the two don't import from each other (that WAS a cycle: nothing
+// gates import cycles in this build, so it silently worked, but it's not a
+// dependency shape worth keeping around).
+export function SectionCard({
+  title,
+  Icon,
+  right,
+  children,
+}: {
+  title: string;
+  Icon?: React.ElementType;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-3 flex items-center gap-2">
+        {Icon && <Icon className="size-4 text-muted-foreground" />}
+        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+        {right && <div className="ml-auto">{right}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}

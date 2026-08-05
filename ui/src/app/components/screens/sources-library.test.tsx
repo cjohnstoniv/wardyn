@@ -199,4 +199,40 @@ describe("SourcesLibrary — add dialog on a k8s control plane", () => {
     expect(screen.getByRole("radio", { name: /repository/i })).toBeInTheDocument();
     expect(screen.queryByText(/Kubernetes control plane/)).toBeNull();
   });
+
+  // M1 regression: useK8sRunner(open) resolves false->true AFTER open (open
+  // flips synchronously on click; the fetch is async) — typing BEFORE that
+  // resolution used to get wiped the moment it landed, because `kind` was
+  // reset inside an effect keyed on [open, k8s]. Every other test in this
+  // file waits for the quiet line (i.e. for k8s to resolve) BEFORE typing,
+  // which is exactly why they never caught this — this one types first.
+  it("typing before the k8s fetch resolves survives the flip (M1)", async () => {
+    let resolveStatus!: (v: ReturnType<typeof baseStatus>) => void;
+    getSetupStatusMock.mockReturnValue(
+      new Promise((r) => {
+        resolveStatus = r;
+      }),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<SourcesLibrary workspaces={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: /add directory or repo/i }));
+    // The fetch hasn't resolved yet — still the docker-shaped dialog.
+    expect(await screen.findByRole("radio", { name: /local directory/i })).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/host path/i), "/home/me/projects/payments");
+    await user.type(screen.getByLabelText(/^name/i), "payments");
+
+    // NOW the k8s fetch resolves — the dialog flips to the k8s (repo-only) shape.
+    resolveStatus(baseStatus({ runner: { driver: "k8s", confinement_classes: ["CC1"] } }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Local directories aren.t available on a Kubernetes control plane/),
+      ).toBeInTheDocument(),
+    );
+
+    // Both fields keep exactly what was typed — the reset effect must not
+    // have re-fired on the k8s flip.
+    expect(screen.getByLabelText(/repo slug or clone url/i)).toHaveValue("/home/me/projects/payments");
+    expect(screen.getByLabelText(/^name/i)).toHaveValue("payments");
+  });
 });

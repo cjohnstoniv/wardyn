@@ -484,10 +484,16 @@ function TopBar({
               <div className="flex items-center gap-1.5">
                 <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{meta.principal}</span>
                 {/* Role is a fact, not an alert (prompt-v2): a quiet chip, no
-                    banner, no callout — admin is unchanged, member just says so. */}
-                <Chip tone="neutral" className="shrink-0 text-[0.625rem] uppercase tracking-wide">
-                  {meta.role}
-                </Chip>
+                    banner, no callout — admin is unchanged, member just says so.
+                    Gated on meta.method like its sibling line below: /me hasn't
+                    resolved (or failed) while method is still "" — the fail-open
+                    role default is "admin" (operator-context.tsx), which would
+                    otherwise flash ADMIN next to a still-"unknown" principal. */}
+                {meta.method && (
+                  <Chip tone="neutral" className="shrink-0 uppercase tracking-wide">
+                    {meta.role}
+                  </Chip>
+                )}
               </div>
               <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                 {meta.method === "sso" ? "signed in via SSO" : meta.method === "token" ? "admin token" : ""}

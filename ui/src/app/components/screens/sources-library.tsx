@@ -84,7 +84,16 @@ export function AddSourceDialog({
   // on `open`: this dialog stays mounted (closed) for as long as the library
   // screen is up, so an unconditional fetch here would fire on every visit.
   const k8s = useK8sRunner(open);
-  const [kind, setKind] = React.useState<"local_dir" | "repo">("local_dir");
+  // kindPick is the operator's own local_dir/repo radio choice; `kind` is
+  // DERIVED from it (never a second piece of state the k8s flip has to keep
+  // in sync). M1 fix: this used to be one `kind` state reset inside an
+  // effect keyed on [open, k8s] — open flips synchronously on click, but the
+  // k8s fetch resolves async, so k8s flipping true a moment later re-ran the
+  // SAME effect and wiped locator/ref/name out from under whatever the
+  // operator had already typed. Deriving at render time means the k8s flip
+  // can never re-trigger a reset.
+  const [kindPick, setKindPick] = React.useState<"local_dir" | "repo">("local_dir");
+  const kind = k8s ? "repo" : kindPick;
   const [locator, setLocator] = React.useState("");
   const [ref, setRef] = React.useState("");
   const [name, setName] = React.useState("");
@@ -93,13 +102,13 @@ export function AddSourceDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    setKind(k8s ? "repo" : "local_dir");
+    setKindPick("local_dir");
     setLocator("");
     setRef("");
     setName("");
     setSaving(false);
     setError(null);
-  }, [open, k8s]);
+  }, [open]);
 
   const save = async () => {
     setSaving(true);
@@ -139,8 +148,8 @@ export function AddSourceDialog({
             </p>
           ) : (
             <RadioGroup
-              value={kind}
-              onValueChange={(v) => setKind(v as "local_dir" | "repo")}
+              value={kindPick}
+              onValueChange={(v) => setKindPick(v as "local_dir" | "repo")}
               className="flex gap-4"
             >
               <label className="flex items-center gap-1.5 text-xs">

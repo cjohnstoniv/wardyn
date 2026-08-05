@@ -21,8 +21,8 @@ import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { usePrincipal } from "../wardyn/operator-context";
+import { SectionCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
-import { SectionCard } from "./run-detail";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.

@@ -203,13 +203,11 @@ export interface SetupStatus {
     driver: "docker" | "k8s" | "none" | (string & {});
     confinement_classes: ConfinementClass[];
     confinement_substrates?: Record<string, string>;
-    // k8s-only: the boot-time egress-canary verdict (setupRunnerInfo, B4).
-    // "enforced" | "unenforced" — the only two a LIVE daemon can ever report
-    // (an indeterminate or an unenforced-without-override canary both refuse
-    // to boot — see the Go SetupRunner.NetworkPolicyProven doc). Absent on a
-    // non-k8s driver, or a k8s daemon build that predates this field — render
-    // that absence as Indeterminate, never as Enforcing.
-    network_policy_proven?: "enforced" | "unenforced" | (string & {});
+    // No network_policy_proven field on the wire (L2 review): the k8s
+    // boot-time egress-canary verdict is consumed via the graded
+    // k8s_egress_containment row in `checks` (environment-step.tsx finds it
+    // by id) — a second, unconsumed copy of the same signal here would just
+    // be surface for the two to drift.
   };
   composer: { enabled: boolean; default?: string; backends: ComposerBackendReadiness[] };
   providers: SetupProvider[];

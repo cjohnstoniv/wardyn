@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -74,6 +74,38 @@ describe("AppShell (control plane unreachable)", () => {
     );
     expect(screen.queryByText("Needs setup")).toBeNull();
     expect(screen.getByText(/Checking/)).toBeInTheDocument();
+  });
+});
+
+// L1 review fix: the role chip used to render unconditionally (fail-open
+// "admin"), so it flashed ADMIN in the account menu next to a still-"unknown"
+// principal before /me resolves — or forever, if /me never resolves at all.
+// Gated on meta.method now, same as its sibling line just below it.
+describe("AppShell — account-menu role chip gating (L1)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("never shows the role chip while /me hasn't resolved (a permanently failing fetch)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    // The account-menu trigger is the last button in the header (after "New
+    // run" and "Toggle theme" — see TopBar).
+    const header = screen.getByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("member", { exact: true })).toBeNull();
   });
 });
 

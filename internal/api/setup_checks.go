@@ -56,9 +56,10 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 }
 
 // k8sEgressContainmentCheck grades the k8s substrate's boot-time NetworkPolicy
-// canary verdict (SetupRunner.NetworkPolicyProven, derived in setupRunnerInfo
-// from ClassSupport.NetworkPolicy). Absent entirely on a non-k8s driver: docker
-// proves L0 (structural — no default route) and has no analogous row; only a
+// canary verdict (netpolProven, computed in setupRunnerInfo from
+// ClassSupport.NetworkPolicy — a local value, not a wire field: nothing else
+// reads it). Absent entirely on a non-k8s driver: docker proves L0
+// (structural — no default route) and has no analogous row; only a
 // Kubernetes deployment's egress claim rests on a packet filter that needs
 // live proof.
 //
@@ -68,12 +69,15 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 // checklist's "ready to launch" verdict even though CC1 sandboxes still
 // create fine (runnerCheck's own separate, milder grade covers that).
 //
-// netpolProven is "enforced" | "unenforced" | "" (see the field's doc for why
-// "unenforced" is the only non-enforced verdict a LIVE wardynd can ever
-// report — an indeterminate or an unenforced-without-override canary both
-// refuse to boot). "" therefore means only a k8s daemon build that predates
-// the field, which is graded exactly like a genuine Indeterminate: an honest
-// "can't confirm", never a silent Enforcing.
+// netpolProven is "enforced" | "unenforced" | "". "unenforced" is the only
+// non-enforced verdict a LIVE wardynd can ever report — an indeterminate or
+// an unenforced-without-override canary both refuse to boot
+// (internal/runner/k8s's newWithClient). "" covers three real cases, not
+// two: a non-k8s driver; a k8s daemon build that predates this computation;
+// AND a genuine k8s driver whose Capabilities() call itself just errored
+// (setupRunnerInfo's own early-return path, which already leaves Driver
+// "k8s" with nothing else resolved). All three grade identically here: an
+// honest "can't confirm", never a silent Enforcing.
 func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 	if driver != "k8s" {
 		return SetupCheck{}, false
@@ -162,7 +166,7 @@ func composerCheck(comp SetupComposer) SetupCheck {
 	return SetupCheck{
 		ID: "composer", Label: "AI Run Composer", Status: "info",
 		Detail: "The AI Run Composer is not enabled (optional); runs can still be configured manually.",
-		Fix:    "Set -composer-config / WARDYN_COMPOSER_CONFIG to enable natural-language run composition.",
+		Fix:    "Set -composer-config / WARDYN_COMPOSER_CONFIG (helm: env.WARDYN_COMPOSER_CONFIG) to enable natural-language run composition.",
 	}
 }
 
@@ -178,7 +182,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
 		Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
-		Fix:    "Generate a durable key with `wardynd -gen-age-key` and set it as WARDYN_AGE_KEY (or -age-key).",
+		Fix:    "Generate a durable key with `wardynd -gen-age-key` and set it as WARDYN_AGE_KEY (helm: env.WARDYN_AGE_KEY; or -age-key).",
 	}
 }
 
