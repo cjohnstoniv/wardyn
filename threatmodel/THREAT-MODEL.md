@@ -166,13 +166,14 @@ has a residual or bypass class, that is noted and also listed in section 5.
 | Layer | Mechanism | What it stops |
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
-| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); block `169.254.169.254` | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
+| L1 default-deny **[shipped on Kubernetes; Docker planned]** | Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata `169.254.169.254` excluded), enforcement PROVEN by the boot canary — a non-enforcing CNI refuses boot. Docker: nftables default-deny still **[planned]** (L0 stands in structurally). Cilium toFQDNs **[planned]** | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
 | L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
-Four egress layers stack outward from the sandbox — the shipped L0 structural
-confinement and L2 proxy carry today's enforcement, with L1 default-deny and
-the L3 tool gateway planned at v0.5.
+Four egress layers stack outward from the sandbox — L0 structural confinement
+(Docker) and the L2 proxy carry enforcement on every path, L1 default-deny is
+shipped on the Kubernetes substrate (canary-proven NetworkPolicy; the nftables
+form for Docker remains planned), and the L3 tool gateway stays planned.
 
 **Substrate containment delta: Docker (L0) vs Kubernetes (L1).** Docker's
 guarantee is *absence of route* — the per-run network is gatewayless, so there
