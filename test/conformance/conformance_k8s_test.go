@@ -17,12 +17,22 @@ package conformance_test
 // substrate's boot-time canary REFUSES to construct without it — see
 // internal/runner/k8s/canary.go) and runs `make test-conformance-k8s`.
 //
-// Agent image: busybox (idle + sh/cat/nc cover everything the suite needs).
+// Agent image: WARDYN_TEST_K8S_AGENT_IMAGE — must be built from
+// deploy/kind/Dockerfile.conformance-agent (busybox:1.36 + a real wardyn-rec
+// binary; `make build-conformance-agent-image`), NOT bare busybox. k8s's
+// SessionRecording is unconditionally true (exec.go's recordCmd has no
+// docker-style opt-out) — a bare busybox agent image fails EVERY Exec closed
+// (no wardyn-rec on PATH), so this suite would never reach a real verdict
+// with one; review round 2 (H1) caught a first version of this file that
+// silently took that failure as "conformance passed" via a since-reverted
+// fallback in recordCmd itself. busybox:1.36 (not :latest): a `:latest` tag
+// defaults to imagePullPolicy Always, which defeats `kind load` — the
+// kubelet re-pulls over the network on every run regardless (M6).
 // Proxy image: the REAL wardyn-proxy build, via WARDYN_PROXY_IMAGE — the
 // construction-time canary launches it with -egress-canary instead of its
-// normal entrypoint args, so a busybox stand-in would make the gate
-// vacuously refuse (ImagePullBackOff/exec-format-error, never a
-// NetworkPolicy verdict) rather than actually proving anything.
+// normal entrypoint args, so a stand-in would make the gate vacuously
+// refuse (ImagePullBackOff/exec-format-error, never a NetworkPolicy verdict)
+// rather than actually proving anything.
 
 import (
 	"context"
@@ -47,6 +57,10 @@ func TestConformanceK8s(t *testing.T) {
 	proxyImage := os.Getenv("WARDYN_PROXY_IMAGE")
 	if proxyImage == "" {
 		t.Fatal("WARDYN_PROXY_IMAGE must name the REAL wardyn-proxy build (the boot-time canary launches it with -egress-canary; a stand-in image makes the gate meaningless — see this file's doc comment)")
+	}
+	agentImage := os.Getenv("WARDYN_TEST_K8S_AGENT_IMAGE")
+	if agentImage == "" {
+		t.Fatal("WARDYN_TEST_K8S_AGENT_IMAGE must name an image built from deploy/kind/Dockerfile.conformance-agent (`make build-conformance-agent-image`) — a recorder-less image (e.g. bare busybox) fails every Exec closed under this substrate's unconditional SessionRecording, which would make the gate meaningless; see this file's doc comment")
 	}
 
 	// Namespace: the substrate's own real config knob (WARDYN_K8S_NAMESPACE),
@@ -78,10 +92,12 @@ func TestConformanceK8s(t *testing.T) {
 	r := orchestrator.New(sub)
 
 	conformance.Run(t, r, conformance.Options{
-		SandboxImage: "busybox:latest",
+		SandboxImage: agentImage,
 		Timeout:      3 * time.Minute,
-		// busybox's sh can exit with an explicit code; the Wait conformance
-		// case Execs this and asserts Wait returns the same code.
+		// The conformance-agent image's sh can exit with an explicit code;
+		// the Wait conformance case Execs this and asserts Wait returns the
+		// same code. It runs through recordCmd's wardyn-rec wrapper like
+		// every other Exec on this substrate — see the file doc comment.
 		ExitArgv: func(code int) []string {
 			return []string{"sh", "-c", "exit " + strconv.Itoa(code)}
 		},
@@ -94,9 +110,30 @@ func TestConformanceK8s(t *testing.T) {
 	})
 
 	t.Run("AgentCannotReachAPIServer", func(t *testing.T) {
-		testAgentCannotReachAPIServer(t, r)
+		testAgentCannotReachAPIServer(t, r, agentImage)
 	})
 }
+
+// apiServerProbeScript is a CODED probe (review round 2, H2): the original
+// version asserted only "exit code != 0 means confined", which reads
+// nc-missing (a broken image), KUBERNETES_SERVICE_HOST/PORT unset (a broken
+// env), and a broken exec ALL as "confined" — none of them prove anything.
+// Distinct exit codes separate "the probe could not run" from "the probe
+// ran and found a breach":
+//
+//	90  nc is not on PATH                          — environment, not a verdict
+//	91  KUBERNETES_SERVICE_HOST/PORT unset          — environment, not a verdict
+//	92  the proxy sidecar (the ONE allowed peer) is unreachable — environment,
+//	    not a verdict, but also a POSITIVE CONTROL: if the one peer the agent
+//	    NetworkPolicy is supposed to allow can't be reached either, the probe
+//	    proves nothing about confinement either way
+//	93  the apiserver WAS reached                   — an actual L1 breach
+//	0   the apiserver was NOT reached, everything else ran fine — confined
+const apiServerProbeScript = `command -v nc >/dev/null 2>&1 || exit 90
+[ -n "$KUBERNETES_SERVICE_HOST" ] && [ -n "$KUBERNETES_SERVICE_PORT" ] || exit 91
+nc -z -w2 wardyn-proxy 3128 || exit 92
+nc -z -w2 "$KUBERNETES_SERVICE_HOST" "$KUBERNETES_SERVICE_PORT" && exit 93
+exit 0`
 
 // testAgentCannotReachAPIServer is the k8s-local L1 replacement for the L0
 // default-route probe: the agent pod's NetworkPolicy (internal/runner/k8s's
@@ -105,10 +142,9 @@ func TestConformanceK8s(t *testing.T) {
 // (regardless of ServiceAccount token automount — that is a separate
 // mechanism) gets KUBERNETES_SERVICE_HOST/KUBERNETES_SERVICE_PORT env vars
 // from the kubelet, so this needs no DNS (the agent's DNSPolicy is
-// deliberately None). busybox's `nc -z` (zero-I/O connect probe, no data
-// phase) must fail: exit 0 would mean the agent reached the apiserver
-// directly, an L1 confinement breach.
-func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner) {
+// deliberately None). See apiServerProbeScript's doc for the exit-code
+// contract this asserts against.
+func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner, agentImage string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -123,7 +159,7 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner) {
 
 	spec := runner.SandboxSpec{
 		RunID:            uuid.New(),
-		Image:            "busybox:latest",
+		Image:            agentImage,
 		ConfinementClass: caps.ConfinementClasses[len(caps.ConfinementClasses)-1],
 		Labels:           map[string]string{"wardyn.conformance": "true"},
 	}
@@ -133,15 +169,22 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner) {
 	}
 	defer func() { _ = r.StopSandbox(context.Background(), sb.Ref) }()
 
-	const probe = `nc -z -w2 "$KUBERNETES_SERVICE_HOST" "$KUBERNETES_SERVICE_PORT"`
-	if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", probe}); err != nil {
+	if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", apiServerProbeScript}); err != nil {
 		t.Fatalf("Exec(apiserver probe): %v", err)
 	}
 	code, err := r.Wait(ctx, sb.Ref)
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if code == 0 {
+	switch code {
+	case 0:
+		// confined: the proxy sidecar (the one allowed peer) was reachable,
+		// the apiserver was not.
+	case 90, 91, 92:
+		t.Fatalf("apiserver probe could not run (exit %d) — an environment problem, not a confinement verdict either way: nc missing (90), KUBERNETES_SERVICE_HOST/PORT unset (91), or the proxy sidecar on 3128 unreachable (92 — the positive control: if the one allowed peer can't be reached, the probe proves nothing)", code)
+	case 93:
 		t.Error("agent pod reached the Kubernetes API server (KUBERNETES_SERVICE_HOST:PORT) directly — L1 confinement breach: the agent NetworkPolicy must allow ONLY the proxy sidecar")
+	default:
+		t.Fatalf("apiserver probe exited %d, a code the script never emits — investigate before trusting this result either way", code)
 	}
 }

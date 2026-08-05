@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -387,6 +388,54 @@ func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
 	_, err := d.CreateSandbox(context.Background(), spec)
 	if err == nil {
 		t.Fatal("CreateSandbox: want an error, got nil")
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+}
+
+// TestCreateSandbox_AgentContainerTerminated_FailsFast covers M5 (review
+// round 2): a container that crashes before ever reaching Running (a bad
+// image whose entrypoint exits immediately, CrashLoopBackOff's first cycle,
+// ...) must fail FAST, not fall through to "keep polling" and burn the full
+// canaryWaitTimeout. Asserted by WALL-CLOCK BOUND, not just "an error
+// happened" — a bug that silently reverted to polling would still return an
+// error eventually (ctx/test timeout), so only the timing proves the early
+// exit actually fired.
+func TestCreateSandbox_AgentContainerTerminated_FailsFast(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(clienttesting.GetAction)
+		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-agent-") {
+			return false, nil, nil
+		}
+		obj, err := cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		pod := obj.(*corev1.Pod).DeepCopy()
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name:  mainContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "boom"}},
+		}}
+		return true, pod, nil
+	})
+
+	spec := testSandboxSpec()
+	start := time.Now()
+	_, err := d.CreateSandbox(context.Background(), spec)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("CreateSandbox: want an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "terminated before ever reaching Running") {
+		t.Errorf("err = %v, want it to name the early-exit reason", err)
+	}
+	// canaryWaitTimeout is 3 minutes; a genuinely fast exit finishes in
+	// milliseconds against the fake clientset (k8sPollInterval is 200ms and
+	// this fires on the FIRST poll) — 5s is a generous bound that still
+	// fails hard if the fix regresses to polling out the full timeout.
+	if elapsed > 5*time.Second {
+		t.Errorf("CreateSandbox took %s, want a fast exit (< 5s) — Terminated must not fall through to polling out canaryWaitTimeout", elapsed)
 	}
 	assertRunObjectsGone(t, cs, spec.RunID)
 }

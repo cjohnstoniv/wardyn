@@ -9,8 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -58,21 +56,9 @@ func TestExec_Success(t *testing.T) {
 		t.Errorf("ephemeral container image = %q, want the main container's image", ec.Image)
 	}
 	wantURL := fmt.Sprintf("http://wardyn-proxy:%d/wardyn/v1/recordings/%s", runner.ProxyListenPort, runID)
-	// Shell-wrapped (see recordCmd's doc): [0]/[1] are the fixed "/bin/sh -c"
-	// prefix, [2] is the generated script — assert its CONTENT (both the
-	// recorder invocation and the raw-argv fallback), not a byte-exact
-	// string, so the shell-quoting mechanics stay an implementation detail.
-	if len(ec.Command) != 3 || ec.Command[0] != "/bin/sh" || ec.Command[1] != "-c" {
-		t.Fatalf("ephemeral container command = %v, want a 3-element [/bin/sh -c <script>] wrapper", ec.Command)
-	}
-	script := ec.Command[2]
-	for _, want := range []string{
-		"command -v wardyn-rec", "wardyn-rec", "-cast-dir", "/tmp", "-upload-url", wantURL,
-		"-run", runID.String(), "/usr/local/bin/agent-run", "do the task", "else exec",
-	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("ephemeral container script = %q, want it to contain %q (recorder-wrapped, masked-upload URL, with a raw-argv fallback)", script, want)
-		}
+	wantCmd := []string{"wardyn-rec", "-cast-dir", "/tmp", "-upload-url", wantURL, "-run", runID.String(), "--", "/usr/local/bin/agent-run", "do the task"}
+	if !equalStrings(ec.Command, wantCmd) {
+		t.Errorf("ephemeral container command = %v, want %v (recorder-wrapped, masked-upload URL)", ec.Command, wantCmd)
 	}
 	if len(ec.Env) != 1 || ec.Env[0].Name != "HOME" {
 		t.Errorf("ephemeral container env = %v, want the main container's env copied verbatim", ec.Env)
@@ -94,76 +80,14 @@ func TestExec_Success(t *testing.T) {
 // docker's own tolerance for an unresolvable run id label.
 func TestRecordCmd_UnresolvableRunID(t *testing.T) {
 	got := recordCmd(uuid.Nil, []string{"/usr/local/bin/agent-run", "task"})
-	if len(got) != 3 || got[0] != "/bin/sh" || got[1] != "-c" {
-		t.Fatalf("recordCmd(uuid.Nil, ...) = %v, want a 3-element [/bin/sh -c <script>] wrapper", got)
-	}
-	script := got[2]
-	if strings.Contains(script, "-upload-url") || strings.Contains(script, "http://") {
-		t.Errorf("recordCmd(uuid.Nil, ...) script = %q, want no upload URL when the run id is unresolvable", script)
-	}
-	if !strings.Contains(script, "command -v wardyn-rec") {
-		t.Errorf("recordCmd still wraps with wardyn-rec even without a run id, got script %q", script)
-	}
-}
-
-// TestRecordCmd_FallsBackWhenRecorderAbsent actually EXECUTES the generated
-// script (not just inspecting its text) under two PATHs: one where a stub
-// wardyn-rec is on it (must run the stub, not the raw command) and one
-// where it is not (must run the raw command directly) — the live-cluster
-// gap a busybox conformance agent image surfaced (recordCmd's doc).
-func TestRecordCmd_FallsBackWhenRecorderAbsent(t *testing.T) {
-	marker := t.TempDir() + "/ran"
-	// /bin/sh (absolute): the OUTER wrapper is always "/bin/sh -c <script>"
-	// (recordCmd's own prefix), but the RAW argv being wrapped is caller
-	// data — using an absolute path for it here means the "recorder absent"
-	// case below (a PATH with no wardyn-rec anywhere) can still find it.
-	argv := []string{"/bin/sh", "-c", "echo raw > " + marker}
-	script := recordCmd(uuid.Nil, argv)
-	if script[0] != "/bin/sh" || script[1] != "-c" {
-		t.Fatalf("recordCmd = %v, want a [/bin/sh -c <script>] wrapper", script)
-	}
-
-	runScript := func(t *testing.T, path string) {
-		t.Helper()
-		cmd := exec.Command("/bin/sh", "-c", script[2])
-		cmd.Env = []string{"PATH=" + path}
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("running the generated script (PATH=%s): %v\noutput: %s", path, err, out)
+	for _, arg := range got {
+		if strings.Contains(arg, "-upload-url") || strings.Contains(arg, "http://") {
+			t.Errorf("recordCmd(uuid.Nil, ...) = %v, want no upload URL when the run id is unresolvable", got)
 		}
 	}
-
-	t.Run("recorder present", func(t *testing.T) {
-		_ = os.Remove(marker)
-		stubDir := t.TempDir()
-		recorderMarker := stubDir + "/recorder-ran"
-		// The stub does NOT propagate to the wrapped command — it only has to
-		// prove IT is what ran, not fully emulate wardyn-rec.
-		stub := "#!/bin/sh\necho recorded > " + recorderMarker + "\n"
-		if err := os.WriteFile(stubDir+"/wardyn-rec", []byte(stub), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		runScript(t, stubDir+":/bin:/usr/bin")
-		if _, err := os.Stat(recorderMarker); err != nil {
-			t.Errorf("wardyn-rec stub did not run when present on PATH: %v", err)
-		}
-		if _, err := os.Stat(marker); err == nil {
-			t.Error("the raw command ALSO ran even though wardyn-rec was found — the branches are not mutually exclusive")
-		}
-	})
-
-	t.Run("recorder absent", func(t *testing.T) {
-		_ = os.Remove(marker)
-		// A real system PATH (sh/echo must exist for the fallback itself to
-		// run) that contains no directory carrying a wardyn-rec binary.
-		runScript(t, "/bin:/usr/bin")
-		b, err := os.ReadFile(marker)
-		if err != nil {
-			t.Fatalf("the raw argv did not run when wardyn-rec is absent: %v", err)
-		}
-		if string(b) != "raw\n" {
-			t.Errorf("marker content = %q, want %q", string(b), "raw\n")
-		}
-	})
+	if got[0] != "wardyn-rec" {
+		t.Errorf("recordCmd still wraps with wardyn-rec even without a run id, got %v", got)
+	}
 }
 
 // TestExec_SecondCallFails covers the once-per-ref contract: ephemeral

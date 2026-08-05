@@ -52,7 +52,18 @@ The session recorder binary, built from `cmd/wardyn-rec`.  It wraps the agent
 process and records the PTY session via `asciinema` (GPL subprocess, never
 linked) or falls back to a plain `.log` file when asciinema is absent.  The
 docker driver calls `wardyn-rec` (via `Exec`) instead of calling `agent-run`
-directly when recording is enabled.
+directly when recording is enabled (`Config.Record`, opt-in on that substrate).
+
+**On the Kubernetes runner substrate (`internal/runner/k8s`, `-tags k8s`) this
+binary is NOT optional.** That substrate always advertises
+`SessionRecording:true` with no opt-out, so `Exec` unconditionally wraps every
+launch with `wardyn-rec` (`exec.go`'s `recordCmd`) — an image without it fails
+every `Exec` closed (the ephemeral container can't start: `wardyn-rec` does
+not resolve). This is deliberate fail-closed behavior, not a bug: a driver
+that claims `SessionRecording:true` must actually deliver it, never silently
+downgrade to unrecorded. The k8s conformance suite's own agent image
+(`deploy/kind/Dockerfile.conformance-agent`) exists specifically to carry a
+real `wardyn-rec` so this path is exercised for real.
 
 ### 4. `/usr/local/bin/wardyn-git-helper`
 

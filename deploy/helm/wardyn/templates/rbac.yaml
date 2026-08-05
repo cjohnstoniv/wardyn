@@ -9,10 +9,21 @@ substrate actually issues; see internal/runner/k8s/{sandbox,lifecycle,exec,
 canary,driver}.go. In particular:
   - pods: NO watch. Every wait loop (Exec's Wait, teardown's waitPodsGone)
     polls with Get/List; none of them use a watch.Interface.
+  - pods/exec: BOTH create and get. session.go's newExecutor builds a
+    FallbackExecutor that tries the websocket transport FIRST (SPDY only on
+    upgrade failure) — and the websocket leg issues an HTTP GET against the
+    exec subresource (remotecommand.NewWebSocketExecutor's
+    http.MethodGet), which RBAC maps to the "get" verb, not "create" (that's
+    the SPDY/POST leg). Without "get" the websocket attempt 403s and every
+    exec silently falls back to the deprecated SPDY path (still functional,
+    but noisy: a 403 audit line per channel) — review round 2, M3.
   - secrets: NO get/list. wardynd creates its own per-run proxy-config Secret
     and later deletes it (by name, then by label at teardown) — it never
     reads one back; the kubelet mounts it into the proxy pod, not wardynd.
   - networkpolicies: NO get/list, same reasoning as secrets.
+  - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
+    runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
+    this substrate lists them.
 
 Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
 per-sandbox object the substrate creates/tears down (pods, ephemeral
@@ -38,7 +49,7 @@ rules:
     verbs: ["update"]
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["get", "create"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "delete", "deletecollection"]
@@ -71,7 +82,7 @@ metadata:
 rules:
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
-    verbs: ["get", "list"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

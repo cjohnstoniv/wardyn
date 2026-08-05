@@ -200,17 +200,33 @@ helm install wardyn ./deploy/helm/wardyn -n wardyn \
   (CC1-only) until pinned here to a RuntimeClass whose `.Handler` actually
   delivers that class's isolation.
 - `k8s.apiServer.ports`: port(s) the control-plane NetworkPolicy opens so
-  wardynd can reach the API server. Defaults to `[443]` —
-  `kubernetes.default.svc`'s Service port on every cluster, regardless of the
-  apiserver's real listen port; override/extend only for a nonstandard
-  in-cluster Service port.
+  wardynd can reach the API server. Defaults to `[443, 6443]` —
+  `kubernetes.default.svc`'s Service port (443, what client-go's in-cluster
+  config always targets) PLUS the typical kubeadm/kind apiserver backend port
+  (6443): on iptables-mode kube-proxy + Calico, the DNAT to that backend port
+  happens BEFORE Calico evaluates egress, so `[443]` alone fails this rule
+  closed on that (common) combination. Override/extend for a different
+  apiserver port or a CNI/dataplane that evaluates pre-DNAT.
+- **`k8s.apiServer.to`: empty (any destination) by default — this is a REAL
+  WIDENING, not a narrow rule.** Like the Postgres egress rule right above it
+  in the rendered NetworkPolicy, an empty `to` allows the ports above to ANY
+  destination, because the apiserver is frequently not a selectable pod (a
+  managed control plane, or static pods no podSelector/namespaceSelector can
+  match) — there is no generically-correct default peer. **Scope this in any
+  cluster where "wardynd can reach 443/6443 anywhere" is not an acceptable
+  posture** — set it to a raw `NetworkPolicyPeer` list (same shape as
+  `networkPolicy.egress.extra`), e.g. an `ipBlock` naming your cluster's
+  actual apiserver/load-balancer CIDR.
 
 RBAC ships least-privilege: the namespaced Role covers exactly the verbs the
-substrate issues (pods create/get/list/delete/deletecollection; the
-`pods/ephemeralcontainers` and `pods/exec` subresources; secrets and
-networkpolicies create/delete/deletecollection — deliberately **no** get/list
-on either, wardynd never reads one back); the cluster-scoped ClusterRole
-covers `runtimeclasses` get/list only (RuntimeClass is never namespaced).
+substrate issues (pods create/get/list/delete/deletecollection;
+`pods/ephemeralcontainers` update; `pods/exec` get+create — the exec
+subresource's websocket transport issues GET, SPDY issues POST, and the
+driver tries websocket first; secrets and networkpolicies
+create/delete/deletecollection — deliberately **no** get/list on either,
+wardynd never reads one back); the cluster-scoped ClusterRole covers
+`runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
+only ever resolves one by name).
 
 ## Split SSH exposure
 

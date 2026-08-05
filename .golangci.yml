@@ -24,14 +24,18 @@
 #
 # Every //nolint for these linters must carry a reason. Current justified set
 # (grep '//nolint:funlen'): api.runComposePipeline, docker.CreateSandbox,
-# api.dispatchRun.
+# api.dispatchRun, k8s.CreateSandbox.
 version: "2"
 
 run:
-  # Lint the shipped build too: the docker-tagged tree (runner/docker, envbuild)
-  # is production code and must meet the same bar.
+  # Lint the shipped builds too: the docker-tagged tree (runner/docker,
+  # envbuild) and the k8s-tagged tree (runner/k8s) are both production code
+  # and must meet the same bar — review round 2 (M7) found this list had
+  # never grown past "docker", so every k8s-tagged file was silently never
+  # linted by `make lint` at all.
   build-tags:
     - docker
+    - k8s
 
 linters:
   default: none

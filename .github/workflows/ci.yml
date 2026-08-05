@@ -304,6 +304,11 @@ jobs:
   # baseSecurityContext/agentSecurityContext/restrictedSecurityContext) —
   # labeling the namespace enforced-restricted is a live admission-time proof
   # of that, not a relaxation to make the job pass.
+  #
+  # RBAC (templates/rbac.yaml) is asserted by RENDER ONLY, in the `helm` job
+  # above — this job's kind-action ServiceAccount is cluster-admin, so the
+  # chart's actual RBAC verbs are never runtime-constrained here (review
+  # round 2, M8: the step name below used to imply otherwise).
   conformance-k8s:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -314,8 +319,13 @@ jobs:
           go-version-file: go.mod
       - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:kind-test .
-      - name: Pull busybox (the conformance agent image)
-        run: docker pull busybox:latest
+      # H1 (review round 2): the conformance agent image MUST carry
+      # wardyn-rec (k8s's SessionRecording is unconditionally true, no
+      # docker-style opt-out) — a bare busybox took the never-records path
+      # and the gate never proved recording works. See the Makefile target's
+      # own doc and deploy/kind/Dockerfile.conformance-agent.
+      - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+        run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
         with:
           cluster_name: wardyn-conformance-k8s
@@ -324,7 +334,7 @@ jobs:
       - name: Load images into kind (no registry pull)
         run: |
           kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-conformance-k8s
-          kind load docker-image busybox:latest --name wardyn-conformance-k8s
+          kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-conformance-k8s
       - name: Install Calico (single-file, version-pinned manifest — NetworkPolicy enforcement)
         run: |
           kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
@@ -333,7 +343,12 @@ jobs:
       - name: Label a PSS-restricted namespace for runs
         run: |
           kubectl create namespace wardyn-conformance
-          kubectl label namespace wardyn-conformance pod-security.kubernetes.io/enforce=restricted
+          kubectl label namespace wardyn-conformance \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=v1.30
+          # v1.30: pinned to match the kindest/node image this cluster boots
+          # (kind-action's default at the time this job was written) — bump
+          # together if that ever changes (review round 2, L5).
       - name: Repoint KUBECONFIG at the node's internal IP (see the job comment above)
         run: |
           NODE_IP=$(kubectl get nodes wardyn-conformance-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
@@ -341,11 +356,12 @@ jobs:
             | sed "s/wardyn-conformance-k8s-control-plane:6443/${NODE_IP}:6443/" \
             > "$RUNNER_TEMP/kubeconfig-internal.yaml"
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
-      - name: Run k8s conformance (make target — WARDYN_TEST_K8S=1, both canary/RBAC/exec live)
+      - name: Run k8s conformance (make target — WARDYN_TEST_K8S=1; canary + exec + recording live, RBAC render-asserted elsewhere)
         env:
           WARDYN_TEST_K8S: "1"
           WARDYN_K8S_NAMESPACE: wardyn-conformance
           WARDYN_PROXY_IMAGE: wardyn/wardyn-proxy:kind-test
+          WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
         run: make test-conformance-k8s
         # No continue-on-error: a real conformance failure must block the build.
 

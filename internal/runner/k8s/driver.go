@@ -159,7 +159,14 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 // operator who set the override cannot miss that every sandbox this Driver
 // creates runs with UNCONFINED egress until it is unset.
 func logWarnUnenforcedNetPolOptOut() {
-	slog.Warn("wardynd: k8s NetworkPolicy is NOT enforced on this cluster (the boot-time egress canary connected despite a deny-all policy) and WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 — proceeding anyway: every sandbox this substrate creates has UNCONFINED egress, not the L1 confinement Wardyn normally requires. Classes stay advertised, but NetworkPolicy and StructuralEgress both report false — this substrate will never read as confined on /healthz. Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL and fix the cluster's CNI/NetworkPolicy support to restore real confinement.")
+	// Wrapped across lines (review round 2, M7): enabling -tags k8s in
+	// .golangci.yml's build-tags for the first time surfaced this as the
+	// tree's one pre-existing lll violation — wardynd never ran the k8s
+	// build through that gate before. Content unchanged.
+	msg := "wardynd: k8s NetworkPolicy is NOT enforced on this cluster (the boot-time egress canary connected despite a deny-all policy) and WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 — proceeding anyway: " +
+		"every sandbox this substrate creates has UNCONFINED egress, not the L1 confinement Wardyn normally requires. Classes stay advertised, but NetworkPolicy and StructuralEgress both report false — " +
+		"this substrate will never read as confined on /healthz. Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL and fix the cluster's CNI/NetworkPolicy support to restore real confinement."
+	slog.Warn(msg)
 }
 
 func (d *Driver) Name() string { return driverName }

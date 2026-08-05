@@ -1,0 +1,10 @@
+# Conformance suite's agent image: busybox + a REAL wardyn-rec binary, so the
+# k8s substrate's unconditional SessionRecording=true (exec.go's recordCmd
+# has no opt-out) is actually exercised end to end, not silently skipped by
+# an image that fails Exec closed. wardyn-rec is staged into the build
+# context by the caller (make build-conformance-agent-image / ci.yml) — the
+# same `go build ./cmd/wardyn-rec` every agent image's own builder stage
+# runs — not rebuilt here, so this file stays exactly what it is: busybox
+# plus one binary.
+FROM busybox:1.36
+COPY wardyn-rec /usr/local/bin/wardyn-rec

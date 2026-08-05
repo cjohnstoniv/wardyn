@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -204,8 +204,24 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 10m ./test/conformance/...
 
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
-	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE required; uses the current kubeconfig context)..."
+	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
 	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 10m ./test/conformance/...
+
+# H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
+# k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no
+# opt-out, unlike docker's Config.Record), so a bare busybox took the
+# never-exercises-recording path and the conformance gate never actually
+# proved recording works. Stages a fresh wardyn-rec binary (not a
+# builder-stage duplicate) into a throwaway build context — mirrors
+# test-envbuild-integration's own tools-staging recipe.
+CONFORMANCE_AGENT_IMAGE ?= wardyn/conformance-agent:local
+build-conformance-agent-image: ## Build the busybox+wardyn-rec conformance agent image (deploy/kind/Dockerfile.conformance-agent)
+	@echo "Building the conformance agent image ($(CONFORMANCE_AGENT_IMAGE))..."
+	@set -eu; \
+	tools_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tools_dir"' EXIT; \
+	CGO_ENABLED=0 GOOS=linux go build -o "$$tools_dir/wardyn-rec" ./cmd/wardyn-rec; \
+	docker build -f deploy/kind/Dockerfile.conformance-agent -t $(CONFORMANCE_AGENT_IMAGE) "$$tools_dir"
 
 test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no cluster needed)
 	@echo "Running driver-agnostic conformance honesty-stub tests (no cluster required)..."
@@ -312,10 +328,11 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (both tag sets) + golangci-lint size/complexity + file-size gate
-	@echo "Running go vet (default + docker tags)..."
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
+	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
+	go vet -tags k8s ./...
 	@echo "Running golangci-lint $(GOLANGCI_LINT_VERSION) (function-size/complexity gate, .golangci.yml)..."
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."
@@ -374,7 +391,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" || { echo "chart left WARDYN_RECORDING_DIR unset — wardynd's default writes to the read-only root FS and the pod crash-loops"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "fs"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=fs — with wardynd's pg default a stock install silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off"; exit 1; }; \
 	echo "$$out" | grep -q "podSelector: {}" || { echo "chart ingress default is not same-namespace"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "default render does not show automount:false exactly twice (the created ServiceAccount object + the pod spec) — k8s.enabled and ssh.enabled both default off, so both must still default-deny the API server token"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
@@ -384,20 +402,21 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: true')" = "1" ] || { echo "pod spec does not honor the values-level automount override on the bring-your-own-SA path (true here: k8s.enabled requires it — see the fourth refusal)"; exit 1; }; \
-	echo "$$out" | grep -q "name: WARDYN_RUNNER" || { echo "k8s.enabled rendered no WARDYN_RUNNER — the registry defaults to docker and would try to dial a nonexistent daemon"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_RUNNER" | grep -q 'value: "k8s"' || { echo "k8s.enabled did not render WARDYN_RUNNER=k8s — the registry defaults to docker and would try to dial a nonexistent daemon"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "k8s.runsNamespace (different from the release namespace) did not render its NetworkPolicy ingress peer"; exit 1; }; \
 	echo "$$out" | grep -q "CC2=gvisor;CC3=kata-qemu" || { echo "k8s.runtimeClasses did not join into WARDYN_CONFINEMENT_MAP"; exit 1; }; \
 	echo "$$out" | grep -q "port: 6443" || { echo "k8s.apiServer.ports did not render the control-plane NetworkPolicy's apiserver egress rule"; exit 1; }; \
-	echo "$$out" | grep -q "kind: Role" || { echo "k8s.enabled rendered no RBAC Role"; exit 1; }; \
-	echo "$$out" | grep -q "kind: ClusterRole" || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
+	echo "$$out" | grep -q '^kind: Role$$' || { echo "k8s.enabled rendered no RBAC Role"; exit 1; }; \
+	echo "$$out" | grep -q '^kind: ClusterRole$$' || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install

@@ -270,6 +270,15 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 			if cs.State.Running != nil {
 				return true, nil
 			}
+			// A container that crashes before ever reaching Running (a bad
+			// image whose entrypoint exits immediately, CrashLoopBackOff's
+			// first cycle, ...) must fail fast here — without this check
+			// review round 2 (M5) found it falls through to "keep polling"
+			// and burns the full canaryWaitTimeout on a container that will
+			// never run.
+			if t := cs.State.Terminated; t != nil {
+				return false, fmt.Errorf("%s container terminated before ever reaching Running (exit code %d): %s", containerName, t.ExitCode, t.Message)
+			}
 			if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
 				return false, fmt.Errorf("%s container stuck waiting (%s): %s", containerName, w.Reason, w.Message)
 			}

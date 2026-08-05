@@ -142,12 +142,26 @@ k8s:
   apiServer:
     # Port(s) the control-plane NetworkPolicy's egress rule opens so wardynd
     # can reach the Kubernetes API server (client-go, driving the k8s
-    # substrate directly). 443 is the kubernetes.default.svc Service port on
-    # EVERY cluster — client-go's in-cluster config always targets it
-    # regardless of the apiserver's real listen port (kube-proxy DNATs to
-    # that afterward); override/extend only for a nonstandard in-cluster
-    # Service port.
-    ports: [443]
+    # substrate directly). 443 is the kubernetes.default.svc Service port
+    # client-go's in-cluster config always targets — but on iptables-mode
+    # kube-proxy + Calico (this chart's own CI cluster, and most kubeadm/kind
+    # clusters), the DNAT to the apiserver's REAL backend port (6443 on a
+    # typical kubeadm/kind control plane) happens BEFORE Calico evaluates
+    # egress, so the packet Calico actually sees is already destined for
+    # 6443 — [443] alone fails this egress closed on exactly the CNI our own
+    # CI proves against (ci/all-on-values.yaml pins [443, 6443], the value
+    # verified working there). Override/extend for a different apiserver
+    # port or a CNI/dataplane that evaluates pre-DNAT.
+    ports: [443, 6443]
+    # Peers this egress is scoped to (raw NetworkPolicyPeer list, same shape
+    # as networkPolicy.egress.extra). EMPTY BY DEFAULT, which — like the
+    # Postgres rule right above it in the rendered NetworkPolicy — widens
+    # egress on these ports to ANY destination, not just the apiserver: the
+    # apiserver is frequently not a selectable pod (a managed control plane,
+    # or static pods a podSelector/namespaceSelector can't match), so there
+    # is no generically-correct peer to default to. SCOPE THIS in production:
+    # e.g. an ipBlock naming your cluster's actual apiserver/LB CIDR.
+    to: []
 
 # SSH access into a running sandbox (see docs/SSH.md — owned by the SSH
 # gateway lane). Off by default; a CONDITIONAL second port on the wardynd

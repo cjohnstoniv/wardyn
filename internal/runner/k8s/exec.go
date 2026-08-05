@@ -143,37 +143,24 @@ func findContainer(containers []corev1.Container, name string) (corev1.Container
 // is best-effort, so a missing/corrupt wardyn.run-id label degrades to a
 // local-only (never-uploaded) cast rather than failing Exec outright.
 //
-// The ephemeral container's Command is NOT the bare recorder argv: it is
-// shell-wrapped to fall back to running argv directly when wardyn-rec is not
-// on PATH. This substrate has no docker-style Config.Record opt-out (Classes
-// always advertises SessionRecording:true — see driver.go) — a Kubernetes
-// Command is a direct exec, never a shell, so "wardyn-rec" resolving to
-// nothing would otherwise fail the whole exec closed (a live-cluster
-// conformance run against a minimal agent image, busybox, surfaced exactly
-// this: the ephemeral container never started at all). Every first-party
-// agent image ships wardyn-rec (image contract §3) so this fallback never
-// fires in production; it exists for a minimal/non-standard image, where "no
-// recording" beats "the task never runs" — the same best-effort posture
-// wardyn-rec itself already takes with ITS OWN optional dependency
-// (asciinema absent -> plain .log capture, never a hard failure).
+// The Command IS the bare recorder argv — no shell, no "is wardyn-rec on
+// PATH" fallback. This substrate has no docker-style Config.Record opt-out:
+// Classes always advertises SessionRecording:true (driver.go), so an image
+// that cannot honour it must fail closed, not silently downgrade to
+// unrecorded — the same fail-closed posture invariant 5 (runner/substrate's
+// package doc) requires everywhere else. An agent image on this substrate
+// MUST ship wardyn-rec (image contract §3, deploy/images/README.md); one
+// that doesn't fails Exec closed via the normal container-start error path
+// (parity with docker: a Record-enabled docker exec with a missing
+// wardyn-rec fails the same way, for the same reason). The conformance
+// suite's own agent image is built from deploy/kind/Dockerfile.conformance-
+// agent specifically so this path is exercised for real, not skipped.
 func recordCmd(runID uuid.UUID, argv []string) []string {
 	uploadURL := ""
 	if runID != uuid.Nil {
 		uploadURL = fmt.Sprintf("http://wardyn-proxy:%d/wardyn/v1/recordings/%s", runner.ProxyListenPort, runID)
 	}
-	recorded := runner.RecorderArgv("/tmp", "", uploadURL, runID, argv)
-
-	quotedRecorded := make([]string, len(recorded))
-	for i, a := range recorded {
-		quotedRecorded[i] = shQuote(a)
-	}
-	quotedRaw := make([]string, len(argv))
-	for i, a := range argv {
-		quotedRaw[i] = shQuote(a)
-	}
-	script := fmt.Sprintf("if command -v wardyn-rec >/dev/null 2>&1; then exec %s; else exec %s; fi",
-		strings.Join(quotedRecorded, " "), strings.Join(quotedRaw, " "))
-	return []string{"/bin/sh", "-c", script}
+	return runner.RecorderArgv("/tmp", "", uploadURL, runID, argv)
 }
 
 // Wait blocks until the ephemeral exec Exec added terminates and returns its

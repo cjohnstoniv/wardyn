@@ -328,6 +328,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
 		run.ID.String(), "success", mustJSON(policy)))
 
+	// Stamped BEFORE CreateSandbox, not after (review round 2, L7): the row
+	// still carries the heartbeat it was born with, which any image
+	// build/pull longer than the stale window has already let expire — so
+	// without an early stamp the next reconcile sweep on any replica can
+	// adopt a run this dispatch is still setting up (reconcile.go). It used
+	// to be stamped once CreateSandbox returned ("the run now has something
+	// to watch"), but CreateSandbox itself can now block for
+	// canaryWaitTimeout (the k8s substrate's agent-pod readiness wait, on
+	// top of whatever image pull it was already doing) — stamping first
+	// covers that latency too instead of leaving it entirely un-leased.
+	// stampRunWatcherLease only touches run.ID (idempotent heartbeat write;
+	// no dependency on sb.Ref), so moving it earlier is safe.
+	s.stampRunWatcherLease(ctx, run.ID)
+
 	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
@@ -348,13 +362,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
 	}
-
-	// The run now HAS something to watch, so its watcher-lease grace starts HERE,
-	// not at row creation: the row still carries the heartbeat it was born with,
-	// which any image build longer than the stale window has already let expire —
-	// so without this one stamp the next sweep on any replica adopts a run this
-	// dispatch is still setting up (reconcile.go).
-	s.stampRunWatcherLease(ctx, run.ID)
 
 	// KILL-RACE GUARD: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the

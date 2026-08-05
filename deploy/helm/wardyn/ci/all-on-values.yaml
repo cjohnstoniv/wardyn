@@ -86,6 +86,9 @@ k8s:
     CC3: kata-qemu
   apiServer:
     ports: [443, 6443]
+    to:
+      - ipBlock:
+          cidr: 172.18.0.0/16
 
 # SSH access, the "other side" of ITS off-by-default switch: a second port on
 # the same Service/Deployment (see templates/service.yaml, deployment.yaml).
