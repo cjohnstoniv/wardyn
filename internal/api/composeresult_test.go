@@ -44,6 +44,31 @@ func (s *memComposeStore) TakeComposeResult(_ context.Context, runID uuid.UUID) 
 	return raw, ok, nil
 }
 
+// TestComposeRunActor pins item 6: RunClaudeCompose must attribute a
+// compose-launched run's created_by to the REQUESTING HUMAN (threaded via
+// withComposeRequestActor, which handleComposeRun stashes on the ctx that
+// flows unchanged through Registry.Propose -> the sandbox backend's Propose
+// -> the bound RunClaudeFunc), not composeActor()'s fixed system marker — a
+// member's own compose-launched run must be visible/killable to them under
+// ownership scoping (item 2), which composeActor()'s "wardyn-composer" broke.
+// The fallback (no request actor tracked) still resolves to composeActor(),
+// so a hypothetical future non-request-scoped caller degrades safely instead
+// of attributing to "".
+func TestComposeRunActor(t *testing.T) {
+	s := &Server{}
+	ctx := withComposeRequestActor(context.Background(), "alice@corp.example")
+	if got := s.composeRunActor(ctx); got != "alice@corp.example" {
+		t.Fatalf("composeRunActor = %q, want the request actor %q", got, "alice@corp.example")
+	}
+	if got := s.composeRunActor(context.Background()); got != "wardyn-composer" {
+		t.Fatalf("composeRunActor with no tracked request actor = %q, want the composeActor() fallback %q", got, "wardyn-composer")
+	}
+	s.cfg.LocalOperator = "local:bob"
+	if got := s.composeRunActor(context.Background()); got != "local:bob" {
+		t.Fatalf("composeRunActor fallback with LocalOperator set = %q, want %q", got, "local:bob")
+	}
+}
+
 // TestUploadComposeResult_RoundTrip: a PUT under the run's OWN id is accepted
 // (204) and the raw body is stashed in the compose-results store for the waiting
 // RunClaudeCompose to take once (delete-on-read).
