@@ -14,6 +14,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `internal/auth/oidc`'s `deriveRole`). Upgrading forces one SSO re-login: a pre-0.5
   session cookie carries no role and now decodes as no session (`decodeSession`), never
   as an authenticated session with an undefined role.
+- **Authorization enforcement: the admin/member role is now enforced, plus
+  owner-or-admin scoping.** `requireOperator`/`isOperator` gate on the session's
+  role instead of re-checking `WARDYN_OIDC_OPERATOR_EMAILS` directly (the
+  allowlist still works — it feeds role derivation via `LegacyAdminEmails`, one
+  source of truth instead of two). `GET /metrics` now carries the admin gate
+  explicitly. A member is scoped to their OWN runs/approvals on `GET /runs`,
+  `GET /approvals` (unscoped), and `GET /audit` (`?run_id=` of an owned run,
+  else an empty result — never a cross-user leak); `GET/kill/profile/grants` on
+  a run, the recording replay, an approval decide, and the attach-ticket mint
+  all use an owner-or-admin gate that answers a foreign resource with the
+  byte-identical 404 a missing one gets (no existence oracle). Attach tickets
+  now carry the minting principal's role (migration 0033), since the
+  interactive-attach WebSocket's `?ticket=` lane authenticates entirely off the
+  ticket and never runs the normal session check. `GET /setup/status` redacts
+  operator-diagnostic detail (environment checks, resident CLI detection,
+  secret names, runner detail) for a member. A member's `inline_policy` on
+  `POST /runs` (and its preflight dry-run) is now clamped to the operator's
+  default policy ceiling before resolution, and bringing a custom sandbox
+  image (`image`) is admin-only. Two routes move from admin-only to
+  owner-or-admin: minting an attach ticket and deciding an approval, both
+  restricted to the run's own creator (or an admin) either way. A new
+  `authz.denied` audit action records a member's admin-surface or BYOI
+  denials (not a foreign-resource 404 — that stays silent by design, matching
+  the no-existence-oracle rule above).
 
 ## [0.4.5] — 2026-08-04
 

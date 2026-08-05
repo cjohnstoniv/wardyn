@@ -77,20 +77,38 @@ The 0.4.4 campaign deliberately deferred everything below to the K8s/corporate
 extension phase — each was confirmed real, sized L (multi-day), and left out of
 the final cleanup on purpose:
 
-- **Authorization/RBAC + owner scoping.** A **minimal** viewer/operator gate now
-  ships across 25 routes: set `WARDYN_OIDC_OPERATOR_EMAILS` and a signed-in
-  human outside that list is a viewer — reads everything, launches and kills
-  runs, but is 403'd on configuring the deployment (managed harness credential,
-  policies, workspaces, site-config), writing/deleting secrets, deciding an
-  approval, and attaching to a running sandbox — both the ticket mint and the
-  attach WebSocket (`internal/api/server.go`, `requireOperator`;
-  `ticketOrHumanAuth`). Unset with no OIDC configured is the old behavior: every
-  authenticated caller is admin-equivalent. Configuring OIDC SSO with the list
-  left empty now REFUSES TO BOOT (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`
-  overrides). This is one allowlist, not RBAC. Still open: real
-  roles/permissions, a role for the admin token and local mode (both are a
-  single shared credential, so both are always operators), per-resource owner
-  scoping, `CreatedBy` persisted-but-never-filtered, no tenant/org columns.
+- **Authorization/RBAC + owner scoping — SHIPPED (v0.5, B1+B2).** Real ADMIN/
+  MEMBER roles now exist: OIDC sessions carry a role derived at login
+  (`internal/auth/oidc`'s `deriveRole`, `WARDYN_OIDC_ROLE_MAP`) — an empty map
+  keeps every signed-in human admin (upgrade-safe default); `WARDYN_OIDC_
+  OPERATOR_EMAILS` still works as an admin allowlist, now via `LegacyAdminEmails`
+  feeding the SAME derivation instead of a second, independent check.
+  `requireOperator`/`isOperator` (`internal/api/http.go`) gate on that role —
+  30 routes require admin outright (403 for a member), enumerated and
+  cross-checked against the router's actual routes by
+  `internal/api/authz_test.go`'s `chi.Walk`-driven matrix. Admin-token and
+  local-mode callers remain always-admin — one shared credential, no per-human
+  identity to key a role off; that ceiling is documented, not an oversight.
+  Owner scoping shipped for the resources that have an owner: `GET/kill/
+  profile/grants` on a run, the attach-ticket mint, an approval decide, and the
+  recording replay all use an owner-or-admin gate (`getRunAuthorized` /
+  `recordingAuthorizer`) that answers a non-owner with the BYTE-IDENTICAL 404 a
+  missing resource gets — no existence oracle. `GET /runs`, `GET /approvals`
+  (unscoped), and `GET /audit` scope a member to their OWN `created_by` rows
+  instead of the whole table (`store.RunsByCreatorPager` /
+  `ApprovalsByRunCreatorPager`); `GET /setup/status` redacts operator-diagnostic
+  detail (checks/providers/secret names/runner detail) for a member. A member's
+  own `inline_policy` on `POST /runs` is clamped to the operator's
+  `DefaultPolicy` ceiling before resolution (an admin's is not), and BYOI
+  (`image`) is admin-only. Still open: no CUSTOM roles beyond admin/member, no
+  per-resource fine-grained permission model (owner-or-admin only — there is no
+  "read-only share" or "co-owner" concept), no tenant/org columns, no
+  separation of duty among admins. `ApprovalsByRunCreatorPager`'s production
+  wiring (a delegation method on wardynd's `approvalService` adapter, mirroring
+  its existing `ListApprovalsPage`) did not land in this lane (scope: internal/
+  api + internal/store only) — until it does, a member's unscoped `GET
+  /approvals` fails closed (500) rather than serving the scoped list; `?run_id=`
+  of an owned run is unaffected.
 - **Kubernetes runner driver** on the existing `substrate.Substrate` seam, plus
   the pieces it drags in: a PVC/volume mount model (today `runner.Mount` is a
   host bind), non-host-local artifact delivery, published + signed images,
@@ -115,11 +133,12 @@ the final cleanup on purpose:
   that.
 - **SPIRE identity / OpenBao secretstore** (seams + conformance suites ship).
 - **Team mode:** SAML/SCIM, per-user RBAC on the console. SSO *sign-in* shipped
-  in 0.4.4, and so did exactly two authorization tiers —
-  `WARDYN_OIDC_OPERATOR_EMAILS` splits signed-in humans into operator and viewer
-  across 25 routes (`requireOperator`). What has NOT shipped is per-user roles:
-  no custom roles, no per-resource scoping, no separation of duty between
-  operators, and the admin token is unconditionally an operator.
+  in 0.4.4; real admin/member roles + owner scoping shipped in v0.5 (see
+  "Authorization/RBAC + owner scoping — SHIPPED" above). What has NOT shipped:
+  SAML/SCIM provisioning, CUSTOM per-user roles beyond admin/member, fine-grained
+  per-resource permissions (only owner-or-admin), separation of duty between
+  admins, and the admin token/local mode remain unconditionally admin (one
+  shared credential, no per-human identity).
 - **OTLP/OCSF audit sinks**; age-key rotation for the secret store.
 - **react-router 7 → 8 major bump** (a per-advisory pnpm-audit suppression
   covers GHSA-qwww-vcr4-c8h2 until then — needs a UI owner).
@@ -154,17 +173,22 @@ shipped behavior; none is scheduled.
   workspace — which has no clone step — leaves interactive SSH pull/push
   unauthenticated. Rewrite the remote to HTTPS, or accept clone-only SSH.
   ([field report](docs/adoption/corp-network-onboarding-findings.md))
-- **Team mode (multi-user SSO/RBAC).** Speculative — no design in the tree. The
-  console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is configured
-  (`/healthz` reports `sso`), and the session it mints authenticates the whole API.
-  There is exactly ONE role tier: `WARDYN_OIDC_OPERATOR_EMAILS` (above) demotes
-  unlisted signers-in to viewers across 25 routes — configuring the deployment,
-  credential writes, approval decisions, and attaching to a running sandbox (the
-  ticket mint *and* the attach WebSocket); reading and launching/killing runs stay
-  open to any signed-in human. Leaving it unset with OIDC configured is refused at
-  boot (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` overrides, and then anyone who
-  signs in has the admin token's powers). For anything those 25 routes do not
-  cover, an operator and the admin token are the same thing.
+- **Team mode (multi-user SSO/RBAC).** Partially shipped as of v0.5 — see
+  "Authorization/RBAC + owner scoping — SHIPPED" above; SAML/SCIM and
+  organization/tenant structure are still speculative, no design in the tree.
+  The console's "Sign in with SSO" button is live whenever `WARDYN_OIDC_*` is
+  configured (`/healthz` reports `sso`), and the session it mints authenticates
+  the whole API. There are now TWO real role tiers (admin/member, derived at
+  login by `deriveRole` — `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS`)
+  instead of one allowlist-shaped gate, plus owner-or-admin scoping on a run's
+  own resources (get/kill/profile/grants/attach-ticket, its approvals, its
+  recording) and on the member-facing list endpoints (`GET /runs`,
+  `GET /approvals`, `GET /audit`). Leaving `WARDYN_OIDC_OPERATOR_EMAILS` unset
+  with OIDC configured is still refused at boot
+  (`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` overrides, and then every
+  signed-in human is admin, same ceiling as before). The admin token and local
+  mode remain the same shared credential they always were: always-admin, no
+  per-human identity, no separation of duty from a real admin user.
 
 ## What is not on the roadmap
 
