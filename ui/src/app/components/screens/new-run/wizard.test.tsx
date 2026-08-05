@@ -71,7 +71,7 @@ const workspace: Workspace = {
   name: "acme-repo",
   kind: "repo",
   source: "acme/widgets",
-  status: "ready",
+  status: "scanned",
   created_at: "now",
   updated_at: "now",
 };

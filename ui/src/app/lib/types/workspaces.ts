@@ -13,19 +13,13 @@ import type { ProfileObservations } from "./profile";
 // "container" is a bring-your-own base IMAGE onboarded as a named execution
 // environment: `source` is an image ref (e.g. "ubuntu:24.04"), no host mount.
 export type WorkspaceKind = "local_dir" | "repo" | "container";
-// Widened for the guided Import flow (scan → build → verify → ready). The
-// original three (pending_scan/ready/error) still mean what they did; the new
-// transient/failure states drive the import panel's rail + polling.
-export type WorkspaceStatus =
-  | "pending_scan"
-  | "scanning"
-  | "scanned"
-  | "building"
-  | "build_error"
-  | "verifying"
-  | "verify_failed"
-  | "ready"
-  | "error";
+// The scan lifecycle. The import-pipeline stages a retired "Import v2" wave
+// had widened this with (building/build_error/verifying/verify_failed/ready)
+// are gone — the server collapsed every stored row back to this set — so a
+// workspace is not-yet-scanned, mid-scan, scanned (ready to use), or errored.
+// With attached sources the status is DERIVED: the worst of the attached
+// sources' own statuses (error > scanning > pending_scan > scanned).
+export type WorkspaceStatus = "pending_scan" | "scanning" | "scanned" | "error";
 
 // One operator-approved (or scanner-detected) setup command run during the
 // build/verify stage. `source` is provenance ("detected" | "operator" | …).
@@ -33,37 +27,6 @@ export interface SetupCommand {
   stage: string;
   command: string;
   source?: string;
-}
-
-// One executed step of a verify run. exit_code 0 => that step passed. log_head /
-// log_tail are already server-side MASKED excerpts (never a raw secret).
-export interface VerifyStep {
-  stage: string;
-  command: string;
-  // TRUE for the step currently executing on a streamed intermediate upload — it
-  // has no meaningful exit_code yet.
-  running?: boolean;
-  exit_code: number;
-  duration_ms?: number;
-  timed_out?: boolean;
-  log_head?: string;
-  log_tail?: string;
-}
-
-// The outcome of a verify run. ran=false => it never executed (e.g. no runner);
-// ok=true => every step exited 0. While a run is in flight the workspace stays
-// `verifying` and this object accumulates: `done` is false/absent on intermediate
-// progress uploads and true on the final one; `total` is how many commands will run.
-export interface VerifyResult {
-  ran: boolean;
-  ok: boolean;
-  done?: boolean;
-  total?: number;
-  steps: VerifyStep[];
-  // Honest environmental-failure hint (server-classified from the first failing
-  // step: e.g. exit 127 → toolchain missing, "Unknown host" → Maven proxy,
-  // "permission denied" → GOTMPDIR/noexec-/tmp). Present only on a failed verify.
-  failure_hint?: string;
 }
 
 // One secret a workspace's own committed files declare a NEED for — NAMES ONLY,
@@ -143,30 +106,82 @@ export interface RecordResult {
   caveats?: string[];
 }
 
-// WorkspaceLLMCredMode selects how a run that picks this workspace/container is
-// credentialed for model/harness access. "" (none) => this workspace binds no
-// model; the run falls back to the global provider config.
-export type WorkspaceLLMCredMode = "" | "managed" | "api_key" | "bedrock";
-
-// A workspace/container's Bedrock model selection (non-secret; the AWS
-// credentials themselves come from the store / mounted ~/.aws, unchanged).
-export interface WorkspaceBedrockRef {
-  region?: string;
-  model?: string;
-  aws_profile?: string;
+// The OPERATOR-owned model/harness credential BINDING on a workspace/
+// container: a run that picks this workspace resolves its model access through
+// the NAMED Integration (category ai_provider) — the generalized replacement
+// for the retired inline {mode, api_key_secret, bedrock} shape (the server
+// tolerates old stored rows by decoding them as "no binding"). Refs/names
+// only, never secret values: the credential lives on the Integration, injected
+// proxy-side at dispatch. Absent / "" => no binding; the run falls back to the
+// global provider config. Set via createWorkspace's `llm_cred` (create) or
+// api.setWorkspaceLLMCred (edit).
+export interface WorkspaceLLMCred {
+  integration_ref?: string;
 }
 
-// The OPERATOR-owned model/harness credential BINDING on a workspace/
-// container: a run that picks this workspace inherits this model access
-// (injected proxy-side at dispatch — never resident). Refs/names only, never
-// secret values — mirrors ApprovedEgress's operator-owned discipline. Set via
-// createWorkspace's `llm_cred` (on create) or api.setWorkspaceLLMCred (edit).
-export interface WorkspaceLLMCred {
-  mode: WorkspaceLLMCredMode;
-  // Store secret name for mode="api_key". Injected proxy-side; never resident.
-  api_key_secret?: string;
-  // Per-workspace Bedrock selection for mode="bedrock".
-  bedrock?: WorkspaceBedrockRef;
+// ---- Composition + requirements-contract wire types ----
+// Mirror internal/types/workspace.go + workspace_contract.go 1:1. The request
+// shape doubles as the response shape (identical wire fields either way).
+export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
+
+// One entry in a workspace's composition — a Workspace is one-or-more of
+// these. Field relevance by kind: local_dir -> path/target/writable,
+// repo -> source/ref/target, ephemeral -> target only.
+export interface WorkspaceSourceInput {
+  type: WorkspaceSourceKind;
+  path?: string;
+  source?: string;
+  ref?: string;
+  target?: string;
+  writable?: boolean;
+}
+
+export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo";
+
+export interface WorkspaceBaseImageInput {
+  kind: WorkspaceBaseImageKind;
+  // Required for every kind except "recommended".
+  image?: string;
+  // "custom" only — Dockerfile RUN/ENV/ARG lines layered on `image`.
+  steps?: string[];
+}
+
+export type RequirementLevel = "required" | "optional";
+export type RequirementProvenance = "scan_seeded" | "operator_set";
+
+// One entry in a requirements contract, keyed "<secret|egress|write|integration>:<rest>"
+// (split on the FIRST colon only — a write:<path> suffix may itself legally
+// contain colons).
+export interface WorkspaceRequirement {
+  level: RequirementLevel;
+  provenance: RequirementProvenance;
+}
+export type WorkspaceRequirementsMap = Record<string, WorkspaceRequirement>;
+
+// A workspace's stance on one requirement key an attached source declares:
+// "off" refuses it for THIS workspace (never edits the shared source);
+// "optional"/"required" re-lane it.
+export type AttachmentOverride = "off" | "optional" | "required";
+
+// One attachment in the three-tier model: this workspace mounts a shared
+// library source (source_id) — or an inline ephemeral scratch row — at
+// `target`, with per-ATTACHMENT writability and requirement overrides.
+// Ordering is load-bearing: attachments[0] is the primary.
+export interface WorkspaceAttachment {
+  source_id?: string;
+  ephemeral?: boolean;
+  target?: string;
+  writable?: boolean;
+  overrides?: Record<string, AttachmentOverride>;
+}
+
+// The contract a run against `ws` is actually held to: the server's fold of
+// the attached sources' contracts under this workspace's own overlay
+// (effective_requirements), with the overlay itself as the identity fallback
+// for rows the hydrate pass hasn't materialized. Mirrors the server's own
+// effectiveRequirements helper.
+export function effectiveWorkspaceRequirements(ws: Workspace): WorkspaceRequirementsMap {
+  return ws.effective_requirements ?? ws.requirements ?? {};
 }
 
 export interface Workspace {
@@ -200,21 +215,31 @@ export interface Workspace {
   // api.setWorkspaceLLMCred (standalone edit) — NOT via updateWorkspace.
   llm_cred?: WorkspaceLLMCred;
   status: WorkspaceStatus;
-  // Operator-approved setup commands (from api.setSetupCommands) — the exact list a
-  // verify run executes. Distinct from profile.setup_commands (the scanner's proposal).
-  setup_commands?: SetupCommand[];
-  // The last verify run's outcome (steps + logs). Present once a verify has run.
-  verify_result?: VerifyResult;
-  // The profile hash that was verified, and when — so a later config edit can be
-  // detected as "needs re-verify".
-  verified_profile_hash?: string;
-  verified_at?: string;
-  // The run currently building/verifying this workspace, if any.
+  // The record/verify run currently holding this workspace's slot, if any.
   active_run_id?: string;
   // Record step (optional, skippable): per-session recording outcomes, keyed by a
   // slug of the operator-chosen session name. Absent on a fresh workspace (no
   // sessions recorded yet) — the UI offers a "New session" affordance.
   record_results?: Record<string, RecordResult>;
+  // ---- Composition (three-tier) ----
+  // The derived sources view, in attachment order (sources[0] is primary).
+  // Response-only; writes go through `sources` on create/update (upserted into
+  // the shared library and attached) or the attachments themselves.
+  sources?: WorkspaceSourceInput[];
+  // The base-image choice (catalog row when bound; absent => the derived
+  // recommended build).
+  base_image?: WorkspaceBaseImageInput;
+  base_image_id?: string;
+  // This workspace's OWN requirement rows — the overlay. What a run is
+  // actually held to is effective_requirements (the fold); read via
+  // effectiveWorkspaceRequirements().
+  requirements?: WorkspaceRequirementsMap;
+  // The server-side fold of attached sources' contracts under the overlay —
+  // read-only, recomputed at every read.
+  effective_requirements?: WorkspaceRequirementsMap;
+  // The three-tier attachment list (shared library sources + inline ephemeral
+  // rows, with per-attachment writability and requirement overrides).
+  attachments?: WorkspaceAttachment[];
   created_at: string;
   updated_at: string;
 }

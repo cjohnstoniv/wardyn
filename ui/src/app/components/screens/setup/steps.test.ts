@@ -89,10 +89,10 @@ describe("environment badge", () => {
 });
 
 describe("workspaces badge", () => {
-  it("shows 'Ready · 2 onboarded' and done=true with two ready workspaces", () => {
+  it("shows 'Ready · 2 onboarded' and done=true with two usable workspaces", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const workspaces = [ws("w1", "ready"), ws("w2", "ready")];
+    const workspaces = [ws("w1", "scanned"), ws("w2", "scanned")];
     expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
       text: "Ready · 2 onboarded",
       tone: "success",
@@ -103,12 +103,11 @@ describe("workspaces badge", () => {
   // The regression that made the product look permanently unfinished: the
   // terminal-success status moved from `ready` to `scanned`, and this badge
   // kept comparing against the literal `ready`. A workspace that had finished
-  // scanning could never earn its checkmark. Both spellings must count — the
-  // current one and the legacy rows written before the collapse.
-  it("counts a `scanned` workspace as done, not just the legacy `ready`", () => {
+  // scanning could never earn its checkmark. isUsable is the one predicate.
+  it("counts a `scanned` workspace as done via the isUsable predicate", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const workspaces = [ws("w1", "scanned"), ws("w2", "ready")];
+    const workspaces = [ws("w1", "scanned"), ws("w2", "scanned")];
     expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
       text: "Ready · 2 onboarded",
       tone: "success",
@@ -139,7 +138,7 @@ describe("workspaces badge", () => {
   it("reads 'Ready · 1 of 2 onboarded' when one of two is still importing", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
-    const workspaces = [ws("a", "ready"), ws("b", "pending_scan")];
+    const workspaces = [ws("a", "scanned"), ws("b", "pending_scan")];
     expect(stepBadges(status, readiness, workspaces, 0).workspaces).toEqual({
       text: "Ready · 1 of 2 onboarded",
       tone: "success",

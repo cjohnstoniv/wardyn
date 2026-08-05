@@ -8,7 +8,7 @@
 // No React, no fetch, no DOM — component files import from here so the same
 // derivation can be unit-tested without rendering anything, matching the
 // convention new-run/wizard-types.ts already established for that wizard.
-import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { WorkspaceProfile } from "../../../lib/types";
 import type {
   RequirementLevel,
   WorkspaceBaseImageInput,
@@ -384,22 +384,6 @@ export function unmetRequiredSecrets(reqs: WorkspaceRequirementsMap, storedSecre
     if (split?.type === "secret" && !storedSecretNames.includes(split.rest)) out.push(split.rest);
   }
   return out;
-}
-
-// ============================ Wire-shape cast (backend ahead of the shared TS type) ============================
-// internal/types/types.go's Workspace already carries sources/base_image/
-// requirements (confirmed against that source + workspace_requirements_test.go);
-// ui/src/app/lib/types/workspaces.ts's Workspace hasn't caught up yet. This is
-// a read-only, boundary-local widening — the same "typed cast-read of the
-// loosely-typed wire field" idiom workspace-needs-panel.tsx already uses for
-// `.profile`, just for these three newer fields.
-export interface WorkspaceWithComposition extends Workspace {
-  sources?: WorkspaceSourceInput[];
-  base_image?: WorkspaceBaseImageInput;
-  requirements?: WorkspaceRequirementsMap;
-}
-export function withComposition(ws: Workspace): WorkspaceWithComposition {
-  return ws as WorkspaceWithComposition;
 }
 
 // Two-tier leak classification, ported verbatim from the mock's TEST_PATH_RE

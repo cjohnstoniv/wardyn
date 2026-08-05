@@ -55,7 +55,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { AddWorkspaceDialog, WorkspacesScreen, attentionItems, modelAccessBroken, sourceSubLine } from "./workspaces";
+import { AddWorkspaceDialog, WorkspacesScreen, attentionItems, sourceSubLine } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 
 function renderScreen() {
@@ -72,7 +72,7 @@ function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace
     name: "payments",
     kind: "local_dir",
     source: "/srv/payments",
-    status: "ready",
+    status: "scanned",
     created_at: "",
     updated_at: "",
     profile: profile as unknown as Record<string, unknown>,
@@ -108,23 +108,12 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("Scan failed")).toBeInTheDocument();
   });
 
-  it("Model access column: the binding chip, plus a warning dot when its secret isn't stored", async () => {
+  it("Model access column: the binding chip names the bound Integration (or None)", async () => {
     listWorkspacesMock.mockResolvedValue([
-      ws({}, { status: "scanned", llm_cred: { mode: "api_key", api_key_secret: "missing-key" } }),
+      ws({}, { status: "scanned", llm_cred: { integration_ref: "ai-anthropic-key" } }),
     ]);
     renderScreen();
-    expect(await screen.findByText("API key: missing-key")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: /bound secret isn't in the store/i })).toBeInTheDocument();
-  });
-
-  it("Model access column: no warning dot once the bound secret is stored", async () => {
-    listWorkspacesMock.mockResolvedValue([
-      ws({}, { status: "scanned", llm_cred: { mode: "api_key", api_key_secret: "present-key" } }),
-    ]);
-    listSecretsMock.mockResolvedValue(["present-key"]);
-    renderScreen();
-    await screen.findByText("API key: present-key");
-    expect(screen.queryByRole("img", { name: /bound secret isn't in the store/i })).not.toBeInTheDocument();
+    expect(await screen.findByText("ai-anthropic-key")).toBeInTheDocument();
   });
 
   it("Needs you: unstored required secrets, hosts awaiting review, then suspected leaks, in that order", async () => {
@@ -244,7 +233,7 @@ describe("WorkspacesScreen — the new wizard opens from both the header button 
   });
 });
 
-describe("attentionItems / modelAccessBroken / sourceSubLine — pure helpers", () => {
+describe("attentionItems / sourceSubLine — pure helpers", () => {
   it("attentionItems orders unstored secrets, then pending hosts, then leaks", () => {
     const w = ws({ suggested_egress: ["h.example.com"], leak_findings: [{ path: "x", kind: "y" }] });
     (w as unknown as { requirements: Record<string, { level: string; provenance: string }> }).requirements = {
@@ -261,12 +250,6 @@ describe("attentionItems / modelAccessBroken / sourceSubLine — pure helpers", 
     expect(attentionItems(ws({}), [])).toEqual([]);
   });
 
-  it("modelAccessBroken is true only for an api_key binding whose secret is missing", () => {
-    expect(modelAccessBroken(ws({}, { llm_cred: { mode: "api_key", api_key_secret: "x" } }), [])).toBe(true);
-    expect(modelAccessBroken(ws({}, { llm_cred: { mode: "api_key", api_key_secret: "x" } }), ["x"])).toBe(false);
-    expect(modelAccessBroken(ws({}, { llm_cred: { mode: "managed" } }), [])).toBe(false);
-  });
-
   it("sourceSubLine shows the mono source (+ ref for a repo) for a single-source workspace", () => {
     expect(sourceSubLine(ws({}, { kind: "repo", source: "acme/x", ref: "main" }))).toBe("acme/x @main");
     expect(sourceSubLine(ws({}, { kind: "local_dir", source: "/srv/x" }))).toBe("/srv/x");
@@ -279,6 +262,7 @@ describe("AddWorkspaceDialog — container kind + model/harness binding", () => 
   beforeEach(() => {
     createWorkspaceMock.mockReset();
     listSecretsMock.mockReset().mockResolvedValue([]);
+    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [] });
   });
 
   it("onboards a container by image ref, with no writable/default-target fields", async () => {
@@ -307,22 +291,24 @@ describe("AddWorkspaceDialog — container kind + model/harness binding", () => 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
-  it("includes an api_key model/harness binding in the create payload when selected", async () => {
+  it("includes the picked Integration binding in the create payload", async () => {
     createWorkspaceMock.mockResolvedValue(ws({}));
-    listSecretsMock.mockResolvedValue(["acme-anthropic-key"]);
+    listIntegrationsMock.mockResolvedValue({
+      ai: [{ id: "ai-acme-key", name: "Acme Anthropic key", typeLabel: "anthropic · api key" }],
+      scm: [],
+    });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={vi.fn()} />);
 
     await user.type(screen.getByLabelText("Name"), "payments");
     await user.type(screen.getByPlaceholderText("/home/me/projects/payments"), "/srv/payments");
-    await user.click(screen.getByRole("radio", { name: "API key" }));
-    await user.type(screen.getByPlaceholderText("anthropic-api-key"), "acme-anthropic-key");
+    await user.click(await screen.findByRole("radio", { name: /acme anthropic key/i }));
     await user.click(screen.getByRole("button", { name: "Add workspace" }));
 
     await waitFor(() =>
       expect(createWorkspaceMock).toHaveBeenCalledWith(
-        expect.objectContaining({ llm_cred: { mode: "api_key", api_key_secret: "acme-anthropic-key" } }),
+        expect.objectContaining({ llm_cred: { integration_ref: "ai-acme-key" } }),
       ),
     );
   });
@@ -348,27 +334,35 @@ describe("WorkspaceLLMCredDialog", () => {
   beforeEach(() => {
     setWorkspaceLLMCredMock.mockReset();
     listSecretsMock.mockReset().mockResolvedValue([]);
+    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [] });
   });
 
-  it("saves the selected mode via setWorkspaceLLMCred and reports the updated workspace", async () => {
-    const workspace = ws({}, { id: "ws-9", name: "payments", llm_cred: { mode: "" } });
-    const updated = { ...workspace, llm_cred: { mode: "managed" as const } };
+  it("saves the picked Integration via setWorkspaceLLMCred and reports the updated workspace", async () => {
+    listIntegrationsMock.mockResolvedValue({
+      ai: [{ id: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
+      scm: [],
+    });
+    const workspace = ws({}, { id: "ws-9", name: "payments", llm_cred: {} });
+    const updated = { ...workspace, llm_cred: { integration_ref: "ai-managed" } };
     setWorkspaceLLMCredMock.mockResolvedValue(updated);
     const onSaved = vi.fn();
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={onSaved} />);
 
-    await user.click(screen.getByRole("radio", { name: /managed/i }));
+    await user.click(await screen.findByRole("radio", { name: /managed subscription/i }));
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-9", { mode: "managed" }));
+    await waitFor(() =>
+      expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-9", { integration_ref: "ai-managed" }),
+    );
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(updated));
   });
 
-  it("preloads the workspace's existing binding", () => {
-    const workspace = ws({}, { llm_cred: { mode: "bedrock", bedrock: { region: "us-east-1" } } });
+  it("keeps a stored ref that no longer lists selectable — named honestly, never invented", async () => {
+    listIntegrationsMock.mockResolvedValue({ ai: [], scm: [] });
+    const workspace = ws({}, { llm_cred: { integration_ref: "ai-gone" } });
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
-    expect(screen.getByPlaceholderText("Region")).toHaveValue("us-east-1");
+    expect(await screen.findByRole("radio", { name: /ai-gone \(not in the Integrations list\)/i })).toBeChecked();
   });
 });

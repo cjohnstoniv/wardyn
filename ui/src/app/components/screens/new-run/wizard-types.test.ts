@@ -24,7 +24,7 @@ function localDirWorkspace(id: string, requirements: Record<string, unknown> = {
     name: id,
     kind: "local_dir",
     source: `/home/me/${id}`,
-    status: "ready",
+    status: "scanned",
     created_at: "",
     updated_at: "",
     requirements,

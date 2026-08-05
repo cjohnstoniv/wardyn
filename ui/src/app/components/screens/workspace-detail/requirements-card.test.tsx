@@ -21,6 +21,16 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { listSecrets: (...a: unknown[]) => listSecretsMock(...a) },
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+const listIntegrationsMock = vi.fn().mockResolvedValue({
+  ai: [{ id: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
+  scm: [],
+});
+vi.mock("../../../lib/api/integrations", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/integrations")>(
+    "../../../lib/api/integrations",
+  );
+  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+});
 
 import { RequirementsCard } from "./requirements-card";
 import { RD2 } from "../../../lib/workspace-copy";
@@ -68,30 +78,19 @@ describe("RequirementsCard — model access is the first group", () => {
     }
   });
 
-  it("flags a broken api_key binding whose secret isn't stored", () => {
-    render(
-      <RequirementsCard
-        ws={ws({ llm_cred: { mode: "api_key", api_key_secret: "missing-key" } })}
-        storedSecretNames={[]}
-        onWorkspaceUpdated={vi.fn()}
-        onSecretStored={vi.fn()}
-      />,
-    );
-    expect(screen.getByText(/isn't in the store/i)).toBeInTheDocument();
-    expect(screen.getByText("missing-key")).toBeInTheDocument();
-  });
-
   it("opens the model access dialog and reports the saved workspace", async () => {
     const onWorkspaceUpdated = vi.fn();
-    setWorkspaceLLMCredMock.mockResolvedValue(ws({ llm_cred: { mode: "managed" } }));
+    setWorkspaceLLMCredMock.mockResolvedValue(ws({ llm_cred: { integration_ref: "ai-managed" } }));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <RequirementsCard ws={ws()} storedSecretNames={[]} onWorkspaceUpdated={onWorkspaceUpdated} onSecretStored={vi.fn()} />,
     );
     await user.click(screen.getByRole("button", { name: /bind model access/i }));
-    await user.click(screen.getByRole("radio", { name: /managed/i }));
+    await user.click(await screen.findByRole("radio", { name: /managed subscription/i }));
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-1", { mode: "managed" }));
+    await waitFor(() =>
+      expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-1", { integration_ref: "ai-managed" }),
+    );
     await waitFor(() => expect(onWorkspaceUpdated).toHaveBeenCalled());
   });
 });
@@ -187,34 +186,14 @@ describe("RequirementsCard — Reach/Record reflect the REAL llm_cred binding, n
     expect(screen.queryByText(RD2.RECORD_NEEDS)).not.toBeInTheDocument();
   });
 
-  it("treats a pinned api_key binding whose secret isn't stored as nothing resolving", async () => {
+  it("Reach seeds the 'from model access' row from a pinned Integration binding", async () => {
     render(
       <RequirementsCard
         ws={ws({
           profile: profile as unknown as Record<string, unknown>,
-          llm_cred: { mode: "api_key", api_key_secret: "missing-key" },
+          llm_cred: { integration_ref: "ai-acme-key" },
         })}
         storedSecretNames={[]}
-        onWorkspaceUpdated={vi.fn()}
-        onSecretStored={vi.fn()}
-      />,
-    );
-    // Amber on Reach; on Record the agent button is ABSENT with the fact.
-    expect(within(screen.getByTestId("power-source-card")).getByText(/nothing yet/)).toBeInTheDocument();
-    await openTab("Record");
-    expect(screen.getByText(RD2.RECORD_NEEDS)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Record a session" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record a terminal session" })).toBeEnabled();
-  });
-
-  it("Reach seeds the 'from model access' row once the api_key binding's secret IS stored", async () => {
-    render(
-      <RequirementsCard
-        ws={ws({
-          profile: profile as unknown as Record<string, unknown>,
-          llm_cred: { mode: "api_key", api_key_secret: "anthropic-api-key" },
-        })}
-        storedSecretNames={["anthropic-api-key"]}
         onWorkspaceUpdated={vi.fn()}
         onSecretStored={vi.fn()}
       />,
@@ -222,10 +201,10 @@ describe("RequirementsCard — Reach/Record reflect the REAL llm_cred binding, n
     const egressGroup = within(screen.getByTestId("group-reach"));
     const chip = egressGroup.getByText("from model access");
     expect(chip).toHaveAttribute("title", RD2.EGRESS_TIP);
-    // A pinned binding is named plainly (API key: <secret>) rather than a
+    // A pinned binding is named plainly by its Integration ref rather than a
     // fabricated hostname — see step-requirements.tsx's ResolvedToken. (The
     // SAME label also appears in the Model access chip above — scope to the
     // egress group so the two don't collide.)
-    expect(egressGroup.getByText("API key: anthropic-api-key")).toBeInTheDocument();
+    expect(egressGroup.getByText("ai-acme-key")).toBeInTheDocument();
   });
 });

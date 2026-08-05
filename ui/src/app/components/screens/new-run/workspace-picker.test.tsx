@@ -32,7 +32,7 @@ function workspace(overrides: Record<string, unknown> = {}): Workspace {
     name: "payments-service",
     kind: "local_dir",
     source: "/home/me/payments",
-    status: "ready",
+    status: "scanned",
     created_at: "",
     updated_at: "",
     ...overrides,

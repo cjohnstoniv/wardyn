@@ -232,6 +232,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **A workspace's Model access binding names an Integration everywhere the UI
+  touches it.** The workspace list chip, the detail page's Model access group,
+  its edit dialog, and the create form all speak the Integration-based binding
+  now (`llm_cred.integration_ref`) — the picker lists the AI-provider
+  Integrations the server actually knows instead of a mode radio whose
+  `api_key`/`bedrock` fields the server had already stopped storing, which
+  made "Save" silently clear the binding. The New Run access step's
+  "this workspace pins it" resolution matches by the named Integration id
+  outright, replacing the old best-effort type matching, and the
+  broken-bound-secret dot is gone from the workspace list — the credential
+  lives on the Integration, and the Integrations screen is where its health
+  shows. The shared workspace types also caught up with the three-tier wire
+  (attachments, the base-image reference, the requirements overlay and its
+  fold), so the New Run picker and preflight now read the same
+  `effective_requirements` contract the create-run gate enforces.
 - **Artifact registry overrides became egress redirects.** The ecosystem-keyed
   `artifact_overrides` map is now an `egress_redirects` list of
   `{from, to, token_secret_ref, ecosystem}`, which stops the shape from

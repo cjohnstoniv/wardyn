@@ -318,7 +318,7 @@ describe("NewRunDialog", () => {
         name: "payments",
         kind: "repo",
         source: "acme/payments",
-        status: "ready",
+        status: "scanned",
         created_at: "now",
         updated_at: "now",
       },
@@ -563,7 +563,7 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     expect(screen.getByText(/proposed setup/i)).toBeInTheDocument();
   });
 
-  it("re-flips a workspace item once its scan lands the workspace at ready", async () => {
+  it("re-flips a workspace item once its scan lands the workspace usable", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     composeMock.mockResolvedValue(
       composeResult({
@@ -589,7 +589,7 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
           name: "payments",
           kind: "repo",
           source: "acme/payments",
-          status: "ready",
+          status: "scanned",
           created_at: "now",
           updated_at: "now",
         },

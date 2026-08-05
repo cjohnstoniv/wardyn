@@ -19,23 +19,12 @@ const ws = (over: Partial<Workspace> = {}): Workspace => ({
   ...over,
 });
 
-// Every legacy status statusWord/statusTone/storySentence must tolerate until
-// the migration wave drops them from the wire (import-types.ts's
-// activeStepForStatus resumes the same set onto Record for the same reason).
-const LEGACY_USABLE: WorkspaceStatus[] = ["ready", "verifying", "verify_failed", "building", "build_error"];
-
 describe("statusWord", () => {
-  it("maps the three current statuses", () => {
+  it("maps the four wire statuses", () => {
     expect(statusWord("pending_scan")).toBe("Setting up");
     expect(statusWord("scanning")).toBe("Setting up");
     expect(statusWord("scanned")).toBe("Usable");
     expect(statusWord("error")).toBe("Scan failed");
-  });
-
-  it("is legacy-tolerant: every retired build/verify status reads as Usable", () => {
-    for (const status of LEGACY_USABLE) {
-      expect(statusWord(status)).toBe("Usable");
-    }
   });
 
   it("defaults an unrecognized status to Setting up, not a crash or 'Usable'", () => {
@@ -54,24 +43,8 @@ describe("statusTone", () => {
     expect(statusTone("error")).toEqual({ tone: "danger" });
   });
 
-  it("agrees with statusWord for every legacy Usable status", () => {
-    for (const status of LEGACY_USABLE) {
-      expect(statusTone(status)).toEqual({ tone: "success" });
-    }
-  });
-
   it("never disagrees with statusWord's bucket for any status", () => {
-    const all: WorkspaceStatus[] = [
-      "pending_scan",
-      "scanning",
-      "scanned",
-      "building",
-      "build_error",
-      "verifying",
-      "verify_failed",
-      "ready",
-      "error",
-    ];
+    const all: WorkspaceStatus[] = ["pending_scan", "scanning", "scanned", "error"];
     for (const status of all) {
       const word = statusWord(status);
       const tone = statusTone(status).tone;
@@ -98,9 +71,4 @@ describe("storySentence", () => {
     expect(storySentence(ws({ status: "scanned", kind: "container" }))).toBe(`Runs can attach this now. ${C.IMAGE_ENV}`);
   });
 
-  it("every legacy Usable status reads the same story as a plain scanned workspace", () => {
-    for (const status of LEGACY_USABLE) {
-      expect(storySentence(ws({ status }))).toBe("Runs can attach this now.");
-    }
-  });
 });

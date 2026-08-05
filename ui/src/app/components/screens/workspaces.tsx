@@ -71,22 +71,12 @@ export const STATUS_TONE: Record<Workspace["status"], "success" | "warning" | "d
   pending_scan: "warning",
   scanning: "info",
   scanned: "info",
-  building: "info",
-  build_error: "danger",
-  verifying: "info",
-  verify_failed: "danger",
-  ready: "success",
   error: "danger",
 };
 export const STATUS_LABEL: Record<Workspace["status"], string> = {
   pending_scan: "Pending scan",
   scanning: "Scanning",
   scanned: "Scanned",
-  building: "Building",
-  build_error: "Build error",
-  verifying: "Verifying",
-  verify_failed: "Verify failed",
-  ready: "Ready",
   error: "Error",
 };
 
@@ -145,13 +135,6 @@ export function attentionItems(ws: Workspace, storedSecretNames: string[]): Atte
   else if (fixtureLeaks)
     out.push({ text: `${fixtureLeaks} key-shaped string${fixtureLeaks > 1 ? "s" : ""} in test files`, tone: "neutral" });
   return out;
-}
-
-// A workspace/container whose bound model access is an api_key pointing at a
-// secret that isn't in the store — the binding silently does nothing.
-export function modelAccessBroken(ws: Workspace, storedSecretNames: string[]): boolean {
-  const cred = ws.llm_cred;
-  return !!(cred?.mode === "api_key" && cred.api_key_secret && !storedSecretNames.includes(cred.api_key_secret));
 }
 
 export function WorkspacesScreen() {
@@ -268,7 +251,6 @@ export function WorkspacesScreen() {
                 const kindMeta = KIND_META[w.kind] ?? KIND_META.local_dir;
                 const tone = statusTone(w.status);
                 const attention = attentionItems(w, secretNames);
-                const brokenModel = modelAccessBroken(w, secretNames);
                 return (
                   <TableRow key={w.id} className="cursor-pointer" onClick={() => openDetail(w.id)}>
                     <TableCell>
@@ -291,17 +273,9 @@ export function WorkspacesScreen() {
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex items-center gap-1.5">
-                        <Chip tone={llmCredTone(w.llm_cred?.mode)} mono={w.llm_cred?.mode === "api_key"}>
+                        <Chip tone={llmCredTone(w.llm_cred)} mono={!!w.llm_cred?.integration_ref}>
                           {llmCredLabel(w.llm_cred)}
                         </Chip>
-                        {brokenModel && (
-                          <span
-                            className="size-1.5 shrink-0 rounded-full bg-danger"
-                            role="img"
-                            aria-label="Bound secret isn't in the store"
-                            title="Bound secret isn't in the store"
-                          />
-                        )}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -431,7 +405,7 @@ export function AddWorkspaceDialog({
   // Model/harness binding — create-only (the server ignores llm_cred on a
   // generic PUT); editing an existing workspace's binding goes through the
   // detail page's Requirements card (WorkspaceLLMCredDialog) instead.
-  const [llmCred, setLlmCred] = React.useState<WorkspaceLLMCred>({ mode: "" });
+  const [llmCred, setLlmCred] = React.useState<WorkspaceLLMCred>({});
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
@@ -443,7 +417,7 @@ export function AddWorkspaceDialog({
     setRef(initial?.ref ?? "");
     setDefaultTarget(initial?.default_target ?? "");
     setWritable(initial?.writable ?? false);
-    setLlmCred({ mode: "" });
+    setLlmCred({});
     setError(null);
     setSaving(false);
   }, [open, initial]);
@@ -475,7 +449,7 @@ export function AddWorkspaceDialog({
         ref: kind === "repo" && ref.trim() ? ref.trim() : undefined,
         default_target: kind !== "container" && defaultTarget.trim() ? defaultTarget.trim() : undefined,
         writable: writable || undefined,
-        llm_cred: !isEdit && llmCred.mode ? llmCred : undefined,
+        llm_cred: !isEdit && llmCred.integration_ref ? llmCred : undefined,
       };
       const saved = isEdit ? await api.updateWorkspace(initial!.id, input) : await api.createWorkspace(input);
       onOpenChange(false);

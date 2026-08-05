@@ -54,7 +54,7 @@ import {
 } from "../../../lib/api/integrations";
 import { IMPOSSIBLE, RESIDENCY_META, type AiCapability } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
-import type { Workspace, WorkspaceLLMCredMode } from "../../../lib/types";
+import type { Workspace } from "../../../lib/types";
 
 export function StepAccess({
   state,
@@ -266,17 +266,6 @@ export function incompatibleReason(row: IntegrationRow, capability: AiCapability
   return row.aiType ? IMPOSSIBLE[row.aiType]?.[capability] : undefined;
 }
 
-// llm_cred.mode names a MODE, not a stable integration id (no cross-reference
-// exists yet between a workspace's binding and an IntegrationRow — W5 stopgap,
-// same one lib/api/integrations.ts's own header documents) — match by aiType as
-// a best-effort approximation of "this workspace pins it".
-function matchesCredMode(row: IntegrationRow, mode: WorkspaceLLMCredMode): boolean {
-  if (mode === "api_key") return row.aiType === "anthropic_api_key" || row.aiType === "openai_api_key";
-  if (mode === "managed") return row.aiType === "anthropic_subscription";
-  if (mode === "bedrock") return row.aiType === "bedrock";
-  return false;
-}
-
 export function resolveModelAccess(
   agent: WizardState["agent"],
   integrationId: string | undefined,
@@ -290,9 +279,11 @@ export function resolveModelAccess(
     const row = ai.find((r) => r.id === integrationId);
     if (row) return { row, because: "you overrode it for this run." };
   }
-  const cred = primaryWorkspace?.llm_cred;
-  if (cred?.mode) {
-    const pinned = ai.find((r) => matchesCredMode(r, cred.mode));
+  // llm_cred names an Integration by id now — the binding IS the
+  // cross-reference (the old aiType best-effort match died with the mode shape).
+  const ref = primaryWorkspace?.llm_cred?.integration_ref;
+  if (ref) {
+    const pinned = ai.find((r) => r.id === ref);
     if (pinned) return { row: pinned, because: "this workspace pins it." };
   }
   const fallback = ai.find(compatible);

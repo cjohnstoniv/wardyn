@@ -8,51 +8,30 @@
 // generation stays available standalone via getEnvAsCode below. Run-creation
 // pickers offer ONLY these onboarded workspaces; a run may not reference any
 // other source.
-import type { Workspace, WorkspaceKind, WorkspaceLLMCred } from "../types";
+import type {
+  Workspace,
+  WorkspaceBaseImageInput,
+  WorkspaceKind,
+  WorkspaceLLMCred,
+  WorkspaceRequirementsMap,
+  WorkspaceSourceInput,
+} from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 // ---- Composition + requirements-contract wire types ----
-// Mirrors internal/types/types.go's WorkspaceSource / WorkspaceBaseImage /
-// WorkspaceRequirement 1:1 (confirmed against that source plus
-// internal/api/workspace_requirements_test.go). ui/src/app/lib/types/workspaces.ts's
-// Workspace type doesn't carry sources/base_image/requirements yet, so these
-// live here, next to the functions that need them, instead of widening that
-// shared file out from under whoever else is mid-edit on it.
-export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
-
-// One entry in a workspace's composition (request body only — a Workspace is
-// one-or-more of these). Field relevance by kind: local_dir -> path/target/
-// writable, repo -> source/ref/target, ephemeral -> target only.
-export interface WorkspaceSourceInput {
-  type: WorkspaceSourceKind;
-  path?: string;
-  source?: string;
-  ref?: string;
-  target?: string;
-  writable?: boolean;
-}
-
-export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo";
-
-export interface WorkspaceBaseImageInput {
-  kind: WorkspaceBaseImageKind;
-  // Required for every kind except "recommended".
-  image?: string;
-  // "custom" only — Dockerfile RUN/ENV/ARG lines layered on `image`.
-  steps?: string[];
-}
-
-export type RequirementLevel = "required" | "optional";
-export type RequirementProvenance = "scan_seeded" | "operator_set";
-
-// One entry in Workspace.Requirements, keyed "<secret|egress|write>:<rest>"
-// (internal/api/workspaces.go's splitRequirementKey splits on the FIRST colon
-// only — a write:<path> suffix may itself legally contain colons).
-export interface WorkspaceRequirement {
-  level: RequirementLevel;
-  provenance: RequirementProvenance;
-}
-export type WorkspaceRequirementsMap = Record<string, WorkspaceRequirement>;
+// These moved home to lib/types/workspaces.ts when the shared Workspace type
+// caught up with the three-tier model; the re-exports below keep every
+// existing `from "../api/workspaces"` importer compiling unchanged.
+export type {
+  WorkspaceSourceKind,
+  WorkspaceSourceInput,
+  WorkspaceBaseImageKind,
+  WorkspaceBaseImageInput,
+  RequirementLevel,
+  RequirementProvenance,
+  WorkspaceRequirement,
+  WorkspaceRequirementsMap,
+} from "../types";
 
 export const workspaces = {
   // GET /api/v1/workspaces — onboarded local dirs + repos (admin-gated). Run-

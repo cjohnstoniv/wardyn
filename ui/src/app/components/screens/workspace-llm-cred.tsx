@@ -7,11 +7,10 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { workspaces as api } from "../../lib/api/workspaces";
-import { secrets as secretsApi } from "../../lib/api/secrets";
+import { integrationsApi, type IntegrationRow } from "../../lib/api/integrations";
 import { getErrorMessage } from "../../lib/format";
-import type { Workspace, WorkspaceLLMCred, WorkspaceLLMCredMode } from "../../lib/types";
+import type { Workspace, WorkspaceLLMCred } from "../../lib/types";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import {
@@ -26,42 +25,28 @@ import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 
 // Human label for the current model/harness binding (list/detail display).
-// "" (or absent) => no binding; the run falls back to the global provider
-// config, matching the backend's Mode="" semantics.
-export function llmCredLabel(cred?: WorkspaceLLMCred): string {
-  switch (cred?.mode) {
-    case "managed":
-      return "Managed subscription";
-    case "api_key":
-      return cred.api_key_secret ? `API key: ${cred.api_key_secret}` : "API key";
-    case "bedrock": {
-      const bits = [cred.bedrock?.region, cred.bedrock?.model].filter(Boolean);
-      return bits.length ? `Bedrock: ${bits.join("/")}` : "Bedrock";
-    }
-    default:
-      return "None";
-  }
+// The binding names an Integration (category ai_provider) by id; absent/"" =>
+// no binding, the run falls back to the global provider config. Pass the
+// fetched rows when you have them to show the integration's display name;
+// without them the id itself is the honest label (operator-readable by
+// construction — it is what the Integrations screen shows and audit logs).
+export function llmCredLabel(cred?: WorkspaceLLMCred, rows?: IntegrationRow[]): string {
+  const ref = cred?.integration_ref;
+  if (!ref) return "None";
+  return rows?.find((r) => r.id === ref)?.name ?? ref;
 }
-// success = injected proxy-side (managed/api_key), warning = resident at run
-// time (bedrock's static/SSO creds) — mirrors the setup screen's residency
-// framing (llm-access.tsx PROXY_INJECTED_CHIP / BEDROCK_RESIDENT_CHIP).
-export function llmCredTone(mode: WorkspaceLLMCredMode | undefined): "neutral" | "success" | "warning" {
-  if (mode === "managed" || mode === "api_key") return "success";
-  if (mode === "bedrock") return "warning";
-  return "neutral";
+// success = a named binding resolves model access proxy-side; neutral = no
+// binding (global provider fallback).
+export function llmCredTone(cred?: WorkspaceLLMCred): "neutral" | "success" {
+  return cred?.integration_ref ? "success" : "neutral";
 }
 
-const CRED_MODES: { value: WorkspaceLLMCredMode | "none"; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "managed", label: "Managed (Wardyn subscription)" },
-  { value: "api_key", label: "API key" },
-  { value: "bedrock", label: "Bedrock" },
-];
-
-// The mode picker + conditional fields (secret name / bedrock region-model-
-// profile) shared by the onboarding form (create) and WorkspaceLLMCredDialog
-// (edit an existing workspace/container). Uncontrolled data lives in the
-// caller — this just renders `value` and reports edits via `onChange`.
+// The binding picker shared by the onboarding form (create) and
+// WorkspaceLLMCredDialog (edit): "None" + every ai_provider Integration the
+// server knows. Uncontrolled data lives in the caller — this renders `value`
+// and reports edits via `onChange`. Rows are fetched once on mount; a fetch
+// failure renders the None-only honest floor (the binding can still be
+// cleared, never invented).
 export function LLMCredFields({
   value,
   onChange,
@@ -69,84 +54,54 @@ export function LLMCredFields({
   value: WorkspaceLLMCred;
   onChange: (next: WorkspaceLLMCred) => void;
 }) {
-  const secretListId = React.useId();
-  const [secretNames, setSecretNames] = React.useState<string[] | null>(null);
+  const [rows, setRows] = React.useState<IntegrationRow[] | null>(null);
   React.useEffect(() => {
-    if (value.mode !== "api_key" || secretNames !== null) return;
-    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
-  }, [value.mode, secretNames]);
+    let live = true;
+    integrationsApi
+      .list()
+      .then((d) => live && setRows(d.ai))
+      .catch(() => live && setRows([]));
+    return () => {
+      live = false;
+    };
+  }, []);
 
+  const ref = value.integration_ref ?? "";
   return (
     <div className="space-y-2.5 rounded-lg border border-border p-3">
       <Label>Model / harness for this environment</Label>
       <RadioGroup
-        value={value.mode || "none"}
-        onValueChange={(v) => onChange({ mode: v === "none" ? "" : (v as WorkspaceLLMCredMode) })}
-        className="flex flex-wrap gap-x-4 gap-y-1.5"
+        value={ref || "none"}
+        onValueChange={(v) => onChange({ integration_ref: v === "none" ? "" : v })}
+        className="flex flex-col gap-1.5"
       >
-        {CRED_MODES.map((m) => (
-          <label key={m.value} className="flex items-center gap-1.5 text-xs">
-            <RadioGroupItem value={m.value} id={`cred-mode-${m.value}`} />
-            <Label htmlFor={`cred-mode-${m.value}`} className="cursor-pointer font-normal">
-              {m.label}
+        <label className="flex items-center gap-1.5 text-xs">
+          <RadioGroupItem value="none" id="cred-ref-none" />
+          <Label htmlFor="cred-ref-none" className="cursor-pointer font-normal">
+            None — use the server&apos;s global provider
+          </Label>
+        </label>
+        {(rows ?? []).map((r) => (
+          <label key={r.id} className="flex items-center gap-1.5 text-xs">
+            <RadioGroupItem value={r.id} id={`cred-ref-${r.id}`} />
+            <Label htmlFor={`cred-ref-${r.id}`} className="cursor-pointer font-normal">
+              {r.name} <span className="font-mono text-muted-foreground">{r.typeLabel}</span>
             </Label>
           </label>
         ))}
+        {/* A stored ref whose integration no longer lists: still selectable/clearable, named honestly. */}
+        {ref && rows !== null && !rows.some((r) => r.id === ref) && (
+          <label className="flex items-center gap-1.5 text-xs">
+            <RadioGroupItem value={ref} id="cred-ref-current" />
+            <Label htmlFor="cred-ref-current" className="cursor-pointer font-mono font-normal">
+              {ref} (not in the Integrations list)
+            </Label>
+          </label>
+        )}
       </RadioGroup>
-
-      {value.mode === "api_key" && (
-        <>
-          <Input
-            list={secretListId}
-            placeholder="anthropic-api-key"
-            value={value.api_key_secret ?? ""}
-            onChange={(e) => onChange({ ...value, api_key_secret: e.target.value })}
-            className="font-mono"
-            autoComplete="off"
-          />
-          <datalist id={secretListId}>
-            {(secretNames ?? []).map((n) => (
-              <option key={n} value={n} />
-            ))}
-          </datalist>
-        </>
+      {rows === null && (
+        <p className="text-[0.6875rem] leading-snug text-muted-foreground">Loading integrations…</p>
       )}
-
-      {value.mode === "bedrock" && (
-        <>
-        <div className="grid grid-cols-3 gap-2">
-          <Input
-            placeholder="Region"
-            value={value.bedrock?.region ?? ""}
-            onChange={(e) => onChange({ ...value, bedrock: { ...value.bedrock, region: e.target.value } })}
-            className="font-mono"
-            autoComplete="off"
-          />
-          <Input
-            placeholder="Model"
-            value={value.bedrock?.model ?? ""}
-            onChange={(e) => onChange({ ...value, bedrock: { ...value.bedrock, model: e.target.value } })}
-            className="font-mono"
-            autoComplete="off"
-          />
-          <Input
-            placeholder="AWS profile"
-            value={value.bedrock?.aws_profile ?? ""}
-            onChange={(e) => onChange({ ...value, bedrock: { ...value.bedrock, aws_profile: e.target.value } })}
-            className="font-mono"
-            autoComplete="off"
-          />
-        </div>
-        {/* Region/model/profile now override the server's global Bedrock config
-            per run (resolveBedrockAuth); the CREDENTIALS remain operator-global. */}
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Selects Bedrock for this environment. Region and model override the server's
-          global Bedrock configuration for runs that pick it (set both, or neither);
-          the AWS credentials come from the secret store or ~/.aws mount.
-        </p>
-        </>
-      )}
-
       <p className="text-[0.6875rem] leading-snug text-muted-foreground">
         A run that picks this workspace/container inherits this model access — injected proxy-side at
         launch, never resident.
@@ -171,11 +126,11 @@ export function WorkspaceLLMCredDialog({
 }) {
   // PUT /workspaces/{id}/llm-cred — operator-only (see http.go).
   const operator = useOperator();
-  const [cred, setCred] = React.useState<WorkspaceLLMCred>({ mode: "" });
+  const [cred, setCred] = React.useState<WorkspaceLLMCred>({});
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
-    if (workspace) setCred(workspace.llm_cred ?? { mode: "" });
+    if (workspace) setCred(workspace.llm_cred ?? {});
   }, [workspace]);
 
   const save = async () => {

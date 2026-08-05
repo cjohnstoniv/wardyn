@@ -147,7 +147,7 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
       name: "payments-service",
       kind: "local_dir",
       source: "/home/me/payments",
-      status: "ready",
+      status: "scanned",
       created_at: "",
       updated_at: "",
     } as Workspace;
@@ -174,7 +174,7 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
       name: "ubuntu-24.04",
       kind: "container",
       source: "ubuntu:24.04",
-      status: "ready",
+      status: "scanned",
       created_at: "",
       updated_at: "",
     } as Workspace;

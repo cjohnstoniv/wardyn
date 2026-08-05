@@ -5,13 +5,8 @@
 
 // Workspace status → the THREE-word vocabulary the redesigned Workspaces list
 // and detail pages render (mockup/wardyn-workspaces.js's wsStatusChip/
-// storyFor). The mock's own state model is simpler (setting_up/usable/
-// scan_failed, plus a separate `scanning` flag) than the real wire
-// WorkspaceStatus union, which still carries the pre-verify-removal statuses
-// (building/build_error/verifying/verify_failed/ready) on older rows until the
-// migration wave (see import-types.ts's activeStepForStatus) — this module is
-// the one place that folds the real union down to the mock's three words.
-// Pure TS — no React, no fetch, no DOM.
+// storyFor). This module is the one place that folds the wire union down to
+// the mock's three words. Pure TS — no React, no fetch, no DOM.
 
 import type { Workspace, WorkspaceStatus } from "./types";
 import { C } from "./workspace-copy";
@@ -19,22 +14,15 @@ import { C } from "./workspace-copy";
 export type StatusWord = "Setting up" | "Usable" | "Scan failed";
 
 // pending_scan/scanning -> Setting up; scanned -> Usable; error -> Scan failed.
-// LEGACY-tolerant: ready/verifying/verify_failed/building/build_error were all
-// reached only by way of a scan that already SUCCEEDED, and Verify/Finalize no
-// longer gate usability (the import panel's Verify/Finalize steps are
-// retired) — so they read as Usable now, same as a plain `scanned` row.
-// Anything unrecognized defaults to Setting up, the safe "not ready yet" guess.
+// Anything unrecognized defaults to Setting up, the safe "not ready yet" guess
+// (the pre-collapse legacy statuses are gone from the wire — the server
+// rewrote every stored row — so the union no longer carries them).
 export function statusWord(status: WorkspaceStatus): StatusWord {
   switch (status) {
     case "pending_scan":
     case "scanning":
       return "Setting up";
     case "scanned":
-    case "ready":
-    case "verifying":
-    case "verify_failed":
-    case "building":
-    case "build_error":
       return "Usable";
     case "error":
       return "Scan failed";
@@ -83,8 +71,6 @@ export function storySentence(ws: Workspace): string {
 // — so a workspace that was finished never earned its checkmark, never offered
 // its re-scan action, and permanently wore a caution chip. Anything asking
 // "is this workspace finished?" asks HERE, so the next rename moves one line.
-// Legacy values are included for the same reason statusWord includes them: a
-// row written before the collapse still reads correctly.
 export function isUsable(status: WorkspaceStatus): boolean {
   return statusWord(status) === "Usable";
 }

@@ -67,18 +67,13 @@ function sourcesOf(ws: Workspace): SourceRow[] {
 // Maps the workspace's REAL llm_cred binding onto the wizard's PowerSource
 // shape — the one idiom StepRequirements' Record/Egress/Secrets tabs key off,
 // on both surfaces (see step-requirements.tsx's `powerSource` prop comment).
-// Unlike the wizard (which can't yet write a real llm_cred — wizard-types.ts's
-// own comment), the detail page's ws.llm_cred IS the real, persisted binding,
-// so "nothing resolves" here means something more concrete than the wizard's
-// unreachable-today `{kind:"none"}`: a pinned api_key whose secret was since
-// deleted from the store — the same `broken` condition ModelAccessGroup below
-// already flags.
-function resolvedPowerSource(ws: Workspace, storedSecretNames: string[]): PowerSource {
+// The binding names an Integration outright now, so the id maps 1:1 (the old
+// broken-secret probe died with the inline api_key shape — the Integration
+// owns its credential and the Integrations screen is where its health shows).
+function resolvedPowerSource(ws: Workspace): PowerSource {
   const cred = ws.llm_cred;
-  if (!cred?.mode) return { kind: "default" };
-  const broken = cred.mode === "api_key" && !!cred.api_key_secret && !storedSecretNames.includes(cred.api_key_secret);
-  if (broken) return { kind: "none" };
-  return { kind: "pinned", integrationId: cred.mode, name: llmCredLabel(cred) };
+  if (!cred?.integration_ref) return { kind: "default" };
+  return { kind: "pinned", integrationId: cred.integration_ref, name: llmCredLabel(cred) };
 }
 
 export function RequirementsCard({
@@ -129,7 +124,7 @@ export function RequirementsCard({
       subtitle={isContainer ? undefined : "What this workspace carries into every run — and what a run has to ask for."}
       right={saving ? <span className="text-[0.6875rem] text-muted-foreground">Saving…</span> : undefined}
     >
-      <ModelAccessGroup ws={ws} storedSecretNames={storedSecretNames} onSaved={onWorkspaceUpdated} />
+      <ModelAccessGroup ws={ws} onSaved={onWorkspaceUpdated} />
 
       {isContainer ? (
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">
@@ -156,7 +151,7 @@ export function RequirementsCard({
             onChange={(next) => void persist(next)}
             storedSecretNames={storedSecretNames}
             onSecretStored={onSecretStored}
-            powerSource={resolvedPowerSource(ws, storedSecretNames)}
+            powerSource={resolvedPowerSource(ws)}
             status={setupStatus}
           />
         </>
@@ -172,42 +167,32 @@ export function RequirementsCard({
 // comment: "deliberately NOT wired to a real llm_cred write yet").
 function ModelAccessGroup({
   ws,
-  storedSecretNames,
   onSaved,
 }: {
   ws: Workspace;
-  storedSecretNames: string[];
   onSaved: (w: Workspace) => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const cred = ws.llm_cred;
-  const broken = cred?.mode === "api_key" && !!cred.api_key_secret && !storedSecretNames.includes(cred.api_key_secret);
+  const bound = !!cred?.integration_ref;
 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-[0.8125rem] font-semibold text-foreground">Model access</h4>
-        <Chip tone={llmCredTone(cred?.mode)} mono={cred?.mode === "api_key"}>
+        <Chip tone={llmCredTone(cred)} mono={bound}>
           {llmCredLabel(cred)}
         </Chip>
         <span className="ml-auto" />
         <Button size="sm" variant="outline" className="h-7" onClick={() => setOpen(true)}>
-          {cred?.mode ? "Change…" : "Bind model access"}
+          {bound ? "Change…" : "Bind model access"}
         </Button>
       </div>
-      {!cred?.mode ? (
+      {!bound ? (
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">
           Nothing bound — runs that pick this workspace use the server&apos;s global model provider. Bind
           one when this environment must use a different key, account, or Bedrock model.
         </p>
-      ) : broken ? (
-        <div className="space-y-1.5 rounded-lg border border-warning/30 bg-warning-subtle p-2.5">
-          <p className="text-[0.6875rem] leading-snug text-warning">
-            The secret <span className="font-mono">{cred.api_key_secret}</span> isn&apos;t in the store. Runs
-            that pick this workspace quietly fall back to the server&apos;s global provider — this binding
-            does nothing right now.
-          </p>
-        </div>
       ) : (
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.MODEL_INJECT}</p>
       )}

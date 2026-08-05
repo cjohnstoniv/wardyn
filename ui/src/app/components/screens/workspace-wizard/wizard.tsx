@@ -38,7 +38,7 @@ import { integrationsApi } from "../../../lib/api/integrations";
 import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
-import type { SetupStatus, WorkspaceProfile } from "../../../lib/types";
+import type { SetupStatus, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -55,7 +55,6 @@ import {
   removeSource,
   seedFloor,
   toSourceInput,
-  withComposition,
   type BaseImageState,
   type PowerSource,
   type SourceRow,
@@ -64,7 +63,6 @@ import {
   type WizardStepId,
   type WorkspaceRequirementsMap,
   type WorkspaceSourceKind,
-  type WorkspaceWithComposition,
 } from "./wizard-types";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -79,7 +77,7 @@ interface WizardState {
   // integrations a workspace may name. null until the fetch lands.
   setupStatus: SetupStatus | null;
   harnessAvailable: boolean;
-  workspace: WorkspaceWithComposition | null;
+  workspace: Workspace | null;
   scans: Record<string, SourceScanState>;
   scanning: boolean;
   partial: boolean;
@@ -115,7 +113,7 @@ function initialState(): WizardState {
   };
 }
 
-function profileOf(ws: WorkspaceWithComposition | null): WorkspaceProfile | null {
+function profileOf(ws: Workspace | null): WorkspaceProfile | null {
   return ws ? ((ws.profile ?? null) as WorkspaceProfile | null) : null;
 }
 
@@ -145,7 +143,7 @@ export function WorkspaceWizard({
   origin?: WizardOrigin;
   onClose: () => void;
   /** Fired once the workspace is created, so a host list can refresh. */
-  onWorkspaceCreated?: (workspace: WorkspaceWithComposition) => void;
+  onWorkspaceCreated?: (workspace: Workspace) => void;
   /** Done's "Make it stronger" cards deep-link here — wiring the real route is
    *  a later step (this wizard isn't mounted into the app yet); omitted, the
    *  cards are inert. */
@@ -195,7 +193,7 @@ export function WorkspaceWizard({
   // the one real outcome. Good enough for the wizard's UI; a true per-source
   // signal is a backend addition for later, not a UI-only gap to paper over
   // with invented per-source state.
-  const startScan = async (ws: WorkspaceWithComposition) => {
+  const startScan = async (ws: Workspace) => {
     const nonEphemeral = s.sources.filter((r) => r.type !== "ephemeral");
     const gated = new Set(
       nonEphemeral
@@ -222,13 +220,13 @@ export function WorkspaceWizard({
       const { async } = await workspacesApi.scanWorkspace(ws.id);
       let finalWs = ws;
       if (!async) {
-        finalWs = withComposition((await workspacesApi.getWorkspace(ws.id)) ?? ws);
+        finalWs = (await workspacesApi.getWorkspace(ws.id)) ?? ws;
       } else {
         for (let i = 0; i < 40; i++) {
           await sleep(1500);
           const polled = await workspacesApi.getWorkspace(ws.id);
           if (polled && polled.status !== "scanning" && polled.status !== "pending_scan") {
-            finalWs = withComposition(polled);
+            finalWs = polled;
             break;
           }
         }
@@ -266,7 +264,7 @@ export function WorkspaceWizard({
         name: s.name.trim(),
         sources: s.sources.map((r) => toSourceInput(r, s.sources)),
       });
-      const created = withComposition(ws);
+      const created = ws;
       patch({ creating: false, workspace: created });
       onWorkspaceCreated?.(created);
       void startScan(created);
@@ -319,7 +317,7 @@ export function WorkspaceWizard({
     patch({ savingRequirements: true });
     try {
       const updated = await workspacesApi.setRequirements(s.workspace.id, s.requirements);
-      patch({ savingRequirements: false, workspace: withComposition(updated), step: "done" });
+      patch({ savingRequirements: false, workspace: updated, step: "done" });
     } catch (e) {
       patch({ savingRequirements: false });
       toast.error("Failed to save requirements", { description: getErrorMessage(e) });

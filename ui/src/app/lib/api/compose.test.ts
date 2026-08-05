@@ -343,7 +343,7 @@ describe("resolveComposeWorkspace", () => {
     name: "payments",
     kind: "repo",
     source: "acme/payments",
-    status: "ready",
+    status: "scanned",
     created_at: "now",
     updated_at: "now",
   };
@@ -352,7 +352,7 @@ describe("resolveComposeWorkspace", () => {
     name: "app",
     kind: "local_dir",
     source: "/home/me/app",
-    status: "ready",
+    status: "scanned",
     created_at: "now",
     updated_at: "now",
   };
@@ -411,7 +411,7 @@ describe("composer.compose() — workspaces[] wire shape", () => {
     name: "payments",
     kind: "repo",
     source: "acme/payments",
-    status: "ready",
+    status: "scanned",
     created_at: "now",
     updated_at: "now",
   };
@@ -422,7 +422,7 @@ describe("composer.compose() — workspaces[] wire shape", () => {
       name: "app",
       kind: "local_dir",
       source: "/home/me/app",
-      status: "ready",
+      status: "scanned",
       created_at: "now",
       updated_at: "now",
     };

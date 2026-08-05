@@ -36,15 +36,11 @@ import type {
   WorkspaceSelection,
 } from "../../../lib/types";
 import { asFirstUseMode, SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
-// The composition-model fields (sources / requirements) aren't on
-// lib/types/workspaces.ts's Workspace type yet — lib/api/workspaces.ts's own
-// header comment explains why (they live next to the functions that need them
-// instead of widening that shared file out from under whoever else is mid-edit
-// on it). Reuse that SAME stopgap here instead of re-declaring a second copy.
 import type {
   WorkspaceRequirementsMap,
   WorkspaceSourceInput,
-} from "../../../lib/api/workspaces";
+} from "../../../lib/types";
+import { effectiveWorkspaceRequirements } from "../../../lib/types";
 
 export type { WorkspaceSelection };
 
@@ -60,19 +56,17 @@ export interface RunWorkspaceSelection extends WorkspaceSelection {
   enabledOptional?: string[];
 }
 
-// `Workspace.requirements` isn't on the shared Workspace type yet (see the
-// import comment above) even though the server already returns it — read it
-// through this ONE cast point rather than scattering `as` casts around the
-// New Run UI (mirrors how Workspace.profile is read via a typed cast-read).
+// What a run against `ws` is actually held to: the server's FOLD of attached
+// sources' contracts under the workspace's own overlay. One shared reader so
+// every New Run surface (picker chips, preflight, review) reads the same
+// contract the create-run gate enforces.
 export function workspaceRequirements(ws: Workspace): WorkspaceRequirementsMap {
-  return (ws as unknown as { requirements?: WorkspaceRequirementsMap }).requirements ?? {};
+  return effectiveWorkspaceRequirements(ws);
 }
 
-// Same stopgap for Workspace.sources (a workspace's one-or-more local_dir/repo/
-// ephemeral sources) — read-only here, so the request-shaped WorkspaceSourceInput
-// doubles as the response shape (the wire fields are identical either direction).
+// The derived sources view, in attachment order (sources[0] is primary).
 function workspaceSources(ws: Workspace): WorkspaceSourceInput[] {
-  return (ws as unknown as { sources?: WorkspaceSourceInput[] }).sources ?? [];
+  return ws.sources ?? [];
 }
 
 // splitRequirementKey mirrors internal/api/workspaces.go's splitRequirementKey:
