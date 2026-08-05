@@ -271,8 +271,16 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // Otherwise consumers that read the stored default (e.g. the import SecurityChip)
   // fall back to CC1/Fence and disagree with what the barrier step displays — you pick
   // Vault, but the import shows Fence. Clicking a card still overrides + re-persists.
+  //
+  // HIGH-4 guard: a member's redacted SetupStatus always reports
+  // confinement_classes: [] (redactSetupStatusForMember) — resolveDefaultCc
+  // would floor that to CC1, and persisting it here would silently downgrade
+  // the STORED default for anyone sharing this browser profile (this
+  // localStorage key isn't per-role) the moment a member is ever the first to
+  // land on this screen. Only an operator's fully-informed, non-empty class
+  // list may seed the initial persisted default.
   React.useEffect(() => {
-    if (status && !getDefaultCc()) setDefaultCc(selectedCc);
+    if (status && status.runner.confinement_classes.length > 0 && !getDefaultCc()) setDefaultCc(selectedCc);
   }, [status, selectedCc]);
 
   if (!status || !readiness) {

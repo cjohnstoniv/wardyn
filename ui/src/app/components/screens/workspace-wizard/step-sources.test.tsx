@@ -14,10 +14,17 @@ vi.mock("../../../lib/api/sources", () => ({
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) },
 }));
+// useK8sRunner's own fetch (B4) — default docker-shaped, the k8s describe
+// block below overrides it.
+const getSetupStatusMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
 
 import { StepSources } from "./step-sources";
 import { newSourceRow, removeSource, seedFloor, type SourceRow, type WorkspaceSourceKind } from "./wizard-types";
 import { C, V2C } from "../../../lib/workspace-copy";
+import { baseStatus } from "../setup/test-fixtures";
 
 // A thin stateful wrapper standing in for the slice of wizard.tsx's state
 // StepSources is a controlled view over — wires the same pure helpers
@@ -54,6 +61,7 @@ function Harness({
 beforeEach(() => {
   setSecretMock.mockReset();
   setSecretMock.mockResolvedValue(undefined);
+  getSetupStatusMock.mockReset().mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }));
 });
 
 describe("StepSources — the ephemeral floor", () => {
@@ -154,5 +162,30 @@ describe("StepSources — the SSH hard gate blocks only its own row", () => {
     const nameInput = within(dialog).getByLabelText(/name/i) as HTMLInputElement;
     expect(nameInput).toHaveValue("ssh-key-ghes-corp-internal");
     expect(nameInput).toHaveAttribute("readonly");
+  });
+});
+
+// B4 source honesty: mounts are structurally impossible on k8s — "Add
+// source" omits the Local directory card and shows the quiet line in its
+// place; Repository and Ephemeral stay offered.
+describe("StepSources — Add source on a k8s control plane", () => {
+  it("omits Local directory, keeps Repository/Ephemeral, and shows the quiet line", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "k8s", confinement_classes: ["CC1"] } }));
+    render(<Harness />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Local directories aren.t available on a Kubernetes control plane/),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: "Add Local directory" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add Repository" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Ephemeral directory" })).toBeInTheDocument();
+  });
+
+  it("a docker/local control plane is unaffected — Local directory still offered", async () => {
+    render(<Harness />);
+    expect(await screen.findByRole("button", { name: "Add Local directory" })).toBeInTheDocument();
+    expect(screen.queryByText(/Kubernetes control plane/)).toBeNull();
   });
 });

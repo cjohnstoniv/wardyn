@@ -731,6 +731,20 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByRole("radio", { name: /Fence/, checked: true })).toBeInTheDocument();
   });
 
+  // HIGH-4 guard: a redacted (empty confinement_classes) status — the shape a
+  // member's SetupStatus always carries (redactSetupStatusForMember) — must
+  // NEVER seed localStorage["wardyn-default-confinement"]. Without the guard
+  // this floors to CC1 and persists it, silently downgrading the default for
+  // anyone sharing this browser profile.
+  it("(HIGH-4) never persists a default barrier off an empty (redacted) confinement_classes list", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: [] } }));
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByRole("heading", { name: /pick your barrier/i });
+    // Give the persistence effect a tick to (not) fire.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getDefaultCc()).toBeNull();
+  });
+
   // Barrier taxonomy — incompatible (hardware) vs needs-setup (installable) ----
 
   it("recommends the strongest COMPATIBLE tier: missing Vault on KVM hardware is Needs setup, still Recommended", async () => {

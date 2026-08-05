@@ -11,6 +11,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../lib/api/core";
 import type { Source, Workspace } from "../../lib/types";
+import { baseStatus } from "./setup/test-fixtures";
 
 const listSourcesMock = vi.fn();
 const createSourceMock = vi.fn();
@@ -24,6 +25,11 @@ vi.mock("../../lib/api/sources", () => ({
     deleteSource: (...a: unknown[]) => deleteSourceMock(...a),
   },
   baseImagesApi: {},
+}));
+// useK8sRunner's own fetch (B4) — default docker-shaped, k8s tests override it.
+const getSetupStatusMock = vi.fn();
+vi.mock("../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
@@ -61,6 +67,7 @@ beforeEach(() => {
   createSourceMock.mockReset();
   scanSourceMock.mockReset();
   deleteSourceMock.mockReset();
+  getSetupStatusMock.mockReset().mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }));
 });
 
 describe("sourceUsage / contractSummary — pure helpers", () => {
@@ -153,5 +160,43 @@ describe("SourcesLibrary", () => {
     await user.click(await screen.findByRole("button", { name: /actions for payments/i }));
     await user.click(screen.getByRole("menuitem", { name: /scan/i }));
     await waitFor(() => expect(scanSourceMock).toHaveBeenCalledWith("s-1"));
+  });
+});
+
+// B4 source honesty: mounts are structurally impossible on k8s — the add
+// dialog omits the local-directory radio entirely (not just defaults away
+// from it) and shows the one quiet line in its place.
+describe("SourcesLibrary — add dialog on a k8s control plane", () => {
+  it("omits Local directory, shows the quiet line, and defaults kind to repo", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "k8s", confinement_classes: ["CC1"] } }));
+    createSourceMock.mockResolvedValue(src({ id: "s-9", name: "lib" }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<SourcesLibrary workspaces={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: /add directory or repo/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Local directories aren.t available on a Kubernetes control plane/),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("radio", { name: /local directory/i })).toBeNull();
+    expect(screen.queryByRole("radio", { name: /repository/i })).toBeNull();
+    // No kind picker needed (repo is the only option) — the locator field is
+    // already in its repo shape.
+    expect(screen.getByLabelText(/repo slug or clone url/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/repo slug or clone url/i), "acme/lib");
+    await user.click(screen.getByRole("button", { name: /add to library/i }));
+    await waitFor(() => expect(createSourceMock).toHaveBeenCalledWith(expect.objectContaining({ kind: "repo" })));
+  });
+
+  it("a docker/local control plane is unaffected — both options still show", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<SourcesLibrary workspaces={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: /add directory or repo/i }));
+    expect(await screen.findByRole("radio", { name: /local directory/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /repository/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Kubernetes control plane/)).toBeNull();
   });
 });

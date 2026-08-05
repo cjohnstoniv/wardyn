@@ -42,6 +42,7 @@ import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
+import { useK8sRunner } from "../../lib/use-k8s-runner";
 
 // How many workspaces attach each source — counted from the workspaces the
 // caller already fetched (attachments carry source ids), so the library needs
@@ -78,6 +79,11 @@ export function AddSourceDialog({
   onSaved: (src: Source) => void;
 }) {
   const operator = useOperator();
+  // B4 source honesty: mounts are structurally impossible on k8s (see
+  // internal/runner/substrate's package doc) — don't offer the option. Gated
+  // on `open`: this dialog stays mounted (closed) for as long as the library
+  // screen is up, so an unconditional fetch here would fire on every visit.
+  const k8s = useK8sRunner(open);
   const [kind, setKind] = React.useState<"local_dir" | "repo">("local_dir");
   const [locator, setLocator] = React.useState("");
   const [ref, setRef] = React.useState("");
@@ -87,13 +93,13 @@ export function AddSourceDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    setKind("local_dir");
+    setKind(k8s ? "repo" : "local_dir");
     setLocator("");
     setRef("");
     setName("");
     setSaving(false);
     setError(null);
-  }, [open]);
+  }, [open, k8s]);
 
   const save = async () => {
     setSaving(true);
@@ -126,24 +132,31 @@ export function AddSourceDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <RadioGroup
-            value={kind}
-            onValueChange={(v) => setKind(v as "local_dir" | "repo")}
-            className="flex gap-4"
-          >
-            <label className="flex items-center gap-1.5 text-xs">
-              <RadioGroupItem value="local_dir" id="src-kind-dir" />
-              <Label htmlFor="src-kind-dir" className="cursor-pointer font-normal">
-                Local directory
-              </Label>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs">
-              <RadioGroupItem value="repo" id="src-kind-repo" />
-              <Label htmlFor="src-kind-repo" className="cursor-pointer font-normal">
-                Repository
-              </Label>
-            </label>
-          </RadioGroup>
+          {k8s ? (
+            <p className="text-xs leading-snug text-muted-foreground">
+              Local directories aren&apos;t available on a Kubernetes control plane — onboard a repository
+              instead.
+            </p>
+          ) : (
+            <RadioGroup
+              value={kind}
+              onValueChange={(v) => setKind(v as "local_dir" | "repo")}
+              className="flex gap-4"
+            >
+              <label className="flex items-center gap-1.5 text-xs">
+                <RadioGroupItem value="local_dir" id="src-kind-dir" />
+                <Label htmlFor="src-kind-dir" className="cursor-pointer font-normal">
+                  Local directory
+                </Label>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs">
+                <RadioGroupItem value="repo" id="src-kind-repo" />
+                <Label htmlFor="src-kind-repo" className="cursor-pointer font-normal">
+                  Repository
+                </Label>
+              </label>
+            </RadioGroup>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="src-locator">{kind === "local_dir" ? "Host path" : "Repo slug or clone URL"}</Label>
             <Input

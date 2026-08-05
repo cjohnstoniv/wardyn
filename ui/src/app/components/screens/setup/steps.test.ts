@@ -486,6 +486,51 @@ describe("review/launch gate — the BARRIER is the only hard requirement; a mod
     expect(stepDone(status, r, [], 1).review).toBe(true);
   });
 
+  // B4/prompt-v4 point 2: a k8s deployment with containment un-proved shows
+  // "Needs attention", never "Ready to launch" — even though the barrier
+  // itself is up (CC1 sandboxes still create fine; k8sEgressContainmentCheck
+  // grades FAIL specifically so this existing checks.some(fail) rule catches
+  // it, with zero changes needed to stepBadges/stepDone themselves).
+  it("k8s with unproven egress containment: Needs attention, not Ready to launch", () => {
+    const status = baseStatus({
+      ready: true,
+      runner: { driver: "k8s", confinement_classes: ["CC1"] },
+      checks: [
+        {
+          id: "k8s_egress_containment",
+          label: "Egress containment",
+          status: "fail",
+          detail: "Not enforcing — the boot-time canary proved this cluster's CNI does not enforce NetworkPolicy.",
+          fix: "Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's CNI/NetworkPolicy support to restore real confinement.",
+        },
+      ],
+    });
+    const r = deriveReadiness(status);
+    const badges = stepBadges(status, r, [], 0);
+    expect(badges.review).toEqual({ text: "Needs attention", tone: "warning" });
+    expect(stepDone(status, r, [], 0).review).toBe(false);
+  });
+
+  // The proven counterpart: an "ok" egress_containment row never blocks it.
+  it("k8s with proven egress containment: Ready to launch, same as docker", () => {
+    const status = baseStatus({
+      ready: true,
+      runner: { driver: "k8s", confinement_classes: ["CC1"] },
+      checks: [
+        {
+          id: "k8s_egress_containment",
+          label: "Egress containment",
+          status: "ok",
+          detail: "Enforcing · NetworkPolicy (the boot-time canary proved a deny-all policy actually blocks egress).",
+        },
+      ],
+    });
+    const r = deriveReadiness(status);
+    const badges = stepBadges(status, r, [], 0);
+    expect(badges.review).toEqual({ text: "Ready to launch", tone: "success" });
+    expect(stepDone(status, r, [], 0).review).toBe(true);
+  });
+
   it("integrations step is Optional (neutral), never a 'Needs setup' warning, with nothing connected", () => {
     const status = baseStatus({ ready: true });
     const r = deriveReadiness(status);

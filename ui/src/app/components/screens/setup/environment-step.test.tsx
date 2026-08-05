@@ -244,4 +244,106 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(screen.queryByText(/Still not detected/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Checking/).length).toBeGreaterThan(0);
   });
+
+  // HIGH-4: a member's redacted runner is Driver:"" (the Go zero value, not
+  // the "none" sentinel) — must read identically to "none", not fall through
+  // to the wrong ("start the Docker daemon") fix text.
+  it("(HIGH-4) an empty driver string reads as no-driver, with the -runner docker fix (not the daemon fix)", () => {
+    const status = baseStatus({ runner: { driver: "", confinement_classes: [] } });
+    renderStep({ status });
+    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
+    expect(screen.getByText(/-runner docker/)).toBeInTheDocument();
+    expect(screen.queryByText(/start the Docker daemon/)).not.toBeInTheDocument();
+  });
+});
+
+// B4: k8s variant rows — Runner/Egress containment/Confinement classes/Agent
+// images. Absent entirely on a non-k8s driver; the tier matrix itself is
+// unaffected either way (same builder, k8s-shaped status data).
+describe("EnvironmentStep — k8s rows (prompt-v4)", () => {
+  function k8sStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+    return baseStatus({
+      runner: { driver: "k8s", confinement_classes: ["CC1"], confinement_substrates: { CC1: "k8s/(default)" } },
+      checks: [{ id: "agent_image", label: "Agent image toolchains", status: "info", detail: "Configured claude-code agent image: ghcr.io/x" }],
+      ...overrides,
+    });
+  }
+
+  it("absent on a docker driver", () => {
+    renderStep({ status: baseStatus() });
+    expect(screen.queryByLabelText("Kubernetes environment")).not.toBeInTheDocument();
+  });
+
+  it("renders Runner/Egress containment/Confinement classes/Agent images on a k8s driver", () => {
+    renderStep({
+      status: k8sStatus({
+        checks: [
+          {
+            id: "k8s_egress_containment",
+            label: "Egress containment",
+            status: "ok",
+            detail: "Enforcing · NetworkPolicy (the boot-time canary proved a deny-all policy actually blocks egress).",
+          },
+          { id: "agent_image", label: "Agent image toolchains", status: "info", detail: "Configured claude-code agent image: ghcr.io/x" },
+        ],
+      }),
+    });
+    const panel = screen.getByLabelText("Kubernetes environment");
+    expect(within(panel).getByText("Runner")).toBeInTheDocument();
+    expect(within(panel).getByText("Kubernetes")).toBeInTheDocument();
+    expect(within(panel).getByText("Egress containment")).toBeInTheDocument();
+    expect(within(panel).getByText(/Enforcing · NetworkPolicy/)).toBeInTheDocument();
+    expect(within(panel).getByText("Confinement classes")).toBeInTheDocument();
+    expect(within(panel).getByText(/CC1 \(k8s\/\(default\)\)/)).toBeInTheDocument();
+    expect(within(panel).getByText("Agent image toolchains")).toBeInTheDocument();
+  });
+
+  it("Not-enforcing reuses the backend row's exact dual-form fix — never dropped to Enforcing's style", () => {
+    renderStep({
+      status: k8sStatus({
+        checks: [
+          {
+            id: "k8s_egress_containment",
+            label: "Egress containment",
+            status: "fail",
+            detail: "Not enforcing — the boot-time canary proved this cluster's CNI does not enforce NetworkPolicy.",
+            fix: "Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's CNI/NetworkPolicy support to restore real confinement.",
+          },
+        ],
+      }),
+    });
+    const panel = screen.getByLabelText("Kubernetes environment");
+    expect(within(panel).getByText(/Not enforcing/)).toBeInTheDocument();
+    expect(within(panel).getByText(/helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/Enforcing · NetworkPolicy \(canary proved/)).not.toBeInTheDocument();
+  });
+
+  it("Indeterminate (field/row absent despite a k8s driver) never borrows Enforcing's style", () => {
+    // No k8s_egress_containment row in checks at all — the honest local fallback.
+    renderStep({ status: k8sStatus({ checks: [] }) });
+    const panel = screen.getByLabelText("Kubernetes environment");
+    expect(within(panel).getByText(/Indeterminate/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/^Enforcing/)).not.toBeInTheDocument();
+  });
+
+  it("the honest ceiling sentence names what CC2/CC3 need when only CC1 is live", () => {
+    renderStep({ status: k8sStatus() }); // confinement_classes: ["CC1"] only
+    const panel = screen.getByLabelText("Kubernetes environment");
+    expect(within(panel).getByText(/CC2 needs a gVisor RuntimeClass; CC3 needs Kata\./)).toBeInTheDocument();
+  });
+
+  it("no ceiling sentence once the cluster maps all three classes", () => {
+    renderStep({
+      status: k8sStatus({
+        runner: {
+          driver: "k8s",
+          confinement_classes: ["CC1", "CC2", "CC3"],
+          confinement_substrates: { CC1: "k8s/(default)", CC2: "k8s/runsc", CC3: "k8s/kata-qemu" },
+        },
+      }),
+    });
+    const panel = screen.getByLabelText("Kubernetes environment");
+    expect(within(panel).queryByText(/needs a gVisor RuntimeClass/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/CC1 \(k8s\/\(default\)\), CC2 \(k8s\/runsc\), CC3 \(k8s\/kata-qemu\)/)).toBeInTheDocument();
+  });
 });
