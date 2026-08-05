@@ -5,12 +5,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -115,6 +117,52 @@ func TestCreateRun_InlineLocalMountRejectedUnlessOnboarded(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("non-onboarded inline mount must be rejected (422), got %d; body=%s", w.Code, w.Body.String())
 	}
+}
+
+// TestCreateRun_MemberInlineClamped pins item 5: a member's inline_policy is
+// clamped to DefaultPolicy BEFORE resolution/validation; an admin's identical
+// request is not. Observed via the policy.inline audit event's
+// min_confinement_class field, which resolveRunPolicy records right after
+// clamping — BEFORE the no-Store harness's later CreateRun panic (see the
+// file's "accepted past validation" 500-sentinel doc comment above), so the
+// clamp's effect is visible even though the request never fully succeeds.
+func TestCreateRun_MemberInlineClamped(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	h.srv.router = h.srv.routes()
+
+	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC1"}}`
+
+	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC2) {
+		t.Fatalf("member: policy.inline min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
+	}
+
+	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC1) {
+		t.Fatalf("admin: policy.inline min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
+	}
+}
+
+// lastInlinePolicyConfinement returns the min_confinement_class of the LAST
+// policy.inline audit event in events, failing the test if there is none.
+func lastInlinePolicyConfinement(t *testing.T, events []types.AuditEvent) string {
+	t.Helper()
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Action != "policy.inline" {
+			continue
+		}
+		var d struct {
+			MinConfinementClass string `json:"min_confinement_class"`
+		}
+		if err := json.Unmarshal(events[i].Data, &d); err != nil {
+			t.Fatalf("decode policy.inline data: %v", err)
+		}
+		return d.MinConfinementClass
+	}
+	t.Fatal("no policy.inline audit event recorded")
+	return ""
 }
 
 // TestValidateInlineSecretRefs_Matrix exercises validateInlineSecretRefs across

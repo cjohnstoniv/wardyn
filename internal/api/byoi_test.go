@@ -7,6 +7,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
 // fakeImageBuilder satisfies ImageBuilder for the BYOI validation tests. The
@@ -46,5 +48,35 @@ func TestBYOI_ImageWithNoBuilderIs400(t *testing.T) {
 		`{"agent":"claude-code","image":"ubuntu:24.04"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 when a custom image is chosen but no builder is wired, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestBYOI_MemberDenied403 pins item 5: a member's explicit req.Image is a
+// 403 (denyMemberBYOI) — BYOI is operator surface — ahead of and distinct
+// from the 400 shape validation checks above (an admin with the identical
+// request gets those 400s, never a 403). Checked on BOTH the create and the
+// preflight paths, since preflight must refuse it exactly as create would.
+func TestBYOI_MemberDenied403(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.router = h.srv.routes()
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+
+	for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
+		t.Run(path, func(t *testing.T) {
+			w := doSSO(t, h.srv, http.MethodPost, path, member, `{"agent":"claude-code","image":"ubuntu:24.04"}`)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("member BYOI on %s: code = %d, want 403: %s", path, w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// The admin path is UNCHANGED: no builder wired still 400s, never 403 —
+	// denyMemberBYOI must be a strict ADDITION ahead of the existing checks,
+	// not a replacement for them.
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", admin, `{"agent":"claude-code","image":"ubuntu:24.04"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("admin BYOI, no builder: code = %d, want 400 (unchanged): %s", w.Code, w.Body.String())
 	}
 }

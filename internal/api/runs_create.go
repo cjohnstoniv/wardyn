@@ -46,6 +46,14 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, "", false
 	}
 
+	// Item 5: a member may not bring their own sandbox image (operator
+	// surface) — checked before the XOR/builder validation below so a
+	// member's request is refused with 403, never a 400 that implies the
+	// shape alone is the problem.
+	if s.denyMemberBYOI(w, r, req) {
+		return req, "", false
+	}
+
 	// BYOI validation (fail closed before any store write): a user-supplied image
 	// is mutually exclusive with a devcontainer build, and — unlike DevcontainerRepo,
 	// which degrades to the convention image — an explicitly chosen image with no
@@ -96,6 +104,29 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	return req, reqCC, true
+}
+
+// denyMemberBYOI refuses a member's (role != admin) explicit BYOI image
+// request with a 403 — bring-your-own-image is operator surface (item 5): the
+// inline_policy clamp (resolveRunPolicy) covers POLICY fields, but req.Image
+// is a request-level field the clamp never touches, so it needs its own gate.
+// Reports true (having written the 403 + an authz.denied audit event) when
+// denied; callers must return immediately.
+//
+// A workspace's own base_image (seedRequestWorkspace, called AFTER this) is
+// deliberately NOT gated here: it is operator-authored config (the workspace
+// was onboarded through an operator-only route), never a member's own
+// free-text choice, and seedRequestWorkspace only ever sets req.Image when
+// the caller left it empty — so this check, run BEFORE that seeding, can
+// never catch it.
+func (s *Server) denyMemberBYOI(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
+	if req.Image == "" || s.isOperator(r.Context()) {
+		return false
+	}
+	writeError(w, http.StatusForbidden, "custom sandbox images (image) are operator-only; launch with the agent's convention image or an onboarded workspace's base image")
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", "runs.image", "denied", mustJSON(map[string]any{"reason": "byoi_member"})))
+	return true
 }
 
 // validateImageBuildRequest enforces the image/devcontainer_repo XOR + the

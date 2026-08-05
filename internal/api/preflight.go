@@ -53,6 +53,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same member BYOI denial launch runs (runs_create.go's decodeAndValidateCreateRun)
+	// — a preflight dry-run must refuse it exactly as create would, not report a
+	// rosier checklist for a request that would 403 at launch.
+	if s.denyMemberBYOI(w, r, req) {
+		return
+	}
+
 	// Resolve the policy through the SAME chokepoint launch uses. resolveRunPolicy
 	// writes its own 4xx (XOR violation, invalid inline spec, missing/reserved
 	// secret 422) and returns ok=false when it has already responded, so Review

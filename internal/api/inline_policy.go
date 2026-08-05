@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -21,20 +22,29 @@ import (
 // stored/default fallback. It writes its own HTTP error and returns ok=false
 // when it has already responded; callers must stop on ok=false.
 //
-// Resolution (fail closed, admin-gated surface):
+// Resolution (fail closed; shared by both handleCreateRun and the
+// handlePreflightRun dry-run, so a member's preview can never disagree with
+// what launch actually does):
 //   - inline_policy AND policy_id both set  => 400 (mutually exclusive).
-//   - inline_policy set                     => validate via validatePolicySpec
-//     (so runner.ValidateMount gates any inline mount) AND validateInlineSecretRefs
-//     (so any inline api_key grant references a real, non-reserved secret); on
-//     success the inline spec attaches with a NIL policy id (it is not a stored
-//     row) and a policy.inline audit event is emitted.
+//   - inline_policy set                     => for a MEMBER caller (item 5),
+//     clamp to composer.Clamp(spec, DefaultPolicy) FIRST — an admin-authored
+//     ceiling a member's own inline_policy can never exceed. An admin is
+//     UNCLAMPED (they ARE the ceiling-setting authority). Only THEN validate
+//     via validatePolicySpec (so runner.ValidateMount gates any inline mount)
+//     AND validateInlineSecretRefs (so any inline api_key grant references a
+//     real, non-reserved secret); on success the (possibly clamped) inline
+//     spec attaches with a NIL policy id (it is not a stored row) and a
+//     policy.inline audit event is emitted — which therefore already
+//     reflects the clamped spec, not the raw member-submitted one.
 //   - else (policy_id set, or neither)      => the existing resolvePolicy path
-//     (stored row, else the configured default), THEN validateInlineSecretRefs
-//     against the resolved spec — same secret-existence check as the inline
-//     branch, including a 422 when the spec's grants exist but no secret store
-//     is configured. This is a deliberate behavior change (see CHANGELOG): a
-//     stored or default policy naming a missing/reserved secret now 422s at
-//     create instead of only failing later at first proxy injection or clone.
+//     (stored row, else the configured default; NOT re-clamped — a stored
+//     policy or the default IS already admin-authored/the ceiling itself),
+//     THEN validateInlineSecretRefs against the resolved spec — same
+//     secret-existence check as the inline branch, including a 422 when the
+//     spec's grants exist but no secret store is configured. This is a
+//     deliberate behavior change (see CHANGELOG): a stored or default policy
+//     naming a missing/reserved secret now 422s at create instead of only
+//     failing later at first proxy injection or clone.
 //
 // dryRun suppresses the policy.inline audit write: a preflight preview is not an
 // inline-policy USE, and the audit feed is the system of record — orphan
@@ -51,6 +61,16 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// validate any inline secret references. On success attach with a nil id.
 	if req.InlinePolicy != nil {
 		spec := *req.InlinePolicy
+		if !s.isOperator(r.Context()) {
+			// Item 5: a member's inline_policy can never smuggle wider grants/
+			// egress/confinement than the operator's own DefaultPolicy allows.
+			// Clamped BEFORE validation/resolution — never the fully-resolved
+			// spec, which would strip the LATER admin-authored additions
+			// (workspace integration binding, ensureLLMGrant,
+			// applyRequiredSecretGrant, applyIntegrationRequirement) folded in
+			// by runs.go/preflight.go AFTER this function returns.
+			spec, _ = composer.Clamp(spec, s.cfg.DefaultPolicy)
+		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, false
