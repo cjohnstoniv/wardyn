@@ -404,7 +404,6 @@ export function WorkspaceWizard({
               onEditSource={() => goToSources()}
               onRescan={() => s.workspace && void startScan(s.workspace)}
               detectedChips={detectedChips}
-              harnessAvailable={s.harnessAvailable}
               state={s.baseImage}
               onChange={(p) => patch({ baseImage: { ...s.baseImage, ...p } })}
             />

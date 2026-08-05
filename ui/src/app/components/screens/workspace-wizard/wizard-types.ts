@@ -199,15 +199,6 @@ export interface CatalogPick {
 export interface BaseImageState {
   choice: BaseImageChoice;
   customBase: string;
-  // Keyed by the detected tool/language chip it toggles (e.g. "Go 1.22") — the
-  // real profile's own vocabulary, never a hardcoded Go/Node/TS list.
-  customTools: Record<string, boolean>;
-  // The agent-tool (Claude Code CLI) toggle — separate from customTools since
-  // its very presence in the checklist depends on harnessAvailable, unlike an
-  // ordinary detected language/package-manager tool.
-  harnessTool: boolean;
-  extraTools: string[];
-  toolDraft: string;
   buildSteps: string;
   byoRef: string;
   // Set iff choice === "catalog".
@@ -217,10 +208,6 @@ export function defaultBaseImageState(): BaseImageState {
   return {
     choice: "recommended",
     customBase: "ubuntu:24.04",
-    customTools: {},
-    harnessTool: true,
-    extraTools: [],
-    toolDraft: "",
     buildSteps: "",
     byoRef: "",
     catalog: null,

@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 const listIntegrationsMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async () => {
@@ -44,7 +44,6 @@ describe("StepBaseImage — Phase A scan progress", () => {
         onEditSource={vi.fn()}
         onRescan={vi.fn()}
         detectedChips={[]}
-        harnessAvailable
         state={defaultBaseImageState()}
         onChange={vi.fn()}
       />,
@@ -67,7 +66,6 @@ describe("StepBaseImage — Phase A scan progress", () => {
         onEditSource={onEditSource}
         onRescan={onRescan}
         detectedChips={[]}
-        harnessAvailable
         state={defaultBaseImageState()}
         onChange={vi.fn()}
       />,
@@ -82,13 +80,12 @@ describe("StepBaseImage — Phase A scan progress", () => {
 
 // A small stateful wrapper so the four cards + editor behave like they will
 // under wizard.tsx (controlled state + patch), without pulling wizard.tsx in.
-function CardsHarness({ initial, harnessAvailable = true }: { initial?: Partial<BaseImageState>; harnessAvailable?: boolean }) {
+function CardsHarness({ initial }: { initial?: Partial<BaseImageState> }) {
   const [state, setState] = React.useState<BaseImageState>({ ...defaultBaseImageState(), ...initial });
   return (
     <ImageCards
       detectedChips={["Go 1.22", "Node 20"]}
       partial={false}
-      harnessAvailable={harnessAvailable}
       state={state}
       onChange={(patch) => setState((s) => ({ ...s, ...patch }))}
     />
@@ -113,18 +110,16 @@ describe("StepBaseImage — the four base-image cards", () => {
     expect(screen.getByText(C.IMG_NO_SCAN)).toBeInTheDocument();
   });
 
-  it("selecting Customize the build discloses the tool checklist (from the detected chips) and the Claude Code CLI toggle when available", () => {
+  it("selecting Customize the build discloses base + steps only — the dead tool checklist is gone", () => {
     render(<CardsHarness />);
     fireEvent.click(screen.getByText("Customize the build"));
-    expect(screen.getByRole("checkbox", { name: "Go 1.22" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Node 20" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Claude Code CLI" })).toBeInTheDocument();
-  });
-
-  it("omits the Claude Code CLI toggle when no integration can drive it", () => {
-    render(<CardsHarness harnessAvailable={false} />);
-    fireEvent.click(screen.getByText("Customize the build"));
+    // What actually reaches the build: the base image + the steps editor —
+    // never a tool checklist (checkboxes that changed nothing were deleted;
+    // an operator expresses tools as build steps).
+    expect(screen.getByRole("textbox", { name: "Base image" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Custom build steps")).toBeInTheDocument();
     expect(screen.queryByText("Claude Code CLI")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("BuildStepsEditor: a credential-shaped line warns with the line + detector kind, never echoes the value, and never disables anything", () => {
@@ -155,17 +150,17 @@ describe("ImageCards — inventory, never consequence (the tools-not-AI law)", (
   // The image doesn't decide whether or which AI is used — the workspace's
   // requirements do. A card may NAME a tool it carries; only the requirements
   // and run surfaces say what a tool is for.
-  it("recommended card's Carries lists claude-code as one tool among tools, exactly when the build will include it", () => {
-    render(<CardsHarness harnessAvailable />);
-    expect(screen.getByText("claude-code")).toBeInTheDocument();
-
-    cleanup();
-    render(<CardsHarness harnessAvailable={false} />);
+  it("recommended card's Carries lists exactly what the scan detected — never the agent CLI", () => {
+    render(<CardsHarness />);
+    // The recommended build is generated from the profile; it never bakes
+    // claude-code, so no card may claim it does. The agent CLI arrives at run
+    // time as a tool choice, not as base-image inventory.
     expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Go 1.22").length).toBeGreaterThan(0);
   });
 
-  it("the registry card carries no warning — its inventory simply lacks the CLI, and no card states an AI consequence", () => {
-    render(<CardsHarness harnessAvailable />);
+  it("the registry card carries no warning — no card states an AI consequence", () => {
+    render(<CardsHarness />);
     expect(screen.queryByText(/agent runs can't drive it/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Claude Code configured/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No AI integration connected/)).not.toBeInTheDocument();
@@ -187,7 +182,6 @@ describe("ImageCards — inventory, never consequence (the tools-not-AI law)", (
         onEditSource={vi.fn()}
         onRescan={vi.fn()}
         detectedChips={[]}
-        harnessAvailable
         state={defaultBaseImageState()}
         onChange={vi.fn()}
       />,
