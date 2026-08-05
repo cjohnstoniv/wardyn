@@ -4,9 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +34,9 @@ type buildState struct {
 	Image     string    `json:"image,omitempty"`
 	Error     string    `json:"error,omitempty"`
 	StartedAt time.Time `json:"started_at,omitempty"`
+	// Log is the bounded tail of this build's output (maxBuildLogLines), fed by
+	// buildLogWriter. Same in-memory-only caveat as the rest of buildState.
+	Log []string `json:"log,omitempty"`
 }
 
 type buildTracker struct {
@@ -41,14 +47,23 @@ type buildTracker struct {
 func (t *buildTracker) get(id uuid.UUID) buildState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if st, ok := t.by[id]; ok {
-		return *st
+	st, ok := t.by[id]
+	if !ok {
+		return buildState{}
 	}
-	return buildState{}
+	cp := *st
+	// Defensive copy: Log's backing array is still owned by the tracker and a
+	// concurrent appendLog (another goroutine, same lock) must never mutate
+	// what a caller reads AFTER we unlock.
+	if st.Log != nil {
+		cp.Log = append([]string(nil), st.Log...)
+	}
+	return cp
 }
 
 // begin claims the single-flight slot; ok=false when a build is already
-// running for this workspace.
+// running for this workspace. A fresh buildState means a fresh (empty) Log —
+// a retried build's pane starts clean, not appended to the failed attempt's.
 func (t *buildTracker) begin(id uuid.UUID, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -68,8 +83,66 @@ func (t *buildTracker) finish(id uuid.UUID, image, errMsg string) {
 	if t.by == nil {
 		t.by = map[uuid.UUID]*buildState{}
 	}
-	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg}
+	// Carry the accumulated Log over into the terminal state — the log IS the
+	// debugging story for a failure, so it must survive Building true->false.
+	var log []string
+	if st, ok := t.by[id]; ok {
+		log = st.Log
+	}
+	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg, Log: log}
 }
+
+// maxBuildLogLines bounds each build's in-memory log ring: oldest lines drop
+// once output exceeds it. Generous enough to carry a real failure's context,
+// small enough that a runaway build can't grow the tracker unbounded.
+const maxBuildLogLines = 500
+
+// appendLog bounds-appends one line to id's ring, under the tracker's own
+// lock (buildState carries no lock of its own — see the package doc).
+// ponytail: keyed by WORKSPACE id like the tracker itself, not a per-build
+// id — a fast Retry can show a trailing line or two from the build it
+// replaced while the old container's log stream finishes closing. Not worth
+// a separate per-build correlation id for a debug-aid pane.
+func (t *buildTracker) appendLog(id uuid.UUID, line string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st, ok := t.by[id]
+	if !ok {
+		return // no build known for id (finished + reaped, or never begun) — drop it
+	}
+	st.Log = append(st.Log, line)
+	if over := len(st.Log) - maxBuildLogLines; over > 0 {
+		st.Log = st.Log[over:]
+	}
+}
+
+// buildLogWriter line-splits build output into id's ring on the tracker. Used
+// as the build's LogSink so the wizard's Build step can show the real output
+// instead of a bare spinner (see cmd/wardynd/envbuild_docker.go's adapter,
+// which tees this with wardynd's own slog so operator logs don't regress).
+type buildLogWriter struct {
+	t   *buildTracker
+	id  uuid.UUID
+	buf []byte
+}
+
+func (w *buildLogWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := strings.TrimSpace(string(w.buf[:i]))
+		w.buf = w.buf[i+1:]
+		if line != "" {
+			w.t.appendLog(w.id, line)
+		}
+	}
+	return len(p), nil
+}
+
+var _ io.Writer = (*buildLogWriter)(nil)
 
 // buildResponse is what both handlers return: the tracker's view unioned with
 // what the workspace row already proves.
@@ -80,6 +153,11 @@ type buildResponse struct {
 	Image     string    `json:"image,omitempty"`
 	Detail    string    `json:"detail,omitempty"`
 	StartedAt time.Time `json:"started_at,omitempty"`
+	// Log is the build's output tail (see buildState.Log) — present only while
+	// the tracker actually knows about a build THIS process ran; a cache-hit
+	// "done" resolved from the workspace row's own ImageRef never populates it
+	// (nothing was streamed this process — no log to show).
+	Log []string `json:"log,omitempty"`
 }
 
 // resolveBuildView derives the honest view for GET/POST responses.
@@ -92,11 +170,11 @@ func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
 	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
-		return buildResponse{State: "building", StartedAt: st.StartedAt}
+		return buildResponse{State: "building", StartedAt: st.StartedAt, Log: st.Log}
 	case st.Error != "":
-		return buildResponse{State: "failed", Detail: st.Error}
+		return buildResponse{State: "failed", Detail: st.Error, Log: st.Log}
 	case st.Image != "":
-		return buildResponse{State: "done", Image: st.Image}
+		return buildResponse{State: "done", Image: st.Image, Log: st.Log}
 	}
 	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" && ws.BuiltProfileHash == prof.ProfileHash() {
 		return buildResponse{State: "done", Image: ws.ImageRef}
@@ -157,7 +235,8 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	buildID := uuid.New() // audit correlation for a build with no run
 	go func() {
 		ctx := context.WithoutCancel(r.Context())
-		built, okBuild := s.resolveWorkspaceImage(ctx, buildID, ws)
+		logSink := &buildLogWriter{t: &s.builds, id: ws.ID}
+		built, okBuild := s.resolveWorkspaceImage(ctx, buildID, ws, logSink)
 		if !okBuild {
 			// resolveWorkspaceImage audited the specific failure under buildID —
 			// read it back so the wizard shows the REAL reason, not a pointer

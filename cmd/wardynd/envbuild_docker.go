@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 
@@ -24,25 +25,44 @@ type envBuilderAdapter struct {
 
 var _ api.ImageBuilder = envBuilderAdapter{}
 
-func (e envBuilderAdapter) BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string) (string, error) {
+func (e envBuilderAdapter) BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (string, error) {
 	return e.b.Build(ctx, envbuild.BuildSpec{
 		RepoURL:        repoURL,
 		Ref:            ref,
 		OutputImageTag: outputTag,
+		LogSink:        e.tee(logSink),
 	})
 }
 
 // BuildFromDevcontainerFiles builds a per-workspace image from generated
 // devcontainer files (workspacescan.GenerateDevcontainer's output) via the
 // git-free local-context envbuilder path. Same hardened builder, no git URL.
-func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string) (string, error) {
-	return e.b.BuildFromDevcontainerFiles(ctx, files, outputTag)
+func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (string, error) {
+	return e.b.BuildFromDevcontainerFiles(ctx, files, outputTag, e.tee(logSink))
 }
 
 // FinalizeBase wraps a user-supplied base image (BYOI) with the runner tools +
 // a cleared ENTRYPOINT via the trusted finalize stage.
-func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string) (string, error) {
-	return e.b.FinalizeBase(ctx, baseRef, outputTag)
+func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
+	return e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink))
+}
+
+// tee combines a caller-supplied per-call log sink (e.g. the wizard Build
+// step's in-memory ring, threaded down from api.ImageBuilder) with the
+// builder's own DefaultLogSink (wardynd's slog, set below) so a caller
+// watching one build is ADDITIVE — operator logs must not regress just
+// because the wizard started watching too. A nil logSink passes through
+// unchanged: envbuild.Builder's own methods already fall back to
+// DefaultLogSink on nil, and teeing nil with DefaultLogSink here would just
+// duplicate that same fallback.
+func (e envBuilderAdapter) tee(logSink io.Writer) io.Writer {
+	if logSink == nil {
+		return nil
+	}
+	if e.b.DefaultLogSink == nil {
+		return logSink
+	}
+	return io.MultiWriter(logSink, e.b.DefaultLogSink)
 }
 
 // newEnvBuilder constructs the devcontainer image builder. Compiled only with

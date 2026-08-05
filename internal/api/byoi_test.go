@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"testing"
 )
@@ -15,13 +16,13 @@ import (
 // s.cfg.ImageBuilder non-nil for the "builder wired" case.
 type fakeImageBuilder struct{}
 
-func (fakeImageBuilder) BuildDevcontainer(context.Context, string, string, string) (string, error) {
+func (fakeImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
 	return "", nil
 }
-func (fakeImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string) (string, error) {
+func (fakeImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
 	return "", nil
 }
-func (fakeImageBuilder) FinalizeBase(context.Context, string, string) (string, error) {
+func (fakeImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (string, error) {
 	return "", nil
 }
 

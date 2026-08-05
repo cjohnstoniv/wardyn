@@ -153,7 +153,7 @@ func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.
 		// No Profile: an unscanned ephemeral-only workspace has none, and the
 		// BaseImage branch must return before ever needing one.
 	}
-	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws)
+	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
 	if !ok || image != "ghcr.io/acme/base:1" {
 		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the workspace's BaseImage verbatim, unconditionally", image, ok)
 	}
