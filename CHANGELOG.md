@@ -8,6 +8,42 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The wizard's Build step showed only a bare spinner — the real image-build
+  output went solely to wardynd's own log, invisible to whoever triggered
+  the build.** `handleBuildWorkspace`'s goroutine now threads a bounded
+  per-workspace log ring (`buildTracker.Log`, 500 lines, oldest dropped)
+  through `resolveWorkspaceImage` into the `api.ImageBuilder` call as an
+  explicit `logSink io.Writer`; the wardynd docker adapter tees it with the
+  existing slog sink so operator logs keep receiving every line unchanged.
+  `GET`/`POST /workspaces/{id}/build` now carry `log` in the response, and
+  `step-build.tsx` renders it in a scrollable pane that stays up through the
+  done/failed states too — the failure line plus the log is the debugging
+  story.
+- **Editing an onboarded workspace through the "Edit source…" dialog could
+  silently destroy it.** The legacy single-form edit dialog rendered blank
+  for any multi-source workspace, and its save path submitted the
+  deprecated scalar shape — which `decodeWorkspaceRequest` folds into
+  exactly ONE source, collapsing `sources[]` and wiping
+  Requirements/Profile/ApprovedEgress on save. `AddWorkspaceDialog` is
+  retired; the "Edit workspace…" kebab item (workspaces.tsx and
+  workspace-detail.tsx) now opens the same wizard used for onboarding,
+  hydrated from the row (sources, base image, requirements) and landed on
+  whatever step the workspace hasn't cleared yet, saving through the
+  composition-shape `sources[]`/`base_image` PUT the wizard's own Base
+  image step already used.
+- **An outside click or Esc could strand a half-onboarded workspace
+  mid-wizard with no way back.** Most steps (including Build) have no
+  explicit Close button, and dismissing the dialog never deleted anything
+  server-side, so a stray outside-click or Esc left the operator locked out
+  of a workspace they'd started onboarding. `WorkspaceWizard`'s
+  `DialogContent` now blocks outside-click and Esc dismissal once a
+  workspace exists and the step isn't Done — the same condition its own
+  footer note already warns about. The X button stays a deliberate
+  one-click close either way, and the "Edit workspace…" fix above gives the
+  operator a way back regardless.
+
 ## [0.4.5] — 2026-08-04
 
 ### Added
