@@ -25,6 +25,31 @@ function elapsedLabel(startedAt?: string): string {
   return secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
 }
 
+// The build's real output, tail-following: fixed height so it doesn't shove
+// the rest of the step around, auto-scrolled to the newest line. Rendered in
+// building/done/failed alike — the failure line plus the log IS the
+// debugging story, so it stays up once the build stops.
+function BuildLogPane({ log }: { log: string[] }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [log.length]);
+  return (
+    <div
+      ref={ref}
+      data-testid="build-log"
+      className="scroll-thin h-56 overflow-y-auto rounded-md border border-border bg-surface-1/60 p-2"
+    >
+      {log.map((line, i) => (
+        <div key={i} className="font-mono text-[0.6875rem] leading-relaxed text-muted-foreground">
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function StepBuild({
   workspaceId,
   onStateChange,
@@ -79,8 +104,9 @@ export function StepBuild({
           </p>
           <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Installing the detected toolchain into the image. This runs server-side — closing this
-            dialog doesn&apos;t stop it. Build output streams into the control plane&apos;s log.
+            dialog doesn&apos;t stop it.
           </p>
+          {build.log && build.log.length > 0 && <BuildLogPane log={build.log} />}
         </div>
       )}
       {build.state === "done" && (
@@ -92,6 +118,7 @@ export function StepBuild({
           <p className="text-[0.6875rem] leading-snug text-muted-foreground">
             Cached until the profile changes — sessions and runs boot it immediately.
           </p>
+          {build.log && build.log.length > 0 && <BuildLogPane log={build.log} />}
         </div>
       )}
       {build.state === "nothing_to_build" && (
@@ -111,6 +138,7 @@ export function StepBuild({
             <TriangleAlert className="size-4" /> Build failed
           </p>
           {build.detail && <p className="text-xs leading-snug text-danger/90">{build.detail}</p>}
+          {build.log && build.log.length > 0 && <BuildLogPane log={build.log} />}
           <Button type="button" size="sm" variant="outline" onClick={kick}>
             <RotateCw className="size-3.5" /> Retry build
           </Button>

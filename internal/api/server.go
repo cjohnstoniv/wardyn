@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -108,8 +109,10 @@ type RefRulesetVerifier interface {
 type ImageBuilder interface {
 	// BuildDevcontainer builds the devcontainer for repoURL@ref and returns the
 	// local image reference to run. outputTag is the deterministic per-run tag
-	// the result is committed under.
-	BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string) (imageRef string, err error)
+	// the result is committed under. logSink, when non-nil, receives build
+	// output lines as they happen (e.g. the wizard Build step's in-memory log);
+	// nil preserves the implementation's own default (wardynd's slog).
+	BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (imageRef string, err error)
 	// BuildFromDevcontainerFiles builds an image from IN-MEMORY generated
 	// devcontainer files (relative path -> content, e.g.
 	// ".devcontainer/devcontainer.json") rather than a repo checkout, returning
@@ -117,14 +120,15 @@ type ImageBuilder interface {
 	// BuildDevcontainer. Used for an onboarded workspace WITHOUT a wired
 	// devcontainer, where internal/workspacescan generates a minimal one from the
 	// detected profile. outputTag is the deterministic profile-hash-keyed tag
-	// the result is committed under.
-	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string) (imageRef string, err error)
+	// the result is committed under. logSink: see BuildDevcontainer.
+	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (imageRef string, err error)
 	// FinalizeBase wraps an arbitrary USER-supplied base image (Bring Your Own
 	// Image) with Wardyn's runner tools + a cleared ENTRYPOINT, returning the
 	// runnable local image reference. No untrusted build, no registry push — just
 	// the trusted FROM+COPY finalize stage; the base is pulled only if absent, so
 	// a host-pre-pulled private image works. outputTag is the per-run tag.
-	FinalizeBase(ctx context.Context, baseRef, outputTag string) (imageRef string, err error)
+	// logSink: see BuildDevcontainer.
+	FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (imageRef string, err error)
 }
 
 // Config holds the API server's non-secret configuration and injected

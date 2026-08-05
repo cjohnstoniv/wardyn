@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	neturl "net/url"
 	"slices"
@@ -100,8 +101,12 @@ func workspaceProfile(ws types.Workspace) (workspacescan.WorkspaceProfile, bool)
 //   - else generate a devcontainer for the detected toolchain, build it, and cache
 //     image_ref + built_profile_hash on the workspace for reuse.
 //
+// logSink, when non-nil, receives the build's output as it happens (the
+// wizard Build step's in-memory ring); every OTHER caller passes nil, which
+// falls back to the ImageBuilder's own default (wardynd's slog) unchanged.
+//
 // It audits its own build success/failure against runID.
-func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace) (string, bool) {
+func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer) (string, bool) {
 	if s.cfg.ImageBuilder == nil {
 		return "", false
 	}
@@ -144,7 +149,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			buildAudit("skipped", map[string]any{"source": "repo-devcontainer", "reason": "ssh-source-not-buildable-by-image-builder"})
 		} else if url := repoCloneURL(repoSrc.Source); url != "" {
 			tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
-			if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag); err == nil {
+			if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
 				buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
 				return built, true
 			} else {
@@ -167,7 +172,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		return "", false
 	}
 	tag := "wardyn-workspace/" + primary.ID.String() + ":" + hash[:12]
-	built, berr := s.cfg.ImageBuilder.BuildFromDevcontainerFiles(ctx, files, tag)
+	built, berr := s.cfg.ImageBuilder.BuildFromDevcontainerFiles(ctx, files, tag, logSink)
 	if berr != nil {
 		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": berr.Error()})
 		return "", false
@@ -243,7 +248,7 @@ func (s *Server) defaultFloorClass() types.ConfinementClass {
 // workspace's BUILT devcontainer image (built now if needed), falling back to
 // the convention agent image when no builder is configured.
 func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) string {
-	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws); ok {
+	if built, ok := s.resolveWorkspaceImage(ctx, runID, ws, nil); ok {
 		return built
 	}
 	return agentImage("claude-code", s.cfg.AgentImages)

@@ -28,6 +28,10 @@ export interface WorkspaceBuildState {
   image?: string;
   detail?: string;
   started_at?: string;
+  // The build's output tail (bounded server-side) — present while the build
+  // ran on THIS control-plane process; absent for a cache-hit "done" (nothing
+  // was streamed this process) or a state with nothing built yet.
+  log?: string[];
 }
 
 export type {

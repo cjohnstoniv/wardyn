@@ -32,7 +32,7 @@ func TestFinalizeBase_WrapsPresentBase(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	tag, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-1:latest")
+	tag, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-1:latest", nil)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestFinalizeBase_PullsAbsentBase(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	if _, err := b.FinalizeBase(context.Background(), "myco/dev:latest", "wardyn-byoi/run-2:latest"); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), "myco/dev:latest", "wardyn-byoi/run-2:latest", nil); err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
 	if !f.pullCalled {
@@ -73,7 +73,7 @@ func TestFinalizeBase_PrePulledDigestBaseIsNotRePulled(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-d:latest"); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-d:latest", nil); err != nil {
 		t.Fatalf("FinalizeBase on a pre-pulled digest base: %v", err)
 	}
 	if f.pullCalled {
@@ -88,7 +88,7 @@ func TestFinalizeBase_FailsClosedOnBuildError(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	_, err := b.FinalizeBase(context.Background(), "distroless/static", "wardyn-byoi/run-3:latest")
+	_, err := b.FinalizeBase(context.Background(), "distroless/static", "wardyn-byoi/run-3:latest", nil)
 	if err == nil {
 		t.Fatal("expected FinalizeBase to fail closed on a wrap-build error")
 	}
@@ -110,7 +110,7 @@ func TestFinalizeBase_RefusesBaseWithOnBuildTriggers(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	_, err := b.FinalizeBase(context.Background(), "evil/base:latest", "wardyn-byoi/run-5:latest")
+	_, err := b.FinalizeBase(context.Background(), "evil/base:latest", "wardyn-byoi/run-5:latest", nil)
 	if err == nil {
 		t.Fatal("expected FinalizeBase to refuse a base carrying ONBUILD triggers")
 	}
@@ -178,7 +178,7 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	// No ToolsDir configured (and no env var in this test).
 	t.Setenv(envToolsDir, "")
-	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-4:latest"); err == nil {
+	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-4:latest", nil); err == nil {
 		t.Fatal("expected FinalizeBase to fail closed with no tools dir")
 	}
 }

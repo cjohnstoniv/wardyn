@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,7 +118,7 @@ type disconnectBuilder struct {
 	mu         sync.Mutex
 }
 
-func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string) (string, error) {
+func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string, _ io.Writer) (string, error) {
 	b.mu.Lock()
 	b.buildCtx = ctx
 	b.mu.Unlock()
@@ -125,11 +126,11 @@ func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string) (stri
 	return "", b.err
 }
 
-func (b *disconnectBuilder) BuildDevcontainer(context.Context, string, string, string) (string, error) {
+func (b *disconnectBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
 	return "", nil
 }
 
-func (b *disconnectBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string) (string, error) {
+func (b *disconnectBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
 	return "", nil
 }
 

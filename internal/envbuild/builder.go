@@ -403,7 +403,11 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 //
 // Fails closed if the tools dir is unconfigured/incomplete, the base is
 // unpullable, or the base carries ONBUILD triggers.
-func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string) (string, error) {
+//
+// logSink, when non-nil, receives the wrap build's output instead of
+// Builder.DefaultLogSink — mirrors runBuildAndFinalize's own nil fallback
+// (this path bypasses that function, so it needs the same one-liner here).
+func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
 		return "", err
@@ -412,9 +416,12 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string) (
 		return "", fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
 			"(pre-pull a private image on the host with `docker pull`)", baseRef, err)
 	}
+	if logSink == nil {
+		logSink = b.DefaultLogSink
+	}
 	// pullParent=false: ensureImage already made the base present locally; a
 	// registry pull here would fail for a local-only or digest-pinned user image.
-	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, nil, false)
+	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, false)
 }
 
 // hardenedHostConfig builds the Docker HostConfig for the build container with

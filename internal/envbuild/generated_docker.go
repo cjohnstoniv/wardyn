@@ -52,7 +52,10 @@ const (
 // Build uses, but envbuilder's build-then-exit behaviour on a real daemon is
 // only smoke-tested for the git path (integration_test.go, WARDYN_TEST_DOCKER=1).
 // A sibling real-daemon smoke test for this path is the remaining verification.
-func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string) (imageRef string, err error) {
+//
+// logSink, when non-nil, receives this build's output; nil falls back to
+// Builder.DefaultLogSink (runBuildAndFinalize's own fallback — see there).
+func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (imageRef string, err error) {
 	if outputTag == "" {
 		return "", fmt.Errorf("envbuild: outputTag is required")
 	}
@@ -73,7 +76,7 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 	if err != nil {
 		return "", err
 	}
-	return b.runBuildAndFinalize(ctx, localBuildEnv(b.CacheRepo), nil, tarCtx, "/", nil, outputTag)
+	return b.runBuildAndFinalize(ctx, localBuildEnv(b.CacheRepo), nil, tarCtx, "/", logSink, outputTag)
 }
 
 // generatedFilesTar packs the generated files under destDir into an in-memory
