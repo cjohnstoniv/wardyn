@@ -31,7 +31,8 @@ import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
 import { CorpNetworkStep, isProxyConfigured, proxyDetected, type CorpStepActions } from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
-import { LaunchStep, ReviewStep, WorkspacesStep } from "./step-bodies";
+import { ImagesStep, LaunchStep, ReviewStep, SourcesStep, WorkspacesStep } from "./step-bodies";
+import { baseImagesApi, sourcesApi } from "../../../lib/api/sources";
 import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
@@ -130,6 +131,24 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   );
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
   const { workspaces, loading: wsLoading, reload: loadWorkspaces } = useWorkspaceList();
+  // Tier-1/2 library sizes for the rail badges. The tier step bodies own their
+  // own lists; this refetches on every step change so a just-added entry earns
+  // its badge as you move on. Best-effort — a failed fetch keeps the last count.
+  const [tierCounts, setTierCounts] = React.useState({ sources: 0, images: 0 });
+  React.useEffect(() => {
+    let live = true;
+    Promise.all([sourcesApi.listSources().catch(() => null), baseImagesApi.listBaseImages().catch(() => null)]).then(
+      ([srcs, imgs]) =>
+        live &&
+        setTierCounts((prev) => ({
+          sources: srcs ? srcs.length : prev.sources,
+          images: imgs ? imgs.length : prev.images,
+        })),
+    );
+    return () => {
+      live = false;
+    };
+  }, [stepId]);
   // Site config feeds the Integrations step's own derivation (SCM/mirror/proxy
   // rows) — read-only here now that the three corporate-baseline steps that
   // used to write it (Host Proxy / SCM Provider / Artifact Redirect) are gone
@@ -300,8 +319,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     redirectCount: corpRedirects.length,
     ...corpGate,
   };
-  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork);
-  const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
+  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, tierCounts.sources, tierCounts.images);
+  const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects, tierCounts.sources, tierCounts.images);
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
   for (const id of DEMO_STEP_IDS) {
@@ -431,6 +450,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             />
           </React.Suspense>
         )}
+        {stepId === "sources" && <SourcesStep workspaces={workspaces} />}
+        {stepId === "images" && <ImagesStep workspaces={workspaces} />}
         {stepId === "workspaces" && (
           <WorkspacesStep workspaces={workspaces} loading={wsLoading} onReload={loadWorkspaces} />
         )}

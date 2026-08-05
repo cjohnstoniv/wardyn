@@ -172,6 +172,10 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
       ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
+      // The three workspace tiers, dependency order: dirs/repos are configured
+      // first, base images second, the aggregate composes them.
+      ["sources", "Directories & repos"],
+      ["images", "Base images"],
       ["workspaces", "Workspaces"],
       ["review", "Review"],
       ["launch", "Launch"],
@@ -181,9 +185,8 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.integrations).toBe("Connect what's outside Wardyn");
   });
 
-  // 9 -> 10: Corporate network comes BACK as its own step, right BEFORE
-  // Integrations — see steps.ts's PHASES comment for why the order itself
-  // (not a banner) is the fix for "blocked network reads as bad credential".
+  // 10 -> 12: YOUR WORK carries the three workspace tiers as their own steps,
+  // in dependency order — see steps.ts's PHASES for the walk rationale.
   it("pins STEP_ORDER to the phase walk (essentials -> demos -> your work -> finish)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
@@ -193,11 +196,13 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
+      "sources",
+      "images",
       "workspaces",
       "review",
       "launch",
     ]);
-    expect(STEP_ORDER).toHaveLength(10);
+    expect(STEP_ORDER).toHaveLength(12);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // The four Demos sub-steps ARE the demos phase, in catalog order.
     expect(PHASES.find((p) => p.id === "demos")?.steps).toEqual([...DEMO_STEP_IDS]);

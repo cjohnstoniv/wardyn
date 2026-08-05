@@ -59,6 +59,10 @@ vi.mock("../../../lib/api/compose", () => ({
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a), scanWorkspace: vi.fn() },
 }));
+vi.mock("../../../lib/api/sources", () => ({
+  sourcesApi: { listSources: () => Promise.resolve([]) },
+  baseImagesApi: { listBaseImages: () => Promise.resolve([]) },
+}));
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
@@ -177,7 +181,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all ten funnel steps and Next/Back move within bounds", async () => {
+  it("walks all twelve funnel steps and Next/Back move within bounds", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
@@ -220,9 +224,16 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /lines that can't be crossed/i }),
     ).toBeInTheDocument();
 
-    // your work: workspaces.
+    // your work: the three tiers, dependency order — dirs/repos, images,
+    // then the workspace that composes them.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(await screen.findByText(/never a raw host path/i)).toBeInTheDocument(); // workspaces (three-tier framing)
+    expect(await screen.findByRole("heading", { name: /^directories & repos$/i })).toBeInTheDocument(); // tier 1
+    expect(screen.getByRole("button", { name: /add directory or repo/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /^base images$/i })).toBeInTheDocument(); // tier 2
+    expect(screen.getByRole("button", { name: /add base image/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByText(/never a raw host path/i)).toBeInTheDocument(); // workspaces (tier 3)
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     // review step — the consolidated readiness rollup + the checks that used to
@@ -530,10 +541,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (step 9 of 10) — checks live there now, not the barrier step
+    // walk to Review (step 11 of 12) — checks live there now, not the barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 9; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -582,7 +593,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 7; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 9; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

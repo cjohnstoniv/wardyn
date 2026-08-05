@@ -30,7 +30,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { STATUS_TONE, STATUS_LABEL, TierTabRail, type WorkspaceTier } from "../workspaces";
+import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { SourcesLibrary } from "../sources-library";
 import { ImageCatalog } from "../image-catalog";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
@@ -254,6 +254,37 @@ function workspaceProfileSummary(raw: Workspace["profile"]): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
+// Tier 1 — its own Getting-started step: the shared library of directories &
+// repos, configured once and attached by any number of workspaces.
+export function SourcesStep({ workspaces }: { workspaces: Workspace[] }) {
+  const operator = useOperator();
+  return (
+    <div className="space-y-4">
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        Configured once — each directory or repo carries its own requirements and scan, and every
+        workspace that needs it attaches the same entry.
+        {!operator && ` ${OPERATOR_ONLY_REASON}`}
+      </p>
+      <SourcesLibrary workspaces={workspaces} embedded />
+    </div>
+  );
+}
+
+// Tier 2 — its own Getting-started step: the shared base-image catalog.
+export function ImagesStep({ workspaces }: { workspaces: Workspace[] }) {
+  const operator = useOperator();
+  return (
+    <div className="space-y-4">
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        Shared across workspaces — a registry image, a custom recipe, or one you bring. A workspace
+        without one runs on its derived recommended build.
+        {!operator && ` ${OPERATOR_ONLY_REASON}`}
+      </p>
+      <ImageCatalog workspaces={workspaces} embedded />
+    </div>
+  );
+}
+
 export function WorkspacesStep({
   workspaces,
   loading,
@@ -270,9 +301,6 @@ export function WorkspacesStep({
   // image -> Requirements -> Done) instead of the retired guided Import panel.
   const [wizardOpen, setWizardOpen] = React.useState(false);
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
-  // Landing on tier 1: dirs/repos are configured FIRST, then images, then
-  // the workspace that composes them — the dependency order IS the walk.
-  const [tier, setTier] = React.useState<WorkspaceTier>("sources");
 
   // Best-effort scan → always refresh (repo scans run async and return 202, local
   // dirs resolve inline) so the row reflects the latest status either way.
@@ -302,20 +330,13 @@ export function WorkspacesStep({
   return (
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
-        Three tiers. <strong>Directories &amp; repos</strong> are configured once — each carries its own
-        requirements and scan. <strong>Base images</strong> are shared. A <strong>workspace</strong> brings
-        one or more of them together (ephemeral scratch works too) — that combination is what a run
-        attaches, never a raw host path.
+        A workspace brings your directories &amp; repos and a base image together — that combination is
+        what a run attaches, never a raw host path (ephemeral scratch works too, so a task that needs
+        no repo can still run).
         {!operator && ` ${OPERATOR_ONLY_REASON}`}
       </p>
 
-      <div className="flex items-start gap-4">
-        <TierTabRail value={tier} onChange={setTier} />
-        <div className="min-w-0 flex-1">
-          {tier === "sources" && <SourcesLibrary workspaces={workspaces} embedded />}
-          {tier === "images" && <ImageCatalog workspaces={workspaces} embedded />}
-
-          {tier !== "workspaces" ? null : loading ? (
+      {loading ? (
         <p className="text-sm text-muted-foreground">Loading workspaces…</p>
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6 text-center">
@@ -388,8 +409,6 @@ export function WorkspacesStep({
           </Button>
         </>
       )}
-        </div>
-      </div>
 
       {/* The four-step "Add workspace" wizard — its own Dialog on top; returns
           here via onClose (like NewRunDialog returns to SetupScreen). Mounted

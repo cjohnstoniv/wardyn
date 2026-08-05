@@ -13,7 +13,7 @@
 // their tests went too — the surviving behaviour is covered by
 // setup/corp-network-step.test.tsx.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -78,7 +78,7 @@ vi.mock("../../../lib/api/integrations", async () => {
   return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
 });
 
-import { WorkspacesStep, ReviewStep, LaunchStep } from "./step-bodies";
+import { ImagesStep, LaunchStep, ReviewStep, SourcesStep, WorkspacesStep } from "./step-bodies";
 import { deriveReadiness } from "../onboarding/intro";
 import { baseStatus as sharedBaseStatus } from "./test-fixtures";
 
@@ -115,23 +115,23 @@ describe("step-bodies.tsx — smoke", () => {
     scanWorkspaceMock.mockReset().mockResolvedValue({ async: false });
   });
 
-  it("WorkspacesStep lands on tier 1 with the rail in dependency order", () => {
-    // WorkspacesStep now navigates to a workspace's detail route (the wizard's
-    // onOpenWorkspace and a non-ready row's Open button both call useNavigate),
-    // so it needs a Router in scope even for this render-smoke assertion.
+  it("SourcesStep and ImagesStep render their tier libraries as their own step bodies", async () => {
     render(
       <MemoryRouter>
-        <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
+        <SourcesStep workspaces={[]} />
       </MemoryRouter>,
     );
-    // Dirs/repos are configured FIRST, then images, then the aggregate — the
-    // rail order IS the dependency order, and tier 1 is the landing tab.
-    const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
-    expect(tabs).toEqual(["Directories & repos", "Base images", "Workspaces"]);
-    expect(screen.getByRole("tab", { name: /directories & repos/i })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("button", { name: /add directory or repo/i })).toBeInTheDocument();
+    cleanup();
+    render(
+      <MemoryRouter>
+        <ImagesStep workspaces={[]} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: /add base image/i })).toBeInTheDocument();
   });
 
-  it("WorkspacesStep's Workspaces tab holds the onboard affordance, which opens the four-step wizard (origin=setup)", async () => {
+  it("WorkspacesStep renders the empty-state onboard affordance, which opens the four-step wizard (origin=setup)", async () => {
     getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
     listSecretsMock.mockReset().mockResolvedValue([]);
     listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
@@ -141,7 +141,6 @@ describe("step-bodies.tsx — smoke", () => {
         <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
       </MemoryRouter>,
     );
-    await user.click(screen.getByRole("tab", { name: /workspaces/i }));
     expect(screen.getByText("No workspaces onboarded yet.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /onboard your first workspace/i }));
     expect(await screen.findByRole("heading", { name: "Add workspace" })).toBeInTheDocument();

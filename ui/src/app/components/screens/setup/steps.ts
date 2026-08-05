@@ -39,7 +39,7 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // 9 -> 10: `corp_network` comes BACK as its own step, right before
 // `integrations` — see corp-network-step.tsx and the PHASES comment below for
 // why the ORDER, not a banner, is the actual fix.
-export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review" | "launch";
+export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "sources" | "images" | "workspaces" | "review" | "launch";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). Scoped
@@ -57,6 +57,8 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
   corp_network: "Corporate network",
   integrations: "Integrations",
   ...DEMO_TITLES,
+  sources: "Directories & repos",
+  images: "Base images",
   workspaces: "Workspaces",
   review: "Review",
   launch: "Launch",
@@ -69,6 +71,10 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
   corp_network: "Corporate network",
   integrations: "Connect what's outside Wardyn",
   ...DEMO_TITLES,
+  // Rail-label-as-heading, the corp_network precedent: these ARE the tiers'
+  // names; a distinct noun-phrase would just be a synonym.
+  sources: "Directories & repos",
+  images: "Base images",
   workspaces: "Onboard a workspace",
   review: "Review readiness",
   launch: "Launch your first run",
@@ -98,7 +104,7 @@ export interface PhaseDef {
 export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "corp_network", "integrations"] },
   { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
-  { id: "work", label: "Your work", steps: ["workspaces"] },
+  { id: "work", label: "Your work", steps: ["sources", "images", "workspaces"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
 ];
 
@@ -126,6 +132,8 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
   // barrier (Environment) is the sole hard requirement.
   "integrations",
   ...DEMO_STEP_IDS,
+  "sources",
+  "images",
   "workspaces",
 ]);
 
@@ -288,6 +296,9 @@ export function stepBadges(
   // this pure function only needs the resulting number.
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
+  // Tier-1/2 library sizes — defaulted so pre-split call sites stand unchanged.
+  sourcesCount = 0,
+  imagesCount = 0,
 ): Record<SetupStepId, StepBadge> {
   const readyWorkspaces = workspaces.filter((w) => isUsable(w.status)).length;
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
@@ -309,6 +320,12 @@ export function stepBadges(
         ? { text: `Ready · ${integrationsCount} connected`, tone: "success" }
         : { text: "Optional", tone: "neutral" },
     ...demoBadges,
+    sources: sourcesCount
+      ? { text: `Ready · ${sourcesCount} configured`, tone: "success" }
+      : { text: "Optional", tone: "neutral" },
+    images: imagesCount
+      ? { text: `Ready · ${imagesCount} saved`, tone: "success" }
+      : { text: "Optional", tone: "neutral" },
     // Count only READY workspaces, not merely onboarded ones — a workspace stuck
     // mid-import isn't attachable to a run yet, so it earns its own honest "In
     // progress" state instead of a premature green "Ready · N onboarded".
@@ -351,6 +368,8 @@ export function stepDone(
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
   corpNetworkRedirects: EgressRedirect[] = [],
+  sourcesCount = 0,
+  imagesCount = 0,
 ): Record<SetupStepId, boolean> {
   // Demos: advisory here (all false). The orchestrator ORs in the per-browser
   // "launched demos" set to earn each demo's checkmark — kept out of this pure fn
@@ -377,6 +396,8 @@ export function stepDone(
     // this pure fn only knows about a real connected integration.
     integrations: integrationsCount > 0,
     ...demoDone,
+    sources: sourcesCount > 0,
+    images: imagesCount > 0,
     // Design delta: done only once a workspace is actually READY, matching the
     // badge above — merely onboarding one (still scanning/building/verifying)
     // no longer earns the stepper checkmark.
