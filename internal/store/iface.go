@@ -62,7 +62,36 @@ type Store interface {
 	// instead of retrying blindly.
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error)
 	SetWorkspaceScanResult(ctx context.Context, id uuid.UUID, profile json.RawMessage, runID uuid.UUID) (types.Workspace, bool, error)
+	// MergeWorkspaceRequirements ADDS overlay rows atomically (jsonb ||) — the
+	// verify loop's approve-writes-the-row-now, safe against concurrent edits
+	// the full-replace SetWorkspaceRequirements would race. ErrConflict at the
+	// key cap.
+	MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add map[string]types.WorkspaceRequirement) (types.Workspace, error)
 	DeleteWorkspace(ctx context.Context, id uuid.UUID) error
+
+	// Source library (tier 1) — a repo/dir configured once, attached to many
+	// workspaces. Upsert dedupes on (kind, locator, ref); the scan lifecycle
+	// (fence, result) mirrors the workspace's own pre-split shape.
+	UpsertSource(ctx context.Context, src types.Source) (types.Source, error)
+	GetSource(ctx context.Context, id uuid.UUID) (types.Source, error)
+	GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error)
+	ListSources(ctx context.Context) ([]types.Source, error)
+	UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error)
+	WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error)
+	DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error
+	ClaimSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
+	ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
+	SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID) (types.Source, error)
+	SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus) (types.Source, error)
+
+	// Base-image catalog (tier 2). Upsert dedupes on (kind, image, steps);
+	// "recommended" is structurally excluded (CHECK) — it is a per-workspace
+	// derived build, never a catalog row.
+	UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error)
+	GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error)
+	ListBaseImages(ctx context.Context) ([]types.BaseImageEntry, error)
+	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
+	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
 
 	// CredentialGrant.
 	CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error)

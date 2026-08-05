@@ -109,7 +109,14 @@ func (s PG) ListPoliciesPage(ctx context.Context, p Page) ([]types.RunPolicy, er
 // workspaces_created_at_idx (0023) covers the ORDER BY.
 func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, error) {
 	q, args := p.appendTo(`SELECT `+wsCols+` FROM workspaces ORDER BY created_at DESC`, nil)
-	return collect(ctx, s.Pool, "list", "workspaces", q, args, scanWorkspace)
+	wss, err := collect(ctx, s.Pool, "list", "workspaces", q, args, scanWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	// Bulk hydrate: ONE sources query for the union across the whole page —
+	// referencedWorkspaces full-lists on run-create/preflight, so per-row
+	// hydration would multiply a hot path.
+	return s.hydrateAll(ctx, wss)
 }
 
 // ListApprovalsPage returns approvals filtered by state (empty = all) in reverse

@@ -33,6 +33,10 @@ import (
 // ErrNotFound is returned when a Get* call finds no row.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrConflict reports a fenced write losing its race: a source scan slot
+// already claimed, or the requirements merge hitting the key cap.
+var ErrConflict = errors.New("store: conflict")
+
 // ErrAlreadyDecided is returned when DecideApproval is called on an approval
 // that has already left the PENDING state. Fail closed: never allow a second
 // decision to silently overwrite the first.
@@ -363,10 +367,25 @@ func workspaceRequirementsParam(reqs map[string]types.WorkspaceRequirement) any 
 	return b
 }
 
+// workspaceAttachmentsParam marshals a workspace's attachments for storage.
+// Empty writes '[]' (the column is NOT NULL — 0031 backfills every row): an
+// empty array IS the pre-split marker, and the hydrate pass falls back to the
+// embedded sources column exactly as it would for NULL.
+func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
+	if len(atts) == 0 {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(atts)
+	if err != nil {
+		return nil // unreachable for this concrete type; fail-safe to pre-split view
+	}
+	return b
+}
+
 // wsCols is the canonical workspace column list (order matches scanWorkspace).
 const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
-	`record_results, llm_cred`
+	`record_results, llm_cred, attachments, base_image_id`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
@@ -374,20 +393,20 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		RETURNING ` + wsCols
-	return scanWorkspace(s.Pool.QueryRow(ctx, q,
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
 		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
-		workspaceLLMCredParam(ws.LLMCred),
+		workspaceLLMCredParam(ws.LLMCred), workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID,
 	))
 }
 
 // GetWorkspace returns the workspace for id, or ErrNotFound.
 func (s PG) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id = $1`, id))
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id = $1`, id))
 }
 
 // ListWorkspaces returns all workspaces in reverse creation order. The slice
@@ -411,14 +430,16 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 		UPDATE workspaces
 		SET name=$1, sources=$2, base_image=$3, requirements=$4,
 			profile=$5, image_ref=$6, built_profile_hash=$7, approved_egress=$8,
-			active_run_id=$9, status=$10, record_results=$11, llm_cred=$12, updated_at=now()
-		WHERE id=$13
+			active_run_id=$9, status=$10, record_results=$11, llm_cred=$12,
+			attachments=$13, base_image_id=$14, updated_at=now()
+		WHERE id=$15
 		RETURNING ` + wsCols
-	return scanWorkspace(s.Pool.QueryRow(ctx, q,
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
 		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
-		string(ws.Status), workspaceProfileParam(ws.RecordResults), workspaceLLMCredParam(ws.LLMCred), id,
+		string(ws.Status), workspaceProfileParam(ws.RecordResults), workspaceLLMCredParam(ws.LLMCred),
+		workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID, id,
 	))
 }
 
@@ -427,7 +448,7 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 // SetWorkspaceApprovedEgress so it can never clobber a concurrently-persisted
 // async scan. Pass nil to clear the binding.
 func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx,
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET llm_cred=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceLLMCredParam(cred), id))
 }
@@ -438,7 +459,7 @@ func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.W
 // scan's profile/status land via the full-column UpdateWorkspace, and a
 // read-modify-write here would silently revert them).
 func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx,
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET approved_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceApprovedParam(domains), id))
 }
@@ -452,7 +473,7 @@ func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domain
 // rather than merges; a caller adding one requirement to an existing set reads
 // first, merges in Go, then calls this with the result.
 func (s PG) SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx,
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET requirements=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceRequirementsParam(reqs), id))
 }
@@ -476,6 +497,7 @@ func (s PG) SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID,
 		args = append(args, onlyIfStatus)
 	}
 	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q+` RETURNING `+wsCols, args...))
+	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) && onlyIfStatus != "" {
 		// Distinguish guard-miss from a missing workspace.
 		ws, gerr := s.GetWorkspace(ctx, id)
@@ -500,6 +522,7 @@ func (s PG) ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, ex
 		`UPDATE workspaces SET active_run_id=$2, updated_at=now()
 		 WHERE id=$1 AND active_run_id IS NOT DISTINCT FROM $3 RETURNING `+wsCols,
 		id, runID, expected))
+	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
 		ws, gerr := s.GetWorkspace(ctx, id)
 		if gerr != nil {
@@ -531,7 +554,7 @@ func (s PG) ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (b
 // writers established; the previous full-row cache write could revert every
 // concurrently-persisted async field from a stale snapshot.
 func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error) {
-	return scanWorkspace(s.Pool.QueryRow(ctx,
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET image_ref=$1, built_profile_hash=$2, updated_at=now() WHERE id=$3 RETURNING `+wsCols,
 		imageRef, builtHash, id))
 }
@@ -559,6 +582,7 @@ func (s PG) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
 		`UPDATE workspaces SET status=$1, active_run_id=$2, updated_at=now()
 		 WHERE id=$3 AND active_run_id IS NOT DISTINCT FROM $4 RETURNING `+wsCols,
 		string(status), activeRunID, id, expectedActive))
+	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish a guard miss (slot moved) from a missing workspace.
 		cur, gerr := s.GetWorkspace(ctx, id)
@@ -586,6 +610,7 @@ func (s PG) SetWorkspaceScanResult(ctx context.Context, id uuid.UUID, profile js
 		`UPDATE workspaces SET profile=$1, status=$2, active_run_id=NULL, updated_at=now()
 		 WHERE id=$3 AND active_run_id=$4 RETURNING `+wsCols,
 		workspaceProfileParam(profile), string(types.WorkspaceScanned), id, runID))
+	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish a guard miss (slot no longer owned) from a missing workspace.
 		ws, gerr := s.GetWorkspace(ctx, id)
@@ -612,14 +637,36 @@ func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+
+// hydratedScan wraps scanWorkspace for the single-row writers: decode the row,
+// then materialize the derived view (attachments → Sources/Profile/Status/
+// BaseImage + the folded EffectiveRequirements).
+
+// hydrateIfOK hydrates ws when err is nil — the mixed-return writers' shim.
+func (s PG) hydrateIfOK(ctx context.Context, ws types.Workspace, err error) (types.Workspace, error) {
+	if err != nil {
+		return ws, err
+	}
+	return s.hydrated(ctx, ws)
+}
+
+func (s PG) hydratedScan(ctx context.Context, row pgx.Row) (types.Workspace, error) {
+	ws, err := scanWorkspace(row)
+	if err != nil {
+		return ws, err
+	}
+	return s.hydrated(ctx, ws)
+}
+
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
 	var status string
-	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw []byte
+	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw, attachmentsRaw []byte
 	err := row.Scan(
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
+		&attachmentsRaw, &ws.BaseImageID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
@@ -658,6 +705,9 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		if json.Unmarshal(llmCredRaw, &c) == nil {
 			ws.LLMCred = &c
 		}
+	}
+	if attachmentsRaw != nil {
+		_ = json.Unmarshal(attachmentsRaw, &ws.Attachments) // fail safe: pre-split view
 	}
 	deriveWorkspaceMirrors(&ws)
 	return ws, nil

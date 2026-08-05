@@ -90,91 +90,11 @@ func firstRepoSource(ws types.Workspace) (types.WorkspaceSource, bool) {
 	return types.WorkspaceSource{}, false
 }
 
-// mergeWorkspaceProfiles combines N local_dir sources' individually-scanned
-// profiles into ONE profile for the workspace: union the set-like fields
-// (languages, package managers, egress, tools, required secrets, services,
-// suggested egress, secret-file paths), concatenate leak findings and setup
-// commands (never drop a suspected secret or an install step), take the
-// largest build-memory hint, and take the LOWEST confidence (one ambiguous
-// source makes the whole workspace's profile suspect). Empty input returns
-// the zero profile; a single profile is returned unchanged.
+// mergeWorkspaceProfiles is workspacescan.MergeProfiles — moved beside the
+// profile type it merges (the store's hydrate pass needs it and cannot import
+// api); this alias keeps the existing call sites put.
 func mergeWorkspaceProfiles(profiles []workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile {
-	if len(profiles) == 0 {
-		return workspacescan.WorkspaceProfile{}
-	}
-	if len(profiles) == 1 {
-		return profiles[0]
-	}
-	langs, pkgMgrs, egress, tools := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
-	services, suggested, secretFiles := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
-	github, otherHosts := map[string]struct{}{}, map[string]struct{}{}
-	secretByName := map[string]workspacescan.SecretNeed{}
-	var leaks []workspacescan.LeakFinding
-	var setupCmds []workspacescan.SetupCommand
-	hasDevcontainer, hasDockerfile, needsReview := false, false, false
-	buildMemMiB := 0
-	confidenceRank := map[string]int{
-		workspacescan.ConfidenceHigh: 3, workspacescan.ConfidenceMedium: 2, workspacescan.ConfidenceLow: 1,
-	}
-	lowest := workspacescan.ConfidenceHigh
-
-	addAll := func(dst map[string]struct{}, xs []string) {
-		for _, x := range xs {
-			dst[x] = struct{}{}
-		}
-	}
-	for _, p := range profiles {
-		addAll(langs, p.Languages)
-		addAll(pkgMgrs, p.PackageManagers)
-		addAll(egress, p.EgressDomains)
-		addAll(tools, p.Tools)
-		addAll(services, p.ServicesNeeded)
-		addAll(suggested, p.SuggestedEgress)
-		addAll(secretFiles, p.SecretFilesPresent)
-		addAll(github, p.GitRemotes.GitHub)
-		addAll(otherHosts, p.GitRemotes.OtherHosts)
-		for _, n := range p.RequiredSecrets {
-			if _, dup := secretByName[n.Name]; !dup {
-				secretByName[n.Name] = n
-			}
-		}
-		leaks = append(leaks, p.LeakFindings...)
-		setupCmds = append(setupCmds, p.SetupCommands...)
-		hasDevcontainer = hasDevcontainer || p.HasDevcontainer
-		hasDockerfile = hasDockerfile || p.HasDockerfile
-		needsReview = needsReview || p.NeedsReview
-		if p.BuildMemoryMiB > buildMemMiB {
-			buildMemMiB = p.BuildMemoryMiB
-		}
-		if confidenceRank[p.Confidence] < confidenceRank[lowest] {
-			lowest = p.Confidence
-		}
-	}
-	requiredSecrets := make([]workspacescan.SecretNeed, 0, len(secretByName))
-	for _, n := range secretByName {
-		requiredSecrets = append(requiredSecrets, n)
-	}
-	slices.SortFunc(requiredSecrets, func(a, b workspacescan.SecretNeed) int { return strings.Compare(a.Name, b.Name) })
-
-	return workspacescan.WorkspaceProfile{
-		Languages:          sortedKeys(langs),
-		PackageManagers:    sortedKeys(pkgMgrs),
-		EgressDomains:      sortedKeys(egress),
-		Tools:              sortedKeys(tools),
-		GitRemotes:         workspacescan.GitRemotes{GitHub: sortedKeys(github), OtherHosts: sortedKeys(otherHosts)},
-		HasDevcontainer:    hasDevcontainer,
-		HasDockerfile:      hasDockerfile,
-		RequiredSecrets:    requiredSecrets,
-		ServicesNeeded:     sortedKeys(services),
-		SuggestedEgress:    sortedKeys(suggested),
-		SecretFilesPresent: sortedKeys(secretFiles),
-		BuildMemoryMiB:     buildMemMiB,
-		LeakFindings:       leaks,
-		SetupCommands:      setupCmds,
-		Confidence:         lowest,
-		NeedsReview:        needsReview,
-		Source:             workspacescan.SourceDeterministic,
-	}
+	return workspacescan.MergeProfiles(profiles)
 }
 
 // workspaceProfile decodes a workspace's opaque profile blob into the scanner's

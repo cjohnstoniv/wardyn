@@ -225,7 +225,28 @@ type Workspace struct {
 	// type prefix is always one of the three fixed tokens above, so splitting
 	// on the first colon unambiguously separates it from the key even though a
 	// host path (a write: key) may itself legally contain colons.
+	//
+	// THREE-TIER SPLIT: this map is now the workspace's OVERLAY — what this
+	// workspace additionally declares or restates on top of what its attached
+	// sources' own contracts contribute. EffectiveRequirements below is the
+	// folded result a run actually consumes.
 	Requirements map[string]WorkspaceRequirement `json:"requirements,omitempty"`
+
+	// Attachments is the tier-3 composition: ordered source references and
+	// inline ephemeral rows, each with per-attachment target/writable and the
+	// workspace's requirement OVERRIDES for that source (workspace_contract.go).
+	// Empty on a pre-split row that hasn't migrated its embedded Sources yet —
+	// the store's hydrate pass falls back to the embedded column then.
+	Attachments []WorkspaceAttachment `json:"attachments,omitempty"`
+	// BaseImageID references the shared base-image catalog (tier 2). Nil means
+	// "recommended" — the per-workspace derived build — by design, not absence.
+	BaseImageID *uuid.UUID `json:"base_image_id,omitempty"`
+	// EffectiveRequirements is DERIVED, read-only, never persisted: the
+	// FoldWorkspaceContract result over attachments + attached source
+	// contracts + the overlay above. This is the map run-create and preflight
+	// consume. Populated by the store's hydrate pass; on a pre-split row it
+	// equals Requirements verbatim (the fold's zero-source identity).
+	EffectiveRequirements map[string]WorkspaceRequirement `json:"effective_requirements,omitempty"`
 
 	// --- Everything below this point through DefaultTarget is a DERIVED
 	// READ-ONLY MIRROR of Sources[0]. NEVER persisted (there is no backing
