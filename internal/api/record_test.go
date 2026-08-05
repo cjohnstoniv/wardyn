@@ -364,7 +364,7 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
 		ID:      wsID,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
-		Status: types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
+		Status:  types.WorkspaceScanned, ApprovedEgress: []string{"already.example.com"},
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
@@ -413,7 +413,7 @@ func TestPromoteRecordEgress_GuardMissConflicts(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
 		ID:      wsID,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
-		Status: types.WorkspaceScanned,
+		Status:  types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Status: recordStatusRecorded, Observations: &obs},
 		})}}}
@@ -455,7 +455,7 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
 		ID:      wsID,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
-		Status: types.WorkspaceScanned,
+		Status:  types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}
@@ -486,7 +486,7 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 	fake := &recordStore{importStateFake: importStateFake{ws: types.Workspace{
 		ID:      wsID,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
-		Status: types.WorkspaceScanned,
+		Status:  types.WorkspaceScanned,
 		RecordResults: mustJSON(map[string]RecordTaskResult{
 			"build": {RunID: runID, Mode: "auto", Status: recordStatusRecorded, Observations: &obs},
 		})}}}

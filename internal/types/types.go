@@ -139,6 +139,10 @@ type AgentRun struct {
 	// agent, and the scan-result endpoint persists the derived profile onto this
 	// workspace from this TRUSTED linkage (not sandbox input). Nil for ordinary runs.
 	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty"`
+	// SourceID is the TRUSTED run→library-source linkage for a per-source scan
+	// run (the three-tier retarget): the scan-facts upload authorizes on it the
+	// way workspace runs authorize on WorkspaceID. Never set by user runs.
+	SourceID *uuid.UUID `json:"source_id,omitempty"`
 	// AutoStopAfterSec is the run's EFFECTIVE idle auto-stop cap, captured from the
 	// resolved RunPolicySpec at creation (frozen for the run's life). The idle
 	// reaper reads it from the run row so a run launched with an inline/default

@@ -49,7 +49,7 @@ func TestWorkspaceCloneEgress_CoversEveryRepoSource(t *testing.T) {
 			want: []string{"gitlab.corp.internal", "ado.corp.internal"},
 		},
 		{
-			name: "GitHub only — nothing to allow (the broker is on-segment)",
+			name:    "GitHub only — nothing to allow (the broker is on-segment)",
 			sources: []types.WorkspaceSource{repo("acme/payments"), repo("acme/web")},
 			want:    nil,
 		},

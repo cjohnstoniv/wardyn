@@ -100,7 +100,9 @@ func (s *Server) authSandboxRunUpload(w http.ResponseWriter, r *http.Request, no
 		writeError(w, http.StatusForbidden, notFoundMsg)
 		return nil, types.AgentRun{}, false
 	}
-	if run.WorkspaceID == nil {
+	if run.WorkspaceID == nil && run.SourceID == nil {
+		// Governed = carries a trusted linkage: a workspace step run OR a
+		// per-source scan run (the three-tier retarget).
 		writeError(w, http.StatusForbidden, notGovernedMsg)
 		return nil, types.AgentRun{}, false
 	}

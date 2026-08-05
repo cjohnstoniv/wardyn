@@ -84,7 +84,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// in a sandbox that never signs a Bedrock request). An INTERACTIVE
 	// workspace-linked run (Record Mode) is a human-driven sandbox, not a scan, so
 	// it stays a model run. Mirrors the WARDYN_SCAN_ONLY discriminator.
-	modelRun := !(run.WorkspaceID != nil && !interactive)
+	modelRun := !((run.WorkspaceID != nil || run.SourceID != nil) && !interactive)
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
 	t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)

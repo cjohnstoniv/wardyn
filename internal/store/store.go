@@ -57,15 +57,15 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	const q = `
 		INSERT INTO agent_runs
 			(id, created_at, updated_at, created_by, agent, repo, task,
-			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id`
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id`
 
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
-		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.Image, r.AutoStopAfterSec,
+		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID,
 	)
 	return scanRun(row)
@@ -75,7 +75,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
 		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, image, auto_stop_after_sec, agent_exec_id
+			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id
 		FROM agent_runs WHERE id = $1`
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
@@ -196,7 +196,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
-		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.Image, &r.AutoStopAfterSec,
+		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -636,7 +636,6 @@ func (s PG) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
 	}
 	return nil
 }
-
 
 // hydratedScan wraps scanWorkspace for the single-row writers: decode the row,
 // then materialize the derived view (attachments → Sources/Profile/Status/

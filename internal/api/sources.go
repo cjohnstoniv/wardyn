@@ -32,6 +32,7 @@ func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly chi.Router) {
 	r.Get("/sources", s.handleListSources)
 	operatorOnly.Post("/sources", s.handleCreateSource)
 	r.Get("/sources/{id}", s.handleGetSource)
+	operatorOnly.Post("/sources/{id}/scan", s.handleScanSource)
 	operatorOnly.Put("/sources/{id}", s.handleUpdateSource)
 	operatorOnly.Delete("/sources/{id}", s.handleDeleteSource)
 	r.Get("/base-images", s.handleListBaseImages)

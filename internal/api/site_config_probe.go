@@ -232,7 +232,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		return runID, probeRunResult{}, fmt.Errorf("mint run identity: %w", err)
 	}
 	// Read-only, ephemeral, holds no credentials -- the operator's floor still
-	// governs, exactly like launchScanRun's rationale (workspace_run.go).
+	// governs, exactly like launchSourceScanRun's rationale (source_scan.go).
 	cc := s.defaultFloorClass()
 	now := s.cfg.Now().UTC()
 	run := types.AgentRun{

@@ -11,7 +11,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -846,29 +845,21 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleScanWorkspace scans an onboarded workspace and persists its profile.
+// handleScanWorkspace scans an onboarded workspace — a fan-out over its
+// attached sources, each of which owns its own scan lifecycle (the tier-1
+// retarget that fixed the old 3-branch switch's bug: a repo+dir workspace
+// never scanned its dirs, because the repo branch won on every call):
 //
-//   - a REPO source needs a governed clone-and-scan run — there is no host-side
-//     way to scan it. It scans as a governed throwaway run whose ScanFacts
-//     return over the brokered scan-result route (handleUploadScanResult).
-//     Launching it returns 202 with the scan_run_id (503 with no runner
-//     configured, 409 when an import step already holds the workspace's
-//     slot); the profile lands asynchronously.
-//     ponytail: when a repo source is present, this scans ONLY the first one
-//     (firstRepoSource) and any local_dir sources on the SAME workspace are
-//     scanned by a LATER call once the repo scan lands, not merged in the
-//     same pass — multi-source aggregation across BOTH kinds in one governed
-//     run is the upgrade path if that's ever needed.
-//   - otherwise, every local_dir source is scanned HOST-SIDE inline via
-//     workspacescan.Scan (bounded, read-only, no subprocess — the host control
-//     plane can read the reusable onboarded path directly) and merged into one
-//     profile (mergeWorkspaceProfiles). The derived profile is persisted,
-//     status flips to scanned, and the profile is returned (200). An onboarded
-//     path that is gone or is not a directory persists status=error and 422s
-//     instead, so a typo never reads as green.
-//   - an ephemeral-only composition has nothing to scan: it is marked scanned
-//     with an empty profile immediately (a scratch dir implies nothing about
-//     languages/egress/secrets).
+//   - every attached local_dir scans HOST-SIDE inline (bounded, read-only
+//     workspacescan.Scan), landing on the SOURCE row immediately;
+//   - every attached repo launches its own governed clone-and-scan run,
+//     fenced on that source's active_run_id (202 with scan_run_ids);
+//   - ephemeral attachments have nothing to scan — an ephemeral-only
+//     composition reads scanned with an empty profile straight from the
+//     hydrate pass.
+//
+// The workspace's profile/status are DERIVED (merge/worst-of its sources) at
+// the store's hydrate pass, so the 200 body is the freshly-merged profile.
 func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
@@ -878,93 +869,5 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
-	switch localDirs := workspaceSourcesOfType(ws, types.WorkspaceSourceTypeLocalDir); {
-	case len(workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo)) > 0:
-		if s.cfg.Runner == nil {
-			writeError(w, http.StatusServiceUnavailable, "no runner configured to launch a governed scan run")
-			return
-		}
-		actorType, actor := actorFromRequest(r)
-		run, lerr := s.launchScanRun(r.Context(), actor, ws)
-		if errors.Is(lerr, errImportStepBusy) {
-			writeError(w, http.StatusConflict, "an import step is already running for this workspace")
-			return
-		}
-		if lerr != nil {
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
-			writeError(w, http.StatusInternalServerError, "launch scan run: "+lerr.Error())
-			return
-		}
-		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,
-			"workspace.scan", id.String(), "success", mustJSON(map[string]any{
-				"sources": len(ws.Sources), "scan_run_id": run.ID.String(),
-			})))
-		// 202: the profile is populated asynchronously when the scan run uploads its
-		// ScanFacts (SetWorkspaceScanResult flips the workspace to status=scanned).
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"scan_run_id": run.ID, "workspace_id": ws.ID, "state": run.State,
-			"detail": "governed scan run launched; the workspace profile updates when the scan completes",
-		})
-	case len(localDirs) > 0:
-		// A nonexistent / unreadable path must NOT report green "Ready": Scan() never
-		// errors (it degrades to a low-confidence profile on a bound/unknown build
-		// system), so an operator typo would otherwise flip straight to Ready and only
-		// surface much later as an empty sandbox mount. Stat every source first and
-		// persist status=error with an actionable reason instead.
-		profiles := make([]workspacescan.WorkspaceProfile, 0, len(localDirs))
-		for _, src := range localDirs {
-			fi, serr := os.Stat(src.Path)
-			if serr == nil && fi.IsDir() {
-				profiles = append(profiles, workspacescan.Scan(src.Path))
-				continue
-			}
-			detail := localDirScanFailureDetail(src.Path, serr == nil && !fi.IsDir(),
-				os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
-			ws.Status = types.WorkspaceError
-			if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
-				writeError(w, http.StatusInternalServerError, "persist scan status: "+uerr.Error())
-				return
-			}
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
-			writeError(w, http.StatusUnprocessableEntity, detail)
-			return
-		}
-		profile := mergeWorkspaceProfiles(profiles)
-		ws.Profile = mustJSON(profile)
-		// Scanned: the workspace is already usable for runs (the mount gate is
-		// onboarding-based, not status-based).
-		ws.Status = types.WorkspaceScanned
-		if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"workspace.scan", id.String(), "failure", mustJSON(map[string]any{"detail": uerr.Error()})))
-			writeError(w, http.StatusInternalServerError, "persist scan profile: "+uerr.Error())
-			return
-		}
-		// Counts only — never detected names (and never values) in audit data.
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.scan", id.String(), "success", mustJSON(map[string]any{
-				"local_dir_sources": len(localDirs), "confidence": profile.Confidence, "needs_review": profile.NeedsReview,
-				"secret_reqs": len(profile.RequiredSecrets), "services": len(profile.ServicesNeeded),
-				"suggested_egress": len(profile.SuggestedEgress), "secret_files": len(profile.SecretFilesPresent),
-				"leak_findings": len(profile.LeakFindings), "build_mem_mib": profile.BuildMemoryMiB,
-			})))
-		writeJSON(w, http.StatusOK, profile)
-	default:
-		// Ephemeral-only composition: nothing to scan. Mark it scanned with an
-		// empty (high-confidence — there is nothing ambiguous about "no source")
-		// profile so the workspace is immediately usable.
-		profile := workspacescan.WorkspaceProfile{Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic}
-		ws.Profile = mustJSON(profile)
-		ws.Status = types.WorkspaceScanned
-		if _, uerr := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws); uerr != nil {
-			writeError(w, http.StatusInternalServerError, "persist scan profile: "+uerr.Error())
-			return
-		}
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.scan", id.String(), "success", mustJSON(map[string]any{"ephemeral_only": true})))
-		writeJSON(w, http.StatusOK, profile)
-	}
+	s.scanAttachedSources(w, r, ws)
 }

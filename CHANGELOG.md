@@ -12,6 +12,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Workspaces split into three tiers: a shared source library, a shared
+  base-image catalog, and the workspace as the aggregate that composes them.**
+  A repo's requirements are a property of the *repo* — the secrets it needs,
+  the hosts its build dials, the paths it writes — not of whichever workspace
+  happens to mount it, so a repo or directory is now configured ONCE as a
+  library **source** (its own requirements contract, its own scan profile and
+  status, deduplicated by canonical identity) and attached to any number of
+  workspaces. Base images likewise became a shared **catalog**
+  (registry/custom/BYO; "recommended" stays a per-workspace derived build,
+  excluded by CHECK constraint, not convention). A workspace is now an ordered
+  list of attachments plus an optional catalog image, and its effective
+  contract is a single pure fold of its sources' contracts under its own
+  overlay — with per-attachment **overrides** so an aggregate can disable or
+  re-lane any requirement a shared source declares (mount a repo read-only to
+  read its code, without inheriting its build secrets). The fold is
+  fail-closed where it matters: a source's `write:` rows apply only to paths
+  the source itself owns, and a scan-seeded contributor anywhere in the merge
+  poisons auto-granting for that key. Everything shipped expand-only
+  (migration 0031 extracts, dedupes, and backfills attachments; the legacy
+  embedded columns keep working and drop in a later release), and the API/SDK
+  wire is unchanged: existing clients keep sending `sources[]` — the server
+  upserts into the library and attaches — and reads return the same derived
+  `sources`/`base_image`/`profile`/`status` fields, now computed from the
+  attached rows at the store's hydrate pass. New endpoints: `GET/POST
+  /api/v1/sources`, `GET/PUT/DELETE /api/v1/sources/{id}`, `PUT
+  /api/v1/sources/{id}/requirements`, `POST /api/v1/sources/{id}/scan`,
+  `GET/POST /api/v1/base-images`, `GET/DELETE /api/v1/base-images/{id}`.
+  Deleting a source or image that workspaces still use answers 409 *naming
+  them* (`?force=1` detaches — for an image that honestly means "fall back to
+  the derived recommended build"; for a source it un-mounts code, which is why
+  the refusal is loud instead of tolerated).
 - **Corporate network is its own Getting-started step, and it comes before
   Integrations** — because on a corporate network every integration after it
   depends on the path it configures, and discovering that at the point an
@@ -307,6 +338,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   workspace, is now `POST /workspaces/{id}/env-as-code/write`.
 
 ### Fixed
+
+- **A repo+dir workspace never scanned its directories.** The whole-workspace
+  scan was a 3-branch switch where the repo branch won on every call: it
+  launched the repo's governed scan and promised the local directories would
+  be scanned "by a later call" — but the later call re-entered the same repo
+  branch, so the dirs' profiles never landed and their secrets/egress needs
+  never reached the requirements contract. Scanning is now per *source*
+  (which is what made the bug structural rather than patchable): every
+  attached directory scans host-side inline and every attached repo launches
+  its own governed run, each fenced on the source's own `active_run_id`, and
+  the workspace's profile is the merge of whatever its sources know. One
+  scan click covers every source, including the mixed case.
 
 - **A local-directory scan failure now says WHY when the daemon can't see the
   host.** On the compose stack wardynd runs sealed and sees only what

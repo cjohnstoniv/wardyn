@@ -235,15 +235,15 @@ func TestValidHeaderName(t *testing.T) {
 	}
 
 	invalid := map[string]string{
-		"":                    "empty",
-		"X-Tok\r\nX-Evil: 1":  "CRLF header splitting",
-		"X-Tok\nX-Evil: 1":    "bare LF",
-		"X-Tok\r":             "trailing CR",
-		"Authorization: Bear": "colon is a separator, not a token char",
-		"X Tok":               "space is a separator",
-		"X-Tok\x00":           "NUL",
-		"X-Tok\t":             "tab",
-		"héader":              "non-ASCII",
+		"":                                      "empty",
+		"X-Tok\r\nX-Evil: 1":                    "CRLF header splitting",
+		"X-Tok\nX-Evil: 1":                      "bare LF",
+		"X-Tok\r":                               "trailing CR",
+		"Authorization: Bear":                   "colon is a separator, not a token char",
+		"X Tok":                                 "space is a separator",
+		"X-Tok\x00":                             "NUL",
+		"X-Tok\t":                               "tab",
+		"héader":                                "non-ASCII",
 		strings.Repeat("x", maxHeaderNameLen+1): "over the length cap",
 	}
 	for name, why := range invalid {

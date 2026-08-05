@@ -619,7 +619,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// interactive (an interactive workspace-linked run is Record Mode, a
 	// human-driven sandbox, never a scan); no agent CLI / model call happens on a
 	// scan.
-	if run.WorkspaceID != nil && !interactive {
+	if (run.WorkspaceID != nil || run.SourceID != nil) && !interactive {
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
 	}
 	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell

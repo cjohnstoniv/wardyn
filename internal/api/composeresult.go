@@ -86,7 +86,7 @@ func (s *Server) handleUploadComposeResult(w http.ResponseWriter, r *http.Reques
 // injected PROXY-SIDE (never resident) — so a distroless container-mode wardynd
 // with no host claude can do subscription-billed composing, ToS-clean.
 //
-// It mirrors launchScanRun's mint → CreateRun → dispatch flow, with three
+// It mirrors the scan launch's mint → CreateRun → dispatch flow, with three
 // deltas: (1) NO WorkspaceID (an ordinary model run — resolveLLMTransport's
 // managed path fires, injecting the token; a scan run makes no model call); (2)
 // the WARDYN_COMPOSE_* env (discriminator + base64 prompt/schema) rides
@@ -116,7 +116,7 @@ func (s *Server) RunClaudeCompose(ctx context.Context, promptJSON []byte) ([]byt
 	}
 
 	// Detach from request cancellation for the durable launch work (mint,
-	// CreateRun, dispatch) exactly like launchScanRun; the wait below still honors
+	// CreateRun, dispatch) exactly like the source-scan launch; the wait below still honors
 	// the caller's ctx (client disconnect stops waiting) via waitCtx.
 	launchCtx := context.WithoutCancel(ctx)
 	runID := uuid.New()

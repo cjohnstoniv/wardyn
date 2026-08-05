@@ -74,29 +74,6 @@ func workspaceSourcesOfType(ws types.Workspace, typ types.WorkspaceSourceType) [
 	return out
 }
 
-// firstRepoSource returns the workspace's first repo-type source. A workspace
-// can carry more than one; the governed scan run — one clone, one uploaded
-// profile via SetWorkspaceScanResult's wholesale replace — only ever scans ONE
-// repo per run today.
-// ponytail: multi-repo scan-and-merge (like the local_dir aggregate scan in
-// handleScanWorkspace) is the upgrade path if a workspace with several repo
-// sources ever needs each one profiled.
-func firstRepoSource(ws types.Workspace) (types.WorkspaceSource, bool) {
-	for _, src := range ws.Sources {
-		if src.Type == types.WorkspaceSourceTypeRepo {
-			return src, true
-		}
-	}
-	return types.WorkspaceSource{}, false
-}
-
-// mergeWorkspaceProfiles is workspacescan.MergeProfiles — moved beside the
-// profile type it merges (the store's hydrate pass needs it and cannot import
-// api); this alias keeps the existing call sites put.
-func mergeWorkspaceProfiles(profiles []workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile {
-	return workspacescan.MergeProfiles(profiles)
-}
-
 // workspaceProfile decodes a workspace's opaque profile blob into the scanner's
 // WorkspaceProfile. Returns ok=false when there is no profile yet (unscanned) or
 // it is malformed.
@@ -563,7 +540,7 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 }
 
 // maybeGitHubReadGrant creates a read-only github_token grant for a github.com
-// clone URL (nil for any other host) — extracted from launchScanRun's
+// clone URL (nil for any other host) — extracted from the scan launch's
 // private-repo clone support so launchRecordRun can reuse it too. A CreateGrant
 // failure is returned, never swallowed: the clone cannot authenticate without
 // the grant, so the launch must fail loudly rather than dispatch a sandbox
@@ -650,7 +627,24 @@ func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time
 // WSL2 NAT networking).
 func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.WorkspaceID == nil {
+	if err != nil {
+		return
+	}
+	// SOURCE scan runs settle on the source row: same self-heal one tier down,
+	// fenced on the source's own active_run_id so a newer claim is untouched.
+	if run.SourceID != nil {
+		src, serr := s.cfg.Store.GetSource(ctx, *run.SourceID)
+		if serr != nil || src.ActiveRunID == nil || *src.ActiveRunID != runID {
+			return
+		}
+		if src.Status == types.WorkspaceScanning {
+			_, _ = s.cfg.Store.SetSourceScanResult(ctx, src.ID, src.Profile, types.WorkspaceError, runID)
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "source.scan",
+				src.ID.String(), "failure", mustJSON(map[string]any{"reason": "no_facts_uploaded"})))
+		}
+		return
+	}
+	if run.WorkspaceID == nil {
 		return
 	}
 	ws, err := s.cfg.Store.GetWorkspace(ctx, *run.WorkspaceID)
@@ -835,100 +829,10 @@ func (s *Server) mintedSecretNames(ctx context.Context, runID uuid.UUID, minted 
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// launchScanRun starts a throwaway GOVERNED run that clones a repo workspace and
-// runs wardyn-scan (scan-only mode) instead of an agent. wardyn-scan uploads
-// ScanFacts to the brokered scan-results route; that endpoint derives + persists
-// the profile onto this workspace via the TRUSTED run→workspace linkage
-// (run.WorkspaceID) — never from sandbox input. Mirrors handleCreateRun's
-// mint → CreateRun → dispatch flow, minus the request surface: no grants, no user
-// mounts, a minimal git-egress policy, no model call. Returns the created run.
-
 // scanIdleCapSec bounds an idle scan run: short, since wardyn-scan clones + scans
 // and uploads promptly. Written to both the run row (for the reaper) and the
 // dispatch scanPolicy so the two never drift.
 const scanIdleCapSec = 600
-
-func (s *Server) launchScanRun(ctx context.Context, actor string, ws types.Workspace) (types.AgentRun, error) {
-	if s.cfg.Runner == nil {
-		return types.AgentRun{}, fmt.Errorf("no runner configured")
-	}
-	repoSrc, ok := firstRepoSource(ws)
-	if !ok {
-		return types.AgentRun{}, fmt.Errorf("workspace %s has no repo source to scan", ws.ID)
-	}
-	url := repoCloneURL(repoSrc.Source)
-	if url == "" {
-		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", repoSrc.Source)
-	}
-	// Detach from request cancellation before the durable launch work: a client
-	// that walks away must not cancel it (same rationale as launchRecordRun).
-	ctx = context.WithoutCancel(ctx)
-
-	runID := uuid.New()
-	// The scan self-heal in reconcileWorkspaceRun keys on ws.ActiveRunID == runID,
-	// so a scan that never claims the slot leaves that branch DEAD — a scan whose
-	// facts upload is lost (e.g. sandbox can't reach the control plane) would then
-	// strand the workspace in `scanning` forever.
-	claimedWS, release, err := s.claimImportStep(ctx, ws, runID)
-	if err != nil {
-		return types.AgentRun{}, err
-	}
-	// Confinement: inherit the operator's default floor. A scan is read-only,
-	// ephemeral, and holds no credentials; the operator's floor still governs.
-	cc := s.defaultFloorClass()
-	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace scan", ws, cc)
-	if err != nil {
-		return types.AgentRun{}, release(err)
-	}
-	now := run.CreatedAt
-	run.Repo = repoSrc.Source             // wardyn-scan clones it; no model call in scan-only mode
-	run.AutoStopAfterSec = scanIdleCapSec // reaper reads the run row; == scanPolicy below
-	created, err := s.cfg.Store.CreateRun(ctx, run)
-	if err != nil {
-		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
-	}
-
-	// Flip the workspace to `scanning` so the import UI's poll (which watches only the
-	// transient statuses) opens and clears its spinner when the async scan run uploads
-	// its profile. Without this the workspace stays `pending_scan` for the whole run
-	// and the UI never re-checks — the scan spinner hangs even after the scan finishes.
-	// Set BEFORE dispatch so a fast scan's `scanned` upload can't be regressed. Best
-	// effort: the scan still completes and sets `scanned` regardless of this update.
-	// Use the post-claim workspace (active_run_id already == runID) as the base so
-	// this status write preserves the slot we just claimed (H14).
-	scanningWS := claimedWS
-	scanningWS.Status = types.WorkspaceScanning
-	_, _ = s.cfg.Store.UpdateWorkspace(ctx, ws.ID, scanningWS)
-
-	// PRIVATE-repo support: for a GitHub repo, create a read-only github_token grant
-	// so wardyn-git-helper can mint a clone credential at clone time. Non-approval +
-	// contents:read (least privilege for a clone). It fails CLOSED when no
-	// GitHubMinter is configured; a PUBLIC repo clones credential-free regardless.
-	// Non-GitHub private hosts would need a git_pat grant (a further follow-up).
-	// SSH clone URL: synthesize the ssh_key grant + surface it as WARDYN_SSH_GRANTS.
-	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, url)
-	if gerr != nil {
-		return types.AgentRun{}, release(fmt.Errorf("create scan clone grants: %w", gerr))
-	}
-
-	// Minimal scan policy: allow only the git host(s) the clone needs + a short
-	// auto-stop. No workspace mounts, no subscription — wardyn-scan uploads to the
-	// proxy's brokered route (not egress).
-	scanPolicy := types.RunPolicySpec{
-		MinConfinementClass: cc,
-		AllowedDomains:      scanEgressDomains(url),
-		AutoStopAfterSec:    scanIdleCapSec,
-	}
-
-	return s.dispatchAndSettle(ctx, created, dispatchParams{
-		RunToken:           runToken,
-		Image:              agentImage("claude-code", s.cfg.AgentImages),
-		Policy:             scanPolicy,
-		FirstGitHubGrantID: ghGrantID,
-		GitGrants:          gitBrokerGrant(url, ghGrantID),
-		SSHGrants:          sshGrants,
-	}), nil
-}
 
 // gitBrokerManagedHosts are the GitHub clone/API/content hosts that Option C's
 // git-broker manages: they are routed through wardyn-proxy (never a run's egress

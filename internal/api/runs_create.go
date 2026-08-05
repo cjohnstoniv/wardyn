@@ -383,7 +383,6 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 	return events
 }
 
-
 // effectiveRequirements is the contract a run actually consumes: the store's
 // hydrate pass folds attachments + source contracts + the overlay into
 // EffectiveRequirements. A workspace that never passed through hydration (a

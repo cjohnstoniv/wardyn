@@ -182,6 +182,29 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 			repaired = true
 		}
 	}
+	// Source strand, one tier down: the derived status reads `scanning` when
+	// any ATTACHED source is mid-scan — if that source's run has terminated
+	// without uploading facts, settle the source the same way. Gated on the
+	// derived status so the sweep costs nothing on healthy reads.
+	if ws.Status == types.WorkspaceScanning && len(ws.Attachments) > 0 {
+		ids := make([]uuid.UUID, 0, len(ws.Attachments))
+		for _, att := range ws.Attachments {
+			if att.SourceID != nil {
+				ids = append(ids, *att.SourceID)
+			}
+		}
+		if srcs, err := s.cfg.Store.GetSourcesByIDs(ctx, ids); err == nil {
+			for _, src := range srcs {
+				if src.Status != types.WorkspaceScanning || src.ActiveRunID == nil {
+					continue
+				}
+				if run, err := s.cfg.Store.GetRun(ctx, *src.ActiveRunID); err == nil && isTerminalRunState(run.State) {
+					s.reconcileWorkspaceRun(ctx, *src.ActiveRunID)
+					repaired = true
+				}
+			}
+		}
+	}
 	if repaired {
 		if fresh, err := s.cfg.Store.GetWorkspace(ctx, ws.ID); err == nil {
 			return fresh
