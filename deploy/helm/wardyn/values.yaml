@@ -163,10 +163,14 @@ k8s:
     # e.g. an ipBlock naming your cluster's actual apiserver/LB CIDR.
     to: []
 
-# SSH access into a running sandbox (see docs/SSH.md — owned by the SSH
-# gateway lane). Off by default; a CONDITIONAL second port on the wardynd
-# Service/Deployment above (no second Service — see README "Split SSH
-# exposure" for the recipe to expose it differently from the HTTP port).
+# SSH gateway (see docs/SSH.md — native SSH/sftp/-L forwarding into a
+# running sandbox's tmux session). Off by default; a CONDITIONAL second port
+# on the wardynd Service/Deployment above (no second Service — see README
+# "Split SSH exposure" for the recipe to expose it differently from the HTTP
+# port). port + advertiseHost below drive WARDYN_SSH_LISTEN/
+# WARDYN_SSH_ADVERTISE — WARDYN_SSH_LISTEN is what actually turns the
+# gateway on; leaving it unset (this chart's own default) means no listener,
+# not even a generated host key.
 ssh:
   enabled: false
   port: 2222

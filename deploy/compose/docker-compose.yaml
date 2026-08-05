@@ -247,6 +247,16 @@ services:
       # override is plumbed: set it true to keep the old all-operators demo, or
       # (preferred) set WARDYN_OIDC_OPERATOR_EMAILS above.
       WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST: "${WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST:-}"
+      # SSH gateway (docs/SSH.md). Empty WARDYN_SSH_LISTEN (the default) means
+      # off — no listener, not even a generated host key — regardless of
+      # whether the WARDYN_SSH_PORT mapping above is published. Set both to
+      # turn it on: WARDYN_SSH_LISTEN=:2222 (matching the published container
+      # port) and WARDYN_SSH_ADVERTISE to whatever host operators actually
+      # reach this compose stack on (e.g. localhost:2222) — the gateway binds
+      # the former, the run-detail "Connect via SSH" card only ever shows the
+      # latter.
+      WARDYN_SSH_LISTEN: "${WARDYN_SSH_LISTEN:-}"
+      WARDYN_SSH_ADVERTISE: "${WARDYN_SSH_ADVERTISE:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
@@ -339,10 +349,11 @@ services:
       # never be reachable beyond the host. Override the host-side port with
       # WARDYN_UP_PORT (matches scripts/up.sh's doctor/healthz-wait).
       - "127.0.0.1:${WARDYN_UP_PORT:-8080}:8080"
-      # SSH access into a running sandbox (see docs/SSH.md — a separate lane).
-      # The mapping is always here, loopback-only, mirroring WARDYN_UP_PORT
-      # above; the FEATURE stays off until that lane's gateway is wired and an
-      # operator opts in — an unused mapped port is inert (connection refused).
+      # SSH gateway (docs/SSH.md). The mapping is always here, loopback-only,
+      # mirroring WARDYN_UP_PORT above; the gateway itself stays off until
+      # WARDYN_SSH_LISTEN is ALSO set (see the environment block below) — an
+      # unused mapped port with no listener behind it is inert (connection
+      # refused).
       - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"
     depends_on:
       postgres:

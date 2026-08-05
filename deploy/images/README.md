@@ -108,13 +108,18 @@ finds (`agent-run-lib.sh`'s `selftest_report_repo_and_git`).
 
 Not (yet) part of the numbered contract above — `oracle`, `full`, and
 `aws-sso` do not carry them — but both user-facing agent images ship two
-binaries the SSH gateway (see [docs/SSH.md](../../docs/SSH.md), a separate
-lane) bridges an inbound SSH/SFTP session through:
+binaries the SSH gateway ([docs/SSH.md](../../docs/SSH.md)'s "Image contract
+(BYOI)") execs **inside the sandbox**, by convention, never by
+reimplementing their protocols:
 
-| Binary | Path | apt package |
-|---|---|---|
-| SFTP subsystem | `/usr/lib/openssh/sftp-server` | `openssh-sftp-server` |
-| General-purpose relay | `/usr/bin/socat` | `socat` |
+| Feature | Binary | Path | Invocation | apt package |
+|---|---|---|---|---|
+| sftp subsystem | sftp-server | `/usr/lib/openssh/sftp-server` | `sftp-server -e` | `openssh-sftp-server` |
+| `-L` port forwarding | socat | `/usr/bin/socat` | `socat - TCP:127.0.0.1:<port>` | `socat` |
+
+A BYOI run on an image missing either gets a clean channel error naming the
+missing binary the moment that specific feature (sftp/`-L`) is used — never
+a hang — per docs/SSH.md; the interactive shell is unaffected either way.
 
 `claude-code` already ships `tmux` + `openssh-client` (the interactive attach
 shell and the SSH-clone lane, §5/§6 above) — only the two binaries above are
