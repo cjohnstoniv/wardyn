@@ -489,16 +489,9 @@ func validRequirementProvenance(p string) bool { return p == "scan_seeded" || p 
 // applyWorkspaceRequirements) and the preflight checklist escalation
 // (compose_setup.go's setupWorkspaceSecretItems).
 func splitRequirementKey(key string) (typ, rest string, ok bool) {
-	typ, rest, found := strings.Cut(key, ":")
-	if !found || rest == "" {
-		return "", "", false
-	}
-	switch typ {
-	case "secret", "egress", "write", "integration":
-		return typ, rest, true
-	default:
-		return "", "", false
-	}
+	// The grammar moved home to internal/types (the store's hydrate pass folds
+	// contracts and cannot import api); this alias keeps api's call sites put.
+	return types.SplitRequirementKey(key)
 }
 
 // validateWorkspaceRequirement validates one Workspace.Requirements key+value
