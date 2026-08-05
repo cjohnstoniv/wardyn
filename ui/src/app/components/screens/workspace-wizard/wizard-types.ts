@@ -8,7 +8,7 @@
 // No React, no fetch, no DOM — component files import from here so the same
 // derivation can be unit-tested without rendering anything, matching the
 // convention new-run/wizard-types.ts already established for that wizard.
-import type { WorkspaceProfile } from "../../../lib/types";
+import type { Workspace, WorkspaceProfile } from "../../../lib/types";
 import type {
   RequirementLevel,
   WorkspaceBaseImageInput,
@@ -50,6 +50,16 @@ export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
 // Where the wizard was opened from — changes ONLY Done's primary action
 // (wizard.tsx / step-done.tsx); every other step is origin-independent.
 export type WizardOrigin = "library" | "setup" | "run";
+
+// The wizard's landing step when hydrated onto an EXISTING workspace (the
+// "Edit workspace…" entry point) — land wherever this workspace left off,
+// not always back at Sources. ponytail: two checks, no per-source
+// granularity; the rail's onJump still reaches every other step from here.
+export function initialStepFor(ws: Workspace): WizardStepId {
+  if (ws.status === "pending_scan") return "sources";
+  if (!ws.image_ref) return "image";
+  return "reqs";
+}
 
 // ============================ Sources (step ①) ============================
 // The composition floor's in-sandbox scratch path — matches the server's own
@@ -173,6 +183,25 @@ export function toSourceInput(row: SourceRow, rows: SourceRow[]): WorkspaceSourc
   return { type: "ephemeral", target };
 }
 
+// ============================ Edit hydration (opening the wizard on an EXISTING workspace) ============================
+// The inverse of toSourceInput() — seeds the Sources step from an already-
+// onboarded workspace's row, for the "Edit workspace…" entry point
+// (workspaces.tsx / workspace-detail.tsx). Every source gets a fresh UI-only
+// id; an empty composition (shouldn't happen server-side) falls back to the
+// same floor a blank wizard starts with.
+export function sourceRowsFromWorkspace(ws: Workspace): SourceRow[] {
+  const sources = ws.sources ?? [];
+  if (sources.length === 0) return seedFloor();
+  return sources.map((src) => ({
+    id: newSourceId(),
+    type: src.type,
+    path: src.path ?? "",
+    source: src.source ?? "",
+    ref: src.ref ?? "",
+    target: src.target ?? "",
+  }));
+}
+
 // ============================ Base image (step ②) ============================
 export type ScanStatus = "pending" | "scanning" | "done" | "failed";
 export interface SourceScanState {
@@ -252,6 +281,27 @@ export function toBaseImageInput(state: BaseImageState, detectedChips: string[] 
     };
   }
   return { kind: "recommended" };
+}
+
+// The inverse of toBaseImageInput(), for edit hydration. A "catalog" pick
+// (base_image_id set) is intentionally NOT reconstructed into a CatalogPick —
+// that needs a name plus a catalog fetch this hydration doesn't do — it
+// degrades to its own kind's plain card (registry/custom/byo) instead, which
+// round-trips fine through toBaseImageInput above. ponytail: no catalog-
+// identity round-trip; add a catalog lookup if editing a catalog-backed
+// workspace needs to keep pointing at the same shared row.
+export function baseImageStateFromWorkspace(ws: Workspace): BaseImageState {
+  const base = defaultBaseImageState();
+  const b = ws.base_image;
+  if (!b || b.kind === "recommended") return base;
+  if (b.kind === "registry") return { ...base, choice: "registry" };
+  if (b.kind === "byo") return { ...base, choice: "byo", byoRef: b.image ?? "" };
+  return {
+    ...base,
+    choice: "custom",
+    customBase: b.image ?? base.customBase,
+    buildSteps: (b.steps ?? []).join("\n"),
+  };
 }
 
 // ---- Resolved model/harness power source (step ②'s power-source line + peek) ----

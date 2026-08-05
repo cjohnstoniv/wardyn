@@ -38,7 +38,7 @@ import { StepEgress } from "./step-egress";
 import { StepConfinement } from "./step-confinement";
 import { StepReview } from "./step-review";
 import { AddSecretDialog } from "../secrets";
-import { AddWorkspaceDialog } from "../workspaces";
+import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import {
   WIZARD_STEPS,
   applyProfileSpecToState,
@@ -473,16 +473,25 @@ export function PermissionWizard({
 
       <AddSecretDialog {...secretFix.dialogProps} existingNames={secrets} />
 
-      <AddWorkspaceDialog
-        open={addWorkspaceOpen}
-        onOpenChange={setAddWorkspaceOpen}
-        onSaved={(ws) => {
-          // Auto-attach the newly onboarded workspace so the operator doesn't
-          // have to re-open the picker to select what they just added.
-          patch({ workspaces: [...state.workspaces, { workspaceId: ws.id }] });
-          void scanAndReload(ws.id);
-        }}
-      />
+      {/* origin="run": Done's primary action is "Attach to this run" (onAttach)
+          instead of "Open workspace" — the wizard already scans/builds/verifies
+          along the way, so there's no separate scanAndReload kick to make here. */}
+      {addWorkspaceOpen && (
+        <WorkspaceWizard
+          origin="run"
+          onClose={() => {
+            setAddWorkspaceOpen(false);
+            reloadWorkspaces();
+          }}
+          onAttach={(workspaceId) => {
+            // Auto-attach the newly onboarded workspace so the operator
+            // doesn't have to re-open the picker for what they just onboarded.
+            patch({ workspaces: [...state.workspaces, { workspaceId }] });
+            setAddWorkspaceOpen(false);
+            reloadWorkspaces();
+          }}
+        />
+      )}
     </>
   );
 }

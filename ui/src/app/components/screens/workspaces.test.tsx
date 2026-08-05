@@ -55,7 +55,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { AddWorkspaceDialog, WorkspacesScreen, attentionItems, sourceSubLine } from "./workspaces";
+import { WorkspacesScreen, attentionItems, sourceSubLine } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 
 function renderScreen() {
@@ -144,10 +144,14 @@ describe("WorkspacesScreen — list columns", () => {
   });
 });
 
-describe("WorkspacesScreen — kebab is Open · Edit source… · Delete… only", () => {
+describe("WorkspacesScreen — kebab is Open · Edit workspace… · Delete… only", () => {
   beforeEach(() => {
     listWorkspacesMock.mockReset();
     listSecretsMock.mockReset().mockResolvedValue([]);
+    // "Edit workspace…" now mounts the real WorkspaceWizard, whose mount
+    // effect fetches these too (mirrors the "new wizard opens" block below).
+    getSetupStatusMock.mockReset().mockResolvedValue({ secrets: { github_app: false } });
+    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [] });
   });
 
   it("offers exactly those three items — no Scan now, Resume import, Model access, or Env as code", async () => {
@@ -157,7 +161,7 @@ describe("WorkspacesScreen — kebab is Open · Edit source… · Delete… only
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
-    expect(within(menu).getByRole("menuitem", { name: /edit source/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /edit workspace/i })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /delete/i })).toBeInTheDocument();
     expect(within(menu).queryByRole("menuitem", { name: /scan/i })).not.toBeInTheDocument();
     expect(within(menu).queryByRole("menuitem", { name: /resume import/i })).not.toBeInTheDocument();
@@ -166,13 +170,15 @@ describe("WorkspacesScreen — kebab is Open · Edit source… · Delete… only
     expect(within(menu).queryByRole("menuitem", { name: /view profile/i })).not.toBeInTheDocument();
   });
 
-  it("Edit source… still opens the existing edit form (reused, unchanged)", async () => {
+  it("Edit workspace… opens the wizard hydrated on this row, not the legacy dialog", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
-    await user.click(screen.getByRole("menuitem", { name: /edit source/i }));
-    expect(await screen.findByText("Edit workspace")).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: /edit workspace/i }));
+    expect(await screen.findByRole("heading", { name: "Edit workspace" })).toBeInTheDocument();
+    // The wizard's rail, not the old single-form dialog.
+    expect(screen.getAllByText("Sources").length).toBeGreaterThan(0);
   });
 
   it("Delete… deletes via the existing confirm dialog", async () => {
@@ -253,77 +259,6 @@ describe("attentionItems / sourceSubLine — pure helpers", () => {
   it("sourceSubLine shows the mono source (+ ref for a repo) for a single-source workspace", () => {
     expect(sourceSubLine(ws({}, { kind: "repo", source: "acme/x", ref: "main" }))).toBe("acme/x @main");
     expect(sourceSubLine(ws({}, { kind: "local_dir", source: "/srv/x" }))).toBe("/srv/x");
-  });
-});
-
-// AddWorkspaceDialog — onboarding a "container" kind (image ref, no host mount)
-// and binding a model/harness credential at create time.
-describe("AddWorkspaceDialog — container kind + model/harness binding", () => {
-  beforeEach(() => {
-    createWorkspaceMock.mockReset();
-    listSecretsMock.mockReset().mockResolvedValue([]);
-    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [] });
-  });
-
-  it("onboards a container by image ref, with no writable/default-target fields", async () => {
-    createWorkspaceMock.mockResolvedValue(ws({}, { kind: "container", source: "ubuntu:24.04" }));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const onSaved = vi.fn();
-
-    render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={onSaved} />);
-
-    await user.click(screen.getByRole("radio", { name: /container image/i }));
-    // Source field relabels to "Image ref" and drops local_dir's absolute-path rule.
-    expect(screen.getByText("Image ref")).toBeInTheDocument();
-    // A container has no host mount — the writable opt-in (local_dir only) is gone.
-    expect(screen.queryByLabelText(/let agents write to this directory/i)).toBeNull();
-    expect(screen.queryByLabelText(/default target/i)).toBeNull();
-
-    await user.type(screen.getByLabelText("Name"), "sandbox-env");
-    await user.type(screen.getByPlaceholderText("ubuntu:24.04"), "ubuntu:24.04");
-    await user.click(screen.getByRole("button", { name: "Add workspace" }));
-
-    await waitFor(() =>
-      expect(createWorkspaceMock).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "container", source: "ubuntu:24.04", default_target: undefined, writable: undefined }),
-      ),
-    );
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
-  });
-
-  it("includes the picked Integration binding in the create payload", async () => {
-    createWorkspaceMock.mockResolvedValue(ws({}));
-    listIntegrationsMock.mockResolvedValue({
-      ai: [{ id: "ai-acme-key", name: "Acme Anthropic key", typeLabel: "anthropic · api key" }],
-      scm: [],
-    });
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={vi.fn()} />);
-
-    await user.type(screen.getByLabelText("Name"), "payments");
-    await user.type(screen.getByPlaceholderText("/home/me/projects/payments"), "/srv/payments");
-    await user.click(await screen.findByRole("radio", { name: /acme anthropic key/i }));
-    await user.click(screen.getByRole("button", { name: "Add workspace" }));
-
-    await waitFor(() =>
-      expect(createWorkspaceMock).toHaveBeenCalledWith(
-        expect.objectContaining({ llm_cred: { integration_ref: "ai-acme-key" } }),
-      ),
-    );
-  });
-
-  it("omits llm_cred entirely when the binding is left at None", async () => {
-    createWorkspaceMock.mockResolvedValue(ws({}));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    render(<AddWorkspaceDialog open onOpenChange={vi.fn()} onSaved={vi.fn()} />);
-    await user.type(screen.getByLabelText("Name"), "payments");
-    await user.type(screen.getByPlaceholderText("/home/me/projects/payments"), "/srv/payments");
-    await user.click(screen.getByRole("button", { name: "Add workspace" }));
-
-    await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());
-    expect(createWorkspaceMock.mock.calls[0][0].llm_cred).toBeUndefined();
   });
 });
 

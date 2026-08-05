@@ -47,7 +47,8 @@ import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { Chip } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { AddWorkspaceDialog, KIND_META, attentionItems, sourceSubLine } from "../workspaces";
+import { KIND_META, attentionItems, sourceSubLine } from "../workspaces";
+import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import { ProfileReview } from "../profile-review";
 import { SectionCard } from "./section-card";
 import { RequirementsCard } from "./requirements-card";
@@ -340,7 +341,7 @@ export function WorkspaceDetailScreen() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setEditOpen(true)}>Edit source…</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setEditOpen(true)}>Edit workspace…</DropdownMenuItem>
               {!isContainer && <DropdownMenuItem onClick={() => setRescanOpen(true)}>Rescan…</DropdownMenuItem>}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setConfirmDelete(true)}>
@@ -379,15 +380,17 @@ export function WorkspaceDetailScreen() {
         {!isContainer && <EnvAsCodeCard ws={ws} />}
       </div>
 
-      <AddWorkspaceDialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
-        initial={ws}
-        onSaved={(w) => {
-          setEditOpen(false);
-          setWs(w);
-        }}
-      />
+      {editOpen && (
+        <WorkspaceWizard
+          key={ws.id}
+          origin="library"
+          initial={ws}
+          onClose={() => {
+            setEditOpen(false);
+            load(false);
+          }}
+        />
+      )}
 
       <AlertDialog open={rescanOpen} onOpenChange={setRescanOpen}>
         <AlertDialogContent>

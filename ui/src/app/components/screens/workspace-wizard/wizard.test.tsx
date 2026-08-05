@@ -46,6 +46,7 @@ vi.mock("../../../lib/api/integrations", async () => {
 import { WorkspaceWizard } from "./wizard";
 import { C, RD2 } from "../../../lib/workspace-copy";
 import { INTEGRATIONS_BLURB } from "./step-integrations";
+import type { Workspace } from "../../../lib/types";
 
 function baseWorkspace(overrides: Record<string, unknown> = {}) {
   return {
@@ -63,6 +64,31 @@ function baseWorkspace(overrides: Record<string, unknown> = {}) {
       egress_domains: ["registry.npmjs.org"],
     },
     ...overrides,
+  };
+}
+
+// A strictly `Workspace`-typed fixture for the `initial` (edit-hydration)
+// prop below — baseWorkspace() above is deliberately loose (status: "ready"
+// isn't a real WorkspaceStatus) and was never checked against the real type
+// until now.
+function editableWorkspace(over: Partial<Workspace> = {}): Workspace {
+  return {
+    id: "ws-1",
+    name: "payments",
+    kind: "repo",
+    source: "acme/payments",
+    ref: "main",
+    status: "scanned",
+    created_at: "now",
+    updated_at: "now",
+    sources: [{ type: "repo", source: "acme/payments", ref: "main", target: "/home/agent/work" }],
+    profile: {
+      languages: ["Go"],
+      package_managers: ["pnpm"],
+      required_secrets: [{ name: "DATABASE_URL" }],
+      egress_domains: ["registry.npmjs.org"],
+    },
+    ...over,
   };
 }
 
@@ -166,6 +192,77 @@ describe("WorkspaceWizard — close semantics", () => {
     expect(screen.getByText(C.CLOSE_KEEPS)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+});
+
+describe("WorkspaceWizard — accidental dismissal is blocked once there's something to strand (Fix C)", () => {
+  it("Escape closes normally before any workspace exists (nothing to strand)", () => {
+    const onClose = vi.fn();
+    render(<WorkspaceWizard onClose={onClose} />);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape is blocked once the workspace exists and the step isn't Done", async () => {
+    const ws = editableWorkspace({ status: "scanned", image_ref: "" });
+    const onClose = vi.fn();
+    render(<WorkspaceWizard initial={ws} onClose={onClose} />);
+    await screen.findByText("Recommended — built for this workspace");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    // Still open — the step content is still there, not stranded mid-close.
+    expect(screen.getByText("Recommended — built for this workspace")).toBeInTheDocument();
+  });
+
+  it("the X button still closes deliberately even while Escape/outside-click are blocked", async () => {
+    const ws = editableWorkspace({ status: "scanned", image_ref: "" });
+    const onClose = vi.fn();
+    render(<WorkspaceWizard initial={ws} onClose={onClose} />);
+    await screen.findByText("Recommended — built for this workspace");
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WorkspaceWizard — edit hydration via the `initial` prop (Fix B)", () => {
+  it("hydrates onto an existing workspace: no create call, lands on the heuristic's step, titled Edit workspace", async () => {
+    const ws = editableWorkspace({ status: "scanned", image_ref: "" });
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit workspace" })).toBeInTheDocument();
+    // scanned + no image_ref yet -> lands on Base image, not Sources.
+    expect(await screen.findByText("Recommended — built for this workspace")).toBeInTheDocument();
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  it("a not-yet-scanned workspace lands on Sources instead", async () => {
+    const ws = editableWorkspace({ status: "pending_scan" });
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+    expect(await screen.findByLabelText("Name")).toHaveValue("payments");
+  });
+
+  it("a scanned workspace with an image already built lands on Requirements", async () => {
+    const ws = editableWorkspace({ status: "scanned", image_ref: "wardyn-workspace/ws-1:abc123" });
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+    expect(await screen.findByText(C.S3_BLURB)).toBeInTheDocument();
+  });
+
+  it("continuing from the hydrated Base image step PUTs via updateWorkspace, never creates", async () => {
+    const ws = editableWorkspace({ status: "scanned", image_ref: "" });
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+    await screen.findByText("Recommended — built for this workspace");
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledTimes(1));
+    expect(updateWorkspaceMock.mock.calls[0][0]).toBe("ws-1");
+    expect(updateWorkspaceMock.mock.calls[0][1]).toMatchObject({
+      sources: [{ type: "repo", source: "acme/payments", ref: "main", target: "/home/agent/work" }],
+      base_image: { kind: "recommended" },
+    });
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
   });
 });
 
