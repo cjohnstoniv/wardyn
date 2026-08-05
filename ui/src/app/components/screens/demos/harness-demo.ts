@@ -3,35 +3,38 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// D1 — the "agent in the box" Getting-Started step's binding picker: which AI
-// integration a launch of that demo binds to, and which built-in agent (and so,
-// server-side, which convention image — agentImage in
-// internal/api/runs_policy.go) that implies. Reuses intro.tsx's
-// defaultAgentRow — the SAME pick Readiness.llmReady is itself built from —
-// instead of re-deriving "the connected model" here. Pure TS, no React.
+// The "agent in the box" Getting-Started step's three-state gate: is there an
+// Anthropic-capable AI integration to run Claude Code against? Claude Code
+// only — Codex CLI is NOT supported here: the catalog's task (`claude -p …`)
+// and policy (api.anthropic.com-only egress) are Claude-specific, and
+// deploy/images/codex-cli carries no claude binary. No integration_id
+// override either: the server's own resolution precedence picks the
+// credential, exactly like the four keyless demos — a client-synthesized id
+// like "ai:anthropic_api_key" doesn't match the server's real integration ids
+// and would 400 the launch (a review finding — see harness-demo-step.tsx).
+// Pure TS, no React.
 import type { SetupStatus } from "../../../lib/types";
-import type { IntegrationRow } from "../../../lib/api/integrations";
 import { defaultAgentRow } from "../onboarding/intro";
 
-export interface HarnessBinding {
-  row: IntegrationRow;
-  /** codex-cli only when the bound integration is an OpenAI key — Codex CLI
-   *  speaks the OpenAI API only (T.X_KEY_CODEX/X_SUB_CODEX/X_BEDROCK_CODEX in
-   *  lib/integrations.ts); every other AI type drives claude-code. */
-  agent: "claude-code" | "codex-cli";
-  /** Tier 1 of the server's model-access precedence (createRunRequest.
-   *  IntegrationID / resolveRunIntegration, internal/api/llmcred.go). */
-  integrationId: string;
-}
+export type HarnessAvailability =
+  // No agent-capable AI integration at all (Readiness.llmReady is false).
+  | "none"
+  // One resolves, but it can only drive Codex CLI, not Claude Code.
+  | "openai_only"
+  // A Claude-Code-capable row resolves: anthropic_api_key, anthropic_subscription,
+  // or bedrock — any agent-capable row that isn't openai_api_key. (azure_openai
+  // never reaches this pick at all — its Claude Code/Codex CLI capability is a
+  // flat impossibility, lib/integrations.ts's CAPS.azure, so it's never in
+  // agentCapableRows to begin with.)
+  | "claude_ready";
 
-// null when no agent-capable integration is connected (Readiness.llmReady is
-// false) — the caller's honest signal to render the step's locked state
-// instead of guessing a binding that doesn't exist. No client-authored
-// api_key grant is produced here or anywhere downstream: the server authors
-// the grant from the integration_id alone.
-export function pickHarnessBinding(status: SetupStatus): HarnessBinding | null {
+// Reuses intro.tsx's defaultAgentRow — the SAME pick Readiness.llmReady is
+// built from — rather than re-deriving "which integration" here. Push order
+// in deriveAiRows (lib/api/integrations.ts) always lists a Claude-capable
+// type before openai_api_key, so this pick is never openai_only unless it's
+// the ONLY agent-capable row connected.
+export function harnessAvailability(status: SetupStatus): HarnessAvailability {
   const row = defaultAgentRow(status);
-  if (!row) return null;
-  const agent = row.aiType === "openai_api_key" ? "codex-cli" : "claude-code";
-  return { row, agent, integrationId: row.id };
+  if (!row) return "none";
+  return row.aiType === "openai_api_key" ? "openai_only" : "claude_ready";
 }

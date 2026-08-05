@@ -26,7 +26,7 @@ import { audit, egressFromAudit } from "../../../lib/api/audit";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
-import { isTerminalRunState, type Agent, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
+import { isTerminalRunState, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
 import { deriveReadiness } from "../onboarding/intro";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
@@ -59,31 +59,18 @@ function forgetStored(demoId: string): void {
 
 type TrackedRun = { id: string; state: RunState };
 
-// Overlay for a demo launch beyond its own policy — an explicit integration_id
-// (tier 1 of the server's model-access precedence, resolveRunIntegration in
-// internal/api/llmcred.go) and, when that integration is an OpenAI key, the
-// matching agent (so the server resolves the codex-cli convention image —
-// agentImage in internal/api/runs_policy.go). Only the "agent in the box"
-// Getting-Started step (setup/harness-demo-step.tsx, via demos/harness-demo.ts's
-// binding picker) ever passes one; every keyless demo launches with none,
-// unchanged.
-export interface DemoOverlay {
-  agent?: Agent;
-  integration_id?: string;
-}
-
 // The exact POST /runs body a demo launches with — exported so a caller that
 // has to PREFLIGHT the same body a launch will send (the harness step's
 // preflight checklist) can mirror it byte for byte, so preflight and launch can
 // never disagree (the same discipline the manual wizard's runRequest applies,
-// wizard.tsx).
-export function demoRunBody(demo: Demo, overlay?: DemoOverlay) {
-  return {
-    agent: overlay?.agent ?? "claude-code",
-    interactive: true,
-    inline_policy: demo.policy,
-    ...(overlay?.integration_id ? { integration_id: overlay.integration_id } : {}),
-  };
+// wizard.tsx). Every demo — including the harness one — launches as
+// claude-code with NO integration_id override: the server's own resolution
+// precedence picks the credential (a client-synthesized row id like
+// "ai:anthropic_api_key" doesn't match a real server integration id and would
+// 400 the launch — a review finding on the harness step, see
+// setup/harness-demo-step.tsx).
+export function demoRunBody(demo: Demo) {
+  return { agent: "claude-code" as const, interactive: true as const, inline_policy: demo.policy };
 }
 
 // useDemoRuns — owns the live-run map, the reload re-attach, the poll, and
@@ -161,14 +148,14 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   usePoll(refresh, 2000, !anyPending);
 
   const start = React.useCallback(
-    async (demo: Demo, overlay?: DemoOverlay) => {
+    async (demo: Demo) => {
       setStarting(demo.id);
       try {
         // Every demo comes up idle for the operator to drive in the attached
         // terminal — keyless demos run plain curl; the harness demo runs `claude`
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
-        const run = await api.createRun(demoRunBody(demo, overlay));
+        const run = await api.createRun(demoRunBody(demo));
         setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
         const store = loadStore();
         store[demo.id] = run.id;

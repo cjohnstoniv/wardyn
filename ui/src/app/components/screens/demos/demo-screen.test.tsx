@@ -39,7 +39,7 @@ vi.mock("../../../lib/api/audit", () => ({
   egressFromAudit: () => [],
 }));
 
-import { DemoScreen, demoRunBody } from "./demo-screen";
+import { DemoScreen } from "./demo-screen";
 import { DEMOS } from "./demo-catalog";
 import { baseStatus } from "../setup/test-fixtures";
 
@@ -132,29 +132,5 @@ describe("DemoScreen", () => {
     expect(screen.getByTestId("live-approvals")).toBeInTheDocument();
     expect(screen.getByTestId("demo-audit-panel")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /end demo/i })).toBeInTheDocument();
-  });
-});
-
-// demoRunBody — the shared body-builder Getting-Started's harness step preflights
-// and launches through (D1's overlay). No overlay: identical to the pre-overlay
-// literal every other demo still launches with (the two tests above pin that
-// exact shape) — proven here directly so a future edit to either can't drift.
-describe("demoRunBody", () => {
-  it("omits agent/integration_id overrides with no overlay — the unchanged keyless shape", () => {
-    expect(demoRunBody(DEMOS[0])).toEqual({
-      agent: "claude-code",
-      interactive: true,
-      inline_policy: DEMOS[0].policy,
-    });
-  });
-
-  it("folds in an explicit integration_id and switches the agent for an OpenAI overlay", () => {
-    const harness = DEMOS.find((d) => d.needsModel)!;
-    expect(demoRunBody(harness, { agent: "codex-cli", integration_id: "ai:openai_api_key" })).toEqual({
-      agent: "codex-cli",
-      interactive: true,
-      inline_policy: harness.policy,
-      integration_id: "ai:openai_api_key",
-    });
   });
 });

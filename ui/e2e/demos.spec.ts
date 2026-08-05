@@ -23,20 +23,21 @@ const DEMO_TITLES = [
 ];
 
 test.describe("Demo sandboxes", () => {
-  test("the catalog renders all four keyless demos, and hides the fifth (harness) one with no model connected", async ({
-    page,
-  }) => {
+  test("the catalog renders all four keyless demos", async ({ page }) => {
     await page.goto("/demos");
     await expect(page.getByRole("heading", { name: "Demo sandboxes" })).toBeVisible();
     for (const title of DEMO_TITLES) {
       await expect(page.getByRole("heading", { name: title })).toBeVisible();
     }
-    // The harness-aware fifth demo (needsModel) — absent, not just unclicked:
-    // demo-screen.tsx's visibleDemos filters it out entirely until llmReady,
-    // and this hermetic backend has no AI provider connected. It also has its
-    // own Getting-Started step now (steps.ts's agent-in-the-box, 12 -> 13),
-    // covered by getting-started.spec.ts's walk and harness-demo-step.test.tsx.
-    await expect(page.getByRole("heading", { name: "The agent in the box" })).toHaveCount(0);
+    // The harness-aware fifth demo's llmReady-gated visibility (needsModel —
+    // demo-screen.tsx's visibleDemos filter) is NOT asserted here: this
+    // shared hermetic backend runs fullyParallel alongside specs that seed a
+    // real AI secret (composer.spec.ts), so a negative "it's absent"
+    // assertion here would race it. That gating is deterministic unit
+    // coverage instead — demo-screen.test.tsx's "hides the harness demo
+    // without a model". It also has its own Getting-Started step now
+    // (steps.ts's agent-in-the-box, 12 -> 13), covered by
+    // getting-started.spec.ts's walk and harness-demo-step.test.tsx.
   });
 
   test("Start is gated on `-runner none`: disabled + honest hint", async ({ page }) => {

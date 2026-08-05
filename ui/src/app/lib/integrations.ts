@@ -169,6 +169,11 @@ export const T = {
     "A real agent run against your model provider, with egress sealed to that provider alone.",
   HARNESS_LOCKED_PANEL: "Connect a model provider first",
   HARNESS_LOCKED_CTA: "Go to Integrations",
+  // Claude Code only (H3, post-review fix): the catalog's task/policy are
+  // Anthropic-specific, and the codex-cli agent image carries no claude
+  // binary — an OpenAI-only deployment stays locked, honestly, with a reason.
+  HARNESS_OPENAI_ONLY_NOTE: "This demo runs Claude Code — connect an Anthropic-capable provider to try it.",
+  HARNESS_PREFLIGHT_UNAVAILABLE: "Preflight unavailable — you can still start.",
   PROVE_IT_BANNER: "Model connected — prove it live",
   TRY_AGENT_BOX: "Try Agent in the box",
 };

@@ -241,9 +241,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
     // The fifth (harness) demo — locked here (this suite's default status has
     // no connected AI integration): the invitation panel, no Start button.
+    // Both queries below must be async findBy*: the step HEADING renders
+    // synchronously (SetupLayout's scaffold), but the lazy-loaded body
+    // (React.lazy + Suspense) can still be settling — a sync getByRole right
+    // after the heading resolves is a real race (this was red once already).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /the agent in the box/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^go to integrations$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^go to integrations$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^start demo$/i })).not.toBeInTheDocument();
 
     // your work: the three tiers, dependency order — dirs/repos, images,

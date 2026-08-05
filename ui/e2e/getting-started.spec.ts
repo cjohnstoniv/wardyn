@@ -114,12 +114,14 @@ test.describe("Getting Started funnel", () => {
     await expect(main.getByRole("heading", { name: /lines that can't be crossed/i })).toBeVisible();
     // 8 the fifth (harness-aware) demo — LOCKED here: this hermetic backend has
     // no AI provider connected, so it's the invitation panel, not the live
-    // catalog body — no "Start demo" button (see harness-demo-step.test.tsx
-    // for the live-state coverage this shared backend can't safely seed).
+    // catalog body (see harness-demo-step.test.tsx for the live-state coverage
+    // this shared backend can't safely seed). Asserted POSITIVELY only (the
+    // panel + its button) — this backend runs fullyParallel alongside specs
+    // that seed a real AI secret (composer.spec.ts), so a negative "Start demo
+    // is absent" assertion here would race it.
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /the agent in the box/i })).toBeVisible();
     await expect(main.getByRole("button", { name: /^go to integrations$/i })).toBeVisible();
-    await expect(main.getByRole("button", { name: /^start demo$/i })).toHaveCount(0);
     // 9-11 your work: dirs/repos, base images, then the workspace tier
     await nextBtn.click();
     await expect(main.getByRole("heading", { name: /^directories & repos$/i })).toBeVisible();
