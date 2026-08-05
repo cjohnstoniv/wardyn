@@ -208,19 +208,16 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
-	// OperatorEmails, when non-empty, is the operator allowlist of the minimal
-	// viewer/operator role gate (requireOperator, http.go): an OIDC human whose
-	// session email is not on it is a VIEWER — read everything, launch runs, but
-	// refused with 403 on configuring the deployment (managed harness credential,
-	// policies, workspaces, site-config), writing/deleting SECRETS, DECIDING an
-	// approval, and minting an attach ticket (a live PTY into a running sandbox).
-	// Matching is case-insensitive on the whole address; read routes are never
-	// gated.
-	//
-	// EMPTY (the default) is exactly today's behavior: every authenticated human
-	// is admin-equivalent. Admin-token and local-mode callers are always
-	// operators (one shared credential, no human to key a role off). Ignored
-	// unless OIDC is configured, since nothing else carries an email.
+	// OperatorEmails is WARDYN_OIDC_OPERATOR_EMAILS, the legacy admin allowlist.
+	// internal/api no longer reads this field directly: requireOperator/isOperator
+	// (http.go) gate on the session's B1-derived Role instead. The list still
+	// matters — cmd/wardynd feeds the SAME value into oidc.Config.LegacyAdminEmails,
+	// so an email on it is still an additional RoleAdmin match at OIDC-login role
+	// derivation time (see internal/auth/oidc's deriveRole) — it just flows through
+	// Session.Role now instead of being re-checked a second time here. Kept on
+	// Config (not deleted) so that wiring keeps compiling; read it here only if you
+	// need the raw configured list for display (e.g. an admin-facing settings page),
+	// never to gate a request.
 	OperatorEmails []string
 	// ImageBuilder, when set, builds a per-run sandbox image from the
 	// devcontainer_repo in a create-run request. Nil disables devcontainer
@@ -517,8 +514,11 @@ func (s *Server) routes() chi.Router {
 	// Prometheus scrape surface. Admin-gated (NOT anonymous like /healthz): it
 	// reports operational volumes, and the public API fails closed without a
 	// credential — a scrape_config carries the admin token in an `authorization:`
-	// header.
-	r.With(s.humanOrAdminAuth).Get("/metrics", s.handleMetrics)
+	// header. Registered OUTSIDE /api/v1 with its own middleware chain, so it
+	// needs the admin (requireOperator) gate explicitly — it is not swept up by
+	// the operatorOnly group below. A member reading it would learn operational
+	// volumes (run counts, approval decisions) about every OTHER user's runs.
+	r.With(s.humanOrAdminAuth, s.requireOperator).Get("/metrics", s.handleMetrics)
 
 	// Human SSO (OIDC): login/callback/logout. Mounted only when configured.
 	// These are unauthenticated by design (they bootstrap the session).
@@ -621,13 +621,11 @@ func (s *Server) routes() chi.Router {
 			// Secret store required (the token is stored age-encrypted).
 			//
 			// RBAC (same as policy/workspace/site-config below): humanOrAdminAuth
-			// is AUTHENTICATION only, so these are ALSO on operatorOnly — with
-			// WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that list
-			// is a viewer and gets 403 here. UNSET (the default) is the disclosed
-			// status quo: ANY authenticated human in OIDC mode can connect or
-			// disconnect the shared managed subscription every run inherits. Full
-			// per-user RBAC is still future work (see ROADMAP.md). Every
-			// connect/disconnect is audited
+			// is AUTHENTICATION only, so these are ALSO on operatorOnly — a
+			// signed-in MEMBER (B1's derived role) gets 403 here. An ADMIN role —
+			// the default for every signed-in human when WARDYN_OIDC_ROLE_MAP is
+			// unset — can connect or disconnect the shared managed subscription
+			// every run inherits. Every connect/disconnect is audited
 			// (harness.credential.captured/disconnected).
 			if s.cfg.Secrets != nil {
 				operatorOnly.Post("/setup/harness-login", s.handleHarnessLogin)
@@ -637,12 +635,9 @@ func (s *Server) routes() chi.Router {
 
 			// Policy management (gated to authenticated humans — a valid SSO
 			// session or the admin token). WRITES are additionally operator-only:
-			// with WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that
-			// list can read policies but not CRUD them. UNSET (the default) is the
-			// disclosed status quo — ANY authenticated human in OIDC mode can CRUD
-			// policies — and full per-user RBAC remains future work (ROADMAP.md).
-			// Every spec is validated before it is persisted (fail closed);
-			// writes are audited.
+			// a signed-in MEMBER (B1's derived role) can read policies but not CRUD
+			// them; an ADMIN can. Every spec is validated before it is persisted
+			// (fail closed); writes are audited.
 			operatorOnly.Post("/policies", s.handleCreatePolicy)
 			r.Get("/policies", s.handleListPolicies)
 			r.Get("/policies/{id}", s.handleGetPolicy)
@@ -651,12 +646,9 @@ func (s *Server) routes() chi.Router {
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token);
-			// every MUTATING route here is additionally operator-only, so with
-			// WARDYN_OIDC_OPERATOR_EMAILS set a signed-in human outside that list
-			// can list/read workspaces but cannot CRUD them or widen what a run
-			// may do. UNSET (the default) is the disclosed status quo — ANY
-			// authenticated human in OIDC mode can CRUD workspaces — and full
-			// per-user RBAC remains future work (ROADMAP.md).
+			// every MUTATING route here is additionally operator-only, so a
+			// signed-in MEMBER (B1's derived role) can list/read workspaces but
+			// cannot CRUD them or widen what a run may do; an ADMIN can.
 			// Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
@@ -719,14 +711,11 @@ func (s *Server) routes() chi.Router {
 			// the URL/host fields) and audited (site_config.write).
 			//
 			// RBAC (same as policy/workspace above): humanOrAdminAuth is
-			// AUTHENTICATION only, so the PUT is operator-only — with
-			// WARDYN_OIDC_OPERATOR_EMAILS set, a signed-in human outside that list
-			// can read the config but not rewrite it. This is where that matters
-			// most: the blast radius is corp-wide (the baseline feeds every run's
-			// upstream proxy / artifact mirror / SCM hosts), higher than a single
-			// policy. UNSET (the default) is the disclosed status quo — ANY
-			// authenticated human in OIDC mode can rewrite it — and full per-user
-			// RBAC remains future work (ROADMAP.md).
+			// AUTHENTICATION only, so the PUT is operator-only — a signed-in
+			// MEMBER (B1's derived role) can read the config but not rewrite it.
+			// This is where that matters most: the blast radius is corp-wide (the
+			// baseline feeds every run's upstream proxy / artifact mirror / SCM
+			// hosts), higher than a single policy.
 			r.Get("/site-config", s.handleGetSiteConfig)
 			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
 			// Live connectivity probes: launch a throwaway one-shot sandbox and

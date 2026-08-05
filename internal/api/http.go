@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -65,6 +64,23 @@ func withOIDCEmail(ctx context.Context, email string) context.Context {
 func oidcEmailFromContext(ctx context.Context) string {
 	e, _ := ctx.Value(oidcEmailCtxKey{}).(string)
 	return e
+}
+
+// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleMember) B1
+// derived for the same verified OIDC session, published by humanOrAdminAuth next
+// to the principal/email for the same reason those two keys exist: isOperator
+// reads this (never oidc's own context key) so the auth middleware stays the
+// single place that trusts the oidc package, and stays unit-testable without
+// minting a signed session cookie.
+type oidcRoleCtxKey struct{}
+
+func withOIDCRole(ctx context.Context, role string) context.Context {
+	return context.WithValue(ctx, oidcRoleCtxKey{}, role)
+}
+
+func oidcRoleFromContext(ctx context.Context) string {
+	r, _ := ctx.Value(oidcRoleCtxKey{}).(string)
+	return r
 }
 
 // errorBody is the uniform JSON error envelope.
@@ -250,9 +266,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// Publish the verified human on an api-owned context key so
 			// actorFromRequest attributes the action to the real SSO human
 			// (and IGNORES any X-Wardyn-Principal header — a real identity won).
-			// The session email rides along for requireOperator.
+			// The session email rides along for /me and audit attribution; the
+			// session role rides along for isOperator (B1's derived admin/member
+			// role is now the sole source of the admin tier — see isOperator).
 			ctx := withOIDCHuman(r.Context(), sub)
 			ctx = withOIDCEmail(ctx, oidc.EmailFromContext(r.Context()))
+			ctx = withOIDCRole(ctx, oidc.RoleFromContext(r.Context()))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -260,39 +279,49 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	}))
 }
 
-// requireOperator is the minimal AUTHORIZATION tier layered on top of
+// requireOperator is the ADMIN authorization tier layered on top of
 // humanOrAdminAuth (which only AUTHENTICATES). It is nested inside that group on
-// the operator half of ONE tier split — viewer = read + launch runs; operator =
+// the admin half of the role split — member = read + launch/own runs; admin =
 // configure the deployment (managed harness credential, policies, workspaces,
-// site-config), write/delete SECRETS, DECIDE approvals, and mint an attach
-// ticket (a live PTY into a running sandbox) — and refuses a signed-in VIEWER
-// with 403 (see routes in Server.Handler). Read routes are untouched, and so is
-// launching a run: a viewer uses the product, it just cannot configure it, hold
-// credential material, authorize an escalation, or get a shell.
+// site-config), write/delete SECRETS, DECIDE any approval, and mint an attach
+// ticket for any run — and refuses a signed-in MEMBER with 403 (see routes in
+// Server.Handler). Read routes are untouched, and so is launching a run: a
+// member uses the product, it just cannot configure it, hold credential
+// material, or reach another user's run (see getRunAuthorized elsewhere in this
+// package for the owner-or-admin tier that sits BETWEEN member and admin).
 //
-// Roles come from ONE optional list, Config.OperatorEmails
-// (WARDYN_OIDC_OPERATOR_EMAILS), mirroring how oidc.Config.AllowedEmailDomains
-// gates sign-in:
+// The name predates B1's Session.Role and is kept (rather than renamed to
+// requireAdmin) as the smallest honest diff — every existing call site and
+// comment already reads "operator" to mean "admin", and the two are now exactly
+// the same tier.
 //
-//   - EMPTY (the default) => there are no viewers. Every authenticated caller
-//     keeps exactly the power it has today. Additive by construction: a
-//     deployment that does not set the list cannot notice this middleware.
-//   - SET => an OIDC human whose session email is not on it is a viewer.
+// isOperator reads the caller's ROLE (B1's oidc.RoleAdmin / oidc.RoleMember,
+// derived at OIDC login by internal/auth/oidc's deriveRole and carried on the
+// session cookie) — never the OperatorEmails list directly. Config.OperatorEmails
+// (WARDYN_OIDC_OPERATOR_EMAILS) still matters: cmd/wardynd feeds the SAME list
+// into oidc.Config.LegacyAdminEmails, so an email on it is still an ADDITIONAL
+// RoleAdmin match at derivation time (see deriveRole) — the mechanism is not
+// deleted, it now flows through Session.Role like every other role signal
+// instead of being re-checked here a second time. WARDYN_OIDC_ROLE_MAP unset
+// means deriveRole grants every signed-in human RoleAdmin unconditionally
+// (today's pre-0.5 behavior, additive by construction) — see oidc.deriveRole.
 //
-// Admin-token and local-mode callers are ALWAYS operators. Both are a single
+// Admin-token and local-mode callers are ALWAYS admins. Both are a single
 // shared credential with no per-human identity to key a role off — the token IS
 // the admin — which is the documented ceiling of this gate, not an oversight.
-// Only an OIDC session carries an email.
-//
-// Fail closed where it matters: with a list configured, an OIDC human whose
-// session carries no email claim (the IdP omitted it, which only
-// AllowedEmailDomains otherwise forces) is a viewer.
 func (s *Server) requireOperator(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.isOperator(r.Context()) {
-			// Do not name the allowlist's members — the caller learns only that
-			// a list exists and that they are not on it.
-			writeError(w, http.StatusForbidden, "requires operator role (WARDYN_OIDC_OPERATOR_EMAILS is configured and this signed-in user is not in it)")
+			// Do not name the allowlist/role-map's members — the caller learns
+			// only that they are not an admin.
+			writeError(w, http.StatusForbidden, "requires admin role")
+			// authz.denied: a member denied a reachable admin surface. Low-noise
+			// by design (see the audit doc in runs_create.go's denyMemberBYOI) —
+			// this is the ONE universal chokepoint every admin-gated route funnels
+			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
+			// one audit call here covers all of them.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -300,31 +329,18 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 }
 
 // isOperator reports whether the authenticated caller on ctx may perform
-// operator-only actions. See requireOperator for the rules.
+// admin-only actions. See requireOperator for the rules. A caller with no
+// verified OIDC human on ctx (admin token, local mode, or OIDC not configured)
+// is always an admin — a single shared credential carries no per-human role to
+// demote. Otherwise the caller's role is authoritative and admin-only when it
+// is exactly oidc.RoleAdmin (fail closed on any other value, including an
+// unexpectedly empty one — B1's decodeSession already refuses to hand out a
+// session with an empty role, so this is defense-in-depth, not a real path).
 func (s *Server) isOperator(ctx context.Context) bool {
-	if len(s.cfg.OperatorEmails) == 0 {
-		return true // no list configured: everyone is an operator (today's behavior)
-	}
 	if oidcHumanFromContext(ctx) == "" {
-		return true // admin token or local mode: no human identity to demote
+		return true // admin token, local mode, or OIDC not configured: no session role to demote
 	}
-	email := strings.TrimSpace(oidcEmailFromContext(ctx))
-	if email == "" {
-		return false // signed in with no email claim: fail closed
-	}
-	// Fail closed on a non-ASCII claim: EqualFold does Unicode SIMPLE folding,
-	// under which e.g. "roſs" (U+017F) or a KELVIN-SIGN "k" (U+212A) MATCHES an
-	// ASCII allowlist entry — the escalating direction. An ASCII allowlist (the
-	// only kind this knob documents) can then never be folded onto.
-	if strings.IndexFunc(email, func(r rune) bool { return r > unicode.MaxASCII }) >= 0 {
-		return false
-	}
-	for _, allowed := range s.cfg.OperatorEmails {
-		if strings.EqualFold(strings.TrimSpace(allowed), email) {
-			return true
-		}
-	}
-	return false
+	return oidcRoleFromContext(ctx) == oidc.RoleAdmin
 }
 
 // adminAuth gates the public API behind a constant-time bearer compare. An

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -746,7 +747,7 @@ func TestSiteConfigProbe_TimeoutReclaimsSandbox(t *testing.T) {
 // allowlist must be refused, never reach the handler.
 func TestHandleTestSiteConfig_OperatorOnly(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
-	viewer := ssoSession(t, "sub-viewer", rbacViewer)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)
 	for _, path := range []string{
 		"/api/v1/site-config/test-proxy",
 		"/api/v1/site-config/test-redirect",
