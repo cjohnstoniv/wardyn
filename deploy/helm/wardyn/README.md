@@ -155,6 +155,52 @@ helm install wardyn ./deploy/helm/wardyn -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
+## Multi-user (admin/member RBAC)
+
+Wardyn has a real two-role model — every OIDC session carries an **admin** or
+**member** role, derived at login (`internal/auth/oidc`'s `deriveRole`).
+`env.WARDYN_OIDC_ISSUER` alone only enables SSO (everyone signs in as admin,
+today's pre-0.5 behavior); `env.WARDYN_OIDC_ROLE_MAP` is what turns that into
+RBAC. Full semantics (ownership scoping, the approval kind-restriction, the
+policy clamp, the admin-token ceiling): [docs/OPERATIONS.md's "Multi-user: who
+can change what"](../../../docs/OPERATIONS.md#multi-user-who-can-change-what).
+A worked, end-to-end setup for Entra ID App Roles specifically (the manifest,
+"assignment required", and the `email_verified` trap) lives in the
+`wardyn-k8s-setup` Claude Code skill
+(`.claude/skills/wardyn-k8s-setup/SKILL.md`).
+
+A minimal end-to-end values snippet — an existing OIDC app registration, two
+Entra App Roles already created (`Wardyn.Admin`, `Wardyn.Member`), the legacy
+allowlist kept as a safety net:
+
+```yaml
+env:
+  WARDYN_OIDC_ISSUER: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=member"
+  WARDYN_OIDC_DEFAULT_ROLE: "member"          # unmatched users land here instead of being denied
+  WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
+
+extraEnv:
+  - name: WARDYN_OIDC_CLIENT_SECRET       # 🔒 secret-bearing var — extraEnv, never a literal `env` value
+    valueFrom:
+      secretKeyRef: {name: wardyn-oidc, key: client-secret}
+```
+
+```bash
+helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
+  --set postgres.dsn.secretRef.name=wardyn-pg \
+  --set auth.adminToken.secretRef.name=wardyn-auth \
+  -f rbac-values.yaml   # the snippet above
+```
+
+Keep `auth.adminToken` configured even with OIDC set up: the admin token
+always authenticates as admin (one shared credential, no per-human identity to
+demote), which is the recovery path if a role-map typo ever locks every human
+out. Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes)
+against an EXISTING OIDC-only install to turn on RBAC for the first time — it
+takes effect on each user's next login (a session signed before the role map
+existed carries no role and is never treated as authenticated).
+
 ## Kubernetes runner substrate (`k8s.enabled`)
 
 Off by default. Turning it on makes wardynd itself create/manage sandboxes as
