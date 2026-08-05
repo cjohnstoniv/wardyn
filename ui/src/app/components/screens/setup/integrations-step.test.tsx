@@ -13,6 +13,7 @@
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { IntegrationsStep } from "./integrations-step";
 import { T } from "../../../lib/integrations";
@@ -28,7 +29,7 @@ vi.mock("../integrations/integrations-screen", () => ({
 function renderStep(props: Partial<ComponentProps<typeof IntegrationsStep>> = {}) {
   return render(
     <MemoryRouter>
-      <IntegrationsStep onRecheck={vi.fn()} {...props} />
+      <IntegrationsStep onRecheck={vi.fn()} llmReady={false} onTryDemo={vi.fn()} {...props} />
     </MemoryRouter>,
   );
 }
@@ -58,5 +59,25 @@ describe("IntegrationsStep", () => {
     renderStep();
     expect(screen.queryByRole("link", { name: /manage in integrations/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^skip this step$/i })).not.toBeInTheDocument();
+  });
+});
+
+// The "prove it live" CTA — points at the new "agent in the box" Getting-
+// Started step (steps.ts's 12 -> 13).
+describe("IntegrationsStep — the 'prove it live' CTA", () => {
+  it("is absent with nothing connected (llmReady false)", () => {
+    renderStep({ llmReady: false });
+    expect(screen.queryByTestId("integrations-prove-it-cta")).not.toBeInTheDocument();
+    expect(screen.queryByText(T.PROVE_IT_BANNER)).not.toBeInTheDocument();
+  });
+
+  it("shows the banner + button once a model resolves, and the button navigates to the demo step", async () => {
+    const user = userEvent.setup();
+    const onTryDemo = vi.fn();
+    renderStep({ llmReady: true, onTryDemo });
+    expect(screen.getByText(T.PROVE_IT_BANNER)).toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: T.TRY_AGENT_BOX });
+    await user.click(btn);
+    expect(onTryDemo).toHaveBeenCalledTimes(1);
   });
 });

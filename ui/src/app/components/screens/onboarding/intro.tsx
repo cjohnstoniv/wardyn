@@ -145,16 +145,24 @@ export interface Readiness {
   composerReady: boolean;
 }
 
+// The row that HOLDS the default for the agent-tool slot, if any type's matrix
+// marks one (today only anthropic_api_key's Claude Code does — see
+// defaultHolder's own W5 note in lib/api/integrations.ts); otherwise just the
+// first agent-capable connected one, since with a single integration it's
+// trivially the default. Exported so a caller that needs the ROW itself — not
+// just its name (Readiness.llmLabel) — can reuse this exact pick instead of
+// re-deriving it: the "agent in the box" Getting-Started step's binding picker
+// (demos/harness-demo.ts) chooses the same row llmReady itself is built from.
+export function defaultAgentRow(status: SetupStatus): IntegrationRow | undefined {
+  const agentRows = agentCapableRows(aiIntegrationRows(status));
+  return defaultHolder(agentRows, AGENT_TOOL_CAPABILITY) ?? agentRows[0];
+}
+
 export function deriveReadiness(status: SetupStatus): Readiness {
   const barrierCount = status.runner?.confinement_classes?.length ?? 0;
   const aiRows = aiIntegrationRows(status);
   const agentRows = agentCapableRows(aiRows);
-  // The row that HOLDS the default for the agent-tool slot, if any type's
-  // matrix marks one (today only anthropic_api_key's Claude Code does — see
-  // defaultHolder's own W5 note in lib/api/integrations.ts); otherwise just
-  // the first connected one, since with a single integration it's trivially
-  // the default.
-  const defaultAgentRow = defaultHolder(agentRows, AGENT_TOOL_CAPABILITY) ?? agentRows[0];
+  const defaultRow = defaultAgentRow(status);
   // ≥1 integration with the Wardyn-features capability ON and a resolved
   // credential — powers the AI Composer / Wardyn's own review features.
   const composerReady = aiRows.some(
@@ -165,7 +173,7 @@ export function deriveReadiness(status: SetupStatus): Readiness {
     barrierReady: barrierCount > 0,
     barrierCount,
     llmReady: agentRows.length > 0,
-    llmLabel: defaultAgentRow?.name ?? "",
+    llmLabel: defaultRow?.name ?? "",
     composerReady,
   };
 }

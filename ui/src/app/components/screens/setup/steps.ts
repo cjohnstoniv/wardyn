@@ -39,16 +39,39 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // 9 -> 10: `corp_network` comes BACK as its own step, right before
 // `integrations` — see corp-network-step.tsx and the PHASES comment below for
 // why the ORDER, not a banner, is the actual fix.
-export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "sources" | "images" | "workspaces" | "review" | "launch";
+//
+// 10 -> 12: `workspaces` (the aggregate view) splits into its three tiers as
+// their own steps — `sources` (Directories & repos), `images` (Base images),
+// and `workspaces` itself — walked in dependency order: directories/repos
+// first, base images second, the workspace that composes them last. See
+// PHASES below for the "your work" walk.
+//
+// 12 -> 13: `agent-in-the-box` joins as the LAST Demos step (see PHASES
+// below). The catalog's fifth demo — the harness-aware one, previously
+// /demos-only and gated on a connected model — now also has a permanent seat
+// on the rail: ALWAYS visible, locked until a model provider resolves, live
+// once one does (its own badge/done logic below; the four keyless demos and
+// their DEMO_STEP_IDS/DEMO_TITLES machinery are untouched).
+export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "agent-in-the-box" | "sources" | "images" | "workspaces" | "review" | "launch";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). Scoped
-// to the FROZEN four funnel demo steps — the catalog also carries the harness
-// demo (agent-in-the-box, /demos-only, gated on a connected model), which is NOT
-// a Getting-started step and must never enter STEP_LABEL/STEP_HEADING/STEP_ORDER.
+// to the FROZEN four funnel demo steps — DEMO_STEP_IDS never grows to include
+// the catalog's fifth (harness) demo. That demo DOES have its own Getting-
+// started step now (agent-in-the-box, added 12 -> 13 above); it just doesn't
+// hang off this map — its STEP_LABEL/STEP_HEADING entry below is its own
+// explicit lookup (still the catalog's title, just not funneled through
+// DEMO_TITLES), and its badge/done logic is its own branch in
+// stepBadges/stepDone, not the shared neutral "Optional" the four keyless
+// demos always read.
 const DEMO_TITLES = Object.fromEntries(
   DEMOS.filter((d) => (DEMO_STEP_IDS as readonly string[]).includes(d.id)).map((d) => [d.id, d.title]),
 ) as Record<DemoStepId, string>;
+
+// The catalog's own title for the fifth (harness) demo — read once, rather
+// than retyped, so the step's label/heading can never drift from what the
+// demo body itself renders.
+const HARNESS_DEMO_TITLE = DEMOS.find((d) => d.id === "agent-in-the-box")!.title;
 
 // id→label lookup — the rail and the layout footer both need it; export once
 // here instead of each rebuilding the same map (F5).
@@ -57,6 +80,7 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
   corp_network: "Corporate network",
   integrations: "Integrations",
   ...DEMO_TITLES,
+  "agent-in-the-box": HARNESS_DEMO_TITLE,
   sources: "Directories & repos",
   images: "Base images",
   workspaces: "Workspaces",
@@ -71,6 +95,9 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
   corp_network: "Corporate network",
   integrations: "Connect what's outside Wardyn",
   ...DEMO_TITLES,
+  // Rail-label-as-heading, same precedent as corp_network and the four demo
+  // steps above: this IS the demo's name.
+  "agent-in-the-box": HARNESS_DEMO_TITLE,
   // Rail-label-as-heading, the corp_network precedent: these ARE the tiers'
   // names; a distinct noun-phrase would just be a synonym.
   sources: "Directories & repos",
@@ -103,7 +130,9 @@ export interface PhaseDef {
 // on the embedded list explains the split to anyone who visited it before).
 export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "corp_network", "integrations"] },
-  { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS] },
+  // agent-in-the-box is LAST in Demos — the flagship proof, after the four
+  // keyless ones (see steps.ts's 12 -> 13 header note above).
+  { id: "demos", label: "Demos", steps: [...DEMO_STEP_IDS, "agent-in-the-box"] },
   { id: "work", label: "Your work", steps: ["sources", "images", "workspaces"] },
   { id: "finish", label: "Finish", steps: ["review", "launch"] },
 ];
@@ -132,6 +161,9 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
   // barrier (Environment) is the sole hard requirement.
   "integrations",
   ...DEMO_STEP_IDS,
+  // Same as the other four demos — a "try it" step, never a requirement, even
+  // while locked with no model connected.
+  "agent-in-the-box",
   "sources",
   "images",
   "workspaces",
@@ -320,6 +352,14 @@ export function stepBadges(
         ? { text: `Ready · ${integrationsCount} connected`, tone: "success" }
         : { text: "Optional", tone: "neutral" },
     ...demoBadges,
+    // Its own ladder, not the shared demoBadges above: "needs a model" while
+    // locked is a DIFFERENT fact than the other four's plain "Optional" (they
+    // are runnable right now; this one isn't yet). The orchestrator ORs in the
+    // launched-override ("Done · demo run") on top, same mechanism as the
+    // other four (setup-screen.tsx) — this pure fn never claims a launch.
+    "agent-in-the-box": r.llmReady
+      ? { text: "Optional", tone: "neutral" }
+      : { text: "Optional · needs a model", tone: "neutral" },
     sources: sourcesCount
       ? { text: `Ready · ${sourcesCount} configured`, tone: "success" }
       : { text: "Optional", tone: "neutral" },
@@ -396,6 +436,10 @@ export function stepDone(
     // this pure fn only knows about a real connected integration.
     integrations: integrationsCount > 0,
     ...demoDone,
+    // Advisory like the other four — the orchestrator ORs in the per-browser
+    // launched signal (setup-screen.tsx); this pure fn only knows llmReady,
+    // never a launch.
+    "agent-in-the-box": false,
     sources: sourcesCount > 0,
     images: imagesCount > 0,
     // Design delta: done only once a workspace is actually READY, matching the

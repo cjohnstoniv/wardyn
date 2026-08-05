@@ -66,10 +66,19 @@ vi.mock("../../../lib/api/sources", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
+const demoCreateRunMock = vi.fn();
+const preflightRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   // The Demos step's DemoRunner calls getRun (reload re-attach) + killRun (end) in
   // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
-  runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
+  // preflightRun is the harness step's own D2 checklist call (fires only once a
+  // model resolves — see beforeEach for its default advisory-error stub).
+  runs: {
+    createRun: (...a: unknown[]) => demoCreateRunMock(...a),
+    getRun: vi.fn(),
+    killRun: vi.fn(),
+    preflightRun: (...a: unknown[]) => preflightRunMock(...a),
+  },
 }));
 // The Demos step embeds AttachTerminal (xterm) + LiveApprovals; neither renders in
 // jsdom. Stub them to trivial nodes so the step's body mounts without a real PTY.
@@ -145,6 +154,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // right fixture for walkthroughs that aren't testing the gate itself.
     testProxyMock.mockReset().mockResolvedValue({ state: "no_runner", detail: "no runner configured, nothing to launch a probe with" });
     testRedirectMock.mockReset().mockResolvedValue({ state: "no_runner", detail: "no runner configured, nothing to launch a probe with" });
+    // The harness step's own preflight (fires only once llmReady) — advisory
+    // rejection by default so a test that never navigates there is unaffected;
+    // tests that DO exercise the live state override this per-case.
+    preflightRunMock.mockReset().mockRejectedValue(new Error("not mocked"));
+    demoCreateRunMock.mockReset().mockResolvedValue({ id: "demo-run-1", state: "RUNNING" });
   });
 
   // Corporate network (steps.ts's corpNetworkGate) now requires proof
@@ -181,14 +195,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("heading", { name: /pick your barrier/i })).not.toBeInTheDocument();
   });
 
-  it("walks all twelve funnel steps and Next/Back move within bounds", async () => {
+  it("walks all thirteen funnel steps and Next/Back move within bounds", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
 
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is anchored as /^back$/i so it can't collide with another
-    // Back-ish verb. STEP_ORDER (9 -> 10: Corporate network came back): essentials
-    // [environment, corp_network, integrations] → demos (four sub-steps) → your
-    // work [workspaces] → finish.
+    // Back-ish verb. STEP_ORDER (12 -> 13: agent-in-the-box joins as the last
+    // Demos step): essentials [environment, corp_network, integrations] → demos
+    // (four sub-steps + the fifth, harness-aware one) → your work [sources,
+    // images, workspaces] → finish.
 
     // environment (first) step — barrier-led; the tier cards render, the
     // cross-cutting checks do NOT (they moved to the Review step).
@@ -223,6 +238,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(
       await screen.findByRole("heading", { name: /lines that can't be crossed/i }),
     ).toBeInTheDocument();
+
+    // The fifth (harness) demo — locked here (this suite's default status has
+    // no connected AI integration): the invitation panel, no Start button.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByRole("heading", { name: /the agent in the box/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^go to integrations$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^start demo$/i })).not.toBeInTheDocument();
 
     // your work: the three tiers, dependency order — dirs/repos, images,
     // then the workspace that composes them.
@@ -400,6 +422,62 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
   });
 
+  // agent-in-the-box (12 -> 13) — orchestrator-owned wiring only (the step
+  // body's own locked/live/preflight-gate coverage lives in
+  // harness-demo-step.test.tsx): the Integrations CTA reaches it, and the
+  // launched-override earns its rail checkmark, same mechanism as the other
+  // four demo steps.
+  describe("agent-in-the-box — orchestrator wiring", () => {
+    it("the Integrations step's 'prove it live' CTA navigates straight to it", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
+      );
+      listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+      preflightRunMock.mockResolvedValue({ setup_items: [], enforced_confinement_class: "CC1" });
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
+      await screen.findByRole("heading", { name: /connect what's outside wardyn/i });
+
+      await user.click(screen.getByRole("button", { name: /try agent in the box/i }));
+      expect(await screen.findByRole("heading", { name: /the agent in the box/i })).toBeInTheDocument();
+    });
+
+    it("launching it earns the rail's 'Done · demo run' checkmark, same as the other four demos", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
+      );
+      listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+      preflightRunMock.mockResolvedValue({
+        setup_items: [{ id: "llm_access:claude-code", kind: "llm_access", label: "Model access for claude-code", required_by: "the agent's own model calls", status: "satisfied" }],
+        enforced_confinement_class: "CC1",
+      });
+      renderScreen(<SetupScreen onDone={() => {}} />);
+      await screen.findByText("Fence");
+
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+      await clearCorpNetworkGate();
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> sealed-box
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> fail-then-approve
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> held-at-the-door
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> lines-that-cant-be-crossed
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> agent-in-the-box
+      await screen.findByRole("heading", { name: /the agent in the box/i });
+
+      const start = await screen.findByTestId("demo-start-agent-in-the-box");
+      await waitFor(() => expect(start).toBeEnabled());
+      await user.click(start);
+
+      const nav = screen.getByRole("navigation", { name: /setup steps/i });
+      const btn = within(nav).getByRole("button", { name: /the agent in the box/i });
+      expect(await within(btn).findByText("Done · demo run")).toBeInTheDocument();
+    });
+  });
+
   // A4 — "Skipped" state: an optional step the operator navigated past without
   // configuring it reads "Skipped" in the rail instead of a perpetual "Optional".
   // Exercised via Integrations now that the old corporate-network steps (which
@@ -541,10 +619,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (step 11 of 12) — checks live there now, not the barrier step
+    // walk to Review (step 12 of 13) — checks live there now, not the barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 9; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -593,7 +671,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 9; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

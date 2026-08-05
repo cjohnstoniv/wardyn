@@ -27,19 +27,47 @@
 // IS that page), and "Skip this step" duplicated Next — the step is optional,
 // so clicking Next past it with nothing connected marks it Skipped
 // (setup-screen.tsx's selectStep). One forward affordance, not three.
+//
+// The one CTA it does carry: once a model provider resolves (llmReady), a
+// success-toned banner invites the operator to prove it live on the new
+// "agent in the box" demo step (steps.ts's 12 -> 13) — absent until then,
+// never shown once already visited/launched (that's the demo step's own badge
+// to carry, not a second copy of it here).
+import { ShieldCheck } from "lucide-react";
+import { Button } from "../../ui/button";
 import { T } from "../../../lib/integrations";
 import { IntegrationsScreen } from "../integrations/integrations-screen";
 
 export function IntegrationsStep({
   onRecheck,
+  llmReady,
+  onTryDemo,
 }: {
   /** Re-fetch the orchestrator's own status/siteConfig/secrets so the rail
    *  badge doesn't go stale right after an in-embed add/rotate/delete. */
   onRecheck: () => void;
+  /** Whether an agent-capable AI integration resolves — the SAME signal the
+   *  "agent in the box" step gates on (onboarding/intro.tsx's deriveReadiness). */
+  llmReady: boolean;
+  /** Navigates to the "agent in the box" step. */
+  onTryDemo: () => void;
 }) {
   return (
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">{T.STEP_LEDE}</p>
+
+      {llmReady && (
+        <div
+          className="flex items-start gap-2.5 rounded-lg border border-success/30 bg-success-subtle px-3 py-2.5"
+          data-testid="integrations-prove-it-cta"
+        >
+          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" />
+          <p className="min-w-0 flex-1 text-[0.8125rem] leading-snug text-success">{T.PROVE_IT_BANNER}</p>
+          <Button size="sm" variant="outline" className="shrink-0" onClick={onTryDemo}>
+            {T.TRY_AGENT_BOX}
+          </Button>
+        </div>
+      )}
 
       <IntegrationsScreen embedded onChanged={onRecheck} />
       <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EMBED_SCOPE_NOTE}</p>

@@ -63,6 +63,12 @@ import {
 // the operator opens a demo step (same reasoning as the /demos route). The pure
 // demo catalog + launched-set reader are imported eagerly above (xterm-free).
 const DemoDetail = React.lazy(() => import("./demos-step"));
+// The fifth (harness) demo's own step body — same lazy-load reasoning (it also
+// composes DemoRunControls -> AttachTerminal). Scoped to stepId ===
+// "agent-in-the-box" below, NOT the DEMOS.some(...) branch DemoDetail uses:
+// DEMOS still carries this catalog entry (needsModel), but it is deliberately
+// NOT in DEMO_STEP_IDS (steps.ts), so it needs its own branch.
+const HarnessDemoStep = React.lazy(() => import("./harness-demo-step"));
 
 // ------------------------------------------------------------
 // SetupScreen
@@ -329,6 +335,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       badges[id] = { text: "Done · demo run", tone: "success" };
     }
   }
+  // The fifth demo (agent-in-the-box) isn't in DEMO_STEP_IDS (steps.ts) — same
+  // per-browser launched signal (demo-catalog.ts's markDemoLaunched/
+  // loadLaunchedDemos are keyed by any demo id, not just the funnel four),
+  // applied here since it can't ride the loop above.
+  if (launchedDemos.has("agent-in-the-box")) {
+    done["agent-in-the-box"] = true;
+    badges["agent-in-the-box"] = { text: "Done · demo run", tone: "success" };
+  }
   // An explicitly-skipped (optional) Integrations step earns its checkmark — a
   // deliberate "nothing connected" decision reads as done, not as an unfinished
   // "Optional". A real connected integration always wins and shows its own
@@ -437,13 +451,31 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             onTabChange={setCorpTab}
           />
         )}
-        {stepId === "integrations" && <IntegrationsStep onRecheck={recheck} />}
-        {DEMOS.some((d) => d.id === stepId) && (
+        {stepId === "integrations" && (
+          <IntegrationsStep
+            onRecheck={recheck}
+            llmReady={readiness.llmReady}
+            onTryDemo={() => selectStep("agent-in-the-box")}
+          />
+        )}
+        {(DEMO_STEP_IDS as readonly string[]).includes(stepId) && (
           <React.Suspense
             fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}
           >
             <DemoDetail
               demo={DEMOS.find((d) => d.id === stepId)!}
+              barrierReady={readiness.barrierReady}
+              onJump={selectStep}
+              onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}
+            />
+          </React.Suspense>
+        )}
+        {stepId === "agent-in-the-box" && (
+          <React.Suspense
+            fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}
+          >
+            <HarnessDemoStep
+              status={status}
               barrierReady={readiness.barrierReady}
               onJump={selectStep}
               onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}

@@ -26,7 +26,7 @@ import { audit, egressFromAudit } from "../../../lib/api/audit";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { usePoll } from "../../../lib/use-poll";
-import { isTerminalRunState, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
+import { isTerminalRunState, type Agent, type AuditEvent, type RunState, type SetupStatus } from "../../../lib/types";
 import { deriveReadiness } from "../onboarding/intro";
 import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
@@ -58,6 +58,33 @@ function forgetStored(demoId: string): void {
 }
 
 type TrackedRun = { id: string; state: RunState };
+
+// Overlay for a demo launch beyond its own policy — an explicit integration_id
+// (tier 1 of the server's model-access precedence, resolveRunIntegration in
+// internal/api/llmcred.go) and, when that integration is an OpenAI key, the
+// matching agent (so the server resolves the codex-cli convention image —
+// agentImage in internal/api/runs_policy.go). Only the "agent in the box"
+// Getting-Started step (setup/harness-demo-step.tsx, via demos/harness-demo.ts's
+// binding picker) ever passes one; every keyless demo launches with none,
+// unchanged.
+export interface DemoOverlay {
+  agent?: Agent;
+  integration_id?: string;
+}
+
+// The exact POST /runs body a demo launches with — exported so a caller that
+// has to PREFLIGHT the same body a launch will send (the harness step's
+// preflight checklist) can mirror it byte for byte, so preflight and launch can
+// never disagree (the same discipline the manual wizard's runRequest applies,
+// wizard.tsx).
+export function demoRunBody(demo: Demo, overlay?: DemoOverlay) {
+  return {
+    agent: overlay?.agent ?? "claude-code",
+    interactive: true,
+    inline_policy: demo.policy,
+    ...(overlay?.integration_id ? { integration_id: overlay.integration_id } : {}),
+  };
+}
 
 // useDemoRuns — owns the live-run map, the reload re-attach, the poll, and
 // start/end for the demo sandboxes. Shared by the /demos grid and the
@@ -134,18 +161,14 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   usePoll(refresh, 2000, !anyPending);
 
   const start = React.useCallback(
-    async (demo: Demo) => {
+    async (demo: Demo, overlay?: DemoOverlay) => {
       setStarting(demo.id);
       try {
         // Every demo comes up idle for the operator to drive in the attached
         // terminal — keyless demos run plain curl; the harness demo runs `claude`
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
-        const run = await api.createRun({
-          agent: "claude-code",
-          interactive: true,
-          inline_policy: demo.policy,
-        });
+        const run = await api.createRun(demoRunBody(demo, overlay));
         setRuns((m) => ({ ...m, [demo.id]: { id: run.id, state: run.state } }));
         const store = loadStore();
         store[demo.id] = run.id;
@@ -339,6 +362,7 @@ export function DemoRunControls({
   loading,
   onStart,
   onEnd,
+  disabled = false,
 }: {
   demo: Demo;
   run?: TrackedRun;
@@ -347,6 +371,10 @@ export function DemoRunControls({
   loading: boolean;
   onStart: () => void;
   onEnd: (runId: string) => void;
+  /** Extra gate beyond barrierReady/loading/starting, ORed into Start's disabled
+   *  condition — the harness step's preflight model-access + operator gate.
+   *  Every other call site omits it (default false), unchanged. */
+  disabled?: boolean;
 }) {
   const running = run?.state === "RUNNING";
   const failed = run?.state === "FAILED";
@@ -397,7 +425,7 @@ export function DemoRunControls({
       )}
       <Button
         onClick={onStart}
-        disabled={!barrierReady || loading || starting}
+        disabled={!barrierReady || loading || starting || disabled}
         data-testid={`demo-start-${demo.id}`}
       >
         {starting ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}

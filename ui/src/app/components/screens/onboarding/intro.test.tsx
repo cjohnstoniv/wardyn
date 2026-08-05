@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { SetupStatus } from "../../../lib/types";
-import { hasLlmPath, deriveReadiness, HowItWorksStrip } from "./intro";
+import { hasLlmPath, deriveReadiness, defaultAgentRow, HowItWorksStrip } from "./intro";
 import { baseStatus } from "../setup/test-fixtures";
 
 // A minimal-but-valid SetupStatus. The default `make setup` config is a single
@@ -153,6 +153,22 @@ describe("deriveReadiness — must not overclaim a fake backend as a connected m
     );
     expect(r.llmReady).toBe(false);
     expect(r.composerReady).toBe(true);
+  });
+});
+
+// defaultAgentRow — the ROW deriveReadiness's llmLabel is built from, exported
+// so a caller that needs the row itself (not just its name) can reuse the same
+// pick instead of re-deriving it (demos/harness-demo.ts's binding picker).
+describe("defaultAgentRow — the same pick llmLabel is built from", () => {
+  it("is undefined with nothing agent-capable connected", () => {
+    expect(defaultAgentRow(status({ composer: { enabled: true, default: "dev", backends: [fakeBackend] } }))).toBeUndefined();
+  });
+
+  it("names the row whose .name matches llmLabel for a connected Anthropic key", () => {
+    const s = status({ secrets: { present: ["anthropic-api-key"], github_app: false } });
+    const row = defaultAgentRow(s);
+    expect(row?.id).toBe("ai:anthropic_api_key");
+    expect(row?.name).toBe(deriveReadiness(s).llmLabel);
   });
 });
 
