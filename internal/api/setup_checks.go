@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -319,4 +320,173 @@ func tlsCookiePostureCheck(oidcConfigured bool, redirectURL string, secureCookie
 		Detail: "The OIDC redirect URL is https but WARDYN_TLS_TERMINATED is not set, so wardynd still thinks it is serving plain HTTP: the session cookie is issued WITHOUT the Secure attribute.",
 		Fix:    "Set WARDYN_TLS_TERMINATED=true (helm: env.WARDYN_TLS_TERMINATED) when TLS terminates at an upstream reverse proxy/ingress.",
 	}, true
+}
+
+// scmProviderCheck grades the SCM credential posture against the safest-path
+// ladder (GitHub App > fine-grained PAT > deploy key > classic PAT/gh token >
+// personal SSH key). NEVER a gate: warn means "a safer option exists", not
+// "broken" — the configured lane still clones fine, and public repos need no
+// SCM credential at all. Grading:
+//   - GitHub App configured        -> ok   (brokered ≤1h scoped tokens; the only
+//     rung Wardyn itself can expire — nothing safer to recommend)
+//   - any ssh-key-<host> secret    -> warn (a STANDING resident-lane key Wardyn
+//     can neither scope nor expire; auto-used by every future SSH clone)
+//   - git-pat-<host> only          -> info (could already be a fine-grained
+//     rung-2 token — server-side we cannot tell it from a classic one, so no
+//     warn; the detail carries the upgrade hint instead)
+//   - nothing configured           -> info (+ posture-aware Fix when the host
+//     shows loose habits: gh CLI login, credential.helper store/cache,
+//     ~/.git-credentials, ~/.netrc)
+//
+// a secret-NAME prefix scan, not a grant-usage check (grants are
+// per-run, not standing config) — the <host-slug> convention (dots→hyphens,
+// e.g. git-pat-github-com) is the contract the ScmProviderStep UI follows.
+func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPosture) SetupCheck {
+	var pats, sshKeys []string
+	for _, n := range secretNames {
+		switch {
+		case strings.HasPrefix(n, "git-pat-"):
+			pats = append(pats, n)
+		case strings.HasPrefix(n, "ssh-key-"):
+			sshKeys = append(sshKeys, n)
+		}
+	}
+	loosePosture := posture.GhCLI || posture.GitCredentialsFile || posture.Netrc ||
+		strings.HasPrefix(posture.CredentialHelper, "store") || strings.HasPrefix(posture.CredentialHelper, "cache")
+	switch {
+	case githubApp:
+		via := append([]string{"GitHub App"}, pats...)
+		detail := "Safest lane configured: the GitHub App mints a brokered, ≤1h, contents-scoped token per run — the only SCM credential Wardyn itself can expire. (" + strings.Join(via, ", ") + ")"
+		if len(sshKeys) > 0 {
+			// Honesty: the App does NOT retire a standing ssh-key-* secret —
+			// SSH-protocol clones still auto-use it, resident, with no prompt.
+			detail += " Note: standing SSH key secret(s) also present (" + strings.Join(sshKeys, ", ") + ") — the App doesn't retire them; delete if unused."
+		}
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "ok",
+			Detail: detail,
+		}
+	case len(sshKeys) > 0:
+		detail := "SSH key secret(s) configured (" + strings.Join(sshKeys, ", ") + "): a STANDING credential, resident in the sandbox for each clone, that Wardyn can neither scope nor expire. It works — a safer rung exists."
+		if len(pats) > 0 {
+			detail += " PAT secret(s) also present (" + strings.Join(pats, ", ") + "): those are brokered per-clone and never resident."
+		}
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "warn",
+			Detail: detail,
+			Fix:    "Prefer a GitHub App (brokered, expirable) or a fine-grained repo-scoped PAT (github.com/settings/personal-access-tokens/new → Contents: Read-only). If SSH, make it a single-repo read-only deploy key, not a personal identity.",
+		}
+	case len(pats) > 0:
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
+			Detail: "PAT secret(s) configured (" + strings.Join(pats, ", ") + "), brokered per-clone and never resident. If it is a classic whole-account PAT, re-issue it fine-grained + repo-scoped + short-expiry; a GitHub App is safer still.",
+		}
+	case loosePosture:
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
+			Detail: "No SCM credential configured yet (optional). Host posture note: this machine keeps broad or plaintext git credentials (gh CLI session, credential.helper store/cache, ~/.git-credentials or ~/.netrc) — Wardyn never reads them.",
+			Fix:    "For private repos, prefer a GitHub App or a fine-grained repo-scoped PAT stored as git-pat-<host-slug> (e.g. git-pat-github-com) — or generate a read-only deploy key (make setup offers this).",
+		}
+	default:
+		return SetupCheck{
+			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
+			Detail: "No SCM credential configured yet (optional): cloning a private GitHub/Azure DevOps repo needs a GitHub App, a git-pat-<host-slug> secret (HTTPS/PAT), or an ssh-key-<host-slug> secret (SSH) referenced from a matching grant.",
+			Fix:    "Add a secret named git-pat-github-com / git-pat-dev-azure-com (or your GHES/ADO-Server host's slug) under Secrets and reference it from a git_pat grant — or configure a GitHub App.",
+		}
+	}
+}
+
+// hostProxyCheck summarizes host-proxy detection as a single non-blocking
+// "info" row — the HostProxy field itself carries the full per-source detail
+// the Host Proxy step renders. Always "info": detection never blocks setup,
+// it only surfaces what's already configured on the host so the step can
+// suggest matching settings.
+//
+// blind is true when this wardynd is containerized AND no host-side detection
+// was seeded in: every tier (shell profiles, git, tool configs, OS/PAC) is then
+// structurally unreachable, so an empty result must say "couldn't look there"
+// rather than assert "nothing is there". Same honesty rule as vaultKVMDetail.
+func hostProxyCheck(d setup.HostProxyDetection, blind bool) SetupCheck {
+	var found []string
+	if d.HTTPProxy != nil || d.HTTPSProxy != nil || d.AllProxy != nil {
+		found = append(found, "an env/shell/OS proxy setting")
+	}
+	if d.GitProxy != nil {
+		found = append(found, "a git config proxy")
+	}
+	if len(d.ToolConfigs) > 0 {
+		names := make([]string, len(d.ToolConfigs))
+		for i, tc := range d.ToolConfigs {
+			names[i] = tc.Tool
+		}
+		found = append(found, "tool configs ("+strings.Join(names, ", ")+")")
+	}
+	if d.PAC != nil {
+		found = append(found, "a PAC/WPAD auto-config URL (cannot be resolved automatically)")
+	}
+	if len(found) == 0 {
+		if blind {
+			return SetupCheck{
+				ID: "host_proxy", Label: "Host proxy", Status: "info",
+				Detail: "Detection ran inside the wardynd container, so it only sees this container's environment — not your host's shell profiles, git config, per-tool configs, or OS/PAC proxy settings. That is \"couldn't look there\", not \"nothing is there\".",
+				Fix:    "If your host uses a corporate proxy, store its URL as a secret and reference it below — or re-run `make setup` (it detects on the host and seeds the result in).",
+			}
+		}
+		return SetupCheck{
+			ID: "host_proxy", Label: "Host proxy", Status: "info",
+			Detail: "No host-side proxy configuration detected (env vars, shell profiles, git config, tool configs, or OS proxy settings).",
+		}
+	}
+	detail := "Detected " + strings.Join(found, "; ") + "."
+	if d.HasCredentials {
+		detail += " A detected proxy carries an embedded credential — store it as a secret rather than a plain URL."
+	}
+	// A loopback-bound proxy is reachable from host processes but from nothing
+	// else: a sandbox's 127.0.0.1 is its own, and on a VM-backed Docker host the
+	// runtime VM cannot reach the host's loopback either. Chaining sandbox egress
+	// through it therefore cannot work, and the failure lands late (at the first
+	// approved request) rather than at setup — so say it here, where the operator
+	// is still configuring. Warn, not fail: detection is never a gate, and a
+	// host-mode wardynd on the same machine CAN use it.
+	if a := d.LoopbackBound(); len(a) > 0 {
+		return SetupCheck{
+			ID: "host_proxy", Label: "Host proxy", Status: "warn",
+			Detail: detail + " " + strings.Join(a, ", ") + " is bound to loopback, which a sandbox cannot reach (its 127.0.0.1 is its own; a VM-backed Docker host can't reach the host's loopback either). Chaining sandbox egress through it will fail to connect.",
+			Fix:    "Point the upstream proxy at an address the sandbox can reach: run `wardyn setup proxy-relay <listen-port> <proxy-port>` on the host and store http://<host-gateway>:<listen-port> as the upstream-proxy secret — see docs/adoption/loopback-only-forward-proxy.md.",
+		}
+	}
+	return SetupCheck{ID: "host_proxy", Label: "Host proxy", Status: "info", Detail: detail}
+}
+
+// artifactRepoCheck reports whether the operator has configured egress
+// redirects (package-registry mirrors, or any other outbound redirect).
+// Always "info": optional and non-blocking.
+func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
+	if len(sc.EgressRedirects) == 0 {
+		return SetupCheck{
+			ID: "artifact_repo", Label: "Egress redirection", Status: "info",
+			Detail: "No egress redirects configured (optional): point npm/pip/cargo/maven/go/nuget (or any other outbound host) at a corporate mirror/relay so runs never reach the public destination directly.",
+			Fix:    "Set egress_redirects via PUT /api/v1/site-config (or the Corporate Network setup step).",
+		}
+	}
+	ecos, network, tokened := map[string]bool{}, 0, 0
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "" {
+			network++
+		} else {
+			ecos[r.Ecosystem] = true
+		}
+		// Either token source counts — a redirect taking its token from an
+		// integration injects one exactly like a bare-secret row does, so
+		// counting only the latter would under-report what is wired.
+		if r.TokenSecretRef != "" || r.TokenIntegrationRef != "" {
+			tokened++
+		}
+	}
+	detail := fmt.Sprintf("%d redirect(s) configured (ecosystems: %s; %d network-only); egress substitutes the corp destination in.",
+		len(sc.EgressRedirects), strings.Join(slices.Sorted(maps.Keys(ecos)), ", "), network)
+	if tokened > 0 {
+		detail += fmt.Sprintf(" %d with a token injected proxy-side.", tokened)
+	}
+	return SetupCheck{ID: "artifact_repo", Label: "Egress redirection", Status: "info", Detail: detail}
 }
