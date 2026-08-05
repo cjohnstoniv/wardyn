@@ -270,17 +270,18 @@ brokered run a second push path the receive-pack parser cannot read — see
 [docs/POLICIES.md](docs/POLICIES.md) "The `ssh_key` and `git_pat` lanes are
 closed too".)
 
-## Layered egress (identical semantics on both targets)
+## Layered egress (per-target status — see each layer's own tag)
 
-L0 structural (netns, no default route) **[shipped]** → L1 default-deny nftables
-/ NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path) **[v0.5+ — planned]**
-→ L2 wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
+L0 structural (netns, no default route) **[shipped]** → L1 default-deny —
+**NetworkPolicy [shipped, k8s target]** / **nftables [planned, docker
+target]** (+ Cilium toFQDNs on the blessed Helm path **[planned]**) → L2
+wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 **[v0.5+ — planned]**.
 
 | Layer | Mechanism | What it stops |
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
-| L1 default-deny **[v0.5+ — planned]** | nftables / NetworkPolicy (+ Cilium toFQDNs on the blessed Helm path); block `169.254.169.254` | Non-HTTP tunnels; metadata-server theft; DNS rebinding |
+| L1 default-deny **[shipped on k8s; planned on docker]** | **k8s [shipped]**: per-run `NetworkPolicy` (blocking `169.254.169.254`), proven live by a boot-time egress canary that refuses to construct the substrate on a CNI that doesn't enforce it (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the logged, opt-in downgrade — see [ROADMAP.md](ROADMAP.md)). **docker [planned]**: nftables — not built (`internal/runner/docker/hardening.go`'s own comment: "be honest, do not claim it"); Cilium `toFQDNs` also planned, either target | Non-HTTP tunnels; metadata-server theft; DNS rebinding — on k8s today, both targets once nftables lands |
 | L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 

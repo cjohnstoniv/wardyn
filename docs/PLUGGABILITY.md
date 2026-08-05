@@ -38,7 +38,7 @@ A pluggable seam in Wardyn has five parts. Four seams implement all of parts
    wired through config, not a registry; see §3.) One documented quirk, not a
    bug: `orchestrator.Orchestrator` (which implements `runner.Runner` over one
    or more `substrate.Substrate`s) reports the literal string `"orchestrator"`
-   from `Name()` — and so from `/healthz`'s `driver` field — only when it
+   from `Name()` — and so from `/healthz`'s `runner` field — only when it
    wraps MORE than one substrate at once; wrapping exactly one (today's only
    real path: `WARDYN_RUNNER`/`-runner` selects a single substrate name, so
    `buildRunnerFromFlags` always constructs the orchestrator with exactly one)

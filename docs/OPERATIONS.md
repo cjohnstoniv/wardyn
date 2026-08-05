@@ -104,6 +104,16 @@ adopting the role map keeps its current operators as admins with zero
 re-configuration. `WARDYN_OIDC_DEFAULT_ROLE` (`admin`/`member`, unset = deny)
 covers everyone the map doesn't name.
 
+Both are validated at **boot**, not at first use: a malformed
+`WARDYN_OIDC_ROLE_MAP` entry (an invalid role value, a non-ASCII key —
+matching is ASCII-only, so it could never match — a duplicate key, or
+non-blank input with no valid entry at all) or an invalid
+`WARDYN_OIDC_DEFAULT_ROLE` value fails wardynd's boot outright, naming the
+var in the error (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`) —
+never a silent fallback that lets a typo reach a session cookie later. A
+signed-in human who matches nothing in a validly-configured map, with no
+default role set, is denied at login instead ("no Wardyn role assigned").
+
 **What admin-only still means** — the writes with the widest blast radius stay
 gated on the role being exactly `admin` (`requireOperator`): the managed
 harness credential, policy create/update/delete, every mutating `/workspaces`
