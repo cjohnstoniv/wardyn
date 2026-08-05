@@ -144,3 +144,23 @@ wardyn_pick_docker_host() {
   fi
   return 0
 }
+
+# env_get FILE KEY — read the last uncommented KEY= value ("" when absent).
+env_get() {
+  [ -f "$1" ] || return 0
+  grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-
+}
+
+# env_set FILE KEY VALUE — idempotently set KEY=VALUE, replacing an existing
+# uncommented line or appending. Plain awk (no sed -i) so it behaves the same
+# under GNU and BSD userlands.
+env_set() {
+  _es_file=$1; _es_key=$2; _es_val=$3
+  if [ -f "${_es_file}" ] && grep -qE "^${_es_key}=" "${_es_file}"; then
+    awk -v k="${_es_key}=" -v line="${_es_key}=${_es_val}" \
+      'index($0,k)==1{print line; next}{print}' "${_es_file}" > "${_es_file}.tmp"
+    mv "${_es_file}.tmp" "${_es_file}"
+  else
+    printf '%s=%s\n' "${_es_key}" "${_es_val}" >> "${_es_file}"
+  fi
+}

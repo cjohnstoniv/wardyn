@@ -393,6 +393,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **"Recommended — built for this workspace" now works out of the box on the
+  compose stack.** The default card required four hand-set knobs and still
+  failed: devcontainer builds were opt-in (`WARDYN_ENVBUILD=false`), needed an
+  external registry, a build-network opt-in, and a hand-staged runner-tools
+  directory — and even fully configured, two latent bugs killed every real
+  build from a containerized control plane. The stack now ships a loopback
+  registry sidecar (Docker trusts `127.0.0.1` registries without TLS or
+  daemon config), builds default ON with the registry/network/tools knobs
+  pre-wired, and the runner tools ride inside the wardynd image. The two
+  bugs: the generated build context was staged in the control plane's own
+  /tmp and bind-mounted by path — a path the host daemon can't see, so
+  envbuilder built an empty workspace (delivery is now a tar streamed into
+  the build container, host-agnostic); and the build container's blanket
+  capability drop broke rootfs extraction for any featureful build ("chown
+  /etc/gshadow: operation not permitted") — it now grants exactly the
+  file-ownership set an image builder needs, keeping the network- and
+  syscall-shaped capabilities dropped. Build output also streams into
+  wardynd's log now; a failed build used to leave nothing but "exit code 1".
+  Proven end to end: a Go+JS workspace's recommended image built, pushed
+  through the sidecar, finalized, and a verify session booted it with
+  go/node/pnpm present.
+- **`make setup` asks which folder Wardyn may onboard.** `WARDYN_WORKSPACES_ROOT`
+  had to be exported by hand on every setup run or local-directory onboarding
+  failed against the sealed daemon. The containerized front door now prompts
+  for it (default: the previous answer, else the current directory), refuses
+  `$HOME` outright, remembers the choice in deploy/compose/.env, and an
+  explicit env var still wins silently for scripts and CI.
 - **The base-image cards stopped claiming tools they never carry.** The
   Recommended card appended a `claude-code` chip whenever an AI integration
   existed — but the recommended build is generated from the scan profile and

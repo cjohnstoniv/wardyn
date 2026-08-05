@@ -141,6 +141,10 @@ type envbuilderDockerAPI interface {
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	// CopyToContainer streams a tar into a created (not-yet-started) container —
+	// the host-agnostic delivery for the generated build context: a bind mount
+	// names a HOST path, which a containerized wardynd's own /tmp is not.
+	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
@@ -174,6 +178,11 @@ type Builder struct {
 	// the built image (H5). Empty => WARDYN_ENVBUILD_TOOLS_DIR. A build fails
 	// closed if the dir or any required tool is missing.
 	ToolsDir string
+
+	// DefaultLogSink receives envbuilder/finalize build output for calls that
+	// pass no per-call sink — without it a failed build's reason is invisible
+	// (only "exit code 1" survives). wardynd points this at slog.
+	DefaultLogSink io.Writer
 
 	// BuildTimeout caps total build time. Zero uses defaultBuildTimeout.
 	BuildTimeout time.Duration
@@ -209,6 +218,7 @@ type BuildSpec struct {
 	// what callers pass to runner.SandboxSpec.Image after a successful build.
 	OutputImageTag string
 	// LogSink receives build log bytes streamed from the envbuilder container.
+	// When nil, Builder.DefaultLogSink (if set) receives them instead.
 	// If nil, build output is discarded.
 	LogSink io.Writer
 }
@@ -263,7 +273,7 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 		return "", err
 	}
 
-	return b.runBuildAndFinalize(ctx, buildEnv(spec, b.CacheRepo), nil, spec.LogSink, spec.OutputImageTag)
+	return b.runBuildAndFinalize(ctx, buildEnv(spec, b.CacheRepo), nil, nil, "", spec.LogSink, spec.OutputImageTag)
 }
 
 // runBuildAndFinalize drives the container lifecycle shared by Build and
@@ -271,7 +281,10 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 // container create/start/wait with env and extraBinds applied atop
 // hardenedHostConfig, always-force-remove, optional log streaming, and the
 // finalize stage that layers Wardyn's runner tools onto the pushed base image.
-func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, logSink io.Writer, outputTag string) (string, error) {
+// contextTar, when non-nil, is streamed into the created container at
+// contextTarDest before start — the generated-files build's delivery (see
+// BuildFromDevcontainerFiles for why a bind mount cannot carry it).
+func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, contextTar io.Reader, contextTarDest string, logSink io.Writer, outputTag string) (string, error) {
 	// Registry PUSH is the only delivery path (the docker.sock fallback is
 	// retired). Fail closed with an actionable error when no registry is set.
 	if err := b.requireCacheRepo(); err != nil {
@@ -313,6 +326,16 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		return "", fmt.Errorf("envbuild: create build container: %w", err)
 	}
 	containerID := created.ID
+	if contextTar != nil {
+		if _, err := b.cli.CopyToContainer(ctx, containerID, client.CopyToContainerOptions{
+			DestinationPath: contextTarDest, Content: contextTar,
+		}); err != nil {
+			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer rmCancel()
+			_, _ = b.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true})
+			return "", fmt.Errorf("envbuild: stage build context: %w", err)
+		}
+	}
 
 	// Always force-remove the build container even on cancellation or panic.
 	defer func() {
@@ -327,6 +350,9 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	}
 
 	// Stream build logs concurrently while waiting for the container to finish.
+	if logSink == nil {
+		logSink = b.DefaultLogSink
+	}
 	if logSink != nil {
 		go b.streamLogs(ctx, containerID, logSink)
 	}
@@ -429,9 +455,22 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 		// for RUN only); see docs/ENVBUILD.md "Residual".
 		NetworkMode: container.NetworkMode(b.effectiveBuildNetwork()),
 
-		// Drop privileges so a compromised build step has minimal capability.
+		// Drop privileges so a compromised build step has minimal capability —
+		// then add back ONLY the file-ownership set an image builder cannot
+		// work without: envbuilder/kaniko unpacks base layers and applies
+		// features into a rootfs, which chowns/chmods files it did not create
+		// and writes setuid/file-capability bits from layer metadata. The
+		// blanket ALL-drop made every featureful build die at extraction with
+		// "chown /etc/gshadow: operation not permitted" (a feature-less
+		// devcontainer never unpacks, which is why smoke tests passed).
+		// Network/syscall-shaped caps (NET_RAW, SYS_ADMIN, SYS_PTRACE, …)
+		// stay dropped, and no-new-privileges still blocks setuid escalation.
 		SecurityOpt: []string{"no-new-privileges"},
 		CapDrop:     []string{"ALL"},
+		CapAdd: []string{
+			"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID",
+			"SETGID", "SETUID", "SETFCAP", "MKNOD",
+		},
 
 		// Resource caps bound the DoS / blast-radius surface of untrusted build
 		// code. Always applied (universally supported by the daemon).

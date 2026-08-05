@@ -222,6 +222,42 @@ if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
 fi
 case "${WARDYN_SETUP_MODE:-container}" in
   container)
+    # ── Which host folder may Wardyn onboard? ─────────────────────────────
+    # The containerized daemon is SEALED: it sees only what this root mounts
+    # in, and with none configured every local-directory onboard fails with a
+    # "not visible from the sealed daemon" 422. Ask ONCE here (the front
+    # door), remember the answer in deploy/compose/.env, and let an explicit
+    # WARDYN_WORKSPACES_ROOT env win without prompting (scripts/CI).
+    if [ -z "${WARDYN_WORKSPACES_ROOT:-}" ] && [ -t 0 ]; then
+      _prev_root="$(env_get "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT 2>/dev/null || true)"
+      _def_root="${_prev_root:-$(pwd)}"
+      hd "Which folder may Wardyn onboard as local directories?"
+      say "  Runs can only mount directories UNDER this folder (a parent of your projects"
+      say "  works well). Leave empty to keep the daemon sealed — repo onboarding still"
+      say "  works, and you can re-run 'make setup' to change it any time."
+      printf "  Folder [%s]: " "${_def_root}"
+      read -r _root || _root=""
+      _root="${_root:-${_def_root}}"
+      # ~ expansion for a typed path; a pasted absolute path passes through.
+      case "${_root}" in "~"|"~/"*) _root="${HOME}${_root#\~}";; esac
+      if [ -n "${_root}" ]; then
+        if [ "${_root}" = "${HOME}" ]; then
+          warn "That is your whole home directory — too broad to mount into the daemon."
+          warn "Pick a projects folder under it (e.g. ${HOME}/projects); keeping the previous setting."
+          _root="${_prev_root}"
+        elif [ ! -d "${_root}" ]; then
+          warn "${_root} is not a directory; keeping the previous setting."
+          _root="${_prev_root}"
+        fi
+      fi
+      WARDYN_WORKSPACES_ROOT="${_root}"
+      export WARDYN_WORKSPACES_ROOT
+    fi
+    if [ -n "${WARDYN_WORKSPACES_ROOT:-}" ]; then
+      env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT "${WARDYN_WORKSPACES_ROOT}"
+      ok "Local directories under ${WARDYN_WORKSPACES_ROOT} can be onboarded (remembered in deploy/compose/.env)"
+    fi
+
     hd "Containerized mode — delegating to scripts/up.sh up"
     info "wardynd runs in a container on wardyn-internal: sandbox→control-plane callbacks route"
     info "in-network (the Docker Desktop + WSL2 NAT workspace-Verify/Record fix). Set up model"

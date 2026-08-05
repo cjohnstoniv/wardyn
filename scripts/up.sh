@@ -162,24 +162,8 @@ open_url() {
 
 # env_get FILE KEY -> current value (empty if unset/absent). Ignores comments
 # (matches only an uncommented "KEY=" line start).
-env_get() {
-  [ -f "$1" ] || return 0
-  grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-
-}
-
-# env_set FILE KEY VALUE — idempotently set KEY=VALUE, replacing an existing
-# uncommented line or appending. Plain awk (no sed -i) so it behaves the same
-# under GNU and BSD userlands.
-env_set() {
-  _es_file=$1; _es_key=$2; _es_val=$3
-  if [ -f "${_es_file}" ] && grep -qE "^${_es_key}=" "${_es_file}"; then
-    awk -v k="${_es_key}=" -v line="${_es_key}=${_es_val}" \
-      'index($0,k)==1{print line; next}{print}' "${_es_file}" > "${_es_file}.tmp"
-    mv "${_es_file}.tmp" "${_es_file}"
-  else
-    printf '%s=%s\n' "${_es_key}" "${_es_val}" >> "${_es_file}"
-  fi
-}
+# env_get/env_set moved to scripts/lib/common.sh — setup.sh's front-door
+# workspaces-root prompt persists through the same helpers.
 
 # _confirm PROMPT — shared consent gate for destructive commands (same
 # convention as setup.sh's stale-store recovery): WARDYN_FORCE_RESET=1 is the
