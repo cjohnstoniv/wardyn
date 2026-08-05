@@ -323,6 +323,17 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	// Three-tier split: the embedded write becomes "library upsert + attach" —
+	// the same dir/repo named by two workspaces is ONE library entry with ONE
+	// contract. The embedded columns are still written too (expand posture;
+	// 0032 drops them), and the store's hydrate pass makes attachments the
+	// authoritative read the moment they exist.
+	atts, baseImageID, aerr := s.upsertAndAttach(r.Context(), req.Sources, req.BaseImage)
+	if aerr != nil {
+		writeError(w, http.StatusInternalServerError, "attach sources: "+aerr.Error())
+		return
+	}
+	ws.Attachments, ws.BaseImageID = atts, baseImageID
 	created, err := s.cfg.Store.CreateWorkspace(r.Context(), ws)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create workspace: "+err.Error())
@@ -368,6 +379,15 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// re-scan — add an optimistic updated_at guard if it ever bites for real.
 	rescan := !slices.Equal(ws.Sources, req.Sources) || !baseImageEqual(ws.BaseImage, req.BaseImage)
 	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, req.BaseImage
+	// Three-tier: the edited composition upserts+attaches through the library
+	// exactly as create does — the hydrated read makes attachments
+	// authoritative, so they must track every composition edit.
+	atts, baseImageID, aerr := s.upsertAndAttach(r.Context(), req.Sources, req.BaseImage)
+	if aerr != nil {
+		writeError(w, http.StatusInternalServerError, "attach sources: "+aerr.Error())
+		return
+	}
+	ws.Attachments, ws.BaseImageID = atts, baseImageID
 	if rescan {
 		ws.Profile = nil
 		ws.ImageRef = ""

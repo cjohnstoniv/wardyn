@@ -36,12 +36,22 @@ import (
 // this is a separate, single-purpose fake rather than growing that one.
 type createCaptureStore struct {
 	store.Store
+	lib     sourceLibraryFake
 	created types.Workspace
 }
 
 func (s *createCaptureStore) CreateWorkspace(_ context.Context, ws types.Workspace) (types.Workspace, error) {
 	s.created = ws
 	return ws, nil
+}
+func (s *createCaptureStore) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
+	return s.lib.UpsertSource(ctx, src)
+}
+func (s *createCaptureStore) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
+	return s.lib.UpsertBaseImage(ctx, b)
+}
+func (s *createCaptureStore) GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error) {
+	return s.lib.GetSourcesByIDs(ctx, ids)
 }
 
 // TestWorkspaceComposition_EmptySourcesFloorsToEphemeral is Task 1(a): a

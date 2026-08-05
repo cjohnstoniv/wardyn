@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -105,10 +106,66 @@ func TestGetDeleteScanWorkspaceBadID(t *testing.T) {
 // GetSiteConfig must be implemented: the env-as-code generator folds in the
 // operator's artifact-registry redirects, and the embedded nil store.Store
 // would panic there.
+// sourceLibraryFake is the in-memory tier-1/tier-2 mixin the workspace fakes
+// embed: upsertAndAttach routes every dir/repo create/update through
+// UpsertSource + UpsertBaseImage now, so any fake serving those handlers must
+// answer them. Dedupe mirrors the store's identity rule.
+type sourceLibraryFake struct {
+	sources map[string]types.Source
+	images  map[string]types.BaseImageEntry
+}
+
+func (f *sourceLibraryFake) UpsertSource(_ context.Context, src types.Source) (types.Source, error) {
+	if f.sources == nil {
+		f.sources = map[string]types.Source{}
+	}
+	key := string(src.Kind) + "|" + src.Locator + "|" + src.Ref
+	if existing, ok := f.sources[key]; ok {
+		return existing, nil
+	}
+	f.sources[key] = src
+	return src, nil
+}
+
+func (f *sourceLibraryFake) UpsertBaseImage(_ context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
+	if f.images == nil {
+		f.images = map[string]types.BaseImageEntry{}
+	}
+	key := b.Kind + "|" + b.Image + "|" + strings.Join(b.Steps, "\n")
+	if existing, ok := f.images[key]; ok {
+		return existing, nil
+	}
+	f.images[key] = b
+	return b, nil
+}
+
+func (f *sourceLibraryFake) GetSourcesByIDs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error) {
+	out := map[uuid.UUID]types.Source{}
+	for _, src := range f.sources {
+		for _, id := range ids {
+			if src.ID == id {
+				out[id] = src
+			}
+		}
+	}
+	return out, nil
+}
+
 type workspaceStoreFake struct {
 	store.Store
+	lib     sourceLibraryFake // named, not embedded: embedding beside the interface makes every shared method ambiguous
 	ws      types.Workspace
 	updated types.Workspace
+}
+
+func (s *workspaceStoreFake) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
+	return s.lib.UpsertSource(ctx, src)
+}
+func (s *workspaceStoreFake) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
+	return s.lib.UpsertBaseImage(ctx, b)
+}
+func (s *workspaceStoreFake) GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error) {
+	return s.lib.GetSourcesByIDs(ctx, ids)
 }
 
 func (s *workspaceStoreFake) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {

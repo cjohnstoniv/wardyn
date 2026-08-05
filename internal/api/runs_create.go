@@ -315,15 +315,16 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
 	var events []requirementAuditEntry
 	for _, ws := range wsRefs {
-		if len(ws.Requirements) == 0 {
+		if len(effectiveRequirements(ws)) == 0 {
 			continue
 		}
 		sel := selections[ws.ID.String()] // zero value when absent: nothing optional enabled, no narrowing
 		var addedEgress []string
 		// Sorted iteration: map order is otherwise nondeterministic, and this
 		// drives grant-creation and audit-event ordering.
-		for _, key := range sortedKeys(ws.Requirements) {
-			req := ws.Requirements[key]
+		reqs := effectiveRequirements(ws)
+		for _, key := range sortedKeys(reqs) {
+			req := reqs[key]
 			typ, name, ok := splitRequirementKey(key)
 			if !ok {
 				continue // defense only: the write endpoint already rejects a bad key
@@ -380,6 +381,20 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 		}
 	}
 	return events
+}
+
+
+// effectiveRequirements is the contract a run actually consumes: the store's
+// hydrate pass folds attachments + source contracts + the overlay into
+// EffectiveRequirements. A workspace that never passed through hydration (a
+// hand-built fixture, a fake store) carries none — and for it the fold's own
+// zero-source identity says the overlay IS the contract, so falling back to
+// Requirements is the correct semantic, not a compatibility shim.
+func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequirement {
+	if ws.EffectiveRequirements != nil {
+		return ws.EffectiveRequirements
+	}
+	return ws.Requirements
 }
 
 // applyRequiredSecretGrant mints the api_key-style grant an operator-declared

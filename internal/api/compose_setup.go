@@ -367,9 +367,10 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 				}
 			}
 		}
-		for _, key := range sortedKeys(ws.Requirements) {
+		wsReqs := effectiveRequirements(ws)
+		for _, key := range sortedKeys(wsReqs) {
 			typ, name, ok := splitRequirementKey(key)
-			if !ok || typ != "secret" || ws.Requirements[key].Level != "required" {
+			if !ok || typ != "secret" || wsReqs[key].Level != "required" {
 				continue
 			}
 			row := bySane[name]
@@ -642,9 +643,10 @@ func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, workspaces 
 	requiredBy := map[string]string{}
 	var ids []string
 	for _, ws := range workspaces {
-		for _, key := range sortedKeys(ws.Requirements) {
+		wsReqs := effectiveRequirements(ws)
+		for _, key := range sortedKeys(wsReqs) {
 			typ, id, ok := splitRequirementKey(key)
-			if !ok || typ != "integration" || ws.Requirements[key].Level != "required" {
+			if !ok || typ != "integration" || wsReqs[key].Level != "required" {
 				continue
 			}
 			if _, seen := requiredBy[id]; !seen {

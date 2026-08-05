@@ -609,6 +609,10 @@ func (s *Server) routes() chi.Router {
 			// repoCloneURL); writes are audited. Scan is a separate endpoint
 			// (workspaces.go handleScanWorkspace) that runs the deterministic
 			// workspacescan and persists the profile + status.
+			// Tier-1 source library + tier-2 base-image catalog routes —
+			// mounted from sources.go, same posture as the workspaces block.
+			s.mountLibraryRoutes(r, operatorOnly)
+
 			operatorOnly.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
 			r.Get("/workspaces/{id}", s.handleGetWorkspace)
