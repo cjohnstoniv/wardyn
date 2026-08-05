@@ -35,7 +35,19 @@ A pluggable seam in Wardyn has five parts. Four seams implement all of parts
    `runner.Runner`/`substrate.Substrate`, …) — the contract the control plane talks
    to. Most carry a `Name()` method so the running impl is self-describing. (Some
    extension points — audit sinks, content detection — are interfaces too but are
-   wired through config, not a registry; see §3.)
+   wired through config, not a registry; see §3.) One documented quirk, not a
+   bug: `orchestrator.Orchestrator` (which implements `runner.Runner` over one
+   or more `substrate.Substrate`s) reports the literal string `"orchestrator"`
+   from `Name()` — and so from `/healthz`'s `driver` field — only when it
+   wraps MORE than one substrate at once; wrapping exactly one (today's only
+   real path: `WARDYN_RUNNER`/`-runner` selects a single substrate name, so
+   `buildRunnerFromFlags` always constructs the orchestrator with exactly one)
+   reports THAT substrate's own name instead, e.g. `docker` or `k8s`. A
+   `-tags docker,k8s` build registers both substrates as *selectable*, but
+   `WARDYN_RUNNER` still names only one at a time — multi-substrate wiring is
+   a capability the orchestrator's constructor has (`New(substrates
+   ...substrate.Substrate)`), not a shipped deployment shape, so `"orchestrator"`
+   is unreachable via any flag/env combination today.
 2. **A registry** built on the shared `internal/component.Registry[C]`: a
    name→constructor map with default resolution and duplicate-name detection
    (one tested implementation, reused by every seam).
@@ -113,7 +125,7 @@ not a second roadmap.
 
 | Subsystem | Interface | Shipped out-of-box default | Recommended (prod) | Registered alternates | Conformance | Seam status |
 |---|---|---|---|---|---|---|
-| Sandbox / confinement | `substrate.Substrate` (under the `orchestrator` `runner.Runner`) | `docker`/OCI substrate; CC1 runc / CC2 runsc / CC3 kata\* | **Kata-CC3** (QEMU by default; experimental today, see README Confinement Classes) | OCI runtime pins via `WARDYN_CONFINEMENT_MAP` (kata-qemu, kata-clh, gVisor, sysbox); non-OCI VMM (SmolVM/Firecracker) via a new `Substrate` impl | `test/conformance` (Runner) + orchestrator routing tests | shipped (registry + `init()` self-registration — the `docker` impl registers under `-tags docker`; runtime-pluggable + substrate sub-interface); non-OCI VMM impl planned |
+| Sandbox / confinement | `substrate.Substrate` (under the `orchestrator` `runner.Runner`) | `docker`/OCI substrate; CC1 runc / CC2 runsc / CC3 kata\* | **Kata-CC3** (QEMU by default; experimental today, see README Confinement Classes) | `k8s` substrate (`internal/runner/k8s`, `-tags k8s`, `WARDYN_RUNNER=k8s`) — pods instead of containers, L1/NetworkPolicy-backed (not L0/structural: the boot-time egress canary refuses to construct unless the cluster's CNI actually enforces `NetworkPolicy`), CC1-only until `WARDYN_CONFINEMENT_MAP`/the Helm chart's `k8s.runtimeClasses` pins CC2/CC3 to a registered RuntimeClass; OCI runtime pins via `WARDYN_CONFINEMENT_MAP` (kata-qemu, kata-clh, gVisor, sysbox); non-OCI VMM (SmolVM/Firecracker) via a new `Substrate` impl | `test/conformance` (Runner) + orchestrator routing tests, run in CI against **both** targets — `conformance` (docker, live daemon) and `conformance-k8s` (a real kind cluster, `disableDefaultCNI` + pinned Calico, since kind's default CNI does not enforce `NetworkPolicy`); a shared case with no k8s equivalent (the L0-specific one) self-skips there by design rather than faking a result, and a dedicated L1 case proves the k8s substrate's actual claim instead | shipped (registry + `init()` self-registration — the `docker` impl registers under `-tags docker`, the `k8s` impl under `-tags k8s`; runtime-pluggable + substrate sub-interface). The `k8s` substrate is registered and conformance-green on kind+Calico, but is NOT the shipped out-of-box default (that stays `docker`) and is not at parity with it — no BYOI/devcontainer builds, no `local_dir` mounts, no ground-truth correlator (`docs/OPERATIONS.md`'s "Kubernetes: known gaps"). Non-OCI VMM impl planned |
 | Identity | `identity.Provider` | `embedded` (SPIFFE-shaped JWT-SVID) | **SPIRE** (attestation, short-lived SVIDs) | `spire` (planned) | `identity/identitytest` | shipped |
 | Secret store | `secretstore.Store` | `pg` (age-encrypted Postgres) | **OpenBao** (LF, Vault-compatible) | `openbao` / `vault` / cloud KMS (planned) | `secretstore/secretstoretest` | shipped |
 | Recording | `recording.Store` | `pg` (`fs` via `WARDYN_RECORDING_STORE=fs`) | `pg` (readable from any process, unlike `fs`; object storage optional at scale). **Not** an HA recommendation — wardynd is single-replica by construction and the Helm chart refuses more (docs/OPERATIONS.md) | `fs`; S3/GCS object store (planned) | `recording/recordingtest` | shipped |

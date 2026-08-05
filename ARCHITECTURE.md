@@ -308,38 +308,54 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 
 > **Deployment status:** containerized (compose) is the default; host mode is an
 > escape hatch (`WARDYN_SETUP_MODE=local`).
-> A first-class **team** deployment — the compose control plane running as a
-> sealed, multi-user shared service with human SSO — **does not exist yet and is
-> not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
+> A first-class **team** deployment — the compose control plane packaged and
+> supported as a sealed, multi-user shared service — **does not exist as a
+> product yet and is not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
-> sign-in lights up when OIDC is configured. Authorization is exactly **two
-> tiers**, not RBAC: `WARDYN_OIDC_OPERATOR_EMAILS` names the operators and every
-> other signed-in human is a viewer, 403 on the mutating routes of seven
-> clusters — the managed harness credential, policy CRUD, workspace CRUD and its
-> scoped widening writes, `PUT /site-config`, secret write/delete, deciding an
-> approval, and attaching to a running sandbox (**both** the ticket mint and the
-> attach WebSocket itself, which falls back to session-cookie auth when no ticket
-> is presented). 25 routes in all; reads are never gated and `POST /runs` /
-> `POST /runs/{id}/kill` stay open, because launching a run is a viewer act by
-> design. All-admin is still reachable but no longer by accident: OIDC configured
-> with that list empty **refuses to boot** unless
-> `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`. The admin token and local mode are
-> always operators — one shared credential carries no human to demote.
+> sign-in lights up when OIDC is configured. Authorization underneath it is
+> real, not aspirational: every OIDC session carries an **admin** or **member**
+> role derived at login (`WARDYN_OIDC_ROLE_MAP` against Entra App Roles/groups/
+> email; unset = everyone admin, upgrade-safe), a member is scoped to their own
+> runs/approvals with owner-or-admin gating (byte-identical 404 on a foreign
+> resource, no existence oracle), a member's own policy is clamped to the
+> operator's ceiling, and BYOI/devcontainer images are admin-only. The admin
+> token and local mode are always admin — one shared credential carries no
+> human to demote. Full semantics, the legacy `WARDYN_OIDC_OPERATOR_EMAILS`
+> allowlist path, and what's still NOT built (custom roles, per-resource
+> permissions, tenant/org columns, separation of duty among admins):
+> [docs/OPERATIONS.md "Multi-user: who can change what"](docs/OPERATIONS.md#multi-user-who-can-change-what).
 > `make setup` asks **containerized vs host** (Enter =
-> containerized; both single-user); team is not a selectable mode
-> (`WARDYN_SETUP_MODE=team` prints a notice and exits).
+> containerized); team is not a selectable mode
+> (`WARDYN_SETUP_MODE=team` prints a notice and exits) — RBAC is a control-plane
+> property today, not a packaged multi-tenant deployment.
 
 ## Parity rule
 
 The control plane contains zero target-specific code: only
-`internal/runner` subpackages may import Docker (and, when the k8s driver
-lands, Kubernetes) client libraries — with one blessed exception:
-`internal/envbuild` (plus its narrow shared helper `internal/dockerutil`)
-legitimately imports the Docker client directly because it drives the
-coder/envbuilder devcontainer build as a Docker container
-(see `docs/ENVBUILD.md`), a distinct concern from launching the agent
-sandbox itself.
-`test/conformance` runs the full suite against the **docker** target in CI.
-There is no Kubernetes runner driver yet (**[v0.5+ — planned]**); a feature is
-not done on Kubernetes until a real driver passes conformance against a live
-cluster.
+`internal/runner` subpackages may import Docker or Kubernetes client
+libraries — `internal/runner/docker` (`-tags docker`) and `internal/runner/k8s`
+(`-tags k8s`) each self-register into the substrate registry
+(`internal/runner/substrate`) from their own `init()`, so a tagless binary
+carries neither and fails closed on either `-runner` name — with one blessed
+exception: `internal/envbuild` (plus its narrow shared helper
+`internal/dockerutil`) legitimately imports the Docker client directly
+because it drives the coder/envbuilder devcontainer build as a Docker
+container (see `docs/ENVBUILD.md`), a distinct concern from launching the
+agent sandbox itself.
+
+`test/conformance` runs the full suite against **both** targets in CI, not
+just docker: the `conformance` job drives the **docker** target against a
+live daemon (`WARDYN_TEST_DOCKER=1`), and the `conformance-k8s` job drives
+the **k8s** target (`internal/runner/k8s`) against a real cluster — kind with
+`disableDefaultCNI: true` plus a pinned Calico manifest, since kind's default
+`kindnet` CNI does not enforce `NetworkPolicy` and the k8s substrate's
+boot-time egress canary refuses to construct without it. Neither job
+tolerates a failure. A shared conformance case that has no k8s equivalent
+self-skips there by design rather than faking a result — the k8s substrate
+claims L1 (NetworkPolicy-enforced), not L0 (structural/gatewayless), so the
+L0-specific case self-skips on that target and a dedicated L1 case
+(`testAgentCannotReachAPIServer`) proves the substrate's actual claim
+instead; see [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) for the full
+per-seam status. The parity bar is ongoing, not a one-time proof: a feature
+is not done on Kubernetes until it also passes conformance there, on every
+change, not just the change that first added a driver.

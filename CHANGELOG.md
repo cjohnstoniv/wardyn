@@ -39,6 +39,70 @@ and does not yet follow semantic versioning (interfaces are not stable).
   denials (not a foreign-resource 404 — that stays silent by design, matching
   the no-existence-oracle rule above).
 
+### Added
+
+- **Kubernetes runner substrate** (`internal/runner/k8s`, `-tags k8s`,
+  `WARDYN_RUNNER=k8s`): a second, independent confinement substrate behind the
+  existing `substrate.Substrate` seam — wardynd creates/manages sandboxes as
+  pods instead of Docker containers. L1 (NetworkPolicy-enforced), not L0
+  (structural) like Docker: a boot-time two-phase egress canary proves the
+  cluster's CNI actually enforces `NetworkPolicy` before the substrate will
+  start at all, refusing to boot otherwise
+  (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the loud, logged opt-out). CC1
+  out of the box; `WARDYN_CONFINEMENT_MAP`/the chart's `k8s.runtimeClasses`
+  pin CC2/CC3 to a registered RuntimeClass. Not at parity with Docker yet —
+  no BYOI/devcontainer builds, no `local_dir` mounts, no per-pod PIDs/disk
+  enforcement, no k8s ground-truth correlator (see
+  `deploy/helm/wardyn/README.md`/`docs/OPERATIONS.md`'s "Known gaps").
+- **The Helm chart (`deploy/helm/wardyn`) can now create sandboxes, not just
+  the control plane.** `k8s.enabled=true` wires the substrate above into a
+  real install: least-privilege `Role`/`RoleBinding` + `ClusterRole` scoped to
+  exactly the verbs the substrate issues, a default-deny `NetworkPolicy`
+  extended with apiserver egress and a runs-namespace ingress peer, and a new
+  `k8s_egress_containment` setup check the console surfaces (Enforcing / Not
+  enforcing / Indeterminate). `test/conformance`'s `conformance-k8s` CI job
+  now proves the substrate on a real cluster (kind, `disableDefaultCNI` + a
+  pinned Calico manifest — kind's default CNI does not enforce
+  `NetworkPolicy`); the suite's one L0-specific case self-skips there by
+  design (the substrate claims L1, not L0) and a dedicated L1 case proves
+  what it actually claims instead. New `.claude/skills/wardyn-k8s-setup`
+  skill: cluster prereqs, values authoring, wiring Entra ID App Roles for
+  admin/member RBAC, install/verify, and a symptom→cause→fix table.
+- **Native SSH into a running sandbox.** `wardynd` serves `ssh
+  <run-id>@host` (registered public keys only, owner-only authorization)
+  directly into the same tmux session the web terminal attaches to: exec
+  (exit-code propagation), the sandbox's own `sftp-server` subsystem, and
+  `-L` port forwarding restricted to the sandbox's own loopback. Each
+  primitive gets its own audit action (`ssh.exec`/`ssh.sftp`/`ssh.forward`);
+  the shell path is recorded exactly like the browser terminal (`ssh-`
+  prefixed session key). Off by default (`WARDYN_SSH_LISTEN` unset — no
+  listener, no host key even generated). See `docs/SSH.md`.
+- **Member console.** The web console is now role- and kind-aware: a
+  member's nav hides operator-only surfaces (policy/workspace/secret CRUD,
+  BYOI), and the approvals view renders per-kind — `egress_domain` approvals
+  a member can decide, `credential`/`tool_call` ones they can only view.
+  Getting Started gained a Kubernetes-runner flavor (source-honest copy for
+  what the k8s substrate does and doesn't support yet).
+- **Signed, published release images.** `.github/workflows/release.yml`
+  builds and pushes the four images a release ships (`wardynd`,
+  `wardyn-proxy`, `agent-claude-code`, `agent-codex-cli`) to
+  `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag, cosign-signs each keylessly
+  (Fulcio/Rekor via the Actions OIDC token), and attaches a CycloneDX SBOM
+  release asset via the existing `make sbom` target. linux/amd64 only today.
+
+### Fixed
+
+- **`ssh.forward` audit rows survived a killed session.** A client that
+  killed its whole SSH session mid-`-L`-forward could race
+  `handleSSHConn`'s connection-teardown context cancellation against
+  `handleSSHDirectTCPIP`'s own trailing `ssh.forward` audit write — caught
+  live by the SSH e2e's `-L` forward step. The write now runs on the
+  daemon-lifetime `BaseCtx` instead of the connection's own (soon-cancelled)
+  context, the same fix already applied to the shell path's `session.detach`
+  write; the identical latent bug in the `ssh.exec`/`ssh.sftp` trailing
+  writes was fixed alongside it. Pinned by
+  `TestSSHGateway_ForwardAuditSurvivesKill`.
+
 ## [0.4.5] — 2026-08-04
 
 ### Added
