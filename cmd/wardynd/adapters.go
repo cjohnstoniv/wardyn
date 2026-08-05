@@ -131,6 +131,17 @@ func (s *approvalService) ListApprovalsPage(ctx context.Context, state types.App
 	return s.st.ListApprovalsPage(ctx, state, p)
 }
 
+// ListApprovalsPageByRunCreator is item 2 / M2's ownership-scoped analogue of
+// ListApprovalsPage above — the api handler type-asserts for it (same
+// optional-capability pattern as store.Pager) to serve a member's unscoped
+// GET /approvals fail-closed rather than fail-open. Pure delegation, promoted
+// from the embedded store.PG exactly like ListApprovalsPage.
+func (s *approvalService) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	return s.st.ListApprovalsPageByRunCreator(ctx, createdBy, state, p)
+}
+
+var _ store.ApprovalsByRunCreatorPager = (*approvalService)(nil)
+
 // ─── audit fanout ─────────────────────────────────────────────────────────────
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts

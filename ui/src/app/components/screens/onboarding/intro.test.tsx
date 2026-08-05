@@ -156,6 +156,41 @@ describe("deriveReadiness — must not overclaim a fake backend as a connected m
   });
 });
 
+// HIGH-4 review fix: a member's redacted SetupStatus (Go redactSetupStatusForMember)
+// zeroes runner.confinement_classes and drops the providers/secrets detail
+// deriveAiRows reads — without these two fallbacks, deriveReadiness would read a
+// member as permanently un-ready no matter the server's real state.
+describe("deriveReadiness — member-redaction survivors (HIGH-4)", () => {
+  it("prefers status.llm_ready over the locally-derived agent-row check when the server sent one", () => {
+    // No secrets/providers/harness at all (a redacted member response) would
+    // locally derive llmReady=false — but the server's own pre-redaction
+    // verdict says otherwise, and it must win.
+    const r = deriveReadiness(status({ llm_ready: true }));
+    expect(r.llmReady).toBe(true);
+  });
+
+  it("still honors a locally-derived false when the server explicitly says llm_ready: false", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false }, llm_ready: false }));
+    expect(r.llmReady).toBe(false);
+  });
+
+  it("falls back to the locally-derived value when llm_ready is absent (older daemon / READY_FALLBACK)", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+    expect(r.llmReady).toBe(true);
+  });
+
+  it("falls back barrierReady to status.ready when confinement_classes is empty (redacted member, real backend)", () => {
+    const r = deriveReadiness(status({ ready: true, runner: { driver: "docker", confinement_classes: [] } }));
+    expect(r.barrierReady).toBe(true);
+    expect(r.barrierCount).toBe(0);
+  });
+
+  it("an empty confinement_classes with ready:false stays not-ready (genuinely unconfigured, not just redacted)", () => {
+    const r = deriveReadiness(status({ ready: false, runner: { driver: "docker", confinement_classes: [] } }));
+    expect(r.barrierReady).toBe(false);
+  });
+});
+
 // defaultAgentRow — the ROW deriveReadiness's llmLabel is built from, exported
 // so a caller that needs the row itself (not just its name) can reuse the same
 // pick instead of re-deriving it (demos/harness-demo.ts's binding picker).

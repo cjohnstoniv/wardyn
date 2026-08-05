@@ -92,6 +92,18 @@ type SetupStatus struct {
 	// subscription. Distinct from Harness above (a CAPTURED credential's live
 	// readiness). ADDITIVE field; omitted when empty.
 	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
+	// LLMReady is the server-computed "does SOME run/compose LLM access path
+	// exist" verdict (HIGH-4 review fix) — the same winning-signal logic that
+	// already decides llmProvenance's detail (resident CLI login, a real
+	// composer backend, a secret-name heuristic, Bedrock, a managed harness
+	// token) OR'd with an ai_provider Integration being configured. It exists
+	// because a MEMBER'S redacted response (redactSetupStatusForMember) drops
+	// the checks/providers/secret-name detail that would otherwise let the
+	// console derive this itself — LLMReady is computed BEFORE redaction and
+	// deliberately left untouched BY it, so the console's readiness chip / new-run
+	// banner / demo gating keep working for a member without any of that detail
+	// leaking. Kept in exact sync with ui/src/app/lib/types.ts's SetupStatus.
+	LLMReady bool `json:"llm_ready"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -365,6 +377,24 @@ func llmProvenance(providers []SetupProvider, backends []ComposerBackendReadines
 		}
 	}
 	return ""
+}
+
+// computeLLMReady is SetupStatus.LLMReady's verdict (HIGH-4 review fix),
+// pulled out of handleSetupStatus as its own pure function purely to keep
+// that handler's branching under the gocyclo gate — llmDetail already IS
+// llmProvenance's own winning signal (plus Bedrock/managed-harness, folded in
+// by the caller before this runs), so the only new branching here is the
+// ai_provider Integration fallback for when llmDetail came up empty.
+func computeLLMReady(llmDetail string, integrations []SetupIntegration) bool {
+	if llmDetail != "" {
+		return true
+	}
+	for _, in := range integrations {
+		if in.Category == types.IntegrationAIProvider {
+			return true
+		}
+	}
+	return false
 }
 
 // subscriptionLLMDetail composes the LLM-access detail for a resident Claude Code
@@ -645,6 +675,17 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		llmDetail = managedDetail
 	}
 
+	// llm_ready (HIGH-4 review fix): llmDetail's own winning signal (resident
+	// CLI login, a real composer backend, a secret-name heuristic, Bedrock, or
+	// a managed harness token — everything folded in above) OR'd with an
+	// ai_provider Integration being configured, computed ONCE here and reused
+	// below for resp.Integrations so effectiveIntegrations() is not walked
+	// twice. Computed BEFORE redaction and left untouched by it (see
+	// redactSetupStatusForMember) — a member's console needs the ANSWER even
+	// though it can no longer see the detail that produced it.
+	integrations := s.integrationsWithCapabilities(ctx)
+	llmReady := computeLLMReady(llmDetail, integrations)
+
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
 	// they cannot clear.
@@ -740,8 +781,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Bedrock:      bedrock,
 		Deployment:   SetupDeployment{HostLike: deploymentHostLike(providers)},
 		Harness:      harnessCreds,
-		Integrations: s.integrationsWithCapabilities(ctx),
+		Integrations: integrations,
 		Harnesses:    setupHarnessTools(),
+		LLMReady:     llmReady,
 	}
 	if !s.isOperator(ctx) {
 		resp = redactSetupStatusForMember(resp)

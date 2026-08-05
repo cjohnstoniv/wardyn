@@ -308,6 +308,13 @@ func TestAuthzMatrix(t *testing.T) {
 				if w := do(t, srv, method, p, adminToken, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("admin token (wrong audience): status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}
+				// L2: an SSO session — even an admin's — is a different auth mode
+				// entirely (internalAuth/internalAuthGroundtruth accept ONLY a
+				// run-scoped or ground-truth-scoped bearer token), not merely "the
+				// wrong audience" the admin-bearer case above already covers.
+				if w := doSSO(t, srv, method, p, adminSess, body); w.Code != http.StatusUnauthorized {
+					t.Errorf("admin SSO session (wrong auth mode entirely): status = %d, want 401; body=%s", w.Code, w.Body.String())
+				}
 
 			case classAdmin:
 				p := buildPath(pattern, "x1")
@@ -337,8 +344,21 @@ func TestAuthzMatrix(t *testing.T) {
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}
+				// L3: the non-owner probe below gets its OWN untouched foreign
+				// approval — foreignID itself is DECIDED by the admin-bypass probe
+				// right below (a state-mutating call against an approval's FSM),
+				// and re-probing an already-decided approval risks a 409
+				// (approval.ErrAlreadyDecided) coincidentally shadowing the 404
+				// this assertion exists to pin, rather than that 404 being pinned
+				// by test design. A run has no such decide-FSM (kill doesn't touch
+				// CreatedBy), so it reuses foreignID directly.
+				nonOwnerForeignID := foreignID
+				if rc.entity == entityApproval {
+					nonOwnerForeignID = seedApproval(otherSub)
+				}
 				pOwned := buildPath(pattern, ownedID.String())
 				pForeign := buildPath(pattern, foreignID.String())
+				pNonOwnerForeign := buildPath(pattern, nonOwnerForeignID.String())
 
 				// Admin reaches even a FOREIGN entity — proves the bypass, not
 				// merely "admin can read its own".
@@ -351,7 +371,7 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 				// A non-owner gets the byte-identical 404 a missing entity would
 				// (no existence oracle) — never 403.
-				if w := doSSO(t, srv, method, pForeign, memberSess, body); w.Code != http.StatusNotFound {
+				if w := doSSO(t, srv, method, pNonOwnerForeign, memberSess, body); w.Code != http.StatusNotFound {
 					t.Errorf("non-owning member: status = %d, want 404 (no existence oracle); body=%s", w.Code, w.Body.String())
 				}
 				if w := doSSO(t, srv, method, pOwned, nil, body); w.Code != http.StatusUnauthorized {
@@ -362,6 +382,61 @@ func TestAuthzMatrix(t *testing.T) {
 				t.Fatalf("route %q has no recognized class %q", key, rc.class)
 			}
 		})
+	}
+}
+
+// TestDecide_MemberKindRestriction is the HIGH-1 review fix's dedicated
+// coverage: TestAuthzMatrix's classOwner case only ever seeds an
+// egress_domain approval (aap.seed), so it proves ownership scoping but never
+// exercises decide()'s per-Kind restriction. A member who owns the run may
+// decide an egress_domain approval on it (unchanged from item 3) but NOT a
+// credential or tool_call approval on that SAME owned run — those stay
+// admin-only regardless of ownership (self-approving either would self-mint a
+// real credential / reopen the clamped ceiling under the member's own
+// authority). Both get the byte-identical "approval not found" 404 a foreign
+// approval would (no existence/kind oracle), never 403.
+func TestDecide_MemberKindRestriction(t *testing.T) {
+	ast := newAuthzStore()
+	aap := newAuthzApprovals(ast)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Approvals = aap
+	srv := New(cfg)
+
+	const memberSub = "sub-member-kind"
+	member := ssoSession(t, memberSub, "member-kind@corp.example", oidc.RoleMember)
+
+	runID := uuid.New()
+	ast.mu.Lock()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: memberSub, State: types.RunRunning}
+	ast.mu.Unlock()
+
+	seed := func(kind types.ApprovalKind) uuid.UUID {
+		id := uuid.New()
+		aap.mu.Lock()
+		aap.byID[id] = types.ApprovalRequest{ID: id, RunID: runID, Kind: kind, State: types.ApprovalPending, RequestedAt: time.Now().UTC()}
+		aap.mu.Unlock()
+		return id
+	}
+
+	for _, kind := range []types.ApprovalKind{types.ApprovalCredential, types.ApprovalToolCall} {
+		for _, path := range []string{"/approve", "/deny"} {
+			id := seed(kind)
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/approvals/"+id.String()+path, member, "")
+			if w.Code != http.StatusNotFound {
+				t.Errorf("owning member deciding a %s approval via %s: status = %d, want 404 (admin-only regardless of ownership); body=%s",
+					kind, path, w.Code, w.Body.String())
+			}
+		}
+	}
+
+	// Contrast case: the SAME owning member CAN decide an egress_domain
+	// approval on the SAME run — the restriction is kind-specific, not a
+	// blanket "members can never decide their own approvals".
+	egressID := seed(types.ApprovalEgressDomain)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/approvals/"+egressID.String()+"/approve", member, ""); w.Code != http.StatusOK {
+		t.Errorf("owning member deciding their own egress_domain approval: status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
 

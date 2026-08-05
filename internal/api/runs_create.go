@@ -46,11 +46,12 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, "", false
 	}
 
-	// Item 5: a member may not bring their own sandbox image (operator
-	// surface) — checked before the XOR/builder validation below so a
-	// member's request is refused with 403, never a 400 that implies the
-	// shape alone is the problem.
-	if s.denyMemberBYOI(w, r, req) {
+	// Item 5 + HIGH-3 review fix: a member may not bring their own sandbox
+	// image OR devcontainer repo (both are operator surface: attacker repo
+	// code executed by the image builder either way) — checked before the
+	// XOR/builder validation below so a member's request is refused with 403,
+	// never a 400 that implies the shape alone is the problem.
+	if s.denyMemberCustomImage(w, r, req) {
 		return req, "", false
 	}
 
@@ -106,24 +107,30 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	return req, reqCC, true
 }
 
-// denyMemberBYOI refuses a member's (role != admin) explicit BYOI image
-// request with a 403 — bring-your-own-image is operator surface (item 5): the
-// inline_policy clamp (resolveRunPolicy) covers POLICY fields, but req.Image
-// is a request-level field the clamp never touches, so it needs its own gate.
-// Reports true (having written the 403 + an authz.denied audit event) when
-// denied; callers must return immediately.
+// denyMemberCustomImage refuses a member's (role != admin) explicit custom
+// sandbox image with a 403 — bring-your-own-image is operator surface (item
+// 5, broadened by the HIGH-3 review fix): the inline_policy clamp
+// (resolveRunPolicy) covers POLICY fields, but req.Image and
+// req.DevcontainerRepo are request-level fields the clamp never touches, so
+// they need their own gate. Both name a build path that hands attacker-
+// reachable repo/image content to the image builder — a member's
+// devcontainer_repo runs exactly as much attacker-controlled build config as
+// a raw image would (the devcontainer.json + Dockerfile/setup steps it
+// points at), so gating req.Image alone left a same-shaped hole open. Reports
+// true (having written the 403 + an authz.denied audit event) when denied;
+// callers must return immediately.
 //
 // A workspace's own base_image (seedRequestWorkspace, called AFTER this) is
 // deliberately NOT gated here: it is operator-authored config (the workspace
 // was onboarded through an operator-only route), never a member's own
 // free-text choice, and seedRequestWorkspace only ever sets req.Image when
 // the caller left it empty — so this check, run BEFORE that seeding, can
-// never catch it.
-func (s *Server) denyMemberBYOI(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
-	if req.Image == "" || s.isOperator(r.Context()) {
+// never catch it. Workspaces have no equivalent devcontainer_repo seed at all.
+func (s *Server) denyMemberCustomImage(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
+	if (req.Image == "" && req.DevcontainerRepo == "") || s.isOperator(r.Context()) {
 		return false
 	}
-	writeError(w, http.StatusForbidden, "custom sandbox images (image) are operator-only; launch with the agent's convention image or an onboarded workspace's base image")
+	writeError(w, http.StatusForbidden, "a custom sandbox image or devcontainer repo (image / devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"authz.denied", "runs.image", "denied", mustJSON(map[string]any{"reason": "byoi_member"})))
 	return true

@@ -119,15 +119,14 @@ type approvalPageLister interface {
 // handleApproveApproval transitions an approval to APPROVED. For credential
 // approvals the broker mints inside the same transaction that observes the
 // APPROVED state (handled by the broker on the next mint call); here we only
-// record the human decision via the approval FSM. Owner-or-admin (item 3): a
-// member may decide an approval raised by a run THEY own.
+// record the human decision via the approval FSM. Owner-or-admin FOR
+// egress_domain approvals ONLY (item 3 + HIGH-1 review fix): see decide().
 func (s *Server) handleApproveApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, true)
 }
 
 // handleDenyApproval transitions an approval to DENIED (fail closed).
-// Owner-or-admin (item 3): a member may decide an approval raised by a run
-// THEY own.
+// Owner-or-admin for egress_domain approvals only (item 3 + HIGH-1): see decide().
 func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, false)
 }
@@ -138,19 +137,33 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 	if !s.isOperator(r.Context()) {
-		// Member: may decide only an approval raised by a run THEY own (item 3).
-		// 404-shaped — byte-identical to "approval not found" — for a foreign or
-		// unknown approval id (no existence oracle), same philosophy as
-		// getRunAuthorized. Get() is a plain read (no state change), so probing
-		// it costs nothing an admin's own decide attempt wouldn't have anyway.
+		// Member: may decide only an egress_domain approval raised by a run THEY
+		// own (item 3, narrowed by the HIGH-1 review fix). credential and
+		// tool_call approvals stay admin-only REGARDLESS of ownership: the
+		// shipped default policy requires approval on github_token, so letting a
+		// member self-approve their OWN run's credential request would self-mint
+		// a real token, and self-approving a tool_call re-opens exactly the
+		// allowance the clamp (item 5 / HIGH-2) is supposed to bound — both under
+		// the SAME authority the operator's ceiling exists to constrain. Checked
+		// before ownership so a foreign non-egress approval and an OWNED
+		// non-egress approval read identically (both 404, no existence oracle
+		// either way) — not audited: this is a foreign-shaped 404, not a distinct
+		// reachable-surface denial (see THREAT-MODEL.md).
 		ap, err := s.cfg.Approvals.Get(r.Context(), id)
-		if err != nil {
+		if err != nil || ap.Kind != types.ApprovalEgressDomain {
 			writeError(w, http.StatusNotFound, "approval not found")
 			return
 		}
 		run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID)
 		if rerr != nil || !s.ownsRunOrAdmin(r, run) {
 			writeError(w, http.StatusNotFound, "approval not found")
+			if rerr == nil {
+				// M1: audited only once the approval is confirmed to genuinely
+				// exist and be decidable in kind — a run lookup failure here would
+				// be a data-integrity oddity, not a clean "not owned".
+				s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+					"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+			}
 			return
 		}
 	}

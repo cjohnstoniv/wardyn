@@ -50,17 +50,27 @@ import (
 // inline-policy USE, and the audit feed is the system of record — orphan
 // policy.inline rows with no following run.create would be indistinguishable
 // from real authorizations.
-func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, bool) {
+//
+// The 4th return is L6's clamp-warning list (composer.Clamp's own "what did I
+// change" notes) — non-nil only on the member inline-policy branch, since
+// that is the ONLY resolution path that ever clamps. handleCreateRun (launch)
+// discards it: a launch may stay silent about a clamp exactly as it always
+// has (the resolved/attached spec is already the clamped one regardless — the
+// clamp itself is never skipped). handlePreflightRun surfaces it in Review so
+// a member sees WHY their inline_policy differs from what they typed, before
+// they launch.
+func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
 		writeError(w, http.StatusBadRequest, "specify either policy_id or inline_policy, not both")
-		return types.RunPolicySpec{}, nil, false
+		return types.RunPolicySpec{}, nil, nil, false
 	}
 
 	// Inline path: validate structurally (same validator as a stored policy) then
 	// validate any inline secret references. On success attach with a nil id.
 	if req.InlinePolicy != nil {
 		spec := *req.InlinePolicy
+		var clampWarnings []string
 		if !s.isOperator(r.Context()) {
 			// Item 5: a member's inline_policy can never smuggle wider grants/
 			// egress/confinement than the operator's own DefaultPolicy allows.
@@ -69,15 +79,15 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// (workspace integration binding, ensureLLMGrant,
 			// applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
-			spec, _ = composer.Clamp(spec, s.cfg.DefaultPolicy)
+			spec, clampWarnings = composer.Clamp(spec, s.cfg.DefaultPolicy)
 		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, false
+			return types.RunPolicySpec{}, nil, nil, false
 		}
 		if code, err := s.validateInlineSecretRefs(ctx, spec); err != nil {
 			writeError(w, code, "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, false
+			return types.RunPolicySpec{}, nil, nil, false
 		}
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
@@ -92,25 +102,27 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 					"eligible_grants":       len(spec.EligibleGrants),
 				})))
 		}
-		return spec, nil, true
+		return spec, nil, clampWarnings, true
 	}
 
 	// Stored/default path: resolve, then validate secret references the SAME way
-	// the inline branch does (one call, no duplicated logic — H1).
+	// the inline branch does (one call, no duplicated logic — H1). Never
+	// clamped (a stored policy or the default IS already the ceiling), so no
+	// warnings to return here either.
 	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusBadRequest, "policy_id not found")
-			return types.RunPolicySpec{}, nil, false
+			return types.RunPolicySpec{}, nil, nil, false
 		}
 		writeError(w, http.StatusInternalServerError, "resolve policy: "+err.Error())
-		return types.RunPolicySpec{}, nil, false
+		return types.RunPolicySpec{}, nil, nil, false
 	}
 	if code, err := s.validateInlineSecretRefs(ctx, spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())
-		return types.RunPolicySpec{}, nil, false
+		return types.RunPolicySpec{}, nil, nil, false
 	}
-	return spec, policyID, true
+	return spec, policyID, nil, true
 }
 
 // validateInlineSecretRefs fails a policy spec closed when any of its api_key

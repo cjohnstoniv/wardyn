@@ -37,7 +37,16 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	if err != nil {
 		return false
 	}
-	return run.CreatedBy == principalFromRequest(r)
+	if run.CreatedBy == principalFromRequest(r) {
+		return true
+	}
+	// M1: audited only once the run is confirmed to genuinely exist — a
+	// malformed prefix or an unknown run (both branches above) stays silent;
+	// only a POSITIVELY identified foreign run reaches this audit. The 404
+	// recording.Handler writes on a false return is unaffected either way.
+	s.recordAudit(r.Context(), s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+	return false
 }
 
 // maxRecordingUploadBytes caps a single recording PUT (Finding 3: DoS / disk

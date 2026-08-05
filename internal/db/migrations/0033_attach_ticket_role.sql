@@ -14,7 +14,11 @@
 -- (TestMigrationPrefixesNoGapsOrDupes).
 --
 -- NOT NULL DEFAULT 'admin' is a rolling-upgrade safety net for a ticket
--- minted by a pre-migration binary mid-deploy -- tickets are 30s-TTL, so the
--- exposure window is vanishingly small either way, and 'admin' is the
--- STRICTER of the two values (never widens what an old ticket could do).
+-- minted by a pre-migration binary mid-deploy (tickets are 30s-TTL, so the
+-- window is vanishingly small either way) -- and 'admin' is not merely the
+-- cautious guess, it is the CORRECT backfill value: pre-B2, minting
+-- (POST /runs/{id}/attach-ticket) was admin-only (see above), so every row a
+-- pre-migration binary could possibly have written was, by construction,
+-- minted by an admin caller. There is no other role such a row could honestly
+-- hold.
 ALTER TABLE attach_tickets ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin';

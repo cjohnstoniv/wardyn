@@ -206,6 +206,12 @@ func (s *Server) getRunAuthorized(w http.ResponseWriter, r *http.Request, id uui
 		return run, true
 	}
 	writeError(w, http.StatusNotFound, "run not found")
+	// M1: audited AFTER confirming the run genuinely exists — a truly-missing
+	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY
+	// identified foreign run reaches this audit (reason not_owner). The response
+	// written above is unaffected (byte-identical either way).
+	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", run.ID.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
 	return types.AgentRun{}, false
 }
 

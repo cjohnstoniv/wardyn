@@ -459,6 +459,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     is the blast radius, not a broader compromise) but worth stating plainly
     rather than leaving "why did my key registration 409 forever" unanswered.
 
+17. **Member self-approval of a run's own `egress_domain` requests.** v0.5's
+    role split (admin/member, narrower than the flat viewer/operator gate item
+    14 describes) lets a member `decide()` (`POST /approvals/{id}/approve|deny`)
+    an approval on a run THEY OWN, but only when its `Kind` is `egress_domain`;
+    `credential` and `tool_call` approvals stay admin-only regardless of
+    ownership — self-deciding either would let a member self-mint a real
+    credential (the shipped example policies' `github_token` grant ships
+    `requires_approval: true`) or reopen exactly the allowance
+    `composer.Clamp`'s ceiling exists to bound. That still leaves an
+    intentional residual: a member can self-approve a `wait_for_review`
+    first-use host on their own run with no second human in the loop — the
+    approval's `decided_by` gives ATTRIBUTION, not independent review, for a
+    member-owned run. An operator who needs genuine third-party sign-off on
+    first-use domains for member-launched runs must set the ceiling policy's
+    `first_use_approval` to `always_deny` (`composer.Clamp` takes the
+    stricter of ceiling vs. proposal) rather than `wait_for_review`, which a
+    member can always clear themselves.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

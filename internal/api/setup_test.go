@@ -11,10 +11,88 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// decodeSetupSSO is decodeSetup's SSO-session twin, for the member-redaction
+// tests (redaction is a role check — a bearer-token caller is always admin,
+// so it needs a real SSO session to exercise the member branch at all).
+func decodeSetupSSO(t *testing.T, srv *Server, cookie *http.Cookie) (int, SetupStatus) {
+	t.Helper()
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", cookie, "")
+	var st SetupStatus
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode setup status: %v; body=%s", err, w.Body.String())
+		}
+	}
+	return w.Code, st
+}
+
+// TestSetupStatus_MemberRedactionPreservesLLMReady is the HIGH-4 review fix:
+// a member's response drops checks/providers/secret-names/runner-detail (item
+// 2's redaction) but LLMReady survives it — computed BEFORE redaction from
+// the SAME signal llmProvenance already folds (here, a resolved composer
+// backend key), matching exactly what an admin sees for the identical server
+// state. Without this a member's console has no way to answer "is there any
+// LLM access at all" once the detail that used to imply it is gone.
+func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
+	reg, err := composer.NewRegistry("primary", []composer.RegistryEntry{
+		{Info: composer.BackendInfo{Name: "primary", Provider: "anthropic", Model: "m"}, Composer: &composer.FakeComposer{}},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	backends := []ComposerBackendReadiness{
+		{Name: "primary", Provider: "anthropic", Model: "m", Wire: "anthropic", Enabled: true, NeedsKey: true, KeySecret: "anthropic-api-key", KeyResolved: true},
+	}
+	srv := New(Config{
+		Runner:           &fakeRunner{},
+		Composer:         reg,
+		AdminToken:       adminToken,
+		OIDC:             &oidc.Authenticator{},
+		ComposerBackends: backends,
+	})
+
+	adminCode, adminSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
+	if adminCode != http.StatusOK {
+		t.Fatalf("admin: code = %d, want 200", adminCode)
+	}
+	if !adminSt.LLMReady {
+		t.Fatalf("admin: llm_ready = false, want true (a resolved composer backend key is configured)")
+	}
+	if len(adminSt.Checks) == 0 {
+		t.Fatalf("admin: checks unexpectedly empty — the fixture is not exercising the signal this test needs")
+	}
+
+	memberCode, memberSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember))
+	if memberCode != http.StatusOK {
+		t.Fatalf("member: code = %d, want 200 (redaction is never a 403/401)", memberCode)
+	}
+	// Redacted: item 2's drop list.
+	if len(memberSt.Checks) != 0 {
+		t.Errorf("member: checks = %v, want empty (redacted)", memberSt.Checks)
+	}
+	if len(memberSt.Providers) != 0 {
+		t.Errorf("member: providers = %v, want empty (redacted)", memberSt.Providers)
+	}
+	if len(memberSt.Secrets.Present) != 0 {
+		t.Errorf("member: secrets.present = %v, want empty (redacted)", memberSt.Secrets.Present)
+	}
+	if len(memberSt.Runner.ConfinementClasses) != 0 {
+		t.Errorf("member: runner.confinement_classes = %v, want empty (redacted)", memberSt.Runner.ConfinementClasses)
+	}
+	// NOT redacted: the answer a member's console needs to function.
+	if !memberSt.LLMReady {
+		t.Errorf("member: llm_ready = false, want true (must survive redaction, matching the admin's view)")
+	}
+	if !memberSt.Ready {
+		t.Errorf("member: ready = false, want true (App.tsx's reachability gate — never redacted)")
+	}
+}
 
 // decodeSetup runs GET /api/v1/setup/status and decodes the body on 200.
 func decodeSetup(t *testing.T, srv *Server, bearer string) (int, SetupStatus) {

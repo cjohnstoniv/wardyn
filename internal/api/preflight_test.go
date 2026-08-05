@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -142,5 +143,54 @@ func TestPreflight_UnknownSecret422Passthrough(t *testing.T) {
 	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("preflight unknown secret: code=%d, want 422; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestPreflight_MemberInlineClampSurfacesWarnings is the L6 review fix's
+// dedicated coverage: composer.Clamp's notices are DISCARDED at launch (see
+// resolveRunPolicy's doc comment — "launch may stay silent") but SURFACED
+// here, so Review can tell a member WHY their inline_policy differs from what
+// they typed, before they launch. Same scenario TestCreateRun_MemberInlineClamped
+// pins for the audit trail (CC1 clamped up to the operator's CC2 ceiling), on
+// the preflight path this time — an admin's identical request is unclamped,
+// so it carries no warnings at all.
+func TestPreflight_MemberInlineClampSurfacesWarnings(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	h.srv.router = h.srv.routes()
+
+	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC1"}}`
+
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", member, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("member preflight: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var memberResp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &memberResp); err != nil {
+		t.Fatalf("decode member response: %v; body=%s", err, w.Body.String())
+	}
+	found := false
+	for _, msg := range memberResp.Warnings {
+		if strings.Contains(msg, "confinement raised") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("member: warnings = %v, want a confinement-raise clamp note", memberResp.Warnings)
+	}
+
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", admin, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin preflight: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var adminResp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &adminResp); err != nil {
+		t.Fatalf("decode admin response: %v; body=%s", err, w.Body.String())
+	}
+	if len(adminResp.Warnings) != 0 {
+		t.Errorf("admin: warnings = %v, want empty (admin is unclamped)", adminResp.Warnings)
 	}
 }

@@ -24,6 +24,13 @@ import (
 type preflightResponse struct {
 	SetupItems               []SetupItem            `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+	// Warnings are L6's clamp notices (composer.Clamp's own "what did I
+	// change" list) — non-empty only for a member's inline_policy request,
+	// the one resolveRunPolicy path that ever clamps. A launch (POST /runs)
+	// stays silent about the same clamp (see resolveRunPolicy's doc comment);
+	// Review is where a member finds out WHY their inline_policy differs from
+	// what they typed, before they launch. ADDITIVE field; omitted when empty.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -53,10 +60,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same member BYOI denial launch runs (runs_create.go's decodeAndValidateCreateRun)
-	// — a preflight dry-run must refuse it exactly as create would, not report a
-	// rosier checklist for a request that would 403 at launch.
-	if s.denyMemberBYOI(w, r, req) {
+	// Same member custom-image denial launch runs (runs_create.go's
+	// decodeAndValidateCreateRun) — a preflight dry-run must refuse it exactly
+	// as create would, not report a rosier checklist for a request that would
+	// 403 at launch.
+	if s.denyMemberCustomImage(w, r, req) {
 		return
 	}
 
@@ -64,7 +72,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// writes its own 4xx (XOR violation, invalid inline spec, missing/reserved
 	// secret 422) and returns ok=false when it has already responded, so Review
 	// sees the real launch error, never a rosier one.
-	spec, _, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
+	spec, _, clampWarnings, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
 	if !ok {
 		return
 	}
@@ -177,5 +185,5 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess, nil, composeSubscriptionState{})
-	writeJSON(w, http.StatusOK, preflightResponse{SetupItems: items, EnforcedConfinementClass: enforced})
+	writeJSON(w, http.StatusOK, preflightResponse{SetupItems: items, EnforcedConfinementClass: enforced, Warnings: clampWarnings})
 }

@@ -170,9 +170,21 @@ export function deriveReadiness(status: SetupStatus): Readiness {
   );
   return {
     ready: status.ready,
-    barrierReady: barrierCount > 0,
+    // HIGH-4 review fix: a member's redacted response zeroes
+    // runner.confinement_classes (Go redactSetupStatusForMember), which would
+    // otherwise pin barrierReady false forever for every member (app-shell
+    // chip, dead demos, false new-run banner). status.ready is the server's
+    // own boot-readiness verdict — computed pre-redaction and never zeroed —
+    // so an empty confinement-class list falls back to it instead of reading
+    // as "not ready".
+    barrierReady: barrierCount > 0 || status.ready,
     barrierCount,
-    llmReady: agentRows.length > 0,
+    // HIGH-4 review fix: status.llm_ready is the server's own pre-redaction
+    // verdict (Go SetupStatus.LLMReady) and survives member redaction —
+    // prefer it whenever the server sent one. agentRows.length stays the
+    // fallback for a status that omits the field (READY_FALLBACK, or an
+    // older daemon build).
+    llmReady: status.llm_ready ?? agentRows.length > 0,
     llmLabel: defaultRow?.name ?? "",
     composerReady,
   };

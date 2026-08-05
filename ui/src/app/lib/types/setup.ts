@@ -187,6 +187,16 @@ export interface WireIntegration {
 
 export interface SetupStatus {
   ready: boolean;
+  // Server-computed "does SOME run/compose LLM access path exist" (resident
+  // CLI login, a resolved composer backend key, an api-key-ish secret,
+  // Bedrock, a managed harness token, or a configured ai_provider
+  // Integration) — computed BEFORE the member redaction pass and left
+  // untouched by it (see the Go SetupStatus.LLMReady doc comment), so a
+  // member's console can answer the question the (redacted-away) `checks` /
+  // `providers` detail used to answer. Optional for the same fixture-compat
+  // reason as `bedrock` — READY_FALLBACK and older daemons omit it; treat
+  // absent as "unknown", not "false".
+  llm_ready?: boolean;
   checks: SetupCheck[];
   auth: { mode: "local" | "sso" | "token" | "disabled"; local_loopback: boolean };
   runner: {
