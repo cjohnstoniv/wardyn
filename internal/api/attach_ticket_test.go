@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -59,7 +60,7 @@ func TestAttachTicket(t *testing.T) {
 	other := uuid.New()
 	now := time.Unix(1_700_000_000, 0)
 
-	tok, err := mintAttachTicket(ctx, st, run, types.ActorHuman, "alice", now)
+	tok, err := mintAttachTicket(ctx, st, run, types.ActorHuman, "alice", oidc.RoleAdmin, now)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -75,8 +76,8 @@ func TestAttachTicket(t *testing.T) {
 		t.Fatal("ticket survived a burned redemption attempt (must be single-use)")
 	}
 
-	// Fresh ticket: redeems once, carries attribution, then is gone.
-	tok2, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "bob", now)
+	// Fresh ticket: redeems once, carries attribution + role, then is gone.
+	tok2, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "bob", oidc.RoleMember, now)
 	ta, ok, err := consumeAttachTicket(ctx, st, tok2, run, now)
 	if err != nil || !ok {
 		t.Fatalf("valid ticket did not redeem: ok=%v err=%v", ok, err)
@@ -84,12 +85,15 @@ func TestAttachTicket(t *testing.T) {
 	if ta.principal != "bob" || ta.actorType != types.ActorHuman {
 		t.Fatalf("attribution lost: got %v/%q", ta.actorType, ta.principal)
 	}
+	if ta.role != oidc.RoleMember {
+		t.Fatalf("role lost: got %q, want %q", ta.role, oidc.RoleMember)
+	}
 	if _, ok, _ := consumeAttachTicket(ctx, st, tok2, run, now); ok {
 		t.Fatal("ticket redeemed twice")
 	}
 
 	// Expiry: a ticket presented after its TTL is rejected.
-	tok3, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "carol", now)
+	tok3, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "carol", oidc.RoleAdmin, now)
 	if _, ok, _ := consumeAttachTicket(ctx, st, tok3, run, now.Add(attachTicketTTL+time.Second)); ok {
 		t.Fatal("expired ticket redeemed")
 	}

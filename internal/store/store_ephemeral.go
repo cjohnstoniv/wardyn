@@ -22,12 +22,18 @@ import (
 )
 
 // AttachTicket is what one redeemed single-use WS attach ticket carries: the run
-// it is bound to and the principal that minted it (attribution — the
-// session.attach audit names the human, never the ticket).
+// it is bound to, the principal that minted it (attribution — the
+// session.attach audit names the human, never the ticket), and that
+// principal's role (admin/member — see internal/auth/oidc's RoleAdmin/
+// RoleMember) at mint time, so the ?ticket= WS lane — which bypasses
+// humanOrAdminAuth entirely — can still enforce owner-or-admin at consume
+// time with no other role source available (see internal/api's
+// ticketOrHumanAuth / handleAttachWS).
 type AttachTicket struct {
 	RunID     uuid.UUID
 	ActorType types.ActorType
 	Principal string
+	Role      string
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -41,10 +47,10 @@ type AttachTicket struct {
 // sweeper (or an expires_at index) only if mint volume ever makes that false.
 func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error {
 	_, err := s.Pool.Exec(ctx, `
-		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $6)
-		INSERT INTO attach_tickets (token, run_id, actor_type, principal, expires_at)
-		VALUES ($1, $2, $3, $4, $5)`,
-		token, t.RunID, string(t.ActorType), t.Principal, expiresAt, now,
+		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
+		INSERT INTO attach_tickets (token, run_id, actor_type, principal, role, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		token, t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -68,9 +74,9 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal`,
+		RETURNING run_id, actor_type, principal, role`,
 		token, now,
-	).Scan(&t.RunID, &actorType, &t.Principal)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}

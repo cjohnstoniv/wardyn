@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -117,6 +118,22 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.getRunOr404(w, r, id)
 	if !ok {
 		return
+	}
+
+	// Ticket lane authorization (item 3): ticketOrHumanAuth's ?ticket= branch
+	// runs neither humanOrAdminAuth nor requireOperator, so the ticket's OWN
+	// stamped role/principal (captured at MINT time — see attach_ticket.go) is
+	// the only authorization signal left. owner-or-admin, re-checked here
+	// against the just-loaded run — belt-and-suspenders alongside
+	// ticketOrHumanAuth's own run-id binding check, using the run row this
+	// handler already needs for its state/sandbox checks below (no extra
+	// store call). The fall-through (cookie) lane is unaffected: reaching this
+	// handler via it already proves admin (requireOperator gates it).
+	if ta, tok := ticketActorFromContext(ctx); tok {
+		if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
+			writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
+			return
+		}
 	}
 
 	// FAIL CLOSED before upgrading: only a RUNNING run with a live sandbox ref

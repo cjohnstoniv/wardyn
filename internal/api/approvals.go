@@ -119,12 +119,15 @@ type approvalPageLister interface {
 // handleApproveApproval transitions an approval to APPROVED. For credential
 // approvals the broker mints inside the same transaction that observes the
 // APPROVED state (handled by the broker on the next mint call); here we only
-// record the human decision via the approval FSM.
+// record the human decision via the approval FSM. Owner-or-admin (item 3): a
+// member may decide an approval raised by a run THEY own.
 func (s *Server) handleApproveApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, true)
 }
 
 // handleDenyApproval transitions an approval to DENIED (fail closed).
+// Owner-or-admin (item 3): a member may decide an approval raised by a run
+// THEY own.
 func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, false)
 }
@@ -133,6 +136,23 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
 		return
+	}
+	if !s.isOperator(r.Context()) {
+		// Member: may decide only an approval raised by a run THEY own (item 3).
+		// 404-shaped — byte-identical to "approval not found" — for a foreign or
+		// unknown approval id (no existence oracle), same philosophy as
+		// getRunAuthorized. Get() is a plain read (no state change), so probing
+		// it costs nothing an admin's own decide attempt wouldn't have anyway.
+		ap, err := s.cfg.Approvals.Get(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "approval not found")
+			return
+		}
+		run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID)
+		if rerr != nil || !s.ownsRunOrAdmin(r, run) {
+			writeError(w, http.StatusNotFound, "approval not found")
+			return
+		}
 	}
 	var body decisionRequest
 	if r.Body != nil {

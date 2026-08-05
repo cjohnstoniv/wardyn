@@ -533,23 +533,33 @@ func (s *Server) routes() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(s.humanOrAdminAuth)
 			// operatorOnly is this same group with ONE extra middleware nested in
-			// front (chi's With is what Group is built from): the minimal role
-			// gate. Routes registered on it are authenticated exactly as before
-			// and then refused for a signed-in VIEWER — see requireOperator, which
-			// is a no-op until WARDYN_OIDC_OPERATOR_EMAILS is set. The tier is
-			// "viewer = read + launch runs": creating/killing/composing a run,
-			// preflight and profile stay on r deliberately (a viewer may USE the
-			// product), while configuring it, touching credential MATERIAL,
-			// DECIDING an approval and minting a PTY ticket are operator acts.
-			// Every read stays on r, so the gated routes are the ones written out
-			// below and nothing else silently joins them.
+			// front (chi's With is what Group is built from): the ADMIN role gate.
+			// Routes registered on it are authenticated exactly as before and then
+			// refused with 403 for a signed-in MEMBER — see requireOperator, which
+			// gates on the session's B1-derived Role (admin unless
+			// WARDYN_OIDC_ROLE_MAP demotes it — see requireOperator's doc). The
+			// tier is "member = read + launch/own runs": creating/killing/composing
+			// a run, preflight and profile stay on r deliberately (a member may USE
+			// the product and reach their OWN runs — see getRunAuthorized), while
+			// configuring the deployment and touching credential MATERIAL are
+			// admin-only acts. DECIDING an approval and minting a PTY ticket moved
+			// DOWN to owner-or-admin (item 3): a member may act on a run/approval
+			// they own, gated inside the handler instead of here. Every read stays
+			// on r, so the gated routes are the ones written out below and nothing
+			// else silently joins them.
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
-			// later-added Use applies to r's routes but silently NOT to these 24.
-			// These 24 are not the whole operator surface: the attach WebSocket
-			// (GET /runs/{id}/attach) is gated too, via ticketOrHumanAuth in its
-			// own group below, because it also accepts a ?ticket=. Count 25 when
-			// asking "what does a viewer get 403 on".
+			// later-added Use applies to r's routes but silently NOT to these.
+			// COUNT (re-verify with `grep -c 'operatorOnly\.' server.go` plus
+			// mountLibraryRoutes' own 6, rather than trusting this comment — it
+			// has gone stale before): 24 direct registrations below +
+			// mountLibraryRoutes' 6 (sources.go) = 30. NOT the whole admin
+			// surface: GET /metrics (outside /api/v1, its own explicit
+			// requireOperator — commit "absorb the operator tier") and the attach
+			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group
+			// below, admin-only; the ticket-bearing lane is owner-or-admin) are
+			// both gated too, via this SAME requireOperator, just not registered
+			// on this operatorOnly value.
 			operatorOnly := r.With(s.requireOperator)
 			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
@@ -575,22 +585,25 @@ func (s *Server) routes() chi.Router {
 			// (through THIS authenticated group) and presents the returned
 			// 30s ticket as ?ticket= on the attach WS below.
 			//
-			// OPERATOR-ONLY: the ticket mints a live interactive PTY inside a
-			// RUNNING sandbox — injected keystrokes and whatever the agent's
-			// injected credentials left on screen — which is strictly more than
-			// "launch a run" and is not something a viewer tier can hold.
-			operatorOnly.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
+			// OWNER-OR-ADMIN (item 3, moved down from operator-only): the ticket
+			// mints a live interactive PTY inside a RUNNING sandbox — injected
+			// keystrokes and whatever the agent's injected credentials left on
+			// screen — which is strictly more than "launch a run", but a member
+			// may still hold one for a run THEY created (handleAttachTicket's
+			// getRunAuthorized gate; a foreign run 404s, no existence oracle).
+			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
 
-			// Approvals: reading the queue is a viewer act, DECIDING is not — the
-			// decision IS the live authorization over an egress/credential
-			// escalation. The sandbox can only ever REQUEST one (machine audience,
-			// /internal/approvals below), so gating the decision here cannot
-			// starve an agent of anything it could previously do for itself.
-			// Consequence, by design: a viewer's run that trips an approval blocks
-			// until an operator decides it.
+			// Approvals: reading the queue is a member act (own runs only — see
+			// handleListApprovals), DECIDING is OWNER-OR-ADMIN (item 3, moved down
+			// from operator-only): the decision IS the live authorization over an
+			// egress/credential escalation, but a member may decide one raised by
+			// a run THEY own — decide() enforces it (a foreign approval 404s, no
+			// existence oracle). The sandbox can only ever REQUEST one (machine
+			// audience, /internal/approvals below), so this cannot starve an agent
+			// of anything it could previously do for itself.
 			r.Get("/approvals", s.handleListApprovals)
-			operatorOnly.Post("/approvals/{id}/approve", s.handleApproveApproval)
-			operatorOnly.Post("/approvals/{id}/deny", s.handleDenyApproval)
+			r.Post("/approvals/{id}/approve", s.handleApproveApproval)
+			r.Post("/approvals/{id}/deny", s.handleDenyApproval)
 
 			r.Get("/audit", s.handleQueryAudit)
 			r.Get("/me", s.handleMe)
