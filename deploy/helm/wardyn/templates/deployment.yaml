@@ -9,7 +9,11 @@ Secret is known to carry it (otherwise wardynd generates an ephemeral key at
 boot), and WARDYN_RECORDING_STORE/WARDYN_RECORDING_DIR follow persistence so the
 chart's own defaults boot on a read-only root FS and record nothing anywhere
 until an operator asks for it. Secret-bearing extras go through .Values.extraEnv;
-.Values.env renders inline.
+.Values.env renders inline. k8s.* wires the k8s runner substrate
+(WARDYN_RUNNER/WARDYN_K8S_NAMESPACE/WARDYN_PROXY_IMAGE/WARDYN_CONFINEMENT_MAP/
+WARDYN_CONTROL_PLANE_URL — refused at render if serviceAccount.automount is
+off, since the substrate drives the API server via client-go); ssh.* adds the
+optional SSH port + WARDYN_SSH_LISTEN/WARDYN_SSH_ADVERTISE.
 
 Hardening (defense in depth alongside the per-run sandbox envelope):
   - runs as a non-root user (the wardynd image is distroless:nonroot, uid 65532)
@@ -19,6 +23,9 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
 */}}
 {{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
 {{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that." -}}
+{{- end -}}
+{{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
+{{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -127,10 +134,52 @@ spec:
             # rendering as a literal in the Deployment object like .Values.env.
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- if .Values.k8s.enabled }}
+            # k8s runner wiring (internal/runner/k8s, `-tags k8s`). Placed AFTER
+            # .Values.env/.extraEnv above so it always wins on a duplicate key
+            # (k8s env: last-defined-wins) — WARDYN_RUNNER especially must never
+            # be silently skipped: the registry defaults to `docker`, and
+            # forgetting it on a cluster (no Docker daemon at all) is a boot-time
+            # connection error, not a helpful message.
+            - name: WARDYN_RUNNER
+              value: "k8s"
+            - name: WARDYN_K8S_NAMESPACE
+              value: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+            - name: WARDYN_PROXY_IMAGE
+              value: {{ .Values.k8s.proxyImage | quote }}
+            {{- if .Values.k8s.imagePullSecret }}
+            - name: WARDYN_K8S_IMAGE_PULL_SECRET
+              value: {{ .Values.k8s.imagePullSecret | quote }}
+            {{- end }}
+            {{- $rtc := list -}}
+            {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}
+            {{- with .Values.k8s.runtimeClasses.CC3 }}{{- $rtc = append $rtc (printf "CC3=%s" .) -}}{{- end }}
+            {{- if $rtc }}
+            - name: WARDYN_CONFINEMENT_MAP
+              value: {{ join ";" $rtc | quote }}
+            {{- end }}
+            # The Service's in-cluster FQDN, not a bare name: correct whether
+            # sandbox proxy pods run in THIS namespace or in a different
+            # k8s.runsNamespace (a bare Service name only resolves within the
+            # SAME namespace's DNS search path).
+            - name: WARDYN_CONTROL_PLANE_URL
+              value: {{ printf "http://%s.%s.svc.cluster.local:%d" (include "wardyn.fullname" .) .Release.Namespace (int .Values.service.port) | quote }}
+            {{- end }}
+            {{- if .Values.ssh.enabled }}
+            - name: WARDYN_SSH_LISTEN
+              value: {{ printf ":%d" (int .Values.ssh.port) | quote }}
+            - name: WARDYN_SSH_ADVERTISE
+              value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" .Values.ssh.advertiseHost) (int .Values.ssh.port) | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.ssh.enabled }}
+            - name: ssh
+              containerPort: {{ .Values.ssh.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

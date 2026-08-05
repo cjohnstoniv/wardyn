@@ -60,11 +60,39 @@ persistence:
 
 # Bring-your-own ServiceAccount: the chart renders NO ServiceAccount here, so
 # the automountServiceAccountToken the gate counts can only come from the pod
-# spec. Leave this false — flipping it to true silently weakens that assertion
-# (the gate pins the count at 1 to catch exactly that).
+# spec (proving the values-level override survives even with create=false).
+# automount=true (not false, as this render used to pin it) because k8s.enabled
+# below now requires it — see templates/deployment.yaml's fourth render
+# refusal. The thing under test either way is the SAME direct passthrough
+# ({{ .Values.serviceAccount.automount }}), so this is equal coverage of that
+# template line, not less — helm-lint asserts the count at 1 for "true" now.
 serviceAccount:
   create: false
   name: wardyn-byo
+  automount: true
+
+# The k8s runner substrate, the "other side" of its own off-by-default switch.
+# runsNamespace deliberately DIFFERENT from the release namespace (which
+# `helm template` with no -n/--namespace resolves to "default") so this render
+# also exercises the control-plane NetworkPolicy's extra runsNamespace ingress
+# peer (see templates/networkpolicy.yaml).
+k8s:
+  enabled: true
+  runsNamespace: wardyn-runs
+  proxyImage: ghcr.io/example/wardyn-proxy:ci-test
+  imagePullSecret: k8s-regcred
+  runtimeClasses:
+    CC2: gvisor
+    CC3: kata-qemu
+  apiServer:
+    ports: [443, 6443]
+
+# SSH access, the "other side" of ITS off-by-default switch: a second port on
+# the same Service/Deployment (see templates/service.yaml, deployment.yaml).
+ssh:
+  enabled: true
+  port: 2222
+  advertiseHost: ssh.example.com
 
 podAnnotations:
   prometheus.io/scrape: "true"

@@ -1,0 +1,90 @@
+{{/*
+RBAC for the Kubernetes runner substrate (internal/runner/k8s). Rendered ONLY
+when k8s.enabled=true — the chart's default (no runner, or the separate
+Docker Compose path) calls the API server for nothing, hence
+serviceaccount.yaml's automount=false default.
+
+Verbs are EXACT, not "just in case" — every verb below is a verb the
+substrate actually issues; see internal/runner/k8s/{sandbox,lifecycle,exec,
+canary,driver}.go. In particular:
+  - pods: NO watch. Every wait loop (Exec's Wait, teardown's waitPodsGone)
+    polls with Get/List; none of them use a watch.Interface.
+  - secrets: NO get/list. wardynd creates its own per-run proxy-config Secret
+    and later deletes it (by name, then by label at teardown) — it never
+    reads one back; the kubelet mounts it into the proxy pod, not wardynd.
+  - networkpolicies: NO get/list, same reasoning as secrets.
+
+Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
+per-sandbox object the substrate creates/tears down (pods, ephemeral
+containers, exec, secrets, network policies).
+Cluster-scoped (ClusterRole+ClusterRoleBinding): RuntimeClass lookups
+(node.k8s.io — RuntimeClass is never namespaced) for the CC2/CC3 floor guard
+(Classes(), resolveRuntimeClassName()).
+*/}}
+{{- if .Values.k8s.enabled -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "wardyn.fullname" . }}-k8s-runner
+  namespace: {{ .Values.k8s.runsNamespace | default .Release.Namespace }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete", "deletecollection"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-k8s-runner
+  namespace: {{ .Values.k8s.runsNamespace | default .Release.Namespace }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "wardyn.fullname" . }}-k8s-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "wardyn.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "wardyn.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}

@@ -6,8 +6,15 @@ re-open only what wardynd needs:
 
   - DNS (UDP+TCP/53) so it can resolve Postgres and the OIDC issuer
   - egress to Postgres on .Values.networkPolicy.postgres.port
+  - egress to the Kubernetes API server (k8s.enabled only) on
+    .Values.k8s.apiServer.ports — wardynd itself drives the k8s runner
+    substrate via client-go
   - ingress to the HTTP port from the configured sources (default: same
-    namespace, e.g. an ingress controller / the UI)
+    namespace, e.g. an ingress controller / the UI) — PLUS, when k8s.enabled
+    and k8s.runsNamespace differs from this release's namespace, from that
+    runs namespace too (its proxy sidecars call back to wardynd for
+    credential mints, approval checks, and recording uploads)
+  - ingress to the SSH port (ssh.enabled only) from the same sources as HTTP
 */}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
@@ -33,9 +40,26 @@ spec:
         # ALL namespaces. Narrow to your ingress controller in production.
         - podSelector: {}
         {{- end }}
+        {{- if and .Values.k8s.enabled .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
+        # A different runs namespace carries no chart labels (the chart never
+        # creates/labels it — see values.yaml's k8s.runsNamespace doc) — match
+        # the built-in, Kubernetes-applied kubernetes.io/metadata.name label
+        # instead of inventing a custom one a bare operator namespace would
+        # never carry. A custom-label selector here would silently match
+        # NOTHING and strand every run's proxy sidecar with no route back to
+        # wardynd (credential mints, approval checks, recording uploads all
+        # go dark, with no render-time or even boot-time signal).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: http
+        {{- if .Values.ssh.enabled }}
+        - protocol: TCP
+          port: ssh
+        {{- end }}
   egress:
     # DNS resolution (kube-dns / CoreDNS). The ONLY rule in this chart that may
     # be cluster-wide: an empty namespaceSelector means all namespaces, which is
@@ -52,6 +76,20 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.postgres.port }}
+    {{- if .Values.k8s.enabled }}
+    # Kubernetes API server (client-go, internal/runner/k8s) — port-only, no
+    # `to:` peer: the apiserver is frequently not a selectable pod (a managed
+    # control plane, or static pods a NetworkPolicy peer selector cannot
+    # match), mirroring the Postgres rule's own posture just above. 443 is
+    # kubernetes.default.svc's Service port on every cluster regardless of
+    # the apiserver's real listen port — see values.yaml's k8s.apiServer.ports
+    # doc.
+    {{- range .Values.k8s.apiServer.ports }}
+    - ports:
+        - protocol: TCP
+          port: {{ . }}
+    {{- end }}
+    {{- end }}
     {{- with .Values.networkPolicy.egress.extra }}
     # Operator-supplied additional egress rules (OIDC issuer, SIEM sinks, etc.).
     {{- toYaml . | nindent 4 }}

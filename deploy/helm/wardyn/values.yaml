@@ -108,6 +108,59 @@ env: {}
 #         secretKeyRef: {name: wardyn-oidc, key: client-secret}
 extraEnv: []
 
+# Kubernetes runner substrate (internal/runner/k8s, `-tags k8s`, v0.5+). Off by
+# default — the Docker Compose stack (deploy/compose/) remains a fully
+# separate, independent path. Enabling this makes wardynd itself create/manage
+# sandboxes as pods in THIS cluster instead of containers on a Docker daemon.
+k8s:
+  enabled: false
+  # Namespace every sandbox's Secret/NetworkPolicies/pods are created in.
+  # Empty => the release namespace (no runs-namespace.yaml, no
+  # createRunsNamespace — the chart never creates or labels one). A DIFFERENT,
+  # pre-existing namespace gets an extra ingress peer on the control-plane
+  # NetworkPolicy below (see networkPolicy's template) and its own
+  # Role/RoleBinding (templates/rbac.yaml) — it must already exist at install
+  # time; the chart does not create it.
+  runsNamespace: ""
+  # wardyn-proxy sidecar image (WARDYN_PROXY_IMAGE) — ALSO what the boot-time
+  # egress canary launches (with -egress-canary instead of its normal
+  # entrypoint args). Required in practice: an empty value boots wardynd but
+  # every run then fails closed (internal/runner/k8s's errProxyImageUnset).
+  proxyImage: ""
+  # Optional imagePullSecrets name (WARDYN_K8S_IMAGE_PULL_SECRET) threaded
+  # onto every pod the k8s substrate creates (agent, proxy, boot-time canary).
+  imagePullSecret: ""
+  # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
+  # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
+  # carries no platform convention Wardyn can guess (unlike docker's runtime
+  # family names) — CC2/CC3 stay unadvertised until pinned here to an existing
+  # RuntimeClass whose .Handler clears the class's floor guard
+  # (internal/runner/k8s/driver.go's Config.ConfinementRuntimes doc).
+  runtimeClasses:
+    CC2: ""
+    CC3: ""
+  apiServer:
+    # Port(s) the control-plane NetworkPolicy's egress rule opens so wardynd
+    # can reach the Kubernetes API server (client-go, driving the k8s
+    # substrate directly). 443 is the kubernetes.default.svc Service port on
+    # EVERY cluster — client-go's in-cluster config always targets it
+    # regardless of the apiserver's real listen port (kube-proxy DNATs to
+    # that afterward); override/extend only for a nonstandard in-cluster
+    # Service port.
+    ports: [443]
+
+# SSH access into a running sandbox (see docs/SSH.md — owned by the SSH
+# gateway lane). Off by default; a CONDITIONAL second port on the wardynd
+# Service/Deployment above (no second Service — see README "Split SSH
+# exposure" for the recipe to expose it differently from the HTTP port).
+ssh:
+  enabled: false
+  port: 2222
+  # Externally-reachable host agents/operators are told to connect back to
+  # (WARDYN_SSH_ADVERTISE, combined with `port` above). Required when
+  # enabled — the chart never guesses a public address.
+  advertiseHost: ""
+
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 networkPolicy:
   enabled: true
