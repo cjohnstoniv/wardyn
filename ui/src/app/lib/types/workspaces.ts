@@ -119,6 +119,38 @@ export interface WorkspaceLLMCred {
   integration_ref?: string;
 }
 
+// ---- The tier-1 source library + tier-2 image catalog (wire rows) ----
+// Mirror internal/types/workspace_contract.go's Source / BaseImageEntry.
+
+// One library source: a repo/dir configured ONCE — its own requirements
+// contract, its own scan profile/status — attached to any number of
+// workspaces. Identity (kind, locator, ref) is deduplicated server-side.
+export interface Source {
+  id: string;
+  kind: "local_dir" | "repo";
+  locator: string;
+  ref?: string;
+  name: string;
+  requirements?: WorkspaceRequirementsMap;
+  profile?: Record<string, unknown> | null;
+  status: WorkspaceStatus;
+  active_run_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// One catalog image: registry ref / custom recipe / BYO — shared across
+// workspaces. "recommended" is never a catalog row (derived per workspace).
+export interface BaseImageEntry {
+  id: string;
+  kind: "registry" | "custom" | "byo";
+  name: string;
+  image: string;
+  steps?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 // ---- Composition + requirements-contract wire types ----
 // Mirror internal/types/workspace.go + workspace_contract.go 1:1. The request
 // shape doubles as the response shape (identical wire fields either way).

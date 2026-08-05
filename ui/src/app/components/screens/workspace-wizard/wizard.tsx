@@ -38,7 +38,7 @@ import { integrationsApi } from "../../../lib/api/integrations";
 import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
-import type { SetupStatus, Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { SetupStatus, Source as SdkSource, Workspace, WorkspaceProfile } from "../../../lib/types";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -180,6 +180,21 @@ export function WorkspaceWizard({
 
   // ---------- Sources (step ①) ----------
   const addSource = (type: WorkspaceSourceKind) => patch({ sources: [...s.sources, newSourceRow(type)] });
+  // Attach a tier-1 LIBRARY entry: resolve it into a prefilled row. The server
+  // upsert dedupes on canonical identity, so create lands the attachment on
+  // the SAME library row — contract, scan and all.
+  const attachLibrarySource = (src: SdkSource) =>
+    patch({
+      sources: [
+        ...s.sources,
+        {
+          ...newSourceRow(src.kind === "repo" ? "repo" : "local_dir"),
+          path: src.kind === "local_dir" ? src.locator : "",
+          source: src.kind === "repo" ? src.locator : "",
+          ref: src.ref ?? "",
+        },
+      ],
+    });
   const updateSource = (id: string, p: Partial<SourceRow>) =>
     patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)) });
   const removeSourceRow = (id: string) => patch({ sources: removeSource(s.sources, id) });
@@ -368,6 +383,7 @@ export function WorkspaceWizard({
         <div className="scroll-thin flex-1 overflow-y-auto px-6 py-5">
           {s.step === "sources" && (
             <StepSources
+              onAttachLibrarySource={attachLibrarySource}
               name={s.name}
               onNameChange={(name) => patch({ name })}
               sources={s.sources}

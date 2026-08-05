@@ -180,7 +180,18 @@ export function fmtElapsed(startedAtMs: number, nowMs: number = Date.now()): str
   return `${pad(m)}:${pad(s % 60)}`;
 }
 
-export type BaseImageChoice = "recommended" | "registry" | "custom" | "byo";
+export type BaseImageChoice = "recommended" | "registry" | "custom" | "byo" | "catalog";
+
+// A picked tier-2 CATALOG entry (already saved, shared across workspaces).
+// Submitting it sends the entry's exact identity — the server's upsert lands
+// base_image_id on the SAME catalog row, never a duplicate.
+export interface CatalogPick {
+  id: string;
+  kind: "registry" | "custom" | "byo";
+  name: string;
+  image: string;
+  steps?: string[];
+}
 
 // Step ②'s "Customize the build" state, held by the wizard and passed down —
 // mirrors new-run/step-access.tsx's WizardState+patch convention rather than
@@ -199,6 +210,8 @@ export interface BaseImageState {
   toolDraft: string;
   buildSteps: string;
   byoRef: string;
+  // Set iff choice === "catalog".
+  catalog: CatalogPick | null;
 }
 export function defaultBaseImageState(): BaseImageState {
   return {
@@ -210,6 +223,7 @@ export function defaultBaseImageState(): BaseImageState {
     toolDraft: "",
     buildSteps: "",
     byoRef: "",
+    catalog: null,
   };
 }
 
@@ -228,6 +242,9 @@ export function suggestedRegistryImage(detectedChips: string[]): string {
 }
 
 export function toBaseImageInput(state: BaseImageState, detectedChips: string[] = []): WorkspaceBaseImageInput {
+  if (state.choice === "catalog" && state.catalog) {
+    return { kind: state.catalog.kind, image: state.catalog.image, steps: state.catalog.steps };
+  }
   if (state.choice === "registry") return { kind: "registry", image: suggestedRegistryImage(detectedChips) };
   if (state.choice === "byo") return { kind: "byo", image: state.byoRef.trim() };
   if (state.choice === "custom") {

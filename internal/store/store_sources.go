@@ -490,19 +490,25 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	}
 	ws.Sources = derived
 
-	// Status: worst-of attached sources (error > scanning > pending_scan >
-	// scanned); ephemeral-only stays scanned.
-	_ = sawSource
-
 	// Profile: the merge of scanned attached sources — same field, same shape,
-	// so list badges and pollers are none the wiser.
-	if len(profiles) > 0 {
+	// so list badges and pollers are none the wiser. An EPHEMERAL-ONLY
+	// composition derives the deterministic empty profile (high confidence —
+	// there is nothing ambiguous about "no source"), exactly what the legacy
+	// scan stamped for it: nil here read as "no contract yet" and the wizard's
+	// Requirements tabs never mounted on the default scratch-floor path.
+	switch {
+	case len(profiles) > 0:
 		merged := workspacescan.MergeProfiles(profiles)
 		if b, err := json.Marshal(merged); err == nil {
 			ws.Profile = b
 		}
-	} else {
-		ws.Profile = nil
+	case !sawSource && status != types.WorkspaceError:
+		empty := workspacescan.WorkspaceProfile{Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic}
+		if b, err := json.Marshal(empty); err == nil {
+			ws.Profile = b
+		}
+	default:
+		ws.Profile = nil // real sources, none scanned yet
 	}
 	ws.Status = status
 

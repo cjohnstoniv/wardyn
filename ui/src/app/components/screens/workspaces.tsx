@@ -60,6 +60,9 @@ import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { ImageCatalog } from "./image-catalog";
+import { SourcesLibrary } from "./sources-library";
 import { WorkspaceWizard } from "./workspace-wizard/wizard";
 import { llmCredLabel, llmCredTone, LLMCredFields } from "./workspace-llm-cred";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
@@ -147,6 +150,7 @@ export function WorkspacesScreen() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<Workspace | null>(null);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
+  const [tier, setTier] = React.useState<"workspaces" | "sources" | "images">("workspaces");
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -173,17 +177,32 @@ export function WorkspacesScreen() {
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Workspaces"
-        description="Add the directories, repos and images your runs may attach. Run creation only ever offers what's added here — a free-text host path is never accepted."
+        description="Three tiers: directories & repos configured once, shared base images, and workspaces — the aggregates runs attach. Run creation only ever offers what's here; a free-text host path is never accepted."
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
-              <Plus className="size-4" /> Add workspace
-            </Button>
+            {tier === "workspaces" && (
+              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+                <Plus className="size-4" /> Add workspace
+              </Button>
+            )}
           </>
         }
       />
 
+      <Tabs value={tier} onValueChange={(v) => setTier(v as typeof tier)} className="mb-4">
+        <TabsList>
+          <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
+          <TabsTrigger value="sources">Directories &amp; repos</TabsTrigger>
+          <TabsTrigger value="images">Base images</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tier === "sources" && <SourcesLibrary workspaces={workspaces} />}
+      {tier === "images" && <ImageCatalog workspaces={workspaces} />}
+
+      {tier === "workspaces" && (
+        <>
       {status === "ready" && workspaces.length > 0 && (
         <div className="mb-4 flex items-center gap-3">
           <Input
@@ -332,6 +351,8 @@ export function WorkspacesScreen() {
           </Table>
         )}
       </div>
+        </>
+      )}
 
       {/* The new four-step wizard (Sources -> Base image -> Requirements -> Done)
           replaces the old ImportWorkspaceDialog as the ONE "Add workspace" front

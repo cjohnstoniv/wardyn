@@ -42,7 +42,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Deleting a source or image that workspaces still use answers 409 *naming
   them* (`?force=1` detaches — for an image that honestly means "fall back to
   the derived recommended build"; for a source it un-mounts code, which is why
-  the refusal is loud instead of tolerated). The CLI speaks the library too:
+  the refusal is loud instead of tolerated). **The tiers are first-class in
+  the UI**: the Workspaces page (and the Getting-started Workspaces step)
+  now carries three tabs — Workspaces · Directories & repos · Base images —
+  each with its own add/delete dialogs, per-source scan and contract summary,
+  used-by counts, and the delete-in-use refusal rendered verbatim with its
+  explicit detach-everywhere escape. The Add-workspace wizard composes FROM
+  the tiers: step ① offers "From your library — already configured,
+  attaching reuses the entry, its contract and its scan" one click per entry
+  (new dirs/repos join the library automatically), and step ② lists your
+  saved catalog images between "Recommended" and the new-image cards, so a
+  recipe configured once is one click in every later workspace. The CLI
+  speaks the library too:
   `wardyn source list|create|scan|rm` manages tier 1, and `wardyn workspace
   create --attach SOURCE-ID[@target][:ro|:rw]` composes a workspace from
   already-configured sources (idempotent by canonical identity, per-attachment
@@ -377,6 +388,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An ephemeral-only workspace lost its Requirements tabs.** The hydrate
+  pass derived a workspace's profile from its attached library sources — and
+  an ephemeral-only composition has none, so it derived *nil* where the old
+  scan had stamped the deterministic empty profile. The wizard's Requirements
+  step read that as "No contract yet" and never mounted its tabs — on the
+  default scratch-floor path Getting Started walks every new operator into.
+  Ephemeral-only now derives scanned + the deterministic empty profile, the
+  exact legacy semantic, pinned by a store test.
 - **Verify's held-at-the-door approval never actually held.** Confined verify
   sessions ran `deny_with_review` on a rationale written for a session shape
   that no longer exists ("an unattended probe must fail fast") — every record

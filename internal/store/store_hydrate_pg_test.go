@@ -121,6 +121,36 @@ func TestPG_HydrateAttachments_DerivedViewAndFold(t *testing.T) {
 	}
 }
 
+// An EPHEMERAL-ONLY composition (the wizard's default scratch floor) must
+// derive scanned + the deterministic empty profile — what the legacy scan
+// stamped for it. Deriving nil here regressed the Requirements step to
+// "No contract yet": the four tabs never mounted on the Getting-started
+// wizard's default path.
+func TestPG_HydrateEphemeralOnly_DeterministicProfile(t *testing.T) {
+	s := hydrateStore(t)
+	ws, err := s.CreateWorkspace(context.Background(), types.Workspace{
+		ID: uuid.New(), Name: "scratch", Status: types.WorkspacePendingScan,
+		Attachments: []types.WorkspaceAttachment{{Ephemeral: true, Target: "/home/agent/work"}},
+		CreatedAt:   time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if ws.Status != types.WorkspaceScanned {
+		t.Errorf("Status = %s, want scanned (nothing to scan)", ws.Status)
+	}
+	var prof struct {
+		Confidence string `json:"confidence"`
+		Source     string `json:"source"`
+	}
+	if err := json.Unmarshal(ws.Profile, &prof); err != nil {
+		t.Fatalf("Profile = %s, want the deterministic empty profile: %v", ws.Profile, err)
+	}
+	if prof.Confidence != "high" || prof.Source != "deterministic" {
+		t.Errorf("Profile = %+v, want confidence=high source=deterministic", prof)
+	}
+}
+
 // Pre-split rows (empty attachments) pass through byte-identically: embedded
 // sources stay the truth, and EffectiveRequirements IS the overlay.
 func TestPG_HydrateLegacyRow_PassthroughIdentity(t *testing.T) {

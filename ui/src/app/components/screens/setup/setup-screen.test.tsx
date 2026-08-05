@@ -222,7 +222,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
     // your work: workspaces.
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    expect(await screen.findByText(/somewhere to work/i)).toBeInTheDocument(); // workspaces
+    expect(await screen.findByText(/never a raw host path/i)).toBeInTheDocument(); // workspaces (three-tier framing)
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     // review step — the consolidated readiness rollup + the checks that used to

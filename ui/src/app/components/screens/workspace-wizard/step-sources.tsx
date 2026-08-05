@@ -10,6 +10,8 @@
 // the state; this component is a pure controlled view over it.
 import * as React from "react";
 import { AlertTriangle, FolderGit2, FolderOpen, Hourglass, KeyRound, X } from "lucide-react";
+import { sourcesApi } from "../../../lib/api/sources";
+import type { Source } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field } from "../new-run/step-shell";
@@ -264,6 +266,7 @@ export function StepSources({
   onNameChange,
   sources,
   onAddSource,
+  onAttachLibrarySource,
   onUpdateSource,
   onRemoveSource,
   secretNames,
@@ -274,6 +277,7 @@ export function StepSources({
   onNameChange: (name: string) => void;
   sources: SourceRow[];
   onAddSource: (type: WorkspaceSourceKind) => void;
+  onAttachLibrarySource: (src: Source) => void;
   onUpdateSource: (id: string, patch: Partial<SourceRow>) => void;
   onRemoveSource: (id: string) => void;
   secretNames: string[];
@@ -281,6 +285,29 @@ export function StepSources({
   onSecretStored: (name: string) => void;
 }) {
   const [credTarget, setCredTarget] = React.useState<CredTarget | null>(null);
+  // The tier-1 library: attach an already-configured dir/repo in one click.
+  // Best-effort fetch — an empty/failed library simply hides the section, the
+  // type-a-new-one flow below is never blocked on it.
+  const [library, setLibrary] = React.useState<Source[]>([]);
+  React.useEffect(() => {
+    let live = true;
+    sourcesApi
+      .listSources()
+      .then((rows) => live && setLibrary(rows))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  // Already-attached identities: hide their library rows (attach is idempotent
+  // server-side, but offering a second attach of the same entry reads as a bug).
+  const attachedKeys = new Set(
+    sources.map((r) => (r.type === "repo" ? `repo:${r.source.trim().toLowerCase()}` : `dir:${r.path.trim()}`)),
+  );
+  const attachable = library.filter(
+    (src) =>
+      !attachedKeys.has(src.kind === "repo" ? `repo:${src.locator.toLowerCase()}` : `dir:${src.locator}`),
+  );
 
   return (
     <div className="space-y-5">
@@ -306,6 +333,35 @@ export function StepSources({
         </div>
       </div>
 
+      {attachable.length > 0 && (
+        <div className="space-y-2" data-testid="library-attach">
+          <p className="text-xs font-medium text-foreground">From your library</p>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            Already configured — attaching reuses the entry, its contract and its scan.
+          </p>
+          <div className="space-y-2">
+            {attachable.map((src) => {
+              const Icon = src.kind === "repo" ? FolderGit2 : FolderOpen;
+              return (
+                <div key={src.id} className="flex items-center gap-3 rounded-lg border border-border p-3">
+                  <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[0.8125rem] font-medium text-foreground">{src.name}</span>
+                    <span className="block truncate font-mono text-[0.6875rem] text-muted-foreground">
+                      {src.kind === "repo" ? "repo" : "dir"} · {src.locator}
+                      {src.ref ? ` @${src.ref}` : ""}
+                    </span>
+                  </span>
+                  <Button type="button" size="sm" variant="outline" onClick={() => onAttachLibrarySource(src)}>
+                    Attach
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-2">
         <p className="text-xs font-medium text-foreground">Add source</p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -329,6 +385,10 @@ export function StepSources({
             );
           })}
         </div>
+        <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+          New directories and repos join your library automatically — the next workspace attaches them
+          from the list above.
+        </p>
       </div>
 
       <AddSecretDialog

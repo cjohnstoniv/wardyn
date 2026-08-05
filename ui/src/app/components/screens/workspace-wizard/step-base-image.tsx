@@ -16,6 +16,8 @@ import { Textarea } from "../../ui/textarea";
 import { Checkbox } from "../../ui/checkbox";
 import { cn } from "../../ui/utils";
 import { Field } from "../new-run/step-shell";
+import { baseImagesApi } from "../../../lib/api/sources";
+import type { BaseImageEntry } from "../../../lib/types";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { C, V2C } from "../../../lib/workspace-copy";
@@ -212,7 +214,8 @@ function ImageCard({
   onSelect,
   children,
 }: {
-  id: BaseImageChoice;
+  // A fixed choice id, or "catalog-<uuid>" for a saved tier-2 entry.
+  id: BaseImageChoice | `catalog-${string}`;
   selected: boolean;
   onSelect: () => void;
   children: React.ReactNode;
@@ -260,6 +263,19 @@ export function ImageCards({
   onChange: (patch: Partial<BaseImageState>) => void;
 }) {
   const credCount = credFlags(state.buildSteps).length;
+  // The tier-2 catalog: images already saved and shared across workspaces.
+  // Best-effort — an empty/failed catalog just means no saved cards.
+  const [catalog, setCatalog] = React.useState<BaseImageEntry[]>([]);
+  React.useEffect(() => {
+    let live = true;
+    baseImagesApi
+      .listBaseImages()
+      .then((rows) => live && setCatalog(rows))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   return (
     <div role="radiogroup" aria-label="Base image" className="space-y-2">
@@ -272,6 +288,29 @@ export function ImageCards({
         <Carries tools={[...detectedChips, ...(harnessAvailable ? ["claude-code"] : [])]} />
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.REC_SUB}</p>
       </ImageCard>
+
+      {catalog.map((entry) => (
+        <ImageCard
+          key={entry.id}
+          id={`catalog-${entry.id}`}
+          selected={state.choice === "catalog" && state.catalog?.id === entry.id}
+          onSelect={() =>
+            onChange({
+              choice: "catalog",
+              catalog: { id: entry.id, kind: entry.kind, name: entry.name, image: entry.image, steps: entry.steps },
+            })
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[0.8125rem] font-medium text-foreground">{entry.name}</span>
+            <Chip tone="neutral">from your catalog</Chip>
+          </div>
+          <p className="font-mono text-[0.6875rem] text-muted-foreground">
+            {entry.image}
+            {entry.steps?.length ? ` · ${entry.steps.length} step${entry.steps.length === 1 ? "" : "s"}` : ""}
+          </p>
+        </ImageCard>
+      ))}
 
       <ImageCard id="registry" selected={state.choice === "registry"} onSelect={() => onChange({ choice: "registry" })}>
         <div className="flex flex-wrap items-center gap-2">

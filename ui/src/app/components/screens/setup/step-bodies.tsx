@@ -31,6 +31,9 @@ import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
+import { SourcesLibrary } from "../sources-library";
+import { ImageCatalog } from "../image-catalog";
+import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
@@ -268,6 +271,7 @@ export function WorkspacesStep({
   // image -> Requirements -> Done) instead of the retired guided Import panel.
   const [wizardOpen, setWizardOpen] = React.useState(false);
   const [scanning, setScanning] = React.useState<Set<string>>(new Set());
+  const [tier, setTier] = React.useState<"workspaces" | "sources" | "images">("workspaces");
 
   // Best-effort scan → always refresh (repo scans run async and return 202, local
   // dirs resolve inline) so the row reflects the latest status either way.
@@ -297,14 +301,25 @@ export function WorkspacesStep({
   return (
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
-        A run attaches an onboarded directory or repo — never a raw host path. Add at least one so your
-        first run has somewhere to work. A task that needs no repo can still run in an ephemeral scratch
-        directory. Importing walks you through scan → configure → an optional Record step that learns
-        what each task really uses → verify.
+        Three tiers. <strong>Directories &amp; repos</strong> are configured once — each carries its own
+        requirements and scan. <strong>Base images</strong> are shared. A <strong>workspace</strong> brings
+        one or more of them together (ephemeral scratch works too) — that combination is what a run
+        attaches, never a raw host path.
         {!operator && ` ${OPERATOR_ONLY_REASON}`}
       </p>
 
-      {loading ? (
+      <Tabs value={tier} onValueChange={(v) => setTier(v as typeof tier)}>
+        <TabsList>
+          <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
+          <TabsTrigger value="sources">Directories &amp; repos</TabsTrigger>
+          <TabsTrigger value="images">Base images</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tier === "sources" && <SourcesLibrary workspaces={workspaces} embedded />}
+      {tier === "images" && <ImageCatalog workspaces={workspaces} embedded />}
+
+      {tier !== "workspaces" ? null : loading ? (
         <p className="text-sm text-muted-foreground">Loading workspaces…</p>
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6 text-center">

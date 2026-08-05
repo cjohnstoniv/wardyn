@@ -8,6 +8,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 const setSecretMock = vi.fn();
+vi.mock("../../../lib/api/sources", () => ({
+  sourcesApi: { listSources: () => Promise.resolve([]) },
+}));
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) },
 }));
@@ -38,6 +41,7 @@ function Harness({
       onNameChange={setName}
       sources={sources}
       onAddSource={(type: WorkspaceSourceKind) => setSources((prev) => [...prev, newSourceRow(type)])}
+      onAttachLibrarySource={() => {}}
       onUpdateSource={(id, patch) => setSources((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
       onRemoveSource={(id) => setSources((prev) => removeSource(prev, id))}
       secretNames={secretNames}
