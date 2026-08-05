@@ -35,13 +35,11 @@ function isHeld(a: ApprovalRequest): boolean {
 
 export function LiveApprovals({
   runId,
-  onApproveHost,
   reasonApprove = "approved live",
   reasonDeny = "rejected live",
   idleHint = "Watching for off-policy egress — anything the agent tries that isn't allow-listed surfaces here to approve or deny, live.",
 }: {
   runId: string;
-  onApproveHost?: (host: string) => void;
   reasonApprove?: string;
   reasonDeny?: string;
   idleHint?: string;
@@ -70,12 +68,15 @@ export function LiveApprovals({
   usePoll(refresh, POLL_MS, false);
 
   const decide = async (a: ApprovalRequest, approve: boolean) => {
-    const host = String((a.requested_scope?.host as string) ?? "");
     setBusy(a.id);
     try {
       if (approve) {
+        // The SERVER writes the durable echo: approving a verify session's
+        // egress request lands the host as an egress: requirement row in that
+        // workspace's contract at the decide() chokepoint. No client-side
+        // second write — the old onApproveHost callback wrote the legacy
+        // approved_egress lane on top of it, two truths behind one click.
         await api.approve(a.id, reasonApprove);
-        if (host) onApproveHost?.(host); // widen the workspace's approved egress
       } else {
         await api.deny(a.id, reasonDeny);
       }

@@ -350,7 +350,6 @@ function SessionCard({
               here without leaving the page. */}
           <LiveApprovals
             runId={confinedRR.run_id}
-            onApproveHost={onApproveHost}
             reasonApprove="approved in replay"
             reasonDeny="rejected in replay"
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
