@@ -8,10 +8,13 @@ package k8s
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -126,6 +129,90 @@ func TestTeardown_SweepsEverySiblingByLabel(t *testing.T) {
 	// Idempotent: killing the now-gone ref again is still success.
 	if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
 		t.Errorf("second KillSandbox: %v, want nil (idempotent)", err)
+	}
+}
+
+// TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols is the H3 regression
+// test: an unselected pod is default-allow, so dropping the NetworkPolicies
+// while the pod is still Terminating would hand a SIGTERM-trapping agent up
+// to its full grace window of open egress. Proves the ORDERING via the
+// actual sequence of API calls teardown issues (pod delete-collection, then
+// a pod list — the wait-for-gone poll — THEN the netpol delete-collection),
+// rather than timing, which the fake's synchronous delete would not
+// otherwise distinguish.
+func TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.9")
+
+	spec := testSandboxSpec()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	cs.ClearActions()
+	if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatalf("KillSandbox: %v", err)
+	}
+
+	podDeleteIdx, podListIdx, netpolDeleteIdx := -1, -1, -1
+	for i, a := range cs.Actions() {
+		res := a.GetResource().Resource
+		switch {
+		case a.GetVerb() == "delete-collection" && res == "pods" && podDeleteIdx == -1:
+			podDeleteIdx = i
+		case a.GetVerb() == "list" && res == "pods" && podListIdx == -1 && podDeleteIdx != -1:
+			podListIdx = i
+		case a.GetVerb() == "delete-collection" && res == "networkpolicies" && netpolDeleteIdx == -1:
+			netpolDeleteIdx = i
+		}
+	}
+	if podDeleteIdx == -1 || podListIdx == -1 || netpolDeleteIdx == -1 {
+		t.Fatalf("missing expected teardown actions: podDelete=%d podList(wait)=%d netpolDelete=%d", podDeleteIdx, podListIdx, netpolDeleteIdx)
+	}
+	if !(podDeleteIdx < podListIdx && podListIdx < netpolDeleteIdx) {
+		t.Errorf("want pod delete-collection < pod list (wait-for-gone) < netpol delete-collection, got indices %d, %d, %d", podDeleteIdx, podListIdx, netpolDeleteIdx)
+	}
+}
+
+// TestTeardown_WaitPodsGoneTimeoutIsAnError covers the fail-closed choice:
+// if pods never actually disappear within the bounded wait, teardown errors
+// rather than proceeding to drop the NetworkPolicies anyway — better to
+// leave a (still-idempotent, retryable) teardown incomplete than delete the
+// confinement around a pod that might still be alive. Uses a short caller
+// ctx deadline (rather than waiting out the real grace+slack budget, ~15s
+// for a Kill) to exercise the exact same "the wait errored" code path fast:
+// wait.PollUntilContextTimeout respects whichever deadline is sooner.
+func TestTeardown_WaitPodsGoneTimeoutIsAnError(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.9")
+	spec := testSandboxSpec()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	// Stub the wait-for-gone poll's List to always report the pod still
+	// present, so the bounded wait genuinely never sees "gone".
+	cs.PrependReactor("list", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: sb.Ref, Namespace: testNamespace, Labels: wardynLabels(spec.RunID, componentAgent, nil)}}
+		return true, &corev1.PodList{Items: []corev1.Pod{pod}}, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err = d.KillSandbox(ctx, sb.Ref)
+	if err == nil {
+		t.Fatal("KillSandbox: want an error when pods never disappear, got nil")
+	}
+
+	// NetworkPolicies must NOT have been deleted.
+	netpols, lerr := cs.NetworkingV1().NetworkPolicies(testNamespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelRun + "=" + spec.RunID.String()})
+	if lerr != nil {
+		t.Fatalf("list network policies: %v", lerr)
+	}
+	if len(netpols.Items) != 2 {
+		t.Errorf("network policies remaining = %d, want 2 (both netpols must survive a failed/timed-out teardown)", len(netpols.Items))
 	}
 }
 

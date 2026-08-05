@@ -23,6 +23,31 @@ func TestName(t *testing.T) {
 	}
 }
 
+// TestSecurityContext_AgentVsDefault_RunAsUserSplit is the H2 regression
+// test: RunAsNonRoot:true with a nil RunAsUser fails kubelet admission for
+// every agent image (they document `USER agent`, a NAME the kubelet cannot
+// verify as non-root). Agent containers (main + ephemeral) must carry an
+// explicit numeric RunAsUser; the proxy/canary containers (the wardyn-proxy
+// image, distroless nonroot — numeric uid 65532) must NOT, so the image's
+// own user stands unmodified.
+func TestSecurityContext_AgentVsDefault_RunAsUserSplit(t *testing.T) {
+	agent := agentSecurityContext()
+	if agent.RunAsUser == nil || *agent.RunAsUser != 1000 {
+		t.Errorf("agentSecurityContext().RunAsUser = %v, want *1000 (every agent Dockerfile documents USER agent, uid 1000)", agent.RunAsUser)
+	}
+	if agent.RunAsNonRoot == nil || !*agent.RunAsNonRoot {
+		t.Error("agentSecurityContext().RunAsNonRoot must be true")
+	}
+
+	def := restrictedSecurityContext()
+	if def.RunAsUser != nil {
+		t.Errorf("restrictedSecurityContext().RunAsUser = %d, want nil (proxy/canary keep the wardyn-proxy image's own distroless nonroot numeric uid)", *def.RunAsUser)
+	}
+	if def.RunAsNonRoot == nil || !*def.RunAsNonRoot {
+		t.Error("restrictedSecurityContext().RunAsNonRoot must be true")
+	}
+}
+
 // TestClasses_CC1Unconditional covers the always-CC1 floor: reaching a
 // constructed Driver already proves the canary passed (or opted out).
 func TestClasses_CC1Unconditional(t *testing.T) {

@@ -8,10 +8,12 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -128,6 +130,23 @@ func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *i
 	if err := d.clientset.CoreV1().Pods(ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete pods: %w", err)
 	}
+
+	// H3: an unselected pod is default-allow, so dropping the NetworkPolicies
+	// while the pod is still Terminating (a SIGTERM-trapping agent can run
+	// for up to its full grace period) would hand it open egress for that
+	// whole window. Wait for the DeleteCollection above to actually take
+	// effect — pods gone, not merely marked for deletion — before touching
+	// the netpols confining them. Bounded at grace+slack: never longer than
+	// the pod would legitimately take to terminate, plus a beat for the
+	// kubelet to report it gone.
+	grace := defaultPodGracePeriod
+	if gracePeriodSeconds != nil {
+		grace = time.Duration(*gracePeriodSeconds) * time.Second
+	}
+	if err := d.waitPodsGone(ctx, ns, listOpts, grace+teardownPollSlack); err != nil {
+		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
+	}
+
 	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
 	}
@@ -135,4 +154,29 @@ func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *i
 		return fmt.Errorf("k8s: teardown: delete secrets: %w", err)
 	}
 	return nil
+}
+
+// defaultPodGracePeriod mirrors the pod-level default when
+// TerminationGracePeriodSeconds is left unset (every pod spec this package
+// creates does): 30s. teardownPollSlack is added on top: the kubelet needs a
+// beat after the grace window elapses to actually report the pod gone.
+const (
+	defaultPodGracePeriod = 30 * time.Second
+	teardownPollSlack     = 15 * time.Second
+)
+
+// waitPodsGone polls until no pod matches listOpts — the ordering guard H3
+// exists for. A timeout here is a real error (not best-effort): proceeding
+// to drop the NetworkPolicies without this proof is exactly the open-egress
+// window this function exists to close. teardown is already idempotent, so
+// a caller retry (or wardynd's own reconciler) completes the sweep once the
+// pod actually terminates.
+func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.ListOptions, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
+		pods, err := d.clientset.CoreV1().Pods(ns).List(pollCtx, listOpts)
+		if err != nil {
+			return false, err
+		}
+		return len(pods.Items) == 0, nil
+	})
 }

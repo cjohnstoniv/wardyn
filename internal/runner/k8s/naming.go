@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -66,31 +67,72 @@ func agentNetPolName(runID uuid.UUID) string { return "wardyn-agent-netpol-" + r
 func proxyNetPolName(runID uuid.UUID) string { return "wardyn-proxy-netpol-" + runID.String() }
 
 // wardynLabels stamps every Wardyn-owned object so audit and teardown
-// selectors can find them by run and component. Mirrors docker's
-// wardynLabels exactly (same keys, same shape).
+// selectors can find them by run and component. extra is applied FIRST and
+// the three reserved keys are stamped LAST (M3 finding): extra is
+// caller-supplied (ultimately from policy/dispatch, e.g. an operator- or
+// agent-provided label), and applying it last would let an entry silently
+// override wardyn.component — un-selecting the agent from its own
+// NetworkPolicy (whose selector is built from this same map). Every extra
+// VALUE is also sanitized to legal k8s label syntax (L4 finding): a
+// free-form value (e.g. a run's agent name) that fails k8s's
+// `[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?`, <=63-char syntax would 422 the
+// WHOLE object create otherwise — an unsanitizable value is omitted
+// entirely rather than risk that; the reserved keys (never caller-supplied)
+// are always present and authoritative regardless.
 func wardynLabels(runID uuid.UUID, component string, extra map[string]string) map[string]string {
-	l := map[string]string{
-		labelManaged:   "true",
-		labelRun:       runID.String(),
-		labelComponent: component,
-	}
+	l := make(map[string]string, len(extra)+3)
 	for k, v := range extra {
-		l[k] = v
+		if sv, ok := sanitizeLabelValue(v); ok {
+			l[k] = sv
+		}
 	}
+	l[labelManaged] = "true"
+	l[labelRun] = runID.String()
+	l[labelComponent] = component
 	return l
 }
 
-// restrictedSecurityContext is Wardyn's non-negotiable per-container hardening
-// on k8s, reused for the agent's main + ephemeral (exec) containers, the proxy
-// container, and the egress canary: runAsNonRoot, no privilege escalation,
-// every Linux capability dropped, RuntimeDefault seccomp. THREE hard API
-// facts (see the A0 contract) make container-level (not merely pod-level) the
-// only correct place for this: (1) Pod Security Standards admission checks
-// EPHEMERAL containers' own securityContext, not just the pod's; (2) an
-// ephemeral container's spec must therefore carry this in full, not inherit
-// it; (3) reusing one builder everywhere means the agent's ephemeral exec is
+// sanitizeLabelValue coerces s into a legal k8s label value
+// ([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?, <=63 chars) or reports it
+// cannot be (ok=false, meaning: omit the label rather than send an illegal
+// value to the apiserver). Any character outside the legal alphabet becomes
+// '-'; leading/trailing '-'/'_'/'.' are trimmed (a value must start and end
+// alphanumeric); the result is capped at 63 chars, re-trimmed in case
+// truncation landed on a separator.
+func sanitizeLabelValue(s string) (string, bool) {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	v := strings.Trim(b.String(), "-_.")
+	if len(v) > 63 {
+		v = strings.Trim(v[:63], "-_.")
+	}
+	return v, v != ""
+}
+
+// baseSecurityContext is the hardening every container on this substrate
+// gets regardless of identity: no privilege escalation, every Linux
+// capability dropped, RuntimeDefault seccomp, runAsNonRoot. THREE hard API
+// facts (see the A0 contract) make container-level (not merely pod-level)
+// the only correct place for this: (1) Pod Security Standards admission
+// checks EPHEMERAL containers' own securityContext, not just the pod's; (2)
+// an ephemeral container's spec must therefore carry this in full, not
+// inherit it; (3) one shared builder means the agent's ephemeral exec is
 // never less hardened than its main container by accident.
-func restrictedSecurityContext() *corev1.SecurityContext {
+//
+// RunAsUser is deliberately NOT set here — see agentSecurityContext and
+// restrictedSecurityContext, which is is the one field that has to split by
+// container identity (H2 finding): RunAsNonRoot:true with a nil RunAsUser
+// only passes kubelet admission when the IMAGE's own USER is already
+// numeric. The wardyn-proxy image (proxy + canary containers) is, so it
+// gets this as-is; the agent images are not (see agentSecurityContext).
+func baseSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             boolPtr(true),
 		AllowPrivilegeEscalation: boolPtr(false),
@@ -99,7 +141,35 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
+// restrictedSecurityContext is baseSecurityContext for containers whose
+// image already runs as a KNOWN NUMERIC non-root user, so the kubelet can
+// verify RunAsNonRoot without an explicit RunAsUser: the proxy and canary
+// containers both run the wardyn-proxy image, built FROM
+// gcr.io/distroless/static-debian12:nonroot (deploy/compose/Dockerfile.proxy)
+// — numeric uid 65532, Google's documented distroless nonroot convention.
+func restrictedSecurityContext() *corev1.SecurityContext {
+	return baseSecurityContext()
+}
+
+// agentSecurityContext is baseSecurityContext PLUS RunAsUser:1000, for the
+// agent's containers (the main placeholder AND the ephemeral exec
+// container). Every wardyn agent image documents `USER agent` — a NAME, not
+// a number (deploy/images/{claude-code,codex-cli,oracle,aws-sso,full}/Dockerfile
+// all carry the "USER agent (uid 1000), home /home/agent" contract comment,
+// and each creates that user via adduser/useradd -u 1000). RunAsNonRoot:true
+// with a NIL RunAsUser fails Pod Security admission here: the kubelet can
+// only verify non-root against a NUMERIC uid, and a name-form USER is
+// opaque to it at admission time — H2 finding, product-breaking (every
+// agent sandbox would 422 at pod create without this). RunAsUser:1000 is
+// what makes RunAsNonRoot admission-checkable instead of a hard failure.
+func agentSecurityContext() *corev1.SecurityContext {
+	sc := baseSecurityContext()
+	sc.RunAsUser = int64Ptr(1000)
+	return sc
+}
+
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(i int64) *int64 { return &i }
 
 // resourceRequirements maps runner.Resources onto a k8s ResourceRequirements
 // with requests == limits (a hard cap, not a burst-friendly range — matches

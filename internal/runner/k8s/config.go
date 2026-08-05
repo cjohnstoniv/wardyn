@@ -25,6 +25,16 @@ const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccou
 // when running as a pod, else the kubeconfig loading rules (KUBECONFIG env,
 // then ~/.kube/config) — the same chain `kubectl` and every other client-go
 // consumer uses, so an operator's existing kubeconfig setup just works.
+//
+// L5: an out-of-cluster kubeconfig's server host may be unreachable from
+// wherever wardynd actually runs (a laptop-local kind cluster, a VPN-only
+// endpoint, ...) — in that case the boot-time egress canary (canary.go)
+// never gets a verdict at all and construction fails with a PERMANENT
+// canaryIndeterminate: no operator override restores boot, because there is
+// no such thing as "opt out of an unreachable apiserver". This is a real,
+// expected failure mode for out-of-cluster kubeconfig use, not a bug — the
+// remedy is a reachable rest.Config (run in-cluster, or point kubeconfig at
+// a cluster this process can actually dial), not a flag.
 func loadRestConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil

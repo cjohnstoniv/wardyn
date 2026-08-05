@@ -117,15 +117,21 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: agentLabels}}},
 			}},
+			// M4: BOTH rules carry the same metadata-excluding peer. A rule
+			// with Ports but no To matches ALL destinations on those ports —
+			// a peer-less "DNS" rule would permit port 53 to the metadata
+			// address too, voiding the Except on the general rule right
+			// next to it.
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{ // DNS
 					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
 						{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
 					},
+					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
 				},
 				{ // everything except the cloud-metadata address
-					To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{"169.254.169.254/32"}}}},
+					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
 				},
 			},
 		},
@@ -197,12 +203,21 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
+			// L3: the default ClusterFirst dnsPolicy points the agent at
+			// kube-dns/CoreDNS — which its own NetworkPolicy denies (no DNS
+			// egress at all; see the agent netpol above). A proxy-UNAWARE
+			// lookup (a tool that ignores HTTP_PROXY) would then hang for
+			// the full resolver timeout instead of failing fast. DNSNone
+			// with a loopback nameserver (nothing listens there) makes such
+			// a lookup fail IMMEDIATELY with connection-refused.
+			DNSPolicy: corev1.DNSNone,
+			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"127.0.0.1"}},
 			Containers: []corev1.Container{{
 				Name:            mainContainerName,
 				Image:           spec.Image,
 				Command:         idleCmd,
 				Env:             envVars(spec.Env),
-				SecurityContext: restrictedSecurityContext(),
+				SecurityContext: agentSecurityContext(),
 				Resources:       resourceRequirements(spec.Resources),
 			}},
 		},
@@ -291,6 +306,21 @@ func (d *Driver) waitPodIP(ctx context.Context, podName string) (string, error) 
 
 func protoPtr(p corev1.Protocol) *corev1.Protocol          { return &p }
 func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString { return &v }
+
+// cloudMetadataAddr is the link-local address every major cloud provider
+// serves its instance-metadata API on (AWS/GCP/Azure all use it) — the
+// proxy netpol's egress carves it out so a compromised proxy cannot reach
+// node/instance credentials.
+const cloudMetadataAddr = "169.254.169.254/32"
+
+// notMetadataIPBlock is 0.0.0.0/0 except the cloud-metadata address, shared
+// by the proxy netpol's DNS and general egress rules so they can never
+// drift apart (M4 finding: a rule missing this peer permits its ports to
+// the metadata address too, voiding the other rule's Except). IPv4-only —
+// this substrate does not yet reason about IPv6 pod networks.
+func notMetadataIPBlock() *networkingv1.IPBlock {
+	return &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{cloudMetadataAddr}}
+}
 
 // isNotFound reports whether err is a k8s "not found" API error — used
 // throughout teardown so Stop/Kill stay idempotent on an already-gone

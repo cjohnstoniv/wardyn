@@ -85,6 +85,19 @@ func testRestConfig() *rest.Config { return &rest.Config{Host: "https://127.0.0.
 // clientset call at all.
 func installCanaryReactor(t *testing.T, cs *fake.Clientset, unenforced bool) {
 	t.Helper()
+	phaseBExit := int32(1)
+	if unenforced {
+		phaseBExit = 0
+	}
+	installCanaryReactorExitCodes(t, cs, 0, phaseBExit)
+}
+
+// installCanaryReactorExitCodes is installCanaryReactor generalized to an
+// ARBITRARY phase B exit code — the M1 regression test scripts 128 (a
+// StartError shape) to prove that only exactly 0 or 1 is ever read as a
+// verdict; anything else is indeterminate.
+func installCanaryReactorExitCodes(t *testing.T, cs *fake.Clientset, phaseAExit, phaseBExit int32) {
+	t.Helper()
 	seen := map[string]bool{}
 	phase := 0
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -98,11 +111,10 @@ func installCanaryReactor(t *testing.T, cs *fake.Clientset, unenforced bool) {
 			phase++
 		}
 		// phase 1 => phase A (no NetworkPolicy yet): must read as a clean
-		// connect. phase 2 => phase B (deny-all in effect): exit code depends
-		// on whether this scenario models an enforced or unenforced policy.
-		var exitCode int32
-		if phase >= 2 && !unenforced {
-			exitCode = 1
+		// connect. phase 2 => phase B (deny-all in effect).
+		exitCode := phaseAExit
+		if phase >= 2 {
+			exitCode = phaseBExit
 		}
 		pod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: action.GetNamespace()},

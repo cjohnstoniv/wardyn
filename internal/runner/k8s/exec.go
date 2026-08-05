@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -28,11 +29,14 @@ const byoiImagePrefix = "wardyn-byoi/"
 
 const (
 	execWaitPollInterval = 1 * time.Second
-	// execWaitMaxProbeErrors mirrors docker's waitMaxProbeErrors: ~5 minutes of
-	// tolerance for a transient apiserver blip at 1s spacing before Wait gives
-	// up. A transient error is NOT "the agent exited" — it must not surface as
-	// one (see docker's identical comment on waitMaxProbeErrors).
-	execWaitMaxProbeErrors = 300
+	// execWaitMaxProbeErrors mirrors docker's waitMaxProbeErrors BUDGET
+	// (~1 minute), not its raw number: docker polls at 200ms so 300 errors
+	// there is ~1 minute; this package polls at 1s, so the same ~1 minute
+	// budget is 60, not 300 (L1 finding — the copied literal carried
+	// docker's cadence-scaled count, not its time budget). A transient
+	// error is NOT "the agent exited" — it must not surface as one (see
+	// docker's identical comment on waitMaxProbeErrors).
+	execWaitMaxProbeErrors = 60
 )
 
 // notFoundExitCode is what Wait reports when the pod vanishes without ever
@@ -90,14 +94,18 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 		}
 	}
 
+	runID := uuid.Nil
+	if id, perr := uuid.Parse(pod.Labels[labelRun]); perr == nil {
+		runID = id
+	}
 	podCopy := pod.DeepCopy()
 	podCopy.Spec.EphemeralContainers = append(podCopy.Spec.EphemeralContainers, corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 			Name:            execContainerName,
 			Image:           main.Image,
-			Command:         argv,
+			Command:         recordCmd(runID, argv),
 			Env:             main.Env, // copied verbatim: ephemeral containers inherit nothing
-			SecurityContext: restrictedSecurityContext(),
+			SecurityContext: agentSecurityContext(),
 			// Resources deliberately left zero-value: the apiserver rejects a
 			// resource request on an ephemeral container.
 		},
@@ -116,6 +124,30 @@ func findContainer(containers []corev1.Container, name string) (corev1.Container
 		}
 	}
 	return corev1.Container{}, false
+}
+
+// recordCmd wraps argv with the recorder for every Exec — mirrors docker's
+// recordCmd (internal/runner/docker/driver.go's recordCmd/recordCmd), but
+// simpler: k8s has no RecordingMount config (SandboxSpec's Recording doc:
+// "no shared-volume path" — mounts are impossible on this substrate), so
+// delivery is ALWAYS the masked brokered upload, never the unmasked
+// shared-mount fallback. hostAliases + NO_PROXY + the agent NetworkPolicy
+// already permit exactly this route (the agent's only egress peer is the
+// proxy on 3128). castDir is a plain "/tmp": unlike docker (one container,
+// one filesystem), the ephemeral container has its OWN rootfs — ephemeral
+// containers do NOT share the main container's filesystem, so
+// AgentIdleScript's /tmp/wardyn (written by the MAIN container's idle
+// process) is not visible here. Do not assume a shared /tmp.
+//
+// runID mirrors docker's own tolerance for an unresolvable label: recording
+// is best-effort, so a missing/corrupt wardyn.run-id label degrades to a
+// local-only (never-uploaded) cast rather than failing Exec outright.
+func recordCmd(runID uuid.UUID, argv []string) []string {
+	uploadURL := ""
+	if runID != uuid.Nil {
+		uploadURL = fmt.Sprintf("http://wardyn-proxy:%d/wardyn/v1/recordings/%s", runner.ProxyListenPort, runID)
+	}
+	return runner.RecorderArgv("/tmp", "", uploadURL, runID, argv)
 }
 
 // Wait blocks until the ephemeral exec Exec added terminates and returns its

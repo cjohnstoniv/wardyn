@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -95,10 +96,19 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 	if !b.reachedRunning {
 		return canaryIndeterminate, fmt.Errorf("egress canary phase B (deny-all NetworkPolicy) pod never reached Running: %w", errCanaryIndeterminate)
 	}
-	if b.exitCode == 0 {
+	switch b.exitCode {
+	case 0:
 		return canaryUnenforced, nil
+	case 1:
+		return canaryEnforced, nil
+	default:
+		// M1: the -egress-canary flag only ever exits 0 (connected) or 1
+		// (refused/timeout) — see cmd/wardyn-proxy/main.go. Any OTHER
+		// non-zero code (128 = exec format/StartError shapes, a signal
+		// death, ...) is not evidence of either verdict; treat it the same
+		// as any other non-network failure.
+		return canaryIndeterminate, fmt.Errorf("egress canary phase B (deny-all NetworkPolicy) exited %d, neither the expected 0 (connected) nor 1 (blocked): %w", b.exitCode, errCanaryIndeterminate)
 	}
-	return canaryEnforced, nil
 }
 
 // runCanaryPhase launches one canary pod (optionally behind a deny-all
@@ -108,7 +118,14 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	ns := d.cfg.Namespace
 	suffix := uuid.New().String()
 	podName := "wardyn-egress-canary-" + suffix
-	labels := map[string]string{labelManaged: "true", labelComponent: componentCanary}
+	// M2: labelRun carries THIS canary invocation's own unique suffix (reused
+	// as both the pod's label and — below — the deny-all netpol's selector).
+	// Without it, two wardynd instances booting concurrently in the same
+	// namespace would share the SAME labelManaged+labelComponent pair, so
+	// instance A's phase-B deny-all netpol would ALSO match instance B's
+	// phase-A pod (which is supposed to see NO policy at all), corrupting
+	// its baseline-reachability verdict.
+	labels := map[string]string{labelManaged: "true", labelComponent: componentCanary, labelRun: suffix}
 
 	if denyAll {
 		netpolName := "wardyn-egress-canary-netpol-" + suffix
@@ -190,6 +207,15 @@ func (d *Driver) waitCanaryTerminal(ctx context.Context, podName string) (reache
 		return false, nil
 	})
 	if pollErr != nil {
+		// L6: a genuine timeout (as opposed to the fast-path Waiting-reason
+		// error above, or ctx being cancelled by the caller) surfaces as
+		// context.DeadlineExceeded from the internal deadline context
+		// wait.PollUntilContextTimeout creates — name the remedy, since
+		// "timed out" alone gives an operator nothing to act on.
+		if errors.Is(pollErr, context.DeadlineExceeded) {
+			return reachedRunning, 0, fmt.Errorf("timed out after %s waiting for the canary pod to reach a terminal state (reached_running=%v) — pre-pull the wardyn-proxy image onto this cluster's nodes, or check scheduling capacity (node resources, taints/tolerations): %w",
+				canaryWaitTimeout, reachedRunning, pollErr)
+		}
 		return reachedRunning, 0, pollErr
 	}
 	return reachedRunning, exitCode, nil

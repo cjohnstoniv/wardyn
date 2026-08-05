@@ -8,20 +8,26 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestExec_Success covers the happy path: an ephemeral container named
-// "wardyn-agent" is added, carrying argv as Command, the main container's
-// image, its Env copied verbatim, the full restricted securityContext, and
-// NO Resources (the apiserver rejects a resource request on an ephemeral
-// container).
+// "wardyn-agent" is added, carrying the main container's image, its Env
+// copied verbatim, the full agent securityContext (H2: RunAsUser:1000, not
+// merely RunAsNonRoot — every agent image documents a NAME-form USER the
+// kubelet can't admission-check without it), NO Resources (the apiserver
+// rejects a resource request on an ephemeral container), and argv wrapped
+// by the recorder (SessionRecording: mirrors docker's recordCmd) delivering
+// to the brokered proxy upload URL.
 func TestExec_Success(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	runID := uuid.New()
@@ -49,8 +55,10 @@ func TestExec_Success(t *testing.T) {
 	if ec.Image != "wardyn/agent-claude:local" {
 		t.Errorf("ephemeral container image = %q, want the main container's image", ec.Image)
 	}
-	if len(ec.Command) != 2 || ec.Command[0] != "/usr/local/bin/agent-run" {
-		t.Errorf("ephemeral container command = %v", ec.Command)
+	wantURL := fmt.Sprintf("http://wardyn-proxy:%d/wardyn/v1/recordings/%s", runner.ProxyListenPort, runID)
+	wantCmd := []string{"wardyn-rec", "-cast-dir", "/tmp", "-upload-url", wantURL, "-run", runID.String(), "--", "/usr/local/bin/agent-run", "do the task"}
+	if !equalStrings(ec.Command, wantCmd) {
+		t.Errorf("ephemeral container command = %v, want %v (recorder-wrapped, masked-upload URL)", ec.Command, wantCmd)
 	}
 	if len(ec.Env) != 1 || ec.Env[0].Name != "HOME" {
 		t.Errorf("ephemeral container env = %v, want the main container's env copied verbatim", ec.Env)
@@ -58,8 +66,27 @@ func TestExec_Success(t *testing.T) {
 	if ec.SecurityContext == nil || ec.SecurityContext.RunAsNonRoot == nil || !*ec.SecurityContext.RunAsNonRoot {
 		t.Errorf("ephemeral container SecurityContext = %+v, want the full restricted set", ec.SecurityContext)
 	}
+	if ec.SecurityContext == nil || ec.SecurityContext.RunAsUser == nil || *ec.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("ephemeral container RunAsUser = %v, want *1000 (H2: agent images document a name-form USER)", ec.SecurityContext.RunAsUser)
+	}
 	if len(ec.Resources.Limits) != 0 || len(ec.Resources.Requests) != 0 {
 		t.Errorf("ephemeral container Resources = %+v, want zero-value (apiserver rejects it on ephemeral containers)", ec.Resources)
+	}
+}
+
+// TestRecordCmd_UnresolvableRunID covers the defensive fallback: an
+// unparseable/missing wardyn.run-id label degrades to a local-only
+// (never-uploaded) cast rather than failing Exec outright — mirrors
+// docker's own tolerance for an unresolvable run id label.
+func TestRecordCmd_UnresolvableRunID(t *testing.T) {
+	got := recordCmd(uuid.Nil, []string{"/usr/local/bin/agent-run", "task"})
+	for _, arg := range got {
+		if strings.Contains(arg, "-upload-url") || strings.Contains(arg, "http://") {
+			t.Errorf("recordCmd(uuid.Nil, ...) = %v, want no upload URL when the run id is unresolvable", got)
+		}
+	}
+	if got[0] != "wardyn-rec" {
+		t.Errorf("recordCmd still wraps with wardyn-rec even without a run id, got %v", got)
 	}
 }
 

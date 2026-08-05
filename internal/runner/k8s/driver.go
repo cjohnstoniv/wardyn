@@ -200,10 +200,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		Resolved:         resolved,
 		StructuralEgress: false, // this substrate proves L1, never L0 (see package doc)
 		NetworkPolicy:    d.netPolEnforced,
-		// wardyn-rec wrapping is not wired into this substrate's Exec (see
-		// exec.go) — recordings ride the brokered proxy upload in a later
-		// wave. Honest false rather than an overclaim.
-		SessionRecording: false,
+		// Exec (see exec.go's recordCmd) wraps every ephemeral-container argv
+		// with wardyn-rec, delivering via the masked brokered proxy upload —
+		// the only path this substrate supports (mounts, and so any
+		// shared-volume delivery, are impossible on k8s; see SandboxSpec's
+		// Recording doc).
+		SessionRecording: true,
 	}, nil
 }
 

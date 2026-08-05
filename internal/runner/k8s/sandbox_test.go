@@ -26,7 +26,12 @@ import (
 // immediately (no real polling latency in tests) — "wardyn-proxy-" is a
 // prefix ONLY the proxy pod name carries among objects routed through a
 // "pods" reactor (the Secret/NetworkPolicy names sharing a "wardyn-proxy-"
-// stem are different resource kinds entirely).
+// stem are different resource kinds entirely). Reads the REAL stored pod via
+// cs.Tracker() (lock-safe: never the typed clientset, see
+// installCanaryReactor's doc for why) and overlays ONLY Status.PodIP, so a
+// caller that Gets the same pod again later (e.g. to inspect its Spec) still
+// sees everything CreateSandbox actually set — a bare synthesized stub here
+// previously left Spec.Containers empty and panicked such a caller.
 func installProxyIPReactor(t *testing.T, cs *fake.Clientset, ip string) {
 	t.Helper()
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -34,10 +39,12 @@ func installProxyIPReactor(t *testing.T, cs *fake.Clientset, ip string) {
 		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
 			return false, nil, nil
 		}
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: ga.GetName(), Namespace: action.GetNamespace()},
-			Status:     corev1.PodStatus{PodIP: ip},
+		obj, err := cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
+		if err != nil {
+			return true, nil, err
 		}
+		pod := obj.(*corev1.Pod).DeepCopy()
+		pod.Status.PodIP = ip
 		return true, pod, nil
 	})
 }
@@ -143,6 +150,123 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 	if len(podNames) != 2 || podNames[0] != proxyPodName(spec.RunID) || podNames[1] != agentPodName(spec.RunID) {
 		t.Errorf("pod create order = %v, want [%s, %s]", podNames, proxyPodName(spec.RunID), agentPodName(spec.RunID))
 	}
+}
+
+// TestCreateSandbox_NetworkPolicyFields (M6) reads both run NetworkPolicies
+// and the two pod specs back from the fake, checking every field the review
+// flagged: agent Ingress==[] (deny all) and egress ONLY to the proxy on
+// 3128; proxy ingress from-agent-only, and its DNS rule specifically (not
+// just "some rule") carries the metadata-excluding peer (M4); hostAliases,
+// automountServiceAccountToken:false, requests==limits, restartPolicy:Never,
+// and the H2 agent-vs-default RunAsUser split.
+func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+
+	spec := testSandboxSpec()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	agentNP, err := cs.NetworkingV1().NetworkPolicies(testNamespace).Get(context.Background(), agentNetPolName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent netpol: %v", err)
+	}
+	if len(agentNP.Spec.Ingress) != 0 {
+		t.Errorf("agent netpol Ingress = %v, want empty (deny all)", agentNP.Spec.Ingress)
+	}
+	if len(agentNP.Spec.Egress) != 1 {
+		t.Fatalf("agent netpol Egress = %d rules, want 1", len(agentNP.Spec.Egress))
+	}
+	eg := agentNP.Spec.Egress[0]
+	if len(eg.Ports) != 1 || eg.Ports[0].Port == nil || eg.Ports[0].Port.IntVal != runner.ProxyListenPort {
+		t.Errorf("agent netpol egress port = %+v, want %d", eg.Ports, runner.ProxyListenPort)
+	}
+	if len(eg.To) != 1 || eg.To[0].PodSelector == nil || eg.To[0].PodSelector.MatchLabels[labelComponent] != componentProxy {
+		t.Errorf("agent netpol egress peer = %+v, want a podSelector matching the proxy component", eg.To)
+	}
+
+	proxyNP, err := cs.NetworkingV1().NetworkPolicies(testNamespace).Get(context.Background(), proxyNetPolName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy netpol: %v", err)
+	}
+	if len(proxyNP.Spec.Ingress) != 1 || proxyNP.Spec.Ingress[0].From[0].PodSelector.MatchLabels[labelComponent] != componentAgent {
+		t.Errorf("proxy netpol ingress = %+v, want from-agent-only", proxyNP.Spec.Ingress)
+	}
+	for _, r := range proxyNP.Spec.Egress {
+		isDNSRule := false
+		for _, p := range r.Ports {
+			if p.Port != nil && p.Port.IntVal == 53 {
+				isDNSRule = true
+			}
+		}
+		hasMetadataExcept := false
+		for _, peer := range r.To {
+			if peer.IPBlock == nil {
+				continue
+			}
+			for _, ex := range peer.IPBlock.Except {
+				if ex == cloudMetadataAddr {
+					hasMetadataExcept = true
+				}
+			}
+		}
+		if len(r.To) == 0 {
+			t.Errorf("proxy netpol egress rule has no To peer (permits its ports to ALL destinations, including metadata): %+v", r)
+		} else if !hasMetadataExcept {
+			t.Errorf("proxy netpol egress rule's peer does not exclude the metadata address: %+v", r)
+		}
+		if isDNSRule && !hasMetadataExcept {
+			t.Errorf("M4: the DNS rule specifically must exclude the metadata address: %+v", r)
+		}
+	}
+
+	agentPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if len(agentPod.Spec.HostAliases) != 1 || agentPod.Spec.HostAliases[0].Hostnames[0] != "wardyn-proxy" {
+		t.Errorf("agent pod HostAliases = %+v, want a wardyn-proxy entry", agentPod.Spec.HostAliases)
+	}
+	if agentPod.Spec.AutomountServiceAccountToken == nil || *agentPod.Spec.AutomountServiceAccountToken {
+		t.Errorf("agent pod AutomountServiceAccountToken = %v, want *false", agentPod.Spec.AutomountServiceAccountToken)
+	}
+	if agentPod.Spec.RestartPolicy != corev1.RestartPolicyNever {
+		t.Errorf("agent pod RestartPolicy = %q, want Never", agentPod.Spec.RestartPolicy)
+	}
+	if agentPod.Spec.DNSPolicy != corev1.DNSNone || agentPod.Spec.DNSConfig == nil || len(agentPod.Spec.DNSConfig.Nameservers) == 0 {
+		t.Errorf("agent pod DNSPolicy/DNSConfig = %q / %+v, want None with a loopback nameserver", agentPod.Spec.DNSPolicy, agentPod.Spec.DNSConfig)
+	}
+	ac := agentPod.Spec.Containers[0]
+	if !resourceListsEqual(ac.Resources.Requests, ac.Resources.Limits) {
+		t.Errorf("agent container requests %v != limits %v, want equal (hard cap)", ac.Resources.Requests, ac.Resources.Limits)
+	}
+	if ac.SecurityContext == nil || ac.SecurityContext.RunAsUser == nil || *ac.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("agent container RunAsUser = %v, want *1000 (H2)", ac.SecurityContext.RunAsUser)
+	}
+
+	proxyPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	pc := proxyPod.Spec.Containers[0]
+	if pc.SecurityContext == nil || pc.SecurityContext.RunAsUser != nil {
+		t.Errorf("proxy container RunAsUser = %v, want nil (H2: image default, distroless nonroot)", pc.SecurityContext.RunAsUser)
+	}
+}
+
+func resourceListsEqual(a, b corev1.ResourceList) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		bv, ok := b[k]
+		if !ok || !v.Equal(bv) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestCreateSandbox_RollbackOnFailure is table-driven over every ordered

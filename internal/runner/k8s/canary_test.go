@@ -10,9 +10,12 @@ import (
 	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 // TestNewWithClient_CanaryEnforced covers the state machine's PASS path:
@@ -99,6 +102,75 @@ func TestNewWithClient_CanaryIndeterminate_RefusesBoot(t *testing.T) {
 	}
 	if !errors.Is(err, errCanaryIndeterminate) {
 		t.Errorf("err = %v, want errors.Is(err, errCanaryIndeterminate)", err)
+	}
+}
+
+// TestNewWithClient_CanaryPhaseBUnexpectedExitCode_Indeterminate is the M1
+// regression test: the -egress-canary flag only ever exits 0 or 1 (see
+// cmd/wardyn-proxy/main.go); any OTHER exit code (128, a StartError shape,
+// is used here) must never be read as "enforced" or "unenforced" — it is
+// indeterminate, same as any other non-network failure.
+func TestNewWithClient_CanaryPhaseBUnexpectedExitCode_Indeterminate(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactorExitCodes(t, cs, 0, 128)
+
+	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
+	if err == nil {
+		t.Fatal("newWithClient: want an error refusing boot, got nil")
+	}
+	if !errors.Is(err, errCanaryIndeterminate) {
+		t.Errorf("err = %v, want errors.Is(err, errCanaryIndeterminate) — an exit code other than 0/1 must never resolve to a verdict", err)
+	}
+}
+
+// TestNewWithClient_CanaryNetPolScopedToSuffix is the M2 regression test:
+// the deny-all netpol's PodSelector (and the canary pod's own labels) must
+// carry a per-invocation unique label (labelRun, reusing that key with the
+// canary's own suffix as the value), so two wardynd instances booting
+// concurrently in the same namespace can't have instance A's phase-B
+// deny-all netpol also match instance B's phase-A pod.
+func TestNewWithClient_CanaryNetPolScopedToSuffix(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactor(t, cs, false)
+	cs.ClearActions()
+
+	if _, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"}); err != nil {
+		t.Fatalf("newWithClient: %v", err)
+	}
+
+	var netpol *networkingv1.NetworkPolicy
+	var pods []*corev1.Pod
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "create" {
+			continue
+		}
+		switch a.GetResource().Resource {
+		case "networkpolicies":
+			netpol = a.(clienttesting.CreateAction).GetObject().(*networkingv1.NetworkPolicy)
+		case "pods":
+			pods = append(pods, a.(clienttesting.CreateAction).GetObject().(*corev1.Pod))
+		}
+	}
+	if netpol == nil {
+		t.Fatal("no NetworkPolicy was created during the canary")
+	}
+	suffix := netpol.Spec.PodSelector.MatchLabels[labelRun]
+	if suffix == "" {
+		t.Fatalf("canary deny-all netpol selector missing %s — would cross-match another concurrent instance's canary pod: %v", labelRun, netpol.Spec.PodSelector.MatchLabels)
+	}
+	if netpol.Labels[labelRun] != suffix {
+		t.Errorf("canary netpol's OWN labels[%s] = %q, want it to match its own selector value %q", labelRun, netpol.Labels[labelRun], suffix)
+	}
+	// The phase B pod (the one this netpol is meant to select) must carry
+	// the SAME suffix value, so the selector actually matches it.
+	matched := false
+	for _, p := range pods {
+		if p.Labels[labelRun] == suffix {
+			matched = true
+		}
+	}
+	if !matched {
+		t.Errorf("no created canary pod carries labels[%s]=%q (the netpol's own selector value) — the selector would match nothing", labelRun, suffix)
 	}
 }
 
