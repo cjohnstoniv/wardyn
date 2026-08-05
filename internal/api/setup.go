@@ -262,6 +262,20 @@ type SetupRunner struct {
 	Driver                string            `json:"driver"`
 	ConfinementClasses    []string          `json:"confinement_classes"`
 	ConfinementSubstrates map[string]string `json:"confinement_substrates,omitempty"`
+	// NetworkPolicyProven is the k8s substrate's boot-time egress-canary
+	// verdict (ClassSupport.NetworkPolicy, orchestrator-aggregated into
+	// runner.Capabilities.NetworkPolicy): "enforced" once the canary proved a
+	// deny-all NetworkPolicy actually blocks egress, "unenforced" when it
+	// proved the CNI does NOT enforce it and the operator explicitly accepted
+	// that risk (WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1) — the ONLY way a LIVE
+	// wardynd can be reporting an unenforced verdict at all: an unenforced
+	// canary WITHOUT that override, or a genuinely indeterminate one, both
+	// refuse to boot entirely (internal/runner/k8s's newWithClient), so
+	// neither state ever reaches this handler. "" on a non-k8s driver, or a
+	// k8s daemon build that predates this field — the k8s Environment/Review
+	// rows render that absence as Indeterminate, never as Enforcing: an
+	// honest "can't tell you", not a claim either way.
+	NetworkPolicyProven string `json:"network_policy_proven,omitempty"`
 }
 
 // SetupComposer is the composer enablement plus each configured backend's
@@ -511,8 +525,8 @@ func composerCeilingCheck(ceiling types.RunPolicySpec, hasAnthropicKey, hasOpenA
 		Detail: "A credential for " + strings.Join(blocked, ", ") + " is stored, but WARDYN_DEFAULT_POLICY does not broker an " +
 			"auto-mint api_key grant with matching egress (or bless a Claude credential mount) — so a composed run's first " +
 			"model call will 404 even though every credential check reads green.",
-		Fix: "Point WARDYN_DEFAULT_POLICY at a composer-capable ceiling (e.g. examples/policies/composer-dev.json) and restart " +
-			"wardynd. `make setup` now auto-picks it when a real model path is configured.",
+		Fix: "Point WARDYN_DEFAULT_POLICY (helm: env.WARDYN_DEFAULT_POLICY) at a composer-capable ceiling (e.g. " +
+			"examples/policies/composer-dev.json) and restart wardynd. `make setup` now auto-picks it when a real model path is configured.",
 	}, true
 }
 
@@ -567,9 +581,9 @@ func agentImageCheck(images map[string]string) SetupCheck {
 			ID: "agent_image", Label: "Agent image toolchains", Status: "warn",
 			Detail: "The configured claude-code agent image (" + ref + ") is the Node-only convention image — " +
 				"a non-JS workspace (Go/Rust/Java/Python) will fail verify/record with exit 127 (toolchain not found).",
-			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (e.g. build deploy/images/full (the fat toolchain image), or your " +
-				"own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a per-run base image " +
-				"in the New Run wizard's \"Custom sandbox image (advanced)\" field — Wardyn wraps it with the runner tools.",
+			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (helm: env.WARDYN_AGENT_IMAGES) (e.g. build deploy/images/full " +
+				"(the fat toolchain image), or your own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a " +
+				"per-run base image in the New Run wizard's \"Custom sandbox image (advanced)\" field — Wardyn wraps it with the runner tools.",
 		}
 	}
 	return SetupCheck{
@@ -693,6 +707,11 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		runnerCheck(rnr),
 		agentImageCheck(s.cfg.AgentImages),
 		llmProviderCheck(llmDetail),
+	}
+	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
+	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
+	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, rnr.NetworkPolicyProven); ok {
+		checks = append(checks, chk)
 	}
 	if chk, ok := bedrockProviderCheck(bedrock); ok {
 		checks = append(checks, chk)
@@ -933,6 +952,18 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) SetupRunner {
 		out.ConfinementSubstrates = make(map[string]string, len(c.Resolved))
 		for k, v := range c.Resolved {
 			out.ConfinementSubstrates[string(k)] = v
+		}
+	}
+	// k8s-only: c.NetworkPolicy is the orchestrator-aggregated ClassSupport
+	// signal (see SetupRunner.NetworkPolicyProven's doc for why "unenforced"
+	// is the only non-enforced verdict a live daemon can ever report here).
+	// Left "" on every other driver — docker proves L0 (StructuralEgress),
+	// never L1, and has no NetworkPolicy row to report.
+	if out.Driver == "k8s" {
+		if c.NetworkPolicy {
+			out.NetworkPolicyProven = "enforced"
+		} else {
+			out.NetworkPolicyProven = "unenforced"
 		}
 	}
 	return out

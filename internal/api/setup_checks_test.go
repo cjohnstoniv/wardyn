@@ -3,7 +3,10 @@
 
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // M5: the golden-id test (setup_check_ids_test.go) pins that these two rows
 // EXIST under one fixture, but an id alone doesn't pin its Status — a check
@@ -78,6 +81,60 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 			}
 			if tc.wantStatus == "warn" && chk.Fix == "" {
 				t.Error("warn status must carry a Fix")
+			}
+		})
+	}
+}
+
+// TestK8sEgressContainmentCheck: absent on every non-k8s driver (docker's L0
+// structural containment has no analogous row); on a k8s driver, FAIL for
+// both "unenforced" (the opt-out is a standing risk acceptance, never a
+// success) and "" (indeterminate — an old daemon build, or in principle any
+// unproven state; see the field's doc for why a genuinely indeterminate LIVE
+// canary can never reach here). Never confuses Indeterminate with Enforcing.
+func TestK8sEgressContainmentCheck(t *testing.T) {
+	cases := []struct {
+		name             string
+		driver           string
+		netpolProven     string
+		wantOK           bool
+		wantStatus       string
+		wantFixHasOptOut bool // the fix string must name the opt-out env var (unenforced only)
+	}{
+		{"docker driver: absent regardless of the field", "docker", "enforced", false, "", false},
+		{"no driver: absent", "none", "", false, "", false},
+		{"k8s enforced: ok, no fix needed", "k8s", "enforced", true, "ok", false},
+		{"k8s unenforced (opted out): fail, fix names the opt-out to unset", "k8s", "unenforced", true, "fail", true},
+		{"k8s indeterminate (field absent): fail, never reads as enforcing", "k8s", "", true, "fail", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if chk.ID != "k8s_egress_containment" {
+				t.Errorf("ID = %q, want %q", chk.ID, "k8s_egress_containment")
+			}
+			if chk.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", chk.Status, tc.wantStatus)
+			}
+			if chk.Status == "fail" && chk.Fix == "" {
+				t.Error("fail status must carry a Fix")
+			}
+			if strings.Contains(chk.Detail, "Enforcing") && chk.Status != "ok" {
+				t.Errorf("a non-ok row must never claim Enforcing in its Detail: %q", chk.Detail)
+			}
+			hasOptOut := strings.Contains(chk.Fix, "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL")
+			if hasOptOut != tc.wantFixHasOptOut {
+				t.Errorf("fix mentions the opt-out env var = %v, want %v (fix: %q)", hasOptOut, tc.wantFixHasOptOut, chk.Fix)
+			}
+			// Every dual-form env-var mention carries the helm form too.
+			if strings.Contains(chk.Fix, "WARDYN_") && !strings.Contains(chk.Fix, "helm: env.") {
+				t.Errorf("fix mentions a WARDYN_ env var with no dual helm form: %q", chk.Fix)
 			}
 		})
 	}

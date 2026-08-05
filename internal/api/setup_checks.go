@@ -55,6 +55,55 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 	}
 }
 
+// k8sEgressContainmentCheck grades the k8s substrate's boot-time NetworkPolicy
+// canary verdict (SetupRunner.NetworkPolicyProven, derived in setupRunnerInfo
+// from ClassSupport.NetworkPolicy). Absent entirely on a non-k8s driver: docker
+// proves L0 (structural — no default route) and has no analogous row; only a
+// Kubernetes deployment's egress claim rests on a packet filter that needs
+// live proof.
+//
+// Graded FAIL, not warn, when unproven: this is the harder security claim
+// (substrate.go's package doc: "never render a green containment row the
+// canary didn't prove"), so an un-proven k8s deployment fails the setup
+// checklist's "ready to launch" verdict even though CC1 sandboxes still
+// create fine (runnerCheck's own separate, milder grade covers that).
+//
+// netpolProven is "enforced" | "unenforced" | "" (see the field's doc for why
+// "unenforced" is the only non-enforced verdict a LIVE wardynd can ever
+// report — an indeterminate or an unenforced-without-override canary both
+// refuse to boot). "" therefore means only a k8s daemon build that predates
+// the field, which is graded exactly like a genuine Indeterminate: an honest
+// "can't confirm", never a silent Enforcing.
+func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
+	if driver != "k8s" {
+		return SetupCheck{}, false
+	}
+	const id, label = "k8s_egress_containment", "Egress containment"
+	switch netpolProven {
+	case "enforced":
+		return SetupCheck{
+			ID: id, Label: label, Status: "ok",
+			Detail: "Enforcing · NetworkPolicy (the boot-time canary proved a deny-all policy actually blocks egress).",
+		}, true
+	case "unenforced":
+		return SetupCheck{
+			ID: id, Label: label, Status: "fail",
+			Detail: "Not enforcing — the boot-time canary proved this cluster's CNI does not enforce NetworkPolicy. The " +
+				"operator accepted that risk via WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) " +
+				"— every sandbox this substrate creates has UNCONFINED egress.",
+			Fix: "Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's " +
+				"CNI/NetworkPolicy support to restore real confinement.",
+		}, true
+	default:
+		return SetupCheck{
+			ID: id, Label: label, Status: "fail",
+			Detail: "Indeterminate — this control plane reports a Kubernetes runner but not its NetworkPolicy canary verdict, " +
+				"so egress containment cannot be confirmed.",
+			Fix: "Upgrade wardynd to a build that reports the canary verdict, and check its boot logs for the egress-canary result.",
+		}, true
+	}
+}
+
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
 // detail, "" when there is none). INFO, never a warning, when there is none: a
 // model provider is OPTIONAL — needed only for agent-harness runs or the AI Run

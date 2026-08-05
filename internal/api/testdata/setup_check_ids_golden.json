@@ -27,6 +27,16 @@
     "runner",
     "scm_provider"
   ],
+  "with_k8s_runner": [
+    "age_key",
+    "agent_image",
+    "composer",
+    "host_proxy",
+    "k8s_egress_containment",
+    "llm_provider",
+    "runner",
+    "scm_provider"
+  ],
   "with_oidc": [
     "age_key",
     "agent_image",

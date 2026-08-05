@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -271,6 +273,88 @@ func TestSetupStatus_ReadyFalseWhenRunnerNil(t *testing.T) {
 	}
 }
 
+// k8sRunner is a minimal runner.Runner fake reporting a k8s-shaped
+// Capabilities() (Driver "k8s", CC1 only, a settable NetworkPolicy verdict) —
+// embeds a nil runner.Runner so only the two methods setupRunnerInfo actually
+// calls (Name/Capabilities) need implementing, same seam
+// setupCheckIdsStore uses for store.Store.
+type k8sRunner struct {
+	runner.Runner
+	networkPolicy bool
+}
+
+func (k8sRunner) Name() string { return "k8s" }
+func (r k8sRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	return runner.Capabilities{
+		Driver:             "k8s",
+		ConfinementClasses: []types.ConfinementClass{types.CC1},
+		NetworkPolicy:      r.networkPolicy,
+	}, nil
+}
+
+// TestSetupStatus_K8sNetworkPolicyProven: setupRunnerInfo derives
+// runner.network_policy_proven from the k8s substrate's aggregated
+// Capabilities.NetworkPolicy, and handleSetupStatus's checks list carries the
+// matching k8s_egress_containment row — proving the two stay in sync end to
+// end, not just at the pure-function level (see TestK8sEgressContainmentCheck
+// in setup_checks_test.go for that).
+func TestSetupStatus_K8sNetworkPolicyProven(t *testing.T) {
+	cases := []struct {
+		name       string
+		netpol     bool
+		wantProven string
+		wantStatus string
+	}{
+		{"canary proved enforced", true, "enforced", "ok"},
+		{"canary proved unenforced (opted out — the only live non-enforced verdict)", false, "unenforced", "fail"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicy: tc.netpol}})
+			code, st := decodeSetup(t, srv, adminToken)
+			if code != http.StatusOK {
+				t.Fatalf("code = %d, want 200", code)
+			}
+			if st.Runner.Driver != "k8s" {
+				t.Fatalf("runner.driver = %q, want k8s", st.Runner.Driver)
+			}
+			if st.Runner.NetworkPolicyProven != tc.wantProven {
+				t.Errorf("runner.network_policy_proven = %q, want %q", st.Runner.NetworkPolicyProven, tc.wantProven)
+			}
+			var found *SetupCheck
+			for i := range st.Checks {
+				if st.Checks[i].ID == "k8s_egress_containment" {
+					found = &st.Checks[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("checks missing k8s_egress_containment; got %+v", st.Checks)
+			}
+			if found.Status != tc.wantStatus {
+				t.Errorf("k8s_egress_containment status = %q, want %q", found.Status, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// A docker-shaped (non-k8s) runner must never carry the field or the row —
+// it is L0 structural, not L1 packet-filter, and has nothing to prove here.
+func TestSetupStatus_NonK8sRunnerOmitsNetworkPolicyProven(t *testing.T) {
+	srv := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	if st.Runner.NetworkPolicyProven != "" {
+		t.Errorf("non-k8s runner.network_policy_proven = %q, want empty", st.Runner.NetworkPolicyProven)
+	}
+	for _, c := range st.Checks {
+		if c.ID == "k8s_egress_containment" {
+			t.Errorf("non-k8s driver must not carry a k8s_egress_containment row: %+v", c)
+		}
+	}
+}
+
 // llmProvenance must NOT count a `fake` (deterministic stub) composer backend
 // as real LLM access — otherwise the first-run page shows "LLM access ✓" for the
 // default `make setup` config (a single fake backend), which is an overclaim: the
@@ -497,6 +581,39 @@ func TestClaudeSubscriptionStagingCheck(t *testing.T) {
 	// Blessed ceiling (staging ran, run-host.sh picked the subscription ceiling) => ok.
 	if chk, ok := claudeSubscriptionStagingCheck(true, true, ""); !ok || chk.Status != "ok" {
 		t.Fatalf("staged: ok=%v status=%q, want ok", ok, chk.Status)
+	}
+}
+
+// TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome is the B4 k8s
+// verify-don't-implement item: claude_subscription_staging is gated on
+// claudeLoginSignal, which is gated on setupProviders -> DetectCLIProviders
+// reading $HOME/.claude/.credentials.json — a k8s pod's home directory is a
+// fresh container filesystem with no such file (nothing resident survives a
+// pod restart), so the row must never appear. End to end through
+// handleSetupStatus (not just the pure claudeSubscriptionStagingCheck unit
+// above), on a k8s-shaped Runner, so a future change to the detection wiring
+// itself would be caught here too.
+//
+// Investigated edge case per the brief (host-mounted ~/.claude into a k8s
+// pod): no Helm value or documented deployment pattern mounts a Claude
+// credential into the wardynd pod (grepped deploy/helm — nothing). If an
+// operator did so anyway, DetectCLIProviders would honestly detect it and
+// this check WOULD fire — its underlying claim ("detected but not staged for
+// the per-run mount") stays true regardless of platform; only its Fix
+// string's host-oriented remedy (`make stage-claude`) would read oddly. That
+// is a copy nit on a deliberately non-standard setup, not a false-positive
+// worth suppression code for — so none was added.
+func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no .claude, no .codex — a fresh pod's $HOME
+	srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicy: true}})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	for _, c := range st.Checks {
+		if c.ID == "claude_subscription_staging" {
+			t.Fatalf("claude_subscription_staging must never fire with no resident ~/.claude; got %+v", c)
+		}
 	}
 }
 

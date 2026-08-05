@@ -93,6 +93,14 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 	got := map[string][]string{
 		"bare": setupCheckIds(t, New(Config{AdminToken: adminToken})),
 
+		// B4: a k8s-shaped Runner (see k8sRunner in setup_test.go) surfaces the
+		// new k8s_egress_containment row — absent on every other fixture here,
+		// which all leave Runner unset (Driver "none").
+		"with_k8s_runner": setupCheckIds(t, New(Config{
+			AdminToken: adminToken,
+			Runner:     k8sRunner{networkPolicy: true},
+		})),
+
 		"with_store": setupCheckIds(t, New(Config{
 			AdminToken: adminToken,
 			Store: setupCheckIdsStore{sc: types.SiteConfig{
