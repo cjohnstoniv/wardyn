@@ -49,16 +49,33 @@ DOCKER_RE='^(internal/runner/docker|internal/envbuild|cmd/wardyn-runner)(/|$)'
 # args: <union-func.txt> <pg-func.txt-or-empty>
 classify() {
   local union="$1" pg="${2:-}"
-  awk -v mod="$MODULE" -v dockerre="$DOCKER_RE" '
+  # A real (if 0-byte) path for pg, always: an empty-STRING argv element is
+  # silently dropped by awk (fine), but a named, non-existent path is a
+  # fatal open error — /dev/null reads as zero records either way, and
+  # every classify() caller (including a future one) gets the same honest
+  # downgrade instead of a crash.
+  [ -n "$pg" ] && [ -f "$pg" ] || pg=/dev/null
+  awk -v mod="$MODULE" -v dockerre="$DOCKER_RE" -v pgfile="$pg" -v unionfile="$union" '
     # Phase 1: keys (file<TAB>func) COVERED (>0%) by the PG lane.
-    FNR==NR {
+    #
+    # FOUND LIVE (this script silently produced an all-zero report whenever
+    # the PG lane profile was absent — i.e. every run without WARDYN_TEST_PG,
+    # which is most of them): the classic FNR==NR idiom ("am I still in the
+    # first file") breaks the instant the first file contributes ZERO
+    # records. With pg empty/tiny, NR and FNR start incrementing together
+    # from the first line of union too — nothing yet told them apart — so
+    # FNR==NR reads true for EVERY line of union as well, and the whole
+    # file falls into this branch (next-ed away) instead of ever reaching
+    # Phase 2. Branching on FILENAME instead is correct regardless of how
+    # many records either file contributes.
+    FILENAME==pgfile {
       if ($2 ~ /^[A-Z]/ && $3 != "0.0%") {
         f=$1; sub(mod,"",f); sub(/:[0-9]+:$/,"",f); pgcov[f "\t" $2]=1
       }
       next
     }
     # Phase 2: the union profile — inventory exported funcs at 0.0%.
-    $2 ~ /^[A-Z]/ && $3=="0.0%" {
+    FILENAME==unionfile && $2 ~ /^[A-Z]/ && $3=="0.0%" {
       loc=$1; sub(mod,"",loc); sub(/:$/,"",loc)     # relpath:line
       file=loc; sub(/:[0-9]+$/,"",file)             # relpath
       pkg=file; sub(/\/[^\/]+$/,"",pkg)             # dir
@@ -69,8 +86,6 @@ classify() {
       print cat "\t" pkg "\t" $2 "\t" loc
     }
   ' "$pg" "$union"
-  # Note: passing an empty/absent pg file to awk is fine — it reads zero records,
-  # so every func falls through to DOCKER/UNTESTED (honest downgrade, see header).
 }
 
 self_test() {
@@ -95,7 +110,23 @@ self_test() {
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
     "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
   if [ "$got" != "$want" ]; then
-    echo "test-gaps: self-test FAIL" >&2
+    echo "test-gaps: self-test FAIL (pg present)" >&2
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
+    exit 1
+  fi
+
+  # LIVE regression (the bug classify()'s FILENAME comment documents): a
+  # missing pg file must still classify every union func instead of
+  # silently reporting zero gaps. CreateRun has no PG data to downgrade it
+  # from this time, so it reads UNTESTED here instead of PG.
+  got="$(classify "$d/u" "$d/does-not-exist" | LC_ALL=C sort)"
+  want="$(printf '%s\n' \
+    "DOCKER	internal/runner/docker	CreateSandbox	internal/runner/docker/driver.go:10" \
+    "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
+    "UNTESTED	internal/store	CreateRun	internal/store/store.go:43" \
+    "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
+  if [ "$got" != "$want" ]; then
+    echo "test-gaps: self-test FAIL (pg missing)" >&2
     diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
     exit 1
   fi
