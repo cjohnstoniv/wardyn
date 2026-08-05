@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -182,6 +183,11 @@ type optionalFeatures struct {
 	disableSubInject bool
 	managedToken     subscription.Provider
 	scanAdvisor      func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
+	// sshHostKey is the SSH gateway's ed25519 host key, loaded/generated ONLY
+	// when -ssh-listen is set — nil (the zero value) otherwise, matching
+	// "empty = off = no listener, no new surface" all the way down to never
+	// minting the secret in the first place.
+	sshHostKey ed25519.PrivateKey
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -390,6 +396,24 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			return workspacescan.AdviseProfile(ctx, facts, base, workspacescan.AIOptions{Timeout: 60 * time.Second})
 		}
 		slog.Info("wardynd: advisory AI workspace-scan fallback ENABLED (WARDYN_SCAN_AI_ADVISOR); advisory-only + fail-open, needs a resident read-only claude CLI on PATH")
+	}
+
+	// SSH gateway (C2/C3), optional: the host key is loaded/generated ONLY
+	// when the gateway is actually enabled, so a deployment with SSH off never
+	// mints this secret at all — the same "no new surface" discipline as the
+	// listener itself (api.Server.ServeSSHGateway's own no-op-when-empty
+	// guard). loadOrCreateSSHHostKey follows the identical loadOrCreateSecret
+	// pattern as the signing/session keys above.
+	if *f.sshListen != "" {
+		hostKey, herr := loadOrCreateSSHHostKey(bootCtx, secrets)
+		if herr != nil {
+			return of, herr
+		}
+		of.sshHostKey = hostKey
+		slog.Info("wardynd: ssh gateway enabled", slog.String("listen", *f.sshListen), slog.String("advertise", *f.sshAdvertise))
+		if *f.sshAdvertise == "" {
+			slog.Warn("wardynd: WARDYN_SSH_ADVERTISE is unset — the run-detail SSH pane has no reachable host[:port] to show; set it to this deployment's externally-reachable address")
+		}
 	}
 
 	return of, nil

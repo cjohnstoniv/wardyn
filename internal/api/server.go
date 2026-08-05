@@ -30,6 +30,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -388,6 +389,25 @@ type Config struct {
 	// closure; it doubles as the test seam so tests inject a fake instead of
 	// shelling out to a real coding-agent CLI.
 	ScanAIAdvisor func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
+	// SSHListenAddr is WARDYN_SSH_LISTEN: the address the SSH gateway binds
+	// (e.g. ":2222"). Empty = off = no listener, no new surface — ServeSSHGateway
+	// no-ops when this is empty, so a caller may invoke it unconditionally.
+	SSHListenAddr string
+	// SSHAdvertiseAddr is WARDYN_SSH_ADVERTISE: the externally-reachable
+	// host[:port] surfaced on /healthz and shown in the run-detail "Connect via
+	// SSH" pane's `ssh` command — NOT what wardynd binds to (that's
+	// SSHListenAddr), since a container/NAT deployment's bind and reachable
+	// address routinely differ. Purely advisory copy; the gateway itself never
+	// reads it.
+	SSHAdvertiseAddr string
+	// SSHHostKey is the gateway's persisted ed25519 host key (loadOrCreateSecret
+	// pattern, cmd/wardynd), used to derive the ssh.Signer AddHostKey wants and
+	// the fingerprint /healthz discloses ("verify on first connect" — public by
+	// design, it identifies the server, it authenticates no one). Empty when the
+	// gateway is disabled (cmd/wardynd only loads/generates it when
+	// SSHListenAddr is set, so a deployment with SSH off never even mints this
+	// secret).
+	SSHHostKey ed25519.PrivateKey
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -422,6 +442,13 @@ type Server struct {
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck
 	refRulesetShow bool
+	// sshSessions counts concurrent SSH "session" channels (shell/exec/
+	// subsystem) per run, enforcing maxSSHSessionsPerRun (sshgateway.go). Zero
+	// value is ready to use. Process-local like lastTouch above — the same
+	// single-replica topology every in-memory bound in this codebase already
+	// assumes (see secretmask.Registry's residual in THREAT-MODEL.md).
+	sshSessionsMu sync.Mutex
+	sshSessions   map[uuid.UUID]int
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -567,6 +594,14 @@ func (s *Server) routes() chi.Router {
 
 			r.Get("/audit", s.handleQueryAudit)
 			r.Get("/me", s.handleMe)
+			// SSH gateway key registry (sshkeys.go): self-service, any authenticated
+			// human — scoped to their OWN principal at the store, so this is
+			// deliberately on r, not operatorOnly (see sshkeys.go's package doc).
+			// NOTE for the B2 route-group split: kept as this one small, localized
+			// block on purpose.
+			r.Get("/me/ssh-keys", s.handleListSSHKeys)
+			r.Post("/me/ssh-keys", s.handleAddSSHKey)
+			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
 			// FIX #6: sign-out. The UI POSTs /api/v1/auth/logout, but the OIDC
 			// logout was mounted ONLY as a root GET /auth/logout, so the POST hit
 			// no route (404), the HttpOnly session cookie survived, and the next
@@ -895,6 +930,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// and per-decision coverage is reported on the egress decision/audit
 		// stream (scanned / tunneled-opaque / llm.scan.blind), not here.
 		"llm_egress_inspection": "available",
+		// ssh discloses the gateway's presence + the two facts the run-detail
+		// "Connect via SSH" pane needs to render its command/config block before
+		// a human is authenticated (anonymous, like every other /healthz field):
+		// advertise_addr (WARDYN_SSH_ADVERTISE, purely advisory copy) and the
+		// host key's SHA256 fingerprint ("verify on first connect" — PUBLIC BY
+		// DESIGN, it identifies the server, it authenticates no one; see
+		// docs/SSH.md). nil (renders as JSON null) when the gateway is
+		// disabled — the smallest honest wire change: no new endpoint, one
+		// field a deployment without SSH simply omits populating.
+		"ssh": s.sshGatewayHealthz(),
 	})
 }
 

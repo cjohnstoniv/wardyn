@@ -134,6 +134,7 @@ invitation, not an embarrassment.
 | **B5 — Approval gate vs. credential issuance** | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in section 4. |
 | **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID **[v0.5+ — planned, arrives with SPIRE]**. Today: a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
+| **B8 — SSH gateway pre-auth listener vs. everything else** | **[v0.5+]** A NEW anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`, off by default — no var set, no listener, no host key even generated). Registered-public-key-only auth (no passwords); the trust root is the `ssh_public_keys` registry a human writes to via self-service `/api/v1/me/ssh-keys`, so the boundary this adds is exactly as strong as that registration step and the DoS bounds around the pre-auth handshake (per-connection deadline, `MaxAuthTries`, a concurrent-connection cap — `ssh.NewServerConn` blocks with no default timeout otherwise). Once authenticated, a session is bounded by owner-only authorization (below) and runs entirely inside B1: the shell/exec/sftp/`-L` primitives are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal and internal tooling already use — this boundary adds a new front door, not a new back door; nothing on the other side of B1 changes. |
 
 On a single-operator machine the trust boundaries compose into a strict
 containment ladder — Wardyn never *adds* power beyond what the operating user
@@ -206,6 +207,10 @@ the canary, never merely claimed because a policy object was applied.
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research area; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[v0.5+ — planned]**. | B1, L0 (L1 v0.5), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
+| Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B8 |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-only (`run.created_by == the key's principal`) — an admin/operator reaching another human's run still uses the web terminal (`requireOperator`-gated), never SSH. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`. | B8, AU |
+| SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH session (shell/exec/sftp) channels, independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells, not just how many strangers can knock. | B8 |
+| SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B8 |
 
 ---
 
@@ -411,6 +416,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     local mode and admin-token mode the only principal IS the admin, so the gap
     collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
     control plane".
+
+15. **SSH gateway authorization has no operator override.** Unlike the browser
+    terminal (`GET /runs/{id}/attach`, gated by `requireOperator` when
+    `WARDYN_OIDC_OPERATOR_EMAILS` is set — an operator may attach to *any* run),
+    SSH gateway (`docs/SSH.md`) authorization is exactly one check:
+    `run.created_by == the connecting key's registered principal`. There is no
+    role column an operator's key could satisfy instead, so an operator who
+    needs to reach a run they did not create has exactly one path today — the
+    web terminal, same as a viewer. This is a *narrower*, not a wider, gap than
+    #14 (SSH grants an operator strictly LESS reach than the browser terminal
+    already does) — named here because a reader auditing "who can reach a live
+    shell in MY run" should not have to infer that SSH and the browser terminal
+    answer the question differently. The upgrade path (a role column, so an
+    operator's own registered key could satisfy an "operator OR owner" check)
+    is marked with a `ponytail:` comment at the authorization check
+    (`internal/api/sshgateway.go`'s `sshAuth`) rather than built now — no
+    deployment has asked for it, and the narrower behavior is safe by
+    construction, not merely unfinished.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

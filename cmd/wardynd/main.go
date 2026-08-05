@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -46,10 +47,11 @@ import (
 
 // Secret names seeded/used at boot.
 const (
-	secretSigningKey   = "wardyn-signing-key" // embedded identity ES256 PEM
-	secretGitHubAppID  = "github-app-id"      // GitHub App numeric id
-	secretGitHubAppKey = "github-app-key"     // GitHub App PEM private key
-	secretSessionKey   = "wardyn-session-key" // OIDC session-cookie HMAC key (32 bytes)
+	secretSigningKey   = "wardyn-signing-key"  // embedded identity ES256 PEM
+	secretGitHubAppID  = "github-app-id"       // GitHub App numeric id
+	secretGitHubAppKey = "github-app-key"      // GitHub App PEM private key
+	secretSessionKey   = "wardyn-session-key"  // OIDC session-cookie HMAC key (32 bytes)
+	secretSSHHostKey   = "wardyn-ssh-host-key" // SSH gateway ed25519 host key PEM
 )
 
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
@@ -268,6 +270,13 @@ func run() error {
 		OIDCRedirectURL:       *f.oidcRedirectURL,
 		OIDCSecureCookies:     posture.secureCookies,
 		ComposerBackends:      feats.composerBackends,
+		// SSH gateway (C2/C3): SSHHostKey is nil unless -ssh-listen is set
+		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
+		// itself checks below — belt and suspenders, "empty = off" holds either
+		// way this Config is constructed.
+		SSHListenAddr:    *f.sshListen,
+		SSHAdvertiseAddr: *f.sshAdvertise,
+		SSHHostKey:       feats.sshHostKey,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -277,6 +286,18 @@ func run() error {
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
+
+	// SSH gateway accept loop (own goroutine, like the periodic workers above):
+	// a no-op inside ServeSSHGateway when -ssh-listen is empty, so this is safe
+	// to launch unconditionally; goSafe contains a panic the same as every
+	// other background goroutine here.
+	if *f.sshListen != "" {
+		go goSafe("ssh.gateway", func() {
+			if serr := srv.ServeSSHGateway(rootCtx); serr != nil {
+				slog.Error("wardynd: ssh gateway stopped", slog.Any("err", serr))
+			}
+		})
+	}
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
 	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
@@ -583,6 +604,41 @@ func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte
 	)
 }
 
+// loadOrCreateSSHHostKey returns the SSH gateway's ed25519 host key,
+// persisting a freshly-generated one into the secret store on first boot —
+// the same loadOrCreateSecret pattern as the signing/session keys above,
+// cloned for the one new field this key needs (ed25519 has no "is this a
+// valid key of the right size" shortcut as cheap as the session key's length
+// check, so validity is "does it parse", checked by the generate/persist
+// round-trip itself; a corrupt stored value fails the parse below and
+// loadOrCreateSecret's caller sees that as a startup error, never a silent
+// re-mint over a key clients have already pinned).
+func loadOrCreateSSHHostKey(ctx context.Context, secrets secretKeyStore) (ed25519.PrivateKey, error) {
+	raw, err := loadOrCreateSecret(ctx, secrets, secretSSHHostKey,
+		func(b []byte) bool { return len(b) > 0 },
+		func() ([]byte, error) {
+			_, priv, gerr := ed25519.GenerateKey(rand.Reader)
+			if gerr != nil {
+				return nil, fmt.Errorf("generate ssh host key: %w", gerr)
+			}
+			pemBytes, merr := marshalEd25519PrivateKeyPEM(priv)
+			if merr != nil {
+				return nil, merr
+			}
+			slog.Info("wardynd: generated and persisted ssh gateway host key")
+			return pemBytes, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	key, perr := parseEd25519PrivateKeyPEM(raw)
+	if perr != nil {
+		return nil, fmt.Errorf("parse stored ssh host key: %w", perr)
+	}
+	return key, nil
+}
+
 // goSafe runs fn with panic recovery so a panic in a DETACHED background
 // goroutine (reaper, approval sweeper, completion watcher) logs and is contained
 // instead of crashing the whole control plane — which would take every governed
@@ -692,6 +748,36 @@ func parseECPrivateKeyPEM(pemBytes []byte) (*ecdsa.PrivateKey, error) {
 		return nil, errors.New("no PEM block in signing key")
 	}
 	return x509.ParseECPrivateKey(block.Bytes)
+}
+
+// marshalEd25519PrivateKeyPEM / parseEd25519PrivateKeyPEM mirror
+// marshalECPrivateKeyPEM / parseECPrivateKeyPEM above for the SSH gateway's
+// host key. ed25519 has no dedicated x509.MarshalECPrivateKey-style helper —
+// PKCS8 is the standard-library encoding for it (x509.ParsePKCS8PrivateKey
+// returns `any`; the type assertion below is the "is this really an ed25519
+// key" check).
+func marshalEd25519PrivateKeyPEM(key ed25519.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ed25519 key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
+func parseEd25519PrivateKeyPEM(pemBytes []byte) (ed25519.PrivateKey, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("no PEM block in ssh host key")
+	}
+	raw, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := raw.(ed25519.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("stored ssh host key is a %T, not ed25519", raw)
+	}
+	return key, nil
 }
 
 // buildGitHubMinter arms the LAZY GitHub minter: it reads the App credentials

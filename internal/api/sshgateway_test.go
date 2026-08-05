@@ -1,0 +1,793 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// In-process integration test for the SSH gateway (C2): a real x/crypto/ssh
+// CLIENT dials a real net.Listener wired to this package's own
+// ServeSSHGateway, against a fake Runner (fake ExecStream/Attach) and an
+// in-memory Store. No daemons, no docker, no real sandbox — the gateway
+// protocol logic (auth/authz, channel dispatch, the exec/sftp/forward
+// bridges) is the thing under test, per the C5-later-lane gate.
+package api
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
+	"io"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// ─── fakes ─────────────────────────────────────────────────────────────────
+
+// sshMemStore is a minimal in-memory store.Store for this test: only the
+// methods the gateway's auth/channel path touches are implemented; every
+// other Store method panics via the embedded nil store.Store — the
+// grantsStore/notFoundStore convention (sshkey_test.go, groundtruth_test.go).
+type sshMemStore struct {
+	store.Store
+	mu   sync.Mutex
+	runs map[uuid.UUID]types.AgentRun
+	keys map[string]types.SSHPublicKey // by fingerprint
+}
+
+func newSSHMemStore() *sshMemStore {
+	return &sshMemStore{runs: map[uuid.UUID]types.AgentRun{}, keys: map[string]types.SSHPublicKey{}}
+}
+
+func (s *sshMemStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	return r, nil
+}
+
+func (s *sshMemStore) TouchRun(context.Context, uuid.UUID) error { return nil }
+
+func (s *sshMemStore) GetSSHKeyByFingerprint(_ context.Context, fp string) (types.SSHPublicKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.keys[fp]
+	if !ok {
+		return types.SSHPublicKey{}, store.ErrNotFound
+	}
+	return k, nil
+}
+
+func (s *sshMemStore) putRun(r types.AgentRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs[r.ID] = r
+}
+
+func (s *sshMemStore) putKey(k types.SSHPublicKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keys[k.Fingerprint] = k
+}
+
+// AddSSHKey/ListSSHKeysByPrincipal/DeleteSSHKey complete sshMemStore's
+// store.Store surface for the REST-layer tests (sshkeys_test.go), mirroring
+// store_sshkeys.go's PG semantics: fingerprint-PK conflict, principal-scoped
+// list, owner-scoped delete (ErrNotFound on someone else's key — no
+// existence leak).
+func (s *sshMemStore) AddSSHKey(_ context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.keys[k.Fingerprint]; exists {
+		return types.SSHPublicKey{}, store.ErrConflict
+	}
+	s.keys[k.Fingerprint] = k
+	return k, nil
+}
+
+func (s *sshMemStore) ListSSHKeysByPrincipal(_ context.Context, principal string) ([]types.SSHPublicKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []types.SSHPublicKey{}
+	for _, k := range s.keys {
+		if k.Principal == principal {
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+
+func (s *sshMemStore) DeleteSSHKey(_ context.Context, fingerprint, principal string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.keys[fingerprint]
+	if !ok || k.Principal != principal {
+		return store.ErrNotFound
+	}
+	delete(s.keys, fingerprint)
+	return nil
+}
+
+// sshFakeRunner is Attach/ExecStream-capable (the brief's explicit "fake
+// ExecStream/Attach" ask); the rest of runner.Runner is unused by this test
+// and errors loudly if reached. execFn/attachFn are set per (sub)test to
+// exactly the behavior that test needs — a pluggable factory rather than a
+// pile of mode fields.
+type sshFakeRunner struct {
+	mu       sync.Mutex
+	attachFn func() (runner.Session, error)
+	execFn   func(spec runner.ExecSpec) (*runner.ExecSession, error)
+	lastArgv []string
+	lastEnv  []string
+}
+
+func (f *sshFakeRunner) Name() string { return "ssh-fake" }
+func (f *sshFakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	return runner.Capabilities{Driver: "ssh-fake"}, nil
+}
+func (f *sshFakeRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
+	return runner.Sandbox{}, errors.New("not used by this test")
+}
+func (f *sshFakeRunner) Exec(context.Context, string, []string) (string, error) {
+	return "", errors.New("not used by this test")
+}
+func (f *sshFakeRunner) Wait(context.Context, string) (int, error) {
+	return 0, errors.New("not used by this test")
+}
+func (f *sshFakeRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (f *sshFakeRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	return runner.Status{State: types.RunRunning}, nil
+}
+func (f *sshFakeRunner) StopSandbox(context.Context, string) error { return nil }
+func (f *sshFakeRunner) KillSandbox(context.Context, string) error { return nil }
+
+func (f *sshFakeRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+	f.mu.Lock()
+	fn := f.attachFn
+	f.mu.Unlock()
+	if fn == nil {
+		return newFakeShellSession(), nil
+	}
+	return fn()
+}
+
+func (f *sshFakeRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	f.mu.Lock()
+	f.lastArgv = spec.Argv
+	f.lastEnv = spec.Env
+	fn := f.execFn
+	f.mu.Unlock()
+	if fn == nil {
+		return nil, runner.ErrExecStreamUnsupported
+	}
+	return fn(spec)
+}
+
+func (f *sshFakeRunner) lastCall() ([]string, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastArgv, f.lastEnv
+}
+
+var _ runner.Runner = (*sshFakeRunner)(nil)
+
+// fakeExecSession backs ExecStream with UNBUFFERED io.Pipes, mirroring the
+// real docker driver's demux (runner/docker/session.go) — so a gateway
+// bridge that forgot to drain Stderr BEFORE reading Stdout would genuinely
+// deadlock a caller of this fake, exactly the HARD CONTRACT the brief calls
+// out (this is what TestSSHGateway_StderrDrainedBeforeStdout pins). stderrMsg
+// is written BEFORE any Stdout byte, matching sftp-server's own error-path
+// ordering.
+func fakeExecSession(stdoutMsg, stderrMsg string, exitCode int) *runner.ExecSession {
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	go func() {
+		if stderrMsg != "" {
+			_, _ = io.WriteString(stderrW, stderrMsg)
+		}
+		if stdoutMsg != "" {
+			_, _ = io.WriteString(stdoutW, stdoutMsg)
+		}
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
+	}()
+	return &runner.ExecSession{
+		Stdout: stdoutR,
+		Stderr: stderrR,
+		Wait:   func() (int, error) { return exitCode, nil },
+	}
+}
+
+// fakeEchoExecSession copies Stdin verbatim to Stdout — the "subsystem
+// plumbing" / direct-tcpip tests' proof that bytes the client sends reach
+// ExecStream's Stdin and whatever ExecStream writes to Stdout reaches the
+// client, with neither side protocol-aware (no real sftp-server/socat).
+func fakeEchoExecSession() *runner.ExecSession {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	go func() {
+		_, _ = io.Copy(stdoutW, stdinR)
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
+	}()
+	return &runner.ExecSession{
+		Stdin:  stdinW,
+		Stdout: stdoutR,
+		Stderr: stderrR,
+		Wait:   func() (int, error) { return 0, nil },
+	}
+}
+
+// fakeShellSession is a trivial runner.Session for the "shell" (Attach)
+// path: it echoes whatever is written back on Read, so the PTY pump can be
+// exercised with no real sandbox.
+type fakeShellSession struct {
+	r *io.PipeReader
+	w *io.PipeWriter
+}
+
+func newFakeShellSession() *fakeShellSession {
+	r, w := io.Pipe()
+	return &fakeShellSession{r: r, w: w}
+}
+
+func (s *fakeShellSession) Read(p []byte) (int, error)                   { return s.r.Read(p) }
+func (s *fakeShellSession) Write(p []byte) (int, error)                  { return s.w.Write(p) }
+func (s *fakeShellSession) Resize(context.Context, uint16, uint16) error { return nil }
+func (s *fakeShellSession) Close() error                                 { _ = s.w.Close(); return s.r.Close() }
+
+var _ runner.Session = (*fakeShellSession)(nil)
+
+// ─── harness ───────────────────────────────────────────────────────────────
+
+// sshTestHarness starts a real SSH gateway (ServeSSHGateway) on a loopback
+// port backed by st/fr, and returns everything a test needs to dial it.
+type sshTestHarness struct {
+	addr    string
+	hostPub ssh.PublicKey
+	audit   *sshTestRecorder
+}
+
+// sshTestRecorder is a thread-safe audit.Recorder. Unlike the rest of this
+// package's synchronous-call-chain tests (which share the plain, unlocked
+// recRecorder safely — a handler records, then returns, then the test reads),
+// the gateway's own goroutines (accept loop, channel bridges) record
+// concurrently with a test that is actively polling for the result
+// (waitForAudit), so a bare slice would race under -race.
+type sshTestRecorder struct {
+	mu     sync.Mutex
+	events []types.AuditEvent
+}
+
+func (r *sshTestRecorder) Record(_ context.Context, ev types.AuditEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+	return nil
+}
+
+func (r *sshTestRecorder) snapshot() []types.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]types.AuditEvent(nil), r.events...)
+}
+
+func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTestHarness {
+	t.Helper()
+	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate host key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(hostPriv)
+	if err != nil {
+		t.Fatalf("host signer: %v", err)
+	}
+
+	// Ask the OS for a free port, release it, then bind the SAME address —
+	// the standard Go test idiom for "know the port before the real listener
+	// exists"; a collision in that window is not realistic for a
+	// single-process test run.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe free port: %v", err)
+	}
+	addr := probe.Addr().String()
+	_ = probe.Close()
+
+	audit := &sshTestRecorder{}
+	srv := New(Config{
+		Store:         st,
+		Identity:      mustIDP(t),
+		Approvals:     newFakeApprovals(),
+		Broker:        &fakeBroker{},
+		Audit:         audit,
+		Runner:        fr,
+		AdminToken:    adminToken,
+		TrustDomain:   "wardyn.local",
+		DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+
+		SSHListenAddr:    addr,
+		SSHAdvertiseAddr: addr,
+		SSHHostKey:       hostPriv,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		if err := srv.ServeSSHGateway(ctx); err != nil {
+			t.Logf("ssh gateway stopped: %v", err)
+		}
+	}()
+	waitForListener(t, addr)
+
+	return &sshTestHarness{addr: addr, hostPub: signer.PublicKey(), audit: audit}
+}
+
+// waitForListener polls addr until something accepts a TCP connection —
+// ServeSSHGateway's net.Listen happens in the goroutine above with no
+// separate readiness signal, so a short poll stands in for one.
+func waitForListener(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("ssh gateway never started listening on %s", addr)
+}
+
+// waitForAudit polls audit for a matching event for up to a second. A
+// completed client-side call (Session.Run returning, a forwarded conn
+// closing) only proves the CHANNEL closed — the server goroutine's own
+// recordAudit call is one more line after that same close, on the SAME
+// goroutine but observed via a separate network event on the client side, so
+// asserting immediately is a genuine (if narrow) race, not a test bug to
+// paper over silently.
+func waitForAudit(t *testing.T, audit *sshTestRecorder, runID uuid.UUID, action, outcome string) *types.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if ev := findAudit(audit.snapshot(), runID, action, outcome); ev != nil {
+			return ev
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// mustSSHKeypair generates an ed25519 keypair and wraps the public half as
+// ssh.PublicKey (what gets registered / offered for auth).
+func mustSSHKeypair(t *testing.T) (ed25519.PrivateKey, ssh.PublicKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("wrap public key: %v", err)
+	}
+	return priv, sshPub
+}
+
+// sshDial authenticates as username with clientPriv against h, pinning the
+// gateway's own host key (verify-on-first-connect, exactly what a real
+// client does against the fingerprint the run-detail pane shows).
+func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed25519.PrivateKey) (*ssh.Client, error) {
+	t.Helper()
+	signer, err := ssh.NewSignerFromKey(clientPriv)
+	if err != nil {
+		t.Fatalf("client signer: %v", err)
+	}
+	return ssh.Dial("tcp", h.addr, &ssh.ClientConfig{
+		User:            username,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.FixedHostKey(h.hostPub),
+		Timeout:         3 * time.Second,
+	})
+}
+
+// ─── tests ─────────────────────────────────────────────────────────────────
+
+// TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
+// key is rejected, a registered key authenticating for a run it does NOT own
+// is rejected (owner-only), and the owner's registered key is accepted —
+// each rejection/acceptance is audited under ssh.auth.
+func TestSSHGateway_AuthRejectAccept(t *testing.T) {
+	st := newSSHMemStore()
+	ownRun := uuid.New()
+	otherRun := uuid.New()
+	st.putRun(types.AgentRun{ID: ownRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	st.putRun(types.AgentRun{ID: otherRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-2"})
+
+	alicePriv, alicePub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{
+		Fingerprint: ssh.FingerprintSHA256(alicePub),
+		Principal:   "alice@example.com",
+		PublicKey:   string(ssh.MarshalAuthorizedKey(alicePub)),
+	})
+
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	t.Run("unregistered key rejected", func(t *testing.T) {
+		strangerPriv, _ := mustSSHKeypair(t)
+		_, err := sshDial(t, h, ownRun.String(), strangerPriv)
+		if err == nil {
+			t.Fatal("dial with an unregistered key succeeded, want rejected")
+		}
+	})
+
+	t.Run("registered key for a run it does not own is rejected", func(t *testing.T) {
+		_, err := sshDial(t, h, otherRun.String(), alicePriv)
+		if err == nil {
+			t.Fatal("dial for a non-owned run succeeded, want owner-only rejection")
+		}
+	})
+
+	t.Run("malformed username (not a run id) is rejected", func(t *testing.T) {
+		_, err := sshDial(t, h, "not-a-uuid", alicePriv)
+		if err == nil {
+			t.Fatal("dial with a non-UUID username succeeded, want rejected")
+		}
+	})
+
+	t.Run("owner's registered key is accepted", func(t *testing.T) {
+		client, err := sshDial(t, h, ownRun.String(), alicePriv)
+		if err != nil {
+			t.Fatalf("owner dial failed: %v", err)
+		}
+		defer client.Close()
+	})
+
+	// Every case above left a trail: at least one failure and one success.
+	var failures, successes int
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != "ssh.auth" {
+			continue
+		}
+		if ev.Outcome == "success" {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	if successes == 0 || failures == 0 {
+		t.Errorf("ssh.auth audit trail = %d success, %d failure; want at least one of each", successes, failures)
+	}
+}
+
+// TestSSHGateway_ExecExitCode covers the exec channel: the command reaches
+// ExecStream wrapped as `/bin/sh -c <command>` (no protocol
+// reimplementation), the real exit code round-trips to the client, and the
+// env allowlist forwards TERM but drops an arbitrary variable.
+func TestSSHGateway_ExecExitCode(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+		return fakeExecSession("", "", 7), nil
+	}}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	_ = sess.Setenv("TERM", "xterm-256color")
+	_ = sess.Setenv("SECRET_LEAK", "should-not-forward")
+
+	err = sess.Run("do the thing")
+	var exitErr *ssh.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("Run error = %v (%T), want *ssh.ExitError", err, err)
+	}
+	if exitErr.ExitStatus() != 7 {
+		t.Errorf("exit status = %d, want 7", exitErr.ExitStatus())
+	}
+
+	argv, env := fr.lastCall()
+	if len(argv) != 3 || argv[0] != "/bin/sh" || argv[1] != "-c" || argv[2] != "do the thing" {
+		t.Errorf("argv = %v, want [/bin/sh -c \"do the thing\"] (no protocol reimplementation)", argv)
+	}
+	if !containsEnv(env, "TERM=xterm-256color") {
+		t.Errorf("env = %v, want TERM forwarded", env)
+	}
+	if containsPrefix(env, "SECRET_LEAK=") {
+		t.Errorf("env = %v, want SECRET_LEAK dropped (allowlist is TERM/LANG/LC_* only)", env)
+	}
+
+	// The audit trail names the argv and the exit code (ssh.exec{argv,exit}).
+	// Session.Run() unblocking (above) races the server goroutine's own
+	// recordAudit call slightly (both follow the same channel-close network
+	// event, on different sides) — poll briefly rather than asserting
+	// immediately.
+	if ev := waitForAudit(t, h.audit, run.ID, "ssh.exec", "success"); ev == nil {
+		t.Errorf("no successful ssh.exec audit event; events=%s", auditDump(h.audit.snapshot(), run.ID))
+	}
+}
+
+// TestSSHGateway_ExecExitZero guards the success path (exit 0 -> nil error),
+// so the exit-status assertion above isn't vacuously true for "any nonzero".
+func TestSSHGateway_ExecExitZero(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("ok\n", "", 0), nil }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	out, err := sess.Output("echo ok")
+	if err != nil {
+		t.Fatalf("Output() = %v, want nil (exit 0)", err)
+	}
+	if string(out) != "ok\n" {
+		t.Errorf("stdout = %q, want %q", out, "ok\n")
+	}
+}
+
+// TestSSHGateway_StderrDrainedBeforeStdout pins the HARD CONTRACT from the
+// A0+C1 review: ExecSession's Stdout/Stderr are unbuffered io.Pipes, so a
+// consumer that reads Stdout before draining Stderr deadlocks the instant the
+// far side writes a stderr byte before any stdout — sftp-server's own
+// error-path ordering. fakeExecSession writes stderr FIRST; if the gateway's
+// drain didn't start before its Stdout copy, this test would hang (and fail
+// on the suite's timeout) instead of completing.
+func TestSSHGateway_StderrDrainedBeforeStdout(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+		return fakeExecSession("stdout-after-stderr\n", "stderr-first\n", 0), nil
+	}}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	out, err := sess.CombinedOutput("cmd")
+	if err != nil {
+		t.Fatalf("CombinedOutput() = %v, want nil", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("no output observed — the stderr-first write may have wedged the stream")
+	}
+}
+
+// TestSSHGateway_ExecStreamUnsupportedIsCleanError pins the post-brief
+// context: runner.ErrExecStreamUnsupported maps to a clean channel error
+// (nonzero exit + a message), never a hang.
+func TestSSHGateway_ExecStreamUnsupportedIsCleanError(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, runner.ErrExecStreamUnsupported }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	out, runErr := sess.CombinedOutput("cmd")
+	if runErr == nil {
+		t.Fatal("exec on an ExecStream-unsupported substrate succeeded, want a clean nonzero error")
+	}
+	if !strings.Contains(string(out), "does not support") {
+		t.Errorf("output = %q, want it to name the unsupported-substrate reason", out)
+	}
+}
+
+// TestSSHGateway_SubsystemPlumbing covers subsystem plumbing: the sftp
+// subsystem's backing exec is bidirectionally bridged (bytes written by the
+// client reach ExecStream's Stdin and come back via Stdout), and a
+// subsystem name other than "sftp" is refused.
+func TestSSHGateway_SubsystemPlumbing(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeEchoExecSession(), nil }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	t.Run("sftp subsystem bridges stdin<->stdout", func(t *testing.T) {
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("new session: %v", err)
+		}
+		defer sess.Close()
+		in, err := sess.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		out, err := sess.StdoutPipe()
+		if err != nil {
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		if err := sess.RequestSubsystem("sftp"); err != nil {
+			t.Fatalf("request sftp subsystem: %v", err)
+		}
+		payload := []byte("sftp-init-packet")
+		if _, err := in.Write(payload); err != nil {
+			t.Fatalf("write stdin: %v", err)
+		}
+		buf := make([]byte, len(payload))
+		if _, err := io.ReadFull(out, buf); err != nil {
+			t.Fatalf("read stdout: %v", err)
+		}
+		if string(buf) != string(payload) {
+			t.Errorf("echoed = %q, want %q (subsystem's exec is not bridged)", buf, payload)
+		}
+		argv, _ := fr.lastCall()
+		if len(argv) != 2 || argv[0] != sftpServerPath || argv[1] != "-e" {
+			t.Errorf("argv = %v, want [%s -e]", argv, sftpServerPath)
+		}
+	})
+
+	t.Run("a non-sftp subsystem is refused", func(t *testing.T) {
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("new session: %v", err)
+		}
+		defer sess.Close()
+		if err := sess.RequestSubsystem("not-sftp"); err == nil {
+			t.Error("non-sftp subsystem was accepted, want refused")
+		}
+	})
+}
+
+// TestSSHGateway_DirectTCPIPLoopbackRestriction covers `-L` forwarding: a
+// non-loopback destination is refused before any ExecStream call, and a
+// loopback destination is bridged through `socat` (fakeEchoExecSession
+// proves the bidirectional plumbing, same as the sftp case).
+func TestSSHGateway_DirectTCPIPLoopbackRestriction(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeEchoExecSession(), nil }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	t.Run("non-loopback destination refused", func(t *testing.T) {
+		if _, err := client.Dial("tcp", "10.0.0.5:8080"); err == nil {
+			t.Error("forward to a non-loopback destination succeeded, want refused")
+		}
+	})
+
+	t.Run("loopback destination bridges via socat", func(t *testing.T) {
+		conn, err := client.Dial("tcp", "127.0.0.1:9999")
+		if err != nil {
+			t.Fatalf("forward to sandbox loopback: %v", err)
+		}
+		payload := []byte("forwarded-bytes")
+		if _, err := conn.Write(payload); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		buf := make([]byte, len(payload))
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if string(buf) != string(payload) {
+			t.Errorf("echoed = %q, want %q", buf, payload)
+		}
+		argv, _ := fr.lastCall()
+		if len(argv) != 3 || argv[0] != "socat" || argv[2] != "TCP:127.0.0.1:9999" {
+			t.Errorf("argv = %v, want [socat - TCP:127.0.0.1:9999]", argv)
+		}
+		// Close explicitly (not deferred): the server-side bridge only
+		// finishes — and records ssh.forward — once it observes EOF, which
+		// for direct-tcpip happens on OUR close, not the fake's.
+		_ = conn.Close()
+	})
+
+	// The server-side audit write races this goroutine's return from Dial's
+	// Close above; poll briefly rather than asserting immediately.
+	if ev := waitForAudit(t, h.audit, run.ID, "ssh.forward", "success"); ev == nil {
+		t.Errorf("no successful ssh.forward audit event; events=%s", auditDump(h.audit.snapshot(), run.ID))
+	}
+}
+
+// TestSSHGateway_RemoteForwardRejected covers "-R": the gateway serves no
+// global requests, so a "tcpip-forward" request (remote/reverse port
+// forwarding) is refused rather than silently ignored or hung.
+func TestSSHGateway_RemoteForwardRejected(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	if _, err := client.Listen("tcp", "127.0.0.1:0"); err == nil {
+		t.Error("remote forward (-R / tcpip-forward) succeeded, want refused")
+	}
+}
+
+// ─── small helpers ─────────────────────────────────────────────────────────
+
+// sshOwnedRunningRun seeds a store with one RUNNING, owned run and returns it
+// alongside the principal, for the tests that don't need to exercise auth
+// itself.
+func sshOwnedRunningRun(t *testing.T) (*sshMemStore, types.AgentRun, string) {
+	t.Helper()
+	st := newSSHMemStore()
+	const principal = "alice@example.com"
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: principal, State: types.RunRunning, SandboxRef: "sbx-1"}
+	st.putRun(run)
+	return st, run, principal
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, e := range env {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPrefix(env []string, prefix string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}

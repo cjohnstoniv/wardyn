@@ -99,6 +99,8 @@ log them.
 | `WARDYN_BEDROCK_AWS_PROFILE` | string | (unset) | `AWS_PROFILE` to select from the mounted `~/.aws` (flag `-bedrock-aws-profile`); falls back to the standard `AWS_PROFILE` when empty |
 | `WARDYN_BEDROCK_AWS_SSO_REGION` | string | (= bedrock-region) | AWS SSO region for the sandbox token exchange (flag `-bedrock-aws-sso-region`) |
 | `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
+| `WARDYN_SSH_LISTEN` | string | (unset) | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`). Registered-public-key auth only (no passwords), owner-only authorization (`run.created_by` must equal the key's principal); see `docs/SSH.md` |
+| `WARDYN_SSH_ADVERTISE` | string | (unset) | externally-reachable `host[:port]` for the SSH gateway, shown in the run-detail "Connect via SSH" pane's `ssh` command and on `/healthz`'s `ssh.advertise_addr` (flag `-ssh-advertise`). Purely advisory copy — the gateway itself binds `WARDYN_SSH_LISTEN`, not this; a container/NAT deployment's bind and its externally-reachable address routinely differ, so set this whenever the gateway is enabled (unset logs a boot warning) |
 
 Standard AWS environment variables are honored as **fallbacks only** — the
 Wardyn-specific Bedrock names above always win when set. Compose forwards them from
