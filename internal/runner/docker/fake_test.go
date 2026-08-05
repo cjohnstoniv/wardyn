@@ -95,9 +95,20 @@ type fakeDocker struct {
 	execGone string
 
 	lastExecCmd []string // argv of the most recent exec
+	// lastExecOpts records the full ExecCreateOptions of the most recent exec
+	// (lastExecCmd predates this and stays as the narrow, common-case reader),
+	// so a test can also assert TTY/Env were passed through correctly.
+	lastExecOpts client.ExecCreateOptions
 	// lastResize records the most recent ExecResize options so attach
 	// tests can assert the PTY was resized.
 	lastResize *client.ExecResizeOptions
+	// execAttachConn, when non-nil, is returned as the hijacked connection's
+	// Conn by ExecAttach INSTEAD of the default fakeConn{} — lets a test
+	// script real bytes through the hijack (e.g. a stdcopy-multiplexed
+	// stream, or a conn that records CloseWrite) rather than the default
+	// instant-EOF stub. nil (the default) preserves every existing test's
+	// behavior unchanged.
+	execAttachConn net.Conn
 }
 
 func newFakeDocker() *fakeDocker {
@@ -326,12 +337,19 @@ func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.Exec
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd
+	f.lastExecOpts = opts
 	return client.ExecCreateResult{ID: execID}, nil
 }
 
 func (f *fakeDocker) ExecAttach(ctx context.Context, execID string, opts client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	f.mu.Lock()
+	conn := f.execAttachConn
+	f.mu.Unlock()
+	if conn == nil {
+		conn = fakeConn{}
+	}
 	return client.ExecAttachResult{
-		HijackedResponse: client.NewHijackedResponse(fakeConn{}, "application/vnd.docker.raw-stream"),
+		HijackedResponse: client.NewHijackedResponse(conn, "application/vnd.docker.raw-stream"),
 	}, nil
 }
 

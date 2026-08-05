@@ -20,6 +20,8 @@ package conformance
 import (
 	"bytes"
 	"context"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +81,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("L0StructuralEgress", func(t *testing.T) { testL0StructuralEgress(t, r, opts) })
 	t.Run("WaitExitCode", func(t *testing.T) { testWaitExitCode(t, r, opts) })
 	t.Run("InteractiveAttach", func(t *testing.T) { testInteractiveAttach(t, r, opts) })
+	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.
@@ -352,6 +355,100 @@ func testInteractiveAttach(t *testing.T, r runner.Runner, opts Options) {
 	}
 	if st.State != types.RunRunning {
 		t.Errorf("after Session.Close the sandbox must still be RUNNING (detach must not stop it), got %q", st.State)
+	}
+}
+
+// testExecStream asserts the ExecStream primitive contract: (a) a Stdin write
+// followed by a half-close (Stdin.Close) flushes to the exec and terminates
+// its read side, (b) Stdout delivers the exec's output, (c) Wait propagates a
+// non-zero exit code, and (d) with TTY=false a stderr write lands on Stderr,
+// NOT interleaved into Stdout (stdout/stderr must be separate streams so a
+// binary protocol riding stdout is never corrupted).
+//
+// The case is skipped when the driver declares no ConfinementClasses (honest
+// stub: it cannot create a sandbox) or when ExecStream returns an error — a
+// driver that has not implemented it yet skips rather than fails, mirroring
+// testInteractiveAttach's Attach skip. The exec shell is assumed to be
+// /bin/sh (the driver's documented default), present in every minimal
+// SandboxImage — the same assumption testInteractiveAttach makes.
+func testExecStream(t *testing.T, r runner.Runner, opts Options) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout())
+	defer cancel()
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skipf("driver %q declares no confinement classes; ExecStream not testable without a sandbox substrate", r.Name())
+	}
+
+	sb := createStrongestSandbox(t, ctx, r, caps, opts, "ExecStream")
+
+	const wantCode = 7
+	spec := runner.ExecSpec{
+		Argv: []string{"sh", "-c", "cat; echo wardyn-execstream-stderr >&2; exit 7"},
+	}
+	sess, err := r.ExecStream(ctx, sb.Ref, spec)
+	if err != nil {
+		t.Skipf("ExecStream not available (driver %q): %v", r.Name(), err)
+	}
+
+	// Drain Stdout/Stderr concurrently so neither pipe can block the exec while
+	// we write + half-close Stdin below.
+	stdoutCh := make(chan string, 1)
+	stderrCh := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(sess.Stdout)
+		stdoutCh <- string(b)
+	}()
+	go func() {
+		b, _ := io.ReadAll(sess.Stderr)
+		stderrCh <- string(b)
+	}()
+
+	if _, err := sess.Stdin.Write([]byte("wardyn-execstream-ok\n")); err != nil {
+		t.Fatalf("Stdin.Write: %v", err)
+	}
+	// Half-close: `cat` must see EOF on its stdin and finish, without tearing
+	// down the still-live Stdout/Stderr streams.
+	if err := sess.Stdin.Close(); err != nil {
+		t.Fatalf("Stdin.Close (half-close): %v", err)
+	}
+
+	var stdout, stderr string
+	select {
+	case stdout = <-stdoutCh:
+	case <-time.After(opts.timeout()):
+		t.Fatal("timed out reading Stdout")
+	}
+	select {
+	case stderr = <-stderrCh:
+	case <-time.After(opts.timeout()):
+		t.Fatal("timed out reading Stderr")
+	}
+
+	if !strings.Contains(stdout, "wardyn-execstream-ok") {
+		t.Errorf("Stdout = %q, want it to contain the echoed stdin marker (stdin write + half-close must flush cat's output)", stdout)
+	}
+	if strings.Contains(stdout, "wardyn-execstream-stderr") {
+		t.Errorf("Stdout = %q, must NOT contain the stderr write — stdout/stderr must be separate streams when TTY=false", stdout)
+	}
+	if !strings.Contains(stderr, "wardyn-execstream-stderr") {
+		t.Errorf("Stderr = %q, want it to contain the stderr marker", stderr)
+	}
+
+	code, err := sess.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if code != wantCode {
+		t.Errorf("Wait exit code = %d, want %d", code, wantCode)
+	}
+
+	if err := sess.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 }
 

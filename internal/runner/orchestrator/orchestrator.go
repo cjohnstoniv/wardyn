@@ -279,6 +279,16 @@ func (o *Orchestrator) Attach(ctx context.Context, ref string, opts runner.Attac
 	return s.Attach(ctx, ref, opts)
 }
 
+// ExecStream is a pure pass-through by ref resolution, mirroring Attach: route
+// to the substrate that owns ref and delegate.
+func (o *Orchestrator) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return s.ExecStream(ctx, ref, spec)
+}
+
 func (o *Orchestrator) Status(ctx context.Context, ref string) (runner.Status, error) {
 	s, err := o.subForRef(ctx, ref)
 	if err != nil {

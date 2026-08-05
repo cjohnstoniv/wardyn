@@ -94,6 +94,10 @@ type Substrate interface {
 	Wait(ctx context.Context, ref string) (int, error)
 	// Attach opens an interactive PTY session inside ref.
 	Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error)
+	// ExecStream launches spec.Argv inside ref as a fresh, streamable exec.
+	// See runner.ExecSpec/runner.ExecSession for the streaming and TTY-merge
+	// contract, and Exec's doc above for the one-Exec-per-ref caution.
+	ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error)
 	// Status reports the sandbox lifecycle state.
 	Status(ctx context.Context, ref string) (runner.Status, error)
 	// AgentStatus reports the AGENT's state restart-safely given the persisted

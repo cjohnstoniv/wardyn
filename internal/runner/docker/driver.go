@@ -803,10 +803,18 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("docker: wait: no agent exec tracked for ref %q (Exec not called?)", ref)
 	}
+	return d.pollExecExit(ctx, execID)
+}
 
-	// Poll the exec to completion. ExecInspect.Running flips to false once the
-	// process exits; ExitCode is then authoritative. The poll cadence matches
-	// waitExec; the unbounded loop is what distinguishes Wait from it.
+// pollExecExit polls execID via ExecInspect until it stops running and
+// returns its exit code. ExecInspect.Running flips to false once the process
+// exits; ExitCode is then authoritative. The poll cadence matches waitExec;
+// this loop is unbounded (bound only by ctx), which is what distinguishes it
+// from waitExec's bounded best-effort poll. Factored out of Wait so
+// ExecStream's returned ExecSession.Wait closure can observe a DIFFERENT
+// exec's completion (a streamed exec, not the tracked agent exec) via the
+// exact same, already-proven polling contract.
+func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 	errs := 0
 	for {
 		insp, err := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
