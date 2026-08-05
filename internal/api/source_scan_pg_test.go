@@ -86,6 +86,20 @@ func TestScanWorkspace_RepoPlusDir_ScansEverySource(t *testing.T) {
 	if dirStatus != string(types.WorkspaceScanned) || len(dirProfile) == 0 {
 		t.Fatalf("dir source: status=%q profile=%dB — the repo branch won again", dirStatus, len(dirProfile))
 	}
+	// Discovery lands on the SOURCE's own contract: the dir's write path seeds
+	// as an optional scan_seeded row (the workspace level only aggregates).
+	var dirReqs map[string]types.WorkspaceRequirement
+	var reqsRaw []byte
+	if err := pool.QueryRow(t.Context(),
+		`SELECT COALESCE(requirements, '{}'::jsonb) FROM sources WHERE id = $1`, dirSrcID).Scan(&reqsRaw); err != nil {
+		t.Fatalf("read dir contract: %v", err)
+	}
+	if err := json.Unmarshal(reqsRaw, &dirReqs); err != nil {
+		t.Fatalf("decode dir contract: %v", err)
+	}
+	if row := dirReqs["write:"+dir]; row.Level != "optional" || row.Provenance != "scan_seeded" {
+		t.Errorf("dir scan did not seed its own write row: %+v", dirReqs)
+	}
 	if repoStatus != string(types.WorkspaceScanning) || repoActive == nil || *repoActive != resp.ScanRunIDs[0] {
 		t.Fatalf("repo source: status=%q active_run_id=%v, want scanning fenced on %s", repoStatus, repoActive, resp.ScanRunIDs[0])
 	}

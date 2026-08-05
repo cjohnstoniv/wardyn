@@ -98,6 +98,34 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// seedSourceRequirements derives the requirement rows a scan DISCOVERS for
+// the source's OWN contract — the wizard's client-side seeding rules moved to
+// where they belong (the tier that was scanned): a detected secret is
+// required unless the scan itself flagged it optional; an auto-allowed egress
+// host is required (already reachable — the row just states it as contract);
+// a directory's own write path is optional (mounted read-only until a run
+// asks for more). Provenance scan_seeded throughout — the fold's trust
+// boundary makes such rows poison auto-granting, so discovery can never mint
+// a credential. Applied fill-missing-only by the store (existing rows,
+// operator edits above all, always win).
+func seedSourceRequirements(kind types.SourceKind, locator string, p workspacescan.WorkspaceProfile) map[string]types.WorkspaceRequirement {
+	seed := map[string]types.WorkspaceRequirement{}
+	for _, sec := range p.RequiredSecrets {
+		level := "required"
+		if sec.Optional {
+			level = "optional"
+		}
+		seed["secret:"+sec.Name] = types.WorkspaceRequirement{Level: level, Provenance: "scan_seeded"}
+	}
+	for _, host := range p.EgressDomains {
+		seed["egress:"+host] = types.WorkspaceRequirement{Level: "required", Provenance: "scan_seeded"}
+	}
+	if kind == types.SourceLocalDir && locator != "" {
+		seed["write:"+locator] = types.WorkspaceRequirement{Level: "optional", Provenance: "scan_seeded"}
+	}
+	return seed
+}
+
 // scanLocalDirSource runs the bounded host-side scan for one directory source
 // and persists the outcome on the source row. ok=false returns the 422 detail
 // (already persisted as status=error) — the same never-a-false-green rule the
@@ -107,11 +135,11 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (work
 	if serr != nil || !fi.IsDir() {
 		detail := localDirScanFailureDetail(src.Locator, serr == nil && !fi.IsDir(),
 			os.Getenv("WARDYN_WORKSPACES_ROOT"), runningInContainer())
-		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, types.WorkspaceError)
+		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, types.WorkspaceError, nil)
 		return workspacescan.WorkspaceProfile{}, detail, false
 	}
 	profile := workspacescan.Scan(src.Locator)
-	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned); err != nil {
+	if _, err := s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, mustJSON(profile), types.WorkspaceScanned, seedSourceRequirements(src.Kind, src.Locator, profile)); err != nil {
 		return workspacescan.WorkspaceProfile{}, "persist scan profile: " + err.Error(), false
 	}
 	return profile, "", true
@@ -141,7 +169,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// in `scanning`.
 	release := func(cause error) error {
 		_ = s.cfg.Store.ClearSourceActiveRun(ctx, src.ID, runID)
-		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, src.Status)
+		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, src.Status, nil)
 		return cause
 	}
 

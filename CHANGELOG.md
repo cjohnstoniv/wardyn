@@ -42,7 +42,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Deleting a source or image that workspaces still use answers 409 *naming
   them* (`?force=1` detaches — for an image that honestly means "fall back to
   the derived recommended build"; for a source it un-mounts code, which is why
-  the refusal is loud instead of tolerated). **The tiers are first-class in
+  the refusal is loud instead of tolerated). **A source's scan seeds the source's own
+  contract** — detected secrets, auto-allowed hosts, and (for a directory)
+  its own write path land as `scan_seeded` rows on the tier-1 entry itself,
+  fill-missing-only in the same atomic write, so an operator's edits always
+  win and a re-scan never flips a decision; the workspace level only ever
+  aggregates the fold. **The tiers are first-class in
   the UI**: the Workspaces page (and the Getting-started Workspaces step)
   now carries three tabs — Workspaces · Directories & repos · Base images —
   each with its own add/delete dialogs, per-source scan and contract summary,
@@ -388,6 +393,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The base-image cards stopped claiming tools they never carry.** The
+  Recommended card appended a `claude-code` chip whenever an AI integration
+  existed — but the recommended build is generated from the scan profile and
+  never bakes the agent CLI (it arrives at run time, as a tool choice). The
+  chip is gone: Carries lists exactly what the scan detected. The custom
+  card's "Tools & features" checklist — including a default-checked "Claude
+  Code CLI" toggle — is deleted outright: none of those checkboxes ever
+  reached the build (only the base image and build steps are sent), so the
+  honest surface is the base + the steps editor, which is what remains.
 - **An ephemeral-only workspace lost its Requirements tabs.** The hydrate
   pass derived a workspace's profile from its attached library sources — and
   an ephemeral-only composition has none, so it derived *nil* where the old
