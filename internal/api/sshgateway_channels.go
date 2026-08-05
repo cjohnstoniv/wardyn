@@ -535,7 +535,22 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	exit, _ := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+	// FINDING (medium, fixed — caught by the live SSH e2e's -L forward step,
+	// scripts/run-e2e-ssh.sh): every trailing write in this file that follows
+	// sshBridgeExecSession (here, bridgeSSHSFTP, handleSSHDirectTCPIP) used to
+	// run on ctx — handleSSHConn's connCtx, cancelled the INSTANT the whole
+	// SSH connection tears down. A client that kills its session mid-flight
+	// races that cancellation against this exact line; lose the race and the
+	// write is attempted on an already-cancelled context. The primary store
+	// write then fails fast (context.Canceled, no query even sent) and
+	// recordAudit swallows that error — the row surfaces only after the audit
+	// spool's own drain cycle (auditSpoolDrainInterval later — invisible to a
+	// poll right after the kill) if a spool is configured at all, or is
+	// dropped outright if it isn't. Same fix as bridgeSSHShell's
+	// session.detach write above / attach.go's identical FINDING: use
+	// s.cfg.BaseCtx (daemon-lifetime) for a write that must outlive the
+	// connection it is reporting the end of.
+	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 		runID.String(), "success", mustJSON(map[string]any{"argv": command, "exit": exit})))
 }
 
@@ -563,7 +578,9 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	_, bytesOut := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp",
+	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
+	// comment above (same shape, same connection-teardown race, same fix).
+	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp",
 		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut})))
 }
 
@@ -618,7 +635,12 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	go ssh.DiscardRequests(reqs)
 
 	_, bytesOut := s.sshBridgeExecSession(ctx, runID, channel, sess, false)
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
+	// comment (same shape, same connection-teardown race, same fix). THIS is
+	// the exact call the live e2e's -L forward step caught losing its
+	// ssh.forward row to a killed session (scripts/run-e2e-ssh.sh, step 5's
+	// comment); TestSSHGateway_ForwardAuditSurvivesKill pins it.
+	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
 		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))
 }

@@ -231,6 +231,21 @@ func fakeEchoExecSession() *runner.ExecSession {
 	}
 }
 
+// fakeBlockingExecSession backs a direct-tcpip forward whose Stdout produces
+// nothing until the caller closes the returned writer — giving a test full
+// control over exactly when sshBridgeExecSession's blocking
+// io.Copy(channel, sess.Stdout) unblocks and the bridge proceeds to its
+// trailing recordAudit call. TestSSHGateway_ForwardAuditSurvivesKill uses
+// this to construct the connection-teardown race deterministically instead
+// of hoping to win a timing race.
+func fakeBlockingExecSession() (sess *runner.ExecSession, stdoutW *io.PipeWriter) {
+	stdoutR, w := io.Pipe()
+	return &runner.ExecSession{
+		Stdout: stdoutR,
+		Wait:   func() (int, error) { return 0, nil },
+	}, w
+}
+
 // fakeShellSession is a trivial runner.Session for the "shell" (Attach)
 // path: it echoes whatever is written back on Read, so the PTY pump can be
 // exercised with no real sandbox.
@@ -272,7 +287,15 @@ type sshTestRecorder struct {
 	events []types.AuditEvent
 }
 
-func (r *sshTestRecorder) Record(_ context.Context, ev types.AuditEvent) error {
+// Record mirrors the real store.Recorder/pgx behaviour this package's
+// production code depends on: a cancelled ctx fails the write instead of
+// silently accepting it (see TestSSHGateway_ForwardAuditSurvivesKill) — a
+// call site that races connection teardown against its own audit write is
+// caught here, in-process, instead of only on a real Postgres-backed run.
+func (r *sshTestRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, ev)
@@ -759,6 +782,65 @@ func TestSSHGateway_DirectTCPIPLoopbackRestriction(t *testing.T) {
 	// Close above; poll briefly rather than asserting immediately.
 	if ev := waitForAudit(t, h.audit, run.ID, "ssh.forward", "success"); ev == nil {
 		t.Errorf("no successful ssh.forward audit event; events=%s", auditDump(h.audit.snapshot(), run.ID))
+	}
+}
+
+// TestSSHGateway_ForwardAuditSurvivesKill pins the audit-race the live C5
+// e2e caught (scripts/run-e2e-ssh.sh's -L forward step, see its step-5
+// comment): killing the WHOLE SSH session (not just the forwarded conn)
+// races handleSSHConn's connCtx cancellation — deferred, fires the instant
+// the connection tears down — against handleSSHDirectTCPIP's own trailing
+// recordAudit call for ssh.forward. That call used to run on connCtx; if the
+// cancellation lands first, the write is attempted on an already-cancelled
+// context and is silently dropped (sshTestRecorder.Record mirrors the real
+// store/pgx behaviour here: it errors on a cancelled ctx instead of writing).
+// The fix runs that trailing write on s.cfg.BaseCtx instead — see
+// bridgeSSHExec's FINDING comment in sshgateway_channels.go.
+//
+// Deterministic, not timing-dependent: the fake ExecSession's Stdout blocks
+// until this test itself closes it, so "the connection is already dead" is
+// guaranteed true (a bounded wait lets handleSSHConn's teardown actually
+// finish) BEFORE the bridge's tail — and its recordAudit call — is ever
+// allowed to run. Revert the s.cfg.BaseCtx fix and this test fails (the
+// event never appears within waitForAudit's deadline); with the fix, BaseCtx
+// is never cancelled by the kill, so the row lands regardless.
+func TestSSHGateway_ForwardAuditSurvivesKill(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+
+	sess, stdoutW := fakeBlockingExecSession()
+	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return sess, nil }}
+	h := newSSHTestHarness(t, st, fr)
+	client, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	conn, err := client.Dial("tcp", "127.0.0.1:9999")
+	if err != nil {
+		t.Fatalf("forward to sandbox loopback: %v", err)
+	}
+	defer conn.Close()
+
+	// Kill the WHOLE session — the exact shape scripts/run-e2e-ssh.sh's step
+	// 5 describes (`kill $FWD_PID`), not merely closing this one forward.
+	if err := client.Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	// Let handleSSHConn's own teardown (its channel-accept loop exiting once
+	// the connection dies, then its deferred connCtx cancel) actually finish
+	// BEFORE the bridge below is allowed to proceed — this is what makes the
+	// race deterministic instead of a coin flip.
+	time.Sleep(200 * time.Millisecond)
+
+	// NOW let the bridge's blocked io.Copy(channel, sess.Stdout) see EOF and
+	// run its tail (Wait + the trailing recordAudit), with connCtx already
+	// cancelled per the wait above.
+	_ = stdoutW.Close()
+
+	if ev := waitForAudit(t, h.audit, run.ID, "ssh.forward", "success"); ev == nil {
+		t.Errorf("no ssh.forward audit event survived connection teardown; events=%s", auditDump(h.audit.snapshot(), run.ID))
 	}
 }
 
