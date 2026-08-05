@@ -22,18 +22,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Conservative platform resource defaults, applied by resourcesFromSpec when a
-// runner.Resources field is zero. They exist so EVERY agent sandbox is capped
-// even when policy sets nothing: without them one runaway or prompt-injected
-// agent can OOM-kill the host, fork-bomb the host PID space, or fill host
-// storage and take sibling runs down with it (the basic multi-tenant safety
-// controls — see types.ResourceLimits). A policy value always overrides.
-const (
-	defaultCPUMillis int64 = 2000 // 2 vCPU
-	defaultMemoryMiB int64 = 4096 // 4 GiB hard memory cap
-	defaultPidsLimit int64 = 512  // max processes/threads (fork-bomb guard)
-)
-
 // Proxy sidecar caps. The wardyn-proxy does little but relay HTTP, so a tight
 // envelope leaves ample headroom while still bounding a compromised proxy: it
 // gets its own PID cap (fork-bomb guard) and a modest memory cap, independent
@@ -100,13 +88,6 @@ func stripDangerousKataAnnotations(ann map[string]string) map[string]string {
 // libkrun) is a shared-kernel runtime and is deliberately NOT accepted for CC3.
 var cc3Runtimes = []string{runtimeKata, runtimeKrun}
 
-// knownNonVaultRuntimes are runtime families we POSITIVELY know do not boot a
-// per-sandbox KVM VM: runc/crun/sysbox share the host kernel, and runsc (gVisor)
-// is a userspace-kernel sandbox (the Wall/CC2 tier). An operator CC3 pin naming
-// one of these is a silent downgrade and is refused even under an explicit pin —
-// unlike an unrecognized runtime name, which we let the operator vouch for.
-var knownNonVaultRuntimes = []string{"runc", "crun", runtimeSysbox, runtimeRunsc}
-
 // runtimeSupportsExec reports whether the OCI runtime can enter a running
 // container via `docker exec`. Every runtime we use can EXCEPT krun/libkrun: a
 // libkrun microVM has no in-guest exec agent (crun's krun handler returns "the
@@ -116,23 +97,6 @@ var knownNonVaultRuntimes = []string{"runc", "crun", runtimeSysbox, runtimeRunsc
 func runtimeSupportsExec(runtimeName string) bool {
 	return !strings.HasPrefix(runtimeName, runtimeKrun)
 }
-
-// isKnownNonVaultRuntime reports whether name is a runtime we can positively
-// classify as delivering less than a VM boundary. Prefix match (like pickRuntime)
-// so "runc"/"crun-foo"/"sysbox-runc"/"runsc-*" are all caught. Note "krun" is NOT
-// matched by the "crun" family (different leading byte), so libkrun stays eligible.
-func isKnownNonVaultRuntime(name string) bool {
-	for _, fam := range knownNonVaultRuntimes {
-		if strings.HasPrefix(name, fam) {
-			return true
-		}
-	}
-	return false
-}
-
-// proxyListenPort is the port wardyn-proxy listens on inside the per-run
-// internal network. The agent's ONLY reachable address.
-const proxyListenPort = 3128
 
 // classToRuntime returns the Docker runtime name required to enforce class,
 // and whether a non-default runtime is needed at all. CC1 uses the default
@@ -228,7 +192,7 @@ func resolveRuntime(class types.ConfinementClass, info system.Info, overrides ma
 		// still refuse runtimes we POSITIVELY know deliver less than a VM (shared-kernel
 		// runc/crun/sysbox, or gVisor/runsc = the CC2 tier): pinning one of those at
 		// Vault is a silent downgrade, not a bring-your-own choice.
-		if isKnownNonVaultRuntime(want) {
+		if runner.IsKnownNonVaultRuntime(want) {
 			return "", false, fmt.Errorf("the Vault tier (CC3) pins runtime %q, a known shared-kernel/userspace-kernel runtime that does not deliver KVM microVM isolation; refusing to downgrade: %w", want, errRuntimeUnavailable)
 		}
 	}
@@ -544,15 +508,15 @@ func proxyResources() container.Resources {
 func resourcesFromSpec(res runner.Resources) container.Resources {
 	cpuMillis := res.CPUMillis
 	if cpuMillis <= 0 {
-		cpuMillis = defaultCPUMillis
+		cpuMillis = runner.DefaultCPUMillis
 	}
 	memMiB := res.MemoryMiB
 	if memMiB <= 0 {
-		memMiB = defaultMemoryMiB
+		memMiB = runner.DefaultMemoryMiB
 	}
 	pids := res.PidsLimit
 	if pids <= 0 {
-		pids = defaultPidsLimit
+		pids = runner.DefaultPidsLimit
 	}
 	memBytes := memMiB * 1024 * 1024
 	pidsLimit := pids // addressable for the *int64 field

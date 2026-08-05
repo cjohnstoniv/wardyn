@@ -10,11 +10,23 @@
 // Confinement Class and aggregates their capabilities.
 //
 // A Substrate owns the mechanism of bringing up + tearing down a governed
-// sandbox (its isolated, gatewayless per-run network, the wardyn-proxy sidecar,
-// and the agent unit) on one substrate. Every Substrate MUST uphold Wardyn's
+// sandbox (its isolated per-run network, the wardyn-proxy sidecar, and the
+// agent unit) on one substrate. Every Substrate MUST uphold Wardyn's
 // non-negotiables for the sandboxes it creates:
-//   - L0 structural egress: the agent has NO default route; its SOLE egress path
-//     is the wardyn-proxy sidecar (no direct off-host route).
+//   - Confined egress, proven EITHER of two ways — never merely asserted:
+//   - L0 structural: the agent has NO default route; its SOLE egress path is
+//     the wardyn-proxy sidecar (no direct off-host route). This is the
+//     docker substrate's guarantee: absence of route, not a filter to bypass.
+//   - L1 network-policy: a packet-filter layer (e.g. Kubernetes NetworkPolicy)
+//     default-denies the agent's egress except the proxy sidecar, AND the
+//     substrate has PROVEN that enforcement on THIS host/cluster — a policy
+//     object existing is not proof; a boot-time canary that positively
+//     confirms the deny takes effect (and refuses to boot when it does not)
+//     is. See ClassSupport.NetworkPolicy.
+//   - A substrate that can prove NEITHER MUST advertise no Confinement Classes
+//     at all (fail closed, never overclaim) — the sole documented exception is
+//     an explicit, operator-set opt-out env var read by that substrate, which
+//     is itself an admission of unconfined egress, not a third proof.
 //   - Fail closed: CreateSandbox MUST error (never silently downgrade) when the
 //     demanded Confinement Class cannot be enforced, before creating anything.
 //   - The run token / secrets NEVER enter the agent's environment.
@@ -40,6 +52,16 @@ type ClassSupport struct {
 	Resolved map[types.ConfinementClass]string
 	// StructuralEgress reports L0 (no default route; sole egress = wardyn-proxy).
 	StructuralEgress bool
+	// NetworkPolicy reports L1 (a packet-filter default-deny, e.g. Kubernetes
+	// NetworkPolicy, default-denying the agent's egress except the proxy
+	// sidecar) — PROVEN on this host/cluster, not merely configured. A
+	// substrate sets this true only after a boot-time canary has positively
+	// confirmed the deny is actually enforced (see the package doc); a
+	// NetworkPolicy object that exists but is silently ignored by a
+	// non-enforcing CNI is exactly the false claim this field must never make.
+	// StructuralEgress and NetworkPolicy are not mutually exclusive in
+	// principle, but today's substrates each prove exactly one.
+	NetworkPolicy bool
 	// SessionRecording reports wardyn-rec PTY recording support.
 	SessionRecording bool
 }
@@ -59,6 +81,14 @@ type Substrate interface {
 	// Exec launches the agent process inside the sandbox ref, returning the
 	// substrate-specific agent exec id ("" for exec-less/main-process substrates)
 	// so the control plane can persist it for restart-safe liveness.
+	//
+	// A substrate MAY support only ONE Exec per ref over the sandbox's
+	// lifetime: Kubernetes ephemeral containers are ADD-ONLY (a pod's
+	// ephemeral-container list can only grow, never be replaced), so a k8s
+	// substrate cannot honour a second Exec on the same ref the way the
+	// docker substrate's "latest Exec wins" re-exec does today. Callers MUST
+	// NOT re-Exec a ref expecting replace semantics — treat Exec as one-shot
+	// per sandbox going forward.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
 	// Wait blocks until the agent process for ref exits and returns its code.
 	Wait(ctx context.Context, ref string) (int, error)

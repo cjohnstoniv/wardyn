@@ -173,6 +173,22 @@ Four egress layers stack outward from the sandbox — the shipped L0 structural
 confinement and L2 proxy carry today's enforcement, with L1 default-deny and
 the L3 tool gateway planned at v0.5.
 
+**Substrate containment delta: Docker (L0) vs Kubernetes (L1).** Docker's
+guarantee is *absence of route* — the per-run network is gatewayless, so there
+is no packet path off-host to bypass. Kubernetes pods always get a routable
+network, so a k8s substrate can only offer L1: a `NetworkPolicy` default-deny
+*packet filter*, applied and enforced by the cluster's CNI rather than removed
+by topology. A filter is only as trustworthy as its enforcer, and CNIs are
+known to silently no-op `NetworkPolicy` for some rule shapes — so the k8s
+substrate does not take the CNI's word for it: a boot-time, two-phase canary
+runs from inside the sandbox's own network namespace right after the deny
+policy applies (phase 1: the allowed path — the wardyn-proxy sidecar — still
+works; phase 2: an address outside the allowlist is unreachable), and the
+substrate refuses to boot the sandbox — fail closed, advertising no
+Confinement Class — if either phase disagrees with what the policy demands.
+This is the honest `NetworkPolicy` bool on `substrate.ClassSupport`: proven by
+the canary, never merely claimed because a policy object was applied.
+
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only). TWO named unmasked paths. (a) The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. (b) The registry itself is **process-local and fails OPEN**: `secretmask.Registry` is an in-memory map, never persisted, populated on whichever wardynd process served the run's injection/mint request; the cast upload and the live-attach relay are separate requests, and both fall back to an unmasked pass-through when the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one replica — the shipped topology everywhere — makes this inert, which is why `replicas: 1` is a SAFETY control and the Helm chart now refuses more (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name` rejects `--scale`. Run a second replica anyway and a cast landing on the wrong pod is persisted verbatim, live credentials in cleartext, with a `success` audit event. | B1, B2, B4 |

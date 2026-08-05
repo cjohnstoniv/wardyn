@@ -156,6 +156,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 			}
 		}
 		caps.StructuralEgress = caps.StructuralEgress || cs.StructuralEgress
+		caps.NetworkPolicy = caps.NetworkPolicy || cs.NetworkPolicy
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
 	}
 	// Strongest last regardless of substrate order.
