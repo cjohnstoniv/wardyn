@@ -93,6 +93,25 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 covered with no per-user configuration.  `agent-run --selftest` reports what it
 finds (`agent-run-lib.sh`'s `selftest_report_repo_and_git`).
 
+### SSH relay binaries (`claude-code`, `codex-cli`)
+
+Not (yet) part of the numbered contract above — `oracle`, `full`, and
+`aws-sso` do not carry them — but both user-facing agent images ship two
+binaries the SSH gateway (see [docs/SSH.md](../../docs/SSH.md), a separate
+lane) bridges an inbound SSH/SFTP session through:
+
+| Binary | Path | apt package |
+|---|---|---|
+| SFTP subsystem | `/usr/lib/openssh/sftp-server` | `openssh-sftp-server` |
+| General-purpose relay | `/usr/bin/socat` | `socat` |
+
+`claude-code` already ships `tmux` + `openssh-client` (the interactive attach
+shell and the SSH-clone lane, §5/§6 above) — only the two binaries above are
+new there. `codex-cli` had neither `tmux` nor an SSH client before; it now
+gains `tmux` (the same attach-shell fallback chain as every other image) and
+the same two SSH-gateway binaries, but deliberately **not** `openssh-client`/
+`corkscrew`/baked host keys — its SSH-clone story is unchanged.
+
 ---
 
 ## Credential and recording flow

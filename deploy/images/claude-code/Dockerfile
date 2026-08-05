@@ -59,6 +59,14 @@ FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca440
 # subprocess — it is never linked into the binary — so Wardyn stays Apache-2.0.
 # If the apt package were ever removed from the bookworm repo, wardyn-rec
 # gracefully falls back to a plain .log capture (see cmd/wardyn-rec/main.go).
+#
+# openssh-sftp-server + socat: the SSH-gateway lane (see docs/SSH.md; wired by
+# the SSH gateway itself, not built here) needs an in-sandbox SFTP subsystem
+# (/usr/lib/openssh/sftp-server) and a general-purpose relay (/usr/bin/socat)
+# to bridge a gateway-side connection into the sandbox — see
+# deploy/images/README.md's "SSH relay binaries" note for the exact paths.
+# tmux + openssh-client already ship here (do not re-touch that pairing/
+# known_hosts baking).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
@@ -66,6 +74,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         asciinema \
         tmux \
         openssh-client \
+        openssh-sftp-server \
+        socat \
         corkscrew \
     && rm -rf /var/lib/apt/lists/*
 

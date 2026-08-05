@@ -12,9 +12,10 @@
 #   stack to untrusted networks or share the host between MUTUALLY-UNTRUSTED users
 #   (any job holding the socket controls the whole daemon). True multi-TENANT
 #   isolation (untrusted users, scoped RBAC, no shared host socket) is the
-#   Kubernetes runner — deploy/helm/wardyn stands up the control plane today, but
-#   its sandbox-launching data plane is v0.5-planned (see deploy/helm/wardyn/
-#   README.md); use this compose stack for a working governed run today.
+#   Kubernetes runner (deploy/helm/wardyn, k8s.enabled=true — see that chart's
+#   README.md), a completely separate substrate (internal/runner/k8s) from
+#   this compose stack's shared-daemon one; this compose stack stays the
+#   single-trusted-operator local/CI path.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # CONCURRENT JOBS on a shared host (one trusted operator, e.g. a CI fleet under one
@@ -338,6 +339,11 @@ services:
       # never be reachable beyond the host. Override the host-side port with
       # WARDYN_UP_PORT (matches scripts/up.sh's doctor/healthz-wait).
       - "127.0.0.1:${WARDYN_UP_PORT:-8080}:8080"
+      # SSH access into a running sandbox (see docs/SSH.md — a separate lane).
+      # The mapping is always here, loopback-only, mirroring WARDYN_UP_PORT
+      # above; the FEATURE stays off until that lane's gateway is wired and an
+      # operator opts in — an unused mapped port is inert (connection refused).
+      - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"
     depends_on:
       postgres:
         condition: service_healthy

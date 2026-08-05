@@ -39,6 +39,7 @@ var envDocAllow = map[string]bool{
 // with that section.
 var envDocShellOnly = map[string]bool{
 	"WARDYN_NS": true, "WARDYN_UP_PORT": true, "WARDYN_PG_PORT": true, "WARDYN_DEX_PORT": true,
+	"WARDYN_SSH_PORT":   true,
 	"WARDYN_CI_PROJECT": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
