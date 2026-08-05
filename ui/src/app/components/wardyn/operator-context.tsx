@@ -17,14 +17,29 @@ import * as React from "react";
 // of their own console. Never "harden" this default to false.
 const OperatorContext = React.createContext<boolean>(true);
 
+// The signed-in principal (GET /api/v1/me's `principal`), for UX that needs
+// to compare "is this MY run/resource" (e.g. the run-detail "Connect via
+// SSH" card, owner-only like the gateway itself). Default "": empty reads as
+// "not mine" everywhere it's compared, the fail-closed direction for an
+// advisory UI check backed by a real server-side owner-only enforcement
+// point (sshgateway.go's sshAuth) — same three-case rationale as
+// OperatorContext above (unresolved /me, a failed fetch, an unwrapped test).
+const PrincipalContext = React.createContext<string>("");
+
 export function OperatorProvider({
   operator,
+  principal = "",
   children,
 }: {
   operator: boolean;
+  principal?: string;
   children: React.ReactNode;
 }) {
-  return <OperatorContext.Provider value={operator}>{children}</OperatorContext.Provider>;
+  return (
+    <OperatorContext.Provider value={operator}>
+      <PrincipalContext.Provider value={principal}>{children}</PrincipalContext.Provider>
+    </OperatorContext.Provider>
+  );
 }
 
 // Whether the signed-in caller may perform operator-only actions (secret
@@ -33,4 +48,9 @@ export function OperatorProvider({
 // the server's requireOperator middleware is what actually refuses a write.
 export function useOperator(): boolean {
   return React.useContext(OperatorContext);
+}
+
+// The signed-in principal — see PrincipalContext above.
+export function usePrincipal(): string {
+  return React.useContext(PrincipalContext);
 }

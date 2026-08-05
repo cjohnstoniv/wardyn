@@ -12,6 +12,7 @@ import {
   ChevronsUpDown,
   Fingerprint,
   FolderOpen,
+  KeyRound,
   Lock,
   LogOut,
   Menu,
@@ -321,7 +322,7 @@ export function AppShell({
   // Add workspace) sees the real role instead of silently falling back to the
   // context default.
   return (
-    <OperatorProvider operator={meta.operator}>
+    <OperatorProvider operator={meta.operator} principal={meta.principal}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
@@ -452,6 +453,12 @@ function TopBar({
                 {meta.method === "sso" ? "signed in via SSO" : meta.method === "token" ? "admin token" : ""}
               </div>
             </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to="/ssh-keys">
+                <KeyRound className="size-4" /> SSH keys
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onSignOut} className="text-danger focus:text-danger">
               <LogOut className="size-4" /> Sign out

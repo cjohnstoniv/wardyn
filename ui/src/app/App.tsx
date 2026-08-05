@@ -85,6 +85,9 @@ const AuditScreen = React.lazy(() => import("./components/screens/audit").then((
 const RecordingScreen = React.lazy(() =>
   import("./components/screens/recording").then((m) => ({ default: m.RecordingScreen })),
 );
+const SSHKeysScreen = React.lazy(() =>
+  import("./components/screens/ssh-keys").then((m) => ({ default: m.SSHKeysScreen })),
+);
 const DemoScreen = React.lazy(() =>
   import("./components/screens/demos/demo-screen").then((m) => ({ default: m.DemoScreen })),
 );
@@ -352,6 +355,14 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <RecordingScreen />
+                </React.Suspense>
+              }
+            />
+            <Route
+              path="/ssh-keys"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <SSHKeysScreen />
                 </React.Suspense>
               }
             />

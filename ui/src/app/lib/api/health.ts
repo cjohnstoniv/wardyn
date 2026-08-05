@@ -105,6 +105,12 @@ export const health = {
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;
+    // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
+    // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
+    // unset) or an older daemon — both must read as "no pane", never a
+    // false-enabled guess. advertise_addr / host_key_fingerprint are both
+    // non-secret (see docs/SSH.md) — the fingerprint is public by design.
+    ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
   }> {
     try {
       const res = await fetch("/healthz", { credentials: "include" });
