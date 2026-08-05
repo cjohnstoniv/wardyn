@@ -216,6 +216,18 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if kerr != nil {
 			return of, kerr
 		}
+		// Role derivation config (WARDYN_OIDC_ROLE_MAP / WARDYN_OIDC_DEFAULT_ROLE):
+		// parsed and validated here, gated on OIDC being configured like the
+		// operator-allowlist rules below, and fails boot closed on a typo'd role
+		// value rather than letting it silently reach a session cookie later.
+		roleMap, rerr := oidc.ParseRoleMap(*f.oidcRoleMap)
+		if rerr != nil {
+			return of, fmt.Errorf("parse WARDYN_OIDC_ROLE_MAP: %w", rerr)
+		}
+		defaultRole := strings.TrimSpace(*f.oidcDefaultRole)
+		if defaultRole != "" && !oidc.ValidRole(defaultRole) {
+			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q", defaultRole, oidc.RoleAdmin, oidc.RoleMember)
+		}
 		// bootCtx (30s), not rootCtx: the ctx is used ONLY for the discovery
 		// HTTP round trip (go-oidc's Provider.Verifier fetches JWKS on a
 		// background ctx per its doc), so an unreachable/stalled IdP must fail
@@ -228,6 +240,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			RedirectURL:         *f.oidcRedirectURL,
 			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
 			SecureCookies:       secureCookies,
+			RoleMap:             roleMap,
+			DefaultRole:         defaultRole,
+			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS
+			// keeps working as an admin allowlist with zero re-configuration
+			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
+			LegacyAdminEmails: splitCSV(*f.oidcOperatorEmails),
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)
@@ -255,6 +273,15 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			slog.Warn("wardynd: NOTE human SSO / team mode is EXPERIMENTAL — a first-class team deployment does not exist yet and is not scheduled; " +
 				"the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so every SSO human would have the same power as the admin token — " +
 				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to demote everyone else to a viewer)")
+		}
+		// Role-map posture (independent knob from the operator-emails split
+		// above; a later lane unifies the two — see internal/auth/oidc's
+		// deriveRole doc). An unset roleMap means deriveRole grants every
+		// signed-in human RoleAdmin, unconditionally — loud so an operator
+		// adding a second human notices before finding out the hard way that
+		// everyone is an admin.
+		if len(roleMap) == 0 {
+			slog.Warn("wardynd: SSO users all receive the admin role; set WARDYN_OIDC_ROLE_MAP to introduce members")
 		}
 	}
 

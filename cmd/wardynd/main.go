@@ -261,10 +261,13 @@ func run() error {
 		Components:                componentsInfo(f, runnerTarget),
 		ScanAIAdvisor:             feats.scanAdvisor,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:       strings.TrimSpace(*f.ageKey) != "",
-		LocalLoopback:       lm.loopback,
-		LocalTrustForwarder: *f.localTrustFwd,
-		ComposerBackends:    feats.composerBackends,
+		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
+		LocalLoopback:         lm.loopback,
+		LocalTrustForwarder:   *f.localTrustFwd,
+		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
+		OIDCRedirectURL:       *f.oidcRedirectURL,
+		OIDCSecureCookies:     posture.secureCookies,
+		ComposerBackends:      feats.composerBackends,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.

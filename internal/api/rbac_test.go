@@ -64,9 +64,14 @@ func rbacServer(t *testing.T, operatorEmails ...string) *Server {
 // branch of humanOrAdminAuth end to end (router included) without standing up an
 // IdP. The encoding is the one oidc.encodeSession produces:
 // base64url(json(Session)) "." base64url(HMAC-SHA256(json)).
+//
+// Role is always RoleAdmin here: decodeSession treats an empty Role as no
+// session (the pre-0.5-cookie guard), and this file's RBAC dimension is the
+// SEPARATE OperatorEmails/isOperator split (WARDYN_OIDC_OPERATOR_EMAILS), not
+// B1's admin/member role — every caller just needs a well-formed session.
 func ssoSession(t *testing.T, sub, email string) *http.Cookie {
 	t.Helper()
-	payload, err := json.Marshal(oidc.Session{Sub: sub, Email: email, Expiry: time.Now().UTC().Add(time.Hour)})
+	payload, err := json.Marshal(oidc.Session{Sub: sub, Email: email, Role: oidc.RoleAdmin, Expiry: time.Now().UTC().Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
 	}

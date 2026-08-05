@@ -685,6 +685,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	checks = append(checks, composerCheck(comp), ageKeyCheck(s.cfg.AgeKeyDurable),
 		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
+	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
+	// conditional check gates on its own applicability).
+	oidcConfigured := s.cfg.OIDC != nil
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured); ok {
+		checks = append(checks, chk)
+	}
+	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
+		checks = append(checks, chk)
+	}
+
 	if s.cfg.Store != nil {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
 			checks = append(checks, siteConfigCheck(sc), artifactRepoCheck(sc))

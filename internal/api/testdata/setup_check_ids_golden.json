@@ -27,6 +27,17 @@
     "runner",
     "scm_provider"
   ],
+  "with_oidc": [
+    "age_key",
+    "agent_image",
+    "composer",
+    "host_proxy",
+    "llm_provider",
+    "runner",
+    "scm_provider",
+    "sso_rbac",
+    "tls_cookie_posture"
+  ],
   "with_store": [
     "age_key",
     "agent_image",

@@ -354,6 +354,25 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
+	// the sso_rbac /setup/status check's gate. Only the presence, never the
+	// mapping itself: the API layer has no use for individual entries, only
+	// whether the operator has opted into role derivation at all (see
+	// internal/auth/oidc's deriveRole). Computed at boot in cmd/wardynd.
+	OIDCRoleMapConfigured bool
+	// OIDCRedirectURL echoes WARDYN_OIDC_REDIRECT_URL (a URL, not a credential)
+	// for the tls_cookie_posture /setup/status check, which flags an https
+	// redirect issued while OIDCSecureCookies is still false — the classic
+	// behind-an-ingress misconfiguration where WARDYN_TLS_TERMINATED was never
+	// set. Computed at boot in cmd/wardynd.
+	OIDCRedirectURL string
+	// OIDCSecureCookies is the boot-computed secureCookies posture
+	// (validateConfig, cmd/wardynd/main.go): true iff wardynd knows the
+	// connection is TLS-protected end to end (built-in TLS or
+	// WARDYN_TLS_TERMINATED) — the same value threaded into
+	// oidc.Config.SecureCookies. Feeds tls_cookie_posture alongside
+	// OIDCRedirectURL. Computed at boot in cmd/wardynd.
+	OIDCSecureCookies bool
 	// ComposerBackends is the BOOT-snapshot readiness of every configured composer
 	// backend (including disabled + needs-key ones the live registry can't show).
 	// Surfaced by /setup/status. Nil when the composer is unconfigured.

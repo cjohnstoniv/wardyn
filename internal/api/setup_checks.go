@@ -272,3 +272,51 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 	}
 	return ""
 }
+
+// ssoRBACCheck warns when OIDC is configured but WARDYN_OIDC_ROLE_MAP is
+// unset: every signed-in human derives role "admin" (internal/auth/oidc's
+// deriveRole, upgrade-safe default) — fine for a single-operator deployment,
+// but silently grants admin to everyone the moment a second human signs in.
+// Only surfaced when OIDC is configured (mirrors bedrockProviderCheck's own
+// "worth showing at all" gate).
+func ssoRBACCheck(oidcConfigured, roleMapConfigured bool) (SetupCheck, bool) {
+	if !oidcConfigured {
+		return SetupCheck{}, false
+	}
+	if roleMapConfigured {
+		return SetupCheck{
+			ID: "sso_rbac", Label: "SSO role mapping", Status: "ok",
+			Detail: "WARDYN_OIDC_ROLE_MAP is set: signed-in humans are assigned admin/member from their IdP roles/groups/email.",
+		}, true
+	}
+	return SetupCheck{
+		ID: "sso_rbac", Label: "SSO role mapping", Status: "warn",
+		Detail: "WARDYN_OIDC_ROLE_MAP is not set: every SSO user is an admin.",
+		Fix:    `Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP) to map IdP roles/groups/emails to "admin" or "member".`,
+	}, true
+}
+
+// tlsCookiePostureCheck warns when the OIDC redirect URL is https — evidence
+// that TLS terminates somewhere in front of this deployment — but wardynd
+// still computed secureCookies=false (validateConfig, cmd/wardynd/main.go: the
+// exact condition this inverts is tlsEnabled||WARDYN_TLS_TERMINATED), so the
+// session cookie is issued without the Secure attribute: the classic
+// behind-an-ingress misconfiguration where WARDYN_TLS_TERMINATED was never
+// set. Only surfaced when OIDC is configured AND the redirect URL is https —
+// there is nothing to warn about otherwise.
+func tlsCookiePostureCheck(oidcConfigured bool, redirectURL string, secureCookies bool) (SetupCheck, bool) {
+	if !oidcConfigured || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(redirectURL)), "https://") {
+		return SetupCheck{}, false
+	}
+	if secureCookies {
+		return SetupCheck{
+			ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "ok",
+			Detail: "The OIDC redirect URL is https and wardynd knows the connection is TLS-protected; session cookies are marked Secure.",
+		}, true
+	}
+	return SetupCheck{
+		ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "warn",
+		Detail: "The OIDC redirect URL is https but WARDYN_TLS_TERMINATED is not set, so wardynd still thinks it is serving plain HTTP: the session cookie is issued WITHOUT the Secure attribute.",
+		Fix:    "Set WARDYN_TLS_TERMINATED=true (helm: env.WARDYN_TLS_TERMINATED) when TLS terminates at an upstream reverse proxy/ingress.",
+	}, true
+}
