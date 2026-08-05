@@ -1,0 +1,16 @@
+# kind cluster config for ci.yml's conformance-k8s job (and for the equivalent
+# LOCAL throwaway cluster the A3 lane's conformance run used — see
+# local/briefs/wave3-a3a4c4-conformance-helm-images.md).
+#
+# disableDefaultCNI: true swaps out kind's bundled kindnet — which does NOT
+# enforce NetworkPolicy — so a subsequent `kubectl apply` of a real CNI
+# (Calico, pinned in ci.yml) is what actually installs pod networking. This is
+# the standard "kind + a real NetworkPolicy-enforcing CNI" recipe (kind's own
+# docs: https://kind.sigs.k8s.io/docs/user/quick-start/#other-cni).
+#
+# kubeProxyMode is left at kind's default deliberately — nothing about the k8s
+# runner substrate's egress canary or NetworkPolicy enforcement depends on it.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true

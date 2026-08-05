@@ -4,24 +4,29 @@
 
 # Coverage floor gate over the real shipped set.
 #
-# `go test -coverprofile` measures ONE build, and Wardyn ships two: the tagless
-# build and the `-tags docker` build. Only the docker build contains the
-# container-hardening driver (internal/runner/docker), internal/envbuild, and
-# the wardynd wiring that calls them — so a tagless-only total is a number for
-# code that is not what runs in production. This unions the profiles from both
-# builds (a block counts as covered if either build covered it) and enforces the
-# floor on the union. No package is excluded to flatter the number.
+# `go test -coverprofile` measures ONE build, and Wardyn ships three: the
+# tagless build, the `-tags docker` build, and the `-tags k8s` build. The
+# docker build contains the container-hardening driver (internal/runner/docker),
+# internal/envbuild, and the wardynd wiring that calls them; the k8s build
+# contains the Kubernetes confinement substrate (internal/runner/k8s) — so a
+# tagless-only total is a number for code that is not what ships. This unions
+# the profiles from every build given (a block counts as covered if ANY build
+# covered it) and enforces the floor on the union. No package is excluded to
+# flatter the number.
 #
-# COUNTED: every package `go test ./...` reaches under BOTH tag sets.
+# COUNTED: every package `go test ./...` reaches under ANY of the tag sets
+# whose profile is passed in.
 #
-# NOT COUNTED — nothing is excluded, but two suites self-skip when their backing
-# service is absent, so their lines land in the union as *uncovered* rather than
-# being hidden from the denominator:
-#   - real-Docker-daemon cases (skip unless WARDYN_TEST_DOCKER=1)
-#   - real-Postgres cases     (skip unless WARDYN_TEST_PG is set; see
-#                              `make test-report-pg`)
-# The per-PR CI job sets neither, so the enforced number is exactly what CI can
-# really run. The fakeDocker-backed tests still cover those same drivers.
+# NOT COUNTED — nothing is excluded, but some suites self-skip when their
+# backing service is absent, so their lines land in the union as *uncovered*
+# rather than being hidden from the denominator:
+#   - real-Docker-daemon cases  (skip unless WARDYN_TEST_DOCKER=1)
+#   - real-Kubernetes-cluster cases (skip unless WARDYN_TEST_K8S=1 + a kubeconfig)
+#   - real-Postgres cases       (skip unless WARDYN_TEST_PG is set; see
+#                                `make test-report-pg`)
+# The per-PR CI job sets none of these, so the enforced number is exactly what
+# CI can really run. The fake-clientset/fakeDocker-backed tests still cover
+# those same drivers.
 #
 # The percentage itself is always `go tool cover -func`'s own total — this script
 # only merges the profiles, it does not reimplement Go's coverage math.
@@ -98,6 +103,6 @@ go tool cover -func="$OUT/cover.out" > "$OUT/coverage-func.txt"
 go tool cover -html="$OUT/cover.out" -o "$OUT/coverage.html" 2>/dev/null || true
 TOTAL="$(awk '/^total:/ {print $NF}' "$OUT/coverage-func.txt" | tr -d '%')"
 
-echo "Union Go coverage (tagless + -tags docker): ${TOTAL}% (floor ${FLOOR}%)"
+echo "Union Go coverage (tagless + -tags docker + -tags k8s): ${TOTAL}% (floor ${FLOOR}%)"
 awk -v t="$TOTAL" -v m="$FLOOR" 'BEGIN{exit !(t + 0 >= m + 0)}' ||
   { echo "coverage ${TOTAL}% below floor ${FLOOR}%"; exit 1; }

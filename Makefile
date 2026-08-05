@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
+.PHONY: test-gaps license-headers diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ui screenshots setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full gitleaks licenses helm-lint helm-install-test compose-config dco sbom npm-license npm-audit ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -151,18 +151,29 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
 	./scripts/test-report.sh docker -tags docker ./...
 
+# The whole tree under -tags k8s, so the k8s confinement substrate
+# (internal/runner/k8s) and the wardynd wiring that calls it — none of which
+# the tagless build can even compile — are actually tested and measured. No
+# cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
+# self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
+# tests (internal/runner/k8s/*_test.go) to run anywhere.
+test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed)
+	@echo "Running k8s-tagged suite with reports (fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
+	./scripts/test-report.sh k8s -tags k8s ./...
+
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
-# Enforced over the UNION of both shipped builds (tagless + -tags docker), not
-# the tagless subset alone — measuring only the tagless build reported a number
-# for code that is not what ships. Pulling the excluded packages in moved the
-# honest total from 67.1% (tagless-only) to 66.1% (union); the floor sits just
-# under that with a small margin for routine churn. Raise it as coverage climbs.
+# Enforced over the UNION of all three shipped builds (tagless + -tags docker +
+# -tags k8s), not the tagless subset alone — measuring only the tagless build
+# reported a number for code that is not what ships. Pulling the excluded
+# packages in moved the honest total from 67.1% (tagless-only) to 66.1%
+# (docker union); the floor sits just under that with a small margin for
+# routine churn. Raise it as coverage climbs.
 # scripts/cover-union.sh documents exactly what is and is not counted.
 COVER_MIN ?= 65
-cover-check: test-report test-report-docker ## Enforce the COVER_MIN floor over BOTH shipped builds, unioned
+cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
-		test/reports/go/unit/cover.out test/reports/go/docker/cover.out
+		test/reports/go/unit/cover.out test/reports/go/docker/cover.out test/reports/go/k8s/cover.out
 
 # ── pre-tag release gate ────────────────────────────────────────────────────
 # `ci` PLUS the release-only checks. It used to be a hand-copied subset of ci's
@@ -191,6 +202,10 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 10m ./test/conformance/...
+
+test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
+	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE required; uses the current kubeconfig context)..."
+	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 10m ./test/conformance/...
 
 test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no cluster needed)
 	@echo "Running driver-agnostic conformance honesty-stub tests (no cluster required)..."
@@ -276,15 +291,17 @@ test-e2e-byoi: ## Live BYOI e2e: wrap stock/harness/hostile bases + selftest gat
 	@echo "Running live BYOI e2e (wrap + selftest gate; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-byoi.sh
 
-govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker)
-	@echo "Running govulncheck (tagless + -tags docker, the shipped build)..."
+govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
+	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags k8s ./...
 
-staticcheck: ## Static analysis (tagless + -tags docker)
-	@echo "Running staticcheck (tagless + -tags docker)..."
+staticcheck: ## Static analysis (tagless + -tags docker + -tags k8s)
+	@echo "Running staticcheck (tagless + -tags docker + -tags k8s)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags k8s ./...
 
 # go.mod/go.sum must stay tidy: `go mod tidy` produces no diff. A stray require,
 # or an indirect that a test/code now imports directly (e.g. moby/docker-image-spec
@@ -317,24 +334,29 @@ gitleaks: ## Scan the FULL git history for committed secrets
 	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml -v
 
 # Forbid copyleft / non-permissive Go dependencies. go-licenses has no -tags
-# flag, so the docker-tagged deps (moby/moby/*, containerd/errdefs) are covered
-# by driving the tag through GOFLAGS on the second pass (U112).
-licenses: ## Forbid copyleft/non-permissive Go dependencies (both tag sets)
-	@echo "Checking Go dependency licenses (tagless + -tags docker)..."
+# flag, so the docker-tagged deps (moby/moby/*, containerd/errdefs) and the
+# k8s-tagged deps (k8s.io/client-go et al) are covered by driving the tag
+# through GOFLAGS on the second/third pass (U112).
+licenses: ## Forbid copyleft/non-permissive Go dependencies (all three tag sets)
+	@echo "Checking Go dependency licenses (tagless + -tags docker + -tags k8s)..."
 	go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
 	GOFLAGS=-tags=docker go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
+	GOFLAGS=-tags=k8s go run github.com/google/go-licenses@$(GO_LICENSES_VERSION) check --disallowed_types=forbidden,restricted ./...
 
 # Helm chart lint + template-render (must render the load-bearing objects).
 #
-# SEVEN renders, because ONE render only ever exercises the default branch of
+# EIGHT renders, because ONE render only ever exercises the default branch of
 # every {{ if }} in templates/ — and every hardening switch this chart has is
 # off/other-side by default:
 #   1. defaults (+ an admin token, which the chart now requires): the
-#      external-Secret / persistence-off / created-ServiceAccount side;
-#   2. ci/all-on-values.yaml — the other side of each of those in one go;
-#   3-6. the four refusals, asserted BY MESSAGE: a render that fails for the
+#      external-Secret / persistence-off / created-ServiceAccount /
+#      k8s-runner-off / ssh-off side;
+#   2. ci/all-on-values.yaml — the other side of each of those in one go,
+#      INCLUDING k8s.enabled (a different runsNamespace, exercising the
+#      control-plane NetworkPolicy's extra ingress peer) and ssh.enabled;
+#   3-7. the five refusals, asserted BY MESSAGE: a render that fails for the
 #      wrong reason is a false green, which is the whole point of these guards.
-#   7. the replicas refusal's documented override, asserted to still RENDER —
+#   8. the replicas refusal's documented override, asserted to still RENDER —
 #      a guard with no way past would be a wall, not a guard.
 # No kubeconform: it resolves schemas at runtime from an unpinned upstream ref,
 # which would trade a network-free gate for a flaky one and break the pinning
@@ -361,12 +383,21 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "1" ] || { echo "pod spec does not opt out of SA token auto-mount on the bring-your-own-SA path"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: true')" = "1" ] || { echo "pod spec does not honor the values-level automount override on the bring-your-own-SA path (true here: k8s.enabled requires it — see the fourth refusal)"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_RUNNER" || { echo "k8s.enabled rendered no WARDYN_RUNNER — the registry defaults to docker and would try to dial a nonexistent daemon"; exit 1; }; \
+	echo "$$out" | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "k8s.runsNamespace (different from the release namespace) did not render its NetworkPolicy ingress peer"; exit 1; }; \
+	echo "$$out" | grep -q "CC2=gvisor;CC3=kata-qemu" || { echo "k8s.runtimeClasses did not join into WARDYN_CONFINEMENT_MAP"; exit 1; }; \
+	echo "$$out" | grep -q "port: 6443" || { echo "k8s.apiServer.ports did not render the control-plane NetworkPolicy's apiserver egress rule"; exit 1; }; \
+	echo "$$out" | grep -q "kind: Role" || { echo "k8s.enabled rendered no RBAC Role"; exit 1; }; \
+	echo "$$out" | grep -q "kind: ClusterRole" || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install
@@ -523,7 +554,7 @@ npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dep
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker tidy-check lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
+ci: build build-docker build-k8s tidy-check lint cover-check test-race staticcheck govulncheck license-headers licenses gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
