@@ -51,14 +51,17 @@ import { StepDone, type DoneVariant } from "./step-done";
 import {
   isFixtureLeak,
   WIZARD_STEPS,
+  baseImageStateFromWorkspace,
   canDriveClaudeCode,
   defaultBaseImageState,
   deriveInitialRequirements,
+  initialStepFor,
   isSshRemote,
   newSourceRow,
   parseRepoSource,
   removeSource,
   seedFloor,
+  sourceRowsFromWorkspace,
   suggestedRegistryImage,
   toBaseImageInput,
   toSourceInput,
@@ -100,22 +103,28 @@ interface WizardState {
   buildState: WorkspaceBuildState | null;
 }
 
-function initialState(): WizardState {
+// initial, when given, hydrates the wizard onto an ALREADY-onboarded
+// workspace (the "Edit workspace…" entry point) instead of a blank create
+// flow: workspace is seeded so continueFromSources's create-branch (POST)
+// never fires, sources/baseImage/requirements seed from the row, and the
+// wizard lands on whatever step this workspace hasn't cleared yet
+// (initialStepFor) instead of always starting at Sources.
+function initialState(initial?: Workspace): WizardState {
   return {
-    step: "sources",
-    name: "",
-    sources: seedFloor(),
+    step: initial ? initialStepFor(initial) : "sources",
+    name: initial?.name ?? "",
+    sources: initial ? sourceRowsFromWorkspace(initial) : seedFloor(),
     secretNames: [],
     githubApp: false,
     setupStatus: null,
     harnessAvailable: false,
-    workspace: null,
+    workspace: initial ?? null,
     scans: {},
     scanning: false,
     partial: false,
-    baseImage: defaultBaseImageState(),
+    baseImage: initial ? baseImageStateFromWorkspace(initial) : defaultBaseImageState(),
 
-    requirements: {},
+    requirements: initial?.requirements ?? {},
     requirementsSeeded: false,
     confirmBackToSources: false,
     creating: false,
@@ -147,12 +156,18 @@ function hasScanned(state: WizardState): boolean {
 
 export function WorkspaceWizard({
   origin = "library",
+  initial,
   onClose,
   onWorkspaceCreated,
   onOpenWorkspace,
   onAttach,
 }: {
   origin?: WizardOrigin;
+  /** Hydrates the wizard onto an ALREADY-onboarded workspace instead of a
+   *  blank create flow — the "Edit workspace…" entry point (workspaces.tsx /
+   *  workspace-detail.tsx). Read once at mount (the lazy useState initializer
+   *  below); callers remount the wizard (a fresh `key`) to edit a different row. */
+  initial?: Workspace;
   onClose: () => void;
   /** Fired once the workspace is created, so a host list can refresh. */
   onWorkspaceCreated?: (workspace: Workspace) => void;
@@ -163,7 +178,8 @@ export function WorkspaceWizard({
   /** origin="run" only — omitted, Done's primary action falls back to closing. */
   onAttach?: (workspaceId: string) => void;
 }) {
-  const [state, setState] = React.useState<WizardState>(initialState);
+  const isEdit = !!initial;
+  const [state, setState] = React.useState<WizardState>(() => initialState(initial));
   const patch = (p: Partial<WizardState>) => setState((s) => ({ ...s, ...p }));
   const s = state;
   // The wizard no longer pins a power source (that control lives on the
@@ -439,12 +455,25 @@ export function WorkspaceWizard({
                 ? "Drive the workspace for real. Anything not in the contract is held at the door — approve or deny it live, adjust, retry, then finish."
                 : undefined;
 
+  // Outside-click and Esc are otherwise indistinguishable from the X button,
+  // but most steps have no explicit Close — losing the dialog this way mid-
+  // Build (or any step past Sources) used to strand a half-onboarded
+  // workspace with no way back. Block them once there's something to strand
+  // (same condition as the footer's CLOSE_KEEPS note below); the X stays a
+  // deliberate one-click close either way. ponytail: block, don't confirm —
+  // add a confirm-on-X only if real usage shows accidental X-clicks too.
+  const blockAccidentalDismiss = wsExists && s.step !== "done";
+
   return (
     <Dialog open onOpenChange={(o) => !o && close()}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-2xl">
+      <DialogContent
+        className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-2xl"
+        onPointerDownOutside={(e) => blockAccidentalDismiss && e.preventDefault()}
+        onEscapeKeyDown={(e) => blockAccidentalDismiss && e.preventDefault()}
+      >
         <div className="space-y-2.5 border-b border-border px-6 py-4">
           <DialogHeader>
-            <DialogTitle>Add workspace</DialogTitle>
+            <DialogTitle>{isEdit ? "Edit workspace" : "Add workspace"}</DialogTitle>
             {blurb && <DialogDescription>{blurb}</DialogDescription>}
           </DialogHeader>
           <StepIndicator
@@ -652,7 +681,7 @@ export function WorkspaceWizard({
           {s.step === "image" && phaseA && (
             <p className="w-full text-right text-[0.6875rem] text-muted-foreground">{V2C.WAIT_NOTE}</p>
           )}
-          {wsExists && s.step !== "done" && (
+          {blockAccidentalDismiss && (
             <p className="w-full text-right text-[0.6875rem] text-muted-foreground">{C.CLOSE_KEEPS}</p>
           )}
         </DialogFooter>

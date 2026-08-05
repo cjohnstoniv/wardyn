@@ -51,7 +51,7 @@ import { ComposeProgress } from "./compose-progress";
 import { ComposeQandA } from "./compose-qanda";
 import { ComposeReview } from "./compose-review";
 import { PermissionWizard } from "./wizard";
-import { AddWorkspaceDialog } from "../workspaces";
+import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import { AddSecretDialog } from "../secrets";
 import { surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
 import { wizardStateFromProposal, type WizardState } from "./wizard-types";
@@ -559,17 +559,27 @@ export function NewRunDialog({
         </DialogContent>
       </Dialog>
 
-      <AddWorkspaceDialog
-        open={addWorkspaceOpen}
-        onOpenChange={setAddWorkspaceOpen}
-        onSaved={(ws) => {
-          // Auto-attach the newly onboarded workspace (mirrors the manual
-          // wizard's Basics step) so the operator doesn't have to re-open the
-          // picker to select what they just added.
-          setWorkspaceSelections((sel) => [...sel, { workspaceId: ws.id }]);
-          void scanAndReload(ws.id);
-        }}
-      />
+      {/* origin="run": Done's primary action is "Attach to this run" (onAttach)
+          instead of "Open workspace" — the wizard already scans/builds/verifies
+          along the way, so there's no separate scanAndReload kick to make here
+          (contrast onFixWorkspace above, which re-scans an EXISTING pick). */}
+      {addWorkspaceOpen && (
+        <WorkspaceWizard
+          origin="run"
+          onClose={() => {
+            setAddWorkspaceOpen(false);
+            reloadWorkspaces();
+          }}
+          onAttach={(workspaceId) => {
+            // Mirrors the manual wizard's Basics step: auto-attach so the
+            // operator doesn't have to re-open the picker for what they just
+            // onboarded.
+            setWorkspaceSelections((sel) => [...sel, { workspaceId }]);
+            setAddWorkspaceOpen(false);
+            reloadWorkspaces();
+          }}
+        />
+      )}
 
       {/* Opened from ComposeReview: the launch-error helper, the no-model-access
           banner, or a checklist row's "Add secret" action. Every caller gets the

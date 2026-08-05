@@ -46,6 +46,15 @@ const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
+// The "Edit workspace…" kebab item now mounts the real WorkspaceWizard (see
+// wizard.test.tsx's identical mock — its mount effect fetches this too).
+const listIntegrationsMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/integrations")>(
+    "../../../lib/api/integrations",
+  );
+  return { ...actual, integrationsApi: { list: () => listIntegrationsMock() } };
+});
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
@@ -100,6 +109,7 @@ beforeEach(() => {
   listSecretsMock.mockResolvedValue([]);
   getSetupStatusMock.mockResolvedValue(setupStatus());
   getObservedEgressMock.mockResolvedValue({ denied: [], runs_examined: 0 });
+  listIntegrationsMock.mockResolvedValue({ ai: [], scm: [] });
 });
 
 describe("WorkspaceDetailScreen — not found", () => {
@@ -161,14 +171,14 @@ describe("WorkspaceDetailScreen — header: status chip + story sentence + one p
   });
 });
 
-describe("WorkspaceDetailScreen — kebab: Edit source… / Rescan… (destructive confirm) / Delete…", () => {
-  it("Edit source… opens the edit form", async () => {
+describe("WorkspaceDetailScreen — kebab: Edit workspace… / Rescan… (destructive confirm) / Delete…", () => {
+  it("Edit workspace… opens the wizard hydrated on this row", async () => {
     getWorkspaceMock.mockResolvedValue(ws());
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderDetail();
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
-    await user.click(screen.getByRole("menuitem", { name: /edit source/i }));
-    expect(await screen.findByText("Edit workspace")).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: /edit workspace/i }));
+    expect(await screen.findByRole("heading", { name: "Edit workspace" })).toBeInTheDocument();
   });
 
   it("Rescan… states what it destroys before scanning", async () => {

@@ -6,12 +6,14 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TARGET,
+  baseImageStateFromWorkspace,
   canDriveClaudeCode,
   credFlags,
   defaultBaseImageState,
   defaultTargetFor,
   deriveInitialRequirements,
   fmtElapsed,
+  initialStepFor,
   isRemovable,
   isSourceShapeValid,
   isSshRemote,
@@ -20,6 +22,7 @@ import {
   removeSource,
   requirementKey,
   seedFloor,
+  sourceRowsFromWorkspace,
   splitRequirementKey,
   suggestedRegistryImage,
   summarizeRequirements,
@@ -29,7 +32,24 @@ import {
   type SourceRow,
   type WorkspaceRequirementsMap,
 } from "./wizard-types";
-import type { WorkspaceProfile } from "../../../lib/types";
+import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+
+// Minimal onboarded-workspace fixture for the edit-hydration tests below —
+// only the fields sourceRowsFromWorkspace/baseImageStateFromWorkspace/
+// initialStepFor actually read vary per test; the rest are the required
+// scalars every Workspace carries.
+function fixtureWorkspace(over: Partial<Workspace> = {}): Workspace {
+  return {
+    id: "ws-1",
+    name: "payments",
+    kind: "repo",
+    source: "acme/payments",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+    ...over,
+  };
+}
 
 describe("seedFloor / removeSource — the >=1-source floor", () => {
   it("seedFloor() yields exactly one seeded ephemeral row", () => {
@@ -269,6 +289,92 @@ describe("toBaseImageInput / suggestedRegistryImage — the base-image wire shap
       image: "ubuntu:24.04",
       steps: ["RUN echo hi", "ENV FOO=bar"],
     });
+  });
+});
+
+describe("sourceRowsFromWorkspace — edit hydration, the inverse of toSourceInput", () => {
+  it("maps each wire source to a SourceRow with a fresh id", () => {
+    const ws = fixtureWorkspace({
+      sources: [
+        { type: "local_dir", path: "/srv/a", target: "/home/agent/work" },
+        { type: "repo", source: "acme/x", ref: "main", target: "/home/agent/work/x" },
+      ],
+    });
+    const rows = sourceRowsFromWorkspace(ws);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ type: "local_dir", path: "/srv/a", target: "/home/agent/work" });
+    expect(rows[1]).toMatchObject({ type: "repo", source: "acme/x", ref: "main", target: "/home/agent/work/x" });
+    expect(rows[0].id).not.toBe(rows[1].id);
+  });
+
+  it("falls back to the seeded floor when the workspace has no sources", () => {
+    const rows = sourceRowsFromWorkspace(fixtureWorkspace({ sources: undefined }));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ type: "ephemeral", seeded: true });
+  });
+});
+
+describe("baseImageStateFromWorkspace — edit hydration, the inverse of toBaseImageInput", () => {
+  it("no base_image (or 'recommended') hydrates the default state", () => {
+    expect(baseImageStateFromWorkspace(fixtureWorkspace())).toEqual(defaultBaseImageState());
+    expect(baseImageStateFromWorkspace(fixtureWorkspace({ base_image: { kind: "recommended" } }))).toEqual(
+      defaultBaseImageState(),
+    );
+  });
+
+  it("registry hydrates the registry choice (the exact image is re-derived on Continue, not carried)", () => {
+    const state = baseImageStateFromWorkspace(
+      fixtureWorkspace({ base_image: { kind: "registry", image: "mcr.microsoft.com/devcontainers/go:1" } }),
+    );
+    expect(state.choice).toBe("registry");
+  });
+
+  it("byo carries the image ref forward", () => {
+    const state = baseImageStateFromWorkspace(
+      fixtureWorkspace({ base_image: { kind: "byo", image: "ghcr.io/acme/dev:latest" } }),
+    );
+    expect(state).toMatchObject({ choice: "byo", byoRef: "ghcr.io/acme/dev:latest" });
+  });
+
+  it("custom carries the base image and re-joins the steps as lines", () => {
+    const state = baseImageStateFromWorkspace(
+      fixtureWorkspace({
+        base_image: { kind: "custom", image: "ubuntu:24.04", steps: ["RUN echo hi", "ENV FOO=bar"] },
+      }),
+    );
+    expect(state).toMatchObject({
+      choice: "custom",
+      customBase: "ubuntu:24.04",
+      buildSteps: "RUN echo hi\nENV FOO=bar",
+    });
+  });
+
+  it("round-trips through toBaseImageInput for byo/custom (registry is re-derived by design)", () => {
+    const byo = fixtureWorkspace({ base_image: { kind: "byo", image: "ghcr.io/acme/dev:latest" } });
+    expect(toBaseImageInput(baseImageStateFromWorkspace(byo))).toEqual(byo.base_image);
+
+    const custom = fixtureWorkspace({
+      base_image: { kind: "custom", image: "ubuntu:24.04", steps: ["RUN echo hi"] },
+    });
+    expect(toBaseImageInput(baseImageStateFromWorkspace(custom))).toEqual(custom.base_image);
+  });
+});
+
+describe("initialStepFor — the edit wizard's landing step", () => {
+  it("not yet scanned -> Sources", () => {
+    expect(initialStepFor(fixtureWorkspace({ status: "pending_scan" }))).toBe("sources");
+  });
+
+  it("scanned (or scanning/error) but no image built yet -> Base image", () => {
+    expect(initialStepFor(fixtureWorkspace({ status: "scanned", image_ref: "" }))).toBe("image");
+    expect(initialStepFor(fixtureWorkspace({ status: "scanning", image_ref: "" }))).toBe("image");
+    expect(initialStepFor(fixtureWorkspace({ status: "error", image_ref: "" }))).toBe("image");
+  });
+
+  it("scanned AND an image already built -> Requirements", () => {
+    expect(initialStepFor(fixtureWorkspace({ status: "scanned", image_ref: "wardyn-workspace/ws-1:abc" }))).toBe(
+      "reqs",
+    );
   });
 });
 
