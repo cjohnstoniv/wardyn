@@ -403,6 +403,9 @@ type Server struct {
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck
 	refRulesetShow bool
+	// builds tracks per-workspace image builds (the wizard's Build step).
+	// Zero value is ready to use.
+	builds buildTracker
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -619,6 +622,10 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Put("/workspaces/{id}", s.handleUpdateWorkspace)
 			operatorOnly.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
 			operatorOnly.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
+			// The wizard's BUILD step: kick the image build asynchronously and
+			// follow it — a session launch then hits the cache and starts fast.
+			r.Get("/workspaces/{id}/build", s.handleGetWorkspaceBuild)
+			operatorOnly.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)

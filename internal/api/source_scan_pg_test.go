@@ -125,3 +125,59 @@ func TestScanWorkspace_RepoPlusDir_ScansEverySource(t *testing.T) {
 		t.Fatalf("rescan during in-flight repo scan: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// The wizard's BUILD step endpoints: an explicit image pick has nothing to
+// build (boots verbatim), and a host without a builder answers an honest
+// "none" with the stock-agent-image detail instead of an error.
+func TestWorkspaceBuild_ExplicitImageAndNoBuilder(t *testing.T) {
+	srv, _ := pgHarnessWithRunner(t, &fakeRunner{})
+
+	body := fmt.Sprintf(`{"name":"byo-%s","sources":[{"type":"ephemeral"}],"base_image":{"kind":"byo","image":"golang:1.26"}}`, uuid.NewString()[:8])
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces", adminToken, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var ws types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &ws); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	w = do(t, srv, http.MethodGet, "/api/v1/workspaces/"+ws.ID.String()+"/build", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get build: %d %s", w.Code, w.Body.String())
+	}
+	var view struct {
+		State string `json:"state"`
+		Image string `json:"image"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.State != "nothing_to_build" || view.Image != "golang:1.26" {
+		t.Fatalf("byo view = %+v, want nothing_to_build/golang:1.26", view)
+	}
+	// POST is a no-op 200 for an explicit image — never a build, never an error.
+	if w = do(t, srv, http.MethodPost, "/api/v1/workspaces/"+ws.ID.String()+"/build", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("post build (byo): %d %s", w.Code, w.Body.String())
+	}
+
+	// Recommended choice on a host with NO builder: honest "none" + detail.
+	body = fmt.Sprintf(`{"name":"rec-%s","sources":[{"type":"ephemeral"}]}`, uuid.NewString()[:8])
+	w = do(t, srv, http.MethodPost, "/api/v1/workspaces", adminToken, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create rec: %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &ws); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	w = do(t, srv, http.MethodPost, "/api/v1/workspaces/"+ws.ID.String()+"/build", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("post build (no builder): %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.State != "none" {
+		t.Fatalf("no-builder view = %+v, want state=none", view)
+	}
+}

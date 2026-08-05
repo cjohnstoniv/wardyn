@@ -29,7 +29,7 @@ export type {
 };
 
 // ============================ Rail ============================
-export type WizardStepId = "sources" | "image" | "integrations" | "reqs" | "done";
+export type WizardStepId = "sources" | "image" | "integrations" | "build" | "reqs" | "verify" | "done";
 export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
   { id: "sources", label: "Sources" },
   { id: "image", label: "Base image" },
@@ -37,7 +37,13 @@ export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
   // (AI, git hosts, feeds) joins its sources + base image in shaping what the
   // Requirements step shows.
   { id: "integrations", label: "Integrations" },
+  // The image build is its OWN, followable step — it used to hide inside the
+  // first session launch and freeze that click for minutes.
+  { id: "build", label: "Build" },
   { id: "reqs", label: "Requirements" },
+  // Verify is its own step: always walk through it — drive the workspace,
+  // approve/deny at the door, adjust — before Done.
+  { id: "verify", label: "Verify" },
   { id: "done", label: "Done" },
 ];
 

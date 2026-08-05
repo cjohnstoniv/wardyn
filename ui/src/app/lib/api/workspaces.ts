@@ -22,6 +22,14 @@ import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./cor
 // These moved home to lib/types/workspaces.ts when the shared Workspace type
 // caught up with the three-tier model; the re-exports below keep every
 // existing `from "../api/workspaces"` importer compiling unchanged.
+// One workspace's image-build view (GET/POST /workspaces/{id}/build).
+export interface WorkspaceBuildState {
+  state: "building" | "done" | "failed" | "none" | "nothing_to_build";
+  image?: string;
+  detail?: string;
+  started_at?: string;
+}
+
 export type {
   WorkspaceSourceKind,
   WorkspaceSourceInput,
@@ -90,6 +98,19 @@ export const workspaces = {
       body: JSON.stringify(input),
     });
     return asJson<Workspace>(res);
+  },
+
+  // The wizard's BUILD step. POST kicks the image build asynchronously
+  // (202 building; 200 done / nothing_to_build / an honest none when this
+  // host has no builder); GET polls it. A session launched after a
+  // successful build hits the cache and starts immediately.
+  async buildWorkspace(id: string): Promise<WorkspaceBuildState> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/build`, { method: "POST" });
+    return asJson<WorkspaceBuildState>(res);
+  },
+  async getWorkspaceBuild(id: string): Promise<WorkspaceBuildState> {
+    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/build`, { method: "GET" });
+    return asJson<WorkspaceBuildState>(res);
   },
 
   // PUT /api/v1/workspaces/{id}/approved-egress  { domains } -> the updated

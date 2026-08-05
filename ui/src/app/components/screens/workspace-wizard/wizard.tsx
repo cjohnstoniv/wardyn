@@ -39,8 +39,11 @@ import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
 import type { SetupStatus, Source as SdkSource, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { BUILD_BLURB, StepBuild } from "./step-build";
 import { StepIntegrations, INTEGRATIONS_BLURB } from "./step-integrations";
+import { VerifyBody } from "./step-requirements";
 import { WizardVerifySession } from "./verify-session";
+import type { WorkspaceBuildState } from "../../../lib/api/workspaces";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -94,6 +97,7 @@ interface WizardState {
   creating: boolean;
   savingImage: boolean;
   savingRequirements: boolean;
+  buildState: WorkspaceBuildState | null;
 }
 
 function initialState(): WizardState {
@@ -117,6 +121,7 @@ function initialState(): WizardState {
     creating: false,
     savingImage: false,
     savingRequirements: false,
+    buildState: null,
   };
 }
 
@@ -334,12 +339,15 @@ export function WorkspaceWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.step, s.requirementsSeeded]);
 
-  const acceptAndFinish = async () => {
+  // Leaving Requirements SAVES the contract first — the verify session's
+  // egress posture is computed server-side from the STORED rows, so an
+  // unsaved contract would verify against yesterday's.
+  const saveAndContinue = async () => {
     if (!s.workspace) return;
     patch({ savingRequirements: true });
     try {
       const updated = await workspacesApi.setRequirements(s.workspace.id, s.requirements);
-      patch({ savingRequirements: false, workspace: updated, step: "done" });
+      patch({ savingRequirements: false, workspace: updated, step: "verify" });
     } catch (e) {
       patch({ savingRequirements: false });
       toast.error("Failed to save requirements", { description: getErrorMessage(e) });
@@ -423,9 +431,13 @@ export function WorkspaceWizard({
         ? V2C.S2_BLURB
         : s.step === "integrations"
           ? INTEGRATIONS_BLURB
-          : s.step === "reqs"
-            ? C.S3_BLURB
-            : undefined;
+          : s.step === "build"
+            ? BUILD_BLURB
+            : s.step === "reqs"
+              ? C.S3_BLURB
+              : s.step === "verify"
+                ? "Drive the workspace for real. Anything not in the contract is held at the door — approve or deny it live, adjust, retry, then finish."
+                : undefined;
 
   return (
     <Dialog open onOpenChange={(o) => !o && close()}>
@@ -442,7 +454,9 @@ export function WorkspaceWizard({
               if (id === "sources") goToSources();
               else if (id === "image" && wsExists) patch({ step: "image" });
               else if (id === "integrations" && wsExists) patch({ step: "integrations" });
+              else if (id === "build" && wsExists) patch({ step: "build" });
               else if (id === "reqs" && wsExists && profile) patch({ step: "reqs" });
+              else if (id === "verify" && wsExists && profile) patch({ step: "verify" });
             }}
           />
         </div>
@@ -487,18 +501,29 @@ export function WorkspaceWizard({
               }}
             />
           )}
+          {s.step === "build" && s.workspace && (
+            <StepBuild workspaceId={s.workspace.id} onStateChange={(b) => patch({ buildState: b })} />
+          )}
+          {s.step === "verify" && s.workspace && (
+            <VerifyBody
+              requirements={s.requirements}
+              storedSecretNames={s.secretNames}
+              powerSource={powerSource}
+              carryImage={carryImage}
+              onOpenReach={() => patch({ step: "reqs" })}
+              verifyPanel={
+                <WizardVerifySession
+                  ws={s.workspace}
+                  nothingResolves={powerSource.kind === "none"}
+                  onContractChanged={() => void absorbServerContract()}
+                />
+              }
+            />
+          )}
           {s.step === "reqs" && (
             <StepRequirements
               carryImage={carryImage}
-              verifyPanel={
-                s.workspace ? (
-                  <WizardVerifySession
-                    ws={s.workspace}
-                    nothingResolves={powerSource.kind === "none"}
-                    onContractChanged={() => void absorbServerContract()}
-                  />
-                ) : undefined
-              }
+              showVerifyTab={false}
               profile={profile}
               sources={s.sources}
               requirements={s.requirements}
@@ -567,18 +592,42 @@ export function WorkspaceWizard({
                 <Button type="button" variant="ghost" onClick={() => patch({ step: "image" })}>
                   Back
                 </Button>
-                <Button type="button" onClick={() => patch({ step: "reqs" })}>
+                <Button type="button" onClick={() => patch({ step: "build" })}>
                   Continue →
+                </Button>
+              </>
+            )}
+            {s.step === "build" && (
+              <>
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "integrations" })}>
+                  Back
+                </Button>
+                {/* Continue never hard-blocks: a failed/absent build falls back
+                    to the stock agent image at session time, stated honestly on
+                    the Verify step's carry card — but while a build RUNS, moving
+                    on just means arriving before the image does. */}
+                <Button type="button" onClick={() => patch({ step: "reqs" })}>
+                  {s.buildState?.state === "building" ? "Continue without waiting" : "Continue →"}
                 </Button>
               </>
             )}
             {s.step === "reqs" && (
               <>
-                <Button type="button" variant="outline" onClick={close}>
-                  Close
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "build" })}>
+                  Back
                 </Button>
-                <Button type="button" disabled={s.savingRequirements} onClick={() => void acceptAndFinish()}>
-                  Accept &amp; finish
+                <Button type="button" disabled={s.savingRequirements} onClick={() => void saveAndContinue()}>
+                  Save &amp; continue →
+                </Button>
+              </>
+            )}
+            {s.step === "verify" && (
+              <>
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "reqs" })}>
+                  Back
+                </Button>
+                <Button type="button" onClick={() => patch({ step: "done" })}>
+                  Finish
                 </Button>
               </>
             )}
