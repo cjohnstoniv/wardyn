@@ -32,6 +32,12 @@ import (
 // route the router no longer registers, so the table cannot go stale either).
 // Per the brief: "six routes were missed by hand-listing across two drafts —
 // the walk-enumeration is the point; hand-list nothing."
+//
+// Coverage boundary: the SSH gateway (docs/SSH.md, internal/api/sshgateway.go)
+// runs its OWN separate listener with its own authorization (sshAuth) —
+// chi.Walk only ever sees wardynd's HTTP router, so it CANNOT discover or
+// exercise SSH connections at all. A green TestAuthzMatrix says nothing
+// about SSH authorization; sshgateway_test.go is that surface's own pin.
 
 // routeClass is the authorization tier a route sits behind.
 type routeClass string
@@ -124,13 +130,20 @@ var routeMatrix = map[string]classifiedRoute{
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
-	"GET /api/v1/approvals":                       {class: classMember},
-	"GET /api/v1/audit":                           {class: classMember},
-	"GET /api/v1/base-images":                     {class: classMember},
-	"GET /api/v1/base-images/{id}":                {class: classMember},
-	"GET /api/v1/composer/backends":               {class: classMember},
-	"GET /api/v1/integrations":                    {class: classMember},
-	"GET /api/v1/me":                              {class: classMember},
+	"GET /api/v1/approvals":         {class: classMember},
+	"GET /api/v1/audit":             {class: classMember},
+	"GET /api/v1/base-images":       {class: classMember},
+	"GET /api/v1/base-images/{id}":  {class: classMember},
+	"GET /api/v1/composer/backends": {class: classMember},
+	"GET /api/v1/integrations":      {class: classMember},
+	"GET /api/v1/me":                {class: classMember},
+	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
+	// self-service registry scoped to the caller's OWN principal AT THE
+	// STORE (sshkeys.go's package doc), same shape as GET/POST /secrets
+	// above; a foreign fingerprint on the DELETE path is store-level
+	// principal-scoped so it already answers store.ErrNotFound (404)
+	// without needing an owner/foreign id pair here.
+	"GET /api/v1/me/ssh-keys":                     {class: classMember},
 	"GET /api/v1/policies":                        {class: classMember},
 	"GET /api/v1/policies/{id}":                   {class: classMember},
 	"GET /api/v1/runs":                            {class: classMember},
@@ -144,10 +157,12 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/workspaces/{id}/env-as-code":     {class: classMember},
 	"GET /api/v1/workspaces/{id}/observed-egress": {class: classMember},
 	"POST /api/v1/auth/logout":                    {class: classMember},
+	"POST /api/v1/me/ssh-keys":                    {class: classMember},
 	"POST /api/v1/runs":                           {class: classMember},
 	"POST /api/v1/runs/compose":                   {class: classMember},
 	"POST /api/v1/runs/compose/assist":            {class: classMember},
 	"POST /api/v1/runs/preflight":                 {class: classMember},
+	"DELETE /api/v1/me/ssh-keys/{fingerprint}":    {class: classMember},
 
 	// ── owner-or-admin ──
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun},
@@ -717,6 +732,24 @@ func (s *authzStore) TakeComposeResult(context.Context, uuid.UUID) ([]byte, bool
 	return nil, false, nil
 }
 func (s *authzStore) DiscardComposeResult(context.Context, uuid.UUID) error { return nil }
+
+// SSH gateway key registry (rebase compile trap, per the reviewer's own
+// note): store.Store gained these four methods on the SSH lane
+// (0032_ssh_public_keys.sql). The matrix's GET/POST /me/ssh-keys and DELETE
+// /me/ssh-keys/{fingerprint} routes are classMember — item 2's coarse
+// admit/refuse boundary, not full functional fidelity (see routeClass's own
+// doc comment) — so honest stubs are enough; never exercised beyond "does the
+// handler reach the store at all".
+func (s *authzStore) AddSSHKey(_ context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
+	return k, nil
+}
+func (s *authzStore) ListSSHKeysByPrincipal(context.Context, string) ([]types.SSHPublicKey, error) {
+	return nil, nil
+}
+func (s *authzStore) GetSSHKeyByFingerprint(context.Context, string) (types.SSHPublicKey, error) {
+	return types.SSHPublicKey{}, store.ErrNotFound
+}
+func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { return nil }
 
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────
 

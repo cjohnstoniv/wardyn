@@ -206,9 +206,8 @@ func parseBootFlags() *bootFlags {
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
 
-		sshListen: flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
-		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "",
-			`externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty falls back to -ssh-listen verbatim, which is wrong for most deployments (a container/NAT bind rarely equals the reachable address) — set this whenever the gateway is enabled`),
+		sshListen:    flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
+		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty falls back to -ssh-listen verbatim, which is wrong for most deployments (a container/NAT bind rarely equals the reachable address) — set this whenever the gateway is enabled`),
 	}
 	flag.Parse()
 

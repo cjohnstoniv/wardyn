@@ -75,6 +75,18 @@ func main() {
 	}
 }
 
+// run is wardynd's boot sequence: one linear ordered chain (validate config →
+// connect+migrate → build secrets/identity/broker/approvals/runner →
+// construct the Server → start background workers → serve) where each
+// phase's ORDER is load-bearing (e.g. the runner must exist before the
+// Server is constructed with it). Each phase already lives in its own helper
+// (validateConfig, connectAndMigrate, buildAuditChain, buildSecretStore,
+// buildRunnerFromFlags, buildOptionalFeatures, startBackgroundWorkers,
+// startSSHGateway, serveAndShutdown, …) — this function is the one place the
+// sequencing itself can be audited top-to-bottom. Low branching (passes
+// gocyclo/gocognit), just long.
+//
+//nolint:funlen // Deliberate: see the doc comment above — one linear ordered boot sequence kept in one scope on purpose, each phase already extracted into its own helper.
 func run() error {
 	f := parseBootFlags()
 
@@ -287,17 +299,9 @@ func run() error {
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
 
-	// SSH gateway accept loop (own goroutine, like the periodic workers above):
-	// a no-op inside ServeSSHGateway when -ssh-listen is empty, so this is safe
-	// to launch unconditionally; goSafe contains a panic the same as every
-	// other background goroutine here.
-	if *f.sshListen != "" {
-		go goSafe("ssh.gateway", func() {
-			if serr := srv.ServeSSHGateway(rootCtx); serr != nil {
-				slog.Error("wardynd: ssh gateway stopped", slog.Any("err", serr))
-			}
-		})
-	}
+	// SSH gateway accept loop (own goroutine, like the periodic workers above,
+	// and extracted the same way — see startSSHGateway's own doc comment).
+	startSSHGateway(rootCtx, f, srv)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
 	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)

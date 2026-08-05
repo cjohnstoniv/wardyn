@@ -24,7 +24,9 @@
 #
 # Every //nolint for these linters must carry a reason. Current justified set
 # (grep '//nolint:funlen'): api.runComposePipeline, docker.CreateSandbox,
-# api.dispatchRun, k8s.CreateSandbox.
+# api.dispatchRun, k8s.CreateSandbox, main.run (wardynd's boot sequence —
+# added when the SSH gateway's C2 lane pushed it 1 line past the ratchet;
+# already-extracted phase helpers, see the doc comment at the call site).
 version: "2"
 
 run:
