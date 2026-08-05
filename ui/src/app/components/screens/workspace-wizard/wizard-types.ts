@@ -29,10 +29,14 @@ export type {
 };
 
 // ============================ Rail ============================
-export type WizardStepId = "sources" | "image" | "reqs" | "done";
+export type WizardStepId = "sources" | "image" | "integrations" | "reqs" | "done";
 export const WIZARD_STEPS: { id: WizardStepId; label: string }[] = [
   { id: "sources", label: "Sources" },
   { id: "image", label: "Base image" },
+  // Integrations sit BEFORE Requirements: what a workspace connects through
+  // (AI, git hosts, feeds) joins its sources + base image in shaping what the
+  // Requirements step shows.
+  { id: "integrations", label: "Integrations" },
   { id: "reqs", label: "Requirements" },
   { id: "done", label: "Done" },
 ];

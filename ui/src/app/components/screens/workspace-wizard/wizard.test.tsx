@@ -41,6 +41,7 @@ vi.mock("../../../lib/api/integrations", async () => {
 
 import { WorkspaceWizard } from "./wizard";
 import { C } from "../../../lib/workspace-copy";
+import { INTEGRATIONS_BLURB } from "./step-integrations";
 
 function baseWorkspace(overrides: Record<string, unknown> = {}) {
   return {
@@ -104,6 +105,10 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     expect(screen.getAllByText("Go").length).toBeGreaterThan(0);
     expect(screen.getAllByText("pnpm").length).toBeGreaterThan(0);
 
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    // Step ③ Integrations sits between Base image and Requirements — what the
+    // workspace connects through joins sources+image in shaping step ④.
+    await screen.findByText(INTEGRATIONS_BLURB);
     fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
     await screen.findByText(C.S3_BLURB);
     // The Requirements step opens on its Record tab (step-requirements.tsx) —
@@ -226,6 +231,8 @@ describe("WorkspaceWizard — Done's primary action follows `origin`", () => {
     const onOpenWorkspace = vi.fn();
     render(<WorkspaceWizard origin={origin} onClose={onClose} onAttach={onAttach} onOpenWorkspace={onOpenWorkspace} />);
     await driveToBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
     fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
     await screen.findByText(C.S3_BLURB);
     fireEvent.click(screen.getByRole("button", { name: /accept & finish/i }));

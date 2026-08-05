@@ -39,6 +39,7 @@ import { slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { C, V2C } from "../../../lib/workspace-copy";
 import type { SetupStatus, Source as SdkSource, Workspace, WorkspaceProfile } from "../../../lib/types";
+import { StepIntegrations, INTEGRATIONS_BLURB } from "./step-integrations";
 import { StepSources } from "./step-sources";
 import { StepBaseImage } from "./step-base-image";
 import { StepRequirements } from "./step-requirements";
@@ -63,6 +64,7 @@ import {
   type WizardStepId,
   type WorkspaceRequirementsMap,
   type WorkspaceSourceKind,
+  setRequirementLane,
 } from "./wizard-types";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -357,9 +359,11 @@ export function WorkspaceWizard({
       ? V2C.S1_BLURB
       : s.step === "image"
         ? V2C.S2_BLURB
-        : s.step === "reqs"
-          ? C.S3_BLURB
-          : undefined;
+        : s.step === "integrations"
+          ? INTEGRATIONS_BLURB
+          : s.step === "reqs"
+            ? C.S3_BLURB
+            : undefined;
 
   return (
     <Dialog open onOpenChange={(o) => !o && close()}>
@@ -375,6 +379,7 @@ export function WorkspaceWizard({
             onJump={(id) => {
               if (id === "sources") goToSources();
               else if (id === "image" && wsExists) patch({ step: "image" });
+              else if (id === "integrations" && wsExists) patch({ step: "integrations" });
               else if (id === "reqs" && wsExists && profile) patch({ step: "reqs" });
             }}
           />
@@ -408,6 +413,18 @@ export function WorkspaceWizard({
               onChange={(p) => patch({ baseImage: { ...s.baseImage, ...p } })}
             />
           )}
+          {s.step === "integrations" && (
+            <StepIntegrations
+              status={s.setupStatus ?? null}
+              requirements={s.requirements}
+              setLane={(key, level) => patch({ requirements: setRequirementLane(s.requirements, key, level) })}
+              clear={(key) => {
+                const next = { ...s.requirements };
+                delete next[key];
+                patch({ requirements: next });
+              }}
+            />
+          )}
           {s.step === "reqs" && (
             <StepRequirements
               profile={profile}
@@ -417,7 +434,10 @@ export function WorkspaceWizard({
               storedSecretNames={s.secretNames}
               onSecretStored={onSecretStored}
               powerSource={powerSource}
-              status={s.setupStatus}
+              // No status: the wizard's step ③ OWNS the integrations picker;
+              // passing it here would render the same section twice. The
+              // workspace DETAIL page still passes its status — that surface
+              // has no step ③, so its Reach keeps the inline section.
             />
           )}
           {s.step === "done" && (
@@ -473,6 +493,16 @@ export function WorkspaceWizard({
                     send garbage rather than the real choice. Persisting it is
                     a small follow-up once that client function grows the same
                     base_image field createWorkspace already has. */}
+                <Button type="button" onClick={() => patch({ step: "integrations" })}>
+                  Continue →
+                </Button>
+              </>
+            )}
+            {s.step === "integrations" && (
+              <>
+                <Button type="button" variant="ghost" onClick={() => patch({ step: "image" })}>
+                  Back
+                </Button>
                 <Button type="button" onClick={() => patch({ step: "reqs" })}>
                   Continue →
                 </Button>
