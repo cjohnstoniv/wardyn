@@ -30,6 +30,13 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
+	// k8s conformance suite gating (test/conformance/conformance_k8s_test.go):
+	// outside envDocRoots (test/, not cmd/ or internal/) so the forward ratchet
+	// never sees these anyway, but listed here too (and in ENV.md's Test/
+	// internal-only section) so the allowlist itself stays the honest, complete
+	// registry of every test-only WARDYN_* var, not just the ones the mechanical
+	// scan happens to reach.
+	"WARDYN_TEST_K8S": true, "WARDYN_TEST_K8S_AGENT_IMAGE": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and

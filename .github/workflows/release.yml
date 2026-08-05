@@ -1,0 +1,156 @@
+name: Release images
+
+# Publishes the FOUR images a Wardyn release actually ships, cosign-signed
+# (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
+# (RELEASING.md's tagging convention). This is the "release" half of image
+# publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
+# (wardynd only, :latest + :sha-<commit> on every push to main) — the two no
+# longer overlap: publish-image.yml's own tags trigger was removed in the same
+# change that added this file (a v* push used to fire BOTH workflows, racing
+# to push the identical wardynd:X.Y.Z ref, one signed one not — see that
+# file's header for the current split).
+#
+# ── the four images, and why each ref is what it is (verified against the
+#    tree, not assumed) ──────────────────────────────────────────────────────
+#   ghcr.io/cjohnstoniv/wardynd
+#     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
+#     — the chart's `image.tag: ""` resolves to `.Chart.AppVersion`, so a
+#     release tag vX.Y.Z landing here as the bare "X.Y.Z" is what makes a
+#     freshly-cut chart of the same version resolve to a real, pullable image
+#     instead of ImagePullBackOff. Built with GO_BUILD_TAGS=docker,k8s (both
+#     runner substrates compiled in — deploy/compose/Dockerfile.wardynd's own
+#     new default, passed explicitly here for the record) so the SAME
+#     published image serves the compose demo AND the Helm chart.
+#   ghcr.io/cjohnstoniv/wardyn-proxy
+#     matches deploy/helm/wardyn/README.md's "Kubernetes runner substrate"
+#     worked example (`--set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG"`)
+#     and WARDYN_PROXY_IMAGE's naming (docs/ENV.md) — the chart ships NO
+#     default for k8s.proxyImage (environment-specific, required in practice),
+#     so this is the ref an operator points `--set k8s.proxyImage=` at once
+#     they choose ghcr as their registry, not a value baked into the chart.
+#   ghcr.io/cjohnstoniv/agent-claude-code, ghcr.io/cjohnstoniv/agent-codex-cli
+#     internal/api/runs_policy.go's agentImage() fallback convention:
+#     "ghcr.io/cjohnstoniv/agent-" + ImageKey, and internal/api/harness.go's
+#     catalog sets ImageKey "claude-code"/"codex-cli" for exactly these two
+#     rows (the aws-sso login-only image is deliberately NOT one of the four
+#     — it names no --agent a run selects, see harness.go's own doc comment).
+#
+# ── cosign (keyless) ─────────────────────────────────────────────────────────
+# No key material anywhere: `id-token: write` lets the job mint a short-lived
+# OIDC token, which cosign exchanges for a Fulcio cert + a Rekor transparency-
+# log entry (the standard GitHub-Actions-native keyless recipe) — `cosign
+# sign --yes` picks this up automatically from the ambient Actions OIDC env,
+# no extra flags. Signs by DIGEST (the build-push step's own `digest` output),
+# never by the mutable tag. `provenance: false` on the build step keeps that
+# digest pointing at the plain single-platform image manifest cosign expects,
+# not a multi-manifest index carrying a BuildKit attestation — signing the
+# index instead is also valid but is a different, unverified-here recipe.
+#
+# ── SBOM ──────────────────────────────────────────────────────────────────
+# `make sbom` (the existing target — not re-deriving syft flags here) via a
+# SEPARATE job, uploaded as a workflow artifact exactly like ci.yml's
+# `sbom-stub` job already does for main-branch freshness — the two are now
+# siblings: sbom-stub is the continuous, unsigned, non-release check;
+# THIS run is the versioned release SBOM. Deliberately NOT auto-attached to
+# a GitHub Release object: RELEASING.md's step 5 ("Create the GitHub
+# Release") is manual by design ("nothing here is automated to push
+# anything") — download this artifact and attach it by hand if wanted.
+#
+# ── linux/amd64 only ─────────────────────────────────────────────────────────
+# ponytail: single-arch (the runner's own arch, no QEMU/cross-build). Add
+# linux/arm64 (docker/setup-qemu-action + a multi-platform `platforms:` list)
+# when an operator actually asks for an arm64 cluster/laptop image — nobody
+# has yet.
+#
+# ── can this be live-tested? ─────────────────────────────────────────────────
+# No. It only runs on a real `vX.Y.Z` tag push against origin, needs GHCR
+# `packages: write` + the Actions OIDC token for cosign, and pushes to the
+# real ghcr.io/cjohnstoniv namespace — none of that exists in this worktree/
+# sandbox. Verified instead by: actionlint (see the lane report), matching
+# every `uses:` pin's style/SHA against ci.yml and publish-image.yml
+# (identical actions, identical versions, reused rather than re-resolved
+# where the same action already appears in this repo), and the image-ref
+# parity check above against the actual tree. The image-build steps
+# themselves (Dockerfile correctness, GO_BUILD_TAGS=docker,k8s compiling) ARE
+# locally verified — see the lane report's gate output.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  images:
+    name: build, push, sign (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing (Fulcio/Rekor OIDC exchange)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wardynd
+            dockerfile: deploy/compose/Dockerfile.wardynd
+            build-args: |
+              GO_BUILD_TAGS=docker,k8s
+          - name: wardyn-proxy
+            dockerfile: deploy/compose/Dockerfile.proxy
+            build-args: ""
+          - name: agent-claude-code
+            dockerfile: deploy/images/claude-code/Dockerfile
+            build-args: ""
+          - name: agent-codex-cli
+            dockerfile: deploy/images/codex-cli/Dockerfile
+            build-args: ""
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: "v2.6.4"
+      # Bare semver (v-prefix stripped), matching Chart.yaml's appVersion —
+      # same convention publish-image.yml uses for its own tag-triggered
+      # publish. Via env, not `${{ }}` inside the script body (this repo's own
+      # precedent — ci.yml's screenshots-fresh job, publish-image.yml's
+      # "Compute image tags" step).
+      - name: Compute the release tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          platforms: linux/amd64
+          provenance: false
+          build-args: ${{ matrix.build-args }}
+          tags: ghcr.io/cjohnstoniv/${{ matrix.name }}:${{ steps.tag.outputs.tag }}
+      - name: Sign the pushed image (keyless, by digest)
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_REF}"
+
+  sbom:
+    name: SBOM (release asset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Generate CycloneDX SBOM (make sbom; syft version pinned in the Makefile)
+        run: make sbom
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: wardyn-sbom-${{ github.ref_name }}
+          path: wardyn-sbom.cdx.json

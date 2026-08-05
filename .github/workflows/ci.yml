@@ -515,11 +515,15 @@ jobs:
             make dco DCO_RANGE="$BASE..HEAD"
           fi
 
-  # ── supply-chain: SBOM + cosign (release stub) ────────────────────────────
-  # This job is a clearly-marked stub. It produces a CycloneDX SBOM via syft
-  # and shows where cosign signing would go in a real release pipeline.
-  # It only runs on push to main (not on PRs) and does NOT upload to a registry.
-  # Wire a real release workflow here when release automation is ready (v0.5).
+  # ── supply-chain: SBOM freshness (continuous, unsigned) ────────────────────
+  # Produces a CycloneDX SBOM via syft on every push to main (not on PRs) and
+  # uploads it as a plain, UNSIGNED workflow artifact — a continuous freshness
+  # check, never a registry upload. The real, cosign-SIGNED release SBOM (plus
+  # the four cosign-signed release images) is a SEPARATE job, on a SEPARATE
+  # trigger: .github/workflows/release.yml, on a vX.Y.Z tag push. Kept "-stub"
+  # in the job id on purpose: relative to that real release artifact, this one
+  # still is one — a cheap main-tip check, not something anyone should pull
+  # and trust as a release manifest.
   sbom-stub:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -532,8 +536,3 @@ jobs:
         with:
           name: wardyn-sbom
           path: wardyn-sbom.cdx.json
-      # STUB: cosign signing goes here once a release key / keyless OIDC
-      # identity is configured. Example:
-      #   cosign sign-blob --yes wardyn-sbom.cdx.json
-      - name: STUB — cosign signing not yet wired
-        run: echo "SBOM generated. cosign signing is a v0.5 release-pipeline task."

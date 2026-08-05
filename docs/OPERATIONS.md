@@ -400,3 +400,74 @@ above, and the masking registry is a worse failure than any of the six was —
 those lost work, this one persists secrets. Keep `replicas: 1`. Going beyond it
 has not been built, tested, or released, and the chart will not render it without
 `allowMultiReplica=true`.
+
+## Kubernetes: known gaps (v0.5)
+
+The `k8s` runner substrate (`deploy/helm/wardyn`, `k8s.enabled=true`,
+`internal/runner/k8s`) is a **separate, independent confinement substrate**
+from the Docker Compose path (L1/NetworkPolicy-backed vs. Compose's L0
+structural one) — most of this document applies to both, but the list below
+is what the k8s substrate does NOT do yet, honestly, as of v0.5. Each item is
+a real limitation checked against the driver, not a guess:
+
+- **No BYOI or devcontainer builds.** A `wardyn-byoi/`-prefixed image ref is
+  refused before any pod is created — ephemeral containers cannot honor the
+  selftest-then-task double-exec BYOI needs
+  (`internal/runner/k8s/errors.go`'s `errBYOIUnsupported`,
+  `internal/runner/k8s/exec.go`). `WARDYN_ENVBUILD` devcontainer builds are
+  Docker-only for the same reason and are unaffected by `k8s.enabled` — they
+  simply have no k8s equivalent.
+- **No `local_dir` / host-path workspace mounts.** A policy with any
+  `WorkspaceMounts` entry fails the run closed with a clear error
+  (`internal/runner/k8s/sandbox.go`'s `errMountsUnsupported`) — a k8s pod has
+  no path back to an arbitrary directory on wardynd's own host the way a
+  Docker bind mount does. Git-clone workspaces (`WorkspaceRepos`) are
+  unaffected; only a *local directory* source is refused.
+- **No `~/.aws` / `~/.claude` host staging.** The same `errMountsUnsupported`
+  refusal covers the RESIDENT-COPY credential path (mounting staged
+  `~/.claude` or a captured `~/.aws` into the sandbox) — there is no host
+  filesystem to stage from in the first place. Use proxy-side injection
+  instead: managed-subscription OAuth injection and the Bedrock AWS SSO
+  exchange are both substrate-agnostic (they happen at `wardyn-proxy`, never
+  by mounting a credential directory into the pod), so they work unchanged
+  on k8s.
+- **No in-sandbox DNS.** Every sandbox pod is `DNSPolicy: DNSNone` with a
+  single nameserver, `127.0.0.1` — nothing listens there, so a DNS query
+  fails FAST (connection refused) rather than hanging out a real timeout
+  against a resolver a NetworkPolicy would deny anyway
+  (`internal/runner/k8s/sandbox.go`). Only the pinned `wardyn-proxy` sidecar
+  resolves hostnames, exactly like the Compose substrate's proxy-only egress
+  posture — this is parity, not a new gap, but the *mechanism* (a present-but-
+  unreachable loopback resolver vs. Compose's no-resolver-configured-at-all)
+  is k8s-specific enough to name here.
+- **No per-pod PIDs limit.** Kubernetes has no per-container "pids" resource
+  the way Docker's `--pids-limit` does — a run's `ResourceLimits.PidsLimit`
+  is accepted but not enforced, and wardynd logs a warning naming the run id
+  every time it's requested and skipped (`internal/runner/k8s/sandbox.go`).
+  **Recommendation**: set the node-level kubelet `podPidsLimit` (or the
+  equivalent `SystemReserved`/`KubeReserved` PID accounting for your
+  distribution) as a cluster-wide fork-bomb backstop — it is coarser
+  (per-node, not per-run) but real, and it is the only lever this substrate
+  has today.
+- **`DiskMiB` is ignored, with a warning.** Same shape as the PIDs gap: no
+  per-container writable-storage quota is wired up on this substrate yet, so
+  a requested disk cap is accepted, not enforced, and logged
+  (`internal/runner/k8s/sandbox.go`). An `ephemeral-storage` resource request/
+  limit at the cluster level is the closest present mitigation.
+- **No k8s ground-truth correlator.** The Tetragon host-sensor → ground-truth
+  pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the
+  `groundtruth` Compose profile) has no k8s-substrate equivalent — it is not
+  referenced anywhere under `internal/runner/k8s`. A k8s deployment gets the
+  NetworkPolicy-enforced boundary (proven live by the boot-time egress
+  canary) but not the independent kernel-level corroboration Compose +
+  Tetragon provides.
+- **`replicas` stays 1 on k8s exactly as it does everywhere else** — see
+  [One replica, by construction](#one-replica-by-construction) above; nothing
+  about the k8s substrate changes that story (the masking registry is still
+  in-process, per-pod).
+
+None of these are silent: the mount and BYOI gaps fail the run closed with a
+named error, the resource-cap gaps log a warning naming exactly what is
+unenforced, and the DNS/replica behavior matches the rest of this document.
+Closing any of them is unstarted work, not a documented-but-planned
+near-term item — see ROADMAP.md for what is actually queued.

@@ -7,15 +7,22 @@ name: Publish wardynd image
 # forever (see RELEASING.md "Container images" and
 # deploy/helm/wardyn/README.md).
 #
-# Runs on push to main (":latest" + ":sha-<short-sha>") and on release tags
-# (v* — RELEASING.md's tagging convention; published as the BARE semver, e.g.
-# v0.4.5 -> "0.4.5", matching Chart.yaml's appVersion so the chart default
-# resolves for that release once it is cut). A release tag that predates this
-# workflow (v0.4.4 and older) can NOT be re-run at its own ref — the workflow
-# file doesn't exist there — so workflow_dispatch takes an extra_tag input:
-# dispatch on main with extra_tag=0.4.4 to publish main's HEAD under that tag
-# (acceptable for the backfill: 0.4.4 is main's lineage; from v0.4.5 onward the
-# tag push publishes the exact tagged commit automatically).
+# Runs on push to main only: ":latest" + ":sha-<short-sha>", the CONTINUOUS
+# (unsigned, main-tip) half of image publishing. A vX.Y.Z release TAG push no
+# longer triggers this file — that is now .github/workflows/release.yml's job
+# (cosign-signed, all four images this release ships, not wardynd alone). The
+# two used to both fire on the same tag push, racing to publish the identical
+# wardynd:X.Y.Z ref, one signed and one not; release.yml is the single
+# tag-triggered publisher now.
+#
+# workflow_dispatch's extra_tag backfill is still real and unrelated to that
+# split: a release tag that predates EITHER workflow (v0.4.4 and older) can
+# NOT be re-run at its own ref (neither workflow file exists there), so
+# dispatching THIS workflow on main with extra_tag=0.4.4 publishes main's
+# HEAD under that old tag (acceptable: 0.4.4 is main's lineage). Manually
+# dispatching this workflow AGAINST a v0.4.5+ tag ref still works too
+# (github.ref_type reads "tag" exactly as a push would) — it is simply no
+# longer the AUTOMATIC path for one.
 #
 # Deliberately its OWN workflow file, not a job on ci.yml: ci.yml's push
 # trigger only ever matched branches (main/master), never tags, and widening
@@ -26,7 +33,6 @@ name: Publish wardynd image
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       extra_tag:

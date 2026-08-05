@@ -534,8 +534,13 @@ dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 
-# CycloneDX SBOM via syft (release stub; installs syft if absent, pinned).
-sbom: ## Generate a CycloneDX SBOM via syft (release stub)
+# CycloneDX SBOM via syft (installs syft if absent, pinned). Consumed by two
+# callers: ci.yml's sbom-stub job (continuous freshness check on main, no
+# signing) and .github/workflows/release.yml (the real release asset, cosign-
+# signed, on a vX.Y.Z tag) — this target earned dropping its former "release
+# stub" self-description once the second caller landed; it IS the release
+# SBOM step now, not a placeholder for one.
+sbom: ## Generate a CycloneDX SBOM via syft
 	@echo "Generating CycloneDX SBOM via syft $(SYFT_VERSION)..."
 	@command -v syft >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/anchore/syft/$(SYFT_VERSION)/install.sh | sh -s -- -b /usr/local/bin $(SYFT_VERSION)
 	syft . -o cyclonedx-json > wardyn-sbom.cdx.json

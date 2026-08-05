@@ -228,6 +228,26 @@ wardynd never reads one back); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name).
 
+### Known gaps (v0.5)
+
+The k8s substrate is not yet at parity with the Docker Compose one. Fails
+closed with a clear error: **no BYOI/devcontainer image builds**, **no
+`local_dir`/host-path workspace mounts** (git-clone workspaces are fine —
+only a local-directory source is refused), and therefore **no `~/.aws` /
+`~/.claude` host staging** either (use proxy-side subscription/Bedrock
+credential injection instead — substrate-agnostic, works unchanged here).
+Accepted but not enforced, with a logged warning naming the run: **no per-pod
+PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide
+backstop) and **`DiskMiB`** (no writable-storage quota wired up yet). Also:
+**no in-sandbox DNS** (a fast-failing loopback-only resolver — only
+`wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
+**no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no
+k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
+other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
+"One replica, by construction"). Full detail, including the exact code each
+claim above is checked against: `docs/OPERATIONS.md`'s "Kubernetes: known
+gaps (v0.5)" section.
+
 ## Split SSH exposure
 
 `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second

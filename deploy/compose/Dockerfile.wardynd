@@ -1,6 +1,14 @@
-# wardynd control plane, built WITH the docker runner (-tags docker) so the
-# compose demo can actually launch sandboxes via the host Docker daemon.
+# wardynd control plane, built WITH the docker AND k8s runner substrates
+# (-tags docker,k8s, ARG GO_BUILD_TAGS below) so the SAME image works for the
+# compose demo (host Docker daemon) and the Helm chart's k8s substrate
+# (deploy/helm/wardyn, k8s.enabled=true) — WARDYN_RUNNER selects which
+# COMPILED-IN substrate is ACTIVE at boot (internal/runner/k8s/register.go's
+# init() only registers a lazy constructor; it is never invoked, and no
+# in-cluster/kubeconfig client is ever built, unless -runner k8s is actually
+# selected — compiling it in is a no-op cost for a docker-runner deployment).
+# Override with --build-arg GO_BUILD_TAGS=docker for a docker-only image.
 #
+
 # DAEMON-TRUST TRADEOFF (read this): the wardynd service in docker-compose.yaml
 # bind-mounts /var/run/docker.sock so the docker runner can create sibling
 # containers (the agent sandbox + wardyn-proxy sidecar). Mounting the host
@@ -101,8 +109,11 @@ RUN go mod download
 
 COPY . .
 # Pure-Go build (CGO off) so the binary runs on distroless static. The docker
-# client and syslog sink are pure Go; -tags docker compiles in the runner.
-RUN CGO_ENABLED=0 GOOS=linux go build -tags docker -o /out/wardynd ./cmd/wardynd \
+# client, k8s client-go and syslog sink are all pure Go; GO_BUILD_TAGS compiles
+# in whichever runner substrate(s) are named (see this file's top-of-file note
+# on why both by default costs nothing at runtime).
+ARG GO_BUILD_TAGS=docker,k8s
+RUN CGO_ENABLED=0 GOOS=linux go build -tags "${GO_BUILD_TAGS}" -o /out/wardynd ./cmd/wardynd \
  && CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn ./cmd/wardyn
 
 # A HOST-NATIVE `wardyn` for scripts/up.sh's host-side proxy detection. The
