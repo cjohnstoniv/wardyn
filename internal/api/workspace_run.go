@@ -334,15 +334,18 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	now := run.CreatedAt
 	run.Interactive = interactive
-	// A confined verify escalates an off-policy host to the operator (deny_with_review:
-	// raise a pending approval, deny the in-flight probe, and let a retry through once
-	// approved) — the direct successor to the legacy forced-true. Deliberately NOT
-	// wait_for_review: an unattended verify probe must fail fast, not hang up to the
-	// hold deadline. The verify panel's live-approval strip decides it either way. A
-	// learning session (allow-all) makes this inert.
+	// A confined verify HOLDS an off-policy host at the door (wait_for_review:
+	// the connection parks while the approval surfaces in the verify panel's
+	// live strip; approve releases it, deny/timeout fails it). The old
+	// deny_with_review here leaned on a stale "unattended probe must fail
+	// fast" rationale — every session is interactive now (the operator drives
+	// the attach terminal), so the operator IS present to decide, and a held
+	// request that gets approved both completes in-flight AND lands as an
+	// egress: requirement row via the decide() hook. A learning session
+	// (allow-all) makes this inert.
 	verifyFirstUse := types.FirstUseAlwaysDeny
 	if confined {
-		verifyFirstUse = types.FirstUseDenyWithReview
+		verifyFirstUse = types.FirstUseWaitForReview
 	}
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,

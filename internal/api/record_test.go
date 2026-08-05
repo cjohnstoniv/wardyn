@@ -79,6 +79,22 @@ func (s *recordStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace,
 func (s *recordStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error) {
 	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive)
 }
+
+// MergeWorkspaceRequirements mirrors the real scoped writer: atomic || into
+// the overlay, guarded by the 256-key cap (ErrConflict past it).
+func (s *recordStore) MergeWorkspaceRequirements(_ context.Context, _ uuid.UUID, add map[string]types.WorkspaceRequirement) (types.Workspace, error) {
+	if len(s.ws.Requirements) >= 256 {
+		return types.Workspace{}, store.ErrConflict
+	}
+	if s.ws.Requirements == nil {
+		s.ws.Requirements = map[string]types.WorkspaceRequirement{}
+	}
+	for k, v := range add {
+		s.ws.Requirements[k] = v
+	}
+	return s.ws, nil
+}
+
 func (s *recordStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	if s.run.ID == uuid.Nil {
 		return types.AgentRun{}, store.ErrNotFound
@@ -373,9 +389,17 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	wantApproved := []string{"already.example.com", "api.stripe.com"}
-	if len(fake.ws.ApprovedEgress) != 2 || fake.ws.ApprovedEgress[0] != wantApproved[0] || fake.ws.ApprovedEgress[1] != wantApproved[1] {
-		t.Errorf("approved = %v, want %v (allow-only, valid-host-only, deduped, sorted)", fake.ws.ApprovedEgress, wantApproved)
+	// Promotion writes the requirements contract now: exactly ONE new row
+	// (allow-only, valid-host-only, deduped against the legacy approved lane),
+	// and the legacy ApprovedEgress column is READ-ONLY — never written again.
+	if len(fake.ws.Requirements) != 1 {
+		t.Fatalf("requirements = %v, want exactly the one promoted row", fake.ws.Requirements)
+	}
+	if row := fake.ws.Requirements["egress:api.stripe.com"]; row.Level != "required" || row.Provenance != "operator_set" {
+		t.Errorf("egress:api.stripe.com = %+v, want required/operator_set", row)
+	}
+	if len(fake.ws.ApprovedEgress) != 1 || fake.ws.ApprovedEgress[0] != "already.example.com" {
+		t.Errorf("approved = %v, want the legacy lane untouched", fake.ws.ApprovedEgress)
 	}
 	if res := fake.savedResult(t, "build"); !res.EgressPromoted {
 		t.Error("egress_promoted marker not set")
@@ -427,10 +451,10 @@ func TestPromoteRecordEgress_GuardMissConflicts(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("code = %d, want 409 when the recording changed concurrently; body=%s", w.Code, w.Body.String())
 	}
-	// M4: the record-entry CAS runs BEFORE the egress widening, so a CAS miss
-	// must leave ApprovedEgress untouched — not widen-then-409.
-	if len(fake.ws.ApprovedEgress) != 0 {
-		t.Errorf("approved egress = %v, want untouched (empty) on a CAS miss", fake.ws.ApprovedEgress)
+	// M4: the record-entry CAS runs BEFORE the contract widening, so a CAS
+	// miss must leave the requirements overlay untouched — not widen-then-409.
+	if len(fake.ws.Requirements) != 0 {
+		t.Errorf("requirements = %v, want untouched (empty) on a CAS miss", fake.ws.Requirements)
 	}
 }
 
@@ -468,9 +492,12 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if len(fake.ws.ApprovedEgress) != 1 || fake.ws.ApprovedEgress[0] != "api.stripe.com" {
-		t.Errorf("approved = %v, want only [api.stripe.com] (model-provider + baseline clone hosts must never be promoted)",
-			fake.ws.ApprovedEgress)
+	if len(fake.ws.Requirements) != 1 {
+		t.Fatalf("requirements = %v, want only the stripe row (model-provider + baseline clone hosts must never be promoted)",
+			fake.ws.Requirements)
+	}
+	if row := fake.ws.Requirements["egress:api.stripe.com"]; row.Level != "required" || row.Provenance != "operator_set" {
+		t.Errorf("egress:api.stripe.com = %+v, want required/operator_set", row)
 	}
 }
 
@@ -497,17 +524,17 @@ func TestPromoteRecordEgress_HostSubset(t *testing.T) {
 	if w := do(t, srv, http.MethodPost, url, adminToken, `{"hosts":["not-observed.example.com"]}`); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("unrecognized host: code = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
-	if len(fake.ws.ApprovedEgress) != 0 {
-		t.Fatalf("a rejected subset must not widen anything, got %v", fake.ws.ApprovedEgress)
+	if len(fake.ws.Requirements) != 0 {
+		t.Fatalf("a rejected subset must not widen anything, got %v", fake.ws.Requirements)
 	}
 
 	// A valid subset promotes ONLY that subset, leaving the rest un-approved.
 	if w := do(t, srv, http.MethodPost, url, adminToken, `{"hosts":["api.stripe.com"]}`); w.Code != http.StatusOK {
 		t.Fatalf("valid subset: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if len(fake.ws.ApprovedEgress) != 1 || fake.ws.ApprovedEgress[0] != "api.stripe.com" {
-		t.Errorf("approved = %v, want only [api.stripe.com] (evil.example.com excluded from the requested subset)",
-			fake.ws.ApprovedEgress)
+	if len(fake.ws.Requirements) != 1 || fake.ws.Requirements["egress:api.stripe.com"].Level != "required" {
+		t.Errorf("requirements = %v, want only egress:api.stripe.com (evil.example.com excluded from the requested subset)",
+			fake.ws.Requirements)
 	}
 }
 

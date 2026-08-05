@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // decisionRequest is the approve/deny body.
@@ -129,5 +131,57 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// approval.Decide itself: internal/api imports internal/approval, so the
 	// dependency only runs this way.
 	s.metrics.approvalDecided(approve)
+	if approve {
+		s.learnVerifyEgress(r.Context(), result, decidedByType, decidedBy)
+	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// learnVerifyEgress is the verify loop's write-back, hooked at the ONE
+// chokepoint every approval decision funnels through: approving an
+// egress_domain request raised DURING a workspace verify/record session lands
+// the host as an `egress:<host>` row in THAT workspace's own requirements
+// contract (required, operator_set — a human just clicked) the moment the
+// decision is made. The gates are the trusted linkages, never sandbox input:
+// the run row's WorkspaceID and its "workspace record" task discriminator — a
+// PLAIN run's approval widens only its own run and writes NOTHING durable.
+// The row lands on the WORKSPACE overlay, never a shared library source:
+// approving a host for this aggregate must not leak the approval into every
+// other workspace attaching the same source. Every guard fails silent — the
+// approval itself already stands; this is the durable echo, not the decision.
+func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest, byType types.ActorType, by string) {
+	if ap.Kind != types.ApprovalEgressDomain || s.cfg.Store == nil {
+		return
+	}
+	run, err := s.cfg.Store.GetRun(ctx, ap.RunID)
+	if err != nil || run.WorkspaceID == nil || run.Task != "workspace record" {
+		return
+	}
+	var scope struct {
+		Host string `json:"host"`
+	}
+	if json.Unmarshal(ap.RequestedScope, &scope) != nil {
+		return
+	}
+	host := strings.ToLower(strings.TrimSpace(scope.Host))
+	if host == "" || !workspacescan.ValidApprovedHost(host) {
+		return
+	}
+	key := "egress:" + host
+	if _, err := s.cfg.Store.MergeWorkspaceRequirements(ctx, *run.WorkspaceID, map[string]types.WorkspaceRequirement{
+		key: {Level: "required", Provenance: "operator_set"},
+	}); err != nil {
+		// The approval stands either way; the contract write is audited as the
+		// miss it is (cap hit / workspace gone) so the operator can add the row
+		// on Reach instead of wondering why the replay still denies the host.
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+			run.WorkspaceID.String(), "failure", mustJSON(map[string]any{
+				"key": key, "source": "verify:" + ap.RunID.String(), "detail": err.Error(),
+			})))
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+		run.WorkspaceID.String(), "success", mustJSON(map[string]any{
+			"key": key, "source": "verify:" + ap.RunID.String(),
+		})))
 }

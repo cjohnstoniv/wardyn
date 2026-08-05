@@ -170,6 +170,19 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 func confinedEgressDomains(ws types.Workspace) []string {
 	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
+	// The verify loop's approvals land as REQUIRED egress: rows in the folded
+	// contract (workspace overlay ∪ attached sources) — the replay must honor
+	// them, or the host an operator just approved is denied again on the very
+	// next confined session. Optional rows stay out: a replay has no
+	// enabled-optional wire, and optional means "may proceed without it".
+	for key, req := range effectiveRequirements(ws) {
+		if req.Level != "required" {
+			continue
+		}
+		if typ, host, ok := types.SplitRequirementKey(key); ok && typ == "egress" {
+			unionAllowedDomains(base, []string{host})
+		}
+	}
 	return base.AllowedDomains
 }
 

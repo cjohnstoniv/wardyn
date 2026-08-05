@@ -43,6 +43,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   them* (`?force=1` detaches — for an image that honestly means "fall back to
   the derived recommended build"; for a source it un-mounts code, which is why
   the refusal is loud instead of tolerated).
+- **Record's verify loop closes: approving a held host writes the contract
+  row, immediately, on the right tier.** A confined verify session now holds
+  an off-policy host at the door (`wait_for_review`), and the operator's
+  approve — hooked at the one chokepoint every approval decision funnels
+  through — lands the host as an `egress:<host>` requirement row
+  (required/operator_set) in *that workspace's* contract the moment the
+  decision is made. Deliberately the workspace overlay and never the shared
+  source: approving a host for one aggregate must not leak the approval into
+  every other workspace attaching the same repo. A plain run's approval
+  widens only its own run and writes nothing durable; deny leaves the
+  contract untouched. The confined replay's allowlist folds in the
+  contract's required `egress:` rows, so the host an operator just approved
+  is reachable on the very next session — approve → row → replay passes, one
+  loop. "Promote to approved egress" now writes the same requirement rows
+  (the legacy `approved_egress` list is read-only from here: still honored
+  in replays, never written again), and the whole approve/deny surface is
+  egress-only by construction — sandboxes can only ever raise egress
+  approvals, so secrets stay declared on the contract, never requested by a
+  running session.
 - **Corporate network is its own Getting-started step, and it comes before
   Integrations** — because on a corporate network every integration after it
   depends on the path it configures, and discovering that at the point an
@@ -339,6 +358,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Verify's held-at-the-door approval never actually held.** Confined verify
+  sessions ran `deny_with_review` on a rationale written for a session shape
+  that no longer exists ("an unattended probe must fail fast") — every record
+  session has been interactive since named sessions landed, so the operator
+  was present, watching a live-approval strip built for holds that never
+  happened: the probe was already denied by the time they clicked approve,
+  and the approval helped only a manual retry. Confined sessions now run
+  `wait_for_review` — the connection parks at the door, approve releases it
+  in-flight (and writes the contract row), deny or timeout fails it.
 - **A repo+dir workspace never scanned its directories.** The whole-workspace
   scan was a 3-branch switch where the repo branch won on every call: it
   launched the repo's governed scan and promised the local directories would
