@@ -315,28 +315,47 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Extract standard claims from the ID token, plus the two role derivation
-	// matches against: "roles" (Entra App Roles — the priority path) and
-	// "groups". Both are optional string-array claims; an IdP that sends
-	// neither contributes nothing to the union, but email still can.
+	// Extract standard claims from the ID token — UNCHANGED shape and fatal
+	// error from before role derivation existed: this is the ONE claims
+	// struct whose failure to parse must abort the login.
 	var claims struct {
-		Email         string   `json:"email"`
-		EmailVerified bool     `json:"email_verified"`
-		Roles         []string `json:"roles"`
-		Groups        []string `json:"groups"`
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
 		return
 	}
 
+	// Role-derivation claims are decoded SEPARATELY and TOLERANTLY, one
+	// struct per claim. "roles" (Entra App Roles — the priority path) and
+	// "groups" are supposed to be JSON string arrays, but a real IdP
+	// sometimes emits a scalar string (or object) instead — e.g. a single
+	// group as bare "eng-team" rather than ["eng-team"]. Folding these into
+	// the claims struct above turned that into a FATAL unmarshal error for
+	// every such IdP, a 100% login outage even with WARDYN_OIDC_ROLE_MAP
+	// unset. A malformed claim here decodes to nil (contributes nothing to
+	// deriveRole — fail closed on that one claim, not the whole login), and a
+	// malformed roles claim can't discard a valid groups claim or vice versa
+	// since each has its own struct.
+	var rc struct {
+		Roles []string `json:"roles"`
+	}
+	_ = idToken.Claims(&rc)
+	var gc struct {
+		Groups []string `json:"groups"`
+	}
+	_ = idToken.Claims(&gc)
+
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		if !claims.EmailVerified {
+			clearCookie(w, sessionCookieName)
 			http.Error(w, "email not verified by IdP", http.StatusForbidden)
 			return
 		}
 		if !emailDomainAllowed(claims.Email, a.cfg.AllowedEmailDomains) {
+			clearCookie(w, sessionCookieName)
 			http.Error(w, "email domain not permitted", http.StatusForbidden)
 			return
 		}
@@ -346,8 +365,11 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// Denying here (rather than issuing a roleless session) is what keeps
 	// decodeSession simple: every cookie this package ever writes has a
 	// non-empty Role.
-	role, ok := deriveRole(claims.Roles, claims.Groups, claims.Email, a.cfg.RoleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
+	role, ok := deriveRole(rc.Roles, gc.Groups, claims.Email, a.cfg.RoleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
 	if !ok {
+		// L6: a denied login must not leave a PRE-EXISTING session cookie
+		// (from before this re-login attempt) still valid in the browser.
+		clearCookie(w, sessionCookieName)
 		http.Error(w, "no Wardyn role assigned; ask your operator to map you via WARDYN_OIDC_ROLE_MAP", http.StatusForbidden)
 		return
 	}
@@ -530,7 +552,9 @@ func ValidRole(s string) bool {
 // case-insensitively against an ID token's roles/groups claims or its email
 // (see deriveRole); role must be RoleAdmin or RoleMember. Empty/blank input
 // returns a nil map (role derivation disabled — Config.RoleMap's empty
-// behavior) and no error.
+// behavior) and no error; non-empty input that yields no usable entry (e.g.
+// "," or a single malformed pair) is an error, never a silent nil — nil means
+// "everyone is admin" (deriveRole), which must never be an accident.
 func ParseRoleMap(csv string) (map[string]string, error) {
 	csv = strings.TrimSpace(csv)
 	if csv == "" {
@@ -550,10 +574,28 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 		if !ValidRole(v) {
 			return nil, fmt.Errorf("entry %q: invalid role %q (want %q or %q)", pair, v, RoleAdmin, RoleMember)
 		}
-		out[strings.ToLower(k)] = v
+		// A non-ASCII key can NEVER match: deriveRole skips non-ASCII claim
+		// values before lookup (asciiOnly, the fold-escalation guard), so
+		// this would silently be a dead entry — worse, one that INVERTS
+		// intent under WARDYN_OIDC_DEFAULT_ROLE=admin, where the operator
+		// meant to name this value out for a lesser role but it can never
+		// match and every such login instead gets the default.
+		if !asciiOnly(k) {
+			return nil, fmt.Errorf("entry %q: non-ASCII value can never match (matching is ASCII-only)", pair)
+		}
+		key := strings.ToLower(k)
+		// A duplicate key silently let the LAST entry win — in the
+		// escalating direction when an earlier entry mapped to member and a
+		// later, easy-to-miss duplicate maps the same value to admin. An
+		// operator reading the file top-to-bottom would expect the first
+		// entry to hold; reject instead of guessing which one they meant.
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("entry %q: duplicate value %q (already mapped by an earlier entry)", pair, k)
+		}
+		out[key] = v
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("no valid entries in %q", csv)
 	}
 	return out, nil
 }
@@ -612,7 +654,12 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 
 // emailInList reports whether email case-insensitively matches an entry in
 // list (mirrors the operator-allowlist match in internal/api's isOperator).
+// email is trimmed here too (each list entry is trimmed below, at the point
+// of comparison) — without trimming email, a padded ID-token claim would
+// silently miss legacyAdminEmails while still matching the role map, whose
+// own lookup (deriveRole's loop) already trims its values.
 func emailInList(email string, list []string) bool {
+	email = strings.TrimSpace(email)
 	if email == "" || !asciiOnly(email) {
 		return false
 	}

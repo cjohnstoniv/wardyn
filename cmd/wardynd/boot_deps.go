@@ -282,6 +282,18 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		// everyone is an admin.
 		if len(roleMap) == 0 {
 			slog.Warn("wardynd: SSO users all receive the admin role; set WARDYN_OIDC_ROLE_MAP to introduce members")
+		} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
+			// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
+			// (~:270), fired independently since either var can be set without
+			// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
+			// email-keyed privilege source riding an unverified IdP claim —
+			// email_verified is enforced only when the domains list is set.
+			for k := range roleMap {
+				if strings.Contains(k, "@") {
+					slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but WARDYN_OIDC_EMAIL_DOMAINS is not set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list too")
+					break
+				}
+			}
 		}
 	}
 

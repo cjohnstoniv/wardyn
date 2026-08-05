@@ -105,6 +105,25 @@ func (e *idpEnv) buildIDTokenWithRoles(t *testing.T, sub, email string, roles, g
 	return tok
 }
 
+// buildIDTokenRawClaim is buildIDToken plus one arbitrary extra claim of any
+// shape — H1's tolerant-decode regression coverage: a real IdP sometimes
+// sends "roles"/"groups" as a scalar string (or object) instead of the JSON
+// array deriveRole expects. Signs with roleCallbackNonce so the result works
+// directly with doCallback.
+func (e *idpEnv) buildIDTokenRawClaim(t *testing.T, sub, email, extraKey string, extraVal interface{}) string {
+	t.Helper()
+	claims := map[string]interface{}{
+		"iss": e.httpSrv.URL, "sub": sub, "aud": e.clientID,
+		"email": email, "email_verified": true, "nonce": roleCallbackNonce,
+		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+		extraKey: extraVal,
+	}
+	raw, _ := json.Marshal(claims)
+	tok := oidctest.SignIDToken(e.priv, "test-key", "RS256", string(raw))
+	e.latestIDTok = tok
+	return tok
+}
+
 // newAuth builds an Authenticator that routes the oauth2 token exchange through
 // env.tokenSrv (via the rewriteTokenRT round-tripper) for full end-to-end tests.
 func (e *idpEnv) newAuth(t *testing.T, allowedDomains []string) *writoidc.Authenticator {
@@ -413,6 +432,10 @@ func TestCallbackRoleNoMatchNoDefaultDenied(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "no Wardyn role assigned") {
 		t.Errorf("body = %q, want the no-role-assigned message naming WARDYN_OIDC_ROLE_MAP", w.Body.String())
 	}
+	// L6: a denied login must clear any pre-existing wardyn_session cookie —
+	// otherwise a browser that already held a valid session from a PRIOR
+	// login keeps sending it after this attempt was refused.
+	assertSessionCookieCleared(t, w)
 }
 
 func TestCallbackRoleNoMatchDefaultRoleMember(t *testing.T) {
@@ -496,6 +519,102 @@ func TestCallbackRoleNonASCIIEmailNoFoldEscalation(t *testing.T) {
 	}
 	if sess.Role != writoidc.RoleMember {
 		t.Errorf("role = %q, want %q (non-ASCII email must not fold onto the ASCII legacy-admin entry)", sess.Role, writoidc.RoleMember)
+	}
+}
+
+// ─── TestCallbackScalarClaim* ─────────────────────────────────────────────────
+//
+// H1: a real IdP sometimes sends "roles"/"groups" as a scalar string (or
+// object) instead of a JSON array — e.g. a lone group as bare "eng-team"
+// rather than ["eng-team"]. That must decode to nothing for that ONE claim,
+// never abort the whole login: folding Roles/Groups into the same claims
+// struct as Email/EmailVerified would make idToken.Claims a FATAL unmarshal
+// for any such IdP, a 100% login outage even with WARDYN_OIDC_ROLE_MAP unset.
+
+func TestCallbackScalarGroupsClaimMapUnsetStillLogsIn(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newRoleAuth(t, nil, "", nil) // WARDYN_OIDC_ROLE_MAP entirely unset
+
+	env.buildIDTokenRawClaim(t, "sub-scalar", "scalar@corp.example", "groups", "not-an-array")
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (a malformed groups claim must not break login): body: %s", w.Code, http.StatusFound, w.Body.String())
+	}
+	if sess.Role != writoidc.RoleAdmin {
+		t.Errorf("role = %q, want %q (role map unset = today's behavior)", sess.Role, writoidc.RoleAdmin)
+	}
+}
+
+func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
+	env := newIdPEnv(t)
+	// The role map has an entry keyed on the EXACT scalar string the token
+	// will send — if the tolerant decode were broken (e.g. silently coerced
+	// into a one-element slice instead of failing closed), this would wrongly
+	// match and grant member.
+	auth := env.newRoleAuth(t, map[string]string{"not-an-array": writoidc.RoleMember}, "", nil)
+
+	env.buildIDTokenRawClaim(t, "sub-scalar2", "scalar2@corp.example", "groups", "not-an-array")
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d (malformed claim decodes to nothing, so nothing matches; deny, not a fatal 401/500): body: %s", w.Code, http.StatusForbidden, w.Body.String())
+	}
+	if sess.Role != "" {
+		t.Errorf("role = %q, want no session (the scalar claim's raw string must not match the role-map entry)", sess.Role)
+	}
+}
+
+// ─── TestParseRoleMap ─────────────────────────────────────────────────────────
+//
+// M2/M3/L8: non-empty input that yields no usable entry, a non-ASCII key
+// (can never match — see asciiOnly), and a duplicate key must all be parse
+// errors, never a silent "close enough" map.
+
+func TestParseRoleMap(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    map[string]string
+		wantErr bool
+	}{
+		{"empty is unset, not an error", "", nil, false},
+		{"blank is unset, not an error", "   ", nil, false},
+		{"one valid entry", "eng-team=member", map[string]string{"eng-team": "member"}, false},
+		{"multiple valid entries, key lowered", "Wardyn.Admin=admin,eng-team=member", map[string]string{"wardyn.admin": "admin", "eng-team": "member"}, false},
+		{"blank entries between commas are skipped", "eng-team=member,,", map[string]string{"eng-team": "member"}, false},
+		{"missing =", "eng-team", nil, true},
+		{"empty key before =", "=admin", nil, true},
+		{"bad role value", "eng-team=owner", nil, true},
+		{"duplicate key", "eng-team=member,eng-team=admin", nil, true},
+		{"duplicate key differs only by case", "Eng-Team=member,eng-team=admin", nil, true},
+		// M2: non-empty input, but every entry is blank — must error, not
+		// silently return nil (which deriveRole reads as "everyone is admin").
+		{"all-blank input is an error, not silently unset", ",,,", nil, true},
+		// M3: a non-ASCII key can never match a claim (deriveRole's asciiOnly
+		// guard skips non-ASCII claim values before lookup) — a silent dead
+		// entry that inverts intent under WARDYN_OIDC_DEFAULT_ROLE=admin.
+		{"non-ASCII key can never match", "roſs@corp.example=admin", nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := writoidc.ParseRoleMap(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseRoleMap(%q): want error, got nil (map = %v)", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseRoleMap(%q): unexpected error: %v", tc.in, err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("ParseRoleMap(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("ParseRoleMap(%q)[%q] = %q, want %q", tc.in, k, got[k], v)
+				}
+			}
+		})
 	}
 }
 
@@ -910,23 +1029,30 @@ func checkDomainFilter(t *testing.T, email string, allowedDomains []string, want
 			t.Errorf("email %q (denied): status = %d, want %d (body: %s)",
 				email, resp.StatusCode, http.StatusForbidden, w.Body.String())
 		}
+		// L6: the domain-check deny paths must also clear any pre-existing
+		// session cookie, same as the no-role deny path.
+		assertSessionCookieCleared(t, w)
 	}
 }
 
-// doRoleCallback drives CallbackHandler with a fixed state/nonce/pkce (like
-// checkDomainFilter) and an ID token carrying the given roles/groups/email,
-// then — if a session cookie was issued — round-trips it through Middleware
-// to read back the derived Sub/Email/Role. Returns the recorder (status +
-// body, for the denied-login assertions) and the round-tripped session (zero
-// value when no cookie was issued, e.g. a denied login).
-func doRoleCallback(t *testing.T, env *idpEnv, auth *writoidc.Authenticator, email string, roles, groups []string) (*httptest.ResponseRecorder, writoidc.Session) {
-	t.Helper()
-	const stateVal, nonceVal, verifierVal = "state-role", "nonce-role", "verifier-role"
-	env.buildIDTokenWithRoles(t, "sub-role", email, roles, groups, nonceVal, time.Now().Add(time.Hour))
+// roleCallbackNonce is the fixed nonce doCallback's request cookie carries;
+// every token built for a doCallback test (buildIDTokenWithRoles,
+// buildIDTokenRawClaim) signs this same value.
+const roleCallbackNonce = "nonce-role"
 
+// doCallback drives CallbackHandler with a fixed state/nonce/pkce (like
+// checkDomainFilter) against whatever ID token is currently staged in the
+// idpEnv (the caller must have signed one carrying roleCallbackNonce), then —
+// if a session cookie was issued — round-trips it through Middleware to read
+// back the derived Sub/Email/Role. Returns the recorder (status + body, for
+// the denied-login assertions) and the round-tripped session (zero value
+// when no cookie was issued, e.g. a denied login).
+func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseRecorder, writoidc.Session) {
+	t.Helper()
+	const stateVal, verifierVal = "state-role", "verifier-role"
 	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
-	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: nonceVal})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: roleCallbackNonce})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: verifierVal})
 	w := httptest.NewRecorder()
 	auth.CallbackHandler(w, r)
@@ -953,6 +1079,31 @@ func doRoleCallback(t *testing.T, env *idpEnv, auth *writoidc.Authenticator, ema
 	checkReq.AddCookie(sessCookie)
 	auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), checkReq)
 	return w, got
+}
+
+// doRoleCallback signs an ID token carrying the given roles/groups/email,
+// then drives it through doCallback.
+func doRoleCallback(t *testing.T, env *idpEnv, auth *writoidc.Authenticator, email string, roles, groups []string) (*httptest.ResponseRecorder, writoidc.Session) {
+	t.Helper()
+	env.buildIDTokenWithRoles(t, "sub-role", email, roles, groups, roleCallbackNonce, time.Now().Add(time.Hour))
+	return doCallback(t, auth)
+}
+
+// assertSessionCookieCleared checks the response set a wardyn_session cookie
+// with MaxAge=-1 (browser-delete) — the L6 invariant every deny path in
+// CallbackHandler must uphold, so a refused login attempt never leaves a
+// pre-existing session cookie valid in the browser.
+func assertSessionCookieCleared(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "wardyn_session" {
+			if c.MaxAge != -1 {
+				t.Errorf("wardyn_session MaxAge = %d, want -1 (cleared)", c.MaxAge)
+			}
+			return
+		}
+	}
+	t.Error("deny response did not clear wardyn_session (no Set-Cookie wardyn_session with MaxAge=-1)")
 }
 
 // cookieMap indexes a slice of cookies by name.

@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **OIDC sessions now carry a derived admin/member role** (`WARDYN_OIDC_ROLE_MAP`,
+  `internal/auth/oidc`'s `deriveRole`). Upgrading forces one SSO re-login: a pre-0.5
+  session cookie carries no role and now decodes as no session (`decodeSession`), never
+  as an authenticated session with an undefined role.
+
 ## [0.4.5] — 2026-08-04
 
 ### Added
