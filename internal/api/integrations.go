@@ -90,8 +90,11 @@ const (
 	// falls through to whatever other lane it has (usually none).
 	reasonBedrockUnset = "Region and model id are unset — a run can't reach Bedrock until both are set."
 	// reasonHostCLIOptIn is the canon note for the host-CLI lane's Wardyn-features
-	// cell (mock: CAPS.sub, hostCli branch) — verbatim.
-	reasonHostCLIOptIn = "Opt-in — off until you switch it on."
+	// cell — kept in sync with ui/src/app/lib/integrations.ts's CAPS.sub hostCli
+	// note, not the (stale) mock: nothing in the console switches this lane on,
+	// it's off by default here at the server, and only a WARDYN_COMPOSER_CONFIG
+	// change flips it.
+	reasonHostCLIOptIn = "Off for this lane — no switch in this console turns it on."
 )
 
 // capabilitiesFor computes the full capability matrix for one integration.

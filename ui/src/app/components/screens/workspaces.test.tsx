@@ -239,6 +239,26 @@ describe("WorkspacesScreen — row click navigates to the detail route", () => {
     await user.keyboard("{Enter}");
     expect(await screen.findByText("detail for {id}")).toBeInTheDocument();
   });
+
+  it("the kebab is a keyboard target too — Enter on it opens the menu, not the detail route", async () => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { id: "ws-42", status: "scanned" })]);
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { Route, Routes } = await import("react-router-dom");
+    render(
+      <MemoryRouter initialEntries={["/workspaces"]}>
+        <Routes>
+          <Route path="/workspaces" element={<WorkspacesScreen />} />
+          <Route path="/workspaces/:id" element={<div>detail for {"{id}"}</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const kebab = await screen.findByRole("button", { name: /workspace actions/i });
+    kebab.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByText("detail for {id}")).not.toBeInTheDocument();
+  });
 });
 
 describe("WorkspacesScreen — the new wizard opens from both the header button and the empty state", () => {

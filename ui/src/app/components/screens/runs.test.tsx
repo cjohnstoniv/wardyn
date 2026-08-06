@@ -84,4 +84,22 @@ describe("RunsScreen board — Kill run confirms before killing", () => {
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(killRunMock).not.toHaveBeenCalled();
   });
+
+  it("Enter on the kebab opens the menu, not the run — the card's own row handler must not steal it", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { Route, Routes } = await import("react-router-dom");
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <Routes>
+          <Route path="/runs" element={<RunsScreen />} />
+          <Route path="/runs/:id" element={<div>detail for {"{id}"}</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const kebab = await screen.findByRole("button", { name: /run actions/i });
+    kebab.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByText("detail for {id}")).not.toBeInTheDocument();
+  });
 });

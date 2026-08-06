@@ -84,6 +84,14 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(ratio(token("muted-foreground"), WHITE)).toBeGreaterThanOrEqual(4.5);
   });
 
+  // Placeholder text is still text (WCAG 1.4.3, 4.5:1) as well as needing to
+  // read as distinctly not-a-value (>=3:1 from filled --foreground) — a dark-
+  // theme regression once satisfied only the second half (see below).
+  it("--placeholder-foreground is >= 4.5:1 on --input-background and >= 3:1 separated from filled-value text", () => {
+    expect(ratio(token("placeholder-foreground"), token("input-background"))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("placeholder-foreground"), token("foreground"))).toBeGreaterThanOrEqual(3);
+  });
+
   // The DARK theme is the default (theme-provider is dark-first), so its status
   // text needs the same guard — the old header claim "dark already passes"
   // measured false for danger (4.10:1 on the bg, 3.59:1 on subtle-over-card).
@@ -109,6 +117,20 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       const hex = (v: number) => v.toString(16).padStart(2, "0");
       return "#" + hex(over(r, cch(1))) + hex(over(g, cch(3))) + hex(over(b, cch(5)));
     };
+    // Input/Textarea's real rendered dark background: dark:bg-input/30's
+    // :is(.dark *) selector always outranks the plain bg-input-background
+    // class (higher specificity, confirmed in the built CSS), so --input at
+    // 30% over --card — not --input-background itself — is what placeholder
+    // and value text actually sit on.
+    const dInputOverCard = (): string => {
+      const input = dtoken("input");
+      const card = dtoken("card");
+      const ich = (i: number) => parseInt(input.slice(i, i + 2), 16);
+      const cch = (i: number) => parseInt(card.slice(i, i + 2), 16);
+      const over = (i: number) => Math.round(0.3 * ich(i) + 0.7 * cch(i));
+      const hex = (v: number) => v.toString(16).padStart(2, "0");
+      return "#" + hex(over(1)) + hex(over(3)) + hex(over(5));
+    };
 
     for (const t of ["success", "warning", "danger", "info", "cyan"]) {
       it(`dark --${t} text is >= 4.5:1 on --background and on -subtle over --card`, () => {
@@ -118,6 +140,11 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     }
     it("dark --danger-foreground on the --danger fill is >= 4.5:1 (kill/delete buttons)", () => {
       expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it("dark --placeholder-foreground is >= 4.5:1 on its real rendered field and >= 3:1 separated from filled-value text", () => {
+      expect(ratio(dtoken("placeholder-foreground"), dInputOverCard())).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(dtoken("placeholder-foreground"), dtoken("foreground"))).toBeGreaterThanOrEqual(3);
     });
   });
 

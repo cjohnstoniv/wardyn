@@ -727,7 +727,7 @@ function RunsTable({
                     {relativeTime(run.created_at)}
                   </span>
                 </TableCell>
-                <TableCell onClick={(e) => e.stopPropagation()}>
+                <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                   <RunActions run={run} terminal={terminal} attachable={attachable} onOpen={onOpen} onKill={onKill} />
                 </TableCell>
               </TableRow>
@@ -775,7 +775,11 @@ function RunActions({
   // it survives the menu's close/unmount.
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
   return (
-    <div onClick={(e) => e.stopPropagation()}>
+    // This guard is RunCard's only defense (the board is the default Mode —
+    // RunCard has no TableCell of its own to also carry it, unlike the table
+    // row above): onClick-only let Enter/Space on the kebab reach RunCard's
+    // row-level onKeyDown and navigate instead of opening the menu.
+    <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon" className="size-8" aria-label="Run actions">
