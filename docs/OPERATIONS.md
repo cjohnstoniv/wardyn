@@ -228,7 +228,8 @@ are DERIVED from what already exists (stored secret names, site config,
 setup status), so an operator who never opens the page keeps identical run
 behavior, and one who does can adopt a row to edit it. Host proxy and Egress
 redirection are deliberately not on this page: the two topology categories
-above exist only as read-only derived rows (nothing writes one directly),
+above surface only as read-only derived rows (no Wardyn surface authors one —
+the API will still accept a hand-written row),
 and their configuration lives under **Corporate network** (below), on the
 same `SiteConfig` document but its own step and its own tabs, so there is
 exactly one place to configure network topology instead of two. A **Tools**
