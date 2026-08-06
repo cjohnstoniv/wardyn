@@ -17,7 +17,10 @@ wardyn_pick_docker_host
 
 export WARDYN_E2E_ADDR=":8098"
 export WARDYN_E2E_PG_DBNAME="wardyn_shots"
-export WARDYN_E2E_DSN="postgres://wardyn:wardyn@localhost:55432/wardyn_shots?sslmode=disable"
+# Overridable PG host:port (same convention as run-ui-e2e.sh); the DB name
+# stays pinned to wardyn_shots — the spec self-gates on it.
+PG_HOSTPORT="${WARDYN_E2E_PG_HOSTPORT:-localhost:55432}"
+export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/wardyn_shots?sslmode=disable"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:8098"
 

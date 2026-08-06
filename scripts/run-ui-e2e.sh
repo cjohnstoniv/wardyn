@@ -30,8 +30,12 @@ wardyn_pick_docker_host
 
 PORT="${WARDYN_E2E_ADDR:-:8088}"; PORT="${PORT#*:}"
 DB="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
+# Overridable PG host:port (the default may be held by a foreign container on a
+# shared box); the database name stays coupled to WARDYN_E2E_PG_DBNAME — the
+# seed/reset path keys on it, and a mismatched pair splits served from seeded.
+PG_HOSTPORT="${WARDYN_E2E_PG_HOSTPORT:-localhost:55432}"
 export WARDYN_E2E_ADDR=":${PORT}"
-export WARDYN_E2E_DSN="postgres://wardyn:wardyn@localhost:55432/${DB}?sslmode=disable"
+export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/${DB}?sslmode=disable"
 export WARDYN_E2E_PG_DBNAME="${DB}"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
