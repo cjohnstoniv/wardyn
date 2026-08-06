@@ -14,19 +14,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   workspace's recommended build.** `AgentToolsForIntegrationTypes` maps any
   `anthropic_*`-typed integration on the workspace to `claude-code`, and a
   generated `.devcontainer/Dockerfile` installs it via the same
-  checksum-verified native-binary lane the full toolchain image uses,
-  running as root before any devcontainer feature so it depends on none.
-  The tool set is also the build-cache key's input, so connecting or
-  removing the integration invalidates the cached image and the next build
-  reflects it. `codex-cli` is deliberately never baked — no Wardyn-verified
-  public native-download contract, and its npm lane would need a Node
-  runtime this build stage doesn't carry — so an OpenAI integration bakes
-  nothing. A workspace whose repo ships its own `.devcontainer` bypasses
-  the generator (and the bake) entirely: Wardyn builds that file as-is and
-  never modifies it, on disk or in the image, so a repo that wants the CLI
-  has to add it itself. Live-proven against a real daemon: a built image's
-  `claude --version` reports a real binary, not the inert no-op an earlier
-  attempt silently shipped.
+  checksum-verified native-binary lane `deploy/images/claude-code/Dockerfile`
+  offers under `CLAUDE_INSTALL=native`, running as root before any
+  devcontainer feature so it depends on none. The tool set is also the
+  build-cache key's input, so naming or un-naming the integration in a
+  workspace's own contract invalidates that workspace's cached image and
+  the next build reflects it. `codex-cli` is deliberately never baked — no
+  Wardyn-verified public native-download contract, and its npm lane would
+  need a Node runtime this build stage doesn't carry — so an OpenAI
+  integration bakes nothing. A workspace whose repo ships its own
+  `.devcontainer` bypasses the generator (and the bake) entirely: Wardyn
+  builds that file as-is and never modifies it, on disk or in the image, so
+  a repo that wants the CLI has to add it itself. Live-proven against a
+  real daemon: a built image's `claude --version` reports a real binary,
+  not the inert no-op an earlier attempt silently shipped.
 
 ### Fixed
 
@@ -205,13 +206,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as one quiet link on an empty Reach tab. The power-source row and its
   Change… peek left the Base image step entirely — and that step now speaks
   ONLY in tool inventory: each suggested image lists what it carries as plain
-  chips, with `claude-code` one tool among tools exactly when the build will
-  include it. No sentence on the image step mentions an AI, states an agent
-  consequence, or narrates integration state ("Claude Code configured…" and
-  the registry card's warning chip are gone — the image doesn't decide whether
-  or which AI is used; the workspace's requirements do). The BYO card keeps
-  the law that earns its place on an image surface: Wardyn doesn't inspect
-  the image and never injects tools into it.
+  chips, with `claude-code` one tool among tools exactly when a named
+  `anthropic_*` integration bakes it into the recommended build (`codex-cli`
+  never joins the chips: nothing bakes it). No sentence on the image step
+  mentions an AI, states an agent consequence, or narrates integration state
+  ("Claude Code configured…" and the registry card's warning chip are gone —
+  the image doesn't decide whether or which AI is used; the workspace's
+  requirements do). The BYO card keeps the law that earns its place on an
+  image surface: Wardyn doesn't inspect the image and never injects tools
+  into it — the same holds for every catalog image, and for a repo that
+  carries its own devcontainer.
 - **The leak banner earns two tiers.** Seventeen red rows of a repo's own test
   fixtures — fake keys that exist because the tests need key-shaped strings —
   train an operator to ignore the banner, the exact reflex it exists to
@@ -522,15 +526,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exposes nothing), refuses `$HOME` outright, remembers the choice in
   deploy/compose/.env, and an explicit env var still wins silently for
   scripts and CI.
-- **The base-image cards stopped claiming tools they never carry.** The
-  Recommended card appended a `claude-code` chip whenever an AI integration
-  existed — but the recommended build is generated from the scan profile and
-  never bakes the agent CLI (it arrives at run time, as a tool choice). The
-  chip is gone: Carries lists exactly what the scan detected. The custom
-  card's "Tools & features" checklist — including a default-checked "Claude
-  Code CLI" toggle — is deleted outright: none of those checkboxes ever
-  reached the build (only the base image and build steps are sent), so the
-  honest surface is the base + the steps editor, which is what remains.
+- **The custom base-image card's "Tools & features" checklist is gone.**
+  None of those checkboxes — including a default-checked "Claude Code CLI"
+  toggle — ever reached the build (only the base image and build steps are
+  sent), so the honest surface is the base + the steps editor, which is
+  what remains.
 - **An ephemeral-only workspace lost its Requirements tabs.** The hydrate
   pass derived a workspace's profile from its attached library sources — and
   an ephemeral-only composition has none, so it derived *nil* where the old
