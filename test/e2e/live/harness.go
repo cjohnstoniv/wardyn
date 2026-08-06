@@ -649,43 +649,6 @@ func (h *harness) authedJSON(ctx context.Context, method, path string, body any)
 	return resp.StatusCode, raw, err
 }
 
-// recTry does one authenticated JSON request (30s timeout) and returns
-// (status, body) without failing the test — for steps that are best-effort
-// per topology.
-func (h *harness) recTry(t *testing.T, method, path string, body any) (int, string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	status, raw, err := h.authedJSON(ctx, method, path, body)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-	return status, string(raw)
-}
-
-// recJSON does one authenticated JSON request and decodes into out (when
-// non-nil), failing the test unless the status is one of want. Thin wrapper
-// over recTry.
-func (h *harness) recJSON(t *testing.T, method, path string, body any, out any, want ...int) {
-	t.Helper()
-	status, raw := h.recTry(t, method, path, body)
-	okStatus := false
-	for _, w := range want {
-		if status == w {
-			okStatus = true
-			break
-		}
-	}
-	if !okStatus {
-		t.Fatalf("%s %s: status %d (want %v): %s", method, path, status, want, raw)
-	}
-	if out != nil {
-		if derr := json.Unmarshal([]byte(raw), out); derr != nil {
-			t.Fatalf("%s %s: decode: %v", method, path, derr)
-		}
-	}
-}
-
 // errorsIsDeadline reports whether err is a context deadline (a WS read timeout
 // between output bursts, expected and non-fatal in driveExpect).
 func errorsIsDeadline(err error) bool {
