@@ -90,6 +90,13 @@ describe("GenericSections", () => {
     renderSections([FEED], false);
     expect(screen.queryByRole("button", { name: /delete corp artifactory/i })).not.toBeInTheDocument();
   });
+
+  it("the zero-rows empty state carries its own heading and the page's one Add-integration verb", () => {
+    renderSections([]);
+    expect(screen.getByText("Services")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add integration/i })).toBeInTheDocument();
+    expect(screen.queryByText(/add a service/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("genericBlastRadius", () => {

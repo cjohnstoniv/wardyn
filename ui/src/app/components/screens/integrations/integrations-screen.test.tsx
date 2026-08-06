@@ -140,18 +140,22 @@ describe("IntegrationsScreen — the two category sections", () => {
     expect(screen.getByText(T.FOOTNOTE)).toBeInTheDocument();
   });
 
-  // The impossible-as-fact chip: muted, and carries the VERBATIM reason as its
-  // tooltip — never a re-typed or paraphrased copy of it.
-  it("an impossible capability renders as a muted chip whose tooltip is the verbatim reason", async () => {
+  // The impossible-as-fact chip: muted, carries the VERBATIM reason as its
+  // tooltip — never a re-typed or paraphrased copy of it — AND states its own
+  // "· n/a" in the label, with the reason ALSO rendered as visible text (not
+  // hover-only), so the fact reaches a keyboard user and AT, not just a mouse.
+  it("an impossible capability renders as a muted '· n/a' chip with the verbatim reason visible, not opacity-faded", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
     getSiteConfigMock.mockResolvedValue({});
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
 
     renderScreen();
 
-    const codexChip = await screen.findByText("Codex CLI");
+    const codexChip = await screen.findByText("Codex CLI · n/a");
     expect(codexChip).toHaveAttribute("title", T.X_KEY_CODEX);
-    expect(codexChip.className).toMatch(/opacity-60/);
+    expect(codexChip.className).not.toMatch(/opacity-60/);
+    // The reason is on the page as real text, not only inside the title attribute.
+    expect(screen.getByText(T.X_KEY_CODEX)).toBeInTheDocument();
   });
 });
 
@@ -168,7 +172,12 @@ describe("IntegrationsScreen — viewer role disables writes", () => {
 
     expect(screen.getByText("Viewer role")).toBeInTheDocument();
     expect(screen.getByText(T.VIEWER_LINE)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /add integration/i })).toBeDisabled();
+    // Two entry points share the one verb now (the header button, and the
+    // empty generic-sections block's own "Add integration") — both respect
+    // the viewer role.
+    const addButtons = screen.getAllByRole("button", { name: /add integration/i });
+    expect(addButtons.length).toBeGreaterThan(0);
+    addButtons.forEach((b) => expect(b).toBeDisabled());
   });
 
   it("a row's Delete/Rotate actions are disabled and each names the operator-only reason", async () => {

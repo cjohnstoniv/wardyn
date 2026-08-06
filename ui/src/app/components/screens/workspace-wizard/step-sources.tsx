@@ -344,8 +344,14 @@ export function StepSources({
 
   return (
     <div className="space-y-5">
-      <Field label="Name" htmlFor="ws-name">
-        <Input id="ws-name" value={name} placeholder="payments" onChange={(e) => onNameChange(e.target.value)} />
+      <Field label="Name" htmlFor="ws-name" required>
+        <Input
+          id="ws-name"
+          value={name}
+          required
+          placeholder="e.g. payments"
+          onChange={(e) => onNameChange(e.target.value)}
+        />
       </Field>
 
       <div className="space-y-2">

@@ -38,6 +38,12 @@
   --secondary-foreground: #171717;
   --muted: #f4f4f5;
   --muted-foreground: #737373;
+  /* input/textarea ::placeholder ONLY — deliberately NOT --muted-foreground.
+     A placeholder has to read as clearly NOT a filled value, so it needs its
+     own, darker-than-muted color even where --muted-foreground itself already
+     separates fine from --foreground (light theme: same value here, so this
+     is a no-op; dark theme is the one that needed it — see below). */
+  --placeholder-foreground: #737373;
   --accent: #f4f4f5;
   --accent-foreground: #171717;
 
@@ -120,6 +126,13 @@
   --secondary-foreground: #ededed;
   --muted: #1f1f1f;
   --muted-foreground: #a3a3a3;
+  /* Placeholder text measured 7.48:1 on the field (near as legible as real
+     input text, #ededed at 16.1:1) with only a 2.16:1 step between the two —
+     under WCAG 1.4.11's 3:1 for telling states apart, so an illustrative
+     placeholder read as an already-filled value. #737373 (light theme's
+     existing --muted-foreground, reused rather than a third gray) restores
+     ~4:1 separation from #ededed while staying legible (~4:1) on its own. */
+  --placeholder-foreground: #737373;
   --accent: #1f1f1f;
   --accent-foreground: #ededed;
 
@@ -188,6 +201,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-placeholder-foreground: var(--placeholder-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
 

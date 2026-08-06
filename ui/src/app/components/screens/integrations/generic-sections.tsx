@@ -78,10 +78,16 @@ export function GenericSections({
 
       {sections.length === 0 && (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center">
-          <p className="text-[0.8125rem] leading-snug text-muted-foreground">{CATALOG_COPY.EMPTY_BODY}</p>
+          {/* Without its own label this panel reads as more SCM-host copy
+              (it sits right under "SCM HOSTS · —") rather than the empty
+              state for the eight generic categories. */}
+          <SectionLabel>Services</SectionLabel>
+          <p className="mt-2 text-[0.8125rem] leading-snug text-muted-foreground">{CATALOG_COPY.EMPTY_BODY}</p>
           <div className="mt-3">
+            {/* Same verb as the page header's button — both open this exact
+                AddServiceDialog; "Add a service" was a second name for it. */}
             <Button size="sm" variant="outline" onClick={onAdd} disabled={!operator}>
-              <Plus className="size-4" /> Add a service
+              <Plus className="size-4" /> Add integration
             </Button>
           </div>
         </div>

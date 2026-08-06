@@ -190,11 +190,13 @@ export const ECOSYSTEM_CONFIG_FILE: Readonly<Record<string, string>> = {
 
 // ============================ CAPABILITY-LINE NOTES (verbatim) ============================
 // mockup/wardyn-integrations.js's `CAPS` — one capability table per AI
-// credential type, rendered as ON (note) / OFF (never seen here — the mock has
-// no off-but-fixable row for these five) / impossible-as-fact (`fact`, always
-// one of T's X_* lines above). `sub`'s Wardyn-features row depends on whether
-// the subscription is the sealed host-CLI lane (hostCli) — the only
-// capability row that varies by anything other than the type itself.
+// credential type, rendered as ON (note) / OFF-but-fixable (`note` with no
+// `fact` — `sub`'s hostCli row below IS this case: the mock predicted it
+// wouldn't occur for these five, but the sealed host-CLI lane is a real
+// counter-example) / impossible-as-fact (`fact`, always one of T's X_* lines
+// above). `sub`'s Wardyn-features row depends on whether the subscription is
+// the sealed host-CLI lane (hostCli) — the only capability row that varies by
+// anything other than the type itself.
 export interface CapabilityRow {
   label: string;
   /** Present (true) when this capability works today. */
@@ -203,7 +205,8 @@ export interface CapabilityRow {
   def?: boolean;
   /** Selecting this credential type WOULD become the default for the capability. */
   makeDefault?: boolean;
-  /** Shown when `on` — what actually happens. */
+  /** Shown when `on` — what actually happens. With `on: false` and no `fact`,
+   *  shown instead as why this instance doesn't have it (off, not impossible). */
   note?: string;
   /** Shown instead of on/note — a flat, unconditional impossibility (verbatim T.X_*). */
   fact?: string;
@@ -228,8 +231,12 @@ export const CAPS = {
       {
         label: "Wardyn features",
         on: !hostCli,
+        // Not "until you switch it on" — nothing in this console switches it;
+        // enabling this lane's composer backend is a server-side config change
+        // (internal/api/integrations.go's reasonHostCLIOptIn: ships disabled by
+        // default). Say that it's off, not that a control is waiting to be found.
         note: hostCli
-          ? "Opt-in — off until you switch it on."
+          ? "Off for this lane — no switch in this console turns it on."
           : "Composer sends Claude-Code-shaped requests, so the token is accepted.",
       },
     ];

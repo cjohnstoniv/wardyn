@@ -152,17 +152,24 @@ export function liveCapRows(rows: CapabilityRow[], wire: WireIntegration | undef
 
 // The compact chip list a list row shows: ON rows (capChip, `· default` when
 // `wire`'s live default_for says so, falling back to the type's static matrix
-// when there's no wire) and impossible rows (factChip, muted, the verbatim
-// reason as tooltip) — OFF rows are omitted, matching the mock.
+// when there's no wire), impossible rows (factChip, muted, the verbatim
+// reason as tooltip, labeled "· n/a" so the state reads without the tooltip)
+// and OFF-but-fixable rows (muted, labeled "· off" — a `note` with no `fact`
+// means it's not an impossibility, just not on for this instance; the
+// anthropic_subscription hostCli lane's Wardyn-features row is the one CAPS
+// entry shaped this way today). A row that is neither on, a fact, nor noted
+// is a true nothing-to-say OFF and stays omitted, matching the mock.
 export function capabilityChips(type: AiType, hostCli?: boolean, wire?: WireIntegration): RowChip[] {
   const defAgent = !!wire?.default_for?.includes("agent_runs");
   const defFeat = !!wire?.default_for?.includes("wardyn_features");
   return liveCapRows(AI_TYPES[type].capabilityPreview(hostCli), wire, defAgent, defFeat)
-    .filter((r) => r.on || r.fact)
+    .filter((r) => r.on || r.fact || r.note)
     .map((r) =>
       r.fact
-        ? { label: r.label, tone: "neutral", muted: true, tooltip: r.fact }
-        : { label: r.def ? `${r.label} · default` : r.label, tone: "info" },
+        ? { label: `${r.label} · n/a`, tone: "neutral", muted: true, tooltip: r.fact }
+        : r.on
+          ? { label: r.def ? `${r.label} · default` : r.label, tone: "info" }
+          : { label: `${r.label} · off`, tone: "neutral", muted: true, tooltip: r.note },
     );
 }
 

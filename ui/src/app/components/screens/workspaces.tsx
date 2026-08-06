@@ -237,8 +237,8 @@ export function WorkspacesScreen() {
             title="No workspaces onboarded yet."
             description={
               operator
-                ? "Add a local directory, repo, or container image so runs can attach it. Wardyn scans it once (languages, package managers, egress) and reuses that profile for every run."
-                : `Add a local directory, repo, or container image so runs can attach it. ${OPERATOR_ONLY_REASON}`
+                ? "Add a local directory, a repo, or scratch space so runs can attach it — a container image is a base image, added from the Base images tab. Wardyn scans it once (languages, package managers, egress) and reuses that profile for every run."
+                : `Add a local directory, a repo, or scratch space so runs can attach it — a container image is a base image, added from the Base images tab. ${OPERATOR_ONLY_REASON}`
             }
             action={
               <Button onClick={() => setAddOpen(true)} disabled={!operator}>
@@ -273,7 +273,25 @@ export function WorkspacesScreen() {
                 const tone = statusTone(w.status);
                 const attention = attentionItems(w, secretNames);
                 return (
-                  <TableRow key={w.id} className="cursor-pointer" onClick={() => openDetail(w.id)}>
+                  <TableRow
+                    key={w.id}
+                    // No role="button" override: a <tr> inside a real <table>
+                    // already carries the implicit "row" role, which the
+                    // table's own screen-reader/`getByRole("row", …)` cell
+                    // associations depend on — overriding it here would trade
+                    // one accessibility gap for a worse one. tabIndex + the
+                    // Enter/Space handler is enough to make the row a real
+                    // keyboard target without giving up its row semantics.
+                    tabIndex={0}
+                    onClick={() => openDetail(w.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openDetail(w.id);
+                      }
+                    }}
+                    className="cursor-pointer"
+                  >
                     <TableCell>
                       <span className="inline-flex items-center gap-2.5">
                         <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground">
@@ -294,9 +312,20 @@ export function WorkspacesScreen() {
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex items-center gap-1.5">
-                        <Chip tone={llmCredTone(w.llm_cred)} mono={!!w.llm_cred?.integration_ref}>
-                          {llmCredLabel(w.llm_cred)}
-                        </Chip>
+                        {/* Unbound is a REAL fallback, not an absence: the run still gets a
+                            model, from the server's global provider (workspace-llm-cred.tsx's
+                            own doc comment, and the picker's "None — use the server's global
+                            provider" radio say the same thing). "None" alone read as "no model
+                            access"; name the fallback and let the title spell it out. */}
+                        {w.llm_cred?.integration_ref ? (
+                          <Chip tone={llmCredTone(w.llm_cred)} mono>
+                            {llmCredLabel(w.llm_cred)}
+                          </Chip>
+                        ) : (
+                          <Chip tone="neutral" title="Runs fall back to the server's global provider.">
+                            Not pinned
+                          </Chip>
+                        )}
                       </span>
                     </TableCell>
                     <TableCell>

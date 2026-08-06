@@ -504,6 +504,26 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     expect(link).toHaveAttribute("href", "/integrations");
   });
 
+  it("splits the two readiness facts — a host-CLI subscription (llmReady, not composerReady) never shows the false 'model access' claim", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    // A host-CLI Claude subscription: llmReady is true (an agent-driven run
+    // gets a model) but composerReady is false (the Wardyn-features capability
+    // is off for this lane — CAPS.sub's own hostCli row) — the exact split
+    // this host's own funnel screens report in green/"Configured".
+    getSetupStatusMock.mockResolvedValue(
+      readySetupStatus({
+        secrets: { present: [], github_app: false },
+        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+      }),
+    );
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+    await screen.findByText(/No integration powers Wardyn's own AI features yet/);
+    expect(screen.queryByText(/doesn't have model access configured yet/)).not.toBeInTheDocument();
+  });
+
   it("shows no hint when the composer + model access are both already configured", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     getSetupStatusMock.mockResolvedValue(readySetupStatus());

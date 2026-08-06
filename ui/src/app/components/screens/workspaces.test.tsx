@@ -108,12 +108,20 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("Scan failed")).toBeInTheDocument();
   });
 
-  it("Model access column: the binding chip names the bound Integration (or None)", async () => {
+  it("Model access column: the binding chip names the bound Integration", async () => {
     listWorkspacesMock.mockResolvedValue([
       ws({}, { status: "scanned", llm_cred: { integration_ref: "ai-anthropic-key" } }),
     ]);
     renderScreen();
     expect(await screen.findByText("ai-anthropic-key")).toBeInTheDocument();
+  });
+
+  it("Model access column: unbound reads 'Not pinned', not a bare 'None' — the run still falls back to a server default", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
+    renderScreen();
+    const chip = await screen.findByText("Not pinned");
+    expect(chip).toHaveAttribute("title", "Runs fall back to the server's global provider.");
+    expect(screen.queryByText("None")).not.toBeInTheDocument();
   });
 
   it("Needs you: unstored required secrets, hosts awaiting review, then suspected leaks, in that order", async () => {
@@ -208,6 +216,27 @@ describe("WorkspacesScreen — row click navigates to the detail route", () => {
       </MemoryRouter>,
     );
     await user.click(await screen.findByText("payments"));
+    expect(await screen.findByText("detail for {id}")).toBeInTheDocument();
+  });
+
+  it("the row is also a keyboard target — Tab then Enter opens the same route", async () => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { id: "ws-42", status: "scanned" })]);
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { Route, Routes } = await import("react-router-dom");
+    render(
+      <MemoryRouter initialEntries={["/workspaces"]}>
+        <Routes>
+          <Route path="/workspaces" element={<WorkspacesScreen />} />
+          <Route path="/workspaces/:id" element={<div>detail for {"{id}"}</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const name = await screen.findByText("payments");
+    const row = name.closest("tr") as HTMLElement;
+    expect(row).toHaveAttribute("tabIndex", "0");
+    row.focus();
+    await user.keyboard("{Enter}");
     expect(await screen.findByText("detail for {id}")).toBeInTheDocument();
   });
 });

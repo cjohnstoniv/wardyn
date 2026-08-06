@@ -29,7 +29,7 @@ describe("deriveIntegrations — AI providers", () => {
     const [row] = deriveIntegrations(status, null, ["anthropic-api-key"]).ai;
     expect(row.typeLabel).toBe("anthropic · api key");
     expect(row.residency).toBe("proxy_injected");
-    const codex = row.chips.find((c) => c.label === "Codex CLI")!;
+    const codex = row.chips.find((c) => c.label === "Codex CLI · n/a")!;
     expect(codex.muted).toBe(true);
     expect(codex.tooltip).toBe(T.X_KEY_CODEX);
     expect(row.chips.find((c) => c.label === "Claude Code · default")).toBeTruthy();
@@ -62,11 +62,19 @@ describe("deriveIntegrations — AI providers", () => {
     expect(bedrockRow.chips.find((c) => c.label === "Claude Code · default")).toBeTruthy();
   });
 
-  it("a resident host-CLI subscription omits the OFF Wardyn-features chip entirely", () => {
+  it("a resident host-CLI subscription renders the impossible pair as '· n/a' and Wardyn features as the OFF-but-fixable '· off' chip, not omitted", () => {
     const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] });
     const [row] = deriveIntegrations(status, null, []).ai;
     expect(row.hostCli).toBe(true);
-    expect(row.chips.map((c) => c.label)).toEqual(["Claude Code", "Codex CLI", "Direct API calls"]);
+    expect(row.chips.map((c) => c.label)).toEqual([
+      "Claude Code",
+      "Codex CLI · n/a",
+      "Direct API calls · n/a",
+      "Wardyn features · off",
+    ]);
+    const features = row.chips.find((c) => c.label === "Wardyn features · off")!;
+    expect(features.muted).toBe(true);
+    expect(features.tooltip).toBe("Off for this lane — no switch in this console turns it on.");
     expect(row.residency).toBe("resident_mount");
   });
 
@@ -112,7 +120,7 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.residency).toBe("control_plane");
     expect(row.secretNames).toEqual(["corp-azure-key"]);
     // Azure can drive neither agent tool — both collapse into ONE fact chip.
-    expect(row.chips.some((c) => c.muted && c.label === "Claude Code · Codex CLI")).toBe(true);
+    expect(row.chips.some((c) => c.muted && c.label === "Claude Code · Codex CLI · n/a")).toBe(true);
   });
 });
 

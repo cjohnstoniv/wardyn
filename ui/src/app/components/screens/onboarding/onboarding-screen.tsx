@@ -60,6 +60,11 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
     icon: React.ElementType,
     ready: boolean,
     readyText: string,
+    // The not-ready label carries its own subject too — a bare "Needs setup"
+    // put the noun only in the ready branch, so the not-ready meaning rode on
+    // the warning icon alone. Mirrors modelChip below, which already prefixes
+    // "Model:" in every branch.
+    notReadyText: string,
   ): React.ReactNode => {
     const Icon = icon;
     if (loading || !readiness)
@@ -70,7 +75,7 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
       );
     return (
       <Chip tone={ready ? "success" : "warning"} dot={ready}>
-        <Icon className="size-3" /> {ready ? readyText : "Needs setup"}
+        <Icon className="size-3" /> {ready ? readyText : notReadyText}
       </Chip>
     );
   };
@@ -100,7 +105,7 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
     <div className="mt-8 w-full rounded-xl border border-border bg-muted/40 p-4 text-left">
       <div className="mb-3 text-sm text-muted-foreground">This host right now:</div>
       <div className="flex flex-wrap gap-2">
-        {chip(BrickWall, !!readiness?.barrierReady, `Barrier: ${strongestLabel} ready`)}
+        {chip(BrickWall, !!readiness?.barrierReady, `Barrier: ${strongestLabel} ready`, "Barrier: needs setup")}
         {modelChip}
       </div>
     </div>

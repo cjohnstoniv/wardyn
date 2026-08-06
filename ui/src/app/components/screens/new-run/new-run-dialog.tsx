@@ -461,20 +461,33 @@ export function NewRunDialog({
             </div>
           )}
 
+          {/* llmReady and composerReady are independent facts (a host-CLI
+              subscription satisfies the first and never the second — see
+              intro.tsx's deriveReadiness) — each gets its own sentence so
+              neither one's absence borrows the other's wording. A host with
+              only the composer half missing must never read "model access
+              configured yet", which on that host is false. One shared remedy
+              link: the fix for either gap is the same action. */}
           {mode === "describe" && composerEnabled && setupHint && (!setupHint.composerReady || !setupHint.llmReady) && (
             <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle p-3 text-xs leading-relaxed text-warning">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              <p>
-                Wardyn doesn&apos;t have model access configured yet — Wardyn can still draft a
-                proposal, but a launched run won&apos;t be able to call a model until this is fixed.{" "}
-                <Link
-                  to="/integrations"
-                  className="font-medium underline underline-offset-2 hover:text-warning"
-                >
-                  Add an integration
-                </Link>
-                .
-              </p>
+              <div className="space-y-1.5">
+                {!setupHint.llmReady && (
+                  <p>
+                    Wardyn doesn&apos;t have model access configured yet — Wardyn can still draft a
+                    proposal, but a launched run won&apos;t be able to call a model until this is fixed.
+                  </p>
+                )}
+                {!setupHint.composerReady && (
+                  <p>No integration powers Wardyn&apos;s own AI features yet — this composer included.</p>
+                )}
+                <p>
+                  <Link to="/integrations" className="font-medium underline underline-offset-2 hover:text-warning">
+                    Add an integration
+                  </Link>
+                  .
+                </p>
+              </div>
             </div>
           )}
 

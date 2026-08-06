@@ -543,17 +543,36 @@ function Row({
         <span className="text-sm font-medium text-foreground">{row.name}</span>
         <Mono className="text-[0.6875rem]">{row.typeLabel}</Mono>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {row.chips.map((c, i) => (
-          <Chip
-            key={`${c.label}-${i}`}
-            tone={c.muted ? "neutral" : c.tone}
-            className={c.muted ? "opacity-60 text-[0.6875rem]" : "text-[0.6875rem]"}
-            title={c.tooltip}
-          >
-            {c.label}
-          </Chip>
-        ))}
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex flex-wrap gap-1.5">
+          {row.chips.map((c, i) => (
+            <Chip
+              key={`${c.label}-${i}`}
+              // Muted already reads as de-emphasized via the neutral tone
+              // (grey vs. the colored live-capability chips) — no opacity
+              // fade on top of it: that measured 3.16:1, under WCAG AA's
+              // 4.5:1, because fading BOTH the chip's bg and its text toward
+              // the page background collapses the contrast between them. The
+              // label itself now carries the state too ("· n/a" / "· off"),
+              // so it isn't color/opacity alone doing the telling.
+              tone={c.muted ? "neutral" : c.tone}
+              className="text-[0.6875rem]"
+              title={c.tooltip}
+            >
+              {c.label}
+            </Chip>
+          ))}
+        </div>
+        {/* The reason a muted chip is muted, as always-visible text — not
+            only a `title`, which a non-focusable span never surfaces to a
+            keyboard user and no screen reader announces on its own. */}
+        {row.chips
+          .filter((c) => c.muted && c.tooltip)
+          .map((c, i) => (
+            <p key={i} className="text-[0.625rem] leading-snug text-muted-foreground">
+              {c.tooltip}
+            </p>
+          ))}
       </div>
       <div>
         <Chip tone={res.tone} className="text-[0.6875rem]" title={res.tooltip}>

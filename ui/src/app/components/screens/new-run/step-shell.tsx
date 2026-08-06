@@ -89,18 +89,32 @@ export function Field({
   label,
   htmlFor,
   hint,
+  required,
   children,
   className,
 }: {
   label: React.ReactNode;
   htmlFor?: string;
   hint?: React.ReactNode;
+  /** Marks the label with a visible "*" — pair with `required` on the actual
+   *  control so the requirement is never conveyed by the marker's color alone. */
+  required?: boolean;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
     <div className={cn("space-y-2", className)}>
-      <Label htmlFor={htmlFor}>{label}</Label>
+      {/* The "*" is a sibling of Label, not inside it, so it never joins the
+          label's accessible name (getByLabelText("Name") stays exact) — the
+          native `required` attribute on the control is what AT announces. */}
+      <div className="flex items-center gap-1">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        {required && (
+          <span className="text-muted-foreground" aria-hidden="true">
+            *
+          </span>
+        )}
+      </div>
       {children}
       {hint && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{hint}</p>}
     </div>

@@ -60,6 +60,13 @@ describe("OnboardingScreen (welcome hero)", () => {
     expect(screen.getByText(/Model: Claude subscription \(host CLI\)/)).toBeInTheDocument();
   });
 
+  it("the not-ready barrier chip still carries its subject — never a bare 'Needs setup'", async () => {
+    getSetupStatusMock.mockResolvedValue(status({ runner: { driver: "docker", confinement_classes: [] } }));
+    render(<OnboardingScreen onGetStarted={() => {}} />);
+    expect(await screen.findByText("Barrier: needs setup")).toBeInTheDocument();
+    expect(screen.queryByText("Needs setup")).not.toBeInTheDocument();
+  });
+
   it("is a single forward CTA (onGetStarted) — no skip, no demo side-door", async () => {
     const onGetStarted = vi.fn();
     render(<OnboardingScreen onGetStarted={onGetStarted} />);

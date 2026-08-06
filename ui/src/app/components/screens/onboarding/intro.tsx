@@ -45,7 +45,15 @@ type NodeTone = "muted" | "primary" | "warning";
 const HOW_IT_WORKS: { Icon: React.ElementType; title: string; sub: string; tone: NodeTone }[] = [
   { Icon: Fingerprint, title: "Own identity", sub: "Every run, cryptographically scoped", tone: "muted" },
   { Icon: BrickWall, title: "Behind a barrier", sub: "Fence, Wall, or Vault — you choose", tone: "primary" },
-  { Icon: KeyRound, title: "Keys stay brokered", sub: "Short-lived tokens, never your real keys", tone: "muted" },
+  // Not "never your real keys, unqualified" — copy.ts's CAPABILITY comments
+  // are explicit that brokerLine is "fully true only for github_token"; a
+  // git_pat/ssh_key grant, and a host-CLI Claude subscription
+  // (resident_mount), really do put the real credential in the sandbox. "By
+  // default" + "labeled" keeps this true for every lane: brokering is the
+  // common case, and the resident exceptions are the amber `resident` chip
+  // (RESIDENCY_META.resident_mount) elsewhere in this same funnel, not a
+  // silently different story.
+  { Icon: KeyRound, title: "Keys stay brokered by default", sub: "Resident lanes are labeled, not hidden", tone: "muted" },
   { Icon: ShieldCheck, title: "You gate the risky bits", sub: "Egress and writes ask first", tone: "warning" },
   { Icon: ScrollText, title: "Everything recorded", sub: "Append-only audit; session replay where the runner supports it", tone: "muted" },
 ];

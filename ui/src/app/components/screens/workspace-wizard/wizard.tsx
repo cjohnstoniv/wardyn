@@ -729,7 +729,15 @@ export function WorkspaceWizard({
                 <Button type="button" variant="outline" onClick={close}>
                   {wsExists ? "Close" : "Cancel"}
                 </Button>
-                <Button type="button" disabled={!s.name.trim() || s.creating} onClick={() => void continueFromSources()}>
+                <Button
+                  type="button"
+                  disabled={!s.name.trim() || s.creating}
+                  // disabled:pointer-events-none (ui/button.tsx) means a plain
+                  // `title` here would never fire on hover — aria-describedby
+                  // + the visible note below is the reachable version.
+                  aria-describedby={s.name.trim() ? undefined : "ws-name-reason"}
+                  onClick={() => void continueFromSources()}
+                >
                   Continue →
                 </Button>
               </>
@@ -816,6 +824,11 @@ export function WorkspaceWizard({
                 </Button>
               ))}
           </div>
+          {s.step === "sources" && !s.name.trim() && (
+            <p id="ws-name-reason" className="w-full text-right text-[0.6875rem] text-muted-foreground">
+              Name is required.
+            </p>
+          )}
           {s.step === "image" && phaseA && (
             <p className="w-full text-right text-[0.6875rem] text-muted-foreground">{V2C.WAIT_NOTE}</p>
           )}
