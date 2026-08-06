@@ -46,6 +46,39 @@ function subtleBg(name: string): string {
   return "#" + hex(over(r)) + hex(over(g)) + hex(over(b));
 }
 
+// A field that paints nothing (bg-transparent) or paints translucently
+// (dark:bg-input/30) shows whatever its CONTAINER paints, so a gate on
+// --placeholder-foreground has to model the TIGHTEST such chain in its theme,
+// not the handiest backdrop. Layers are innermost-first, each [token, alpha];
+// they composite outermost-first onto an opaque --background root, which is
+// where every chain terminates (nothing above an opaque paint can reach the
+// field). `tok` selects the theme.
+function fieldBackdrop(tok: (name: string) => string, layers: [string, number][]): string {
+  const ch = (name: string, k: number) => parseInt(tok(name).slice(1 + 2 * k, 3 + 2 * k), 16);
+  let bg = [0, 1, 2].map((k) => ch("background", k));
+  for (const [t, a] of [...layers].reverse()) {
+    bg = bg.map((v, k) => Math.round(a * ch(t, k) + (1 - a) * v));
+  }
+  return "#" + bg.map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+// Read the dark translucency from the primitive rather than restating it. The
+// modelled field is a <Textarea>, so textarea.tsx — not input.tsx — is the file
+// that decides it; the assertion below pins the two to the same alpha.
+function darkFieldAlpha(primitive: "input" | "textarea"): number {
+  const m = readFileSync(`src/app/components/ui/${primitive}.tsx`, "utf8").match(/dark:bg-input\/(\d+)\b/);
+  if (!m) throw new Error(`dark:bg-input/NN not found in ui/${primitive}.tsx`);
+  return +m[1] / 100;
+}
+
+// The build-steps Textarea's chain, shared by both themes: bg-surface-2/40
+// inside the selected image card's bg-primary/10, on the wizard dialog's
+// bg-background (workspace-wizard/step-base-image.tsx + wizard.tsx).
+const BUILD_STEPS_PANES: [string, number][] = [
+  ["surface-2", 0.4],
+  ["primary", 0.1],
+];
+
 const WHITE = "#ffffff";
 
 // All .tsx under src/app, for the source-scanning guards below.
@@ -87,8 +120,16 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // Placeholder text is still text (WCAG 1.4.3, 4.5:1) as well as needing to
   // read as distinctly not-a-value (>=3:1 from filled --foreground) — a dark-
   // theme regression once satisfied only the second half (see below).
-  it("--placeholder-foreground is >= 4.5:1 on --input-background and >= 3:1 separated from filled-value text", () => {
-    expect(ratio(token("placeholder-foreground"), token("input-background"))).toBeGreaterThanOrEqual(4.5);
+  // Light mode has no dark: override, so a field normally IS --input-background
+  // (#ffffff) — but that is the loosest backdrop in the theme, and one shipped
+  // field is not on it: the build-steps Textarea's own bg-transparent evicts
+  // bg-input-background (tailwind-merge folds both into its one bg-color group,
+  // and the built sheet emits .bg-transparent later at equal specificity), so it
+  // paints nothing and sits on the tinted panes below. Gating on
+  // --input-background certified #737373, which renders 4.19:1 there.
+  it("--placeholder-foreground is >= 4.5:1 on the TIGHTEST real field and >= 3:1 separated from filled-value text", () => {
+    const tightestField = fieldBackdrop(token, BUILD_STEPS_PANES);
+    expect(ratio(token("placeholder-foreground"), tightestField)).toBeGreaterThanOrEqual(4.5);
     expect(ratio(token("placeholder-foreground"), token("foreground"))).toBeGreaterThanOrEqual(3);
   });
 
@@ -129,23 +170,8 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     // the selected card's bg-primary/10 (:229-232, the disclosed body renders
     // only when selected), on the wizard dialog's bg-background. Clear AA there
     // and every darker-backed field follows.
-    const inputAlpha = (() => {
-      // Read from the primitive rather than restating it: a change of
-      // dark:bg-input/30 lightens every field in the app at once.
-      const m = readFileSync("src/app/components/ui/input.tsx", "utf8").match(/dark:bg-input\/(\d+)\b/);
-      if (!m) throw new Error("dark:bg-input/NN not found in ui/input.tsx");
-      return +m[1] / 100;
-    })();
-    // Layers innermost-first over an opaque root, each [token, alpha].
-    const dTightestField = (): string => {
-      const layers: [string, number][] = [["input", inputAlpha], ["surface-2", 0.4], ["primary", 0.1]];
-      const ch = (name: string, k: number) => parseInt(dtoken(name).slice(1 + 2 * k, 3 + 2 * k), 16);
-      let bg = [0, 1, 2].map((k) => ch("background", k));
-      for (const [tok, a] of [...layers].reverse()) {
-        bg = bg.map((v, k) => Math.round(a * ch(tok, k) + (1 - a) * v));
-      }
-      return "#" + bg.map((v) => v.toString(16).padStart(2, "0")).join("");
-    };
+    const dTightestField = (): string =>
+      fieldBackdrop(dtoken, [["input", darkFieldAlpha("textarea")], ...BUILD_STEPS_PANES]);
 
     for (const t of ["success", "warning", "danger", "info", "cyan"]) {
       it(`dark --${t} text is >= 4.5:1 on --background and on -subtle over --card`, () => {
@@ -160,6 +186,13 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     it("dark --placeholder-foreground is >= 4.5:1 on the LIGHTEST real field and >= 3:1 separated from filled-value text", () => {
       expect(ratio(dtoken("placeholder-foreground"), dTightestField())).toBeGreaterThanOrEqual(4.5);
       expect(ratio(dtoken("placeholder-foreground"), dtoken("foreground"))).toBeGreaterThanOrEqual(3);
+    });
+
+    // "one alpha lightens every field at once" is only true while the two field
+    // primitives carry the same one. Without this, a textarea-only alpha change
+    // would lighten the very field the gate above pins, unseen.
+    it("Input and Textarea carry the same dark:bg-input alpha", () => {
+      expect(darkFieldAlpha("input")).toBe(darkFieldAlpha("textarea"));
     });
   });
 

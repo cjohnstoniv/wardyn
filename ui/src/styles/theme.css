@@ -39,11 +39,17 @@
   --muted: #f4f4f5;
   --muted-foreground: #737373;
   /* input/textarea ::placeholder ONLY — deliberately NOT --muted-foreground.
-     A placeholder has to read as clearly NOT a filled value, so it needs its
-     own, darker-than-muted color even where --muted-foreground itself already
-     separates fine from --foreground (light theme: same value here, so this
-     is a no-op; dark theme is the one that needed it — see below). */
-  --placeholder-foreground: #737373;
+     A placeholder has to read as clearly NOT a filled value (>=3:1 from
+     --foreground) while its own text still clears WCAG 1.4.3's 4.5:1, and both
+     have to hold on the TIGHTEST real field rather than the handiest backdrop.
+     In light mode that is the build-steps Textarea (workspace-wizard/
+     step-base-image.tsx): its bg-transparent evicts the primitive's
+     bg-input-background, so the field paints NOTHING and shows bg-surface-2/40
+     inside the selected card's bg-primary/10 on the wizard dialog's
+     bg-background — (236,242,243), where the old #737373 measured 4.19:1.
+     #696969 clears both there (4.85:1 legibility, 3.27:1 separation) and
+     therefore on every white-backed field too. */
+  --placeholder-foreground: #696969;
   --accent: #f4f4f5;
   --accent-foreground: #171717;
 
