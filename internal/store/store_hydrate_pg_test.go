@@ -259,19 +259,34 @@ func TestPG_MergeWorkspaceRequirements_AtomicAndCapped(t *testing.T) {
 		t.Errorf("overlay after two merges = %+v, want both rows (|| is additive)", got.Requirements)
 	}
 
-	// The cap refuses with ErrConflict, never silently dropping.
+	// The cap is evaluated on the POST-merge total, not the pre-merge count:
+	// 2 rows already stored + 254 new = exactly 256 must succeed; 256 + 1
+	// more must refuse. A pre-merge-only check would let the bulk merge
+	// overshoot to 258, which is the bug this pins.
 	big := map[string]types.WorkspaceRequirement{}
-	for i := 0; i < 256; i++ {
+	for i := 0; i < 254; i++ {
 		big["egress:h"+uuid.NewString()[:8]+".example"] = types.WorkspaceRequirement{Level: "optional", Provenance: "operator_set"}
 	}
-	if _, err := s.MergeWorkspaceRequirements(ctx, ws.ID, big); err != nil {
-		t.Fatalf("bulk merge under cap: %v", err)
+	got, err = s.MergeWorkspaceRequirements(ctx, ws.ID, big)
+	if err != nil {
+		t.Fatalf("bulk merge up to the cap: %v", err)
+	}
+	if len(got.Requirements) != 256 {
+		t.Fatalf("overlay after bulk merge = %d keys, want exactly 256 (at the cap)", len(got.Requirements))
 	}
 	_, err = s.MergeWorkspaceRequirements(ctx, ws.ID, map[string]types.WorkspaceRequirement{
 		"egress:one-more.example": {Level: "required", Provenance: "operator_set"},
 	})
 	if !errors.Is(err, store.ErrConflict) {
 		t.Errorf("merge past the cap = %v, want ErrConflict", err)
+	}
+	// The refused merge must never have landed: the total stays at 256.
+	final, err := s.GetWorkspace(ctx, ws.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(final.Requirements) != 256 {
+		t.Errorf("overlay after a refused merge = %d keys, want unchanged at 256 (never overshoot)", len(final.Requirements))
 	}
 
 	// Unknown workspace is NotFound, not Conflict.

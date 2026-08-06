@@ -82,15 +82,25 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 	recommended := insertPre0031Workspace(t, pool, "rec", []any{eph},
 		map[string]any{"kind": "recommended"}, nil, "scanned")
 
+	// Two MORE workspaces sharing one sole non-ephemeral source between them —
+	// the donor-determinism case: DISTINCT ON must pick the 'error' row over
+	// the 'scanned' row regardless of insertion/scan order.
+	_ = insertPre0031Workspace(t, pool, "shared-a", []any{map[string]any{
+		"type": "local_dir", "path": "/home/me/shared",
+	}}, nil, map[string]any{"languages": []string{"scanned-donor"}}, "scanned")
+	_ = insertPre0031Workspace(t, pool, "shared-b", []any{map[string]any{
+		"type": "local_dir", "path": "/home/me/shared",
+	}}, nil, map[string]any{"languages": []string{"error-donor"}}, "error")
+
 	execMigrationFile(t, pool, sourceLibraryMigration)
 
 	// Dedupe: /home/me/payments (slash-trimmed) + acme/widgets@main (case/trim-
-	// canonicalized) + /home/me/solo = exactly 3 library rows.
+	// canonicalized) + /home/me/solo + /home/me/shared = exactly 4 library rows.
 	var nSources int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sources`).Scan(&nSources); err != nil {
 		t.Fatal(err)
 	}
-	if nSources != 3 {
+	if nSources != 4 {
 		rows, _ := pool.Query(ctx, `SELECT kind, locator, ref FROM sources`)
 		defer rows.Close()
 		for rows.Next() {
@@ -98,7 +108,7 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 			_ = rows.Scan(&k, &l, &r)
 			t.Logf("source: %s %s %q", k, l, r)
 		}
-		t.Fatalf("sources = %d, want 3 (dedupe on identity)", nSources)
+		t.Fatalf("sources = %d, want 4 (dedupe on identity)", nSources)
 	}
 	var repoCount int
 	if err := pool.QueryRow(ctx,
@@ -175,13 +185,33 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 	}
 	_ = single
 
+	// Donor determinism: /home/me/shared has TWO eligible donors (shared-a
+	// scanned, shared-b error) — the 'error' row must win deterministically,
+	// not whichever Postgres happens to visit last.
+	var sharedStatus string
+	var sharedProfileRaw []byte
+	if err := pool.QueryRow(ctx,
+		`SELECT status, profile FROM sources WHERE locator='/home/me/shared'`).Scan(&sharedStatus, &sharedProfileRaw); err != nil {
+		t.Fatal(err)
+	}
+	if sharedStatus != "error" {
+		t.Errorf("shared-source donor status = %q, want %q (worst-status-wins, deterministic)", sharedStatus, "error")
+	}
+	var sharedProf map[string]any
+	if err := json.Unmarshal(sharedProfileRaw, &sharedProf); err != nil {
+		t.Fatal(err)
+	}
+	if langs, _ := sharedProf["languages"].([]any); len(langs) != 1 || langs[0] != "error-donor" {
+		t.Errorf("shared-source donor profile = %v, want the error-status workspace's profile", sharedProf)
+	}
+
 	// 0031 is expand-only: the embedded columns survive untouched.
 	var legacyIntact int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workspaces WHERE sources IS NOT NULL`).Scan(&legacyIntact); err != nil {
 		t.Fatal(err)
 	}
-	if legacyIntact != 4 {
-		t.Errorf("embedded sources column rows = %d, want all 4 intact (expand-only)", legacyIntact)
+	if legacyIntact != 6 {
+		t.Errorf("embedded sources column rows = %d, want all 6 intact (expand-only)", legacyIntact)
 	}
 }
 

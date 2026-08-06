@@ -44,6 +44,11 @@ func (s *sourcesEndpointFake) WorkspacesAttaching(context.Context, uuid.UUID) ([
 	return s.attached, nil
 }
 func (s *sourcesEndpointFake) DeleteSource(_ context.Context, id uuid.UUID, detach bool) error {
+	if !detach && len(s.attached) > 0 {
+		// Mirrors the real store's atomic NOT EXISTS guard: a non-force
+		// delete while something is attached never reaches the delete.
+		return store.ErrConflict
+	}
 	s.deleted, s.detached = &id, detach
 	return nil
 }
@@ -117,6 +122,43 @@ func TestSources_DeleteInUseIsLoud(t *testing.T) {
 	}
 	if fake.deleted == nil || !fake.detached {
 		t.Error("force=1 must detach-and-delete")
+	}
+}
+
+// A repo locator's identity dedupes case-INsensitively on scheme+host, but
+// hydrate must serve the operator's clone path back EXACTLY as authored —
+// self-hosted GitLab/Gitea/Bitbucket paths are case-sensitive, so lowercasing
+// the whole locator clones the wrong URL or 404s.
+func TestSources_RepoLocatorCanonicalizesHostOnly(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, &sourcesEndpointFake{}))
+	w := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken,
+		`{"kind":"repo","locator":"https://Git.Corp.Example/MyGroup/MyRepo.git"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var created types.Source
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	const want = "https://git.corp.example/MyGroup/MyRepo.git"
+	if created.Locator != want {
+		t.Errorf("Locator = %q, want %q (scheme+host lowercased, path preserved as authored)", created.Locator, want)
+	}
+}
+
+func TestCanonicalRepoLocator_HostOnlyLowercased(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"https URL, mixed-case host and path", "https://Git.Corp.Example/MyGroup/MyRepo.git", "https://git.corp.example/MyGroup/MyRepo.git"},
+		{"scp-form, mixed-case host, path untouched", "git@GitHub.com:MyOrg/MyRepo.git", "git@github.com:MyOrg/MyRepo.git"},
+		{"bare org/name slug: no host component to normalize", "MyOrg/MyRepo", "MyOrg/MyRepo"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := canonicalRepoLocator(c.in); got != c.want {
+				t.Errorf("canonicalRepoLocator(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
 	}
 }
 

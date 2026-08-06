@@ -377,7 +377,7 @@ func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
 	}
 	b, err := json.Marshal(atts)
 	if err != nil {
-		return nil // unreachable for this concrete type; fail-safe to pre-split view
+		return []byte("[]") // unreachable for this concrete type; fail-safe to the pre-split marker — NOT nil, the column is NOT NULL (matches workspaceSourcesParam)
 	}
 	return b
 }
@@ -708,7 +708,6 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	if attachmentsRaw != nil {
 		_ = json.Unmarshal(attachmentsRaw, &ws.Attachments) // fail safe: pre-split view
 	}
-	deriveWorkspaceMirrors(&ws)
 	return ws, nil
 }
 

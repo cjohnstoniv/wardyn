@@ -144,9 +144,9 @@ func scanName(row pgx.Row) (string, error) {
 }
 
 // DeleteSource removes a library source. detach=true first strips every
-// workspace attachment referencing it (the ?force=1 escape); detach=false and
-// the caller must have already checked WorkspacesAttaching (the handler 409s
-// with the names — the store just enforces nothing dangles silently).
+// workspace attachment referencing it (the ?force=1 escape); detach=false
+// refuses in ONE atomic statement — the in-use check and the delete can never
+// split into two round trips a concurrent attach could land between.
 func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
 		if _, err := s.Pool.Exec(ctx, `
@@ -159,13 +159,33 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 			id.String()); err != nil {
 			return fmt.Errorf("store: detach source: %w", err)
 		}
+		tag, err := s.Pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, id)
+		if err != nil {
+			return fmt.Errorf("store: delete source: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
 	}
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, id)
+	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, so a
+	// workspace attach landing after a caller's own WorkspacesAttaching probe
+	// can never slip a delete through — the exact orphaning the doc above
+	// refuses. Zero rows affected means either "still attached" or "no such
+	// id"; both read as ErrConflict here (mirrors ClaimSourceActiveRun's
+	// zero-rows convention) — the caller already has the id from the request
+	// path, so a 409 naming zero attaching workspaces on a bad id is a
+	// harmless edge case, not a silent miss.
+	tag, err := s.Pool.Exec(ctx, `
+		DELETE FROM sources WHERE id=$1 AND NOT EXISTS (
+			SELECT 1 FROM workspaces
+			WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))
+		)`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete source: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+		return ErrConflict
 	}
 	return nil
 }
@@ -271,6 +291,26 @@ func (s PG) GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntr
 	return scanBaseImage(s.Pool.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images WHERE id=$1`, id))
 }
 
+// GetBaseImagesByIDs returns the base images for ids in ONE query, keyed by
+// id — hydrateAll's bulk read, mirroring GetSourcesByIDs. Missing ids are
+// simply absent from the map (a dangling base_image_id contributes nothing;
+// hydrateWorkspace leaves BaseImage nil for it).
+func (s PG) GetBaseImagesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.BaseImageEntry, error) {
+	out := make(map[uuid.UUID]types.BaseImageEntry, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	imgs, err := collect(ctx, s.Pool, "list", "base images by id",
+		`SELECT `+baseImageCols+` FROM base_images WHERE id = ANY($1)`, []any{ids}, scanBaseImage)
+	if err != nil {
+		return nil, err
+	}
+	for _, img := range imgs {
+		out[img.ID] = img
+	}
+	return out, nil
+}
+
 // ListBaseImages returns the whole catalog, newest first.
 func (s PG) ListBaseImages(ctx context.Context) ([]types.BaseImageEntry, error) {
 	return collect(ctx, s.Pool, "list", "base images",
@@ -309,9 +349,10 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 // atomically — the `jsonb ||` idiom SetWorkspaceRecordResult established — so
 // the verify loop's approve-writes-the-row-now can never clobber a concurrent
 // edit the way read-modify-write on the full-replace writer would. The WHERE
-// clause carries the same key-count cap the PUT endpoint enforces, so a
-// runaway session can't grow the contract unboundedly; at the cap it returns
-// ErrConflict rather than silently dropping the row.
+// clause carries the same key-count cap the PUT endpoint enforces, evaluated
+// on the POST-merge total (existing keys merged with this patch) so a
+// multi-key merge can't overshoot the cap in one jump; at the cap it returns
+// ErrConflict rather than silently dropping rows or exceeding it.
 func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	if len(add) == 0 {
 		return s.GetWorkspace(ctx, id)
@@ -324,7 +365,7 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 		UPDATE workspaces
 		SET requirements = COALESCE(requirements, '{}'::jsonb) || $2::jsonb, updated_at = now()
 		WHERE id = $1
-		  AND (SELECT count(*) FROM jsonb_object_keys(COALESCE(requirements, '{}'::jsonb))) < 256
+		  AND (SELECT count(*) FROM jsonb_object_keys(COALESCE(requirements, '{}'::jsonb) || $2::jsonb)) <= 256
 		RETURNING `+wsCols, id, patch))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "no such workspace" from "cap reached" for the caller.
@@ -386,13 +427,15 @@ func (s PG) hydrateAll(ctx context.Context, wss []types.Workspace) ([]types.Work
 			return nil, err
 		}
 	}
-	images := map[uuid.UUID]types.BaseImageEntry{}
-	for id := range imageIDs {
-		img, err := s.GetBaseImage(ctx, id)
-		if err != nil && !errors.Is(err, ErrNotFound) {
+	var images map[uuid.UUID]types.BaseImageEntry
+	if len(imageIDs) > 0 {
+		ids := make([]uuid.UUID, 0, len(imageIDs))
+		for id := range imageIDs {
+			ids = append(ids, id)
+		}
+		var err error
+		if images, err = s.GetBaseImagesByIDs(ctx, ids); err != nil {
 			return nil, err
-		} else if err == nil {
-			images[id] = img
 		}
 	}
 
@@ -417,7 +460,8 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	// Sources view, in attachment order.
 	derived := make([]types.WorkspaceSource, 0, len(ws.Attachments))
 	profiles := make([]workspacescan.WorkspaceProfile, 0, len(ws.Attachments))
-	status := types.WorkspaceScanned // ephemeral-only ⇒ scanned (nothing to scan)
+	identities := make([]string, 0, len(ws.Attachments)) // profiles[i]'s source locator, for MergeProfiles attribution
+	status := types.WorkspaceScanned                     // ephemeral-only ⇒ scanned (nothing to scan)
 	sawSource := false
 	for _, att := range ws.Attachments {
 		if att.Ephemeral || att.SourceID == nil {
@@ -450,6 +494,7 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 			var p workspacescan.WorkspaceProfile
 			if json.Unmarshal(src.Profile, &p) == nil {
 				profiles = append(profiles, p)
+				identities = append(identities, src.Locator)
 			}
 		}
 		status = worseWorkspaceStatus(status, src.Status)
@@ -464,7 +509,7 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	// Requirements tabs never mounted on the default scratch-floor path.
 	switch {
 	case len(profiles) > 0:
-		merged := workspacescan.MergeProfiles(profiles)
+		merged := workspacescan.MergeProfiles(profiles, identities)
 		if b, err := json.Marshal(merged); err == nil {
 			ws.Profile = b
 		}

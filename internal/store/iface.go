@@ -75,6 +75,7 @@ type Store interface {
 	UpsertSource(ctx context.Context, src types.Source) (types.Source, error)
 	GetSource(ctx context.Context, id uuid.UUID) (types.Source, error)
 	GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error)
+	GetBaseImagesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.BaseImageEntry, error)
 	ListSources(ctx context.Context) ([]types.Source, error)
 	UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error)
 	WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error)

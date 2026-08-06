@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // sources.go — the tier-1 SOURCE LIBRARY endpoints: a repo/dir configured
@@ -55,9 +57,38 @@ func canonicalSourceIdentity(kind types.SourceKind, locator, ref string) (string
 		}
 		return locator, ""
 	case types.SourceRepo:
-		return strings.ToLower(locator), strings.TrimSpace(ref)
+		return canonicalRepoLocator(locator), strings.TrimSpace(ref)
 	}
 	return locator, strings.TrimSpace(ref)
+}
+
+// canonicalRepoLocator lowercases ONLY the scheme+host of a repo locator,
+// leaving the path verbatim: a case-sensitive forge (self-hosted GitLab/
+// Gitea/Bitbucket, or any case-sensitive path segment) needs the operator's
+// clone path preserved exactly as authored, while scheme/host is
+// case-insensitive by definition — so "https://Git.Corp.Example/MyGroup/
+// MyRepo.git" dedupes with the lowercase spelling but hydrate always serves
+// "MyGroup/MyRepo.git" back, not "mygroup/myrepo.git". A bare "<org>/<name>"
+// GitHub slug has no host component in the string itself and passes through
+// unchanged.
+func canonicalRepoLocator(locator string) string {
+	if strings.Contains(locator, "://") {
+		if u, err := url.Parse(locator); err == nil && u.Host != "" {
+			u.Scheme = strings.ToLower(u.Scheme)
+			u.Host = strings.ToLower(u.Host)
+			return u.String()
+		}
+		return locator
+	}
+	// scp-form user@host:path (no scheme) — lowercase only the host between
+	// '@' and the following ':'.
+	if at := strings.IndexByte(locator, '@'); at >= 0 {
+		rest := locator[at+1:]
+		if colon := strings.IndexByte(rest, ':'); colon >= 0 {
+			return locator[:at+1] + strings.ToLower(rest[:colon]) + rest[colon:]
+		}
+	}
+	return locator
 }
 
 // validateSourceWrite checks a library source the way the workspace's own
@@ -108,14 +139,10 @@ func validateSourceWrite(src types.Source) string {
 // sourceRequest is the POST/PUT body. POST is an UPSERT by identity — the
 // library's whole point is that the same dir/repo configured twice is one
 // entry — so a re-POST of an existing identity returns the existing row (200,
-// not 201) rather than a conflict.
-type sourceRequest struct {
-	Kind         types.SourceKind                      `json:"kind"`
-	Locator      string                                `json:"locator"`
-	Ref          string                                `json:"ref,omitempty"`
-	Name         string                                `json:"name"`
-	Requirements map[string]types.WorkspaceRequirement `json:"requirements,omitempty"`
-}
+// not 201) rather than a conflict. A type ALIAS (not a hand-maintained copy)
+// of the public SDK's client.SourceRequest — the alias discipline the other
+// request DTOs already follow (dto_alias_test.go pins it at compile time).
+type sourceRequest = client.SourceRequest
 
 // handleListSources returns the whole library.
 //
@@ -234,7 +261,11 @@ func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request) {
 // workspaces attach it. A dangling attachment silently un-mounts code and
 // turns runs into unexplained 422s at the mount gate, so in-use is a 409
 // naming every attaching workspace; ?force=1 is the explicit
-// detach-everywhere escape.
+// detach-everywhere escape. The in-use gate and the delete are ONE atomic
+// statement in the store (DeleteSource): WorkspacesAttaching here only names
+// who's attached for the 409 body, it does not decide the outcome, so a
+// workspace attaching between this call and the delete can never slip
+// through.
 //
 //	DELETE /api/v1/sources/{id}[?force=1]
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
@@ -248,13 +279,13 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "check source use: "+err.Error())
 		return
 	}
-	if len(names) > 0 && !force {
-		writeError(w, http.StatusConflict, fmt.Sprintf(
-			"source is attached by %d workspace(s): %s — detach them first, or pass ?force=1 to detach everywhere and delete",
-			len(names), strings.Join(names, ", ")))
-		return
-	}
 	if err := s.cfg.Store.DeleteSource(r.Context(), id, force); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"source is attached by %d workspace(s): %s — detach them first, or pass ?force=1 to detach everywhere and delete",
+				len(names), strings.Join(names, ", ")))
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "no such source")
 			return

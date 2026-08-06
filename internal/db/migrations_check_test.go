@@ -117,3 +117,122 @@ func TestAgentRunStateCheckCoversAllStates(t *testing.T) {
 		}
 	}
 }
+
+// checkInRe returns a regexp matching a `<column> IN ( ... )` CHECK clause —
+// the general form of stateInCheckRe, parameterized by column so the parity
+// guard below can reuse the same parsing for every closed enum, not just
+// agent_runs.state.
+func checkInRe(column string) *regexp.Regexp {
+	return regexp.MustCompile(`(?is)` + regexp.QuoteMeta(column) + `\s+IN\s*\(([^)]*)\)`)
+}
+
+// targetsTableRe returns a regexp matching a statement whose TARGET table is
+// `table` (CREATE TABLE table / ALTER TABLE table) — the general form of
+// targetsAgentRunsRe, parameterized by table name. Must NOT match a statement
+// that merely FK-references table.
+func targetsTableRe(table string) *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?is)(?:CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|ALTER\s+TABLE\s+(?:ONLY\s+)?)` + regexp.QuoteMeta(table) + `\b`)
+}
+
+// effectiveCheckValues returns the set of values a `table.column IN (...)`
+// CHECK allows after ALL migrations are applied in lexical order — the LAST
+// migration that (re)defines it wins, same rule as effectiveAgentRunStates,
+// generalized past agent_runs.state to the closed enums below. Reuses
+// readMigrationNames (db_test.go) and quotedRe.
+func effectiveCheckValues(t *testing.T, table, column string) map[string]bool {
+	t.Helper()
+	targetsRe := targetsTableRe(table)
+	inRe := checkInRe(column)
+	var allowed map[string]bool
+	for _, name := range readMigrationNames(t) {
+		data, err := migrationFS.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		// Process statement-by-statement so the CHECK is attributed to its
+		// OWNING table, not merely a table that mentions the column name.
+		for _, stmt := range strings.Split(string(data), ";") {
+			if !targetsRe.MatchString(stmt) {
+				continue
+			}
+			loc := inRe.FindStringSubmatch(stmt)
+			if loc == nil {
+				continue
+			}
+			vals := map[string]bool{}
+			for _, q := range quotedRe.FindAllStringSubmatch(loc[1], -1) {
+				vals[q[1]] = true
+			}
+			if len(vals) > 0 {
+				allowed = vals // last writer (lexically-latest migration) wins
+			}
+		}
+	}
+	return allowed
+}
+
+// stringSet builds a lookup set from literal values — closedEnumCheck.known
+// for the enums below.
+func stringSet(vals ...string) map[string]bool {
+	out := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		out[v] = true
+	}
+	return out
+}
+
+// workspaceStatusValues is shared by workspaces.status and sources.status:
+// 0031 gave sources the identical status vocabulary types.WorkspaceStatus
+// already defines for workspaces (pending_scan/scanning/scanned/error).
+func workspaceStatusValues() map[string]bool {
+	return stringSet(
+		string(types.WorkspacePendingScan), string(types.WorkspaceScanning),
+		string(types.WorkspaceScanned), string(types.WorkspaceError),
+	)
+}
+
+// closedEnumCheck is one Go-const-vs-DB-CHECK parity case beyond
+// agent_runs.state: a table.column whose CHECK the DB enforces against a
+// small closed set the Go side also defines. Adding a value on one side
+// without the other reproduces the COMPLETED-state incident
+// TestAgentRunStateCheckCoversAllStates exists to catch.
+type closedEnumCheck struct {
+	table, column string
+	known         map[string]bool
+}
+
+// TestClosedEnumChecksMatchConstants extends the always-on parity guard past
+// agent_runs.state to the closed enums 0029/0031 shipped: workspaces.status,
+// sources.status, sources.kind and base_images.kind had no equivalent guard,
+// so any of them could silently drift the way agent_runs.state once did.
+func TestClosedEnumChecksMatchConstants(t *testing.T) {
+	cases := []closedEnumCheck{
+		{"workspaces", "status", workspaceStatusValues()},
+		{"sources", "status", workspaceStatusValues()},
+		{"sources", "kind", stringSet(string(types.SourceLocalDir), string(types.SourceRepo))},
+		// base_images.kind has no typed Go enum (types.BaseImageEntry.Kind is a
+		// plain string — internal/types/workspace_contract.go) and is validated
+		// ad hoc in internal/api/base_images.go, so this literal list IS the
+		// closed set, not a derived one.
+		{"base_images", "kind", stringSet("registry", "custom", "byo")},
+	}
+	for _, c := range cases {
+		t.Run(c.table+"."+c.column, func(t *testing.T) {
+			allowed := effectiveCheckValues(t, c.table, c.column)
+			if allowed == nil {
+				t.Fatalf("no %s.%s CHECK found in migrations", c.table, c.column)
+			}
+			for v := range c.known {
+				if !allowed[v] {
+					t.Errorf("%s.%s CHECK does not allow %q, which the Go side defines", c.table, c.column, v)
+				}
+			}
+			for v := range allowed {
+				if !c.known[v] {
+					t.Errorf("%s.%s CHECK allows %q, which is not a defined Go constant", c.table, c.column, v)
+				}
+			}
+		})
+	}
+}

@@ -147,13 +147,18 @@ WHERE w.base_image->>'kind' IN ('registry','custom','byo')
 -- source hasn't been scanned yet. A multi-source workspace's MERGED profile
 -- cannot be split back onto its members — those sources stay pending_scan and
 -- one rescan click rebuilds honestly (population today: ~zero; the
--- composition model is days old).
+-- composition model is days old). When the SAME source is that sole
+-- attachment of two or more workspaces, DISTINCT ON picks ONE donor
+-- deterministically instead of leaving it to Postgres's unspecified
+-- UPDATE...FROM row choice: worst-status-wins (error over scanned — the
+-- pessimistic read), newest updated_at as the tiebreak.
 UPDATE sources s
 SET profile = w.profile,
     status  = w.status,
     updated_at = now()
 FROM (
-    SELECT (a.e->>'source_id')::uuid AS sid, w2.profile, w2.status
+    SELECT DISTINCT ON (sid)
+           (a.e->>'source_id')::uuid AS sid, w2.profile, w2.status
     FROM workspaces w2,
          jsonb_array_elements(w2.attachments) AS a(e)
     WHERE w2.profile IS NOT NULL
@@ -161,6 +166,7 @@ FROM (
       AND a.e ? 'source_id'
       AND (SELECT count(*) FROM jsonb_array_elements(w2.attachments) x
             WHERE x ? 'source_id') = 1
+    ORDER BY sid, (w2.status = 'error') DESC, w2.updated_at DESC
 ) w
 WHERE s.id = w.sid AND s.profile IS NULL;
 
