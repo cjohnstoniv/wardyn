@@ -21,7 +21,9 @@ network path works — chains the sandbox proxy through your proxy and
 redirects package registries
 (or any other host: a container registry, an internal appliance) at an
 internal mirror, each with a live probe that actually tests the path (see
-[OPERATIONS.md](OPERATIONS.md)) — and only a passing probe unlocks **Next**.
+[OPERATIONS.md](OPERATIONS.md)) — and a passing probe unlocks **Next**. The
+one exception is honest rather than silent: with no runner wired there is
+nothing to probe from, so the step says so and lets you past.
 Nothing on the step has to be configured; on an open network, Test
 connectivity then Next is the whole visit. Whatever IS configured, though,
 has to prove itself before you can move past it.
