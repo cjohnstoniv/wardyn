@@ -21,12 +21,13 @@ network path works — chains the sandbox proxy through your proxy and
 redirects package registries
 (or any other host: a container registry, an internal appliance) at an
 internal mirror, each with a live probe that actually tests the path (see
-[OPERATIONS.md](OPERATIONS.md)) — and a passing probe unlocks **Next**. The
-one exception is honest rather than silent: with no runner wired there is
-nothing to probe from, so the step says so and lets you past.
-Nothing on the step has to be configured; on an open network, Test
-connectivity then Next is the whole visit. Whatever IS configured, though,
-has to prove itself before you can move past it.
+[OPERATIONS.md](OPERATIONS.md)) — and only a passing probe unlocks
+**Next**. The one exception is honest rather than silent: with no runner
+wired there is nothing to probe from, so the step says so and lets you
+past. Nothing on the step has to be configured; on an open network,
+Test connectivity then Next is the whole visit. Whatever IS configured,
+though, has to prove itself before you can move past it — whenever
+there is a runner to prove it with.
 **Integrations** (the same page as
 `/integrations`) is where you then name the systems outside Wardyn a run has to
 reach — a model provider, GitHub Enterprise / Azure DevOps (see
@@ -34,8 +35,11 @@ reach — a model provider, GitHub Enterprise / Azure DevOps (see
 MCP server, a ticket tracker, or anything else under **Other service**. Each one
 bundles where the system lives, what credential it takes, and how that credential
 reaches the request; adding it is what puts its hosts within a run's reach.
-Nothing is ambient — a run gets an integration when the workspace it runs in
-requires it by name, never because it is configured.
+Nothing is ambient — a run gets an integration when the workspace
+it runs in requires it by name, never because it is configured. The one
+exception is model access: an `ai_provider` integration marked the site-wide
+default for agent runs folds into every run regardless of workspace (see
+[OPERATIONS.md](OPERATIONS.md) → "Model access resolves").
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 

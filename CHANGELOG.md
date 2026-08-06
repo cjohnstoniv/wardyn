@@ -249,11 +249,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   never heard of be added with no backend change, through the generic
   proxy-injection path that already ships.
 - **A workspace's requirements can name an integration** (`integration:<id>`,
-  alongside `secret:` / `egress:` / `write:`). Its hosts join the run's egress
-  allowlist and its header credential is injected proxy-side, one grant per
-  host. NOTHING IS AMBIENT: configuring an integration grants nothing until a
-  run is granted it, and an operator with fifty configured and a workspace that
-  names none gets a spec byte-identical to having none at all.
+  alongside `secret:` / `egress:` / `write:`). Its hosts join the run's
+  egress allowlist and its header credential is injected proxy-side, one
+  grant per host. NOTHING IS AMBIENT: configuring an integration grants
+  nothing until a run is granted it, and an operator with fifty configured
+  and a workspace that names none gets a spec byte-identical to having none
+  at all — except for model access specifically, where an `ai_provider`
+  integration marked the site-wide `agent_runs` default folds into every
+  run regardless (see "Model access resolves" below).
 - **Preflight names an integration a workspace requires but nobody
   configured.** The runtime fold degrades silently on purpose — a workspace may
   state an intent before the integration exists, and a missing one must never
@@ -326,10 +329,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   group only when a scan found Go, the JVM group only when it found
   Maven/Gradle, the union across attached sources — because what a sandbox
   carries follows from the workspace's actual requirements, never from a
-  platform guess. Runs with no workspace context at all (ad-hoc, BYO image,
-  scan and login runs) keep the full set: nothing was scanned and nothing
-  declared, and "unknown" must not break the proven CI and ad-hoc lanes. The
-  in-sandbox consumers were already env-driven no-ops when a key is absent.
+  platform guess. Runs with no workspace context at all (ad-hoc, a bare
+  `--image` override, scan and login runs) keep the full set: nothing was
+  scanned and nothing declared, and "unknown" must not break the proven CI
+  and ad-hoc lanes. The in-sandbox consumers were already env-driven no-ops
+  when a key is absent.
 - **A workspace's Model access binding names an Integration everywhere the UI
   touches it.** The workspace list chip, the detail page's Model access group,
   and its edit dialog all speak the Integration-based binding now

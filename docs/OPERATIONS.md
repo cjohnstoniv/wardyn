@@ -216,20 +216,24 @@ topology, not a named account). For `ai_provider` and `scm_host`, `Type` is
 closed too — `anthropic_api_key`, `anthropic_subscription`, `bedrock`,
 `openai_api_key`, `azure_openai` for the former; `github_app`, `git_host`
 for the latter — `capabilitiesFor` switches on it, so a new one is a code
-change. For every other category `Type` is an open slug (`"jira"`,
-`"pagerduty"`, …) validated for shape only — a provider Wardyn has never
-heard of is just a new string, no schema change.
+change. `artifact_mirror` and `host_proxy` are closed too, each to its
+own single fixed type (`"artifact_mirror"`, `"host_proxy"`) — a write
+naming anything else 400s. For the eight generic categories (`package_feed`
+through `other_service`), `Type` is an open slug (`"jira"`, `"pagerduty"`,
+…) validated for shape only — a provider Wardyn has never heard of
+is just a new string, no schema change.
 
 The Integrations page (`/integrations`) is the one surface for these — rows
 are DERIVED from what already exists (stored secret names, site config,
 setup status), so an operator who never opens the page keeps identical run
 behavior, and one who does can adopt a row to edit it. Host proxy and Egress
-redirection are deliberately NOT part of this taxonomy: that configuration
-lives under **Corporate network** (below), on the same `SiteConfig` document
-but its own step and its own tabs, so there is exactly one place to
-configure network topology instead of two. A **Tools** tab on the same page
-names the other half of the distinction: a tool is what the image carries,
-an integration is what it connects through.
+redirection are deliberately not on this page: the two topology categories
+above exist only as read-only derived rows (nothing writes one directly),
+and their configuration lives under **Corporate network** (below), on the
+same `SiteConfig` document but its own step and its own tabs, so there is
+exactly one place to configure network topology instead of two. A **Tools**
+tab on the same page names the other half of the distinction: a tool is
+what the image carries, an integration is what it connects through.
 
 ### Nothing is ambient
 
