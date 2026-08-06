@@ -34,12 +34,12 @@ import (
 // from the exact same ws.Sources[0] the consumer reads as "primary"). A
 // primaryIdentity matching no profile (primary is ephemeral or unscanned)
 // yields false/false, never another source's values. identities[i] names
-// profiles[i]'s source (its locator, unique per source); LeakFinding.Path and
-// SecretFilesPresent entries are prefixed "identity/path" so a merged finding
-// still says which source it came from — "/" rather than ": " so the prefixed
-// form still starts a path segment the client's TEST_PATH_RE fixture
-// classifier (ui/.../wizard-types.ts) can match (testdata/fixtures/__tests__).
-// Empty input returns the zero profile.
+// profiles[i]'s source (its locator, unique per source): SecretFilesPresent
+// entries are prefixed "identity/path" so a merged finding still says which
+// source it came from, while a LeakFinding carries the same attribution in
+// LeakFinding.Source and keeps its Path scan-root-relative — Path is
+// path-CLASSIFIED by the client (fixture vs hot), which a locator prefix
+// would corrupt. Empty input returns the zero profile.
 func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIdentity string) WorkspaceProfile {
 	if len(profiles) == 0 {
 		return WorkspaceProfile{}
@@ -93,7 +93,12 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 			}
 		}
 		for _, f := range p.LeakFindings {
-			f.Path = attributePath(identity, f.Path)
+			// Attribution rides its OWN field here, not a Path prefix: Path is
+			// path-classified downstream (fixture vs hot), so prefixing it with a
+			// locator that itself contains a testdata/fixtures segment would
+			// silently reclassify every leak in that source. Source still keeps
+			// two sources' identical relative paths distinct in leakSeen.
+			f.Source = identity
 			if _, dup := leakSeen[f]; !dup {
 				leakSeen[f] = struct{}{}
 				leaks = append(leaks, f)
@@ -173,13 +178,15 @@ func primaryBuildFacts(profiles []WorkspaceProfile, identities []string, primary
 // identity so a merged finding still says which attached source it came
 // from — two sources' identical relative paths ("config/.env") would
 // otherwise be indistinguishable once concatenated. "/" is the separator
-// (not ": ") so the result still STARTS a path segment: the client's fixture
-// classifier (ui/.../wizard-types.ts TEST_PATH_RE) anchors on `(^|/)` before
-// testdata|__tests__|fixtures, which a "identity: testdata/x" prefix breaks
-// but "identity/testdata/x" does not — and it doubles as a plausible full
-// path (source root / file). Empty identity leaves path as-is (unreachable
-// via hydrateWorkspace, which always has a source locator, but fail-safe
-// rather than producing a stray leading "/").
+// (not ": ") so the result reads as a plausible full path (source root /
+// file). Empty identity leaves path as-is (unreachable via hydrateWorkspace,
+// which always has a source locator, but fail-safe rather than producing a
+// stray leading "/").
+//
+// SecretFilesPresent only: it is a bare []string with nowhere to put a
+// separate attribution field, and nothing path-CLASSIFIES it. LeakFinding
+// carries its attribution in LeakFinding.Source instead — see the loop above
+// for why a prefix there is wrong.
 func attributePath(identity, path string) string {
 	if identity == "" {
 		return path

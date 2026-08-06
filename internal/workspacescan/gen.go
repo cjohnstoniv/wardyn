@@ -10,11 +10,42 @@ package workspacescan
 // and cache-keyed (Workspace.BuiltProfileHash, a later wave).
 //
 // The generated devcontainer only ever promises fields envbuilder actually
-// consumes: a base `image` plus a `features` object of official
-// ghcr.io/devcontainers/features/* refs (cross-checked against envbuilder's
-// devcontainer-spec-support). One feature is selected per detected language;
-// languages with no official core feature (Elixir, Dart, ...) are simply left
-// off the image and surface via the profile's NeedsReview elsewhere.
+// consumes: a base (`image`, or a `build.dockerfile` naming the generated
+// Dockerfile) plus a `features` object of official ghcr.io/devcontainers/features/*
+// refs (cross-checked against envbuilder's devcontainer-spec-support). One
+// feature is selected per detected language; languages with no official core
+// feature (Elixir, Dart, ...) are simply left off the image and surface via
+// the profile's NeedsReview elsewhere.
+//
+// The agent CLI an integration implies is baked by a generated
+// .devcontainer/Dockerfile (genAgentToolDockerfile) that devcontainer.json
+// points `build.dockerfile` at, so its RUN steps are layers of the image
+// kaniko builds and PUSHES. Two mechanisms were tried and rejected against a
+// real build, in this order:
+//
+//   - a devcontainer lifecycle hook (onCreate/postCreate): envbuilder runs
+//     lifecycle scripts AFTER executor.DoBuild + DoPush, so nothing they do
+//     reaches the image Wardyn delivers (the pushed base, which stage 2 wraps
+//     FROM — internal/envbuild/builder.go finalizeImage, docs/ENVBUILD.md
+//     "Two-stage build"), and the runner boots that finalized tag directly
+//     with no devcontainer CLI, so they never run at run time either. They
+//     also run as the base image's unprivileged remoteUser, where a
+//     root-needing install fails the whole build.
+//   - the tool vendor's own devcontainer FEATURE
+//     (ghcr.io/anthropics/devcontainer-features/claude-code): correct
+//     mechanism, wrong engine. That feature is an npm install and needs the
+//     node feature beside it; envbuilder implements NEITHER `installsAfter`
+//     nor `overrideFeatureInstallOrder` (verified against the binary), and it
+//     ran claude-code's install.sh before node's, which hard-FAILED the build
+//     ("Node.js and npm are required but could not be installed"). Feature
+//     ordering is not a contract this engine offers, so a feature that
+//     depends on another feature cannot be used here.
+//
+// A Dockerfile RUN has neither problem: kaniko snapshots it into the pushed
+// image, it runs as root, it runs BEFORE any feature (so it depends on none),
+// and it stays inside the hardened, resource-capped build container rather
+// than on the host daemon (which is why this is not done in stage-2 finalize,
+// whose whole trust story is "FROM + COPY, no untrusted RUN").
 //
 // Symbols here are gen-prefixed to stay clear of the other new files in this
 // package (ai.go); they never touch scan.go/markers.go/profile.go.
@@ -31,6 +62,12 @@ import (
 // canonical location envbuilder discovers by default (no ENVBUILDER_DEVCONTAINER_DIR
 // needed).
 const genDevcontainerPath = ".devcontainer/devcontainer.json"
+
+// genDockerfilePath is the OPTIONAL second file: emitted only when something
+// has to be baked in with a RUN (genAgentToolDockerfile). It sits beside
+// devcontainer.json, which is also the build context devcontainer.json's
+// `build` block resolves `dockerfile` against.
+const genDockerfilePath = ".devcontainer/Dockerfile"
 
 // genBaseImage is the universal devcontainer base. Language toolchains are
 // layered on as features rather than by swapping the base, which keeps the
@@ -57,7 +94,8 @@ var genLangFeatures = map[string]string{
 // featuresFor builds the devcontainer.json Features map for the detected
 // languages that have an official feature (genLangFeatures); languages
 // without one contribute nothing. Shared by EmitEnvAsCode and
-// GenerateDevcontainer.
+// GenerateDevcontainer. Agent CLIs do NOT ride here — see the package comment
+// for why a feature cannot bake one on this engine.
 func featuresFor(langs []string) map[string]map[string]any {
 	features := map[string]map[string]any{}
 	for _, lang := range langs {
@@ -66,6 +104,73 @@ func featuresFor(langs []string) map[string]map[string]any {
 		}
 	}
 	return features
+}
+
+// genAgentToolInstalls maps an AgentToolsForIntegrationTypes value to the
+// Dockerfile RUN body that BAKES that agent CLI in. This table is the whole
+// bake surface: anything absent from it is not bakeable, and
+// AgentToolsForIntegrationTypes must therefore not name it.
+//
+// claude-code's is the checksum-verified native-binary lane — the same
+// downloads.claude.ai + manifest.json sha256 pattern as
+// deploy/images/claude-code/Dockerfile's CLAUDE_INSTALL=native RUN block,
+// flattened onto one RUN (kaniko supports no heredoc) and reading the
+// architecture from `dpkg --print-architecture` rather than a buildx
+// TARGETARCH. "stable" resolves to a concrete version exactly as that
+// Dockerfile's default ARG CLAUDE_CODE_VERSION=stable does. It needs only
+// curl + dpkg + coreutils from the base image, so it depends on no
+// devcontainer feature — which matters, because this RUN executes BEFORE any
+// feature and envbuilder offers no way to order the two. Reachable because
+// the generated devcontainer only ever builds with
+// WARDYN_ENVBUILD_BUILD_NETWORK=host (deploy/compose); air-gapped is a
+// documented limitation, not special-cased here.
+//
+// codex-cli is deliberately absent: it has NO Wardyn-verified public
+// native-download contract (deploy/images/codex-cli/Dockerfile: native install
+// is staged-only, "fails loudly... rather than guessing a URL"), and its npm
+// lane would need a Node runtime this stage does not have. So it is not
+// bakeable today — the image is built without it, never with a guessed URL or
+// a false claim that it is there.
+//
+// Dockerfile note: RUN is not one of the instructions the builder performs
+// environment replacement on, so the $plat/$ver/$sum shell variables below
+// reach /bin/sh verbatim.
+var genAgentToolInstalls = map[string]string{
+	"claude-code": `case "$(dpkg --print-architecture)" in \
+      amd64) plat=linux-x64 ;; \
+      arm64) plat=linux-arm64 ;; \
+      *) echo "unsupported architecture for native claude-code install" >&2; exit 1 ;; \
+    esac; \
+    base=https://downloads.claude.ai/claude-code-releases; \
+    ver="$(curl -fsSL "$base/stable")"; \
+    curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
+    sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
+    [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
+    curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
+    echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/claude; \
+    rm -f /tmp/claude-manifest.json`,
+}
+
+// genAgentToolDockerfile returns the .devcontainer/Dockerfile that bakes tools
+// into the image, or "" when nothing in tools is bakeable (including the
+// no-tools case) — callers must then emit no Dockerfile at all and leave
+// devcontainer.json on the plain `image` base.
+//
+// Every RUN leads with "set -eu" so a failed install fails the BUILD rather
+// than silently producing an image that claims a tool it does not carry: that
+// inventory honesty is the whole point of this feature.
+func genAgentToolDockerfile(tools []string) string {
+	var b strings.Builder
+	for _, t := range tools {
+		if body, ok := genAgentToolInstalls[t]; ok {
+			b.WriteString("RUN set -eu; \\\n    " + body + "\n")
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "FROM " + genBaseImage + "\n\n" + b.String()
 }
 
 // AgentToolsForIntegrationTypes derives the agent CLIs implied by naming
@@ -80,14 +185,19 @@ func featuresFor(langs []string) map[string]map[string]any {
 // says bedrock CAN drive an already-baked claude-code at run time — not
 // whether the image should bake one for it). Sorted + deduped so the result
 // is a stable devcontainer/cache-key input regardless of call order.
+//
+// The result is exactly the set genAgentToolInstalls can INSTALL, never a
+// wider "requested" set: this value is both the generator's input and (via
+// WorkspaceProfile.CacheKey) the built-image cache key, so a tool the
+// generator would silently drop must not appear here either — it would key a
+// rebuild that reproduces a byte-identical devcontainer. That is why
+// "openai_*" contributes nothing: codex-cli has no bakeable install lane (see
+// genAgentToolInstalls).
 func AgentToolsForIntegrationTypes(integrationTypes []string) []string {
 	seen := map[string]bool{}
 	for _, t := range integrationTypes {
-		switch {
-		case strings.HasPrefix(t, "anthropic_"):
+		if strings.HasPrefix(t, "anthropic_") {
 			seen["claude-code"] = true
-		case strings.HasPrefix(t, "openai_"):
-			seen["codex-cli"] = true
 		}
 	}
 	if len(seen) == 0 {
@@ -96,97 +206,51 @@ func AgentToolsForIntegrationTypes(integrationTypes []string) []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// claudeCodeNativeInstall is the checksum-verified native-binary install lane
-// for claude-code when no npm/Node runtime is in the profile — the same
-// downloads.claude.ai + manifest.json sha256 pattern as
-// deploy/images/claude-code/Dockerfile's CLAUDE_INSTALL=native RUN block,
-// adapted for a devcontainer onCreateCommand: a plain shell script, so the
-// Dockerfile's host-staged-binary branch (needs a build-context COPY) drops
-// out, and architecture comes from `dpkg --print-architecture` at container
-// run time rather than a buildx TARGETARCH. "stable" resolves to a concrete
-// version the same way the Dockerfile's default ARG CLAUDE_CODE_VERSION=stable
-// does. Reachable because the generated devcontainer only ever builds with
-// WARDYN_ENVBUILD_BUILD_NETWORK=host (deploy/compose); air-gapped is a
-// documented limitation, not special-cased here.
-const claudeCodeNativeInstall = `case "$(dpkg --print-architecture)" in
-  amd64) plat=linux-x64 ;;
-  arm64) plat=linux-arm64 ;;
-  *) echo "unsupported architecture for native claude-code install" >&2; exit 1 ;;
-esac
-base=https://downloads.claude.ai/claude-code-releases
-ver="$(curl -fsSL "$base/stable")"
-curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json
-sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"
-[ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }
-curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude
-echo "$sum  /usr/local/bin/claude" | sha256sum -c -
-chmod 0755 /usr/local/bin/claude
-rm -f /tmp/claude-manifest.json`
-
-// genAgentToolInstall returns the onCreateCommand shell script that installs
-// tools (AgentToolsForIntegrationTypes' output) into the image being built,
-// so "Carries: X" is true of the image rather than a run-time credential with
-// nothing to authenticate. hasNode picks npm (fast, uses the ecosystem the
-// profile's own Node feature already installs) over the native lane, keyed on
-// the SAME signal genLangFeatures uses for the node feature
-// (slices.Contains(p.Languages, "JavaScript")).
-//
-// codex-cli has NO Wardyn-verified public native-download contract
-// (deploy/images/codex-cli/Dockerfile: native install is staged-only, "fails
-// loudly... rather than guessing a URL"). When hasNode is false, codex-cli is
-// silently DROPPED from the script rather than guessing a URL — the image is
-// simply built without it, never with a false claim that it's there.
-//
-// The script starts "set -eu" so a failed install fails the BUILD, not just
-// the tool: an image that silently failed to install a tool it claims to
-// carry would violate the inventory-honesty this whole feature exists to
-// uphold. Returns "" when nothing in tools is installable in this lane
-// (including "no tools" and "codex-cli alone with hasNode=false") — callers
-// must leave OnCreateCommand unset rather than emit an empty one.
-func genAgentToolInstall(tools []string, hasNode bool) string {
-	var blocks []string
-	for _, t := range tools {
-		switch t {
-		case "claude-code":
-			if hasNode {
-				blocks = append(blocks, "npm install -g @anthropic-ai/claude-code")
-			} else {
-				blocks = append(blocks, claudeCodeNativeInstall)
-			}
-		case "codex-cli":
-			if hasNode {
-				blocks = append(blocks, "npm install -g @openai/codex")
-			}
-		}
-	}
-	if len(blocks) == 0 {
-		return ""
-	}
-	return "set -eu\n" + strings.Join(blocks, "\n")
-}
-
 // genDevcontainer is the minimal devcontainer.json shape we emit. Struct field
-// order controls JSON key order (image, features, onCreateCommand, then
+// order controls JSON key order (image or build, then features, then
 // containerEnv); the features/containerEnv maps' own keys are sorted by
 // encoding/json, so the whole document is deterministic. ContainerEnv is only
 // populated by EmitEnvAsCode (GenerateDevcontainer leaves it unset — the
 // envbuilder-built image's runs already get the fidelity env from dispatch's
 // sandboxEnv, so it would be a no-op there).
 //
-// OnCreateCommand is a DIFFERENT trust class from postCreateCommand, which we
-// still never emit: it runs INSIDE the envbuilder build and is baked into the
-// pushed image (docs/ENVBUILD.md "Build sandbox" lists onCreate/updateContent
-// alongside Dockerfile RUN as build-time-executed), so it carries ONLY
-// genAgentToolInstall's checksum-verified agent-CLI install — never a
-// scan-DETECTED, never-verified SetupCommand. Those stay prose-only in
-// AGENTS.md (genAgentsMD): Wardyn has no verify step to prove a detected
-// install/build command actually works, so nothing UNVERIFIED is ever
-// auto-run, unattended, at container create.
+// Image and Build are mutually exclusive, which is why both are omitempty:
+// with nothing to bake we name the base image directly, and with something to
+// bake we point at the generated Dockerfile (whose own FROM is that same base).
+//
+// There is deliberately NO lifecycle-command field. postCreateCommand was
+// always refused (a scan-DETECTED, never-verified SetupCommand must not
+// auto-run unattended — those stay prose-only in AGENTS.md, genAgentsMD), and
+// onCreateCommand is refused too: it cannot bake anything into the image
+// Wardyn delivers, and it would run as the base image's unprivileged
+// remoteUser, where a root-needing install fails the whole build (see the
+// package comment).
 type genDevcontainer struct {
-	Image           string                    `json:"image"`
-	Features        map[string]map[string]any `json:"features,omitempty"`
-	OnCreateCommand string                    `json:"onCreateCommand,omitempty"`
-	ContainerEnv    map[string]string         `json:"containerEnv,omitempty"`
+	Image        string                    `json:"image,omitempty"`
+	Build        *genBuild                 `json:"build,omitempty"`
+	Features     map[string]map[string]any `json:"features,omitempty"`
+	ContainerEnv map[string]string         `json:"containerEnv,omitempty"`
+}
+
+// genBuild is devcontainer.json's `build` block, naming the Dockerfile beside
+// devcontainer.json. No `context` key: it defaults to the folder holding
+// devcontainer.json, which is where genDockerfilePath already puts it.
+type genBuild struct {
+	Dockerfile string `json:"dockerfile"`
+}
+
+// baseOrBuild points a devcontainer at either the plain base image or the
+// generated Dockerfile, and returns the extra files to emit alongside it.
+// Shared by EmitEnvAsCode and GenerateDevcontainer so the committable export
+// and the image Wardyn builds can never drift on what they carry.
+func baseOrBuild(dc *genDevcontainer, tools []string) map[string]string {
+	dockerfile := genAgentToolDockerfile(tools)
+	if dockerfile == "" {
+		dc.Image = genBaseImage
+		return nil
+	}
+	dc.Build = &genBuild{Dockerfile: "Dockerfile"}
+	return map[string]string{genDockerfilePath: dockerfile}
 }
 
 // EmitEnvAsCode produces committable environment-as-code from a scanned
@@ -207,14 +271,14 @@ type genDevcontainer struct {
 // redirect is configured.
 //
 // tools is AgentToolsForIntegrationTypes' output (the caller derives it from
-// the workspace's named integrations) — see genAgentToolInstall for the
-// install-lane rule; pass nil when nothing is named.
+// the workspace's named integrations) — see genAgentToolInstalls for the
+// bake-lane rule; pass nil when nothing is named.
 func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, tools []string) (map[string]string, error) {
-	dc := genDevcontainer{Image: genBaseImage}
+	var dc genDevcontainer
+	extra := baseOrBuild(&dc, tools)
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
-	dc.OnCreateCommand = genAgentToolInstall(tools, slices.Contains(p.Languages, "JavaScript"))
 	// GOTMPDIR: dispatch's sandboxEnv (runs_dispatch.go) sets this for every
 	// Wardyn-governed run because the sandbox /tmp is noexec and `go test`
 	// compiles+execs its test binaries into $TMPDIR. Workspace-folder-relative
@@ -241,6 +305,9 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, tools []
 	out := map[string]string{
 		genDevcontainerPath: string(b),
 		"AGENTS.md":         genAgentsMD(p),
+	}
+	for path, content := range extra {
+		out[path] = content
 	}
 	for path, content := range artifactFiles {
 		out[path] = content
@@ -397,11 +464,13 @@ func genAgentsMD(p WorkspaceProfile) string {
 	return b.String()
 }
 
-// GenerateDevcontainer produces a minimal, deterministic .devcontainer/devcontainer.json
-// for the profile: the universal base image plus one official devcontainer
-// feature per detected, feature-supported language, plus tools' agent-CLI
-// install (see genAgentToolInstall). The returned map is path -> file content
-// (a single entry); it is safe to feed straight to the envbuilder
+// GenerateDevcontainer produces a minimal, deterministic
+// .devcontainer/devcontainer.json for the profile: the universal base image
+// plus one devcontainer feature per detected, feature-supported language. When
+// tools names something bakeable, a .devcontainer/Dockerfile is emitted
+// alongside it and devcontainer.json points `build.dockerfile` at that instead
+// of naming the base directly (see genAgentToolInstalls). The returned map is
+// path -> file content; it is safe to feed straight to the envbuilder
 // local-context build (BuildFromDevcontainerFiles).
 //
 // Pure: no I/O, no clock, no randomness. p.Languages is already sorted+deduped
@@ -409,11 +478,11 @@ func genAgentsMD(p WorkspaceProfile) string {
 // map yields identical bytes for identical profiles. tools is
 // AgentToolsForIntegrationTypes' output; pass nil when nothing is named.
 func GenerateDevcontainer(p WorkspaceProfile, tools []string) (files map[string]string, err error) {
-	dc := genDevcontainer{Image: genBaseImage}
+	var dc genDevcontainer
+	out := baseOrBuild(&dc, tools)
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
-	dc.OnCreateCommand = genAgentToolInstall(tools, slices.Contains(p.Languages, "JavaScript"))
 
 	b, err := json.MarshalIndent(dc, "", "  ")
 	if err != nil {
@@ -422,5 +491,9 @@ func GenerateDevcontainer(p WorkspaceProfile, tools []string) (files map[string]
 		return nil, fmt.Errorf("workspacescan: marshal devcontainer: %w", err)
 	}
 	b = append(b, '\n')
-	return map[string]string{genDevcontainerPath: string(b)}, nil
+	if out == nil {
+		out = map[string]string{}
+	}
+	out[genDevcontainerPath] = string(b)
+	return out, nil
 }

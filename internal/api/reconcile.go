@@ -69,11 +69,14 @@ type ImageBuildSweeper interface {
 //     never comes back is adopted by ANY live replica instead of waiting for that
 //     pod's own boot, which may never happen. This is what the per-run watcher
 //     goroutine (an in-process, un-persisted thing) could never provide alone.
-//  3. sweepOrphanedBuilds — BOOT ONLY, and independent of s.cfg.Runner: reaps
-//     envbuild build containers left behind by a crashed/restarted process
-//     (see ImageBuildSweeper). A build container is short-lived by contract
-//     (BuildTimeout), so unlike the two run reapers above it needs no periodic
-//     recheck — whatever is orphaned at boot is the whole problem.
+//  3. sweepOrphanedBuilds — at boot AND every buildSweepInterval after,
+//     independent of s.cfg.Runner: reaps envbuild build containers left behind
+//     by a crashed/restarted process (see ImageBuildSweeper). The boot pass
+//     alone is NOT enough, because the sweep's own safety gate is an age gate
+//     (2*BuildTimeout, envbuild/reaper.go): under systemd Restart=always or a
+//     k8s pod restart the process is back within seconds, so at the one moment
+//     anything looked, the orphan was too young to reap — and its writable
+//     layer would then leak until the next boot, which may be weeks away.
 //
 // Best-effort: errors are logged, never fatal. Adopted watchers run on the
 // daemon base context so they outlive this call, and observe the AGENT via the
@@ -81,6 +84,9 @@ type ImageBuildSweeper interface {
 // whose agent already exited is finalized instead of stranded.
 func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	buildErr := s.sweepOrphanedBuilds(ctx)
+	if _, ok := s.cfg.ImageBuilder.(ImageBuildSweeper); ok && s.watcherBaseCtx() != nil {
+		go s.orphanedBuildSweeper(s.watcherBaseCtx(), buildSweepInterval)
+	}
 	if s.cfg.Runner == nil {
 		return buildErr
 	}
@@ -106,6 +112,39 @@ func (s *Server) sweepOrphanedBuilds(ctx context.Context) error {
 		return fmt.Errorf("sweep orphaned envbuild containers: %w", err)
 	}
 	return nil
+}
+
+// buildSweepInterval is how often sweepOrphanedBuilds re-runs after the boot
+// pass. What counts as orphaned is decided entirely by the sweep's own age gate
+// (2*BuildTimeout); this interval only bounds how long a container survives
+// AFTER crossing that line. imageBuildTimeout is the proportionate tick — one
+// ContainerList per half hour is free next to the writable layer it reclaims,
+// and it caps the leak at a build timeout rather than "until the next boot".
+const buildSweepInterval = imageBuildTimeout
+
+// orphanedBuildSweeper re-runs the orphaned-build sweep on a cadence for the
+// life of the daemon. Started only when an ImageBuildSweeper is actually
+// configured (ReconcileOnBoot), and panic-safe: a panic here must not crash the
+// control plane, it just returns the sweep to boot-only.
+func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "wardynd: PANIC in orphaned build sweeper (contained; sweep now boot-only)",
+				slog.Any("panic", r))
+		}
+	}()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if err := s.sweepOrphanedBuilds(ctx); err != nil {
+				slog.WarnContext(ctx, "wardynd: orphaned build sweep", slog.Any("err", err))
+			}
+		}
+	}
 }
 
 // undispatchedGrace is how old a run with no sandbox ref must be before the

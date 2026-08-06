@@ -67,9 +67,14 @@ var _ envbuilderListerAPI = (*client.Client)(nil)
 // wardynd crash or restart mid-build. A cli that doesn't implement
 // envbuilderListerAPI (a narrower test fake) is simply not swept.
 //
-// Meant to be called once at boot, before this process has started any build
-// of its own — wired into api.Server.ReconcileOnBoot via the optional
-// api.ImageBuildSweeper capability (see cmd/wardynd/envbuild_docker.go).
+// Called at boot AND on a cadence after it — wired into
+// api.Server.ReconcileOnBoot via the optional api.ImageBuildSweeper capability
+// (see cmd/wardynd/envbuild_docker.go). Boot alone would not do: the age gate
+// below is what makes the sweep safe, and under a supervised restart the
+// orphan is always still inside that window at the one moment a boot pass
+// looks (see api/reconcile.go's orphanedBuildSweeper). Safe to run at any
+// time, including while this process has builds of its own in flight —
+// liveBuilds plus the age gate are what protect those.
 //
 // liveBuilds ALONE is not enough to prove a labeled container is safe to
 // destroy: the label is written by every wardynd sharing this docker daemon

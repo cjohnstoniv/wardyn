@@ -88,37 +88,50 @@ func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	}
 }
 
-// TestEmitEnvAsCode_AgentToolInstall mirrors GenerateDevcontainer's tool-install
+// TestEmitEnvAsCode_AgentToolFeature mirrors GenerateDevcontainer's tool-bake
 // wiring for the exported/committable devcontainer path, so an exported
 // workspace and the one Wardyn itself builds never drift on what they claim
 // to carry.
-func TestEmitEnvAsCode_AgentToolInstall(t *testing.T) {
+func TestEmitEnvAsCode_AgentToolFeature(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"JavaScript"}, Confidence: "high", Source: "deterministic"}
 	files, err := EmitEnvAsCode(p, nil, []string{"claude-code"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var parsed struct {
-		OnCreateCommand string `json:"onCreateCommand"`
+		Image string `json:"image"`
+		Build *struct {
+			Dockerfile string `json:"dockerfile"`
+		} `json:"build"`
 	}
 	if err := json.Unmarshal([]byte(files[".devcontainer/devcontainer.json"]), &parsed); err != nil {
 		t.Fatalf("devcontainer.json not valid JSON: %v", err)
 	}
-	want := "set -eu\nnpm install -g @anthropic-ai/claude-code"
-	if parsed.OnCreateCommand != want {
-		t.Errorf("onCreateCommand = %q, want %q", parsed.OnCreateCommand, want)
+	if parsed.Build == nil || parsed.Build.Dockerfile != "Dockerfile" || parsed.Image != "" {
+		t.Errorf("a baked tool must point build.dockerfile at the emitted Dockerfile, not name the base image: %+v", parsed)
+	}
+	if df := files[".devcontainer/Dockerfile"]; !strings.Contains(df, "downloads.claude.ai") {
+		t.Errorf("the exported Dockerfile must carry claude-code's install: %q", df)
 	}
 }
 
-// TestEmitEnvAsCode_NoToolsNoOnCreateCommand pins the negative case: no named
-// tools must emit no onCreateCommand at all, not an empty one.
-func TestEmitEnvAsCode_NoToolsNoOnCreateCommand(t *testing.T) {
+// TestEmitEnvAsCode_NoToolsNoAgentFeature pins the negative case: no named
+// tools must add no agent-CLI feature, and no path emits a lifecycle command
+// (which would bake nothing into the pushed image anyway).
+func TestEmitEnvAsCode_NoToolsNoAgentFeature(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
 	files, err := EmitEnvAsCode(p, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(files[".devcontainer/devcontainer.json"], "onCreateCommand") {
-		t.Errorf("no named tools must emit no onCreateCommand: %s", files[".devcontainer/devcontainer.json"])
+	dc := files[".devcontainer/devcontainer.json"]
+	if _, ok := files[".devcontainer/Dockerfile"]; ok {
+		t.Error("no named tools must emit no Dockerfile at all")
+	}
+	if !strings.Contains(dc, `"image"`) {
+		t.Errorf("no named tools must name the base image directly: %s", dc)
+	}
+	if strings.Contains(dc, "CreateCommand") {
+		t.Errorf("a lifecycle command bakes nothing into the pushed image: %s", dc)
 	}
 }

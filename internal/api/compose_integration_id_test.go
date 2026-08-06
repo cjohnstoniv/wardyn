@@ -125,6 +125,56 @@ func TestComposeRun_IntegrationID_UsesBedrockRegionOverride(t *testing.T) {
 	}
 }
 
+// TestComposeRun_IntegrationID_BedrockUnsetIsNotModelAccess pins the OTHER
+// half of the override above: a bedrock row is derived from AWS creds/mount
+// alone and validates with region and model both EMPTY. For that row
+// resolveBedrockAuth returns unready at launch and dispatch falls back to the
+// api-key path whose grant applyIntegrationCreds already removed — so the run
+// reaches no model at all, and bedrockCaps says exactly that
+// (model_api: needs_setup). Compose must not claim otherwise.
+func TestComposeRun_IntegrationID_BedrockUnsetIsNotModelAccess(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{Result: composer.Proposal{
+		Run:          composer.RunInput{Agent: "claude-code", Task: "build a small website"},
+		InlinePolicy: types.RunPolicySpec{AllowedDomains: []string{"github.com"}},
+		Summary:      "throwaway sandbox",
+	}})
+	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
+		{ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock"},
+	}}}}
+	// No global fallback either: s.cfg.BedrockRegion/Model are the other half
+	// of the same effective-config rule bedrockCaps applies.
+	h.srv.cfg.BedrockRegion, h.srv.cfg.BedrockModel = "", ""
+
+	body := `{"prompt":"build a small website","workspace":{"kind":"ephemeral"},"mode":"skip","integration_id":"acme-bedrock"}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("compose code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp composeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.LLMAccess != nil && resp.LLMAccess.Provisioned {
+		t.Errorf("LLMAccess = %+v, want NOT provisioned: an unset-region/model bedrock row reaches no model, "+
+			"and the capability matrix reports needs_setup for the same integration", resp.LLMAccess)
+	}
+
+	// ...and the global config IS the fallback: set it and the same row resolves.
+	h.srv.cfg.BedrockRegion, h.srv.cfg.BedrockModel = "us-east-1", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/compose", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("compose code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp = composeResponse{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.LLMAccess == nil || !resp.LLMAccess.Provisioned {
+		t.Errorf("LLMAccess = %+v, want provisioned=true once the global Bedrock config supplies region+model", resp.LLMAccess)
+	}
+}
+
 // TestComposeRun_IntegrationID_NonAIProviderIs400 pins the shared rule
 // (runs_create.go's decodeAndValidateCreateRun applies the identical check for
 // plain create-run): naming a non-ai_provider integration is a 400, checked

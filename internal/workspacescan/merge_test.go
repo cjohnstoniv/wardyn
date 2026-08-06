@@ -153,12 +153,16 @@ func TestMergeProfiles_FieldByField(t *testing.T) {
 	if got.BuildMemoryMiB != 1024 {
 		t.Errorf("BuildMemoryMiB = %d, want 1024 (largest)", got.BuildMemoryMiB)
 	}
+	// Path stays SCAN-ROOT-RELATIVE (it is path-classified downstream: prefixing
+	// it with a locator that itself contains a testdata/fixtures segment would
+	// reclassify every leak in that source as a fixture); attribution rides
+	// Source, which also keeps the two identical relative paths distinct.
 	wantLeaks := []LeakFinding{
-		{Path: "repoA/config/.env", Kind: "aws-access-key", Line: 3},
-		{Path: "repoB/config/.env", Kind: "aws-access-key", Line: 3},
+		{Path: "config/.env", Kind: "aws-access-key", Line: 3, Source: "repoA"},
+		{Path: "config/.env", Kind: "aws-access-key", Line: 3, Source: "repoB"},
 	}
 	if !reflect.DeepEqual(got.LeakFindings, wantLeaks) {
-		t.Errorf("LeakFindings = %+v, want %+v (identity-prefixed, both kept — different sources, same relative path)", got.LeakFindings, wantLeaks)
+		t.Errorf("LeakFindings = %+v, want %+v (attributed via Source, both kept — different sources, same relative path)", got.LeakFindings, wantLeaks)
 	}
 	wantCmds := []SetupCommand{
 		{Stage: "build", Command: "go build ./...", Source: "convention:go"},

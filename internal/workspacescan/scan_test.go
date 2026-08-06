@@ -345,7 +345,18 @@ func TestCacheKey(t *testing.T) {
 		t.Errorf("hash length = %d, want 64 (sha256 hex)", got)
 	}
 
+	// NO tools is ProfileHash() itself, not a digest of it: the devcontainer
+	// generated for an empty tool set is byte-identical to what the old
+	// ProfileHash-only key described, so re-hashing would invalidate every
+	// already-built workspace image on upgrade and rebuild each one to
+	// reproduce exactly what was already cached.
 	noTools := p.CacheKey(nil)
+	if noTools != p.ProfileHash() {
+		t.Error("CacheKey(nil) must equal ProfileHash() — otherwise every cached image rebuilds once on upgrade for no reason")
+	}
+	if got := p.CacheKey([]string{}); got != noTools {
+		t.Error("an empty (non-nil) tools slice is the same no-tools case")
+	}
 	withClaude := p.CacheKey([]string{"claude-code"})
 	if withClaude == noTools {
 		t.Error("naming a tool must change the cache key, or toggling an integration never rebuilds")

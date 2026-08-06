@@ -171,12 +171,16 @@ func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.
 type resolveImageStoreFake struct {
 	store.Store
 	sc types.SiteConfig
+	// builtHash records what the WRITER stored in built_profile_hash, so a
+	// test can assert the READER keys on the same expression.
+	builtHash string
 }
 
 func (s *resolveImageStoreFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.sc, nil
 }
-func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string) (types.Workspace, error) {
+func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, hash string) (types.Workspace, error) {
+	s.builtHash = hash
 	return types.Workspace{}, nil
 }
 
@@ -204,8 +208,9 @@ func (b *capturingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, fi
 // TestResolveWorkspaceImage_NamedIntegrationBakesAgentTool pins moving part 1
 // of the "integration bakes the CLI" wave end to end through
 // resolveWorkspaceImage: a workspace that names an anthropic integration in
-// its requirements must have claude-code's install baked into the generated
-// devcontainer's onCreateCommand; a workspace that names nothing must not.
+// its requirements must have claude-code's install baked into a generated
+// .devcontainer/Dockerfile that devcontainer.json builds; a workspace that
+// names nothing must not.
 func TestResolveWorkspaceImage_NamedIntegrationBakesAgentTool(t *testing.T) {
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
@@ -230,8 +235,14 @@ func TestResolveWorkspaceImage_NamedIntegrationBakesAgentTool(t *testing.T) {
 			t.Fatalf("want exactly one build, got %d", len(builder.calls))
 		}
 		dc := builder.calls[0].files[".devcontainer/devcontainer.json"]
-		if !strings.Contains(dc, "onCreateCommand") || !strings.Contains(dc, "@anthropic-ai/claude-code") {
-			t.Errorf("a named anthropic integration must bake claude-code's install into onCreateCommand: %s", dc)
+		df := builder.calls[0].files[".devcontainer/Dockerfile"]
+		if !strings.Contains(df, "downloads.claude.ai") || !strings.Contains(dc, `"dockerfile"`) {
+			t.Errorf("a named anthropic integration must bake claude-code via a built Dockerfile:\n%s\n%s", dc, df)
+		}
+		// A lifecycle hook runs after envbuilder's build+push and reaches no
+		// delivered layer — the whole reason this is a Dockerfile RUN.
+		if strings.Contains(dc, "CreateCommand") {
+			t.Errorf("the bake must be a build step, never a lifecycle command: %s", dc)
 		}
 	})
 
@@ -247,9 +258,8 @@ func TestResolveWorkspaceImage_NamedIntegrationBakesAgentTool(t *testing.T) {
 		if len(builder.calls) != 1 {
 			t.Fatalf("want exactly one build, got %d", len(builder.calls))
 		}
-		dc := builder.calls[0].files[".devcontainer/devcontainer.json"]
-		if strings.Contains(dc, "onCreateCommand") {
-			t.Errorf("no named integration must bake no onCreateCommand: %s", dc)
+		if _, ok := builder.calls[0].files[".devcontainer/Dockerfile"]; ok {
+			t.Errorf("no named integration must bake no agent CLI: %v", builder.calls[0].files)
 		}
 	})
 }
@@ -317,4 +327,59 @@ func TestResolveWorkspaceImage_CacheKeyFoldsNamedIntegration(t *testing.T) {
 			t.Errorf("want exactly one rebuild when the cached hash predates the named tool, got %d", len(builder.calls))
 		}
 	})
+}
+
+// TestResolveBuildView_AgreesWithBuiltHash pins the reader/writer contract the
+// /build endpoints depend on: resolveBuildView must key the cache-hit "done"
+// branch on the SAME expression resolveWorkspaceImage stores in
+// built_profile_hash. It cannot use a bare ProfileHash(), which the writer has
+// never stored — that made the branch unreachable, so a workspace that IS built
+// read back as state:"none" (and POST re-entered the async build machinery, and
+// audited a run.build) from any process whose in-memory tracker had not itself
+// run the build: after a restart, or from a second replica.
+//
+// Both tool sets matter: with a named integration the hash folds tools, and
+// without one it must still be the plain ProfileHash the pre-upgrade rows carry.
+func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go", "JavaScript"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	sc := types.SiteConfig{Integrations: []types.Integration{
+		{ID: "acme-claude", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"},
+	}}
+	cases := []struct {
+		name string
+		reqs map[string]types.WorkspaceRequirement
+	}{
+		{name: "no named integration", reqs: nil},
+		{name: "named anthropic integration", reqs: map[string]types.WorkspaceRequirement{
+			"integration:acme-claude": {Level: "optional", Provenance: "operator_set"},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &resolveImageStoreFake{sc: sc}
+			cfg := baseTestConfig(h, st)
+			cfg.ImageBuilder = &capturingImageBuilder{}
+			srv := New(cfg)
+			ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile), Requirements: tc.reqs}
+			built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+			if !ok {
+				t.Fatal("resolveWorkspaceImage failed")
+			}
+			if st.builtHash == "" {
+				t.Fatal("writer stored no built_profile_hash")
+			}
+
+			// A FRESH server: the in-memory build tracker knows nothing, exactly
+			// like the process that reads this row after a restart.
+			fresh := New(baseTestConfig(h, &resolveImageStoreFake{sc: sc}))
+			ws.ImageRef, ws.BuiltProfileHash = built, st.builtHash
+			view := fresh.resolveBuildView(context.Background(), ws)
+			if view.State != "done" || view.Image != built {
+				t.Errorf("resolveBuildView = %+v, want state=done image=%q — the reader disagrees with the writer's hash", view, built)
+			}
+		})
+	}
 }

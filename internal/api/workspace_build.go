@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // workspace_build.go — the wizard's BUILD step endpoints. Building the
@@ -192,7 +193,15 @@ type buildResponse struct {
 }
 
 // resolveBuildView derives the honest view for GET/POST responses.
-func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
+//
+// ctx is needed only for the cache-hit branch: it re-derives the workspace's
+// named agent tools so the stored BuiltProfileHash is compared against the
+// SAME expression resolveWorkspaceImage wrote it with (p.CacheKey(tools), not
+// a bare ProfileHash()). Keying the reader on anything else makes this branch
+// unreachable by construction — which reports state:"none" for a workspace
+// that IS built as soon as s.builds (in-memory, per-process) no longer knows
+// about it: after any restart, or from a second replica.
+func (s *Server) resolveBuildView(ctx context.Context, ws types.Workspace) buildResponse {
 	// An explicit image choice boots verbatim — there is nothing to build.
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" {
 		return buildResponse{State: "nothing_to_build", Image: b.Image,
@@ -207,8 +216,11 @@ func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
 	case st.Image != "":
 		return buildResponse{State: "done", Image: st.Image, Log: st.Log}
 	}
-	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" && ws.BuiltProfileHash == prof.ProfileHash() {
-		return buildResponse{State: "done", Image: ws.ImageRef}
+	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" {
+		tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(ctx, ws))
+		if ws.BuiltProfileHash == prof.CacheKey(tools) {
+			return buildResponse{State: "done", Image: ws.ImageRef}
+		}
 	}
 	if s.cfg.ImageBuilder == nil {
 		return buildResponse{State: "none",
@@ -229,7 +241,7 @@ func (s *Server) handleGetWorkspaceBuild(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.resolveBuildView(ws))
+	writeJSON(w, http.StatusOK, s.resolveBuildView(r.Context(), ws))
 }
 
 // handleBuildWorkspace kicks the workspace's image build asynchronously —
@@ -249,7 +261,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := s.resolveBuildView(ws)
+	view := s.resolveBuildView(r.Context(), ws)
 	if view.State == "nothing_to_build" || view.State == "done" {
 		writeJSON(w, http.StatusOK, view)
 		return

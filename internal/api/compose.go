@@ -588,8 +588,18 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// integration itself IS the provisioned credential; teach the verdict that
 	// directly instead of asking reconcileLLMAccess to model a transport it has
 	// no branch for.
+	//
+	// Bedrock ONLY when it actually resolves, though: a bedrock row is derived
+	// from AWS creds/mount alone (SetupBedrock.configured) and validates with
+	// region and model both EMPTY, and for that row resolveBedrockAuth returns
+	// unready at launch and dispatch falls back to the api-key path whose grant
+	// applyIntegrationCreds just removed — no model access at all. Same
+	// effective-region/model rule bedrockCaps applies (integration config wins,
+	// global config is the fallback), so this verdict can never contradict the
+	// capability matrix for the same integration.
 	if (llmAccess == nil || !llmAccess.Provisioned) &&
-		integCredKind != "" && integCredKind != "anthropic_api_key" && integCredKind != "openai_api_key" {
+		integCredKind != "" && integCredKind != "anthropic_api_key" && integCredKind != "openai_api_key" &&
+		(integCredKind != "bedrock" || s.bedrockResolves(bedrockRef)) {
 		note := fmt.Sprintf("model access provisioned for agent %q: the pinned %s integration is applied", prop.Run.Agent, integCredKind)
 		if bedrockRef != nil {
 			note += fmt.Sprintf(" (region %s, model %s)", bedrockRef.Region, bedrockRef.Model)

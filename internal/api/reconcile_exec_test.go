@@ -383,7 +383,10 @@ var _ runner.Runner = (*errProbeRunner)(nil)
 // ImageBuildSweeper capability, so ReconcileOnBoot's type assertion finds it
 // — the wiring under test. The three ImageBuilder methods are never called by
 // ReconcileOnBoot; they exist only so this type satisfies the field's type.
-type sweepableImageBuilder struct{ swept int }
+type sweepableImageBuilder struct {
+	mu    sync.Mutex
+	swept int
+}
 
 func (*sweepableImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
 	return "", errors.New("not implemented")
@@ -395,8 +398,16 @@ func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.W
 	return "", errors.New("not implemented")
 }
 func (s *sweepableImageBuilder) SweepOrphanedBuilds(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.swept++
 	return nil
+}
+
+func (s *sweepableImageBuilder) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.swept
 }
 
 // TestReconcileOnBoot_SweepsOrphanedBuildsIndependentOfRunner pins the third
@@ -410,8 +421,37 @@ func TestReconcileOnBoot_SweepsOrphanedBuildsIndependentOfRunner(t *testing.T) {
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
 	}
-	if sweeper.swept != 1 {
-		t.Fatalf("SweepOrphanedBuilds called %d times, want 1", sweeper.swept)
+	if sweeper.count() != 1 {
+		t.Fatalf("SweepOrphanedBuilds called %d times, want 1", sweeper.count())
+	}
+}
+
+// TestOrphanedBuildSweeper_RunsOnCadence pins the fix for the boot-ONLY sweep:
+// the sweep's own safety gate is an AGE gate (2*BuildTimeout), so under a
+// supervised restart the orphan is always too young at the one moment the boot
+// pass looks — and its writable layer would leak until the next boot. The sweep
+// therefore has to keep running.
+func TestOrphanedBuildSweeper_RunsOnCadence(t *testing.T) {
+	sweeper := &sweepableImageBuilder{}
+	srv := &Server{cfg: Config{ImageBuilder: sweeper}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.orphanedBuildSweeper(ctx, time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for sweeper.count() < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := sweeper.count(); got < 3 {
+		t.Fatalf("SweepOrphanedBuilds ran %d times in 5s at a 1ms cadence, want >= 3 (the sweep is still boot-only)", got)
+	}
+	cancel()
+	// Cancellation must actually stop it — this goroutine lives for the life of
+	// the daemon, so a ctx it ignores would outlive every test that starts one.
+	time.Sleep(20 * time.Millisecond)
+	stopped := sweeper.count()
+	time.Sleep(20 * time.Millisecond)
+	if after := sweeper.count(); after != stopped {
+		t.Errorf("sweeper kept running after ctx cancel: %d -> %d", stopped, after)
 	}
 }
 

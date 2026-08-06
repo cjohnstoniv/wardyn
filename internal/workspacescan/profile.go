@@ -103,6 +103,15 @@ type LeakFinding struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
 	Line int    `json:"line,omitempty"`
+	// Source names the attached source this finding came from (the source's
+	// locator) once N sources are merged into one workspace profile; empty for
+	// a single-source profile. Attribution is a SEPARATE field rather than a
+	// prefix on Path because Path is path-CLASSIFIED downstream (the client's
+	// testdata|__tests__|fixtures fixture check): folding the locator into it
+	// makes every leak in a source whose own path contains such a segment
+	// classify as a fixture. Path therefore stays scan-root-relative and
+	// means exactly what it says.
+	Source string `json:"source,omitempty"`
 }
 
 // UnrecognizedSample is a bounded, scrubbed snippet of a file that looked
@@ -230,18 +239,25 @@ func (p WorkspaceProfile) ProfileHash() string {
 // (AgentToolsForIntegrationTypes' output — gen.go) in alongside the profile:
 // two workspaces with an identical scanned profile but a different named AI
 // integration must build (and cache) DIFFERENT images, because the generated
-// devcontainer's onCreateCommand differs — without this, toggling an
-// integration would never trigger a rebuild. tools is the closed small set
-// AgentToolsForIntegrationTypes returns ({claude-code, codex-cli} today), so
-// joining it verbatim carries no escaping risk. Sorted so the caller's slice
-// order never changes the hash.
+// devcontainer (and its generated Dockerfile) differs — without this,
+// toggling an integration would never trigger a rebuild. tools is the closed small set
+// AgentToolsForIntegrationTypes returns ({claude-code} today), so joining it
+// verbatim carries no escaping risk. Sorted so the caller's slice order never
+// changes the hash.
 //
-// This changes what ProfileHash()-only callers used to compute (an empty
-// tools set still appends a "|tools=" suffix), so every already-cached
-// workspace misses ONCE on first use after this ships — the same accepted
-// one-time-churn category as ContextHash riding into ProfileHash above; no
-// migration, BuiltProfileHash just gets recomputed on the next build.
+// NO tools is ProfileHash() ITSELF, not a "|tools=" digest of it: the
+// devcontainer generated for an empty tool set is byte-identical to the one
+// the old ProfileHash-only key described, so re-hashing would invalidate
+// every already-built workspace image on upgrade and rebuild each one once to
+// reproduce exactly what was already cached. That is the same rebuild storm
+// this key deliberately avoids by folding the derived TOOL SET rather than a
+// wider fingerprint. No collision risk: ProfileHash and this digest are
+// distinct hashes of distinct preimages, and the no-tools case is precisely
+// the case the old key already covered.
 func (p WorkspaceProfile) CacheKey(tools []string) string {
+	if len(tools) == 0 {
+		return p.ProfileHash()
+	}
 	sorted := slices.Clone(tools)
 	slices.Sort(sorted)
 	sum := sha256.Sum256([]byte(p.ProfileHash() + "|tools=" + strings.Join(sorted, ",")))

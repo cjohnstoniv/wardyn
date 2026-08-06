@@ -18,6 +18,10 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 		prof  WorkspaceProfile
 		tools []string
 		want  string
+		// wantDockerfile: the tool bake emits a SECOND file beside
+		// devcontainer.json (and devcontainer.json then carries `build`, not
+		// `image`).
+		wantDockerfile bool
 	}{
 		{
 			name: "no languages -> base image only, no features key",
@@ -63,11 +67,12 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 `,
 		},
 		{
-			// The honesty case: codex-cli has no verified native-download
-			// contract (genAgentToolInstall), so naming it on a workspace with
-			// no JS must bake NOTHING — never a guessed URL. The output is
-			// byte-identical to a plain Go profile with no tools at all.
-			name:  "codex-cli named but no JS in profile -> nothing bakeable, no onCreateCommand",
+			// The honesty case: codex-cli has no first-party feature to bake it
+			// with (genAgentToolFeatures), so naming it must bake NOTHING —
+			// never a guessed URL or a third-party install script. The output is
+			// byte-identical to a plain Go profile with no tools at all, which
+			// is exactly why AgentToolsForIntegrationTypes never emits it.
+			name:  "codex-cli named -> nothing bakeable, no extra feature",
 			prof:  WorkspaceProfile{Languages: []string{"Go"}},
 			tools: []string{"codex-cli"},
 			want: `{
@@ -77,6 +82,37 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
   }
 }
 `,
+		},
+		{
+			// The bake: devcontainer.json stops naming the base image and points
+			// build.dockerfile at the generated Dockerfile whose RUN kaniko bakes
+			// into the image it PUSHES — unlike a lifecycle command, which runs
+			// after the push and reaches no delivered layer.
+			name:  "claude-code named -> build.dockerfile instead of image, features unchanged",
+			prof:  WorkspaceProfile{Languages: []string{"Go"}},
+			tools: []string{"claude-code"},
+			want: `{
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {}
+  }
+}
+`,
+			wantDockerfile: true,
+		},
+		{
+			name:  "claude-code on a profile with no language features",
+			prof:  WorkspaceProfile{},
+			tools: []string{"claude-code"},
+			want: `{
+  "build": {
+    "dockerfile": "Dockerfile"
+  }
+}
+`,
+			wantDockerfile: true,
 		},
 	}
 
@@ -90,8 +126,15 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 			if !ok {
 				t.Fatalf("missing %s in output; got keys %v", genDevcontainerPath, keysOf(files))
 			}
-			if len(files) != 1 {
-				t.Errorf("expected exactly one generated file, got %d: %v", len(files), keysOf(files))
+			wantFiles := 1
+			if tc.wantDockerfile {
+				wantFiles = 2
+				if df := files[genDockerfilePath]; !strings.Contains(df, "FROM "+genBaseImage) {
+					t.Errorf("expected a generated Dockerfile FROM the base image, got %q", df)
+				}
+			}
+			if len(files) != wantFiles {
+				t.Errorf("expected exactly %d generated file(s), got %d: %v", wantFiles, len(files), keysOf(files))
 			}
 			if got != tc.want {
 				t.Errorf("devcontainer.json mismatch:\n got:\n%s\nwant:\n%s", got, tc.want)
@@ -117,84 +160,36 @@ func TestGenerateDevcontainer_Deterministic(t *testing.T) {
 	}
 }
 
-// TestGenerateDevcontainer_AgentToolInstall pins the npm lanes' EXACT
-// onCreateCommand content — safe to compare directly (unlike the native lane,
-// these carry no characters JSON needs to escape). Parses the emitted
-// devcontainer.json rather than hand-writing its escaped form.
-func TestGenerateDevcontainer_AgentToolInstall(t *testing.T) {
-	cases := []struct {
-		name  string
-		prof  WorkspaceProfile
-		tools []string
-		want  string
-	}{
-		{
-			name:  "claude-code via npm when JS is in the profile",
-			prof:  WorkspaceProfile{Languages: []string{"JavaScript"}},
-			tools: []string{"claude-code"},
-			want:  "set -eu\nnpm install -g @anthropic-ai/claude-code",
-		},
-		{
-			name:  "codex-cli via npm when JS is in the profile",
-			prof:  WorkspaceProfile{Languages: []string{"JavaScript"}},
-			tools: []string{"codex-cli"},
-			want:  "set -eu\nnpm install -g @openai/codex",
-		},
-		{
-			name:  "both tools named, JS profile -> both npm lines",
-			prof:  WorkspaceProfile{Languages: []string{"JavaScript"}},
-			tools: []string{"claude-code", "codex-cli"},
-			want:  "set -eu\nnpm install -g @anthropic-ai/claude-code\nnpm install -g @openai/codex",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			files, err := GenerateDevcontainer(tc.prof, tc.tools)
-			if err != nil {
-				t.Fatalf("GenerateDevcontainer: %v", err)
+// TestGenerateDevcontainer_NoLifecycleCommand pins the bake MECHANISM: the
+// generated devcontainer must never carry a lifecycle command. envbuilder runs
+// those AFTER the build+push, so they cannot reach the delivered image, and
+// they run as the base image's unprivileged remoteUser, where a root-needing
+// install fails the whole build. Whatever the tool set, the only keys we emit
+// are image/features/containerEnv.
+func TestGenerateDevcontainer_NoLifecycleCommand(t *testing.T) {
+	for _, tools := range [][]string{nil, {"claude-code"}, {"codex-cli"}, {"claude-code", "codex-cli"}} {
+		files, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"JavaScript"}}, tools)
+		if err != nil {
+			t.Fatalf("GenerateDevcontainer(%v): %v", tools, err)
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(files[genDevcontainerPath]), &keys); err != nil {
+			t.Fatalf("devcontainer.json not valid JSON: %v", err)
+		}
+		for _, banned := range []string{"onCreateCommand", "updateContentCommand", "postCreateCommand", "postStartCommand"} {
+			if _, bad := keys[banned]; bad {
+				t.Errorf("tools=%v emitted %q: a lifecycle hook bakes nothing into the pushed image", tools, banned)
 			}
-			var parsed struct {
-				OnCreateCommand string `json:"onCreateCommand"`
-			}
-			if err := json.Unmarshal([]byte(files[genDevcontainerPath]), &parsed); err != nil {
-				t.Fatalf("devcontainer.json not valid JSON: %v", err)
-			}
-			if parsed.OnCreateCommand != tc.want {
-				t.Errorf("onCreateCommand = %q, want %q", parsed.OnCreateCommand, tc.want)
-			}
-		})
-	}
-}
-
-// TestGenerateDevcontainer_NativeInstallRoundTrips checks the native lane
-// (whose script contains characters JSON must escape) by round-tripping
-// through the real marshal/unmarshal instead of hand-computing escaped JSON.
-func TestGenerateDevcontainer_NativeInstallRoundTrips(t *testing.T) {
-	prof := WorkspaceProfile{Languages: []string{"Go"}} // no JS -> native lane
-	files, err := GenerateDevcontainer(prof, []string{"claude-code"})
-	if err != nil {
-		t.Fatalf("GenerateDevcontainer: %v", err)
-	}
-	var parsed struct {
-		OnCreateCommand string `json:"onCreateCommand"`
-	}
-	if err := json.Unmarshal([]byte(files[genDevcontainerPath]), &parsed); err != nil {
-		t.Fatalf("devcontainer.json not valid JSON: %v", err)
-	}
-	want := genAgentToolInstall([]string{"claude-code"}, false)
-	if parsed.OnCreateCommand != want {
-		t.Errorf("onCreateCommand = %q, want %q", parsed.OnCreateCommand, want)
-	}
-	if !strings.Contains(parsed.OnCreateCommand, "downloads.claude.ai") {
-		t.Errorf("native lane must hit downloads.claude.ai, never a guessed URL: %s", parsed.OnCreateCommand)
+		}
 	}
 }
 
 // TestAgentToolsForIntegrationTypes pins the prefix mapping: anthropic_* ->
-// claude-code, openai_* -> codex-cli, everything else (including the OTHER
-// ai_provider types, bedrock/azure_openai) contributes nothing — this
-// decides what gets BAKED, a narrower question than run-time auth
-// compatibility. Sorted + deduped.
+// claude-code; everything else — openai_* included, because codex-cli has no
+// bakeable feature — contributes nothing. The result is what gets BAKED, a
+// narrower question than run-time auth compatibility, and it is also the
+// image cache key, so it must never name a tool the generator would drop.
+// Sorted + deduped.
 func TestAgentToolsForIntegrationTypes(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -204,14 +199,14 @@ func TestAgentToolsForIntegrationTypes(t *testing.T) {
 		{name: "nil input -> nil", types: nil, want: nil},
 		{name: "anthropic api key", types: []string{"anthropic_api_key"}, want: []string{"claude-code"}},
 		{name: "anthropic subscription", types: []string{"anthropic_subscription"}, want: []string{"claude-code"}},
-		{name: "openai api key", types: []string{"openai_api_key"}, want: []string{"codex-cli"}},
+		{name: "openai api key -> nothing bakeable", types: []string{"openai_api_key"}, want: nil},
 		{name: "bedrock unmapped", types: []string{"bedrock"}, want: nil},
 		{name: "azure_openai unmapped", types: []string{"azure_openai"}, want: nil},
 		{name: "unknown type contributes nothing", types: []string{"github_app"}, want: nil},
 		{
-			name:  "both providers named -> sorted",
+			name:  "both providers named -> only the bakeable one",
 			types: []string{"openai_api_key", "anthropic_api_key"},
-			want:  []string{"claude-code", "codex-cli"},
+			want:  []string{"claude-code"},
 		},
 		{
 			name:  "two anthropic rows dedupe to one tool",
@@ -234,52 +229,75 @@ func TestAgentToolsForIntegrationTypes(t *testing.T) {
 	}
 }
 
-// TestGenAgentToolInstall pins genAgentToolInstall directly: the npm-vs-native
-// lane choice, and the core honesty assertion — codex-cli is silently DROPPED
-// (never a guessed URL) when hasNode is false.
-func TestGenAgentToolInstall(t *testing.T) {
-	t.Run("no tools -> empty", func(t *testing.T) {
-		if got := genAgentToolInstall(nil, true); got != "" {
-			t.Errorf("genAgentToolInstall(nil, true) = %q, want empty", got)
+// TestGenAgentToolInstalls pins the bake table itself: claude-code resolves to
+// the checksum-verified native lane, and codex-cli resolves to nothing at all —
+// the honesty rule (no verified download contract, so no guessed URL). It also
+// pins that the table and AgentToolsForIntegrationTypes agree, which is what
+// keeps the cache key from rebuilding for a tool the generator would drop.
+func TestGenAgentToolInstalls(t *testing.T) {
+	body, ok := genAgentToolInstalls["claude-code"]
+	if !ok {
+		t.Fatal("claude-code must have a bake lane")
+	}
+	for _, want := range []string{"downloads.claude.ai", "sha256sum -c", "chmod 0755 /usr/local/bin/claude"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("claude-code's lane missing %q: %s", want, body)
 		}
-	})
-	t.Run("claude-code, hasNode -> npm", func(t *testing.T) {
-		want := "set -eu\nnpm install -g @anthropic-ai/claude-code"
-		if got := genAgentToolInstall([]string{"claude-code"}, true); got != want {
-			t.Errorf("got %q, want %q", got, want)
+	}
+	// npm would need a Node runtime this stage does not have — and depending on
+	// the node FEATURE is impossible, since envbuilder cannot order a Dockerfile
+	// RUN after a feature (it runs strictly before every one of them).
+	if strings.Contains(body, "npm install") {
+		t.Errorf("the Dockerfile stage runs before every feature, so it cannot depend on npm: %s", body)
+	}
+	if _, ok := genAgentToolInstalls["codex-cli"]; ok {
+		t.Error("codex-cli has no verified native-download contract; it must not be baked from a guessed URL")
+	}
+	for _, tool := range AgentToolsForIntegrationTypes([]string{"anthropic_api_key", "anthropic_subscription", "openai_api_key", "bedrock"}) {
+		if _, ok := genAgentToolInstalls[tool]; !ok {
+			t.Errorf("AgentToolsForIntegrationTypes emitted %q, which genAgentToolInstalls cannot install", tool)
 		}
-	})
-	t.Run("claude-code, no node -> checksum-verified native lane", func(t *testing.T) {
-		got := genAgentToolInstall([]string{"claude-code"}, false)
-		if !strings.HasPrefix(got, "set -eu\n") {
-			t.Errorf("must still fail the build closed on a bad install: %q", got)
+	}
+}
+
+// TestGenAgentToolDockerfile pins the emitted Dockerfile: it FROMs the same
+// base a no-tools devcontainer names directly, and every RUN leads with
+// "set -eu" so a failed install fails the BUILD rather than shipping an image
+// that claims a tool it does not carry.
+func TestGenAgentToolDockerfile(t *testing.T) {
+	if got := genAgentToolDockerfile(nil); got != "" {
+		t.Errorf("no tools must emit no Dockerfile, got %q", got)
+	}
+	if got := genAgentToolDockerfile([]string{"codex-cli"}); got != "" {
+		t.Errorf("nothing bakeable must emit no Dockerfile, got %q", got)
+	}
+	df := genAgentToolDockerfile([]string{"claude-code"})
+	if !strings.HasPrefix(df, "FROM "+genBaseImage+"\n") {
+		t.Errorf("Dockerfile must FROM the same base image: %s", df)
+	}
+	// Parse it the way a Dockerfile builder does — fold every trailing-backslash
+	// continuation into its instruction — and assert the result is exactly the
+	// two instructions we meant. A continuation that is not last on its line
+	// would leave the next line standing as its own bogus instruction, which is
+	// precisely what this catches.
+	var instrs []string
+	var cur string
+	for _, line := range strings.Split(strings.TrimRight(df, "\n"), "\n") {
+		cur += strings.TrimSuffix(line, "\\")
+		if strings.HasSuffix(line, "\\") {
+			continue
 		}
-		for _, want := range []string{"downloads.claude.ai", "sha256sum -c", "chmod 0755 /usr/local/bin/claude"} {
-			if !strings.Contains(got, want) {
-				t.Errorf("native lane missing %q: %s", want, got)
-			}
+		if trimmed := strings.TrimSpace(cur); trimmed != "" {
+			instrs = append(instrs, trimmed)
 		}
-	})
-	t.Run("codex-cli, hasNode -> npm", func(t *testing.T) {
-		want := "set -eu\nnpm install -g @openai/codex"
-		if got := genAgentToolInstall([]string{"codex-cli"}, true); got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
-	})
-	t.Run("codex-cli, no node -> dropped, never a guessed URL", func(t *testing.T) {
-		if got := genAgentToolInstall([]string{"codex-cli"}, false); got != "" {
-			t.Errorf("codex-cli has no verified native-download contract; got %q, want empty (dropped, not guessed)", got)
-		}
-	})
-	t.Run("both tools, no node -> codex-cli dropped, claude-code native survives", func(t *testing.T) {
-		got := genAgentToolInstall([]string{"claude-code", "codex-cli"}, false)
-		if !strings.Contains(got, "downloads.claude.ai") {
-			t.Errorf("claude-code's native lane must still run: %s", got)
-		}
-		if strings.Contains(got, "@openai/codex") {
-			t.Errorf("codex-cli must not appear when it cannot be verified-installed: %s", got)
-		}
-	})
+		cur = ""
+	}
+	if len(instrs) != 2 {
+		t.Fatalf("want exactly FROM + one RUN, got %d instructions: %q", len(instrs), instrs)
+	}
+	if !strings.HasPrefix(instrs[1], "RUN set -eu; ") {
+		t.Errorf("every RUN must fail the build closed: %q", instrs[1])
+	}
 }
 
 func keysOf(m map[string]string) []string {
