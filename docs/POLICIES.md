@@ -310,6 +310,19 @@ block every governed push at GitHub as well.
 Empty or unrecognised normalises to `always_deny` at runtime (fail closed), but
 an unrecognised literal is rejected at write time.
 
+`wait_for_review`'s one built-in user today is a workspace's confined record
+replay (`docs/TRY-IT.md` "record a session, rerun it as a governed profile"):
+`launchRecordRun` sets it for exactly that session, never for a learning
+(open-egress) one. Approving a hold there does more than release the parked
+connection — the decision funnels through the same chokepoint every approval
+does (`decide`, `internal/api/approvals.go`), which — only for an
+`egress_domain` approval raised during a `workspace record` run — writes a
+required `egress:<host>` row into that workspace's own requirements contract
+(`learnVerifyEgress`). The next confined replay of the SAME workspace folds
+required `egress:` rows into its allowlist (`confinedEgressDomains`), so it
+does not hold on that host again; a plain run's hold widens only its own run
+and writes nothing durable.
+
 ## `eligible_grants[]` — `GrantSpec`
 
 | Field | Type | Default | What it does |

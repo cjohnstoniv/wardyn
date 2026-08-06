@@ -12,10 +12,13 @@ tiers are available (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3
 Kata microVM; whichever are missing show a copy-paste
 `wardyn setup wall` / `wardyn setup vault` command tailored to your OS and Docker
 setup), whether an LLM path exists, and secret-store durability — then links
-straight into your first run. The rail runs 10 steps; inside a corporate
-network, the **Corporate network** step — seated right before Integrations,
-because nothing downstream can be verified until the network path works —
-chains the sandbox proxy through your proxy and redirects package registries
+straight into your first run. The rail runs 12 steps: 3 essentials, 4 hands-on
+demos, 3 **Your work** steps that onboard what you'll actually run against
+(**Directories & repos**, **Base images**, **Workspaces**), and 2 to finish.
+Inside a corporate network, the **Corporate network** step — seated right
+before Integrations, because nothing downstream can be verified until the
+network path works — chains the sandbox proxy through your proxy and
+redirects package registries
 (or any other host: a container registry, an internal appliance) at an
 internal mirror, each with a live probe that actually tests the path (see
 [OPERATIONS.md](OPERATIONS.md)). **Integrations** (the same page as
@@ -221,15 +224,21 @@ picking one fast-tracks you to Review with the recording's observed egress
 already loaded into the allowlist. **Replay confined** launches a fresh CONFINED
 session for a recording you pick — default-deny egress, live approvals surfaced next to
 the attached terminal — so you re-run the same steps under the tightened policy
-and prove the profile works before relying on it. An off-policy host is denied
-in-flight and raised as an approval you can grant, then retry
-(`deny_with_review`; deliberately not a `wait_for_review` hold, so an
-unattended probe fails fast).
+and prove the profile works before relying on it. An off-policy host is **held
+at the door**: the connection parks at the proxy while an approval surfaces in
+the live strip next to the terminal (`wait_for_review`), and approving it
+completes that same in-flight request — no retry needed; denying it, or
+letting the hold deadline pass, fails it closed. Approving one there does more
+than release the connection: it durably writes a required `egress:<host>` row
+into the workspace's own requirements contract, so a later confined replay of
+the same workspace does not hold on that host again — see `docs/POLICIES.md`.
 
 The confined session's allowlist is **not** the approved set alone. It is:
 
     baseline clone/registry hosts ∪ the workspace profile's detected registry
-    hosts (`EgressDomains`) ∪ the operator's `ApprovedEgress`
+    hosts (`EgressDomains`) ∪ the operator's `ApprovedEgress` ∪ every required
+    `egress:<host>` row in the workspace's requirements contract (scan-seeded,
+    operator-set, or just durably approved through a hold as described above)
 
 so it is much tighter than the open recording, but it is **not minimal**:
 
@@ -237,11 +246,12 @@ so it is much tighter than the open recording, but it is **not minimal**:
   all: it is routed through the Wardyn git-broker (repo-scoped, token minted
   proxy-side), so `github.com` and its bundle are **not** in the confined
   session's egress. The residual is the reverse — the baseline is otherwise the
-  workspace profile's detected registries ∪ `ApprovedEgress`, and the replay
-  proves the steps work under that policy without proving it is the smallest
-  one that works. Content-derived `SuggestedEgress` is deliberately excluded — a build
-  that needs a host (including an un-granted GitHub dependency) surfaces as an
-  observed denial you can promote.
+  workspace profile's detected registries ∪ `ApprovedEgress` ∪ approved
+  requirement rows, and the replay proves the steps work under that policy
+  without proving it is the smallest one that works. Content-derived
+  `SuggestedEgress` is deliberately excluded — a build that needs a host
+  (including an un-granted GitHub dependency) surfaces as an observed denial
+  you can promote.
 
 (It's a live re-run under the tighter policy, not a byte-for-byte replay of the
 captured session. It is also the ONLY environment proof Wardyn offers: the
@@ -256,10 +266,11 @@ env-as-code a finalize emits is re-fetchable any time via
 `GET /api/v1/workspaces/{id}/env-as-code` (same `emitted_files` shape), and a
 finished session's cast downloads with `wardyn run recording <run-id> [-o file]`.
 
-**From the CLI:** `wardyn record task <workspace-id> <task-key>` records a single
-workspace-import task (the `task-key` is one of the workspace's derived
-`record_tasks` — `build`/`test`/`lint`/`setup`/`custom`) in an OPEN (allow-all
-egress) sandbox, so you can learn exactly what one build/test step actually uses.
+**From the CLI:** `wardyn record task <workspace-id> <task-key>` records a
+single named session — `task-key` is a free-form name you choose ("build &
+test", "agent dev loop", anything), not picked from a derived taxonomy —
+in an OPEN (allow-all egress) sandbox, so you can learn exactly what that
+session actually uses.
 The session idles for `wardyn attach`; when it ends, the capture lands on the
 workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
 profile (or promote the observed egress from the console's import panel).

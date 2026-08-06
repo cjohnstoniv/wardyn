@@ -230,14 +230,17 @@ case "${WARDYN_SETUP_MODE:-container}" in
     # WARDYN_WORKSPACES_ROOT env win without prompting (scripts/CI).
     if [ -z "${WARDYN_WORKSPACES_ROOT:-}" ] && [ -t 0 ]; then
       _prev_root="$(env_get "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT 2>/dev/null || true)"
-      _def_root="${_prev_root:-$(pwd)}"
       hd "Which folder may Wardyn onboard as local directories?"
       say "  Runs can only mount directories UNDER this folder (a parent of your projects"
       say "  works well). Leave empty to keep the daemon sealed — repo onboarding still"
       say "  works, and you can re-run 'make setup' to change it any time."
-      printf "  Folder [%s]: " "${_def_root}"
+      if [ -n "${_prev_root}" ]; then
+        printf "  Folder [%s]: " "${_prev_root}"
+      else
+        printf "  Folder [sealed]: "
+      fi
       read -r _root || _root=""
-      _root="${_root:-${_def_root}}"
+      _root="${_root:-${_prev_root}}"
       # ~ expansion for a typed path; a pasted absolute path passes through.
       case "${_root}" in "~"|"~/"*) _root="${HOME}${_root#\~}";; esac
       if [ -n "${_root}" ]; then

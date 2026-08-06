@@ -203,6 +203,28 @@ is rejected (400) rather than guessed at. `wardyn site-config get` after
 upgrading no longer returns `artifact_overrides` at all — re-save the file at
 that point.
 
+### Integrations are not part of this round-trip
+
+`integrations` — the Integrations page's rows: model providers, git hosts,
+package feeds, everything under **Other service** — lives on the SAME
+`SiteConfig` document `GET`/`PUT /site-config` reads and writes, but it does
+not travel through this door. `PUT /site-config` 400s outright on a body
+carrying a non-empty `integrations` ("integrations are managed through their
+own endpoints, not PUT /site-config") and always carries the STORED
+integrations forward onto whatever it persists, regardless of what the body
+sent (`handlePutSiteConfig`, `internal/api/site_config.go`). That guard exists
+because this is the same whole-document-replace contract as above: an older
+client that `get`s a config saved before `integrations` existed, then `apply`s
+it back unmodified (the exact round-trip described at the top of this
+section), would otherwise silently delete every stored integration.
+
+The practical edge: `wardyn site-config apply` does not strip `integrations`
+from the file it reads (`cmd/wardyn/siteconfig.go`), so once any are stored, a
+fresh `wardyn site-config get > corp-baseline.json` captures them too — drop
+the `integrations` key from that file before `apply`, or the request 400s.
+Manage integrations themselves through their own routes (`GET /api/v1/integrations`,
+`PUT`/`DELETE /api/v1/integrations/{id}`), never through this document.
+
 ### Testing it: two probes, not a courtesy button
 
 Wardyn otherwise has no test-connection buttons anywhere: it cannot dial a
