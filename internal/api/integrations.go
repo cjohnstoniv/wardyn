@@ -71,10 +71,10 @@ const (
 // an available cell with a qualifying fact), and where the credential lives
 // when wired (Residency; "" when not applicable — e.g. an impossible cell).
 type Capability struct {
-	ID        string
-	State     CapState
-	Reason    string
-	Residency string
+	ID        string   `json:"id"`
+	State     CapState `json:"state"`
+	Reason    string   `json:"reason,omitempty"`
+	Residency string   `json:"residency,omitempty"`
 }
 
 // model_api / wardyn_features copy canon not already owned by the harness

@@ -163,10 +163,10 @@ export interface SCMPosture {
 // what's actually on the wire, not the tidier shape a snake_case reader would
 // expect.
 export interface WireCapability {
-  ID: string;
-  State: string;
-  Reason?: string;
-  Residency?: string;
+  id: string;
+  state: string;
+  reason?: string;
+  residency?: string;
 }
 
 // An integration exactly as the server returns it (internal/api.SetupIntegration
