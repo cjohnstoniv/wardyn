@@ -71,77 +71,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **Workspaces split into three tiers: a shared source library, a shared
   base-image catalog, and the workspace as the aggregate that composes them.**
-  A repo's requirements are a property of the *repo* — the secrets it needs,
-  the hosts its build dials, the paths it writes — not of whichever workspace
-  happens to mount it, so a repo or directory is now configured ONCE as a
-  library **source** (its own requirements contract, its own scan profile and
-  status, deduplicated by canonical identity) and attached to any number of
-  workspaces. Base images likewise became a shared **catalog**
-  (registry/custom/BYO; "recommended" stays a per-workspace derived build,
-  excluded by CHECK constraint, not convention). A workspace is now an ordered
-  list of attachments plus an optional catalog image, and its effective
-  contract is a single pure fold of its sources' contracts under its own
-  overlay — the fold already honors per-attachment **overrides** server-side,
-  letting a stored attachment disable or re-lane any requirement a shared
-  source declares (mount a repo read-only to read its code, without
-  inheriting its build secrets) — though no operator-reachable surface can
-  set one yet: no wire field, endpoint, CLI flag, or wizard control. That
-  surface lands with the per-source Requirements regroup. The fold is
-  fail-closed where it matters: a source's `write:` rows apply only to paths
-  the source itself owns, and a scan-seeded contributor anywhere in the merge
-  poisons auto-granting for that key. Everything shipped expand-only
-  (migration 0031 extracts, dedupes, and backfills attachments; the legacy
-  embedded columns keep working and drop in a later release), and the API/SDK
-  wire is unchanged: existing clients keep sending `sources[]` — the server
-  upserts into the library and attaches — and reads return the same derived
-  `sources`/`base_image`/`profile`/`status` fields, now computed from the
-  attached rows at the store's hydrate pass. New endpoints: `GET/POST
-  /api/v1/sources`, `GET/PUT/DELETE /api/v1/sources/{id}`, `POST
-  /api/v1/sources/{id}/scan`, `GET/POST /api/v1/base-images`, `GET/DELETE
-  /api/v1/base-images/{id}`.
-  Deleting a source or image that workspaces still use answers 409 *naming
-  them* (`?force=1` detaches — for an image that honestly means "fall back to
-  the derived recommended build"; for a source it un-mounts code, which is why
-  the refusal is loud instead of tolerated). **A source's scan seeds the source's own
-  contract** — detected secrets, auto-allowed hosts, and (for a directory)
-  its own write path land as `scan_seeded` rows on the tier-1 entry itself,
-  fill-missing-only in the same atomic write, so an operator's edits always
-  win and a re-scan never flips a decision; the workspace level only ever
-  aggregates the fold. **The tiers are first-class in
-  the UI**: the Workspaces page (and the Getting-started Workspaces step)
-  now carries three tabs — Workspaces · Directories & repos · Base images —
-  each with its own add/delete dialogs, per-source scan and contract summary,
-  used-by counts, and the delete-in-use refusal rendered verbatim with its
-  explicit detach-everywhere escape. The Add-workspace wizard composes FROM
-  the tiers: step ① offers "From your library — already configured,
-  attaching reuses the entry, its contract and its scan" one click per entry
-  (new dirs/repos join the library automatically), and step ② lists your
-  saved catalog images between "Recommended" and the new-image cards, so a
-  recipe configured once is one click in every later workspace. The CLI
-  speaks the library too:
-  `wardyn source list|create|scan|rm` manages tier 1, and `wardyn workspace
-  create --attach SOURCE-ID[@target][:ro|:rw]` composes a workspace from
-  already-configured sources (idempotent by canonical identity, per-attachment
-  read-only default).
-- **Record's verify loop closes: approving a held host writes the contract
-  row, immediately, on the right tier.** A confined verify session now holds
-  an off-policy host at the door (`wait_for_review`), and the operator's
-  approve — hooked at the one chokepoint every approval decision funnels
-  through — lands the host as an `egress:<host>` requirement row
-  (required/operator_set) in *that workspace's* contract the moment the
-  decision is made. Deliberately the workspace overlay and never the shared
-  source: approving a host for one aggregate must not leak the approval into
-  every other workspace attaching the same repo. A plain run's approval
-  widens only its own run and writes nothing durable; deny leaves the
-  contract untouched. The confined replay's allowlist folds in the
-  contract's required `egress:` rows, so the host an operator just approved
-  is reachable on the very next session — approve → row → replay passes, one
-  loop. "Promote to approved egress" now writes the same requirement rows
-  (the legacy `approved_egress` list is read-only from here: still honored
-  in replays, never written again), and the whole approve/deny surface is
-  egress-only by construction — sandboxes can only ever raise egress
-  approvals, so secrets stay declared on the contract, never requested by a
-  running session.
+  A repo or directory's requirements (secrets, hosts, write paths) are now
+  configured once as a library **source** and attached to any number of
+  workspaces; base images became a shared **catalog** ("recommended" stays a
+  per-workspace derived build). Shipped expand-only and wire-compatible
+  (existing clients keep sending `sources[]`), and a source's own re-scan
+  only fills missing contract rows, never overwrites an operator's edit. See
+  `docs/OPERATIONS.md` ("Workspaces: three tiers") for the new endpoints,
+  CLI, fold precedence, delete-in-use behavior, and overrides' reachability.
+- **Record's verify loop closes: approving a held host writes the contract row,
+  immediately, on the right tier.** A confined verify session now holds an
+  off-policy host at the door; approving it durably writes an `egress:<host>`
+  row into *that workspace's* contract, never the shared source (a plain
+  run's approval isn't durable). The whole approve/deny surface stays
+  egress-only by construction — a sandbox can raise an egress approval but
+  never request a secret. See `docs/POLICIES.md` ("`first_use_approval` modes")
+  and `docs/TRY-IT.md` ("Level 2.5") for the write-back mechanism.
 - **Corporate network is its own Getting-started step, and it comes before
   Integrations** — because on a corporate network every integration after it
   depends on the path it configures, and discovering that at the point an
@@ -169,53 +114,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (DNS, refused, TLS, timeout) rather than collapsing into "failed". These are
   the only test buttons in the product; everywhere else Wardyn still refuses to
   claim it verified a credential it cannot dial.
-- **The container login announces itself before anything launches.** Picking a
-  Claude subscription used to jump: a dialog, then suddenly a terminal, then
-  suddenly a browser tab asking you to authenticate — nothing said what was
-  coming or what would be asked of you. The login pane now opens on a numbered
-  "what happens next": a sandboxed login run and a terminal, a claude.ai tab to
-  sign in and approve (an active subscription is the stated requirement), where
-  a hand-you-a-code login gets pasted, and what is stored at the end — the
-  token write-only, the login sandbox shut down, runs credentialed proxy-side.
-  Nothing launches until Start login. The AWS flow keeps its start-URL gate and
-  gains the same what-happens-next above it. The login terminal also stops
-  dwarfing or overflowing its dialog: the one dialog that can host a terminal
-  has its sizing pinned inline with horizontal overflow made structurally
-  impossible, and the terminal drops from 70vh to a fixed compact height. And
-  the login now has a memory — after a capture the credential cell says so and
-  offers "Log in again" (backing out of a RE-login keeps what you had; only a
-  first-ever login's cancel leaves the panel), instead of reverting to a bare
-  "Log in" as though nothing had happened. A capture from an earlier session
-  shows as "Already connected — captured 3d ago", presence and age, never a
-  live check.
-- **The Requirements step reads in dependency order, and Verify is what
-  closes it.** The tab strip was Record · Egress · Secrets · Files &
-  services, leading with the one tab that consumes everything the others
-  declare. It now reads Reach · Secrets · Files & services · Verify — though
-  the wizard shows only the first three, since Verify is its own rail step
-  there; the fourth tab lives on the workspace detail page's copy of this
-  strip:
-  Reach headlines the integrations (an integration is the reason a host is on
-  the allowlist at all) under a display-only power-source card stating what
-  agent runs here resolve to — the choice itself lives where it always really
-  did, on the workspace page's binding dialog — and Verify closes the walk as
-  "prove & discover", opening with the power source, riding secrets and egress
-  posture the contract grants it. With nothing resolving, the agent-record
-  button is absent rather than disabled, the stated fact points at Reach, and
-  terminal recording is promoted — it needs no model. Discovery-first survives
-  as one quiet link on an empty Reach tab. The power-source row and its
-  Change… peek left the Base image step entirely — and that step now speaks
-  ONLY in tool inventory: each suggested image lists what it carries as plain
-  chips, with `claude-code` one tool among tools exactly when a named
-  `anthropic_*` integration bakes it into the recommended build (`codex-cli`
-  never joins the chips: nothing bakes it). No sentence on the image step
-  mentions an AI, states an agent consequence, or narrates integration state
-  ("Claude Code configured…" and the registry card's warning chip are gone —
-  the image doesn't decide whether or which AI is used; the workspace's
-  requirements do). The BYO card keeps the law that earns its place on an
-  image surface: Wardyn doesn't inspect the image and never injects tools
-  into it — the same holds for every catalog image, and for a repo that
-  carries its own devcontainer.
+- **The container login announces itself before anything launches.** The login
+  pane now opens on a numbered "what happens next" (a sandboxed login run, a
+  claude.ai tab, what gets stored) instead of jumping straight to a terminal
+  and browser tab with no warning; the AWS flow gets the same treatment. The
+  login terminal no longer overflows or dwarfs its dialog, and a prior capture
+  now shows its age with a "Log in again" option instead of reverting to a bare
+  "Log in" as though nothing had happened.
+- **The Requirements step reads in dependency order, and Verify is what closes
+  it.** The tab strip was Record · Egress · Secrets · Files & services; it now
+  reads Reach · Secrets · Files & services · Verify — the wizard shows only the
+  first three (Verify is its own rail step); the fourth tab is the detail
+  page's. The Base image step dropped every AI-specific sentence and now speaks
+  only in tool inventory: `claude-code` appears as a chip exactly when a named
+  `anthropic_*` integration bakes it into the recommended build — no image is
+  ever inspected or has tools injected into it otherwise. See
+  `docs/OPERATIONS.md` ("A named Anthropic integration bakes the claude-code
+  CLI; nothing bakes codex-cli").
 - **The leak banner earns two tiers.** Seventeen red rows of a repo's own test
   fixtures — fake keys that exist because the tests need key-shaped strings —
   train an operator to ignore the banner, the exact reflex it exists to
@@ -385,61 +300,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   button did. Backing off it decides nothing.
 
 - **The Corporate network step is a proof, not a form — and only the proof is
-  required.** It is not skippable: `Next: Integrations` unlocks only once a
-  probe has shown a sandbox on this host can actually reach the internet, and
-  every *configured* redirect has tested clean. But nothing here has to be
-  configured, and the copy stops claiming otherwise: a corporate proxy matters
-  only on hosts behind one, egress redirection is rarer still, and on most
-  hosts the whole step is one click — Test connectivity, `Reached · direct`,
-  Next. The forced look at the Egress redirection tab is gone; it was the one
-  mechanic that made the least-common feature feel mandatory. A redirect in
-  `bypass` still blocks; every failing row is named at once ("Fix a and b
-  above…"), and rows merely untested get their own instruction rather than a
-  generic "a redirect failed".
-  The step already explained that a model provider or git host added first
-  looks broken when it's really the network that's blocked; it now prevents
-  that instead of only warning about it.
-  - **While the gate is locked, the footer's button IS the fix** — "Test
-    connectivity" (or "Test this URL" once you've typed one, or "Test the
-    redirect(s)" when configured rows are what's left) renders in place of a
-    disabled Next, under a bold one-line state headline. One launch point per
-    screen: the panel's own button is suppressed while the gate row carries
-    the action, and returns as "Test again" once the step is satisfied.
-  - **The forward walk passes through Egress redirection rather than over
-    it.** From Host proxy, a pass unlocks "Next: Egress redirection" — the
-    step's other tab, one more click past its quiet empty line, not the exit;
-    from there, "Next: Integrations" hands off. Back mirrors it. Navigation,
-    not a gate: nothing blocks and empty stays a fine answer — the tab is
-    simply seen once instead of being skippable to the point of invisibility.
-  - `no_runner` is the one thing that never blocks. With no runner configured
-    Wardyn cannot launch a probe at all, and demanding proof it is structurally
-    incapable of collecting would trap an operator in setup with no way out.
-  - A blocked probe can be retried against **a URL you name**. That is the
-    escape for internal-only and air-gapped hosts, where no public endpoint
-    will ever answer: point it at something your network can reach and the
-    check goes back to proving egress works, rather than proving the public
-    internet does. A custom target claims less — Wardyn cannot know what your
-    endpoint should return, so it only proves the request completed, and both
-    the response text and the UI say so.
-- **Probe verdicts say what was actually established, in the design's own
-  words, at every altitude.** A builtin pass reads "Reached
-  www.msftconnecttest.com/connecttest.txt and detectportal.firefox.com/success.txt
-  … — payloads matched, the full chain a run takes" (or the no-proxy variant
-  saying none was needed); a connection failure reads "Could not reach either
-  endpoint: <the real cause>"; an interception is rendered apart end to end —
-  its own `Blocked · intercepted` chip, a what-this-means box (the request
-  left the host and something replied — a different person to call than a
-  refused connection), and the why-these-endpoints rationale. A custom-URL
-  pass never wears the verified treatment anywhere: a `Request completed`
-  chip in a dashed frame instead of the success chip, the caveat line beside
-  it, an info-tone `Reached · custom endpoint` rail badge with no redirect
-  arithmetic, and a standing note beside the *enabled* Next saying the proof
-  is weaker — the same note mechanism `no_runner` uses, which now unlocks
-  Next without ticking the step's checkmark, because nothing was proven. The
-  probe response carries `via`/`intercepted`/`custom` so no client
-  string-matches a sentence to know which treatment to render, and a
-  server-rejected custom URL now renders inline where it was typed, with the
-  server's own message, instead of vanishing into a toast.
+  required.** `Next: Integrations` unlocks only once a probe shows a sandbox on
+  this host can reach the internet and every configured redirect tests clean —
+  but nothing has to be configured, and on most hosts it's one click (Test
+  connectivity, `Reached · direct`, Next). While the gate is locked, the
+  footer's own button becomes the fix; a blocked probe can be retried against a
+  URL you name, for internal-only and air-gapped hosts. See `docs/TRY-IT.md`
+  ("Corporate network") for the `no_runner` exception and `docs/OPERATIONS.md`
+  ("Testing it: two probes, not a courtesy button").
+- **Probe verdicts say what was actually established, at every altitude.** An
+  interception now renders apart from a plain connection failure — a reply
+  that arrives but doesn't match the expected payload is a different problem
+  than nothing answering — and a custom-URL pass never wears the "verified"
+  treatment, since nothing was actually proven. A server-rejected custom URL
+  now renders inline instead of vanishing into a toast. See
+  `docs/OPERATIONS.md` ("Testing it: two probes, not a courtesy button") for
+  the `reached`/`blocked`/`bypass`/`no_runner` state semantics.
 
 - **Getting started is twelve steps, not thirteen.** The model-provider,
   host-proxy, SCM-provider, artifact-registry and credentials steps were five
@@ -471,22 +347,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **`go build` works in every image, not just the full toolchain image.** The
-  platform env points `GOTMPDIR` at the agent's home for a run whose
-  workspace scans call for Go (the sandbox mounts `/tmp` noexec, and `go
-  test` executes what it compiles there), but unlike `GOCACHE` the go tool
-  refuses to create `GOTMPDIR`
-  itself — and only the full image baked the directory, so the first Go
-  command in a recommended-built or BYO image failed with
-  `stat /home/agent/.gotmp: no such file or directory`. Two runtime guards,
-  both reading the env var itself (nothing toolchain-specific is baked into
-  any image — what an image carries stays a workspace-requirements matter):
-  `agent-run` creates the directory at session prep next to the
-  ephemeral-dirs step, and the attach shell's exec wrapper creates it before
-  the prompt renders — session prep was measured taking 18s to reach the
-  mkdir while the attach terminal opens instantly, so a fast operator's
-  first command could still lose the race. (Found live by the Verify step
-  doing exactly its job, twice.)
+- **`go build` works in every image, not just the full toolchain image.**
+  `GOTMPDIR` needs a directory the go tool itself refuses to create, and only
+  the full toolchain image pre-baked it, so the first Go command in a
+  recommended-built or BYO image failed with `stat: no such file or directory`.
+  Two runtime guards now create it from the env var alone whenever a
+  workspace's scans call for Go. See `docs/OPERATIONS.md` ("Toolchain-fidelity
+  environment") for the mechanism and the measured race window.
 - **Scan-seeded secret rows now use storable names — one scanned source no
   longer wedges the Requirements save.** A scan honestly reports the env-var
   name the code reads (`AWS_DEFAULT_REGION`), but a `secret:` contract row
@@ -503,26 +370,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the invariant that broke: every row the seeder writes passes the same
   validation any PUT of that contract goes through.
 - **"Recommended — built for this workspace" now works out of the box on the
-  compose stack.** The default card required four hand-set knobs and still
-  failed: devcontainer builds were opt-in (`WARDYN_ENVBUILD=false`), needed an
-  external registry, a build-network opt-in, and a hand-staged runner-tools
-  directory — and even fully configured, two latent bugs killed every real
-  build from a containerized control plane. The stack now ships a loopback
-  registry sidecar (Docker trusts `127.0.0.1` registries without TLS or
-  daemon config), builds default ON with the registry/network/tools knobs
-  pre-wired, and the runner tools ride inside the wardynd image. The two
-  bugs: the generated build context was staged in the control plane's own
-  /tmp and bind-mounted by path — a path the host daemon can't see, so
-  envbuilder built an empty workspace (delivery is now a tar streamed into
-  the build container, host-agnostic); and the build container's blanket
-  capability drop broke rootfs extraction for any featureful build ("chown
-  /etc/gshadow: operation not permitted") — it now grants exactly the
-  file-ownership set an image builder needs, keeping the network- and
-  syscall-shaped capabilities dropped. Build output also streams into
-  wardynd's log now; a failed build used to leave nothing but "exit code 1".
-  Proven end to end: a Go+JS workspace's recommended image built, pushed
-  through the sidecar, finalized, and a verify session booted it with
-  go/node/pnpm present.
+  compose stack.** The default card required four hand-set knobs, and two
+  latent bugs killed every real build regardless: the generated build context
+  was staged unreachably for the host daemon, and a blanket capability drop
+  broke rootfs extraction for any featureful build. The stack now ships a
+  loopback registry sidecar with builds on by default, and both bugs are fixed.
+  See `docs/OPERATIONS.md` ("Recommended builds on compose") for the four
+  pre-wired pieces.
 - **`make setup` asks which folder Wardyn may onboard.** `WARDYN_WORKSPACES_ROOT`
   had to be exported by hand on every setup run or local-directory onboarding
   failed against the sealed daemon. The containerized front door now prompts
@@ -654,71 +508,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` per proxy to opt out (for an image
   whose `agent-run` predates the run branch); unrecognized values fail closed.
 - **The brokered git route is now the only route to those GitHub host names.**
-  Dispatch subtracts the broker-managed GitHub hosts (`github.com`,
-  `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) from the
-  egress allowlist of any run with git grants **and denies them** — deny beats
-  `allow_all_egress` too — and `wardyn-git-helper` no longer mints a GitHub App
-  token into a brokered sandbox at all (a GitHub host is refused whenever
-  `WARDYN_GIT_BROKER_REPOS` is non-empty; a grant covering no repo is not
-  brokered, and mints nothing either way — `MintInstallationToken` refuses an
-  empty repo list). Previously the direct lane was closed only by
-  shipped-policy convention: no git host is ever TLS-MITM'd, so a
-  `github.com:443` CONNECT is an opaque tunnel the ref parser cannot inspect,
-  and the helper printed a live token to stdout inside the sandbox. A run with
-  **no** git grants is unaffected.
-  Honest scope: this binds the brokered App lane — a `git_pat` push (opaque
-  CONNECT) cannot be bound by a receive-pack parser and remains bounded by the
-  operator who supplied the credential. `ssh_key` and `git_pat` used to carry
-  that same honest-scope exception for the SAME forge; neither does now — see
-  the single-lane entry below.
+  Dispatch subtracts the four broker-managed GitHub hosts from the egress
+  allowlist of any run with git grants **and denies them** (deny beats
+  `allow_all_egress` too), and `wardyn-git-helper` no longer mints a GitHub App
+  token into a brokered sandbox at all — closing a gap an opaque CONNECT
+  tunnel used to leave open. A run with no git grants is unaffected. See
+  `docs/POLICIES.md` ("Brokered GitHub: the denies you did not write") and
+  `docs/ENV.md` (`WARDYN_GIT_BROKER_REPOS`).
 - **A brokered forge is now single-lane: neither `ssh_key` nor `git_pat` can
-  ride beside a `github_token` grant for it.** Closes the gap the entry above
-  used to carve out. Three seams: `validateGrantLaneExclusivity`
-  (`internal/api/policy.go`) refuses a policy that declares both a
-  `github_token` grant and an `ssh_key` or `git_pat` grant for the same forge
-  (`400`, on every policy write — stored, inline, `WARDYN_DEFAULT_POLICY`, and
-  the composer/profile clamps); `confineGitBrokerEgress`
-  (`internal/api/runs_dispatch_gitbroker.go`) also denies that forge's
-  `ssh.<forge>` SSH-over-443 endpoint — spelled as the bare host, so the deny
-  covers every port, not just 443 — alongside the four managed HTTPS hosts, on
-  every brokered run regardless of which grants it holds; and
-  `handleInternalMint` refuses either kind for a brokered forge before opening
-  the broker transaction. For a policy stored before the rule shipped,
-  `dropBrokeredGrants` withholds that forge's `ssh_key` **and** `git_pat`
-  grants from the sandbox env at dispatch entirely, so the credential is never
-  minted (not merely denied a route), each with a `slog` warning and a
-  `run.ssh.brokered_forge` / `run.git_pat.brokered_forge` audit event. An
-  `ssh_key` or `git_pat` grant for a *different* host (ADO, GitLab, GHES — the
-  lane `git_pat` exists for) is untouched by any of it. The `git_pat` half
-  corrects a stated justification that did not hold: a brokered `git_pat` was
-  called "already dead twice over", counting `wardyn-git-helper`'s in-sandbox
-  refusal as one death — but that only binds a caller that asks *git* for the
-  credential, and the proxy's own mint refusal (`isBrokeredGitGrant`) matches
-  `github_token` grant ids only, so a direct POST to the mint route was
-  answered with the PAT. That left one barrier, a name-keyed deny; and a GitHub
-  `git_pat` is typically a *user* PAT, broader than the repo-scoped
-  installation token beside it. The `ssh_key` half reverses an earlier decision
-  of this same doc-reconciliation effort, on the owner's call — see
-  `confineGitBrokerEgress` for why. Same standing caveat as the four HTTPS
-  denies: it is a NAME deny, so a raw-IP CONNECT reaches `allow` under
-  `allow_all_egress` (measured) — see `docs/POLICIES.md`.
+  ride beside a `github_token` grant for it.** Three seams enforce it: policy
+  write refuses a policy declaring both grants for the same forge (`400`);
+  dispatch denies that forge's SSH endpoint and withholds any already-stored
+  grant from the sandbox; and the mint route refuses either kind for a
+  brokered forge outright, closing a direct-POST gap that used to bypass
+  `wardyn-git-helper`'s own refusal. A grant for a different host (ADO,
+  GitLab, GHES) is untouched. See `docs/POLICIES.md` ("The `ssh_key` and
+  `git_pat` lanes are closed too") for the write/dispatch/mint mechanics.
 - **Token-side confinement: GitHub ref-ruleset verification, plus an opt-in
-  mint gate.** `VerifyRefRuleset` (`internal/broker/ruleset.go`) asks GitHub
-  which rules are in force on a repo outside and inside the run's push
-  namespace — `creation`+`update`+`deletion` required outside, neither inside
-  — and reads each backing ruleset's `current_user_can_bypass`, requiring
-  `"never"`, so an App exempted via bypass still grades unconfined. A
-  `github_ref_ruleset` setup-checklist row grades the first repo a policy
-  names (never `fail`, only `warn`/unknown, and cached so the wizard's polling
-  cannot turn into a rate-limit), and `WARDYN_GITHUB_REQUIRE_REF_RULESET`
-  (opt-in, default off) turns the same check into a pre-mint gate that refuses
-  a `github_token` mint when the repo is unconfined or unverifiable. Branches
-  only — a `target: "branch"` ruleset leaves `refs/tags/*` open — and classic
-  branch protection does not surface in the endpoint this reads, so a repo
-  protected that way still grades unconfined. The recipe to create the
-  ruleset is in `docs/POLICIES.md` ("Bound the token itself: a GitHub
-  ruleset"); Wardyn never creates it (needs repo-admin it deliberately does
-  not request).
+  mint gate.** `VerifyRefRuleset` asks GitHub which rules bind a repo outside
+  and inside the run's push namespace. A `github_ref_ruleset` setup-checklist
+  row grades the first repo a policy names, and
+  `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default off) turns the same
+  check into a pre-mint gate. Branches only — classic branch protection isn't
+  visible to this check. See `docs/POLICIES.md` ("Bound the token itself: a
+  GitHub ruleset") for the recipe, the bypass-actor rule, and the exact
+  fnmatch semantics.
 - **wardynd images are published to GHCR** (`.github/workflows/publish-image.yml`:
   main pushes → `:latest` + `:sha-<7>`, `vX.Y.Z` tags → the bare semver the Helm
   chart's default resolves to; `workflow_dispatch` `extra_tag` backfills
@@ -729,45 +543,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every default `docker run`/Helm install previously hit (the Go-relative
   default never resolved from the distroless WorkingDir).
 
-- **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate** (flag
-  `-oidc-operator-emails`), the first authorization tier on the control plane,
-  now covering 35 routes. List the operators and every other signed-in human
-  becomes a **viewer**: reads everything and can launch/kill runs, but is
-  403'd on configuring the deployment (managed harness credential, policies,
-  workspaces, `PUT /site-config`), writing/deleting secrets, deciding an
-  approval, and attaching to a running sandbox — both the ticket mint and the
-  WebSocket itself, since the socket falls back to session-cookie auth when no
-  ticket is presented. Additive — unset (the default) keeps
-  today's behavior exactly, and the admin token and local mode are always
-  operators (one shared credential, no human to key a role off). Configuring
-  OIDC SSO with the operator list left empty now **refuses to boot** (flag
-  `-allow-oidc-no-operator-list` / `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`
-  overrides, for a deployment that really does want every signed-in human
-  admin-equivalent). This is one allowlist, not RBAC: run create/kill stay
-  open to any signed-in human by design
-  (`ROADMAP.md`, `threatmodel/THREAT-MODEL.md` residual #14).
+- **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate**, the first
+  authorization tier on the control plane, now covering 35 routes. Listed
+  operators keep full access; every other signed-in human becomes a **viewer**
+  — reads everything, can launch/kill runs, but is 403'd on configuring the
+  deployment, secret writes, approval decisions, and sandbox attach. Additive
+  (unset keeps prior behavior); an empty operator list with OIDC configured now
+  **refuses to boot** (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`).
+  Allowlist, not RBAC — run create/kill stay open to any signed-in human. See
+  `docs/OPERATIONS.md` ("Who can change what").
 - **Three per-process defects that used to make `replicas > 1` unsafe are now
-  closed at the code level** — not because multi-replica is a supported
-  configuration today (no shipped topology runs more than one: compose pins
-  `container_name`, the chart pins `replicas: 1`), but because a future build
-  no longer needs three separate durability projects to get there. Session
-  recordings default to a Postgres-backed store (migration 0028,
-  `internal/recording/pgstore.go`) visible to every replica;
-  `WARDYN_RECORDING_STORE=fs` still selects the legacy per-pod directory, and
-  the real "fully off" recipe is now two variables
-  (`WARDYN_RECORDING_STORE=fs` **and** `WARDYN_RECORDING_DIR=""`). Note that
-  this is the BINARY's default: the Helm chart deliberately pins `fs`, because
-  it is single-replica by policy and `pg` retains every cast forever by
-  default — so a `helm install` does NOT get the Postgres store unless you set
-  `env.WARDYN_RECORDING_STORE=pg`. Compose does get it. Run-watcher
-  adoption is a Postgres lease plus a periodic cross-replica sweep (migration
-  0027, `internal/api/reconcile.go`): a run orphaned by a pod that never comes
-  back is adopted by any live replica within roughly 65-150s instead of
-  stranding forever. The ground-truth token rotator is leader-elected via a
-  Postgres advisory lock (`cmd/wardynd/gt_rotator.go`), with a standby taking
-  over within one ~30s backoff of the leader's session ending. See
-  `docs/OPERATIONS.md` ("One replica, by construction") for the full
-  mechanism and what remains per-process by design.
+  closed at the code level** — not because multi-replica is supported today,
+  but so a future build doesn't need three separate durability projects to get
+  there. Session recordings default to a Postgres-backed store visible to every
+  replica (`WARDYN_RECORDING_STORE=fs` still selects the legacy per-pod
+  directory; the Helm chart deliberately keeps `fs`). Run-watcher adoption is a
+  Postgres lease plus a periodic cross-replica sweep, and the ground-truth
+  token rotator is leader-elected via a Postgres advisory lock. See
+  `docs/OPERATIONS.md` ("One replica, by construction") for the full mechanism
+  and what remains per-process by design — the secret-masking registry,
+  notably, still fails open across replicas.
 
 ### Fixed
 
