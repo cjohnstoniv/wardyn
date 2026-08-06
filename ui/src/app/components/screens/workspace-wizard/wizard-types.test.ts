@@ -15,7 +15,6 @@ import {
   fmtElapsed,
   initialStepFor,
   isRemovable,
-  isSourceShapeValid,
   isSshRemote,
   newSourceRow,
   parseRepoSource,
@@ -130,18 +129,7 @@ describe("parseRepoSource / isSshRemote", () => {
   });
 });
 
-describe("isSourceShapeValid / toSourceInput", () => {
-  it("requires an absolute path for local_dir", () => {
-    expect(isSourceShapeValid({ ...newSourceRow("local_dir"), path: "relative" })).toBe(false);
-    expect(isSourceShapeValid({ ...newSourceRow("local_dir"), path: "/abs" })).toBe(true);
-  });
-  it("requires a parseable source for repo", () => {
-    expect(isSourceShapeValid({ ...newSourceRow("repo"), source: "" })).toBe(false);
-    expect(isSourceShapeValid({ ...newSourceRow("repo"), source: "acme/payments" })).toBe(true);
-  });
-  it("ephemeral is always shape-valid", () => {
-    expect(isSourceShapeValid(newSourceRow("ephemeral"))).toBe(true);
-  });
+describe("toSourceInput", () => {
   it("toSourceInput strips UI-only fields and fills the derived target", () => {
     const row: SourceRow = { ...newSourceRow("repo"), source: "acme/payments", ref: "main" };
     expect(toSourceInput(row, [row])).toEqual({

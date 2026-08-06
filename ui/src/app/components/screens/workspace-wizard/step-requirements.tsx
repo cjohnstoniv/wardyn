@@ -79,7 +79,7 @@ function GroupHead({ title, chips }: { title: string; chips?: React.ReactNode })
   );
 }
 
-function LeakBanner({ leaks }: { leaks: { path: string; kind: string; line?: number }[] }) {
+export function LeakBanner({ leaks }: { leaks: { path: string; kind: string; line?: number }[] }) {
   // Two tiers, path-classified (isFixtureLeak): outside test-conventional
   // paths the red headline is unchanged; under them, one muted collapsed line —
   // "rotate" is meaningless advice for a fixture, "confirm they're fake" is the
@@ -513,7 +513,6 @@ export function StepRequirements({
               <TabsContent value="record" className="space-y-3 pt-3" data-testid="group-record">
                 <VerifyBody
                   requirements={requirements}
-                  storedSecretNames={storedSecretNames}
                   powerSource={powerSource}
                   carryImage={carryImage}
                   verifyPanel={verifyPanel}
@@ -557,20 +556,17 @@ export function StepRequirements({
 // never drift.
 export function VerifyBody({
   requirements,
-  storedSecretNames,
   powerSource,
   carryImage,
   verifyPanel,
   onOpenReach,
 }: {
   requirements: WorkspaceRequirementsMap;
-  storedSecretNames: string[];
   powerSource: PowerSource;
   carryImage?: string;
   verifyPanel?: React.ReactNode;
   onOpenReach: () => void;
 }) {
-  void storedSecretNames;
   const nothingResolves = powerSource.kind === "none";
   const requiredSecretCount = Object.entries(requirements).filter(
     ([k, v]) => k.startsWith("secret:") && v.level === "required",

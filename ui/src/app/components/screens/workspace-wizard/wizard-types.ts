@@ -159,16 +159,6 @@ export function parseRepoSource(src: string): ParsedRepoSource | null {
   return null;
 }
 
-// Bare-minimum client-side shape check for the step's Continue gate — mirrors
-// the INTENT of runner.ValidateMountSource/repoCloneURL, not their exact
-// rules; the server (validateWorkspaceSource, internal/api/workspaces.go)
-// remains the real gate.
-export function isSourceShapeValid(row: SourceRow): boolean {
-  if (row.type === "local_dir") return /^\//.test(row.path.trim());
-  if (row.type === "repo") return !!parseRepoSource(row.source);
-  return true;
-}
-
 // A repo row's SSH gate: its source is an SSH remote but no ssh-key-<slug>
 // secret is stored for that host yet. Checked by the caller against the lanes
 // deriveProviders() returns for the row's host (scm-provider.ts) — kept here
@@ -218,7 +208,6 @@ export type ScanStatus = "pending" | "scanning" | "done" | "failed";
 export interface SourceScanState {
   status: ScanStatus;
   startedAt?: number;
-  secs?: number;
   error?: string;
 }
 

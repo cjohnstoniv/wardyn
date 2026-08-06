@@ -375,45 +375,25 @@ function SessionCard({
   );
 }
 
+// Same table+one-Chip idiom as primitives.tsx's runStateMeta: one row per
+// SessionStage instead of a 42-line if-chain of near-identical Chips.
+const STAGE_CHIP_META: Record<
+  SessionStage,
+  { tone: "info" | "danger" | "success" | "neutral"; label: string; pulse?: boolean }
+> = {
+  recording: { tone: "info", label: "Recording…", pulse: true },
+  replaying: { tone: "info", label: "Replaying confined…", pulse: true },
+  record_failed: { tone: "danger", label: "Record failed" },
+  replay_failed: { tone: "danger", label: "Replay failed" },
+  replayed: { tone: "success", label: "Replayed confined" },
+  recorded: { tone: "neutral", label: "Recorded" },
+};
+
 function stageChip(stage: SessionStage) {
-  if (stage === "recording") {
-    return (
-      <Chip tone="info" dot pulse className="ml-auto">
-        Recording…
-      </Chip>
-    );
-  }
-  if (stage === "replaying") {
-    return (
-      <Chip tone="info" dot pulse className="ml-auto">
-        Replaying confined…
-      </Chip>
-    );
-  }
-  if (stage === "record_failed") {
-    return (
-      <Chip tone="danger" className="ml-auto">
-        Record failed
-      </Chip>
-    );
-  }
-  if (stage === "replay_failed") {
-    return (
-      <Chip tone="danger" className="ml-auto">
-        Replay failed
-      </Chip>
-    );
-  }
-  if (stage === "replayed") {
-    return (
-      <Chip tone="success" className="ml-auto">
-        Replayed confined
-      </Chip>
-    );
-  }
+  const m = STAGE_CHIP_META[stage];
   return (
-    <Chip tone="neutral" className="ml-auto">
-      Recorded
+    <Chip tone={m.tone} dot={!!m.pulse} pulse={m.pulse} className="ml-auto">
+      {m.label}
     </Chip>
   );
 }

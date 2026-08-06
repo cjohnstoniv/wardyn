@@ -30,7 +30,6 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { BTN, OPERATOR_ONLY_REASON, RUN_MODE } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { SourcesLibrary } from "../sources-library";
 import { ImageCatalog } from "../image-catalog";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
@@ -38,7 +37,7 @@ import type { Readiness } from "../onboarding/intro";
 import { lastCheckedLabel } from "../onboarding/intro";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
-import { isUsable } from "../../../lib/workspace-status";
+import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
 
 // ------------------------------------------------------------
 // Shared check-row primitives (Review + the Corporate network step).
@@ -360,7 +359,7 @@ export function WorkspacesStep({
                   {summary && (
                     <span className="block truncate text-[0.6875rem] text-muted-foreground">{summary}</span>
                   )}
-                  {STATUS_TONE[w.status] === "danger" && (
+                  {statusTone(w.status).tone === "danger" && (
                     // The failure reason itself is only in the import overlay's scan
                     // pane (the toast is ephemeral) — point at the recovery path
                     // inline instead of leaving a bare red chip.
@@ -374,8 +373,8 @@ export function WorkspacesStep({
                     <Loader2 className="size-3 animate-spin" /> Scanning…
                   </Chip>
                 ) : (
-                  <Chip tone={STATUS_TONE[w.status]} dot>
-                    {STATUS_LABEL[w.status]}
+                  <Chip tone={statusTone(w.status).tone} dot>
+                    {statusWord(w.status)}
                   </Chip>
                 )}
                 {isUsable(w.status) ? (

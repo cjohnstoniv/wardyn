@@ -55,21 +55,6 @@ import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 
-// Exported so the setup wizard's Workspaces step renders the same status
-// vocabulary — the two surfaces can't drift.
-export const STATUS_TONE: Record<Workspace["status"], "success" | "warning" | "danger" | "info"> = {
-  pending_scan: "warning",
-  scanning: "info",
-  scanned: "info",
-  error: "danger",
-};
-export const STATUS_LABEL: Record<Workspace["status"], string> = {
-  pending_scan: "Pending scan",
-  scanning: "Scanning",
-  scanned: "Scanned",
-  error: "Error",
-};
-
 // Icon + label for the three onboardable kinds. "container" has no host mount
 // (source is an image ref), so it gets its own icon rather than reusing the
 // local-dir folder.

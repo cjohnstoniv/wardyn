@@ -188,7 +188,7 @@ export function WorkspaceWizard({
   /** Done's "Make it stronger" cards deep-link here — wiring the real route is
    *  a later step (this wizard isn't mounted into the app yet); omitted, the
    *  cards are inert. */
-  onOpenWorkspace?: (workspaceId: string, focus?: "record" | "env" | "model") => void;
+  onOpenWorkspace?: (workspaceId: string) => void;
   /** origin="run" only — omitted, Done's primary action falls back to closing. */
   onAttach?: (workspaceId: string) => void;
 }) {
@@ -593,7 +593,6 @@ export function WorkspaceWizard({
           {s.step === "verify" && s.workspace && (
             <VerifyBody
               requirements={s.requirements}
-              storedSecretNames={s.secretNames}
               powerSource={powerSource}
               carryImage={carryImage}
               onOpenReach={() => patch({ step: "reqs" })}
@@ -634,8 +633,8 @@ export function WorkspaceWizard({
               storedSecretNames={s.secretNames}
               leakCount={leakCount}
               powerSource={powerSource}
-              onOpenDetail={(focus) => {
-                if (s.workspace) onOpenWorkspace?.(s.workspace.id, focus);
+              onOpenDetail={() => {
+                if (s.workspace) onOpenWorkspace?.(s.workspace.id);
               }}
               onRescan={() => {
                 if (s.workspace) onOpenWorkspace?.(s.workspace.id);

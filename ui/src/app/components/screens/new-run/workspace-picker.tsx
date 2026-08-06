@@ -37,9 +37,10 @@ import { Mono } from "../../wardyn/code-block";
 import type { Workspace } from "../../../lib/types";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { C } from "../../../lib/workspace-copy";
-// Reuse the single widened status vocabulary so this picker can't drift from the
-// /workspaces screen (and covers every import-flow status, not just three).
-import { STATUS_TONE, STATUS_LABEL, KIND_META } from "../workspaces";
+// Reuse the SAME status vocabulary /workspaces itself renders, so this picker
+// can't drift from that screen.
+import { KIND_META } from "../workspaces";
+import { statusTone, statusWord } from "../../../lib/workspace-status";
 import {
   comesWithLine,
   compositionSummary,
@@ -233,7 +234,7 @@ function SelectedWorkspaceCard({
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-sm font-medium text-foreground">{ws?.name ?? sel.workspaceId}</span>
             {index === 0 && <Chip tone="primary">primary</Chip>}
-            {ws && <Chip tone={STATUS_TONE[ws.status]}>{STATUS_LABEL[ws.status]}</Chip>}
+            {ws && <Chip tone={statusTone(ws.status).tone}>{statusWord(ws.status)}</Chip>}
             {/* A multi-source workspace holds more than one kind — show what it
                 holds ("2 dirs · 1 repo") instead of a single kind chip. */}
             {composition && (

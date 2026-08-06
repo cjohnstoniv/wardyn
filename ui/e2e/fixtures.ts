@@ -70,6 +70,25 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
   await sidebarLink(page, label).click();
 }
 
+// Clears Corporate network's connectivity gate for real (no route stub): this
+// backend genuinely runs `-runner none`, so clicking Test connectivity gets back
+// {state:"no_runner"} from the actual server (internal/api/site_config_probe.go
+// short-circuits on s.cfg.Runner == nil before it ever tries to launch a
+// probe) — corpNetworkGate's one honest bypass, which clears the whole ladder
+// at once (no Egress-tab visit needed). Must be called while the Corporate
+// network step is on screen, on its default Host proxy tab. Shared by
+// getting-started.spec.ts and corp-network.spec.ts — the same gate, two specs.
+export async function passCorpNetworkGate(page: Page): Promise<void> {
+  const main = page.getByRole("main");
+  await main.getByRole("button", { name: /^test connectivity$/i }).click();
+  await expect(main.getByText(/can't test here/i)).toBeVisible();
+  // The forward walk passes THROUGH Egress redirection (navigation, not a
+  // gate) — step through it here so the caller's next "Next:" click advances
+  // to Integrations.
+  await page.getByRole("button", { name: /^next: egress redirection$/i }).click();
+  await expect(main.getByText(/nothing redirected on this host/i)).toBeVisible();
+}
+
 // Some specs seed state the API can't create (e.g. an approval — `POST
 // /internal/approvals` needs a run-scoped token, not the admin one), so they talk
 // to the backend's own Postgres via `docker exec`, mirroring the seeding scripts.

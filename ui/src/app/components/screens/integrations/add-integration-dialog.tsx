@@ -23,7 +23,6 @@ import {
   T,
   type AiType,
   type BedrockLane,
-  type CapabilityRow,
   type SubscriptionLane,
 } from "../../../lib/integrations";
 import { aiResidency, aiRowName, defaultHolder, type IntegrationRow } from "../../../lib/api/integrations";
@@ -32,7 +31,6 @@ import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Checkbox } from "../../ui/checkbox";
-import { Switch } from "../../ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Field, OptionCard } from "../new-run/step-shell";
 import { Mono } from "../../wardyn/code-block";
@@ -40,6 +38,7 @@ import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { AddSecretDialog } from "../secrets";
 import { HarnessLoginPane } from "../setup/harness-login-pane";
 import { AddProviderPanel1, AddProviderPanel2, type ProviderOption } from "../setup/scm-provider-step";
+import { CapabilityTable } from "./integration-detail";
 import type { Lane } from "../../../lib/scm-provider";
 import { relativeTime } from "../../../lib/format";
 
@@ -399,46 +398,6 @@ function AiTypePanel({
 }
 
 // ---- AI provider: Panel 3 (connect & review) ----
-
-// mockup's capRow: a Switch for on/off, NO control at all for an impossible
-// row — just the muted fact text (never a disabled switch pretending a choice
-// exists). Always disabled: a capability row is a FACT about what the
-// credential type does, not a per-instance setting anything here can persist.
-function CapabilityTable({ rows, editor }: { rows: CapabilityRow[]; editor?: boolean }) {
-  return (
-    <div className="divide-y divide-border rounded-lg border border-border">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-center justify-between gap-3 px-3 py-2.5">
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-foreground">{r.label}</span>
-              {r.def && (
-                <Chip tone="primary" mono>
-                  default
-                </Chip>
-              )}
-              {/* ponytail: no persistence exists for a per-capability default
-                  yet — inert, matches the mock's own noop handlers exactly. */}
-              {editor && r.makeDefault && (
-                <button type="button" className="text-[0.6875rem] text-primary hover:underline">
-                  Make default
-                </button>
-              )}
-            </div>
-            {!r.fact && r.note && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{r.note}</p>}
-          </div>
-          {r.fact ? (
-            <span className="max-w-[280px] shrink-0 text-right text-[0.6875rem] leading-snug text-muted-foreground" title={r.fact}>
-              {r.fact}
-            </span>
-          ) : (
-            <Switch checked={!!r.on} disabled aria-label={r.label} />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // The credential cell for the two container-login lanes (Claude subscription,
 // Bedrock SSO). It owns the whole lifecycle the pane hands back — which the

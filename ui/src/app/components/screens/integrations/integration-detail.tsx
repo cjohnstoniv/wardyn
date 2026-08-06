@@ -69,7 +69,7 @@ function Region({ label, children }: { label: string; children: React.ReactNode 
 // a capability row is a FACT about the credential type, not a per-instance
 // setting anything here can persist. "Make default" mirrors the mock's own
 // noop handlers (ponytail: no backend concept of a per-capability default yet).
-function CapabilityTable({ rows }: { rows: CapabilityRow[] }) {
+export function CapabilityTable({ rows }: { rows: CapabilityRow[] }) {
   return (
     <div className="divide-y divide-border rounded-lg border border-border">
       {rows.map((r, i) => (

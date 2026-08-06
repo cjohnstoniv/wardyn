@@ -69,7 +69,7 @@ function ScanRow({
           )}
           {status === "done" && (
             <>
-              <Check className="size-3.5 text-success" /> scanned{scan?.secs != null ? ` · ${scan.secs}s` : ""}
+              <Check className="size-3.5 text-success" /> scanned
             </>
           )}
           {status === "failed" && <Chip tone="danger">failed</Chip>}
@@ -109,21 +109,15 @@ export function ScanProgress({
 }: {
   sources: SourceRow[];
   scans: Record<string, SourceScanState>;
-  onEditSource: (id: string) => void;
-  onRescan: (id: string) => void;
+  onEditSource: () => void;
+  onRescan: () => void;
 }) {
   const anyScanning = sources.some((r) => r.type !== "ephemeral" && scans[r.id]?.status === "scanning");
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-border">
         {sources.map((row) => (
-          <ScanRow
-            key={row.id}
-            row={row}
-            scan={scans[row.id]}
-            onEditSource={() => onEditSource(row.id)}
-            onRescan={() => onRescan(row.id)}
-          />
+          <ScanRow key={row.id} row={row} scan={scans[row.id]} onEditSource={onEditSource} onRescan={onRescan} />
         ))}
       </div>
       {anyScanning && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SCAN_REPO}</p>}
@@ -386,8 +380,8 @@ export function StepBaseImage({
   scans: Record<string, SourceScanState>;
   phaseA: boolean;
   partial: boolean;
-  onEditSource: (id: string) => void;
-  onRescan: (id: string) => void;
+  onEditSource: () => void;
+  onRescan: () => void;
   detectedChips: string[];
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;

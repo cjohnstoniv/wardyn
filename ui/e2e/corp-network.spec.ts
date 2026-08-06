@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, gotoConsole, navTo, passCorpNetworkGate } from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
 
 // Corporate network — Getting Started step 2 of 10 (steps.ts PHASES; see
@@ -50,8 +50,8 @@ import type { Page, Locator } from "@playwright/test";
 // corpNetworkGate): proof of internet access, a look at Egress
 // redirection, and every configured redirect testing reached. Most tests
 // below satisfy it for real (a genuine `-runner none` Test-proxy click reports
-// "no_runner", the one honest bypass — see passGate) since they aren't
-// testing the gate itself; one dedicated test below is.
+// "no_runner", the one honest bypass — see passCorpNetworkGate) since they
+// aren't testing the gate itself; one dedicated test below is.
 
 function main(page: Page): Locator {
   return page.getByRole("main");
@@ -71,20 +71,6 @@ async function openCorpNetworkStep(page: Page): Promise<Locator> {
   return m;
 }
 
-// Clears the connectivity gate for real (no route stub): this backend
-// genuinely runs `-runner none`, so clicking Test connectivity gets back
-// {state:"no_runner"} from the actual server — corpNetworkGate's one
-// honest bypass, which clears the whole ladder at once (no Egress-tab visit
-// needed). Must be called on the Host proxy tab (the default).
-async function passGate(m: Locator) {
-  await m.getByRole("button", { name: /^test connectivity$/i }).click();
-  await expect(m.getByText(/can't test here/i)).toBeVisible();
-  // Step through the Egress redirection tab — the forward walk passes
-  // through it, so a single "Next:" click afterwards leaves the step.
-  await m.page().getByRole("button", { name: /^next: egress redirection$/i }).click();
-  await expect(m.getByText(/nothing redirected on this host/i)).toBeVisible();
-}
-
 test.describe("Corporate network step", () => {
   test("reaches Corporate network between Environment and Integrations, and both tabs switch", async ({ page }) => {
     const m = await openCorpNetworkStep(page);
@@ -102,7 +88,7 @@ test.describe("Corporate network step", () => {
 
     // Next is gated on proof of connectivity (steps.ts's corpNetworkGate)
     // — satisfy it for real before confirming the step order below.
-    await passGate(m);
+    await passCorpNetworkGate(page);
 
     // Confirms the order from steps.ts's PHASES: corp_network sits directly
     // before integrations.
@@ -198,12 +184,12 @@ test.describe("Corporate network step", () => {
     // Exactly one launch point on the whole screen.
     await expect(m.getByRole("button", { name: /^test connectivity$/i })).toHaveCount(1);
 
-    await passGate(m);
+    await passCorpNetworkGate(page);
 
     // no_runner is the ladder's one honest bypass — it unlocks the walk at
     // once, with its standing note in place of the blocker (T.NORUNNER_NOTE:
-    // nothing was PROVEN, and the note keeps saying so). passGate stepped
-    // through Egress redirection, so the footer now offers the exit.
+    // nothing was PROVEN, and the note keeps saying so). passCorpNetworkGate
+    // stepped through Egress redirection, so the footer now offers the exit.
     await expect(page.getByRole("button", { name: /^next: integrations$/i })).toBeEnabled();
     await expect(m.getByText(/connectivity isn't proven yet/i)).toHaveCount(0);
     await expect(page.getByText(/nothing to test with/i)).toBeVisible();

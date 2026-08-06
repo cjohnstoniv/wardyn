@@ -14,7 +14,6 @@ import { Label } from "../../ui/label";
 import { Mono, YamlBlock } from "../../wardyn/code-block";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { RUN_MODE } from "../../wardyn/copy";
-import { STATUS_TONE, STATUS_LABEL } from "../workspaces";
 import { Field } from "./step-shell";
 import { buildSpec, comesWithLine, type WizardState } from "./wizard-types";
 // Reused rather than re-derived: the SAME resolution preview step-access.tsx's
@@ -28,7 +27,7 @@ import { RESIDENCY_META } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
 import type { PreflightResult, RunPolicy, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
-import { isUsable } from "../../../lib/workspace-status";
+import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
 
 export function StepReview({
   state,
@@ -305,8 +304,8 @@ export function StepReview({
                         {/* Surface scan status so a still-pending / errored workspace isn't
                             attached silently at the final gate. */}
                         {w && !isUsable(w.status) && (
-                          <Chip tone={STATUS_TONE[w.status]} className="px-1.5 py-0 text-[0.625rem]">
-                            {STATUS_LABEL[w.status]}
+                          <Chip tone={statusTone(w.status).tone} className="px-1.5 py-0 text-[0.625rem]">
+                            {statusWord(w.status)}
                           </Chip>
                         )}
                       </div>

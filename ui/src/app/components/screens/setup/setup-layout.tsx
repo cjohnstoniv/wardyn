@@ -15,9 +15,7 @@ import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { HostStatusBar } from "./host-status-bar";
 import {
-  nextPhaseFirstStep,
   OPTIONAL_STEPS,
-  PHASES,
   STEP_HEADING,
   STEP_LABEL,
   STEP_ORDER,
@@ -85,12 +83,6 @@ export function SetupLayout({
   const idx = STEP_ORDER.indexOf(current);
   const prev = idx > 0 ? STEP_ORDER[idx - 1] : null;
   const next = idx < STEP_ORDER.length - 1 ? STEP_ORDER[idx + 1] : null;
-  // "Skip this section": when the current step sits inside a collapsible phase
-  // (the corporate-network group), offer a one-click jump PAST the whole phase to
-  // the next phase's first step. Pure navigation — corporate steps are non-gating
-  // and stay reachable in the rail if the operator changes their mind.
-  const skipPhase = PHASES.find((p) => p.collapsible && p.steps.includes(current));
-  const skipTarget = skipPhase ? nextPhaseFirstStep(skipPhase.id) : null;
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
@@ -151,11 +143,6 @@ export function SetupLayout({
               "Finish setup" completes it (barrier is the only requirement; launching
               a run is offered but optional). */}
           <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
-            {skipTarget && (
-              <Button variant="ghost" onClick={() => onSelect(skipTarget)}>
-                Skip {skipPhase?.label.toLowerCase()}
-              </Button>
-            )}
             <Button
               variant="outline"
               disabled={!prev && !backOverride}

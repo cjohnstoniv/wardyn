@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, gotoConsole, navTo, passCorpNetworkGate } from "./fixtures";
 
 // Getting Started funnel — hermetic walk against the seeded backend (real
 // wardynd + Postgres + `none` runner, admin-token auth). The unit suites cover
@@ -32,7 +32,7 @@ import { test, expect, gotoConsole, navTo } from "./fixtures";
 // corpNetworkGate) — this walk can no longer blindly Next through it.
 // The seeded `-runner none` backend answers a REAL Test-proxy click with
 // "no_runner", the ladder's one honest bypass, exactly as an operator on a
-// runner-less host would see — so passCorpNetworkGate() below clicks the real
+// runner-less host would see — so passCorpNetworkGate() clicks the real
 // button rather than stubbing the endpoint. Without that click the gate stays
 // shut (proxyProbe starts undefined, not no_runner), so every walk below
 // would otherwise stall clicking a disabled Next on step 2.
@@ -48,24 +48,6 @@ async function openSetupFunnel(page: import("@playwright/test").Page) {
   // The SetupScreen funnel replaces the hero.
   await expect(page.getByRole("heading", { name: "Getting started" })).toBeVisible();
   await expect(page.getByText(/step 1 of 10/i)).toBeVisible();
-}
-
-// Clears Corporate network's connectivity gate for real (no route stub): this
-// backend genuinely runs `-runner none`, so clicking Test connectivity gets back
-// {state:"no_runner"} from the actual server (internal/api/site_config_probe.go
-// short-circuits on s.cfg.Runner == nil before it ever tries to launch a
-// probe) — corpNetworkGate's one honest bypass, which clears the whole ladder
-// at once (no Egress-tab visit needed). Must be called while the
-// Corporate network step is on screen, on its default Host proxy tab.
-async function passCorpNetworkGate(page: import("@playwright/test").Page) {
-  const main = page.getByRole("main");
-  await main.getByRole("button", { name: /^test connectivity$/i }).click();
-  await expect(main.getByText(/can't test here/i)).toBeVisible();
-  // The forward walk passes THROUGH Egress redirection (navigation, not a
-  // gate) — step through it here so the walks' next "Next:" click advances
-  // to Integrations, same as before.
-  await page.getByRole("button", { name: /^next: egress redirection$/i }).click();
-  await expect(main.getByText(/nothing redirected on this host/i)).toBeVisible();
 }
 
 test.describe("Getting Started funnel", () => {

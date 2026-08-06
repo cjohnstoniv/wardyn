@@ -81,15 +81,13 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
 };
 
 // ------------------------------------------------------------
-// Phases (redesign) — groups the FROZEN steps above for the collapsible funnel
-// layout. Translated 1:1 from the design's PHASES9 onto the real ids above.
+// Phases (redesign) — groups the FROZEN steps above for the funnel layout.
+// Translated 1:1 from the design's PHASES9 onto the real ids above.
 // ------------------------------------------------------------
 export interface PhaseDef {
   id: string;
   label: string;
   steps: SetupStepId[];
-  /** Corporate phase collapses into one group row until expanded. */
-  collapsible?: boolean;
 }
 
 // Walk order: essentials → demos → your work → finish. Corporate network sits
@@ -109,14 +107,6 @@ export const PHASES: PhaseDef[] = [
 ];
 
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
-
-// First step of the phase AFTER the given phase id (or null if it's the last) —
-// powers the "skip this section" control for a collapsible phase. No phase is
-// collapsible in the 9-step rail today; kept for the layout that reads it.
-export function nextPhaseFirstStep(phaseId: string): SetupStepId | null {
-  const i = PHASES.findIndex((p) => p.id === phaseId);
-  return i >= 0 ? (PHASES[i + 1]?.steps[0] ?? null) : null;
-}
 
 // Steps that render an "Optional" chip in the shell (everything outside the two
 // Essentials and two Finish steps). Exported so the layout and its test share

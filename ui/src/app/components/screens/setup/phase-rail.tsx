@@ -4,12 +4,11 @@
  */
 
 // Phased vertical rail (brief §7.1) — full labels always visible, per-step live
-// badge, phase progress. The corporate phase collapses into one group row until
-// expanded. Ported from docs/design/figma-make-onboarding/src/components/setup/PhaseRail.tsx
-// onto the real (frozen) step ids/labels in ./steps. Pure presentational: the
-// caller (setup-screen orchestrator) computes badges/done via stepBadges/stepDone.
-import { useState } from "react";
-import { Check, ChevronDown, ChevronRight } from "lucide-react";
+// badge, phase progress. Ported from
+// docs/design/figma-make-onboarding/src/components/setup/PhaseRail.tsx onto the
+// real (frozen) step ids/labels in ./steps. Pure presentational: the caller
+// (setup-screen orchestrator) computes badges/done via stepBadges/stepDone.
+import { Check } from "lucide-react";
 import { cn } from "../../ui/utils";
 import {
   OPTIONAL_STEPS,
@@ -38,9 +37,6 @@ export function PhaseRail({
   done: Record<SetupStepId, boolean>;
   onSelect: (step: SetupStepId) => void;
 }) {
-  // Auto-expand a collapsed phase if the current step lives inside it.
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
   return (
     <>
       {/* Compact icon rail — visible lg only (56px column) */}
@@ -95,86 +91,68 @@ export function PhaseRail({
           // never reach N/N. Per-step dots still track real progress inside it.
           const allOptional = phase.steps.every((id) => OPTIONAL_STEPS.has(id));
           const doneCount = phase.steps.filter((id) => done[id]).length;
-          const isOpen =
-            !phase.collapsible || expanded[phase.id] || phase.steps.includes(current);
 
           return (
             <div key={phase.id}>
               <div className="mb-2 flex items-center justify-between gap-2">
-                {phase.collapsible ? (
-                  <button
-                    onClick={() => setExpanded((e) => ({ ...e, [phase.id]: !isOpen }))}
-                    className="inline-flex items-center gap-1 text-xs uppercase tracking-wide text-muted-foreground hover:text-foreground"
-                  >
-                    {isOpen ? (
-                      <ChevronDown className="size-3.5" aria-hidden />
-                    ) : (
-                      <ChevronRight className="size-3.5" aria-hidden />
-                    )}
-                    {phase.label}
-                  </button>
-                ) : (
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                    {phase.label}
-                  </span>
-                )}
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  {phase.label}
+                </span>
                 <span className="text-xs text-muted-foreground">
                   {allOptional ? "all optional" : `${doneCount}/${phase.steps.length}`}
                 </span>
               </div>
 
-              {isOpen && (
-                <ul className="flex flex-col gap-1">
-                  {phase.steps.map((stepId) => {
-                    const badge = badges[stepId];
-                    const isDone = done[stepId];
-                    // A4: see the compact rail above for what this means.
-                    const isVisited = !isDone && badge.text === "Skipped";
-                    const active = current === stepId;
-                    return (
-                      <li key={stepId}>
-                        <button
-                          onClick={() => onSelect(stepId)}
-                          aria-current={active ? "step" : undefined}
+              <ul className="flex flex-col gap-1">
+                {phase.steps.map((stepId) => {
+                  const badge = badges[stepId];
+                  const isDone = done[stepId];
+                  // A4: see the compact rail above for what this means.
+                  const isVisited = !isDone && badge.text === "Skipped";
+                  const active = current === stepId;
+                  return (
+                    <li key={stepId}>
+                      <button
+                        onClick={() => onSelect(stepId)}
+                        aria-current={active ? "step" : undefined}
+                        className={cn(
+                          "group flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                          active
+                            ? "border-primary/50 bg-primary/10"
+                            : "border-transparent hover:bg-muted",
+                        )}
+                      >
+                        <span
+                          data-visited={isVisited || undefined}
                           className={cn(
-                            "group flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                            active
-                              ? "border-primary/50 bg-primary/10"
-                              : "border-transparent hover:bg-muted",
+                            "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                            isDone
+                              ? "border-success bg-success text-white"
+                              : isVisited
+                                ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
+                                : cn("border-border-strong", TONE_DOT[badge.tone]),
                           )}
                         >
+                          {isDone && <Check className="size-3" aria-hidden />}
+                        </span>
+                        <span className="min-w-0 flex-1">
                           <span
-                            data-visited={isVisited || undefined}
                             className={cn(
-                              "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-                              isDone
-                                ? "border-success bg-success text-white"
-                                : isVisited
-                                  ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
-                                  : cn("border-border-strong", TONE_DOT[badge.tone]),
+                              "block text-sm",
+                              active ? "text-foreground" : "text-foreground/90",
                             )}
                           >
-                            {isDone && <Check className="size-3" aria-hidden />}
+                            {STEP_LABEL[stepId]}
                           </span>
-                          <span className="min-w-0 flex-1">
-                            <span
-                              className={cn(
-                                "block text-sm",
-                                active ? "text-foreground" : "text-foreground/90",
-                              )}
-                            >
-                              {STEP_LABEL[stepId]}
-                            </span>
-                            <span className={cn("block text-xs", TONE_DOT[badge.tone])}>
-                              {badge.text}
-                            </span>
+                          <span className={cn("block text-xs", TONE_DOT[badge.tone])}>
+                            {badge.text}
                           </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           );
         })}

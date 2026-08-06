@@ -47,7 +47,7 @@ describe("DetectedCard — leak findings pinned top, content-free, no promote ac
         onWorkspaceUpdated={vi.fn()}
       />,
     );
-    const leaks = screen.getByTestId("detected-leaks");
+    const leaks = screen.getByTestId("leak-hot");
     expect(within(leaks).getByText("src/config.ts:12 — aws-access-key")).toBeInTheDocument();
     expect(within(leaks).queryByRole("button")).not.toBeInTheDocument();
     expect(within(leaks).getByText(/never shown or stored/i)).toBeInTheDocument();

@@ -14,7 +14,6 @@ import * as React from "react";
 import { FolderGit2, FolderOpen, Loader2, MoreHorizontal, Plus, RotateCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { sourcesApi } from "../../lib/api/sources";
-import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import { statusTone, statusWord } from "../../lib/workspace-status";
 import { usePoll } from "../../lib/use-poll";
@@ -43,6 +42,7 @@ import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
+import { DeleteInUseDialog } from "../wardyn/delete-in-use-dialog";
 
 // How many workspaces attach each source — counted from the workspaces the
 // caller already fetched (attachments carry source ids), so the library needs
@@ -194,84 +194,6 @@ export function AddSourceDialog({
             {saving && <Loader2 className="size-4 animate-spin" />}
             Add to library
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// Delete-in-use: the server's 409 names the attaching workspaces; render that
-// message verbatim and offer the explicit detach-everywhere escape.
-function DeleteSourceDialog({
-  target,
-  onOpenChange,
-  onDeleted,
-}: {
-  target: Source | null;
-  onOpenChange: (o: boolean) => void;
-  onDeleted: () => void;
-}) {
-  const [busy, setBusy] = React.useState(false);
-  const [inUseDetail, setInUseDetail] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    setBusy(false);
-    setInUseDetail(null);
-  }, [target]);
-
-  const attempt = async (force: boolean) => {
-    if (!target) return;
-    setBusy(true);
-    try {
-      await sourcesApi.deleteSource(target.id, force);
-      toast.success(`"${target.name}" removed from the library`);
-      onDeleted();
-      onOpenChange(false);
-    } catch (e) {
-      if (!force && e instanceof HttpError && e.status === 409) {
-        setInUseDetail(getErrorMessage(e));
-      } else {
-        toast.error("Failed to delete source", { description: getErrorMessage(e) });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open={!!target} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Delete “{target?.name}”?</DialogTitle>
-          <DialogDescription>
-            Removes the library entry and its contract. Workspaces attaching it keep their own
-            overlays; the shared configuration is what goes.
-          </DialogDescription>
-        </DialogHeader>
-        {inUseDetail && (
-          <div className="space-y-1.5 rounded-lg border border-warning/30 bg-warning-subtle p-2.5">
-            <p className="text-xs leading-snug text-warning">{inUseDetail}</p>
-            <p className="text-[0.6875rem] leading-snug text-warning/90">
-              Detaching un-mounts this source from those workspaces — their next runs fail loudly at
-              the mount gate instead of silently losing code.
-            </p>
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          {inUseDetail ? (
-            <Button variant="destructive" onClick={() => void attempt(true)} disabled={busy}>
-              {busy && <Loader2 className="size-4 animate-spin" />}
-              Detach everywhere & delete
-            </Button>
-          ) : (
-            <Button variant="destructive" onClick={() => void attempt(false)} disabled={busy}>
-              {busy && <Loader2 className="size-4 animate-spin" />}
-              Delete
-            </Button>
-          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -441,7 +363,16 @@ export function SourcesLibrary({
           void scan(src);
         }}
       />
-      <DeleteSourceDialog target={toDelete} onOpenChange={(o) => !o && setToDelete(null)} onDeleted={load} />
+      <DeleteInUseDialog
+        target={toDelete}
+        onOpenChange={(o) => !o && setToDelete(null)}
+        onDeleted={load}
+        description="Removes the library entry and its contract. Workspaces attaching it keep their own overlays; the shared configuration is what goes."
+        inUseHint="Detaching un-mounts this source from those workspaces — their next runs fail loudly at the mount gate instead of silently losing code."
+        onDelete={(src, force) => sourcesApi.deleteSource(src.id, force)}
+        removedFrom="the library"
+        errorNoun="source"
+      />
     </div>
   );
 }
