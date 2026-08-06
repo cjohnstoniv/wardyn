@@ -6,6 +6,7 @@
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 const listIntegrationsMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async () => {
@@ -80,7 +81,15 @@ describe("StepBaseImage — Phase A scan progress", () => {
 
 // A small stateful wrapper so the four cards + editor behave like they will
 // under wizard.tsx (controlled state + patch), without pulling wizard.tsx in.
-function CardsHarness({ initial, agentTools }: { initial?: Partial<BaseImageState>; agentTools?: string[] }) {
+function CardsHarness({
+  initial,
+  agentTools,
+  onPatch,
+}: {
+  initial?: Partial<BaseImageState>;
+  agentTools?: string[];
+  onPatch?: (patch: Partial<BaseImageState>) => void;
+}) {
   const [state, setState] = React.useState<BaseImageState>({ ...defaultBaseImageState(), ...initial });
   return (
     <ImageCards
@@ -88,7 +97,10 @@ function CardsHarness({ initial, agentTools }: { initial?: Partial<BaseImageStat
       agentTools={agentTools}
       partial={false}
       state={state}
-      onChange={(patch) => setState((s) => ({ ...s, ...patch }))}
+      onChange={(patch) => {
+        onPatch?.(patch);
+        setState((s) => ({ ...s, ...patch }));
+      }}
     />
   );
 }
@@ -144,6 +156,37 @@ describe("StepBaseImage — the four base-image cards", () => {
   it("BuildStepsEditor leaves ordinary build steps unflagged", () => {
     render(<BuildStepsEditor value={"RUN apt-get install -y protobuf-compiler\nENV GOFLAGS=-mod=vendor"} onChange={vi.fn()} />);
     expect(screen.queryByTestId("cred-warning")).not.toBeInTheDocument();
+  });
+
+  // The editor lives inside ImageCard, whose role=radio onKeyDown preventDefaults
+  // Enter and Space to select the card. preventDefault on a keydown kills the
+  // keystroke itself, so without a keydown guard on the disclosed body a real
+  // build step — every one of which contains a space, most of which need a
+  // second line — cannot be TYPED at all (paste still worked, which is how this
+  // shipped). It must be userEvent, not fireEvent.change: only a real keydown
+  // reaches the card, so a change-driven test cannot see the regression.
+  it("BuildStepsEditor accepts spaces and newlines typed inside the card, without re-selecting it", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const onPatch = vi.fn();
+    render(<CardsHarness initial={{ choice: "custom", buildSteps: "" }} onPatch={onPatch} />);
+    const editor = screen.getByLabelText("Custom build steps");
+    await user.click(editor);
+    onPatch.mockClear();
+    await user.keyboard("RUN apt-get install -y protobuf-compiler{Enter}ENV GOFLAGS=-mod=vendor");
+    expect(editor).toHaveValue("RUN apt-get install -y protobuf-compiler\nENV GOFLAGS=-mod=vendor");
+    // Typing must never re-run the card's selection: every patch is a buildSteps
+    // edit, none is a choice change.
+    expect(onPatch.mock.calls.every(([p]) => !("choice" in p))).toBe(true);
+    expect(screen.getByTestId("image-card-custom")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("the BYO image-ref field accepts a typed space too (same disclosed-body guard)", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<CardsHarness initial={{ choice: "byo", byoRef: "" }} />);
+    const field = screen.getByLabelText("Image ref");
+    await user.click(field);
+    await user.keyboard("ghcr.io/acme/dev:latest ");
+    expect(field).toHaveValue("ghcr.io/acme/dev:latest ");
   });
 });
 

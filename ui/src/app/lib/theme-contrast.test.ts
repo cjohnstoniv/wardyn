@@ -117,19 +117,34 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       const hex = (v: number) => v.toString(16).padStart(2, "0");
       return "#" + hex(over(r, cch(1))) + hex(over(g, cch(3))) + hex(over(b, cch(5)));
     };
-    // Input/Textarea's real rendered dark background: dark:bg-input/30's
-    // :is(.dark *) selector always outranks the plain bg-input-background
-    // class (higher specificity, confirmed in the built CSS), so --input at
-    // 30% over --card — not --input-background itself — is what placeholder
-    // and value text actually sit on.
-    const dInputOverCard = (): string => {
-      const input = dtoken("input");
-      const card = dtoken("card");
-      const ich = (i: number) => parseInt(input.slice(i, i + 2), 16);
-      const cch = (i: number) => parseInt(card.slice(i, i + 2), 16);
-      const over = (i: number) => Math.round(0.3 * ich(i) + 0.7 * cch(i));
-      const hex = (v: number) => v.toString(16).padStart(2, "0");
-      return "#" + hex(over(1)) + hex(over(3)) + hex(over(5));
+    // Input/Textarea's dark:bg-input/30 wins over the plain bg-input-background
+    // class (its :is(.dark *) selector has higher specificity — confirmed in the
+    // built CSS), so no field is ever --input-background itself: it is --input,
+    // translucent, over whatever the field's CONTAINER paints. A gate on that
+    // token therefore has to model the LIGHTEST real container — the first
+    // version of this test modelled input/30-over---card and certified a value
+    // that four shipped fields, sitting on a bg-surface-2/40 pane, rendered
+    // under AA. The lightest real field in the app is the build-steps Textarea
+    // (workspace-wizard/step-base-image.tsx:163): bg-surface-2/40 (:144) inside
+    // the selected card's bg-primary/10 (:229-232, the disclosed body renders
+    // only when selected), on the wizard dialog's bg-background. Clear AA there
+    // and every darker-backed field follows.
+    const inputAlpha = (() => {
+      // Read from the primitive rather than restating it: a change of
+      // dark:bg-input/30 lightens every field in the app at once.
+      const m = readFileSync("src/app/components/ui/input.tsx", "utf8").match(/dark:bg-input\/(\d+)\b/);
+      if (!m) throw new Error("dark:bg-input/NN not found in ui/input.tsx");
+      return +m[1] / 100;
+    })();
+    // Layers innermost-first over an opaque root, each [token, alpha].
+    const dTightestField = (): string => {
+      const layers: [string, number][] = [["input", inputAlpha], ["surface-2", 0.4], ["primary", 0.1]];
+      const ch = (name: string, k: number) => parseInt(dtoken(name).slice(1 + 2 * k, 3 + 2 * k), 16);
+      let bg = [0, 1, 2].map((k) => ch("background", k));
+      for (const [tok, a] of [...layers].reverse()) {
+        bg = bg.map((v, k) => Math.round(a * ch(tok, k) + (1 - a) * v));
+      }
+      return "#" + bg.map((v) => v.toString(16).padStart(2, "0")).join("");
     };
 
     for (const t of ["success", "warning", "danger", "info", "cyan"]) {
@@ -142,8 +157,8 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("dark --placeholder-foreground is >= 4.5:1 on its real rendered field and >= 3:1 separated from filled-value text", () => {
-      expect(ratio(dtoken("placeholder-foreground"), dInputOverCard())).toBeGreaterThanOrEqual(4.5);
+    it("dark --placeholder-foreground is >= 4.5:1 on the LIGHTEST real field and >= 3:1 separated from filled-value text", () => {
+      expect(ratio(dtoken("placeholder-foreground"), dTightestField())).toBeGreaterThanOrEqual(4.5);
       expect(ratio(dtoken("placeholder-foreground"), dtoken("foreground"))).toBeGreaterThanOrEqual(3);
     });
   });

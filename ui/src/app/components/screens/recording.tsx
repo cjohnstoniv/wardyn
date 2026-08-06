@@ -391,6 +391,10 @@ function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => vo
           <Link
             to={`/runs/${encodeURIComponent(run.id)}`}
             onClick={(e) => e.stopPropagation()}
+            // The card's onKeyDown preventDefaults Enter to replay; unguarded,
+            // that cancels the anchor's own activation and Enter here opens the
+            // replay dialog instead of the run.
+            onKeyDown={(e) => e.stopPropagation()}
             className="ml-auto text-xs font-medium text-primary hover:underline"
           >
             Open run →

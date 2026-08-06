@@ -131,11 +131,15 @@
      so an illustrative placeholder read as an already-filled value. That's a
      separation problem, not a legibility one — the placeholder's own text
      still has to clear WCAG 1.4.3's 4.5:1 (1.4.11 doesn't apply; it excludes
-     text). #808080 satisfies both: 4.54:1 on the rendered field (dark:bg-input/30
-     over --card — that rule's :is(.dark *) always outranks bg-input-background's
-     plain class, so the field is never --input-background itself) and 3.37:1
-     separation from #ededed. */
-  --placeholder-foreground: #808080;
+     text). dark:bg-input/30's :is(.dark *) always outranks bg-input-background's
+     plain class, so no field is ever --input-background itself: it is --input at
+     30% over whatever its CONTAINER paints, and the value has to clear AA on the
+     LIGHTEST such container, not the handiest one. That is the build-steps
+     Textarea (workspace-wizard/step-base-image.tsx:163) — bg-surface-2/40 inside
+     the selected card's bg-primary/10, on the wizard dialog's bg-background.
+     #878787 clears both criteria there — 4.63:1 legibility, 3.07:1 separation
+     from #ededed — and therefore on every darker-backed field too. */
+  --placeholder-foreground: #878787;
   --accent: #1f1f1f;
   --accent-foreground: #ededed;
 

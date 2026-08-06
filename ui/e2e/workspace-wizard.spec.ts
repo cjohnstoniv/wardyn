@@ -168,7 +168,12 @@ test.describe("Add workspace wizard", () => {
     await dlg.locator('[data-testid="image-card-custom"]').click();
     const steps = dlg.getByLabel("Custom build steps");
     await expect(steps).toBeVisible();
-    await steps.fill("RUN echo hi\nENV AWS_ACCESS_KEY=AKIAABCDEFGHIJKL1234");
+    // pressSequentially, not fill: the editor sits inside a role=radio card that
+    // preventDefaults Enter/Space, so a value SET on the element proves nothing
+    // about whether a step can be TYPED. Real keystrokes here (spaces + the
+    // newline) are the only thing that pins the card's keydown guard.
+    await steps.pressSequentially("RUN echo hi\nENV AWS_ACCESS_KEY=AKIAABCDEFGHIJKL1234");
+    await expect(steps).toHaveValue("RUN echo hi\nENV AWS_ACCESS_KEY=AKIAABCDEFGHIJKL1234");
 
     const warning = dlg.locator('[data-testid="cred-warning"]');
     await expect(warning).toBeVisible();

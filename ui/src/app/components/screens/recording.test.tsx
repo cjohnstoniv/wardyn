@@ -200,4 +200,22 @@ describe("RecordingScreen", () => {
 
     await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
   });
+
+  // "Open run →" and the card do DIFFERENT things — the link goes to /runs/{id},
+  // the card replays. The card's onKeyDown preventDefaults Enter, which cancels
+  // the anchor's own activation, so without a keydown guard on the link the
+  // keyboard path silently yields the wrong screen (replay dialog, not the run).
+  it("Enter on 'Open run →' is left to the link — it does not open the replay dialog", async () => {
+    listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
+    getRecordingMock.mockResolvedValue(rec("run_1"));
+    renderScreen();
+
+    await screen.findByText("ship the fix");
+    const link = screen.getByRole("link", { name: /open run/i });
+    expect(link).toHaveAttribute("href", "/runs/run_1");
+    // fireEvent returns false when a handler preventDefaulted the event; the
+    // browser performs an anchor's Enter-activation only on an unprevented one.
+    expect(fireEvent.keyDown(link, { key: "Enter" })).toBe(true);
+    expect(screen.queryByTestId("player")).not.toBeInTheDocument();
+  });
 });

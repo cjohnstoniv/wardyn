@@ -237,8 +237,11 @@ function ImageCard({
 }
 
 // A card's disclosed body must not toggle the card's own selection when the
-// operator clicks inside an input/checkbox/button it contains.
-function stopPropagation(e: React.MouseEvent) {
+// operator clicks — or types — inside an input/checkbox/button it contains.
+// Keydown is the half that bites: ImageCard preventDefaults Enter and Space,
+// which cancels the keystroke itself, so without this guard a build step
+// (every one has spaces, most need a second line) cannot be typed at all.
+function stopPropagation(e: React.SyntheticEvent) {
   e.stopPropagation();
 }
 
@@ -331,7 +334,7 @@ export function ImageCards({
         </div>
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">Starts from the recommended recipe.</p>
         {state.choice === "custom" && (
-          <div onClick={stopPropagation} className="space-y-3 border-t border-border pt-3">
+          <div onClick={stopPropagation} onKeyDown={stopPropagation} className="space-y-3 border-t border-border pt-3">
             <Field label="Base image" htmlFor="bi-custom-base">
               <Input
                 id="bi-custom-base"
@@ -349,7 +352,7 @@ export function ImageCards({
       <ImageCard id="byo" selected={state.choice === "byo"} onSelect={() => onChange({ choice: "byo" })}>
         <span className="text-[0.8125rem] font-medium text-foreground">Bring your own image</span>
         {state.choice === "byo" ? (
-          <div onClick={stopPropagation} className="space-y-2 border-t border-border pt-3">
+          <div onClick={stopPropagation} onKeyDown={stopPropagation} className="space-y-2 border-t border-border pt-3">
             <Field label="Image ref" htmlFor="bi-byo-ref">
               <Input
                 id="bi-byo-ref"
