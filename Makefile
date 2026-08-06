@@ -136,7 +136,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
 	./scripts/test-report.sh pg \
 		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
-		./internal/api/... ./test/apie2e/...
+		./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls

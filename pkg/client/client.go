@@ -20,10 +20,11 @@
 //   - policies:    CreatePolicy, GetPolicy, ListPolicies, UpdatePolicy, DeletePolicy
 //   - workspaces:  CreateWorkspace, GetWorkspace, ListWorkspaces, UpdateWorkspace,
 //     DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
+//   - sources:     ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit:       AuditEvents, RecentAuditEvents
 //   - secrets:     ListSecrets, SetSecret, DeleteSecret
 //   - site-config: GetSiteConfig, PutSiteConfig
-//   - setup:       SetupStatus
+//   - setup:       SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity:    Me
 //   - health:      Healthz
 //

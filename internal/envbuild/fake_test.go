@@ -87,6 +87,20 @@ type fakeEnvbuilderDocker struct {
 	lastResources container.Resources
 	// lastStorageOpt records hostCfg.StorageOpt given to ContainerCreate.
 	lastStorageOpt map[string]string
+	// lastCapAdd/lastCapDrop record hostCfg.CapAdd/CapDrop given to ContainerCreate.
+	lastCapAdd  []string
+	lastCapDrop []string
+	// lastLabels records cfg.Labels given to ContainerCreate.
+	lastLabels map[string]string
+
+	// listItems is what ContainerList returns — a test seeds it to simulate
+	// containers left over from a prior process (the orphan-sweep scenario).
+	listItems []container.Summary
+	// lastListFilters/lastListAll record the ContainerList call's options.
+	lastListFilters client.Filters
+	lastListAll     bool
+	// removedIDs records every container ID passed to ContainerRemove, in order.
+	removedIDs []string
 }
 
 func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
@@ -173,12 +187,15 @@ func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.Co
 	f.createCalled++
 	if opts.Config != nil {
 		f.lastEnv = opts.Config.Env
+		f.lastLabels = opts.Config.Labels
 	}
 	if opts.HostConfig != nil {
 		f.lastBinds = opts.HostConfig.Binds
 		f.lastNetworkMode = opts.HostConfig.NetworkMode
 		f.lastResources = opts.HostConfig.Resources
 		f.lastStorageOpt = opts.HostConfig.StorageOpt
+		f.lastCapAdd = opts.HostConfig.CapAdd
+		f.lastCapDrop = opts.HostConfig.CapDrop
 	}
 	return client.ContainerCreateResult{ID: "fake-build-container"}, nil
 }
@@ -234,9 +251,21 @@ func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ clie
 	return client.ContainerWaitResult{Result: resultC, Error: errC}
 }
 
-func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, _ string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, containerID string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = true
+	f.removedIDs = append(f.removedIDs, containerID)
 	return client.ContainerRemoveResult{}, nil
+}
+
+// ContainerList returns the test-seeded listItems, recording the call's
+// filters/All so SweepOrphanedBuilds' label-filtered, All:true scan can be
+// pinned.
+func (f *fakeEnvbuilderDocker) ContainerList(_ context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastListFilters = options.Filters
+	f.lastListAll = options.All
+	return client.ContainerListResult{Items: f.listItems}, nil
 }

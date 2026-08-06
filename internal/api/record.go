@@ -276,7 +276,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actorType, actor := actorFromRequest(r)
-	run, weakCC, lerr := s.launchRecordRun(r.Context(), actor, ws, key, label, mode, req.Confined)
+	run, weakCC, lerr := s.launchRecordRun(r.Context(), actor, ws, key, label, req.Confined)
 	if errors.Is(lerr, errImportStepBusy) {
 		writeError(w, http.StatusConflict, "an import step is already running for this workspace")
 		return

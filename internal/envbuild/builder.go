@@ -129,37 +129,12 @@ var requiredTools = []string{
 	"wardyn-git-helper", // brokered-token git credential helper
 }
 
-// envbuilderDockerAPI is the narrow slice of the Docker client that Builder
-// needs. It mirrors the pattern in internal/runner/docker: the interface is
-// defined locally (not imported from that package) so the dep graph stays
-// clean while the same *client.Client satisfies both interfaces.
-type envbuilderDockerAPI interface {
-	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
-	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
-	ImageBuild(ctx context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error)
-	// ImageInspect reads a local image's config; the wrap build uses it to read
-	// the base's ONBUILD triggers before using it as a FROM (see assertWrapSafeBase).
-	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
-
-	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
-	// CopyToContainer streams a tar into a created (not-yet-started) container —
-	// the host-agnostic delivery for the generated build context: a bind mount
-	// names a HOST path, which a containerized wardynd's own /tmp is not.
-	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
-	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
-	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
-	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
-	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
-}
-
-// the real client must implement our slice.
-var _ envbuilderDockerAPI = (*client.Client)(nil)
-
 // Builder drives coder/envbuilder as a container to turn a devcontainer.json
 // repository into a local workspace image.
 type Builder struct {
 	// cli is the Docker API client; set by New / newWithClient.
 	cli envbuilderDockerAPI
+	liveBuilds liveBuildTracker // in-flight build container IDs; see reaper.go
 
 	// EnvbuilderImage is the envbuilder OCI image reference to use.
 	// Defaults to defaultEnvbuilderImage.
@@ -312,8 +287,9 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	}
 
 	cfg := &container.Config{
-		Image: b.EnvbuilderImage,
-		Env:   env,
+		Image:  b.EnvbuilderImage,
+		Env:    env,
+		Labels: map[string]string{envbuildContainerLabel: outputTag}, // reaper.go's orphan scan
 		// envbuilder is the image entrypoint; Cmd is left nil intentionally.
 	}
 	hostCfg, err := b.hardenedHostConfig()
@@ -327,6 +303,7 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		return "", fmt.Errorf("envbuild: create build container: %w", err)
 	}
 	containerID := created.ID
+	defer b.liveBuilds.track(containerID)() // see reaper.go
 	if contextTar != nil {
 		if _, err := b.cli.CopyToContainer(ctx, containerID, client.CopyToContainerOptions{
 			DestinationPath: contextTarDest, Content: contextTar,

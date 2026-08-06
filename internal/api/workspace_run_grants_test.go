@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	srv := New(cfg)
 
 	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", fake.ws,
-		"build", "build", recordModeInteractive, false)
+		"build", "build", false)
 	if err != nil {
 		t.Fatalf("launchRecordRun on a github repo workspace failed: %v", err)
 	}
@@ -189,5 +190,34 @@ func TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey(t *testing.T) {
 	deep, err := srv.maybeGitHubReadGrant(context.Background(), runID, time.Now(), "https://github.com/acme")
 	if err != nil || deep != nil {
 		t.Fatalf("a github URL with no <org>/<repo> must yield no grant; got (%v, %v)", deep, err)
+	}
+}
+
+// ─── ephemeral workspace targets (WARDYN_EPHEMERAL_DIRS) ─────────────────────
+
+// TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch pins audit row
+// 56's fix at its source: an ephemeral workspace source has no mount/clone —
+// wireWorkspaceSource must return its Target in ephemeralDirs (for the caller
+// to thread into dispatchParams.EphemeralDirs) rather than silently dropping
+// it, which is what the ephemeral case used to do.
+func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
+	var run types.AgentRun
+	var policy types.RunPolicySpec
+	ws := types.Workspace{
+		ID: uuid.New(),
+		Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"},
+			{Type: types.WorkspaceSourceTypeEphemeral}, // no target: nothing to surface
+		},
+	}
+
+	_, ephemeralDirs := wireWorkspaceSource(&run, &policy, ws)
+
+	if want := []string{"/home/agent/scratch"}; !slices.Equal(ephemeralDirs, want) {
+		t.Errorf("ephemeralDirs = %v, want %v", ephemeralDirs, want)
+	}
+	if len(policy.WorkspaceMounts) != 0 || len(policy.WorkspaceRepos) != 0 {
+		t.Errorf("an ephemeral source must add no mount/clone policy entry; got mounts=%v repos=%v",
+			policy.WorkspaceMounts, policy.WorkspaceRepos)
 	}
 }

@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
@@ -71,19 +73,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	// State the git-broker push posture ONCE at boot, and only when it is OFF —
-	// the sibling of the WARDYN_LLM_SCAN line above, for the one control in that
-	// path that is ON by default. WARN, not Info: the kill-switch above disables
-	// something the policy had to opt INTO, this disables a confinement every
-	// brokered run otherwise gets. A garbage value already logs (fail-closed,
-	// proxy.BranchNSEnforced); before this, the OFF state logged nothing at all,
-	// so the only way to tell a confined proxy from an opted-out one was
-	// `docker inspect` on the sidecar. Per-push proof lives in the decision log
-	// (rule_source "brokered:git:branch-ns-off").
-	if !proxy.BranchNSEnforced() {
-		slog.Warn("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false — push branch-namespace confinement is OFF for this proxy; a brokered git push may update ANY ref in a granted repo, including the default branch",
-			slog.String("run_id", cfg.RunID.String()))
-	}
+	// State the git-broker push posture ONCE at boot — see logBranchNSPosture.
+	logBranchNSPosture(cfg.RunID)
 
 	// Startup mint of injection credentials is bounded: fail closed if the
 	// broker is unreachable or an approval is still pending.
@@ -131,5 +122,25 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("wardyn-proxy: stopped cleanly")
+	}
+}
+
+// logBranchNSPosture states the git-broker push branch-namespace posture ONCE
+// at boot, and only when it is OFF — the sibling of the WARDYN_LLM_SCAN line
+// in main, for the one control in that path that is ON by default. WARN, not
+// Info: the kill-switch above disables something the policy had to opt INTO,
+// this disables a confinement every brokered run otherwise gets. A garbage
+// env value already logs (fail-closed, proxy.BranchNSEnforced); before this,
+// the OFF state logged nothing at all, so the only way to tell a confined
+// proxy from an opted-out one was `docker inspect` on the sidecar. Per-push
+// proof lives in the decision log (rule_source "brokered:git:branch-ns-off").
+//
+// Extracted from main() as its own seam so the one-shot boot WARN is
+// testable without driving the rest of main() (a real listener, os.Exit,
+// signal handling).
+func logBranchNSPosture(runID uuid.UUID) {
+	if !proxy.BranchNSEnforced() {
+		slog.Warn("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false — push branch-namespace confinement is OFF for this proxy; a brokered git push may update ANY ref in a granted repo, including the default branch",
+			slog.String("run_id", runID.String()))
 	}
 }

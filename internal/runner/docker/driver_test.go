@@ -577,6 +577,16 @@ func TestAttach_OpensInteractiveShellNotTrackedAsAgentExec(t *testing.T) {
 	if got := f.lastExecCmd; !slices.Equal(got, attachShell) {
 		t.Errorf("attach must exec the interactive shell %v, got %v", attachShell, got)
 	}
+	// Pin the GOTMPDIR prep guard on the RECORDED exec argv itself — not just
+	// against the attachShell var (which the check above already compares
+	// against itself and so can never catch a regression in attachShell's own
+	// content). Session prep in agent-run-lib.sh does the same work, but only
+	// after slower steps, so this shell must run it too or `go build` fails in
+	// the attach terminal on an envbuilt/BYO image whose GOTMPDIR dir was never
+	// pre-created.
+	if len(f.lastExecCmd) < 3 || !strings.Contains(f.lastExecCmd[2], `mkdir -p "$GOTMPDIR"`) {
+		t.Errorf("attach exec argv must run the GOTMPDIR mkdir guard, got %v", f.lastExecCmd)
+	}
 
 	// CRITICAL: the attach exec must NOT be registered as the agent exec — that
 	// map is exclusively the agent process Wait tracks. Attaching before any

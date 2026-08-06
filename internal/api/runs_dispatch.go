@@ -561,18 +561,20 @@ type toolchainNeeds struct{ goTools, jvmTools bool }
 // runToolchainNeeds derives a run's toolchainNeeds from its resolved
 // workspaces: the union of every attached profile's detections
 // (workspacescan.ToolchainNeeds — the same signals the devcontainer emission
-// keys on). No workspaces at all → nil (unknown; dispatch keeps the full
-// set). Workspaces whose scan detected neither → empty needs: a workspace
-// run's env states what its requirements ground, nothing more.
+// keys on). No workspaces at all, or none of them yield a decodable profile
+// (unattached/unscanned/malformed) → nil (UNKNOWN; dispatch keeps the full
+// set). Only once at least one workspace actually decodes a profile does
+// empty needs apply: a workspace run's env then states what its requirements
+// ground, nothing more.
 func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
-	if len(wsRefs) == 0 {
-		return nil
-	}
 	profiles := make([]workspacescan.WorkspaceProfile, 0, len(wsRefs))
 	for _, ws := range wsRefs {
 		if p, ok := workspaceProfile(ws); ok {
 			profiles = append(profiles, p)
 		}
+	}
+	if len(profiles) == 0 {
+		return nil
 	}
 	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
 	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}

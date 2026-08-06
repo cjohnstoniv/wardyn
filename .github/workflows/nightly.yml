@@ -164,10 +164,21 @@ jobs:
           go-version-file: go.mod
       - name: Docker available
         run: docker --version
+      # test/e2e/live's newHarness FATALs (not skips) once WARDYN_TEST_DOCKER=1
+      # is set and its healthz probe fails — a deliberate "you told me a stack
+      # is up" contract (test/e2e/live/harness.go) — and this job never brings
+      # one up (task-e2e-live above owns that lane). `make test-report-docker`
+      # runs -tags docker over ./..., which pulls live in and made this job red
+      # by construction without ever measuring the docker-tagged (fakeDocker)
+      # coverage it exists for. Scope the package list to exclude it instead.
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
-        run: make test-report-docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pkgs < <(go list -tags docker ./... | grep -v '^github.com/cjohnstoniv/wardyn/test/e2e/live$')
+          ./scripts/test-report.sh docker -tags docker "${pkgs[@]}"
       - name: Upload docker-tagged test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

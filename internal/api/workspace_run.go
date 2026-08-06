@@ -302,7 +302,7 @@ func (s *Server) dispatchAndSettle(ctx context.Context, created types.AgentRun, 
 // loses the CAS and never launches a sandbox. (2) Upsert the task's
 // `recording` entry — BEFORE dispatch, so even a run that dies instantly has
 // the entry its terminal capture keys on. (3) Create + dispatch.
-func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Workspace, sessionKey, sessionLabel, mode string, confined bool) (types.AgentRun, bool, error) {
+func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Workspace, sessionKey, sessionLabel string, confined bool) (types.AgentRun, bool, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
 	}
@@ -327,7 +327,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	startedAt := s.cfg.Now().UTC()
 	if _, _, perr := s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
-		RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined, Status: recordStatusRecording, StartedAt: startedAt,
+		RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined, Status: recordStatusRecording, StartedAt: startedAt,
 	}, ""); perr != nil {
 		return types.AgentRun{}, false, release(fmt.Errorf("persist record state: %w", perr))
 	}
@@ -337,19 +337,18 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	abort := func(reason error) error {
 		now := s.cfg.Now().UTC()
 		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
-			RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined, Status: recordStatusFailed, StartedAt: now, FinishedAt: &now,
+			RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined, Status: recordStatusFailed, StartedAt: now, FinishedAt: &now,
 			FailureHint: "launch failed: " + reason.Error(),
 		}, recordStatusRecording)
 		return release(reason)
 	}
 
-	interactive := mode == recordModeInteractive
 	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace record", ws, cc)
 	if err != nil {
 		return types.AgentRun{}, false, abort(err)
 	}
 	now := run.CreatedAt
-	run.Interactive = interactive
+	run.Interactive = true
 	// A confined verify HOLDS an off-policy host at the door (wait_for_review:
 	// the connection parks while the approval surfaces in the verify panel's
 	// live strip; approve releases it, deny/timeout fails it). The old
@@ -378,16 +377,12 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// for a learning session. (Cloud-metadata / private IPs stay unconditionally
 		// blocked regardless.)
 		FirstUseApproval: verifyFirstUse,
-		// Auto: above wardyn-verify's 40-min budget (same rationale as verify).
-		// Interactive: generous but FINITE idle cap — an abandoned open-egress
-		// recording self-terminates (and revokes) instead of living forever.
-		AutoStopAfterSec: 3600,
-	}
-	if interactive {
-		policy.AutoStopAfterSec = int(recordInteractiveIdleCap.Seconds())
+		// Generous but FINITE idle cap — an abandoned open-egress recording
+		// self-terminates (and revokes) instead of living forever.
+		AutoStopAfterSec: int(recordInteractiveIdleCap.Seconds()),
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
-	cloneURLs := wireWorkspaceSource(&run, &policy, ws)
+	cloneURLs, ephemeralDirs := wireWorkspaceSource(&run, &policy, ws)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create record run: %w", err))
@@ -463,7 +458,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// guess). Guarded on `recording`: a superseding re-record must not resurrect this
 	// entry.
 	_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
-		RunID: runID, Label: sessionLabel, Mode: mode, Confined: confined,
+		RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
 		Status: recordStatusRecording, StartedAt: startedAt,
 		LLMMode: llmMode, Model: s.cfg.AgentAnthropicModel,
 	}, recordStatusRecording)
@@ -478,10 +473,13 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		GitGrants:          gitBrokerGrant(primaryCloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		Injections:         injections,
-		Interactive:        interactive,
+		Interactive:        true,
 		// A record/verify session runs ONE workspace — its scans decide the
 		// toolchain env, same rule as an ordinary workspace run.
 		Toolchains: runToolchainNeeds([]types.Workspace{ws}),
+		// Any ephemeral source's scratch target — wireWorkspaceSource's doc
+		// comment — surfaced the same way the ordinary create-run path does.
+		EphemeralDirs: ephemeralDirs,
 	}), weakCC, nil
 }
 
@@ -490,10 +488,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 // also sets run.Repo, the run-row label); each local_dir source is
 // bind-mounted at its own target (falling back to the composer workspace
 // target when unset). An ephemeral source gets NO policy entry (a mkdir
-// inside the sandbox, not a mount/clone — mirrors runs_create.go's
-// WARDYN_EPHEMERAL_DIRS handling for the ordinary create-run path); this
-// import-flow launch does not thread that env var, so an ephemeral source
-// here is silently inert.
+// inside the sandbox, not a mount/clone) — its target is collected into
+// ephemeralDirs instead, for the caller to surface as WARDYN_EPHEMERAL_DIRS at
+// dispatch, mirroring seedRequestWorkspace's identical handling for the
+// ordinary create-run path (runs_create.go).
 //
 // It returns every repo source's clone URL, in Sources order, for
 // workspaceSourceGrants — which today only auto-mints a clone credential for
@@ -505,7 +503,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 // also create must run AFTER it, since credential_grants.run_id REFERENCES
 // agent_runs(id) with an immediate FK. Doing both halves here forced one of the
 // two orders to be wrong; the grant half is split out for that reason.
-func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs []string) {
+func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs, ephemeralDirs []string) {
 	for _, src := range ws.Sources {
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
@@ -536,10 +534,13 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 				Source: src.Path, Target: target, ReadOnly: &ro,
 			})
 		case types.WorkspaceSourceTypeEphemeral:
-			// no policy entry — see doc comment above.
+			// No policy entry — it's a mkdir inside the sandbox, not a mount/clone.
+			if src.Target != "" {
+				ephemeralDirs = append(ephemeralDirs, src.Target)
+			}
 		}
 	}
-	return cloneURLs
+	return cloneURLs, ephemeralDirs
 }
 
 // workspaceSourceGrants creates the repo clone's read credentials. It MUST be

@@ -83,10 +83,11 @@ func recordCmd(client clientFn) *cobra.Command {
 	task := &cobra.Command{
 		Use:   "task <workspace-id> <task-key>",
 		Short: "Record one workspace import task in an OPEN sandbox (learn what it actually uses)",
-		Long: "Launches the task's open (allow-all egress) recording sandbox via the workspace import\n" +
-			"pipeline. Task keys come from the workspace's derived record_tasks (build/test/lint/setup/\n" +
-			"custom). The session idles for `wardyn attach` and ends with the normal run kill\n" +
-			"(Done recording). The capture lands on the workspace when the run terminates.",
+		Long: "Launches a single named OPEN (allow-all egress) recording sandbox via the workspace\n" +
+			"import pipeline. task-key is a free-form name you choose (\"build & test\", \"agent dev\n" +
+			"loop\", anything) — not picked from a derived taxonomy. The session idles for\n" +
+			"`wardyn attach` and ends with the normal run kill (Done recording). The capture lands\n" +
+			"on the workspace when the run terminates.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wsID, err := parseID("workspace", args[0])

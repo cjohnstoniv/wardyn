@@ -91,6 +91,15 @@ type (
 	// WorkspaceRequirement is one entry in Workspace.Requirements.
 	WorkspaceRequirement = types.WorkspaceRequirement
 
+	// WorkspaceAttachment is one tier-3 composition row (Workspace.Attachments):
+	// either a library Source reference (SourceID set) or an inline ephemeral
+	// scratch row.
+	WorkspaceAttachment = types.WorkspaceAttachment
+
+	// BaseImageEntry is one tier-2 base-image catalog row: a shared, reusable
+	// image an operator saved (kind registry|custom|byo).
+	BaseImageEntry = types.BaseImageEntry
+
 	// SiteConfig is the operator-wide site config. Returned by GetSiteConfig and
 	// accepted by PutSiteConfig.
 	SiteConfig = types.SiteConfig
@@ -145,6 +154,11 @@ type (
 	// WorkspaceSourceType discriminates a WorkspaceSource's kind (local_dir |
 	// repo | ephemeral).
 	WorkspaceSourceType = types.WorkspaceSourceType
+
+	// WorkspaceStatus is the onboarding/scan lifecycle of a Workspace or Source
+	// (Workspace.Status, Source.Status): not-yet-scanned, mid-scan, scanned
+	// (ready to use), or errored.
+	WorkspaceStatus = types.WorkspaceStatus
 )
 
 // SourceKind values (the tier-1 library's two onboardable kinds).
@@ -217,4 +231,12 @@ const (
 	WorkspaceSourceTypeLocalDir  = types.WorkspaceSourceTypeLocalDir
 	WorkspaceSourceTypeRepo      = types.WorkspaceSourceTypeRepo
 	WorkspaceSourceTypeEphemeral = types.WorkspaceSourceTypeEphemeral
+)
+
+// WorkspaceStatus values (Workspace.Status, Source.Status).
+const (
+	WorkspacePendingScan = types.WorkspacePendingScan
+	WorkspaceScanning    = types.WorkspaceScanning
+	WorkspaceScanned     = types.WorkspaceScanned
+	WorkspaceError       = types.WorkspaceError
 )

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -377,3 +378,50 @@ func TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans(t *testing.T) {
 
 var _ runner.Runner = (*execExitRunner)(nil)
 var _ runner.Runner = (*errProbeRunner)(nil)
+
+// sweepableImageBuilder implements both ImageBuilder and the optional
+// ImageBuildSweeper capability, so ReconcileOnBoot's type assertion finds it
+// — the wiring under test. The three ImageBuilder methods are never called by
+// ReconcileOnBoot; they exist only so this type satisfies the field's type.
+type sweepableImageBuilder struct{ swept int }
+
+func (*sweepableImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (*sweepableImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (s *sweepableImageBuilder) SweepOrphanedBuilds(context.Context) error {
+	s.swept++
+	return nil
+}
+
+// TestReconcileOnBoot_SweepsOrphanedBuildsIndependentOfRunner pins the third
+// leg of ReconcileOnBoot (see its doc comment): an ImageBuilder implementing
+// the optional ImageBuildSweeper capability is swept EVEN with no Runner
+// configured — an image builder can be wired standalone, and unlike the two
+// run reapers this leg must not short-circuit on s.cfg.Runner == nil.
+func TestReconcileOnBoot_SweepsOrphanedBuildsIndependentOfRunner(t *testing.T) {
+	sweeper := &sweepableImageBuilder{}
+	srv := &Server{cfg: Config{ImageBuilder: sweeper}}
+	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnBoot: %v", err)
+	}
+	if sweeper.swept != 1 {
+		t.Fatalf("SweepOrphanedBuilds called %d times, want 1", sweeper.swept)
+	}
+}
+
+// TestReconcileOnBoot_ImageBuilderWithoutSweepCapabilityIsNoop asserts an
+// ImageBuilder that doesn't implement ImageBuildSweeper (a plain fake, or any
+// future non-docker target) never panics or errors ReconcileOnBoot — the
+// capability is genuinely optional.
+func TestReconcileOnBoot_ImageBuilderWithoutSweepCapabilityIsNoop(t *testing.T) {
+	srv := &Server{cfg: Config{ImageBuilder: fakeImageBuilder{}}}
+	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnBoot: %v", err)
+	}
+}

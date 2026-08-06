@@ -9,8 +9,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 // fakeToolsDir writes the required runner tool binaries into a temp dir so the
@@ -373,6 +376,37 @@ func TestBuild_NeverBindsDockerSocket(t *testing.T) {
 	}
 }
 
+// TestBuildFromDevcontainerFiles_DeliversTarContext pins the git-free
+// generated-build delivery mechanism: a HOST bind mount cannot carry the
+// context into a containerized wardynd (its own /tmp is not host-visible to
+// the daemon — see BuildFromDevcontainerFiles's doc comment), so the
+// generated files MUST be streamed into the created container as a tar via
+// CopyToContainer, never a bind. Regression: the old MkdirTemp+bind
+// implementation staged an empty workspace in that case and every
+// containerized build died with exit 1.
+func TestBuildFromDevcontainerFiles_DeliversTarContext(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	b := newPushBuilder(t, f)
+
+	files := map[string]string{".devcontainer/devcontainer.json": `{"image":"golang:1.22"}`}
+	if _, err := b.BuildFromDevcontainerFiles(t.Context(), files, "wardyn-ws:gen", nil); err != nil {
+		t.Fatalf("BuildFromDevcontainerFiles: %v", err)
+	}
+
+	if len(f.copiedTo) != 1 || f.copiedTo[0] != "fake-build-container" {
+		t.Fatalf("copiedTo = %v, want exactly one CopyToContainer call naming the created container", f.copiedTo)
+	}
+	if len(f.copiedTars) != 1 || f.copiedTars[0] == 0 {
+		t.Fatalf("copiedTars = %v, want exactly one non-empty tar stream", f.copiedTars)
+	}
+	// The generated context's own delivery adds no extra bind (extraBinds is
+	// nil at BuildFromDevcontainerFiles' runBuildAndFinalize call site) — the
+	// whole point of the tar path is that nothing here needs a host bind.
+	if len(f.lastBinds) != 0 {
+		t.Errorf("lastBinds = %v, want none: the generated context must never be bind-mounted from the host", f.lastBinds)
+	}
+}
+
 // Regression for the CRITICAL host-root finding: registry PUSH is the only
 // delivery path, so a build without a CacheRepo must FAIL CLOSED (the retired
 // docker.sock fallback no longer exists).
@@ -472,6 +506,32 @@ func TestBuild_AppliesResourceCaps(t *testing.T) {
 	}
 }
 
+// TestBuild_AppliesExactCapabilitySet pins hardenedHostConfig's capability
+// allowlist EXACTLY: CapDrop ALL, then CapAdd back only the file-ownership set
+// an image builder cannot extract layers/features without (see the "chown
+// /etc/gshadow" regression note on hardenedHostConfig). A wider CapAdd here
+// would silently regress the build sandbox's blast-radius bound.
+func TestBuild_AppliesExactCapabilitySet(t *testing.T) {
+	clearSandboxEnv(t)
+	f := newFakeEnvbuilderDocker()
+	b := newPushBuilder(t, f)
+
+	if _, err := b.Build(t.Context(), BuildSpec{
+		RepoURL:        "https://github.com/example/repo",
+		OutputImageTag: "wardyn-ws:abc",
+	}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	wantDrop := []string{"ALL"}
+	if !slices.Equal(f.lastCapDrop, wantDrop) {
+		t.Errorf("CapDrop = %v, want %v", f.lastCapDrop, wantDrop)
+	}
+	wantAdd := []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETGID", "SETUID", "SETFCAP", "MKNOD"}
+	if !slices.Equal(f.lastCapAdd, wantAdd) {
+		t.Errorf("CapAdd = %v, want %v", f.lastCapAdd, wantAdd)
+	}
+}
+
 // The optional writable-layer size cap is OFF unless MaxBuildContextBytes (or
 // its env fallback) is set — and applied as StorageOpt "size" when it is.
 func TestBuild_StorageOptContextCap(t *testing.T) {
@@ -505,6 +565,68 @@ func TestBuild_StorageOptContextCap(t *testing.T) {
 			t.Errorf("StorageOpt[size] = %q, want \"8589934592\"", got)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Boot-time orphan sweep (SweepOrphanedBuilds)
+// ---------------------------------------------------------------------------
+
+// TestSweepOrphanedBuilds_RemovesOnlyUntrackedLabeledContainers pins the
+// reaper's two invariants: it scans with a wardyn.envbuild label filter over
+// ALL containers (AutoRemove is off, so an exited one leaks too), and it
+// removes exactly the ones this process has no live build tracked for —
+// never a build the SAME process is actively running.
+func TestSweepOrphanedBuilds_RemovesOnlyUntrackedLabeledContainers(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.listItems = []container.Summary{
+		{ID: "orphan-1", Labels: map[string]string{envbuildContainerLabel: "wardyn-workspace/aaa:devcontainer"}},
+		{ID: "live-1", Labels: map[string]string{envbuildContainerLabel: "wardyn-workspace/bbb:devcontainer"}},
+	}
+	b := newWithClient(f, "envbuilder:test", "registry.example.com/wardyn-cache")
+	b.liveBuilds.track("live-1") // stays live: this test's untrack is deliberately never called
+
+	if err := b.SweepOrphanedBuilds(t.Context()); err != nil {
+		t.Fatalf("SweepOrphanedBuilds: %v", err)
+	}
+
+	if !f.lastListAll {
+		t.Error("orphan scan must list ALL containers (All: true) — an exited one leaks too since AutoRemove is off")
+	}
+	if !f.lastListFilters["label"][envbuildContainerLabel] {
+		t.Errorf("orphan scan must filter on label %q, got filters %v", envbuildContainerLabel, f.lastListFilters)
+	}
+	if !slices.Equal(f.removedIDs, []string{"orphan-1"}) {
+		t.Errorf("removedIDs = %v, want exactly [\"orphan-1\"] (live-1 is tracked, must survive)", f.removedIDs)
+	}
+}
+
+// TestSweepOrphanedBuilds_NoneLabeled is the empty-scan smoke case: no
+// containers, no removals, no error.
+func TestSweepOrphanedBuilds_NoneLabeled(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	b := newWithClient(f, "envbuilder:test", "registry.example.com/wardyn-cache")
+
+	if err := b.SweepOrphanedBuilds(t.Context()); err != nil {
+		t.Fatalf("SweepOrphanedBuilds: %v", err)
+	}
+	if len(f.removedIDs) != 0 {
+		t.Errorf("removedIDs = %v, want none", f.removedIDs)
+	}
+}
+
+// TestBuild_StampsEnvbuildLabel pins the label a real build container carries
+// so SweepOrphanedBuilds can find it after a crash/restart.
+func TestBuild_StampsEnvbuildLabel(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	b := newPushBuilder(t, f)
+
+	spec := BuildSpec{RepoURL: "https://github.com/example/repo", OutputImageTag: "wardyn-ws:abc"}
+	if _, err := b.Build(t.Context(), spec); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := f.lastLabels[envbuildContainerLabel]; got != spec.OutputImageTag {
+		t.Errorf("container label %q = %q, want %q", envbuildContainerLabel, got, spec.OutputImageTag)
+	}
 }
 
 // ---------------------------------------------------------------------------

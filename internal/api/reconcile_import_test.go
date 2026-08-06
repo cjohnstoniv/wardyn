@@ -199,7 +199,7 @@ func TestLaunchRecordRun_CreateGrantFailureFinalizesRun(t *testing.T) {
 	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
 	srv := New(cfg)
 
-	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", fake.ws, "build", "build", recordModeInteractive, false)
+	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", fake.ws, "build", "build", false)
 	if err == nil {
 		t.Fatal("expected launchRecordRun to fail when CreateGrant errors")
 	}

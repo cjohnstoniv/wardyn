@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -40,9 +41,22 @@ var watcherOwner = func() string {
 	return host + "/" + uuid.NewString()
 }()
 
+// ImageBuildSweeper is an OPTIONAL capability an ImageBuilder may additionally
+// implement: a boot-time sweep that force-removes build containers orphaned
+// by a crashed or restarted wardynd process. It is a separate interface
+// (rather than a fourth ImageBuilder method) because api must stay
+// target-agnostic — the concrete envbuild package is docker-tagged, so this
+// is checked via type assertion in sweepOrphanedBuilds below, the same
+// optional-capability pattern as store.RunWatcherLeaser. An ImageBuilder that
+// doesn't implement it (nil, a test fake, or a future non-docker target) is
+// simply never swept.
+type ImageBuildSweeper interface {
+	SweepOrphanedBuilds(ctx context.Context) error
+}
+
 // ReconcileOnBoot rebuilds the safety net that keeps a run from stranding
 // non-terminal forever with a live sandbox and un-revoked credentials (C3), then
-// keeps rebuilding it for the life of the daemon. Two halves, because they are
+// keeps rebuilding it for the life of the daemon. Three parts, because they are
 // safe under different conditions:
 //
 //  1. finalizeUndispatchedRuns — at boot AND on a slow cadence after it. A
@@ -55,21 +69,43 @@ var watcherOwner = func() string {
 //     never comes back is adopted by ANY live replica instead of waiting for that
 //     pod's own boot, which may never happen. This is what the per-run watcher
 //     goroutine (an in-process, un-persisted thing) could never provide alone.
+//  3. sweepOrphanedBuilds — BOOT ONLY, and independent of s.cfg.Runner: reaps
+//     envbuild build containers left behind by a crashed/restarted process
+//     (see ImageBuildSweeper). A build container is short-lived by contract
+//     (BuildTimeout), so unlike the two run reapers above it needs no periodic
+//     recheck — whatever is orphaned at boot is the whole problem.
 //
 // Best-effort: errors are logged, never fatal. Adopted watchers run on the
 // daemon base context so they outlive this call, and observe the AGENT via the
 // persisted agent_exec_id rather than the container — an idle-container exec run
 // whose agent already exited is finalized instead of stranded.
 func (s *Server) ReconcileOnBoot(ctx context.Context) error {
+	buildErr := s.sweepOrphanedBuilds(ctx)
 	if s.cfg.Runner == nil {
-		return nil
+		return buildErr
 	}
 	// Start the periodic sweep FIRST, before anything that can fail: a transient
 	// store error in the boot pass must not disable adoption for the process's
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	go s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval)
-	return errors.Join(s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx))
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx))
+}
+
+// sweepOrphanedBuilds reaps envbuild build containers orphaned by a crashed or
+// restarted process (see ImageBuildSweeper). Independent of s.cfg.Runner — an
+// image builder can be configured on its own — and best-effort: an
+// ImageBuilder that doesn't implement the optional capability (nil, a test
+// fake, or a future non-docker target) is simply not swept.
+func (s *Server) sweepOrphanedBuilds(ctx context.Context) error {
+	sweeper, ok := s.cfg.ImageBuilder.(ImageBuildSweeper)
+	if !ok {
+		return nil
+	}
+	if err := sweeper.SweepOrphanedBuilds(ctx); err != nil {
+		return fmt.Errorf("sweep orphaned envbuild containers: %w", err)
+	}
+	return nil
 }
 
 // undispatchedGrace is how old a run with no sandbox ref must be before the

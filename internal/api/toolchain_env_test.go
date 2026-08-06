@@ -56,9 +56,15 @@ func TestRunToolchainNeeds(t *testing.T) {
 	if got := runToolchainNeeds(nil); got != nil {
 		t.Fatalf("no workspaces must mean UNKNOWN (nil), got %+v", got)
 	}
-	// A workspace with no profile yet declares nothing.
-	if got := runToolchainNeeds([]types.Workspace{{}}); got == nil || got.goTools || got.jvmTools {
-		t.Fatalf("profileless workspace: want empty needs, got %+v", got)
+	// An attached workspace with NO DECODABLE profile (unattached/unscanned/
+	// malformed) is UNKNOWN too — nil, so dispatch keeps the full accommodation
+	// set. Empty needs is reserved for a workspace that actually scanned and
+	// decoded a profile with neither signal.
+	if got := runToolchainNeeds([]types.Workspace{{}}); got != nil {
+		t.Fatalf("profileless workspace: want UNKNOWN (nil), got %+v", got)
+	}
+	if got := runToolchainNeeds([]types.Workspace{wsWith(workspacescan.WorkspaceProfile{Languages: []string{"Python"}})}); got == nil || got.goTools || got.jvmTools {
+		t.Fatalf("scanned workspace with neither signal: want empty needs (not nil), got %+v", got)
 	}
 	// Union across attachments: one Go workspace + one Maven workspace.
 	got := runToolchainNeeds([]types.Workspace{
@@ -71,5 +77,23 @@ func TestRunToolchainNeeds(t *testing.T) {
 	// Gradle counts as the JVM signal too.
 	if got := runToolchainNeeds([]types.Workspace{wsWith(workspacescan.WorkspaceProfile{PackageManagers: []string{"gradle"}})}); got == nil || !got.jvmTools {
 		t.Fatalf("gradle profile: want jvmTools, got %+v", got)
+	}
+}
+
+// TestApplyEphemeralDirsEnv is the dispatch-level assertion for audit row 56:
+// applyEphemeralDirsEnv is the exact function dispatchRun calls to land a
+// run's ephemeral workspace-source targets in sandboxEnv as
+// WARDYN_EPHEMERAL_DIRS — nil/empty dirs (the ordinary case) must add
+// nothing, and non-empty dirs must land comma-joined, in order.
+func TestApplyEphemeralDirsEnv(t *testing.T) {
+	env := map[string]string{}
+	applyEphemeralDirsEnv(env, nil)
+	if _, ok := env["WARDYN_EPHEMERAL_DIRS"]; ok {
+		t.Errorf("no ephemeral dirs must add nothing, got env = %v", env)
+	}
+
+	applyEphemeralDirsEnv(env, []string{"/home/agent/scratch-a", "/home/agent/scratch-b"})
+	if got, want := env["WARDYN_EPHEMERAL_DIRS"], "/home/agent/scratch-a,/home/agent/scratch-b"; got != want {
+		t.Errorf("WARDYN_EPHEMERAL_DIRS = %q, want %q", got, want)
 	}
 }

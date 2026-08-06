@@ -23,7 +23,10 @@ type envBuilderAdapter struct {
 	b *envbuild.Builder
 }
 
-var _ api.ImageBuilder = envBuilderAdapter{}
+var (
+	_ api.ImageBuilder      = envBuilderAdapter{}
+	_ api.ImageBuildSweeper = envBuilderAdapter{}
+)
 
 func (e envBuilderAdapter) BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (string, error) {
 	return e.b.Build(ctx, envbuild.BuildSpec{
@@ -45,6 +48,14 @@ func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files
 // a cleared ENTRYPOINT via the trusted finalize stage.
 func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
 	return e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink))
+}
+
+// SweepOrphanedBuilds satisfies api.ImageBuildSweeper: force-removes build
+// containers left behind by a crashed or restarted process. Wired into
+// api.Server.ReconcileOnBoot via a type assertion — envbuild is docker-tagged
+// and api must stay target-agnostic, so the capability is optional.
+func (e envBuilderAdapter) SweepOrphanedBuilds(ctx context.Context) error {
+	return e.b.SweepOrphanedBuilds(ctx)
 }
 
 // tee combines a caller-supplied per-call log sink (e.g. the wizard Build
