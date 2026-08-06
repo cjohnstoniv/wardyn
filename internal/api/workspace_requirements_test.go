@@ -220,6 +220,62 @@ func TestSetWorkspaceRequirements_HappyPath(t *testing.T) {
 	}
 }
 
+// TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract pins the h4
+// server guard (local/hardening-0.4.5/h4-design.md §3, HANDOFF-2026-08-06.md
+// §4 moving part 3): the wizard's step ③ now persists a named integration
+// through THIS endpoint on every "Continue", so naming one must not cost the
+// operator their scan profile, approved egress, recordings, or build cache —
+// the wipe handleUpdateWorkspace's sourcesChanged branch legitimately does
+// for a genuinely NEW composition (see its own doc comment) would be a
+// regression here, since this scoped write never touches those columns at
+// all. Verified true today (SetWorkspaceRequirements only ever sets the
+// requirements column); this test pins it so a future refactor that widens
+// the write can't reintroduce the wipe silently.
+func TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	fake := &requirementsStoreFake{ws: types.Workspace{
+		ID:               id,
+		Name:             "w",
+		Status:           types.WorkspaceScanned,
+		Profile:          json.RawMessage(`{"languages":["Go"]}`),
+		ApprovedEgress:   []string{"api.github.com"},
+		RecordResults:    json.RawMessage(`{"smoke":{"status":"recorded"}}`),
+		ImageRef:         "wardyn-workspace/w:abc123",
+		BuiltProfileHash: "deadbeef",
+	}}
+	srv := New(baseTestConfig(h, fake))
+	body := `{"requirements":{"integration:anthropic_api_key":{"level":"required","provenance":"operator_set"}}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Status != types.WorkspaceScanned {
+		t.Errorf("status = %q, want preserved %q", got.Status, types.WorkspaceScanned)
+	}
+	if string(got.Profile) != `{"languages":["Go"]}` {
+		t.Errorf("profile = %s, want preserved", got.Profile)
+	}
+	if len(got.ApprovedEgress) != 1 || got.ApprovedEgress[0] != "api.github.com" {
+		t.Errorf("approved_egress = %v, want preserved", got.ApprovedEgress)
+	}
+	if string(got.RecordResults) != `{"smoke":{"status":"recorded"}}` {
+		t.Errorf("record_results = %s, want preserved", got.RecordResults)
+	}
+	if got.ImageRef != "wardyn-workspace/w:abc123" || got.BuiltProfileHash != "deadbeef" {
+		t.Errorf("image cache = (%q,%q), want preserved", got.ImageRef, got.BuiltProfileHash)
+	}
+	if len(got.Requirements) != 1 {
+		t.Errorf("requirements = %+v, want the one new integration row", got.Requirements)
+	} else if row := got.Requirements["integration:anthropic_api_key"]; row.Level != "required" {
+		t.Errorf("integration row = %+v, want level=required", row)
+	}
+}
+
 func TestSetWorkspaceRequirements_UnknownWorkspaceIs404(t *testing.T) {
 	h := newHarness(t)
 	fake := &requirementsStoreFake{}

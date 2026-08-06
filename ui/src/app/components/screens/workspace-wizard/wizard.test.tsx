@@ -166,14 +166,67 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
     await screen.findByText(RD2.CARRY);
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
-    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
-    expect(setRequirementsMock.mock.calls[0][1]).toMatchObject({
+    // Two calls now: leaving step ③ Integrations persists whatever was picked
+    // there (nothing, in this walk), and step ⑤'s "Save & continue" persists
+    // the full seeded contract — assert the LAST one, the final saved state.
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(2));
+    expect(setRequirementsMock.mock.calls.at(-1)?.[1]).toMatchObject({
       // Seeded under the STORABLE name — the PUT must pass the server's
       // secret-name grammar (the live 400 this pins).
       "secret:database-url": { level: "required" },
       "egress:registry.npmjs.org": { level: "required" },
     });
     await screen.findByText("payments is usable.");
+  });
+});
+
+// design §3 / HANDOFF-2026-08-06.md §4 moving part 3: the Build step (right
+// after Integrations) can only see a named integration if leaving Integrations
+// actually persisted it first — previously the Continue there was a bare
+// client-side step patch.
+describe("WorkspaceWizard — leaving Integrations persists the pick before Build runs", () => {
+  it("issues setRequirements, and it resolves before Build's own kick fires", async () => {
+    const ws = baseWorkspace();
+    createWorkspaceMock.mockResolvedValue(ws);
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(ws);
+    setRequirementsMock.mockResolvedValue({
+      ...ws,
+      requirements: { "integration:anthropic_api_key": { level: "required", provenance: "operator_set" } },
+    });
+
+    render(<WorkspaceWizard onClose={vi.fn()} />);
+    await driveToBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(setRequirementsMock.mock.calls[0][0]).toBe("ws-1");
+    await waitFor(() => expect(buildWorkspaceMock).toHaveBeenCalled());
+    expect(setRequirementsMock.mock.invocationCallOrder[0]).toBeLessThan(
+      buildWorkspaceMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("a failed save keeps the operator on Integrations and never kicks a Build", async () => {
+    const ws = baseWorkspace();
+    createWorkspaceMock.mockResolvedValue(ws);
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(ws);
+    setRequirementsMock.mockRejectedValue(new Error("network down"));
+
+    render(<WorkspaceWizard onClose={vi.fn()} />);
+    await driveToBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(INTEGRATIONS_BLURB)).toBeInTheDocument();
+    expect(buildWorkspaceMock).not.toHaveBeenCalled();
   });
 });
 
@@ -558,8 +611,10 @@ describe("WorkspaceWizard — Back-to-Sources preserves operator_set lanes when 
     await screen.findByText(C.S3_BLURB);
     fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
 
-    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
-    expect(setRequirementsMock.mock.calls[0][1]).toMatchObject({
+    // Leaving step ③ Integrations now persists too, so this is the SECOND
+    // call — assert the LAST one, the final saved state, same as above.
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(2));
+    expect(setRequirementsMock.mock.calls.at(-1)?.[1]).toMatchObject({
       "egress:manually-added.example.com": { level: "required", provenance: "operator_set" },
     });
   });

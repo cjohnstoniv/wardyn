@@ -112,6 +112,7 @@ interface WizardState {
   confirmBackToSources: boolean;
   creating: boolean;
   savingImage: boolean;
+  savingIntegrations: boolean;
   savingRequirements: boolean;
   buildState: WorkspaceBuildState | null;
 }
@@ -143,6 +144,7 @@ function initialState(initial?: Workspace): WizardState {
     confirmBackToSources: false,
     creating: false,
     savingImage: false,
+    savingIntegrations: false,
     savingRequirements: false,
     buildState: null,
   };
@@ -455,6 +457,29 @@ export function WorkspaceWizard({
     }
   };
 
+  // ---------- Integrations (step ③) ----------
+  // Leaving step ③: PERSIST the named integration rows, mirroring
+  // continueFromImage's persist-then-navigate shape just above. Today they
+  // only patch client state and land server-side at step ⑤'s "Save &
+  // continue" PUT — so Build, the very next step, can't see what was just
+  // picked and boots without the CLI the operator chose. A failed save stays
+  // on the step with the error in a toast, like every other persisting
+  // Continue in this wizard.
+  const continueFromIntegrations = async () => {
+    if (!s.workspace) {
+      patch({ step: "build" });
+      return;
+    }
+    patch({ savingIntegrations: true });
+    try {
+      const updated = await workspacesApi.setRequirements(s.workspace.id, s.requirements);
+      patch({ savingIntegrations: false, workspace: updated, step: "build" });
+    } catch (e) {
+      patch({ savingIntegrations: false });
+      toast.error("Failed to save the selected integrations", { description: getErrorMessage(e) });
+    }
+  };
+
   // After a verify session ends: the decide() hook may have written rows into
   // the WORKSPACE's contract server-side (approved hosts, required/operator_set).
   // Refetch and absorb them — new keys join the wizard's map; a key the
@@ -690,7 +715,7 @@ export function WorkspaceWizard({
                 <Button type="button" variant="ghost" onClick={() => patch({ step: "image" })}>
                   Back
                 </Button>
-                <Button type="button" onClick={() => patch({ step: "build" })}>
+                <Button type="button" disabled={s.savingIntegrations} onClick={() => void continueFromIntegrations()}>
                   Continue →
                 </Button>
               </>
