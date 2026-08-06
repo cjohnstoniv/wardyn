@@ -37,6 +37,31 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.secretNames).toEqual(["anthropic-api-key"]);
   });
 
+  // The chip used to be a pure function of CAPS.key()'s hardcoded `def: true`
+  // — a checkbox elsewhere could mark a DIFFERENT row the real default and
+  // this chip would never know. It must follow status.integrations' live
+  // default_for instead, the same source the kebab checkbox itself reads.
+  it("the '· default' chip follows the LIVE wire default_for, not the static per-type table", () => {
+    const status = baseStatus({
+      secrets: { present: ["anthropic-api-key"], github_app: false },
+      bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
+      integrations: [
+        { id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", source: "stored", default_for: [] },
+        { id: "bedrock", category: "ai_provider", type: "bedrock", source: "stored", default_for: ["agent_runs"] },
+      ],
+    });
+    const { ai } = deriveIntegrations(status, null, ["anthropic-api-key"]);
+    const keyRow = ai.find((r) => r.id === "ai:anthropic_api_key")!;
+    const bedrockRow = ai.find((r) => r.id === "ai:bedrock")!;
+    // The static table (CAPS.key()) still says def:true for the key row — the
+    // live wire row says otherwise, and live wins: the chip drops "· default".
+    expect(keyRow.chips.find((c) => c.label === "Claude Code · default")).toBeUndefined();
+    expect(keyRow.chips.find((c) => c.label === "Claude Code")).toBeTruthy();
+    // Bedrock's static table (CAPS.bedrock()) never sets `def` at all — this
+    // chip can only come from the live overlay.
+    expect(bedrockRow.chips.find((c) => c.label === "Claude Code · default")).toBeTruthy();
+  });
+
   it("a resident host-CLI subscription omits the OFF Wardyn-features chip entirely", () => {
     const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] });
     const [row] = deriveIntegrations(status, null, []).ai;

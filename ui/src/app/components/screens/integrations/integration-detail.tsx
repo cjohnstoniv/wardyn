@@ -19,6 +19,7 @@ import {
   describePosture,
   findRow,
   blastRadius,
+  liveCapRows,
   type IntegrationRow,
   type IntegrationsData,
 } from "../../../lib/api/integrations";
@@ -51,28 +52,11 @@ import { CheckRow } from "../setup/step-bodies";
 import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor, type DefaultForMark } from "./actions";
 
 const AGENT_SLOT = /Claude Code|Codex/;
-const FEATURES_SLOT = /^Wardyn features/;
 const POSTURE_CLASS: Record<"success" | "warning" | "muted", string> = {
   success: "text-success",
   warning: "text-warning",
   muted: "text-muted-foreground",
 };
-
-// Overlays the REAL default_for state onto the type's static capability
-// preview: `def` (the "default" chip) and `makeDefault` (whether the button
-// offers to change it) both flip on live state once a server identity backs
-// the row, instead of the static per-type guess the preview ships with. A row
-// with no server identity yet (no `wire`) keeps the static preview verbatim —
-// there's nothing to write to regardless of what it claims.
-function liveCapRows(rows: CapabilityRow[], wire: WireIntegration | undefined, defAgent: boolean, defFeat: boolean): CapabilityRow[] {
-  if (!wire) return rows;
-  return rows.map((r) => {
-    if (!r.on) return r;
-    if (AGENT_SLOT.test(r.label)) return { ...r, def: defAgent, makeDefault: !defAgent };
-    if (FEATURES_SLOT.test(r.label)) return { ...r, def: defFeat, makeDefault: !defFeat };
-    return r;
-  });
-}
 
 function Region({ label, children }: { label: string; children: React.ReactNode }) {
   return (

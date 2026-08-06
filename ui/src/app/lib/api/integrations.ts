@@ -24,7 +24,7 @@
 // per-integration "default" persistence, an Azure endpoint URL, workspace
 // pin-counts for the blast radius).
 import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
-import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType } from "../integrations";
+import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType, type CapabilityRow } from "../integrations";
 import { deriveProviders, LANE_META, slugHost, type Lane } from "../scm-provider";
 import { relativeTime, clockTime } from "../format";
 import type { SetupStatus, SiteConfig } from "../types";
@@ -127,12 +127,37 @@ export function aiRowName(type: AiType, hostCli?: boolean): string {
   }
 }
 
+const AGENT_SLOT = /Claude Code|Codex/;
+const FEATURES_SLOT = /^Wardyn features/;
+
+// Overlays the REAL default_for state onto a type's static capability
+// preview: `def` (the "default" chip/label) flips on live state once a server
+// identity (`wire`) backs the row, instead of the static per-type guess the
+// preview ships with (CAPS.key()'s hardcoded `def: true`, etc). A row with no
+// wire yet keeps the static preview verbatim — there's nothing live to read.
+// Shared by capabilityChips below (so the list chip, the Add dialog's
+// defaultHolder() and onboarding's llmLabel all read one source) and the
+// detail page's CapabilityTable, so no two surfaces can independently drift
+// on which row actually holds a mark the way the list chip and the kebab
+// checkbox once did.
+export function liveCapRows(rows: CapabilityRow[], wire: WireIntegration | undefined, defAgent: boolean, defFeat: boolean): CapabilityRow[] {
+  if (!wire) return rows;
+  return rows.map((r) => {
+    if (!r.on) return r;
+    if (AGENT_SLOT.test(r.label)) return { ...r, def: defAgent, makeDefault: !defAgent };
+    if (FEATURES_SLOT.test(r.label)) return { ...r, def: defFeat, makeDefault: !defFeat };
+    return r;
+  });
+}
+
 // The compact chip list a list row shows: ON rows (capChip, `· default` when
-// the type's own matrix says so) and impossible rows (factChip, muted, the
-// verbatim reason as tooltip) — OFF rows are omitted, matching the mock.
-export function capabilityChips(type: AiType, hostCli?: boolean): RowChip[] {
-  return AI_TYPES[type]
-    .capabilityPreview(hostCli)
+// `wire`'s live default_for says so, falling back to the type's static matrix
+// when there's no wire) and impossible rows (factChip, muted, the verbatim
+// reason as tooltip) — OFF rows are omitted, matching the mock.
+export function capabilityChips(type: AiType, hostCli?: boolean, wire?: WireIntegration): RowChip[] {
+  const defAgent = !!wire?.default_for?.includes("agent_runs");
+  const defFeat = !!wire?.default_for?.includes("wardyn_features");
+  return liveCapRows(AI_TYPES[type].capabilityPreview(hostCli), wire, defAgent, defFeat)
     .filter((r) => r.on || r.fact)
     .map((r) =>
       r.fact
@@ -179,6 +204,11 @@ function bedrockSecretNames(lane: BedrockLane | undefined, present: string[]): s
 function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] {
   const rows: IntegrationRow[] = [];
   const claude = status.providers.find((p) => p.tool === "claude");
+  // The live wire row behind each id below (status.integrations) — the SAME
+  // lookup integrations-screen.tsx's own wireById performs for the kebab
+  // checkbox, so capabilityChips can overlay the real default_for instead of
+  // guessing from the static per-type table.
+  const wireById = new Map((status.integrations ?? []).map((w) => [w.id, w]));
 
   if (present.includes("anthropic-api-key")) {
     rows.push({
@@ -187,7 +217,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       category: "ai_provider",
       name: aiRowName("anthropic_api_key"),
       typeLabel: AI_TYPE_LABEL.anthropic_api_key,
-      chips: capabilityChips("anthropic_api_key"),
+      chips: capabilityChips("anthropic_api_key", undefined, wireById.get("anthropic_api_key")),
       residency: aiResidency("anthropic_api_key", undefined, undefined),
       posture: { kind: "configured" },
       secretNames: ["anthropic-api-key"],
@@ -203,7 +233,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       category: "ai_provider",
       name: aiRowName("anthropic_subscription", true),
       typeLabel: subscriptionTypeLabel(true),
-      chips: capabilityChips("anthropic_subscription", true),
+      chips: capabilityChips("anthropic_subscription", true, wireById.get("anthropic_subscription:resident_host")),
       residency: aiResidency("anthropic_subscription", true, undefined),
       // A resident host login carries no capture timestamp Wardyn can see.
       posture: { kind: "configured" },
@@ -222,7 +252,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       category: "ai_provider",
       name: aiRowName("anthropic_subscription", false),
       typeLabel: subscriptionTypeLabel(false),
-      chips: capabilityChips("anthropic_subscription", false),
+      chips: capabilityChips("anthropic_subscription", false, wireById.get("anthropic_subscription:managed")),
       residency: aiResidency("anthropic_subscription", false, undefined),
       posture: managed.aging
         ? { kind: "reconnect_soon" }
@@ -256,7 +286,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       category: "ai_provider",
       name: aiRowName("bedrock"),
       typeLabel: AI_TYPE_LABEL.bedrock,
-      chips: capabilityChips("bedrock"),
+      chips: capabilityChips("bedrock", undefined, wireById.get("bedrock")),
       residency: aiResidency("bedrock", undefined, lane),
       posture,
       secretNames: bedrockSecretNames(lane, present),
@@ -274,7 +304,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       category: "ai_provider",
       name: aiRowName("openai_api_key"),
       typeLabel: AI_TYPE_LABEL.openai_api_key,
-      chips: capabilityChips("openai_api_key"),
+      chips: capabilityChips("openai_api_key", undefined, wireById.get("openai_api_key")),
       residency: aiResidency("openai_api_key", undefined, undefined),
       posture: { kind: "configured" },
       secretNames: ["openai-api-key"],

@@ -149,11 +149,10 @@ export function deriveReadiness(status: SetupStatus): Readiness {
   const barrierCount = status.runner?.confinement_classes?.length ?? 0;
   const aiRows = aiIntegrationRows(status);
   const agentRows = agentCapableRows(aiRows);
-  // The row that HOLDS the default for the agent-tool slot, if any type's
-  // matrix marks one (today only anthropic_api_key's Claude Code does — see
-  // defaultHolder's own W5 note in lib/api/integrations.ts); otherwise just
-  // the first connected one, since with a single integration it's trivially
-  // the default.
+  // The row that HOLDS the default for the agent-tool slot — the operator's
+  // own kebab-checkbox mark (live default_for), read off the same chips the
+  // list screen renders; otherwise just the first connected one, since with a
+  // single integration it's trivially the default.
   const defaultAgentRow = defaultHolder(agentRows, AGENT_TOOL_CAPABILITY) ?? agentRows[0];
   // ≥1 integration with the Wardyn-features capability ON and a resolved
   // credential — powers the AI Composer / Wardyn's own review features.

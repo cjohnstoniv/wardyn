@@ -66,23 +66,38 @@ type FullWireIntegration = WireIntegration & { config?: unknown; disabled_capabi
 // `mark`'s membership changes. Radio semantics (naming a mark here clears it
 // on every OTHER row) are enforced server-side (applyDefaultForRadio);
 // callers should reload rather than guess the result.
+//
+// Atomic from the operator's point of view: a fresh adopt is only a means to
+// the PUT, never the goal itself. If the PUT rejects (e.g. a half-set Bedrock
+// row — region set, model empty — passes the checkbox gate but hard-400s
+// server-side), the just-adopted row is deleted again so a failed "set
+// default" attempt doesn't leave behind a row the operator never asked to
+// store. The rollback is best-effort (its own failure is swallowed) — either
+// way the PUT's real error propagates to the caller, which is what actually
+// explains the failure.
 export async function setDefaultFor(wire: WireIntegration, mark: DefaultForMark, on: boolean): Promise<void> {
-  if (wire.source !== "stored") await integrationsApi.adoptIntegration(wire.id);
+  const adopted = wire.source !== "stored";
+  if (adopted) await integrationsApi.adoptIntegration(wire.id);
   const full = wire as FullWireIntegration;
   const current = wire.default_for ?? [];
   const default_for = on ? [...current, mark] : current.filter((m) => m !== mark);
-  await genericIntegrationsApi.put(wire.id, {
-    name: wire.name ?? "",
-    category: wire.category,
-    type: wire.type,
-    disabled: wire.disabled,
-    hosts: wire.hosts,
-    header: wire.header,
-    format: wire.format,
-    docs: wire.docs,
-    credentials: wire.credentials,
-    config: full.config as Record<string, unknown> | undefined,
-    disabled_capabilities: full.disabled_capabilities,
-    default_for,
-  });
+  try {
+    await genericIntegrationsApi.put(wire.id, {
+      name: wire.name ?? "",
+      category: wire.category,
+      type: wire.type,
+      disabled: wire.disabled,
+      hosts: wire.hosts,
+      header: wire.header,
+      format: wire.format,
+      docs: wire.docs,
+      credentials: wire.credentials,
+      config: full.config as Record<string, unknown> | undefined,
+      disabled_capabilities: full.disabled_capabilities,
+      default_for,
+    });
+  } catch (e) {
+    if (adopted) await genericIntegrationsApi.remove(wire.id).catch(() => {});
+    throw e;
+  }
 }

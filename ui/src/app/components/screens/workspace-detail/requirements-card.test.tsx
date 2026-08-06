@@ -189,6 +189,88 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
     expect(secondBody["egress:registry.npmjs.org"]).toEqual({ level: "optional", provenance: "operator_set" });
     expect(secondBody["secret:database-url"]).toEqual({ level: "optional", provenance: "operator_set" });
   });
+
+  // A rejected PUT used to leave the optimistic `pending` map untouched — the
+  // toggle stayed rendered checked forever, and every later toggle composed
+  // onto (and re-sent) that phantom lane.
+  it("a rejected PUT reverts pending — the toggle un-checks, and the next write doesn't resurrect it", async () => {
+    const onWorkspaceUpdated = vi.fn();
+    setRequirementsMock.mockRejectedValueOnce(new Error("409 conflict"));
+    setRequirementsMock.mockResolvedValueOnce(ws({ profile: profile as unknown as Record<string, unknown> }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <RequirementsCard
+        ws={ws({ profile: profile as unknown as Record<string, unknown> })}
+        storedSecretNames={["database-url"]}
+        onWorkspaceUpdated={onWorkspaceUpdated}
+        onSecretStored={vi.fn()}
+      />,
+    );
+
+    // Toggle 1 (Reach, the default tab) — rejected.
+    const reachGroup = within(screen.getByTestId("group-reach"));
+    await user.click(reachGroup.getByRole("radio", { name: "Optional" }));
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    // Reverted once the rejection lands — not left phantom-checked.
+    await waitFor(() => expect(reachGroup.getByRole("radio", { name: "Required" })).toHaveAttribute("aria-checked", "true"));
+    expect(reachGroup.getByRole("radio", { name: "Optional" })).toHaveAttribute("aria-checked", "false");
+
+    // Toggle 2 (Secrets) — succeeds.
+    await user.click(screen.getByRole("tab", { name: "Secrets" }));
+    const secretsGroup = within(screen.getByTestId("group-secrets"));
+    await user.click(secretsGroup.getByRole("radio", { name: "Optional" }));
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(2));
+
+    // The second write carries ONLY the secrets edit — the reverted (failed)
+    // Reach edit never resurrects itself onto a later write.
+    const secondBody = setRequirementsMock.mock.calls[1][1] as WorkspaceRequirementsMap;
+    expect(secondBody["secret:database-url"]).toEqual({ level: "optional", provenance: "operator_set" });
+    expect(secondBody["egress:registry.npmjs.org"]).toBeUndefined();
+  });
+});
+
+// The card is never remounted on an out-of-band refresh (workspace-detail.tsx
+// gives it no `key`) — including the Edit-workspace overlay's onClose, which
+// reloads with load(false) and can NULL the requirements contract server-side
+// (sourcesChanged, internal/api/workspaces.go). Without reconciliation the
+// card would go on rendering — and PUTting back — a contract the server no
+// longer has.
+describe("RequirementsCard — pending reconciles with the server", () => {
+  const profile: WorkspaceProfile = {
+    required_secrets: [{ name: "DATABASE_URL", kind: "postgres" }],
+  };
+
+  it("re-seeds pending when ws's requirements change out from under the (not remounted) card", async () => {
+    const withContract = ws({
+      profile: profile as unknown as Record<string, unknown>,
+      requirements: { "secret:database-url": { level: "optional", provenance: "operator_set" } },
+    });
+    const { rerender } = render(
+      <RequirementsCard ws={withContract} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+    await openTab("Secrets");
+    await waitFor(() =>
+      expect(within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Optional" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      ),
+    );
+
+    // Same component instance (no remount) — a fresh `ws` prop with the
+    // contract reset to empty, exactly what load(false) hands back after an
+    // Edit-workspace close that changed sources.
+    const resetWs = ws({ profile: profile as unknown as Record<string, unknown>, requirements: {} });
+    rerender(
+      <RequirementsCard ws={resetWs} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+
+    await waitFor(() =>
+      expect(within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Required" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      ),
+    );
+  });
 });
 
 describe("RequirementsCard — a viewer's lane toggles and Bind-model-access are disabled", () => {

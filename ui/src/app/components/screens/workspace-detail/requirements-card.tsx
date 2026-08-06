@@ -113,15 +113,26 @@ export function RequirementsCard({
   const recipe = profile?.setup_commands ?? [];
 
   const [saving, setSaving] = React.useState(false);
-  // Local, optimistic copy of the requirements map — seeded once (this card
-  // remounts per workspace; the detail page's loading gate tears the whole
-  // subtree down on every id change). PUT-per-toggle used to derive `next`
-  // straight from the `ws` PROP, which only updates once the PREVIOUS PUT
-  // resolves: two toggles fired inside one round trip both read the same
-  // stale base, and the second's write silently discards the first (PUT is a
-  // full replace). Composing on this local copy instead means each toggle
-  // always builds on the one just applied, regardless of the server's timing.
+  // Local, optimistic copy of the requirements map. PUT-per-toggle used to
+  // derive `next` straight from the `ws` PROP, which only updates once the
+  // PREVIOUS PUT resolves: two toggles fired inside one round trip both read
+  // the same stale base, and the second's write silently discards the first
+  // (PUT is a full replace). Composing on this local copy instead means each
+  // toggle always builds on the one just applied, regardless of the server's
+  // timing.
   const [pending, setPending] = React.useState<WorkspaceRequirementsMap>(() => requirementsOf(ws));
+  // Reconciles `pending` with the server whenever `ws` changes out from under
+  // this card. This card is NOT remounted on every out-of-band refresh — only
+  // load(true)'s foreground gate tears the detail page's subtree down
+  // (workspace-detail.tsx); the Edit-workspace overlay's onClose uses
+  // load(false), which can NULL the requirements contract server-side
+  // (sourcesChanged resets it — internal/api/workspaces.go) without
+  // remounting this card. Skipped while a write of OUR OWN is in flight, so
+  // an in-progress optimistic edit doesn't get clobbered by a `ws` snapshot
+  // that predates it.
+  React.useEffect(() => {
+    if (!saving) setPending(requirementsOf(ws));
+  }, [ws, saving]);
   const persist = async (next: WorkspaceRequirementsMap) => {
     setPending(next);
     setSaving(true);
@@ -130,6 +141,10 @@ export function RequirementsCard({
       setPending(requirementsOf(updated));
       onWorkspaceUpdated(updated);
     } catch (e) {
+      // Roll back to the server's own last-known state — a rejected write
+      // must not leave a phantom lane rendered (and composing onto every
+      // later write) forever.
+      setPending(requirementsOf(ws));
       toast.error("Failed to save requirements", { description: getErrorMessage(e) });
     } finally {
       setSaving(false);
@@ -152,8 +167,13 @@ export function RequirementsCard({
           approve) is operatorOnly server-side. A native disabled fieldset
           gates the whole subtree at once, same as the rest of the console's
           Buttons already render when disabled — `contents` keeps it out of
-          the box model since there's no existing wrapper div to repurpose here. */}
-      <fieldset disabled={!operator} className="contents">
+          the box model since there's no existing wrapper div to repurpose
+          here. `space-y-4` is repeated on it: SectionCard's own space-y-4 is a
+          direct-child selector, and `contents` makes this fieldset's CHILDREN
+          (not the fieldset itself) the effective direct children once the
+          fieldset drops out of the box tree — the rule has to be on the
+          element whose children it should space. */}
+      <fieldset disabled={!operator} className="contents space-y-4">
         <ModelAccessGroup ws={ws} onSaved={onWorkspaceUpdated} />
 
         {recipe.length > 0 && (

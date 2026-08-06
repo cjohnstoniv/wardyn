@@ -27,7 +27,24 @@ vi.mock("../../../lib/api/harness-auth", () => ({
   harnessAuth: { harnessDisconnect: (...a: unknown[]) => harnessDisconnectMock(...a) },
 }));
 
-import { canRotateInline, deleteIntegration, primarySecretName } from "./actions";
+const adoptIntegrationMock = vi.fn();
+const putIntegrationMock = vi.fn();
+const removeIntegrationMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return {
+    ...actual,
+    integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
+    genericIntegrationsApi: {
+      ...actual.genericIntegrationsApi,
+      put: (...a: unknown[]) => putIntegrationMock(...a),
+      remove: (...a: unknown[]) => removeIntegrationMock(...a),
+    },
+  };
+});
+
+import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor } from "./actions";
+import type { WireIntegration } from "../../../lib/types/setup";
 
 function scmRow(overrides: Partial<IntegrationRow> = {}): IntegrationRow {
   return {
@@ -85,5 +102,51 @@ describe("canRotateInline / primarySecretName", () => {
     expect(primarySecretName(scmRow({ isGithubApp: true, secretNames: ["github-app-id", "github-app-key"] }))).toBe(
       "github-app-key",
     );
+  });
+});
+
+// adopt-then-PUT used to have no rollback: a rejected PUT (e.g. a half-set
+// Bedrock row — region set, model empty — passes the checkbox gate but
+// hard-400s server-side under validateIntegrationWrite) left the just-adopted
+// row permanently stored even though the operator's action never succeeded.
+describe("setDefaultFor", () => {
+  function legacyWire(overrides: Partial<WireIntegration> = {}): WireIntegration {
+    return { id: "bedrock", category: "ai_provider", type: "bedrock", source: "legacy", default_for: [], ...overrides };
+  }
+
+  beforeEach(() => {
+    adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
+    putIntegrationMock.mockReset();
+    removeIntegrationMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("rolls back the adopt when the PUT rejects, and surfaces the real error", async () => {
+    putIntegrationMock.mockRejectedValueOnce(new Error("bedrock region and model must be set together"));
+
+    await expect(setDefaultFor(legacyWire(), "agent_runs", true)).rejects.toThrow(/region and model/);
+
+    expect(adoptIntegrationMock).toHaveBeenCalledWith("bedrock");
+    // The failed write leaves nothing stored — the just-adopted row is removed again.
+    expect(removeIntegrationMock).toHaveBeenCalledWith("bedrock");
+  });
+
+  it("an already-stored row is left alone on a rejected PUT — nothing was adopted, so there's nothing to roll back", async () => {
+    putIntegrationMock.mockRejectedValueOnce(new Error("500"));
+
+    await expect(setDefaultFor(legacyWire({ source: "stored", default_for: ["agent_runs"] }), "agent_runs", false)).rejects.toThrow(
+      "500",
+    );
+
+    expect(adoptIntegrationMock).not.toHaveBeenCalled();
+    expect(removeIntegrationMock).not.toHaveBeenCalled();
+  });
+
+  it("a successful PUT never rolls back the adopt", async () => {
+    putIntegrationMock.mockResolvedValue(undefined);
+
+    await setDefaultFor(legacyWire(), "agent_runs", true);
+
+    expect(adoptIntegrationMock).toHaveBeenCalledWith("bedrock");
+    expect(removeIntegrationMock).not.toHaveBeenCalled();
   });
 });
