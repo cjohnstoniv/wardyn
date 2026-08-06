@@ -139,19 +139,22 @@ describe("StepRequirements — the full stack's lane controls", () => {
     expect(screen.getByTestId("leak-fixtures")).toBeInTheDocument();
   });
 
-  it("a not-stored secret shows the pill + Add, which opens the locked AddSecretDialog for its exact name", async () => {
+  it("a not-stored secret shows the pill + Add, which opens the locked AddSecretDialog for its STORABLE name", async () => {
     render(<Harness profile={profile} />);
     await openTab("Secrets");
     const group = screen.getByTestId("group-secrets");
     expect(within(group).getByText("not stored yet")).toBeInTheDocument();
+    // The detected env-var name stays the row's face; the store name it maps
+    // to is stated beside it (the server's grammar can't hold "DATABASE_URL").
+    expect(within(group).getByText(/stored as/)).toBeInTheDocument();
 
     fireEvent.click(within(group).getByRole("button", { name: "Add" }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByLabelText(/name/i)).toHaveValue("DATABASE_URL");
+    expect(within(dialog).getByLabelText(/name/i)).toHaveValue("database-url");
   });
 
   it("a stored secret shows the stored pill instead, with no Add button", async () => {
-    render(<Harness profile={profile} storedSecretNames={["DATABASE_URL"]} />);
+    render(<Harness profile={profile} storedSecretNames={["database-url"]} />);
     await openTab("Secrets");
     const group = screen.getByTestId("group-secrets");
     expect(within(group).getByText("stored")).toBeInTheDocument();

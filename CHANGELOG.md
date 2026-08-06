@@ -429,6 +429,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Scan-seeded secret rows now use storable names — one scanned source no
+  longer wedges the Requirements save.** A scan honestly reports the env-var
+  name the code reads (`AWS_DEFAULT_REGION`), but a `secret:` contract row
+  names an entry in Wardyn's secret store, whose lowercase grammar can never
+  hold that shape — the seeder wrote the raw name, so every later save of the
+  contract failed validation with "invalid secret name", and the row could
+  never have matched a stored secret anyway. Profile names are now mapped
+  onto the storable grammar (`AWS_DEFAULT_REGION` → `aws-default-region`) at
+  every profile→contract boundary — the server-side seeder (both scan lanes)
+  and the UI's seeding, stored-check, and Add-secret prefill, which had the
+  same mismatch (an uppercase row never showed "stored", and its Add button
+  proposed a name the secrets API rejects). Rows keep the detected env-var
+  name as their face with a "stored as" hint beside it, and a test now pins
+  the invariant that broke: every row the seeder writes passes the same
+  validation any PUT of that contract goes through.
 - **"Recommended — built for this workspace" now works out of the box on the
   compose stack.** The default card required four hand-set knobs and still
   failed: devcontainer builds were opt-in (`WARDYN_ENVBUILD=false`), needed an

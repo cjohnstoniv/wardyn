@@ -143,7 +143,7 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
     render(
       <RequirementsCard
         ws={ws({ profile: profile as unknown as Record<string, unknown> })}
-        storedSecretNames={["DATABASE_URL"]}
+        storedSecretNames={["database-url"]}
         onWorkspaceUpdated={onWorkspaceUpdated}
         onSecretStored={vi.fn()}
       />,
@@ -155,7 +155,9 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
       expect(setRequirementsMock).toHaveBeenCalledWith(
         "ws-1",
         expect.objectContaining({
-          "secret:DATABASE_URL": { level: "optional", provenance: "operator_set" },
+          // Keyed by the STORABLE name (the server grammar's shape), while the
+          // row still displays the detected env-var name.
+          "secret:database-url": { level: "optional", provenance: "operator_set" },
         }),
       ),
     );

@@ -32,6 +32,7 @@ import {
   requirementKey,
   setRequirementLane,
   splitRequirementKey,
+  storableSecretName,
   unmetRequiredSecrets,
   type PowerSource,
   type RequirementLevel,
@@ -376,19 +377,37 @@ export function StepRequirements({
               {secrets.length > 0 || !nothingResolves ? (
                 <div className="divide-y divide-border rounded-lg border border-border">
                   {secrets.map((s) => {
-                    const key = requirementKey("secret", s.name);
-                    const stored = storedSecretNames.includes(s.name);
+                    // The row's contract key and store lookups use the STORABLE
+                    // name (see storableSecretName); the detected env-var name
+                    // stays as the row's face — that's the scan's honest fact.
+                    const storable = storableSecretName(s.name);
+                    if (!storable) {
+                      return (
+                        <div key={s.name} className="flex flex-wrap items-center gap-2 p-2.5">
+                          <Mono className="min-w-36 text-xs text-foreground">{s.name}</Mono>
+                          {s.kind && <Chip tone="neutral">{s.kind}</Chip>}
+                          <span className="ml-auto text-[0.6875rem] text-muted-foreground">name not storable as a secret</span>
+                        </div>
+                      );
+                    }
+                    const key = requirementKey("secret", storable);
+                    const stored = storedSecretNames.includes(storable);
                     const level = requirements[key]?.level ?? "required";
                     return (
                       <div key={s.name} className="flex flex-wrap items-center gap-2 p-2.5">
                         <Mono className="min-w-36 text-xs text-foreground">{s.name}</Mono>
+                        {storable !== s.name && (
+                          <span className="text-[0.6875rem] text-muted-foreground">
+                            stored as <Mono className="text-[0.6875rem]">{storable}</Mono>
+                          </span>
+                        )}
                         {s.kind && <Chip tone="neutral">{s.kind}</Chip>}
                         {stored ? (
                           <Chip tone="success">stored</Chip>
                         ) : (
                           <div className="flex items-center gap-1.5">
                             <Chip tone="warning">not stored yet</Chip>
-                            <Button size="sm" variant="outline" className="h-6 px-2 text-[0.6875rem]" onClick={() => setAddSecretName(s.name)}>
+                            <Button size="sm" variant="outline" className="h-6 px-2 text-[0.6875rem]" onClick={() => setAddSecretName(storable)}>
                               Add
                             </Button>
                           </div>

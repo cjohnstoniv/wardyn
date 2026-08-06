@@ -372,6 +372,21 @@ export function requirementKey(type: "secret" | "egress" | "write" | "integratio
   return `${type}:${rest}`;
 }
 
+// Mirrors internal/api/compose.go's sanitizeSecretName: a scan reports the
+// ENV-VAR name the code reads ("AWS_DEFAULT_REGION"); a secret: contract row
+// names an entry in Wardyn's secret STORE, whose lowercase grammar can never
+// hold that shape. Lowercase, '_'/' ' → '-', other invalid runes drop, edge
+// punctuation trims; "" when nothing storable remains.
+export function storableSecretName(name: string): string {
+  let out = "";
+  for (const ch of name.toLowerCase()) {
+    if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9") || ch === "." || ch === "-") out += ch;
+    else if (ch === "_" || ch === " ") out += "-";
+  }
+  out = out.replace(/^[.\-_]+|[.\-_]+$/g, "");
+  return /^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$/.test(out) ? out : "";
+}
+
 // Splits on the FIRST colon only, mirroring internal/api/workspaces.go's
 // splitRequirementKey — a write:<path> suffix may itself legally contain colons.
 export function splitRequirementKey(key: string): { type: string; rest: string } | null {
@@ -399,7 +414,8 @@ export function deriveInitialRequirements(
     if (!out[key]) out[key] = { level, provenance: "scan_seeded" };
   };
   for (const s of profile?.required_secrets ?? []) {
-    seed(requirementKey("secret", s.name), s.optional ? "optional" : "required");
+    const name = storableSecretName(s.name);
+    if (name) seed(requirementKey("secret", name), s.optional ? "optional" : "required");
   }
   for (const host of profile?.egress_domains ?? []) {
     seed(requirementKey("egress", host), "required");

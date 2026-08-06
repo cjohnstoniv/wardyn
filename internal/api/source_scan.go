@@ -111,11 +111,19 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 func seedSourceRequirements(kind types.SourceKind, locator string, p workspacescan.WorkspaceProfile) map[string]types.WorkspaceRequirement {
 	seed := map[string]types.WorkspaceRequirement{}
 	for _, sec := range p.RequiredSecrets {
+		// A scan reports the ENV-VAR name the code reads ("AWS_DEFAULT_REGION");
+		// a secret: row names an entry in Wardyn's secret STORE, whose grammar
+		// (secretNameRE) can never hold that shape — map onto the storable name
+		// (compose.go's normalize-to-storable rule), skip what nothing maps.
+		name := sanitizeSecretName(sec.Name)
+		if name == "" {
+			continue
+		}
 		level := "required"
 		if sec.Optional {
 			level = "optional"
 		}
-		seed["secret:"+sec.Name] = types.WorkspaceRequirement{Level: level, Provenance: "scan_seeded"}
+		seed["secret:"+name] = types.WorkspaceRequirement{Level: level, Provenance: "scan_seeded"}
 	}
 	for _, host := range p.EgressDomains {
 		seed["egress:"+host] = types.WorkspaceRequirement{Level: "required", Provenance: "scan_seeded"}

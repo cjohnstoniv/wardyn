@@ -129,7 +129,7 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     getWorkspaceMock.mockResolvedValue(ws);
     setRequirementsMock.mockResolvedValue({
       ...ws,
-      requirements: { "secret:DATABASE_URL": { level: "required", provenance: "operator_set" } },
+      requirements: { "secret:database-url": { level: "required", provenance: "operator_set" } },
     });
 
     render(<WorkspaceWizard onClose={vi.fn()} />);
@@ -165,7 +165,9 @@ describe("WorkspaceWizard — the happy path end to end", () => {
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
     await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
     expect(setRequirementsMock.mock.calls[0][1]).toMatchObject({
-      "secret:DATABASE_URL": { level: "required" },
+      // Seeded under the STORABLE name — the PUT must pass the server's
+      // secret-name grammar (the live 400 this pins).
+      "secret:database-url": { level: "required" },
       "egress:registry.npmjs.org": { level: "required" },
     });
     await screen.findByText("payments is usable.");

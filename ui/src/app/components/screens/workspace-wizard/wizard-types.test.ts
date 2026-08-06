@@ -23,6 +23,7 @@ import {
   requirementKey,
   seedFloor,
   sourceRowsFromWorkspace,
+  storableSecretName,
   splitRequirementKey,
   suggestedRegistryImage,
   summarizeRequirements,
@@ -206,6 +207,18 @@ describe("requirementKey / splitRequirementKey — the server's fixed key gramma
   });
 });
 
+describe("storableSecretName — env-var name → store-grammar name", () => {
+  it("maps detected env-var names onto the server's lowercase grammar", () => {
+    expect(storableSecretName("AWS_DEFAULT_REGION")).toBe("aws-default-region");
+    expect(storableSecretName("already-storable.key")).toBe("already-storable.key");
+    expect(storableSecretName("My Token")).toBe("my-token");
+  });
+  it("returns '' when nothing storable remains", () => {
+    expect(storableSecretName("___")).toBe("");
+    expect(storableSecretName("")).toBe("");
+  });
+});
+
 describe("deriveInitialRequirements — seeding the contract from a scan profile", () => {
   const profile: WorkspaceProfile = {
     required_secrets: [
@@ -215,10 +228,13 @@ describe("deriveInitialRequirements — seeding the contract from a scan profile
     egress_domains: ["registry.npmjs.org"],
   };
 
-  it("defaults a secret to required unless the scan flagged it optional", () => {
+  it("defaults a secret to required unless the scan flagged it optional — keyed by the STORABLE name", () => {
     const reqs = deriveInitialRequirements(profile, []);
-    expect(reqs["secret:DATABASE_URL"]).toEqual({ level: "required", provenance: "scan_seeded" });
-    expect(reqs["secret:REDIS_URL"]).toEqual({ level: "optional", provenance: "scan_seeded" });
+    // The scan reports env-var names; the contract row names a store entry the
+    // server's lowercase grammar can actually hold (the live 400 this pins).
+    expect(reqs["secret:database-url"]).toEqual({ level: "required", provenance: "scan_seeded" });
+    expect(reqs["secret:redis-url"]).toEqual({ level: "optional", provenance: "scan_seeded" });
+    expect(reqs["secret:DATABASE_URL"]).toBeUndefined();
   });
 
   it("defaults an auto-allowed egress host to required", () => {
@@ -233,10 +249,10 @@ describe("deriveInitialRequirements — seeding the contract from a scan profile
 
   it("never overwrites an existing (operator-set) entry", () => {
     const existing: WorkspaceRequirementsMap = {
-      "secret:DATABASE_URL": { level: "optional", provenance: "operator_set" },
+      "secret:database-url": { level: "optional", provenance: "operator_set" },
     };
     const reqs = deriveInitialRequirements(profile, [], existing);
-    expect(reqs["secret:DATABASE_URL"]).toEqual({ level: "optional", provenance: "operator_set" });
+    expect(reqs["secret:database-url"]).toEqual({ level: "optional", provenance: "operator_set" });
   });
 
   it("handles an empty/missing profile without throwing", () => {
