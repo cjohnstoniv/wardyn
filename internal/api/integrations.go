@@ -505,7 +505,7 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 	// ai_provider: Bedrock — ONE row. Reuses setupBedrock's own "is Bedrock
 	// touched at all" predicate (region/model/AWS profile/any bedrock secret)
 	// rather than re-deriving it a second way.
-	if b := s.setupBedrock(present); b.configured() {
+	if b := s.setupBedrock(ctx, present); b.configured() {
 		add("bedrock", types.Integration{
 			Name: "AWS Bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
 			Config: mustJSON(map[string]any{"lane": "auto", "region": b.Region, "model": b.Model}),

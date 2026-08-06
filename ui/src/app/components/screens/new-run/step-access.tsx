@@ -323,11 +323,18 @@ export function resolveModelAccess(
   // credential). So the bedrock half additionally requires bedrockReady, the
   // server's own readiness verdict — never an ordinary stored-but-unmarked
   // row, which genuinely still needs the mark.
-  const globalFallback = ai.find(
-    (r) =>
-      compatible(r) &&
-      (r.serverId === "anthropic_subscription:managed" || (r.serverId === "bedrock" && bedrockReady)),
-  );
+  //
+  // BEDROCK IS TRIED FIRST, in dispatch's order rather than the order
+  // deriveAiRows happens to push the rows: managed injection requires
+  // `!t.bedrockReady` (runs_dispatch_llm.go), so an install with BOTH runs on
+  // Bedrock. Naming the subscription there would not merely mislabel — the
+  // residency chip is read off the row named here, and the subscription's
+  // proxy_injected reads "success" while Bedrock's resident_env/resident_mount
+  // reads "warning", so step-review.tsx would suppress the "credential resident
+  // in sandbox" chip for a run that really does carry one.
+  const globalFallback =
+    ai.find((r) => compatible(r) && r.serverId === "bedrock" && bedrockReady) ??
+    ai.find((r) => compatible(r) && r.serverId === "anthropic_subscription:managed");
   if (globalFallback) return { row: globalFallback, because: "the server's global provider config applies." };
   return null;
 }

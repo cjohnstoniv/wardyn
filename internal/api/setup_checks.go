@@ -90,8 +90,8 @@ func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
 	if bedrock.Model == "" {
 		missing = append(missing, "-bedrock-model")
 	}
-	if !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent {
-		missing = append(missing, "a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, or aws-access-key-id + aws-secret-access-key secrets")
+	if !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent && !bedrock.SSOPresent {
+		missing = append(missing, "a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, a container AWS SSO login, or aws-access-key-id + aws-secret-access-key secrets")
 	}
 	return SetupCheck{
 		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",

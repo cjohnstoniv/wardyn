@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -315,6 +317,13 @@ func TestSetupBedrock_ReadyAndConfigured(t *testing.T) {
 		{"bearer only", SetupBedrock{BearerPresent: true}, true, false},
 		{"ready via mount", SetupBedrock{Region: "us-east-1", Model: "m", AWSMount: true}, true, true},
 		{"ready via bearer", SetupBedrock{Region: "us-east-1", Model: "m", BearerPresent: true}, true, true},
+		// A captured container-login AWS SSO session is the FOURTH source
+		// resolveBedrockAuth accepts, and the one the shipped login flow is sold on
+		// ("no host ~/.aws mount and no static keys"). Omitting it read
+		// not-ready for an operator whose runs authenticate fine. configured() does
+		// NOT take an SSO term (an AWS login alone is not a Bedrock intent), which is
+		// consistent only because ready() implies configured() through Region.
+		{"ready via sso", SetupBedrock{Region: "us-east-1", Model: "m", SSOPresent: true}, true, true},
 		{"region+model no creds", SetupBedrock{Region: "us-east-1", Model: "m"}, true, false},
 	}
 	for _, c := range cases {
@@ -324,5 +333,52 @@ func TestSetupBedrock_ReadyAndConfigured(t *testing.T) {
 		if got := c.b.ready(); got != c.wantReady {
 			t.Errorf("%s: ready() = %v, want %v", c.name, got, c.wantReady)
 		}
+	}
+}
+
+// TestSetupBedrock_SSOLaneMatchesLaunchGate pins the invariant the wizard's
+// honesty depends on: setupBedrock's verdict accepts EXACTLY the credential set
+// resolveBedrockAuth accepts. region+model+a captured, non-expired container
+// login (no bearer, no ~/.aws mount, no static keys) is a launchable config, so
+// readiness must say so; an EXPIRED session is not, because resolveBedrockAuth
+// falls through it to the next mode. Both directions are asserted against the
+// launch path itself, not against a second copy of the rule.
+func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
+	newServer := func() *Server {
+		return &Server{cfg: Config{
+			BedrockRegion: "us-east-1",
+			BedrockModel:  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+			Secrets:       &memSecrets{m: map[string][]byte{}}, // no bearer, no static keys
+			Now:           func() time.Time { return awsSSOTestFixedNow },
+			MaskRegistry:  secretmask.NewRegistry(),
+		}}
+	}
+	// Region+model and NO credential at all stays unready — the SSO term must not
+	// become a blanket "ready" for every operator.
+	if b := newServer().setupBedrock(context.Background(), nil); b.Ready {
+		t.Fatal("setupBedrock: Ready = true with region+model and no credential source; want false")
+	}
+
+	live := newServer()
+	putAWSSSOBlob(t, live, awsSSOTestFixedNow.Add(time.Hour))
+	b := live.setupBedrock(context.Background(), nil)
+	if !b.SSOPresent || !b.Ready {
+		t.Fatalf("captured non-expired SSO: SSOPresent = %v, Ready = %v; want true/true", b.SSOPresent, b.Ready)
+	}
+	if ba := live.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil); !ba.ready {
+		t.Fatal("resolveBedrockAuth: ready = false on the config setupBedrock calls ready — the two gates drifted apart again")
+	}
+	if got := b.credSourceDesc(); !strings.Contains(got, "SSO") {
+		t.Errorf("credSourceDesc() = %q; want the winning SSO lane named", got)
+	}
+
+	dead := newServer()
+	putAWSSSOBlob(t, dead, awsSSOTestFixedNow.Add(-time.Minute)) // expired
+	db := dead.setupBedrock(context.Background(), nil)
+	if db.SSOPresent || db.Ready {
+		t.Fatalf("EXPIRED SSO: SSOPresent = %v, Ready = %v; want false/false", db.SSOPresent, db.Ready)
+	}
+	if ba := dead.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil); ba.ready {
+		t.Fatal("resolveBedrockAuth: ready = true on an expired SSO blob with no other credential — fixture no longer models the launch gate")
 	}
 }

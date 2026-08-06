@@ -456,3 +456,91 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	}
 	return ready(bedrockAuth{env: env, egressHosts: hosts})
 }
+
+// SetupBedrock is the Amazon Bedrock Anthropic-transport readiness snapshot the
+// wizard renders. It lives HERE, immediately below resolveBedrockAuth, because
+// ready() must accept exactly the credential set that function accepts: when the
+// two drifted (readiness omitted the captured-SSO lane above) the wizard told an
+// operator whose runs authenticate fine that no integration could drive Claude
+// Code. Keep the two lists edited together.
+type SetupBedrock struct {
+	Region string `json:"region,omitempty"`
+	Model  string `json:"model,omitempty"`
+	// The four credential SOURCES resolveBedrockAuth accepts, in its precedence
+	// order (bearer > captured AWS SSO session > ~/.aws mount > resident SigV4).
+	// ANY one is sufficient — a mount-, bearer- or SSO-credentialed host has NO
+	// aws-access-key-id/-secret secrets yet is fully ready, so gating readiness on
+	// CredsPresent alone wrongly reads "needs setup".
+	CredsPresent  bool `json:"creds_present"`  // resident aws-access-key-id + aws-secret-access-key secrets
+	AWSMount      bool `json:"aws_mount"`      // host-mode read-only ~/.aws bind-mount (SSO auto-refreshes)
+	BearerPresent bool `json:"bearer_present"` // bedrock-api-key bearer token secret (never resident)
+	SSOPresent    bool `json:"sso_present"`    // captured, NON-EXPIRED container-login AWS SSO session
+	// Ready is the server-computed readiness (region+model+any credential source),
+	// echoed so the UI doesn't re-derive — and drift from — this gate.
+	Ready bool `json:"ready"`
+}
+
+// ready reports whether a claude-code run would actually get the Bedrock
+// transport right now — mirrors resolveBedrockAuth's gate: region + model AND at
+// least one credential source (a bearer token, a captured AWS SSO session, a
+// ~/.aws mount, or resident keys). Presence, not value, is enough here (no live
+// secret-store read) — except for the SSO session, whose expiry IS honoured
+// because resolveBedrockAuth falls through an expired blob to the next mode.
+func (b SetupBedrock) ready() bool {
+	return b.Region != "" && b.Model != "" &&
+		(b.CredsPresent || b.AWSMount || b.BearerPresent || b.SSOPresent)
+}
+
+// configured reports whether the operator has touched ANY Bedrock knob (region,
+// model, or a credential source that is Bedrock's alone) — used to decide
+// whether the bedrock_provider check is worth showing at all vs. staying silent
+// for the overwhelming majority of operators who never use Bedrock. SSOPresent
+// is deliberately NOT a term: a container AWS SSO login on its own says nothing
+// about wanting Bedrock, and ready() already implies configured() through Region.
+func (b SetupBedrock) configured() bool {
+	return b.Region != "" || b.Model != "" || b.CredsPresent || b.AWSMount || b.BearerPresent
+}
+
+// credSourceDesc names the winning credential source (resolveBedrockAuth's
+// precedence) for honest UI copy — "resident keys" is wrong for a mount/bearer host.
+func (b SetupBedrock) credSourceDesc() string {
+	switch {
+	case b.BearerPresent:
+		return "a proxy-injected Bedrock API key (never resident in the sandbox)"
+	case b.SSOPresent:
+		return "your captured AWS SSO session (container login; re-login when it expires)"
+	case b.AWSMount:
+		return "your host AWS credentials via a read-only ~/.aws mount (SSO auto-refreshes)"
+	default:
+		return "resident AWS SigV4 credentials"
+	}
+}
+
+// setupBedrock reports Bedrock readiness: region/model are boot-time config
+// (non-secret, safe to echo to the UI) and each credential flag mirrors the
+// matching resolveBedrockAuth branch — presence, never the value. AWSMount
+// mirrors its opt-in host-mode path: BedrockAWSConfigDir set AND the dir still
+// exists (stat it, so a since-deleted ~/.aws doesn't read ready). SSOPresent
+// mirrors its captured-SSO branch, which is why this needs a ctx: the blob is a
+// secret-store read, and an expired one is not a credential there either.
+func (s *Server) setupBedrock(ctx context.Context, present map[string]bool) SetupBedrock {
+	awsMount := false
+	if s.cfg.BedrockAWSConfigDir != "" {
+		st, err := os.Stat(s.cfg.BedrockAWSConfigDir)
+		awsMount = err == nil && st.IsDir()
+	}
+	sso := false
+	if blob, found, err := s.readAWSSSOBlob(ctx); err == nil && found {
+		sso = !blob.expired(s.cfg.Now())
+	}
+	b := SetupBedrock{
+		Region:        s.cfg.BedrockRegion,
+		Model:         s.cfg.BedrockModel,
+		CredsPresent:  present[bedrockAccessKeyIDSecret] && present[bedrockSecretAccessKeySecret],
+		AWSMount:      awsMount,
+		BearerPresent: present[bedrockAPIKeySecret],
+		SSOPresent:    sso,
+	}
+	b.Ready = b.ready()
+	return b
+}

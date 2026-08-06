@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -180,51 +179,8 @@ type SetupDeployment struct {
 	HostLike bool `json:"host_like"`
 }
 
-// SetupBedrock is the Amazon Bedrock Anthropic-transport readiness snapshot.
-type SetupBedrock struct {
-	Region string `json:"region,omitempty"`
-	Model  string `json:"model,omitempty"`
-	// The three credential SOURCES resolveBedrockAuth accepts, in its precedence
-	// order (bearer > ~/.aws mount > resident SigV4). ANY one is sufficient — a
-	// mount- or bearer-configured host has NO aws-access-key-id/-secret secrets
-	// yet is fully ready, so gating readiness on CredsPresent alone wrongly reads
-	// "needs setup".
-	CredsPresent  bool `json:"creds_present"`  // resident aws-access-key-id + aws-secret-access-key secrets
-	AWSMount      bool `json:"aws_mount"`      // host-mode read-only ~/.aws bind-mount (SSO auto-refreshes)
-	BearerPresent bool `json:"bearer_present"` // bedrock-api-key bearer token secret (never resident)
-	// Ready is the server-computed readiness (region+model+any credential source),
-	// echoed so the UI doesn't re-derive — and drift from — this gate.
-	Ready bool `json:"ready"`
-}
-
-// bedrockReady reports whether a claude-code run would actually get the Bedrock
-// transport right now — mirrors resolveBedrockAuth's gate: region + model AND at
-// least one credential source (resident keys, a ~/.aws mount, or a bearer token).
-// Presence, not value, is enough here (no live secret-store read).
-func (b SetupBedrock) ready() bool {
-	return b.Region != "" && b.Model != "" && (b.CredsPresent || b.AWSMount || b.BearerPresent)
-}
-
-// bedrockConfigured reports whether the operator has touched ANY Bedrock knob
-// (region, model, or any credential source) — used to decide whether the
-// bedrock_provider check is worth showing at all vs. staying silent for the
-// overwhelming majority of operators who never use Bedrock.
-func (b SetupBedrock) configured() bool {
-	return b.Region != "" || b.Model != "" || b.CredsPresent || b.AWSMount || b.BearerPresent
-}
-
-// credSourceDesc names the winning credential source (resolveBedrockAuth's
-// precedence) for honest UI copy — "resident keys" is wrong for a mount/bearer host.
-func (b SetupBedrock) credSourceDesc() string {
-	switch {
-	case b.BearerPresent:
-		return "a proxy-injected Bedrock API key (never resident in the sandbox)"
-	case b.AWSMount:
-		return "your host AWS credentials via a read-only ~/.aws mount (SSO auto-refreshes)"
-	default:
-		return "resident AWS SigV4 credentials"
-	}
-}
+// SetupBedrock (the Bedrock readiness snapshot) and its predicates live in
+// runs_bedrock.go, next to the resolveBedrockAuth gate they must mirror.
 
 // SetupCheck is one environment/readiness row. Status is ok|warn|fail|info;
 // "info" is a permanent, non-fixable condition (e.g. no /dev/kvm on macOS) that
@@ -634,7 +590,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// winning signal (not a change to llmProvenance's own priority order) so a
 	// Bedrock-only operator still sees "LLM access: ok" without touching the
 	// existing CLI/composer/secret-name signals or their tests.
-	bedrock := s.setupBedrock(present)
+	bedrock := s.setupBedrock(ctx, present)
 	if llmDetail == "" && bedrock.Ready {
 		llmDetail = fmt.Sprintf(
 			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",
@@ -781,28 +737,6 @@ func claudeLoginSignal(providers []SetupProvider) (bool, string) {
 		}
 	}
 	return false, ""
-}
-
-// setupBedrock reports Bedrock readiness: region/model are boot-time config
-// (non-secret, safe to echo to the UI) and CredsPresent mirrors
-// resolveBedrockAuth's secret-name check — presence, never the value. AWSMount
-// mirrors resolveBedrockAuth's opt-in host-mode path: BedrockAWSConfigDir set AND
-// the dir still exists (stat it, so a since-deleted ~/.aws doesn't read ready).
-func (s *Server) setupBedrock(present map[string]bool) SetupBedrock {
-	awsMount := false
-	if s.cfg.BedrockAWSConfigDir != "" {
-		st, err := os.Stat(s.cfg.BedrockAWSConfigDir)
-		awsMount = err == nil && st.IsDir()
-	}
-	b := SetupBedrock{
-		Region:        s.cfg.BedrockRegion,
-		Model:         s.cfg.BedrockModel,
-		CredsPresent:  present[bedrockAccessKeyIDSecret] && present[bedrockSecretAccessKeySecret],
-		AWSMount:      awsMount,
-		BearerPresent: present[bedrockAPIKeySecret],
-	}
-	b.Ready = b.ready()
-	return b
 }
 
 // setupHarnessCreds reports the credentials captured by a containerized login,

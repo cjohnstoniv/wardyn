@@ -247,6 +247,105 @@ describe("StepAccess — model access resolution card", () => {
     expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
     expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
   });
+
+  // Readiness is the SERVER's verdict, and it counts every credential lane
+  // resolveBedrockAuth accepts — including a captured container-login AWS SSO
+  // session with NO host ~/.aws mount and NO static keys, which is exactly the
+  // configuration harness-login-pane advertises. While ready() was narrower than
+  // the launch gate, this operator's run authenticated fine and Access still
+  // said nothing could drive Claude Code.
+  it("a Bedrock config ready only via a captured AWS SSO session resolves via the carve-out", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    const bedrock: IntegrationRow = {
+      id: "ai:bedrock",
+      serverId: "bedrock",
+      category: "ai_provider",
+      name: "AWS Bedrock",
+      typeLabel: "bedrock",
+      chips: [],
+      residency: "resident_mount",
+      posture: { kind: "session_expires", when: "14:20" },
+      secretNames: [],
+      harnessProvider: "aws",
+      aiType: "bedrock",
+      bedrockLane: "sso",
+      checkIds: [],
+    };
+    listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }],
+        bedrock: {
+          region: "us-east-1",
+          model: "anthropic.claude-3-sonnet",
+          creds_present: false,
+          aws_mount: false,
+          bearer_present: false,
+          sso_present: true,
+          ready: true,
+        },
+        harness: [{ provider: "aws", captured: true, expired: false }],
+      }),
+    );
+    renderStep();
+    expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+  });
+
+  // Dispatch injects the managed subscription only when Bedrock is NOT ready
+  // (runs_dispatch_llm.go: `managed := … && !t.bedrockReady`), so an install
+  // with both runs on Bedrock. Naming the subscription — which is merely what
+  // deriveAiRows pushes first — also reads ITS proxy_injected residency, hiding
+  // the resident-credential warning step-review renders off the named row.
+  it("with BOTH a managed subscription and a ready Bedrock, names Bedrock and its resident residency — dispatch's order, not list order", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    const managedSubscription: IntegrationRow = {
+      id: "ai:anthropic_subscription:managed",
+      serverId: "anthropic_subscription:managed",
+      category: "ai_provider",
+      name: "Claude subscription (managed)",
+      typeLabel: "anthropic · subscription",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "anthropic_subscription",
+      checkIds: [],
+    };
+    const bedrock: IntegrationRow = {
+      id: "ai:bedrock",
+      serverId: "bedrock",
+      category: "ai_provider",
+      name: "AWS Bedrock",
+      typeLabel: "bedrock",
+      chips: [],
+      residency: "resident_env",
+      posture: { kind: "configured" },
+      secretNames: ["aws-access-key-id", "aws-secret-access-key"],
+      aiType: "bedrock",
+      bedrockLane: "static",
+      checkIds: [],
+    };
+    // deriveAiRows' own push order: managed BEFORE bedrock. Resolution must not
+    // inherit it.
+    listIntegrationsMock.mockResolvedValue(integrations([managedSubscription, bedrock]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        integrations: [
+          { id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" },
+          { id: "bedrock", category: "ai_provider", type: "bedrock" },
+        ],
+        bedrock: { region: "us-east-1", model: "anthropic.claude-3-sonnet", creds_present: true, ready: true },
+        harness: [{ provider: "anthropic", captured: true }],
+      }),
+    );
+    renderStep();
+    expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
+    expect(screen.queryByText("Claude subscription (managed)")).not.toBeInTheDocument();
+    // The residency the operator is shown is Bedrock's, not the subscription's.
+    expect(screen.getByText("resident")).toBeInTheDocument();
+    expect(screen.queryByText("proxy-injected")).not.toBeInTheDocument();
+  });
 });
 
 describe("StepAccess — Override for this run peek", () => {

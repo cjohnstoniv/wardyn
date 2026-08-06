@@ -220,6 +220,58 @@ describe("StepReview — Model access (resolved from integrations)", () => {
     expect(await screen.findByText(/No integration can drive Claude Code/)).toBeInTheDocument();
   });
 
+  // With BOTH a managed subscription and a ready Bedrock configured, dispatch
+  // runs on Bedrock (runs_dispatch_llm.go: `managed := … && !t.bedrockReady`).
+  // Naming the subscription — merely the row deriveAiRows pushes first — also
+  // reads its proxy_injected residency, and this chip is gated on the NAMED
+  // row's residency tone: the operator would be told nothing is resident while
+  // the run carries AWS keys in the sandbox. Wrong direction for a product
+  // whose thesis is credential containment.
+  it("names Bedrock and still shows the resident-credential chip when a managed subscription is also configured", async () => {
+    const managedSubscription: IntegrationRow = {
+      id: "ai:anthropic_subscription:managed",
+      serverId: "anthropic_subscription:managed",
+      category: "ai_provider",
+      name: "Claude subscription (managed)",
+      typeLabel: "anthropic · subscription",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "anthropic_subscription",
+      checkIds: [],
+    };
+    const bedrock: IntegrationRow = {
+      id: "ai:bedrock",
+      serverId: "bedrock",
+      category: "ai_provider",
+      name: "AWS Bedrock",
+      typeLabel: "bedrock",
+      chips: [],
+      residency: "resident_env",
+      posture: { kind: "configured" },
+      secretNames: ["aws-access-key-id", "aws-secret-access-key"],
+      aiType: "bedrock",
+      bedrockLane: "static",
+      checkIds: [],
+    };
+    listIntegrationsMock.mockResolvedValueOnce({ ai: [managedSubscription, bedrock], scm: [], mirror: [], proxy: [] });
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({
+        integrations: [
+          { id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" },
+          { id: "bedrock", category: "ai_provider", type: "bedrock" },
+        ],
+        bedrock: { region: "us-east-1", model: "anthropic.claude-3-sonnet", creds_present: true, ready: true },
+        harness: [{ provider: "anthropic", captured: true }],
+      }),
+    );
+    render(<StepReview state={initialWizardState("CC2")} patch={() => {}} />);
+    expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
+    expect(screen.queryByText("Claude subscription (managed)")).not.toBeInTheDocument();
+    expect(screen.getByText("Reduced isolation: credential resident in sandbox")).toBeInTheDocument();
+  });
+
   it("shows the governed-command line instead of a resolution for a governed command", () => {
     render(
       <StepReview

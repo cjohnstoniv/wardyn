@@ -68,6 +68,10 @@ export interface SetupBedrock {
   // Optional for fixture-compat with an older daemon that predates them.
   aws_mount?: boolean;
   bearer_present?: boolean;
+  // A captured, non-expired container-login AWS SSO session. The lane controls
+  // read it from status.harness (which also carries the expiry to render); this
+  // is the server folding the same fact into `ready` below.
+  sso_present?: boolean;
   // Server-computed readiness (region+model+any credential source). Prefer this
   // over re-deriving in the UI so the two gates can't drift.
   ready?: boolean;
