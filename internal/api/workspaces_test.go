@@ -364,3 +364,47 @@ func TestWriteEnvAsCode_PreservesExistingDockerfile(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteEnvAsCode_RefreshesOwnStub pins the R6 fix: the O_EXCL guard used
+// to key on existence alone, so the SECOND "Write into the directory"
+// click — the card's own "regenerate after a rescan" contract invites exactly
+// this — always found the FIRST click's own Dockerfile in the way and
+// reported it skipped, permanently closing the regenerate path for this one
+// file and making the card's "won't include the agent CLI unless you add
+// that yourself" copy false about a file that DOES bake it. A pre-existing
+// Dockerfile whose content is byte-identical to what Wardyn would write right
+// now (genAgentToolDockerfile is a pure function of tools, so identical
+// content can only be Wardyn's own previous stub, never an operator's
+// coincidence) now refreshes silently and is never reported skipped.
+func TestWriteEnvAsCode_RefreshesOwnStub(t *testing.T) {
+	root := t.TempDir()
+	const wardynStub = "FROM mcr.microsoft.com/devcontainers/base:ubuntu\n\nRUN set -eu; \\\n    echo installing\n"
+	if err := os.MkdirAll(filepath.Join(root, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulates an earlier "Write into the directory" click that already
+	// planted Wardyn's own stub.
+	if err := os.WriteFile(filepath.Join(root, ".devcontainer", "Dockerfile"), []byte(wardynStub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string]string{
+		".devcontainer/devcontainer.json": `{"build":{"dockerfile":"Dockerfile"}}`,
+		".devcontainer/Dockerfile":        wardynStub, // same tools -> byte-identical regeneration
+		"AGENTS.md":                       "# agents",
+	}
+	skipped, err := writeEnvAsCode(root, files)
+	if err != nil {
+		t.Fatalf("writeEnvAsCode: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none — this is Wardyn's own stub, not the operator's", skipped)
+	}
+	got, err := os.ReadFile(filepath.Join(root, ".devcontainer", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != wardynStub {
+		t.Errorf("Dockerfile = %q, want refreshed %q", got, wardynStub)
+	}
+}

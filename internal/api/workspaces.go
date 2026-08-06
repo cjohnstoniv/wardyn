@@ -879,15 +879,23 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // truncate an operator file, wardynd running as the operator in host mode. The
 // lexical check stays as a cheap first gate against a `..` in a generated key.
 //
-// workspacescan.EnvAsCodeDockerfilePath is special-cased O_EXCL: every OTHER
-// emitted key is Wardyn's own narrow, regenerate-on-demand output (the card's
-// own copy promises "regenerate after a rescan or a requirements change" for
+// workspacescan.EnvAsCodeDockerfilePath is special-cased: every OTHER emitted
+// key is Wardyn's own narrow, regenerate-on-demand output (the card's own
+// copy promises "regenerate after a rescan or a requirements change" for
 // devcontainer.json/AGENTS.md, and the artifact-redirect stubs are one-line
 // registry pointers with no plausible hand-authored equivalent) — but
 // .devcontainer/Dockerfile is exactly where an operator using devcontainers
 // already puts their OWN hand-written Dockerfile, unrelated to Wardyn. A
-// pre-existing file there is left alone and reported back instead of
-// truncated.
+// pre-existing file there is protected UNLESS its content is byte-identical
+// to what Wardyn would write right now — genAgentToolDockerfile is a pure
+// function of tools, so that can only be Wardyn's own previously-emitted
+// stub, never an operator's coincidence — in which case it is refreshed like
+// every other key, not reported skipped. Keying the guard on existence alone
+// would make the SECOND "Write into the directory" click always find the
+// FIRST click's own stub in the way, permanently closing the regenerate path
+// for this one file and falsifying the card's "won't include the agent CLI
+// unless you add that yourself" copy. Only a Dockerfile whose content
+// actually differs — genuinely the operator's — is left alone and reported.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
 	root, err := os.OpenRoot(cleanRoot)
@@ -909,7 +917,16 @@ func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) 
 		}
 		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 		if rel == workspacescan.EnvAsCodeDockerfilePath {
-			flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+			// The EXCL guard is needed only when a pre-existing file can't
+			// already be PROVEN to be Wardyn's own: byte-identical to what
+			// would be written right now (genAgentToolDockerfile is a pure
+			// function of tools, so only Wardyn's own previous stub can
+			// match). A read error — including "does not exist" — falls
+			// through to the guard, the safe default: create fresh, or fail
+			// closed into the EEXIST-skip path below rather than guess.
+			if existing, rerr := root.ReadFile(relPath); rerr != nil || string(existing) != content {
+				flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+			}
 		}
 		f, err := root.OpenFile(relPath, flag, 0o644)
 		if err != nil {

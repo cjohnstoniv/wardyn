@@ -276,6 +276,13 @@ export function resolveModelAccess(
   // tier-3 "server default" claim below — absent (or not yet loaded) just
   // means nothing can be genuinely marked yet, which correctly falls through.
   integrations?: WireIntegration[],
+  // SetupStatus.bedrock?.ready (internal/api/setup.go's bedrockReady() gate,
+  // echoed on the wire so the UI doesn't re-derive — and drift from — it).
+  // Needed because, unlike the managed-subscription row below, the derived
+  // "bedrock" row is synthesized on mere TOUCH, not on readiness — see the
+  // comment on globalFallback. Absent (not yet loaded) means that half of the
+  // carve-out correctly can't fire yet either.
+  bedrockReady?: boolean,
 ): ResolvedModelAccess | null {
   const capability = agentCapability(agent);
   const compatible = (r: IntegrationRow) => !incompatibleReason(r, capability);
@@ -308,11 +315,18 @@ export function resolveModelAccess(
   // (resolveBedrockAuth(…, nil)) — exactly what preflight.go:161-179 folds in
   // so the checklist "stop[s] telling an operator with working Bedrock access
   // that they have none." Both are visible here ONLY as the two fixed-id
-  // derived rows integrations.go synthesizes precisely when each is ready
-  // (anthropic_subscription:managed, bedrock) — never an ordinary
-  // stored-but-unmarked row, which genuinely still needs the mark.
+  // derived rows integrations.go synthesizes — but NOT symmetrically: the
+  // managed-subscription row is synthesized precisely when managedInjectReady,
+  // while the bedrock row is synthesized whenever the operator has touched ANY
+  // Bedrock knob (SetupBedrock.configured — region OR model OR any
+  // credential), which is strictly weaker than ready (region AND model AND a
+  // credential). So the bedrock half additionally requires bedrockReady, the
+  // server's own readiness verdict — never an ordinary stored-but-unmarked
+  // row, which genuinely still needs the mark.
   const globalFallback = ai.find(
-    (r) => compatible(r) && (r.serverId === "anthropic_subscription:managed" || r.serverId === "bedrock"),
+    (r) =>
+      compatible(r) &&
+      (r.serverId === "anthropic_subscription:managed" || (r.serverId === "bedrock" && bedrockReady)),
   );
   if (globalFallback) return { row: globalFallback, because: "the server's global provider config applies." };
   return null;
@@ -331,6 +345,7 @@ function ModelAccessCard({
 }) {
   const [ai, setAi] = React.useState<IntegrationRow[]>([]);
   const [integrations, setIntegrations] = React.useState<WireIntegration[] | undefined>(undefined);
+  const [bedrockReady, setBedrockReady] = React.useState<boolean | undefined>(undefined);
   const [peekOpen, setPeekOpen] = React.useState(false);
   // Self-fetched (not threaded through wizard.tsx as a new prop) so every
   // existing StepAccess call site keeps working unchanged; only the id of the
@@ -359,15 +374,19 @@ function ModelAccessCard({
 
   // Which compatible row is genuinely marked DefaultFor:agent_runs — the same
   // fact resolveModelAccess's tier-3 now requires, not merely "first in list
-  // order". A second fetch (integrationsApi.list() derives its rows from the
-  // same three endpoints but discards the raw status), same self-fetch idiom
-  // as `ai` above.
+  // order" — plus status.bedrock?.ready, which its bedrock carve-out requires
+  // for the same reason. A second fetch (integrationsApi.list() derives its
+  // rows from the same three endpoints but discards the raw status), same
+  // self-fetch idiom as `ai` above.
   React.useEffect(() => {
     let alive = true;
     setupApi
       .getSetupStatus()
       .then((status) => {
-        if (alive) setIntegrations(status.integrations);
+        if (alive) {
+          setIntegrations(status.integrations);
+          setBedrockReady(status.bedrock?.ready);
+        }
       })
       .catch(() => {});
     return () => {
@@ -376,7 +395,7 @@ function ModelAccessCard({
   }, []);
 
   const primaryWorkspace = workspaces.find((w) => w.id === primaryWorkspaceId);
-  const resolved = resolveModelAccess(agent, integrationId, primaryWorkspace, ai, integrations);
+  const resolved = resolveModelAccess(agent, integrationId, primaryWorkspace, ai, integrations, bedrockReady);
 
   return (
     <div className="rounded-xl border border-border bg-card p-3.5">

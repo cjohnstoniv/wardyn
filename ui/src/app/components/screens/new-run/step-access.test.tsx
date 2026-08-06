@@ -180,7 +180,14 @@ describe("StepAccess — model access resolution card", () => {
     expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
   });
 
-  it("an unmarked install still resolves via the global-Bedrock carve-out", async () => {
+  // The derived "bedrock" row exists whenever the operator has touched ANY
+  // Bedrock knob (SetupBedrock.configured), which is weaker than readiness
+  // (SetupBedrock.ready — region+model+a credential). The carve-out must gate
+  // on the latter (status.bedrock.ready) or the wizard names a provider whose
+  // first model call 404s — and, because a truthy `resolved` also suppresses
+  // step-review.tsx's "No model access" warning, hides the very problem it
+  // causes. Both directions pinned below.
+  it("a touched-but-not-ready Bedrock config yields no model access, not the carve-out", async () => {
     listWorkspacesMock.mockResolvedValue([]);
     const bedrock: IntegrationRow = {
       id: "ai:bedrock",
@@ -197,7 +204,44 @@ describe("StepAccess — model access resolution card", () => {
     };
     listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }] }),
+      baseStatus({
+        integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }],
+        // Region set, nothing else — configured() (the row exists) is true,
+        // but ready() (region AND model AND a credential) is false.
+        bedrock: { region: "us-east-1", creds_present: false, ready: false },
+      }),
+    );
+    renderStep();
+    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("AWS Bedrock")).not.toBeInTheDocument();
+  });
+
+  it("a ready Bedrock config resolves via the global-Bedrock carve-out", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    const bedrock: IntegrationRow = {
+      id: "ai:bedrock",
+      serverId: "bedrock",
+      category: "ai_provider",
+      name: "AWS Bedrock",
+      typeLabel: "bedrock",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "bedrock",
+      checkIds: [],
+    };
+    listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }],
+        bedrock: {
+          region: "us-east-1",
+          model: "anthropic.claude-3-sonnet",
+          creds_present: true,
+          ready: true,
+        },
+      }),
     );
     renderStep();
     expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();

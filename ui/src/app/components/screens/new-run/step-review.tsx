@@ -90,14 +90,19 @@ export function StepReview({
   }, []);
   // The effective wire rows — resolveModelAccess's tier-3 needs this to tell a
   // genuinely-marked DefaultFor:agent_runs row from merely the first
-  // compatible one, same as step-access.tsx's own card.
+  // compatible one, same as step-access.tsx's own card. bedrockReady is the
+  // same status.bedrock?.ready its bedrock carve-out also needs.
   const [integrations, setIntegrations] = React.useState<WireIntegration[] | undefined>(undefined);
+  const [bedrockReady, setBedrockReady] = React.useState<boolean | undefined>(undefined);
   React.useEffect(() => {
     let alive = true;
     setupApi
       .getSetupStatus()
       .then((status) => {
-        if (alive) setIntegrations(status.integrations);
+        if (alive) {
+          setIntegrations(status.integrations);
+          setBedrockReady(status.bedrock?.ready);
+        }
       })
       .catch(() => {});
     return () => {
@@ -106,7 +111,7 @@ export function StepReview({
   }, []);
   const resolved = isGovernedCommand
     ? null
-    : resolveModelAccess(state.agent, state.integrationId, primaryWorkspace, ai, integrations);
+    : resolveModelAccess(state.agent, state.integrationId, primaryWorkspace, ai, integrations, bedrockReady);
   // A resident credential (a "warning"-toned residency, e.g. a host-CLI
   // subscription mount) means reduced isolation — surfaced the same way
   // regardless of WHICH integration ended up resolved.
