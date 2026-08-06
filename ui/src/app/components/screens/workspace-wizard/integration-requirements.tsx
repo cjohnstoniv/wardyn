@@ -33,14 +33,24 @@ export function IntegrationRequirements({
   requirements,
   setLane,
   clear,
+  namedOnly = false,
 }: {
   /** Absent while status is still loading — the section simply doesn't render. */
   status: SetupStatus | null;
   requirements: WorkspaceRequirementsMap;
   setLane: (key: string, level: RequirementLevel) => void;
   clear: (key: string) => void;
+  /**
+   * Suppress the picker and show only the rows the contract already names —
+   * for a surface whose PICKING lives elsewhere (the wizard's step ③) but
+   * which must still tell the truth about a named row's existence.
+   */
+  namedOnly?: boolean;
 }) {
-  const available = React.useMemo(() => (status ? genericIntegrations(status) : []), [status]);
+  const available = React.useMemo(
+    () => (status && !namedOnly ? genericIntegrations(status) : []),
+    [status, namedOnly],
+  );
   const named = namedIntegrationIds(requirements);
 
   // Nothing configured and nothing named: say nothing. An empty picker on a
@@ -49,6 +59,11 @@ export function IntegrationRequirements({
   if (available.length === 0 && named.length === 0) return null;
 
   const byId = new Map(available.map((r) => [r.wire.id, r]));
+  // EXISTENCE is judged against every STORED integration, not the generic
+  // subset above — an adopted AI/SCM row (e.g. anthropic_subscription:managed)
+  // is picked on step ③, not here, but a contract naming it must not be told
+  // "not configured" by the one surface that filtered it out of its picker.
+  const storedById = new Map((status?.integrations ?? []).map((w) => [w.id, w]));
 
   return (
     <section className="space-y-2 rounded-lg border border-border p-3" data-testid="integration-requirements">
@@ -65,26 +80,51 @@ export function IntegrationRequirements({
             onClear={() => clear(requirementKey("integration", row.wire.id))}
           />
         ))}
-        {/* A named integration that no longer exists still shows: the contract
-            states an intent, and it opens nothing until the row is back. */}
+        {/* Named rows the generic picker doesn't carry: a stored AI/SCM row
+            renders configured (it was picked on step ③); a truly-absent id
+            keeps the honest warning — the contract states an intent, and it
+            opens nothing until the row is back. */}
         {named
           .filter((id) => !byId.has(id))
-          .map((id) => (
-            <div key={id} className="flex flex-wrap items-center gap-2 p-2.5">
-              <div className="min-w-0">
-                <Mono className="text-xs text-foreground">{id}</Mono>
-                <p className="text-[0.6875rem] text-warning">Not configured — this opens nothing until it exists.</p>
+          .map((id) => {
+            const wire = storedById.get(id);
+            const key = requirementKey("integration", id);
+            const level = requirements[key]?.level;
+            return (
+              <div key={id} className="flex flex-wrap items-center gap-2 p-2.5">
+                <div className="min-w-0">
+                  {wire ? (
+                    <>
+                      <span className="text-xs text-foreground">{wire.name || id}</span>
+                      <Mono className="ml-2 text-[0.6875rem] text-muted-foreground">{id}</Mono>
+                      <p className="text-[0.6875rem] text-muted-foreground">Its wiring rides along.</p>
+                    </>
+                  ) : (
+                    <>
+                      <Mono className="text-xs text-foreground">{id}</Mono>
+                      <p className="text-[0.6875rem] text-warning">Not configured — this opens nothing until it exists.</p>
+                    </>
+                  )}
+                </div>
+                <span className="ml-auto" />
+                {wire && level && (
+                  <RequiredOptionalToggle
+                    idPrefix={`integration-${id}`}
+                    label={`${wire.name || id} lane`}
+                    value={level}
+                    onChange={(l) => setLane(key, l)}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="text-[0.6875rem] text-muted-foreground underline"
+                  onClick={() => clear(key)}
+                >
+                  Remove
+                </button>
               </div>
-              <span className="ml-auto" />
-              <button
-                type="button"
-                className="text-[0.6875rem] text-muted-foreground underline"
-                onClick={() => clear(requirementKey("integration", id))}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
+            );
+          })}
       </div>
     </section>
   );

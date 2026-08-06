@@ -29,7 +29,9 @@ export function StepIndicator<T extends string = WizardStepId>({
 }) {
   const currentIdx = steps.findIndex((s) => s.id === current);
   return (
-    <ol className="flex items-center gap-1.5">
+    // gap-y widens on wrap: a 7-step rail in a width-capped dialog folds to a
+    // second row instead of clipping steps past the panel edge.
+    <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
       {steps.map((step, i) => {
         const state = i < currentIdx ? "done" : i === currentIdx ? "active" : "todo";
         const clickable = onJump && i <= currentIdx;

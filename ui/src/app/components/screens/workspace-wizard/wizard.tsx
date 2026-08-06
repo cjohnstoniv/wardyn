@@ -521,7 +521,10 @@ export function WorkspaceWizard({
   return (
     <Dialog open onOpenChange={(o) => !o && close()}>
       <DialogContent
-        className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-2xl"
+        // 5xl: the 7-step rail (numbered circles + always-on labels + rails)
+        // needs ~900px on one line — at 2xl steps ⑥⑦ rendered past the panel
+        // edge, and 4xl still folded "Done" onto a second row.
+        className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-5xl"
         onPointerDownOutside={(e) => blockAccidentalDismiss && e.preventDefault()}
         onEscapeKeyDown={(e) => blockAccidentalDismiss && e.preventDefault()}
       >
@@ -614,10 +617,13 @@ export function WorkspaceWizard({
               storedSecretNames={s.secretNames}
               onSecretStored={onSecretStored}
               powerSource={powerSource}
-              // No status: the wizard's step ③ OWNS the integrations picker;
-              // passing it here would render the same section twice. The
-              // workspace DETAIL page still passes its status — that surface
-              // has no step ③, so its Reach keeps the inline section.
+              // Named-only: the wizard's step ③ OWNS the integrations picker,
+              // so Reach shows just the rows the contract names — WITH status,
+              // because existence must stay honest (omitting it told the
+              // operator an adopted row was "not configured"). The workspace
+              // DETAIL page has no step ③, so its Reach keeps the full picker.
+              status={s.setupStatus ?? null}
+              integrationsNamedOnly
             />
           )}
           {s.step === "done" && (

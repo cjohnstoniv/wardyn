@@ -160,6 +160,7 @@ export function StepRequirements({
   onSecretStored,
   powerSource,
   status,
+  integrationsNamedOnly = false,
   showVerifyTab = true,
   verifyPanel,
   carryImage,
@@ -180,6 +181,10 @@ export function StepRequirements({
   // so every existing caller (and every fixture) keeps working — absent simply
   // means the integrations section doesn't render.
   status?: SetupStatus | null;
+  // Reach shows only the rows the contract already NAMES, no picker — for the
+  // wizard, whose step ③ owns picking; without this the same picker renders
+  // twice, and without status the named rows lie "not configured".
+  integrationsNamedOnly?: boolean;
   // The LIVE verify-session panel (wizard only: it owns a real workspace to
   // launch against). Absent — the detail page, fixtures — keeps the plain
   // buttons, whose real launcher lives elsewhere on that page.
@@ -300,6 +305,7 @@ export function StepRequirements({
                 requirements={requirements}
                 setLane={setLane}
                 clear={clearRequirement}
+                namedOnly={integrationsNamedOnly}
               />
               {autoAllowed.length > 0 || !nothingResolves ? (
                 <div className="divide-y divide-border rounded-lg border border-border">

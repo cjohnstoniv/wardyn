@@ -23,7 +23,11 @@ const FEED: WireIntegration = {
   credentials: { token: "artifactory-token" },
 };
 
-function renderSection(integrations: WireIntegration[], requirements: WorkspaceRequirementsMap = {}) {
+function renderSection(
+  integrations: WireIntegration[],
+  requirements: WorkspaceRequirementsMap = {},
+  namedOnly = false,
+) {
   const setLane = vi.fn();
   const clear = vi.fn();
   render(
@@ -32,6 +36,7 @@ function renderSection(integrations: WireIntegration[], requirements: WorkspaceR
       requirements={requirements}
       setLane={setLane}
       clear={clear}
+      namedOnly={namedOnly}
     />,
   );
   return { setLane, clear };
@@ -86,5 +91,40 @@ describe("IntegrationRequirements", () => {
     renderSection([], { "integration:not-configured-yet": required });
     expect(screen.getByText("not-configured-yet")).toBeInTheDocument();
     expect(screen.getByText(/opens nothing until it exists/i)).toBeInTheDocument();
+  });
+
+  // The live lie this pins: an adopted AI row (picked on step ③) is filtered
+  // out of the generic picker by DESIGN, but it is stored — the existence
+  // check must consult every stored integration, never the picker subset.
+  it("a named AI/SCM row that IS stored renders configured, never 'not configured'", async () => {
+    const sub: WireIntegration = {
+      id: "anthropic_subscription:managed",
+      name: "Claude subscription (managed)",
+      category: "ai_provider",
+      type: "anthropic_subscription",
+    };
+    const { setLane, clear } = renderSection([sub], {
+      "integration:anthropic_subscription:managed": required,
+    });
+    expect(screen.getByText("Claude subscription (managed)")).toBeInTheDocument();
+    expect(screen.queryByText(/not configured/i)).not.toBeInTheDocument();
+    // Full lane parity with any other named row: re-lane and remove both work.
+    await userEvent.click(screen.getByRole("radio", { name: "Optional" }));
+    expect(setLane).toHaveBeenCalledWith("integration:anthropic_subscription:managed", "optional");
+    await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+    expect(clear).toHaveBeenCalledWith("integration:anthropic_subscription:managed");
+  });
+
+  // The wizard's Reach: step ③ owns picking, so no picker here — but the rows
+  // the contract names still render, resolved against the STORED set (this
+  // mode with no status was exactly the 'not configured' lie).
+  it("namedOnly hides the picker but keeps named rows honest", () => {
+    renderSection([FEED], { "integration:corp-artifactory": required }, true);
+    // No picker: an un-named stored feed offers nothing to add.
+    expect(screen.queryByRole("button", { name: /add to this workspace/i })).not.toBeInTheDocument();
+    // The named row resolves against the stored set: real name, no warning.
+    expect(screen.getByText("Corp Artifactory")).toBeInTheDocument();
+    expect(screen.queryByText(/not configured/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Required", checked: true })).toBeInTheDocument();
   });
 });
