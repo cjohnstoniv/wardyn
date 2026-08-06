@@ -191,8 +191,8 @@ type Workspace struct {
 	// default convention image for the detected/scanned stack.
 	BaseImage *WorkspaceBaseImage `json:"base_image,omitempty"`
 	// Requirements is the workspace's declared requirements contract: what
-	// secrets/egress/write-access a run against this workspace needs, keyed by
-	// a fixed grammar of "<type>:<key>" where type is one of:
+	// secrets/egress/write-access/integrations a run against this workspace
+	// needs, keyed by a fixed grammar of "<type>:<key>" where type is one of:
 	//
 	//	secret:NAME       a named secret must be resolvable (the store secret
 	//	                  NAME), e.g. "secret:acme-anthropic-key"
@@ -203,12 +203,18 @@ type Workspace struct {
 	//	write:/host/path  the given HOST path must be mounted writable, e.g.
 	//	                  "write:/home/user/repo" — matches a Sources[] entry
 	//	                  whose Path equals /host/path and Writable=true
+	//	integration:ID    the named Integration (SiteConfig.Integrations[i].ID)
+	//	                  must be granted — its hosts opened and its credential
+	//	                  (if any) presented, e.g. "integration:artifact_mirror:
+	//	                  artifactory.corp" (ID itself may contain colons; see
+	//	                  the split rule below)
 	//
 	// The map key is exactly "<type>:<key>", type and key joined by ONE colon.
 	// A key parser MUST split on the FIRST colon only (never the last): the
-	// type prefix is always one of the three fixed tokens above, so splitting
+	// type prefix is always one of the four fixed tokens above, so splitting
 	// on the first colon unambiguously separates it from the key even though a
-	// host path (a write: key) may itself legally contain colons.
+	// host path (a write: key) or an adopted legacy id (an integration: key)
+	// may itself legally contain colons.
 	//
 	// THREE-TIER SPLIT: this map is now the workspace's OVERLAY — what this
 	// workspace additionally declares or restates on top of what its attached

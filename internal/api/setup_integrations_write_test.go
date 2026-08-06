@@ -6,9 +6,11 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -300,6 +302,30 @@ func TestHandlePutIntegration_DefaultForRadioSemantics(t *testing.T) {
 	}
 }
 
+// TestHandlePutIntegration_DefaultForClear completes the DefaultFor write-path
+// coverage (set + radio-steal are pinned above): PUT is a FULL REPLACEMENT, so
+// PUTting a row again with default_for omitted clears its own marks — the
+// third write shape the tier-4 precedence and composer-registry boot
+// derivation both need to actually be unset again through the API.
+func TestHandlePutIntegration_DefaultForClear(t *testing.T) {
+	rowA := types.Integration{
+		ID: "acme-a", Category: types.IntegrationAIProvider, Type: "anthropic_api_key",
+		DefaultFor: []string{"agent_runs", "wardyn_features"},
+	}
+	srv, fake, _ := integrationWriteHarness(t, []types.Integration{rowA})
+	body := `{"category":"ai_provider","type":"anthropic_api_key"}` // default_for omitted
+	w := do(t, srv, http.MethodPut, "/api/v1/integrations/acme-a", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 1 {
+		t.Fatalf("expected exactly one row, got %+v", fake.cfg.Integrations)
+	}
+	if got := fake.cfg.Integrations[0].DefaultFor; len(got) != 0 {
+		t.Errorf("DefaultFor = %v, want cleared (PUT is a full replacement)", got)
+	}
+}
+
 func TestHandleDeleteIntegration_RemovesStoredRow(t *testing.T) {
 	existing := types.Integration{ID: "acme-anthropic", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"}
 	srv, fake, audit := integrationWriteHarness(t, []types.Integration{existing})
@@ -359,6 +385,46 @@ func TestHandleAdoptIntegration_PersistsDerivedRowVerbatim(t *testing.T) {
 	w2 := do(t, srv, http.MethodPost, "/api/v1/integrations/anthropic_api_key/adopt", adminToken, "")
 	if w2.Code != http.StatusConflict {
 		t.Fatalf("second adopt: code = %d, want 409; body=%s", w2.Code, w2.Body.String())
+	}
+}
+
+// TestHandleAdoptIntegration_ColonIDThenPutBack proves the colon-id fix end to
+// end: adopting a legacy row that mints a colon-qualified id
+// ("anthropic_subscription:managed") persists it verbatim (already true
+// before this fix — f1a749f taught the router to unescape it), and — the part
+// this fix adds — PUTting that SAME id back (the round-trip GET-then-edit
+// flow adoption exists to unlock) no longer 400s on validateIntegrationWrite's
+// id gate. The URL uses the percent-encoded colon a real browser fetch()
+// sends (encodeURIComponent), exercising integrationIDParam's unescape too.
+func TestHandleAdoptIntegration_ColonIDThenPutBack(t *testing.T) {
+	srv, fake, _ := integrationWriteHarness(t, nil)
+	srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}
+	const id = "anthropic_subscription:managed"
+	escapedPath := "/api/v1/integrations/" + url.PathEscape(id)
+
+	w := do(t, srv, http.MethodPost, escapedPath+"/adopt", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("adopt: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 1 || fake.cfg.Integrations[0].ID != id {
+		t.Fatalf("expected exactly one stored row with the colon id, got %+v", fake.cfg.Integrations)
+	}
+
+	body := `{"name":"Claude subscription (managed)","category":"ai_provider","type":"anthropic_subscription",` +
+		`"config":{"lane":"managed"},"default_for":["agent_runs"]}`
+	w = do(t, srv, http.MethodPut, escapedPath, adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT back the adopted colon id: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.cfg.Integrations) != 1 {
+		t.Fatalf("PUT must replace, not duplicate: got %+v", fake.cfg.Integrations)
+	}
+	got := fake.cfg.Integrations[0]
+	if got.ID != id {
+		t.Errorf("PUT-back row id = %q, want the colon id retained", got.ID)
+	}
+	if len(got.DefaultFor) != 1 || got.DefaultFor[0] != "agent_runs" {
+		t.Errorf("PUT-back row DefaultFor = %v, want [agent_runs]", got.DefaultFor)
 	}
 }
 

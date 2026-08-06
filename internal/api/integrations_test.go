@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -388,6 +389,43 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 
+		// ---------------- generic categories ----------------
+		{
+			name: "generic category: header + stored secret but NO hosts — credential still needs_setup",
+			v: integrationView{Type: "acme_feed", Category: string(types.IntegrationPackageFeed),
+				Header:      "x-api-key",
+				Credentials: map[string]string{types.IntegrationCredentialToken: "feed-token"},
+			},
+			env: capEnv{SecretPresent: secretSet("feed-token")},
+			want: []Capability{
+				{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."},
+				{ID: "credential", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."},
+			},
+		},
+		{
+			name: "generic category: hosts present — credential gates on the stored secret as before",
+			v: integrationView{Type: "acme_feed", Category: string(types.IntegrationPackageFeed),
+				Header: "x-api-key", Hosts: []string{"feed.corp.example"},
+				Credentials: map[string]string{types.IntegrationCredentialToken: "feed-token"},
+			},
+			env: capEnv{SecretPresent: secretSet("feed-token")},
+			want: []Capability{
+				{ID: "egress_host", State: CapAvailable},
+				{ID: "credential", State: CapAvailable, Residency: "proxy_injected"},
+			},
+		},
+		{
+			name: "generic category routes to genericCaps even when Type collides with a typed name",
+			v: integrationView{Type: "host_proxy", Category: string(types.IntegrationOtherService),
+				Hosts: []string{"tool.internal"},
+			},
+			env: capEnv{},
+			want: []Capability{
+				{ID: "egress_host", State: CapAvailable},
+				{ID: "credential", State: CapImpossible, Reason: reasonNoDeliveryLane},
+			},
+		},
+
 		// ---------------- DisabledCaps / Disabled overrides ----------------
 		{
 			name: "DisabledCaps turns off one cell and leaves the rest alone",
@@ -655,6 +693,29 @@ func TestEffectiveIntegrations_ScmHostsMergesWithCredential(t *testing.T) {
 	}
 }
 
+// A HYPHENATED ScmHosts entry must merge with its own git-pat-<slug> secret
+// onto ONE row: the naive reverse (hyphens back to dots) would instead spawn
+// a SECOND, wrongly-named row ("ghe.prod.corp.com") holding the credential,
+// leaving the correctly-named row credential-less.
+func TestEffectiveIntegrations_ScmHostsHyphenatedHostMergesForward(t *testing.T) {
+	srv := New(integrationsTestConfig(t,
+		types.SiteConfig{ScmHosts: []string{"ghe-prod.corp.com"}},
+		map[string][]byte{"git-pat-ghe-prod-corp-com": []byte("pat")}))
+	rows := srv.effectiveIntegrations(context.Background())
+	var matches []integrationRow
+	for _, r := range rows {
+		if strings.HasPrefix(r.ID, "git_host:") {
+			matches = append(matches, r)
+		}
+	}
+	if len(matches) != 1 || matches[0].ID != "git_host:ghe-prod.corp.com" {
+		t.Fatalf("expected exactly ONE git_host row named git_host:ghe-prod.corp.com, got %+v", matches)
+	}
+	if matches[0].Credentials["pat"] != "git-pat-ghe-prod-corp-com" {
+		t.Errorf("merged row lost its credential: %+v", matches[0])
+	}
+}
+
 func TestEffectiveIntegrations_ArtifactMirror(t *testing.T) {
 	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
@@ -675,6 +736,24 @@ func TestEffectiveIntegrations_ArtifactMirror(t *testing.T) {
 	ecos, _ := cfg["ecosystems"].([]any)
 	if len(ecos) != 2 {
 		t.Errorf("ecosystems = %+v, want both npm and pip on the one shared-host row", ecos)
+	}
+}
+
+// A host's FIRST-STORED redirect having no token must not permanently mark the
+// derived row credential-less: the fix takes the first NON-EMPTY
+// TokenSecretRef seen for the host, not just the literal first redirect.
+func TestEffectiveIntegrations_ArtifactMirrorTokenFromLaterRedirect(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://pypi.org/simple/", To: "https://artifactory.corp/api/pip/pip-remote/", Ecosystem: "pip"},
+		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", TokenSecretRef: "npm-token", Ecosystem: "npm"},
+	}}
+	srv := New(integrationsTestConfig(t, sc, nil))
+	row, ok := findRow(srv.effectiveIntegrations(context.Background()), "artifact_mirror:artifactory.corp")
+	if !ok {
+		t.Fatal("expected one artifact_mirror row for the shared host")
+	}
+	if row.Credentials["token"] != "npm-token" {
+		t.Errorf("credentials = %+v, want the npm token even though the FIRST-stored redirect for this host carried none", row.Credentials)
 	}
 }
 

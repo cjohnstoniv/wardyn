@@ -25,8 +25,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"principal": principalFromRequest(r),
 		"method":    method,
-		// The SAME predicate operatorOnly gates the 24 operator routes with
-		// (isOperator, http.go) — never a second, driftable copy of the rule.
+		// The SAME predicate every operatorOnly route gates with (isOperator,
+		// http.go) — never a second, driftable copy of the rule.
 		"operator": s.isOperator(r.Context()),
 	})
 }

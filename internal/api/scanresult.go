@@ -24,35 +24,39 @@ import (
 const maxScanResultUploadBytes = 8 << 20 // 8 MiB
 
 // handleUploadScanResult accepts a PUT /api/v1/internal/scan-results/{runID}
-// from wardyn-scan running inside a governed scan run. The caller must hold a
-// valid run token (internalAuth); the path run id MUST match the token's run
-// (cross-run pollution guard, exactly like handleUploadRecording). The body is
-// the raw ScanFacts JSON — untrusted evidence, re-derived into a WorkspaceProfile
-// control-plane-side (facts-out, not profile-out).
+// from wardyn-scan running inside a governed SOURCE scan run. The caller must
+// hold a valid run token (internalAuth); the path run id MUST match the
+// token's run (cross-run pollution guard, exactly like handleUploadRecording).
+// Every governed scan run carries a SourceID (the three-tier retarget's only
+// producer, launchSourceScanRun, always pairs Task "source scan" with one) —
+// there is no separate workspace lane: a workspace's profile is always the
+// hydrate pass's merge of its attached sources' own scan results.
 func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) {
 	// Cross-run guard + TRUSTED run→workspace linkage: the caller must hold the
-	// scan run's OWN token, and the run must be a governed scan run (nil
-	// WorkspaceID or a non-scan Task has no business uploading scan facts).
+	// scan run's OWN token, and the run must be a governed source scan run (nil
+	// SourceID or a non-scan Task has no business uploading scan facts).
 	claims, scanRun, ok := s.authSandboxRunUpload(w, r,
 		"run not found for scan upload", "run is not a governed scan run", "run is not a scan run",
-		"workspace scan", "source scan")
+		"source scan")
 	if !ok {
 		return
 	}
-	// SOURCE lane (the three-tier retarget): a per-source scan run's facts land
-	// on the LIBRARY row, fenced on sources.active_run_id — the exact shape the
-	// workspace lane below has, one table over. The workspace(s) attaching this
-	// source see the result through the hydrate pass's merge; nothing here ever
-	// touches a workspace row.
-	if scanRun.SourceID != nil {
-		s.uploadSourceScanResult(w, r, claims, *scanRun.SourceID)
+	if scanRun.SourceID == nil {
+		writeError(w, http.StatusForbidden, "run is not a governed scan run")
 		return
 	}
-	wsID := *scanRun.WorkspaceID
+	s.uploadSourceScanResult(w, r, claims, *scanRun.SourceID)
+}
 
+// uploadSourceScanResult is the (only live) lane of handleUploadScanResult:
+// capped read, fail-closed parse, facts→profile derivation plus the opt-in
+// AI-advisor gap-fill, landing on the source row via the fenced
+// SetSourceScanResult, so a superseded upload (the fence moved) fails fast
+// and honestly rather than clobbering.
+func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, claims *identity.Claims, sourceID uuid.UUID) {
 	// Fail closed: cap the body, then strict-parse it. A malformed / oversized
 	// body never yields a profile (it would otherwise let an in-sandbox agent
-	// pollute a workspace's authority object).
+	// pollute a source's authority object).
 	raw, ok := readCappedBody(w, r, maxScanResultUploadBytes, "scan result")
 	if !ok {
 		return
@@ -64,32 +68,11 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 	// Unmarshal is both sufficient and forward-compatible with a newer scanner.
 	var facts workspacescan.ScanFacts
 	if err := json.Unmarshal(raw, &facts); err != nil {
-		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "parse: "+err.Error(), nil)
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "parse: " + err.Error()})))
 		writeError(w, http.StatusBadRequest, "invalid scan facts: "+err.Error())
 		return
 	}
-
-	ws, ok := s.getWorkspaceOr404(w, r, wsID)
-	if !ok {
-		return
-	}
-
-	// Active-run fence (mirror the verify lane in reconcileWorkspaceRun): only the
-	// run that STILL owns the workspace's import-step slot may land a profile. A
-	// superseded / lagging scan upload — the slot was reclaimed by a newer run or
-	// released by a reconcile — must not clobber a fresher profile. The scoped write
-	// below re-checks this atomically (WHERE active_run_id=runID) to close the
-	// read→write TOCTOU; this early check fails such an upload fast + honestly.
-	if ws.ActiveRunID == nil || *ws.ActiveRunID != claims.RunID {
-		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "superseded scan upload (active-run mismatch)", nil)
-		writeError(w, http.StatusConflict, "scan upload superseded: another import step owns this workspace")
-		return
-	}
-
-	// Re-derive the authority object from the untrusted facts and persist it via a
-	// SCOPED, fenced write (profile + status only). Identity fields and any
-	// concurrently-persisted column (approved_egress / setup_commands) are left
-	// untouched — never round-tripped from this stale snapshot.
 	profile := workspacescan.DeriveProfile(facts)
 
 	// ADVISORY AI fallback (opt-in; nil advisor = OFF, byte-identical behavior).
@@ -105,75 +88,6 @@ func (s *Server) handleUploadScanResult(w http.ResponseWriter, r *http.Request) 
 		aiChanged = profile.Source == workspacescan.SourceAIAssisted
 	}
 
-	// Scoped + fenced persist: profile + status=scanned, releasing the import-step
-	// slot only while this run still owns it (active_run_id=runID). Off the old
-	// full-row UpdateWorkspace so it cannot revert a concurrently-persisted column;
-	// applied=false means the slot was reclaimed between the fence and here (409).
-	_, applied, err := s.cfg.Store.SetWorkspaceScanResult(r.Context(), wsID, mustJSON(profile), claims.RunID)
-	if err != nil {
-		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "persist: "+err.Error(), nil)
-		writeError(w, http.StatusInternalServerError, "persist scan profile: "+err.Error())
-		return
-	}
-	if !applied {
-		s.auditScan(r, claims.SPIFFEID, wsID, "failure", "superseded scan upload (slot reclaimed before write)", nil)
-		writeError(w, http.StatusConflict, "scan upload superseded: another import step owns this workspace")
-		return
-	}
-
-	// Counts only — never detected names (and never values) in audit data.
-	s.auditScan(r, claims.SPIFFEID, wsID, "success", "", map[string]any{
-		"confidence": profile.Confidence, "needs_review": profile.NeedsReview,
-		"secret_reqs": len(profile.RequiredSecrets), "services": len(profile.ServicesNeeded),
-		"suggested_egress": len(profile.SuggestedEgress), "secret_files": len(profile.SecretFilesPresent),
-		"leak_findings": len(profile.LeakFindings), "build_mem_mib": profile.BuildMemoryMiB,
-		// AI-advisor discriminator: ai_advisor=whether the advisory fallback ran,
-		// ai_changed=whether it altered the deterministic profile (source flip).
-		"ai_advisor": aiRan, "ai_changed": aiChanged,
-	})
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// auditScan records a workspace.scan audit event attributed to the scanning
-// agent run (mirrors handleUploadRecording's recording.upload audit). extra
-// carries scan-summary COUNTS (never detected names or values).
-func (s *Server) auditScan(r *http.Request, spiffeID string, wsID uuid.UUID, outcome, detail string, extra map[string]any) {
-	claims, _ := claimsFromContext(r)
-	var runID *uuid.UUID
-	data := map[string]any{"workspace_id": wsID.String()}
-	if claims != nil {
-		rid := claims.RunID
-		runID = &rid
-		data["run_id"] = rid.String()
-	}
-	if detail != "" {
-		data["detail"] = detail
-	}
-	for k, v := range extra {
-		data[k] = v
-	}
-	s.recordAudit(r.Context(), s.auditEvent(
-		runID, types.ActorAgent, spiffeID, "workspace.scan", wsID.String(), outcome, mustJSON(data),
-	))
-}
-
-// uploadSourceScanResult is the source lane of handleUploadScanResult: same
-// capped read, same fail-closed parse, same facts→profile derivation — landing
-// on the source row via the fenced SetSourceScanResult, so a superseded upload
-// (the fence moved) fails fast and honestly rather than clobbering.
-func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, claims *identity.Claims, sourceID uuid.UUID) {
-	raw, ok := readCappedBody(w, r, maxScanResultUploadBytes, "scan result")
-	if !ok {
-		return
-	}
-	var facts workspacescan.ScanFacts
-	if err := json.Unmarshal(raw, &facts); err != nil {
-		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "parse: " + err.Error()})))
-		writeError(w, http.StatusBadRequest, "invalid scan facts: "+err.Error())
-		return
-	}
-	profile := workspacescan.DeriveProfile(facts)
 	// The scan's discoveries land on the SOURCE's own contract in the same
 	// fenced write — a repo source has no host write path, so its seed is
 	// profile-derived only (secrets + auto-allowed hosts).
@@ -192,6 +106,9 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 		"source.scan", sourceID.String(), "success", mustJSON(map[string]any{
 			"confidence": profile.Confidence, "secret_reqs": len(profile.RequiredSecrets),
 			"suggested_egress": len(profile.SuggestedEgress), "leak_findings": len(profile.LeakFindings),
+			// AI-advisor discriminator: ai_advisor=whether the advisory fallback ran,
+			// ai_changed=whether it altered the deterministic profile (source flip).
+			"ai_advisor": aiRan, "ai_changed": aiChanged,
 		})))
 	writeJSON(w, http.StatusOK, map[string]any{"source_id": src.ID, "status": src.Status})
 }

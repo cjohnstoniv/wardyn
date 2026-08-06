@@ -38,19 +38,31 @@ type preflightResponse struct {
 // here: deriveSetupItems' backend row reports that honestly instead, so a host
 // that can't yet enforce the class shows a fixable checklist row on Review
 // rather than a fatal error that blanks the panel. Reproduced launch gates:
-// resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (unknown
-// workspace, an image/devcontainer_repo XOR violation surfaced by a
-// workspace's base_image, target collision), the onboarded-workspace gate,
-// the workspace credential-binding fold, and the confinement
-// floor check below. Not reproduced (unreachable via the wizard body this
-// endpoint serves): the agent-required 400, the BYOI image/devcontainer 400s,
-// and the cloud_sts identity-provider 422 — launch still enforces all of them.
+// the run-explicit integration_id ai_provider check below, resolveRunPolicy's
+// 4xx set, the workspace_id seed's 400/422s (unknown workspace, an
+// image/devcontainer_repo XOR violation surfaced by a workspace's base_image,
+// target collision), the onboarded-workspace gate, the workspace
+// credential-binding fold, and the confinement floor check below. Not
+// reproduced (unreachable via the wizard body this endpoint serves): the
+// agent-required 400, the BYOI image/devcontainer 400s, and the cloud_sts
+// identity-provider 422 — launch still enforces all of them.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req createRunRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
+	}
+	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
+	// runs_create.go): a typo or a non-ai_provider id 400s here exactly as it
+	// would at launch, instead of silently resolving to nothing at
+	// foldRunIntegration time below (previewing as "no model access" on
+	// Review) and only failing for real once the operator clicks launch.
+	if req.IntegrationID != "" {
+		if in, ok := s.resolveIntegrationRef(ctx, req.IntegrationID); !ok || in.Category != types.IntegrationAIProvider {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an ai_provider integration", req.IntegrationID))
+			return
+		}
 	}
 
 	// Resolve the policy through the SAME chokepoint launch uses. resolveRunPolicy
@@ -118,7 +130,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// does (runs.go) — the SAME applyWorkspaceRequirements call, so Review can
 	// never predict a rosier (or stricter) outcome than launch actually applies.
 	// Discarded, not audited: preflight persists nothing, mirroring the
-	// applyWorkspaceCreds call just above.
+	// foldRunIntegration call just above.
 	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with

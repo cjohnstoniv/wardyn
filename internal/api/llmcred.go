@@ -47,9 +47,10 @@ func apiKeyGrantScopeHost(scope json.RawMessage) string {
 }
 
 // apiKeyGrantScopeSecret returns the secret_name an api_key grant's scope
-// carries. A grant may name a NON-convention secret (a workspace credential
-// binding does — applyWorkspaceCreds writes the workspace's own APIKeySecret),
-// so verdict code must key on the grant's secret, not the provider default.
+// carries. A grant may name a NON-convention secret (a workspace's resolved
+// ai_provider Integration does — applyIntegrationCreds grants the
+// INTEGRATION's own secret, not necessarily the provider convention name), so
+// verdict code must key on the grant's secret, not the provider default.
 func apiKeyGrantScopeSecret(scope json.RawMessage) string {
 	var sc struct {
 		SecretName string `json:"secret_name"`
@@ -291,20 +292,6 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 	}
 }
 
-// foldIntegration applies a resolved Integration to spec: the credential/
-// egress fold (applyIntegrationCreds) plus, for a resident_host subscription,
-// the ceiling mount via applyLLMCredMount — THE single subscription gate,
-// unchanged. Shared by applyWorkspaceCreds (workspace-ref tier only) and
-// applyPrimaryWorkspaceCreds (the full run-level precedence chain) so the fold
-// can never disagree between them. Returns the kind applied ("" = no-op).
-func (s *Server) foldIntegration(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration, agent string) (string, *types.WorkspaceBedrockRef) {
-	kind, bedrockRef := s.applyIntegrationCreds(ctx, spec, integ, agent)
-	if kind == "anthropic_subscription" && subscriptionLane(integ) == "resident_host" {
-		applyLLMCredMount(spec, s.cfg.DefaultPolicy, agent, true)
-	}
-	return kind, bedrockRef
-}
-
 // resolveRunIntegration resolves the FULL run-level integration precedence:
 //
 //  1. integrationID (run-explicit: createRunRequest.IntegrationID /
@@ -342,9 +329,18 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		}
 	}
 	if workspaceRef != "" {
-		if in, ok := s.resolveIntegrationRef(ctx, workspaceRef); ok && in.Category == types.IntegrationAIProvider {
-			return in, true
+		// A SET workspace ref that fails to resolve to an ai_provider row
+		// (dangling, or naming something else entirely) is the honest "no
+		// binding" outcome — return here rather than falling through to tier
+		// 4: the operator who bound THIS workspace chose a SPECIFIC
+		// integration, and cascading a stale/miscategorized ref to the
+		// site-wide default would be the exact credential surprise this
+		// tier's doc above says it refuses.
+		in, ok := s.resolveIntegrationRef(ctx, workspaceRef)
+		if !ok || in.Category != types.IntegrationAIProvider {
+			return types.Integration{}, false
 		}
+		return in, true
 	}
 	return s.defaultAgentRunsIntegration(ctx, "")
 }
@@ -372,8 +368,11 @@ func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID
 
 // foldRunIntegration is the AUDIT-FREE half of applyPrimaryWorkspaceCreds: it
 // resolves the full precedence chain (run-explicit integration_id → workspace
-// binding → operator default → none) and folds the winner into the spec,
-// returning what was applied so the caller can decide whether to audit.
+// binding → operator default → none) and folds the winner into spec — the
+// credential/egress fold (applyIntegrationCreds) plus, for a resident_host
+// subscription, the ceiling mount via applyLLMCredMount (THE single
+// subscription gate) — returning what was applied so the caller can decide
+// whether to audit.
 //
 // Both launch and preflight call THIS, so Review cannot predict a different
 // model access than launch grants. Preflight used to fold only the workspace
@@ -397,7 +396,10 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	if !ok {
 		return types.Integration{}, "", nil
 	}
-	kind, bedrockRef := s.foldIntegration(ctx, spec, integ, req.Agent)
+	kind, bedrockRef := s.applyIntegrationCreds(ctx, spec, integ, req.Agent)
+	if kind == "anthropic_subscription" && subscriptionLane(integ) == "resident_host" {
+		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true)
+	}
 	return integ, kind, bedrockRef
 }
 

@@ -506,11 +506,14 @@ func (s *Server) routes() chi.Router {
 			// below and nothing else silently joins them.
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
-			// later-added Use applies to r's routes but silently NOT to these 24.
-			// These 24 are not the whole operator surface: the attach WebSocket
+			// later-added Use applies to r's routes but silently NOT to every
+			// mutating configuration route registered on operatorOnly below.
+			// Those are not the whole operator surface: the attach WebSocket
 			// (GET /runs/{id}/attach) is gated too, via ticketOrHumanAuth in its
-			// own group below, because it also accepts a ?ticket=. Count 25 when
-			// asking "what does a viewer get 403 on".
+			// own group below, because it also accepts a ?ticket=. gatedRoutes
+			// (rbac_test.go) — plus its router-walk completeness assertion — is
+			// the current authoritative enumeration; ask it, not a hard-coded
+			// count here, "what does a viewer get 403 on".
 			operatorOnly := r.With(s.requireOperator)
 			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy

@@ -6,13 +6,10 @@ package api
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -102,6 +99,16 @@ const (
 // needs. Unknown v.Type reads as "no capabilities" (nil), the same honest
 // default an unrecognized harness id gets in harness.go.
 func capabilitiesFor(v integrationView, env capEnv) []Capability {
+	// A GENERIC-category row's behavior is fully described by its own hosts/
+	// header (genericCaps), never by Type — checked FIRST so an open-slug
+	// Type that happens to collide with a typed name below (e.g. a
+	// container_registry row named "host_proxy") is never routed into the
+	// typed switch, which is reached only for a genuinely TYPED category.
+	if genericIntegrationCategories[types.IntegrationCategory(v.Category)] {
+		caps := genericCaps(v, env)
+		applyDisabled(caps, v)
+		return caps
+	}
 	var caps []Capability
 	switch v.Type {
 	case "anthropic_api_key":
@@ -132,13 +139,11 @@ func capabilitiesFor(v integrationView, env capEnv) []Capability {
 	case "host_proxy":
 		caps = []Capability{gatedCap("egress_upstream", v.Credentials["secret"], env, "proxy_injected")}
 	default:
-		// Only a GENERIC category derives a matrix from the row itself. An
-		// unrecognized Type in a TYPED category still reads as "no capabilities"
-		// (nil) — the same honest default an unrecognized harness id gets — since
-		// that row's behavior was supposed to come from code that doesn't exist.
-		if genericIntegrationCategories[types.IntegrationCategory(v.Category)] {
-			caps = genericCaps(v, env)
-		}
+		// A generic-category row never reaches here (handled above). An
+		// unrecognized Type in a TYPED category reads as "no capabilities"
+		// (nil) — the same honest default an unrecognized harness id gets —
+		// since that row's behavior was supposed to come from code that
+		// doesn't exist.
 	}
 	applyDisabled(caps, v)
 	return caps
@@ -162,15 +167,24 @@ const reasonNoDeliveryLane = "Wardyn can open the path to these hosts. Deliverin
 //     exists to avoid.
 //   - credential — proxy-injected when a header names a stored secret;
 //     otherwise the stated "egress only" fact, which is what the two groups
-//     that authenticate outside HTTP (cloud providers, data stores) get.
+//     that authenticate outside HTTP (cloud providers, data stores) get. A
+//     header names a delivery MECHANISM, not a destination: with no hosts
+//     there is nothing for the runtime fold to present it AT, so this cell
+//     needs_setup with the SAME no-hosts reason as egress_host rather than
+//     the header-alone "available" — the identical lie egress_host above
+//     already refuses to tell.
 func genericCaps(v integrationView, env capEnv) []Capability {
+	noHosts := len(v.Hosts) == 0
 	reach := Capability{ID: "egress_host", State: CapAvailable}
-	if len(v.Hosts) == 0 {
+	if noHosts {
 		reach = Capability{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."}
 	}
 	cred := Capability{ID: "credential", State: CapImpossible, Reason: reasonNoDeliveryLane}
 	if v.Header != "" {
 		cred = gatedCap("credential", v.Credentials[types.IntegrationCredentialToken], env, "proxy_injected")
+		if noHosts {
+			cred = Capability{ID: "credential", State: CapNeedsSetup, Reason: reach.Reason}
+		}
 	}
 	return []Capability{reach, cred}
 }
@@ -366,9 +380,11 @@ func gatedCap(id, ref string, env capEnv, residency string) Capability {
 	return Capability{ID: id, State: CapAvailable, Residency: residency}
 }
 
-// stringSlice reads a []string out of a Config value that may arrive either
-// as a plain Go literal (test/direct construction) or as []any (the shape
-// map[string]any takes after a JSON round-trip).
+// stringSlice reads a []string out of a Config value shaped like []any — the
+// shape map[string]any takes after a JSON round-trip, and how every
+// production/test Config is constructed. Any other shape (including a bare
+// []string, which this switch has no case for) reads as nil rather than
+// panicking.
 func stringSlice(v any) []string {
 	switch vv := v.(type) {
 	case []any:
@@ -546,6 +562,28 @@ func (c gitHostCreds) credentials() map[string]string {
 	return m
 }
 
+// slugHost is the canonical secret-name slug for a host: lowercase, collapse
+// any run of non [a-z0-9] characters to "-", strip leading/trailing "-".
+// Verbatim port of ui/src/app/lib/scm-provider.ts's slugHost (itself ported
+// from wardyn-frames.js:617) — prefixed with "git-pat-"/"ssh-key-" this is the
+// CONVENTIONAL secret name for a host (setup.go's scmProviderCheck).
+func slugHost(host string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(host)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+			continue
+		}
+		if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 // hostFromSecretSlug reverses the "<host-slug>" naming convention
 // (dots -> hyphens, e.g. git-pat-github-com) documented in setup.go's
 // scmProviderCheck: strip prefix, turn hyphens back into dots.
@@ -554,33 +592,34 @@ func (c gitHostCreds) credentials() map[string]string {
 // "ghe-prod.corp.com" slugs to "ghe-prod-corp-com" and would round-trip
 // wrong) — the same ambiguity the existing convention already accepts
 // (scmProviderCheck treats these as opaque display names, never a validated
-// host). Upgrade path: store the real host alongside the secret if an exact
-// reverse ever matters.
+// host). gitHostRows below uses this ONLY as the orphan fallback (a secret
+// whose slug matches no registered ScmHosts entry); a registered host always
+// merges via slugHost's FORWARD match instead. Upgrade path: store the real
+// host alongside the secret if an exact reverse ever matters for an orphan.
 func hostFromSecretSlug(name, prefix string) string {
 	return strings.ReplaceAll(strings.TrimPrefix(name, prefix), "-", ".")
 }
 
 // gitHostRows derives one scm_host/git_host row per host named by a
-// git-pat-<slug>/ssh-key-<slug> secret OR a SiteConfig.ScmHosts entry, merged
+// SiteConfig.ScmHosts entry OR a git-pat-<slug>/ssh-key-<slug> secret, merged
 // by host: an operator's declared ScmHosts host with no credential yet still
 // gets a row (egress_host only; clone:pat/clone:ssh read needs_setup), and a
 // host that also has a credential carries it.
+//
+// Host recovery is FORWARD, not reversed (ports ui/src/app/lib/scm-provider.ts's
+// deriveProviders — see its doc comment for the full rationale): for each
+// ScmHosts entry we compute slugHost(host) ONCE and match secrets against
+// THAT, so a hyphenated hostname ("ghe-prod.corp.com") merges onto its OWN
+// row instead of ALSO spawning a second, wrongly-named one from
+// hostFromSecretSlug's naive hyphens-to-dots reverse. That reverse survives
+// only as the fallback for an ORPHAN secret — one whose slug matches no
+// registered ScmHosts entry — where a best-guess dotted host beats dropping
+// the credential entirely. slugHost is also many-to-one (two registered hosts
+// can share a slug), so a matching secret's lane is added to EVERY host that
+// slug matches.
 func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[string]bool) []integrationRow {
 	byHost := map[string]gitHostCreds{}
-	for n := range secretNames {
-		switch {
-		case strings.HasPrefix(n, "git-pat-"):
-			h := hostFromSecretSlug(n, "git-pat-")
-			c := byHost[h]
-			c.pat = n
-			byHost[h] = c
-		case strings.HasPrefix(n, "ssh-key-"):
-			h := hostFromSecretSlug(n, "ssh-key-")
-			c := byHost[h]
-			c.sshKey = n
-			byHost[h] = c
-		}
-	}
+	slugToHosts := map[string][]string{}
 	for _, h := range scmHosts {
 		h = strings.ToLower(strings.TrimSpace(h))
 		if h == "" {
@@ -588,6 +627,32 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 		}
 		if _, ok := byHost[h]; !ok {
 			byHost[h] = gitHostCreds{}
+		}
+		slug := slugHost(h)
+		slugToHosts[slug] = append(slugToHosts[slug], h)
+	}
+	for n := range secretNames {
+		prefix := ""
+		switch {
+		case strings.HasPrefix(n, "git-pat-"):
+			prefix = "git-pat-"
+		case strings.HasPrefix(n, "ssh-key-"):
+			prefix = "ssh-key-"
+		default:
+			continue
+		}
+		hosts, ok := slugToHosts[strings.TrimPrefix(n, prefix)]
+		if !ok {
+			hosts = []string{hostFromSecretSlug(n, prefix)}
+		}
+		for _, h := range hosts {
+			c := byHost[h]
+			if prefix == "git-pat-" {
+				c.pat = n
+			} else {
+				c.sshKey = n
+			}
+			byHost[h] = c
 		}
 	}
 	var rows []integrationRow
@@ -607,8 +672,10 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 // artifactMirrorRows derives one artifact_mirror row per corp mirror/relay HOST
 // (several redirects — ecosystem-scoped or network-only alike — commonly share
 // one destination), mirroring planArtifactRedirect's dedupe-by-host shape
-// (artifact_redirect.go). A row's token credential is the FIRST TokenSecretRef
-// seen for that host in EgressRedirects' stored order — the common case is one
+// (artifact_redirect.go). A row's token credential is the first NON-EMPTY
+// TokenSecretRef seen for that host in EgressRedirects' stored order (a host
+// whose FIRST-stored redirect carries none is not reported credential-less
+// just because it wasn't the one holding the token) — the common case is one
 // token per host; a host with genuinely divergent per-redirect tokens still
 // redirects every one of them (Config carries every ecosystem it touches), it
 // just reports one representative credential. Ecosystems is empty for a purely
@@ -631,8 +698,11 @@ func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrati
 		}
 		he, ok := byHost[host]
 		if !ok {
-			he = &hostEcos{token: r.TokenSecretRef}
+			he = &hostEcos{}
 			byHost[host] = he
+		}
+		if he.token == "" {
+			he.token = r.TokenSecretRef
 		}
 		if r.Ecosystem != "" {
 			he.ecosystems = append(he.ecosystems, r.Ecosystem)
@@ -657,310 +727,11 @@ func artifactMirrorRows(sc types.SiteConfig, stored map[string]bool) []integrati
 	return rows
 }
 
-// ─── Integration WRITES: validation + the run/composer resolution ladder ────
-//
-// Everything below builds ON TOP of effectiveIntegrations/capabilitiesFor
-// above without changing either: validateIntegrationWrite backs the write
-// endpoints (setup_integrations.go); resolveIntegrationRef/
-// defaultAgentRunsIntegration back the run-time resolution ladder
-// (llmcred.go); WardynFeaturesBackend backs the composer-registry boot
-// derivation (cmd/wardynd/composer.go).
-
-// knownIntegrationTypes is the closed type set PER CATEGORY a write may name —
-// a hand-kept mirror of capabilitiesFor's switch above (frozen; see this
-// file's own doc comment) rather than a reflection-based derivation, so a type
-// this list is missing fails LOUD here ("invalid type") instead of silently
-// passing validation and landing on "no capabilities" in the live matrix.
-var knownIntegrationTypes = map[types.IntegrationCategory]map[string]bool{
-	types.IntegrationAIProvider: {
-		"anthropic_api_key": true, "anthropic_subscription": true, "bedrock": true,
-		"openai_api_key": true, "azure_openai": true,
-	},
-	types.IntegrationSCMHost:        {"github_app": true, "git_host": true},
-	types.IntegrationArtifactMirror: {"artifact_mirror": true},
-	types.IntegrationHostProxy:      {"host_proxy": true},
-}
-
-// genericIntegrationCategories are the categories whose behavior does NOT
-// depend on Type (see types.IntegrationCategory): the row's own hosts, header
-// and secret ref are the whole contract, so Type is an open slug validated for
-// shape only. Enumerating ~35 provider types here would buy nothing but a
-// second hand-kept mirror of the UI catalog to drift against.
-var genericIntegrationCategories = map[types.IntegrationCategory]bool{
-	types.IntegrationPackageFeed:       true,
-	types.IntegrationContainerRegistry: true,
-	types.IntegrationCloudProvider:     true,
-	types.IntegrationDataStore:         true,
-	types.IntegrationMCPServer:         true,
-	types.IntegrationWorkTracking:      true,
-	types.IntegrationObservability:     true,
-	types.IntegrationOtherService:      true,
-}
-
-// maxIntegrationHosts bounds one integration's host list. Well under the
-// per-run 64-host egress cap the requirements surface already warns at, so a
-// single integration can never be the thing that blows it.
-const maxIntegrationHosts = 32
-
-// validateIntegrationHosts checks the host list against the SAME shape rule
-// every operator-supplied policy allowlist entry runs (proxy.ValidDomainEntry
-// — exact host, leading-"*." wildcard, optional ":port"), because these
-// entries become exactly that: allowlist entries on a granted run.
-//
-// hasHeader tightens it to BARE EXACT hosts, for one reason with two shapes:
-// proxy-side injection resolves through Policy.AllowedExactHost, which consults
-// the exact-host set ONLY — deliberately, so a credential can never leak to a
-// wildcard-matched host. A wildcard entry ("*.corp.internal") and a
-// port-qualified one ("nexus.corp.internal:8443") both compile into other sets
-// (allowedWild / allowedExactPort), so neither can ever satisfy it:
-//
-//   - the wildcard row would open the path and silently never present the
-//     credential — a row that looks credentialed and isn't;
-//   - the port-qualified row is worse than silent. buildInjector REFUSES an
-//     injection rule whose host misses the exact allowlist, and that refusal is
-//     a hard proxy startup failure, so the run is bricked rather than
-//     under-credentialed.
-//
-// Reject both at write time and say why. A host with a port or a wildcard is
-// still perfectly fine on an integration that delivers no header — which is
-// exactly the shape the data stores take (db.corp.internal:5432, egress only).
-func validateIntegrationHosts(hosts []string, hasHeader bool) error {
-	if len(hosts) > maxIntegrationHosts {
-		return fmt.Errorf("hosts: %d entries exceeds the %d-host limit", len(hosts), maxIntegrationHosts)
-	}
-	for i, h := range hosts {
-		if err := proxy.ValidDomainEntry(h); err != nil {
-			return fmt.Errorf("hosts[%d]: %w", i, err)
-		}
-		if hasHeader && !bareExactHost(h) {
-			return fmt.Errorf("hosts[%d]: %q is a wildcard or carries a port, and a credential header is only ever added to a "+
-				"bare exact host — the proxy cannot present the credential there. Name the host without a wildcard or port, "+
-				"or clear the header", i, h)
-		}
-	}
-	return nil
-}
-
-// bareExactHost reports whether h is a plain hostname the proxy's credential
-// injector can actually match (Policy.AllowedExactHost) — no leading-"*."
-// wildcard, no ":port" qualifier. Assumes h already passed
-// proxy.ValidDomainEntry, so the only shapes left to exclude are those two.
-func bareExactHost(h string) bool {
-	h = strings.TrimSpace(h)
-	return !strings.HasPrefix(h, "*.") && !strings.Contains(h, ":")
-}
-
-// validateIntegrationCredentialDelivery checks the proxy-injected delivery
-// triple (Header, Format, and the secret the header carries).
-//
-// Header is a trust boundary: it is written verbatim onto a forwarded request,
-// so it must be a real HTTP field-name token (egress.ValidHeaderName — which
-// excludes CR/LF, ':' and space by construction). Format is the other half of
-// the same wire value: fmt.Sprintf substitutes the secret into it, so it needs
-// exactly one %s (a format with none silently DROPS the credential and sends a
-// bare prefix; one with two renders "%!s(MISSING)") and no CR/LF of its own.
-func validateIntegrationCredentialDelivery(in types.Integration) error {
-	if in.Header == "" {
-		if in.Format != "" {
-			return fmt.Errorf("format: set without a header — nothing presents this value")
-		}
-		return nil
-	}
-	if !egress.ValidHeaderName(in.Header) {
-		return fmt.Errorf("header: %q is not a valid HTTP header name "+
-			"(letters, digits and !#$%%&'*+-.^_`|~ only — no spaces, no ':', no line breaks)", in.Header)
-	}
-	if in.Format != "" {
-		if strings.Count(in.Format, "%s") != 1 || strings.Count(in.Format, "%") != 1 {
-			return fmt.Errorf("format: %q must contain exactly one %%s (where the secret goes) and no other verb", in.Format)
-		}
-		if strings.ContainsAny(in.Format, "\r\n") {
-			return fmt.Errorf("format: must not contain a line break")
-		}
-	}
-	if in.Credentials[types.IntegrationCredentialToken] == "" {
-		return fmt.Errorf("credentials[%s]: a header is set but names no secret to present in it", types.IntegrationCredentialToken)
-	}
-	return nil
-}
-
-// validIntegrationDefaultFor is DefaultFor's closed value set (see
-// types.Integration's doc comment: "agent_runs" and/or "wardyn_features").
-var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_features": true}
-
-// validateIntegrationWrite enforces an operator-authored Integration's
-// structural + security invariants before it is persisted (PUT
-// /integrations/{id}, and defensively on adopt): id shape (secretNameRE — the
-// same identifier rule secret names use), category/type against the known
-// sets above, every credential value a real non-reserved secret name
-// (validSecretRef — the same rule site-config's *SecretRef fields use),
-// DefaultFor closed to {agent_runs, wardyn_features}, and the two per-type
-// Config checks this codebase already has an established rule for: an
-// artifact_mirror's ecosystems must be the same closed set ArtifactOverrides
-// uses (site_config.go), and a bedrock integration may not half-override
-// region/model — the identical hazard
-// `git show ecc1903~1:internal/api/llmcred.go`'s
-// TestValidateWorkspaceLLMCred_Rejections pinned for the pre-Integration
-// shape (a region-scoped inference profile 403s at invoke with only one set).
-// Other per-type Config knobs (e.g. a subscription's lane) are deliberately
-// left permissive: capabilitiesFor documents an unrecognized value as a
-// graceful fallback, not an error, and this validator should not be stricter
-// than the reader.
-func validateIntegrationWrite(in types.Integration) error {
-	if !secretNameRE.MatchString(in.ID) {
-		return fmt.Errorf("id: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars)", in.ID)
-	}
-	switch knownTypes, typed := knownIntegrationTypes[in.Category]; {
-	case typed:
-		if !knownTypes[in.Type] {
-			return fmt.Errorf("type: %q is not a known %s type", in.Type, in.Category)
-		}
-	case genericIntegrationCategories[in.Category]:
-		// Open type set — shape only (see genericIntegrationCategories).
-		if !secretNameRE.MatchString(in.Type) {
-			return fmt.Errorf("type: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars)", in.Type)
-		}
-	default:
-		return fmt.Errorf("category: unknown %q", in.Category)
-	}
-	for role, ref := range in.Credentials {
-		if ref != "" && !validSecretRef(ref) {
-			return fmt.Errorf("credentials[%s]: invalid or reserved secret name %q", role, ref)
-		}
-	}
-	if err := validateIntegrationHosts(in.Hosts, in.Header != ""); err != nil {
-		return err
-	}
-	if err := validateIntegrationCredentialDelivery(in); err != nil {
-		return err
-	}
-	if len(in.Docs) > 2048 {
-		return fmt.Errorf("docs: too long (%d bytes, max 2048)", len(in.Docs))
-	}
-	for _, d := range in.DefaultFor {
-		if !validIntegrationDefaultFor[d] {
-			return fmt.Errorf("default_for: unknown %q (want agent_runs and/or wardyn_features)", d)
-		}
-	}
-	if len(in.Config) == 0 {
-		return nil
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(in.Config, &cfg); err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	if in.Type == "bedrock" {
-		region, _ := cfg["region"].(string)
-		model, _ := cfg["model"].(string)
-		if (region == "") != (model == "") {
-			return fmt.Errorf("config: bedrock region and model must be set together (a region-scoped inference profile 403s at invoke with only one)")
-		}
-	}
-	if in.Category == types.IntegrationArtifactMirror {
-		for _, eco := range stringSlice(cfg["ecosystems"]) {
-			if !validArtifactEcosystems[eco] {
-				return fmt.Errorf("config.ecosystems: unknown ecosystem %q", eco)
-			}
-		}
-	}
-	return nil
-}
-
-// applyDefaultForRadio enforces DefaultFor's RADIO semantics across rows: each
-// value in newDefaultFor is a single-select mark, so setting it on the row
-// named id CLEARS that same value from every OTHER row's DefaultFor in the
-// same write — never a 409, per the approved spec. Mutates rows in place
-// (mirroring applyDisabled's own in-place style above); a row with nothing to
-// clear is left untouched (including its slice identity, so an unrelated
-// write never appears to "touch" every other row).
-func applyDefaultForRadio(rows []types.Integration, id string, newDefaultFor []string) {
-	if len(newDefaultFor) == 0 {
-		return
-	}
-	marks := make(map[string]bool, len(newDefaultFor))
-	for _, m := range newDefaultFor {
-		marks[m] = true
-	}
-	for i := range rows {
-		if rows[i].ID == id || len(rows[i].DefaultFor) == 0 {
-			continue
-		}
-		cleared := slices.DeleteFunc(slices.Clone(rows[i].DefaultFor), func(m string) bool { return marks[m] })
-		if len(cleared) != len(rows[i].DefaultFor) {
-			rows[i].DefaultFor = cleared
-		}
-	}
-}
-
-// resolveIntegrationRef resolves ref against the EFFECTIVE integration set
-// (stored ∪ legacy-derived — effectiveIntegrations above) into the concrete
-// types.Integration it names. Effective, not stored-only, so a run/workspace
-// binding "just works" against a well-known legacy id (e.g.
-// "anthropic_api_key") with no adoption step required first — the entire
-// point of deriving legacy rows in the first place. ok=false when ref is
-// empty or names nothing at all.
-func (s *Server) resolveIntegrationRef(ctx context.Context, ref string) (types.Integration, bool) {
-	if ref == "" {
-		return types.Integration{}, false
-	}
-	for _, row := range s.effectiveIntegrations(ctx) {
-		if row.ID == ref {
-			return row.Integration, true
-		}
-	}
-	return types.Integration{}, false
-}
-
-// defaultAgentRunsIntegration returns the STORED ai_provider integration
-// marked DefaultFor: agent_runs, optionally narrowed to onlyType (""=any
-// type). Only a STORED row can carry DefaultFor at all (a legacy-derived row
-// is never persisted, so it never has one — see types.Integration's doc
-// comment), which is exactly what keeps this tier a no-op with zero stored
-// integrations regardless of onlyType. ok=false when none is marked.
-func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType string) (types.Integration, bool) {
-	var sc types.SiteConfig
-	if s.cfg.Store != nil {
-		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			sc = got
-		}
-	}
-	for _, in := range sc.Integrations {
-		if in.Category != types.IntegrationAIProvider || !slices.Contains(in.DefaultFor, "agent_runs") {
-			continue
-		}
-		if onlyType != "" && in.Type != onlyType {
-			continue
-		}
-		return in, true
-	}
-	return types.Integration{}, false
-}
-
-// WardynFeaturesBackend returns the STORED ai_provider integration marked
-// DefaultFor: wardyn_features whose wardyn_features capability reads
-// "available" right now (capabilitiesFor above — never a needs_setup/off/
-// impossible one), for cmd/wardynd's composer-registry boot derivation
-// (WARDYN_COMPOSER_CONFIG unset — see cmd/wardynd/composer.go). Exported as a
-// plain function of an already-fetched SiteConfig plus the same live signals
-// liveCapEnv folds from Server config, because cmd/wardynd builds the
-// composer registry BEFORE the api.Server exists (Config.Composer is
-// late-bound INTO it once built) — there is no live Server here to read them
-// from. ok=false (no eligible integration) is the signal to keep today's
-// behavior: no registry, compose 404s honestly.
-func WardynFeaturesBackend(sc types.SiteConfig, secretPresent func(string) bool, bedrockRegionSet, bedrockModelSet bool, managedBlobPresent func(string) bool) (types.Integration, bool) {
-	env := capEnv{
-		SecretPresent: secretPresent, BedrockRegionSet: bedrockRegionSet,
-		BedrockModelSet: bedrockModelSet, ManagedBlobPresent: managedBlobPresent,
-	}
-	for _, in := range sc.Integrations {
-		if in.Category != types.IntegrationAIProvider || !slices.Contains(in.DefaultFor, "wardyn_features") {
-			continue
-		}
-		for _, c := range capabilitiesFor(toIntegrationView(integrationRow{Integration: in}), env) {
-			if c.ID == "wardyn_features" && c.State == CapAvailable {
-				return in, true
-			}
-		}
-	}
-	return types.Integration{}, false
-}
+// Integration WRITES (validation) + the run/composer resolution ladder built
+// ON TOP of effectiveIntegrations/capabilitiesFor above live in
+// integrations_write.go (split out once this file crossed the 1000-line
+// gate): knownIntegrationTypes, genericIntegrationCategories,
+// validateIntegrationWrite (setup_integrations.go's write endpoints),
+// resolveIntegrationRef/defaultAgentRunsIntegration (llmcred.go's run-time
+// resolution ladder), WardynFeaturesBackend (cmd/wardynd/composer.go's
+// composer-registry boot derivation).

@@ -201,6 +201,31 @@ func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t
 	}
 }
 
+// TestApplyPrimaryWorkspaceCreds_DanglingWorkspaceRef_DoesNotCascadeToDefault
+// pins resolveRunIntegration's documented non-cascade (llmcred.go): a
+// workspace bound to a SPECIFIC integration ref that no longer resolves
+// (deleted, or renamed to something non-ai_provider) must NOT silently fall
+// through to the operator's site-wide DefaultFor:agent_runs default — even
+// though, per the test above, that default is live and would otherwise fire.
+// A stale binding silently promoting to a different integration is a
+// credential surprise, not a convenience.
+func TestApplyPrimaryWorkspaceCreds_DanglingWorkspaceRef_DoesNotCascadeToDefault(t *testing.T) {
+	def := apiKeyIntegration("acme-default", "acme-default-key")
+	def.DefaultFor = []string{"agent_runs"}
+	s := integrationTestServer(t, []types.Integration{def}, "acme-default-key")
+	spec := &types.RunPolicySpec{}
+	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "does-not-exist"}}
+	req := createRunRequest{Agent: "claude-code"}
+
+	bedrockRef := s.applyPrimaryWorkspaceCreds(context.Background(), uuid.New(), spec, req, []types.Workspace{ws})
+	if bedrockRef != nil {
+		t.Errorf("bedrockRef = %+v, want nil (nothing should have folded)", bedrockRef)
+	}
+	if _, ok := apiKeyGrantForHost(spec, "api.anthropic.com"); ok {
+		t.Error("a dangling workspace ref cascaded to the operator's site-wide default — resolveRunIntegration's documented non-cascade was violated")
+	}
+}
+
 // TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef
 // pins resolution tier 1 (run-explicit) over tier 3 (workspace ref): an
 // explicit choice at create time overrides whatever the workspace itself

@@ -119,6 +119,14 @@ const composerWorkspaceTarget = "/home/agent/work"
 type composeProposed struct {
 	Run          composer.RunInput   `json:"run"`
 	InlinePolicy types.RunPolicySpec `json:"inline_policy"`
+	// BedrockRef is the pinned integration's region/model override, when this
+	// proposal resolved a bedrock ai_provider integration with one (nil
+	// otherwise). Advisory only, like the rest of this payload: the real run
+	// created from this proposal re-resolves its own bedrockRef from
+	// integration_id at launch (applyPrimaryWorkspaceCreds, runs.go) — this
+	// field lets the review surface show which region/model that will be
+	// instead of only the AllowedDomains side effect.
+	BedrockRef *types.WorkspaceBedrockRef `json:"bedrock_ref,omitempty"`
 }
 
 // composeResponse is advisory output for human review: the proposed setup, Wardyn's
@@ -491,13 +499,20 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// connected setup-token and the wizard toggle off).
 	managedForVerdict := managedSub ||
 		(prop.Run.Agent == "claude-code" && !subscribed && s.managedInjectReady(prop.Run.Agent))
-	if hasInteg && (integ.Type == "anthropic_api_key" || integ.Type == "openai_api_key") {
-		// An explicit api-key integration overrides ensureLLMGrant's
-		// provider-DEFAULT secret with the INTEGRATION's own —
-		// applyIntegrationCreds is the same grant + exact-host-egress coupling
-		// ensureLLMGrant uses, just keyed to a specific stored secret instead
-		// of the provider convention name.
-		s.applyIntegrationCreds(ctx, &prop.InlinePolicy, integ, prop.Run.Agent)
+	var bedrockRef *types.WorkspaceBedrockRef
+	if hasInteg && integ.Type != "anthropic_subscription" {
+		// Any pinned NON-subscription integration (api_key/openai_api_key/
+		// bedrock/azure_openai) overrides ensureLLMGrant's provider-DEFAULT
+		// secret with the INTEGRATION's own — applyIntegrationCreds is the
+		// same grant + exact-host-egress coupling ensureLLMGrant uses for
+		// api_key, unions the region-scoped Bedrock hosts for bedrock (instead
+		// of falling through to a default Anthropic api-key grant that
+		// discards the region/model override), and no-ops for azure_openai
+		// (its own switch case: no sandbox lane exists). bedrockRef is threaded
+		// into the proposal below instead of discarded — the same ref launch
+		// carries to dispatch (dispatchParams.BedrockRef, runs.go) once the
+		// operator approves and creates the real run from this preview.
+		_, bedrockRef = s.applyIntegrationCreds(ctx, &prop.InlinePolicy, integ, prop.Run.Agent)
 	} else {
 		ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
 	}
@@ -619,7 +634,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// The proposal is serialized+capped as ONE text blob (not embedded as nested
 	// JSON): CapAuditText can cut mid-object, so storing the possibly-truncated
 	// result as a plain string is what keeps the OUTER audit Data valid JSON.
-	proposedJSON, _ := json.Marshal(composeProposed{Run: run, InlinePolicy: clamped})
+	proposedJSON, _ := json.Marshal(composeProposed{Run: run, InlinePolicy: clamped, BedrockRef: bedrockRef})
 	auditData, _ := json.Marshal(map[string]any{
 		"backend": backend, "overall_risk": string(overall),
 		"workspace": string(req.Workspace.Kind), "correlation_id": correlationID,
@@ -641,7 +656,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	}
 	resp := composeResponse{
 		Kind:           "proposal",
-		Proposed:       composeProposed{Run: run, InlinePolicy: clamped},
+		Proposed:       composeProposed{Run: run, InlinePolicy: clamped, BedrockRef: bedrockRef},
 		RiskAssessment: items,
 		OverallRisk:    overall,
 		Summary:        prop.Summary,

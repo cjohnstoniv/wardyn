@@ -61,7 +61,6 @@ type Store interface {
 	// expected empty); applied=false means it moved and the caller must re-read
 	// instead of retrying blindly.
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error)
-	SetWorkspaceScanResult(ctx context.Context, id uuid.UUID, profile json.RawMessage, runID uuid.UUID) (types.Workspace, bool, error)
 	// MergeWorkspaceRequirements ADDS overlay rows atomically (jsonb ||) — the
 	// verify loop's approve-writes-the-row-now, safe against concurrent edits
 	// the full-replace SetWorkspaceRequirements would race. ErrConflict at the

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -158,8 +160,10 @@ var gatedRoutes = []struct{ method, path string }{
 	{http.MethodPut, "/api/v1/workspaces/w1"},
 	{http.MethodDelete, "/api/v1/workspaces/w1"},
 	{http.MethodPost, "/api/v1/workspaces/w1/scan"},
+	{http.MethodPost, "/api/v1/workspaces/w1/build"},
 	{http.MethodPut, "/api/v1/workspaces/w1/approved-egress"},
 	{http.MethodPut, "/api/v1/workspaces/w1/llm-cred"},
+	{http.MethodPut, "/api/v1/workspaces/w1/requirements"},
 	{http.MethodPost, "/api/v1/workspaces/w1/record"},
 	{http.MethodPost, "/api/v1/workspaces/w1/record/t1/promote-egress"},
 	{http.MethodPost, "/api/v1/workspaces/w1/env-as-code/write"},
@@ -183,6 +187,17 @@ var gatedRoutes = []struct{ method, path string }{
 	// ticket and get the same PTY. Both are listed because both must refuse.
 	{http.MethodPost, "/api/v1/runs/r1/attach-ticket"},
 	{http.MethodGet, "/api/v1/runs/r1/attach"},
+	// 8. source library (tier 1) + base-image catalog (tier 2)
+	{http.MethodPost, "/api/v1/sources"},
+	{http.MethodPost, "/api/v1/sources/src1/scan"},
+	{http.MethodPut, "/api/v1/sources/src1"},
+	{http.MethodDelete, "/api/v1/sources/src1"},
+	{http.MethodPost, "/api/v1/base-images"},
+	{http.MethodDelete, "/api/v1/base-images/bi1"},
+	// 9. integrations — same corp-wide blast radius as site-config's PUT.
+	{http.MethodPut, "/api/v1/integrations/i1"},
+	{http.MethodDelete, "/api/v1/integrations/i1"},
+	{http.MethodPost, "/api/v1/integrations/i1/adopt"},
 }
 
 // readRoutes are the reads in those same clusters. A viewer keeps all of them —
@@ -275,6 +290,62 @@ func TestRequireOperator_AdminTokenAlwaysOperator(t *testing.T) {
 				t.Fatalf("status = %d, want the admin token to stay an operator: %s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// launchARunAllowlist is the small set of non-GET /api/v1 routes a VIEWER
+// legitimately keeps (server.go's own "viewer = read + launch runs" doc
+// comment): every one of these stays on the base humanOrAdminAuth group,
+// never operatorOnly. TestGatedRoutes_CoversEveryOperatorRoute asserts every
+// OTHER non-GET /api/v1 route (outside the sandbox-token /internal/* realm,
+// a separate auth surface no human reaches) is enumerated in gatedRoutes —
+// this is the allowlist that keeps that assertion from also demanding those
+// intentionally-ungated routes be gated.
+var launchARunAllowlist = map[string]bool{
+	http.MethodPost + " /api/v1/runs":               true,
+	http.MethodPost + " /api/v1/runs/preflight":      true,
+	http.MethodPost + " /api/v1/runs/compose":        true,
+	http.MethodPost + " /api/v1/runs/compose/assist": true,
+	http.MethodPost + " /api/v1/runs/{id}/kill":      true,
+	http.MethodPost + " /api/v1/runs/{id}/profile":   true,
+	http.MethodPost + " /api/v1/auth/logout":         true,
+}
+
+// TestGatedRoutes_CoversEveryOperatorRoute is a router-walk completeness
+// check, the regression test for the finding that left 11 tier-1-source/
+// tier-2-base-image/integrations operatorOnly routes silently absent from
+// gatedRoutes above: every non-GET /api/v1 route the LIVE router registers —
+// other than launchARunAllowlist and the /internal/* sandbox-token surface —
+// must appear in gatedRoutes. chi's own Find is used to turn each gatedRoutes
+// CONCRETE fixture path ("/api/v1/workspaces/w1") into the route TEMPLATE
+// chi.Walk reports ("/api/v1/workspaces/{id}"), so the two enumerations are
+// compared in the same vocabulary without a second hand-kept template list to
+// drift against.
+func TestGatedRoutes_CoversEveryOperatorRoute(t *testing.T) {
+	srv := rbacServer(t, rbacOperator)
+	gated := make(map[string]bool, len(gatedRoutes))
+	for _, rt := range gatedRoutes {
+		rctx := chi.NewRouteContext()
+		pattern := srv.router.Find(rctx, rt.method, rt.path)
+		if pattern == "" {
+			t.Fatalf("gatedRoutes entry %s %s does not resolve to a live route (stale fixture?)", rt.method, rt.path)
+		}
+		gated[rt.method+" "+pattern] = true
+	}
+	if err := chi.Walk(srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method == http.MethodGet || !strings.HasPrefix(route, "/api/v1/") || strings.HasPrefix(route, "/api/v1/internal/") {
+			return nil // GETs, non-API routes, and the sandbox-token /internal/* realm are out of scope
+		}
+		key := method + " " + route
+		if launchARunAllowlist[key] {
+			return nil
+		}
+		if !gated[key] {
+			t.Errorf("router registers %s outside gatedRoutes and outside launchARunAllowlist — add it to one", key)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
 	}
 }
 

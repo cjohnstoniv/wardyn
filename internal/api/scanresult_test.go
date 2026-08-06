@@ -40,17 +40,17 @@ type scanRunStore struct {
 
 func (s scanRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) { return s.run, nil }
 
-// TestUploadScanResult_NonScanRunRejected: the run→workspace linkage is TRUSTED
-// server state (run.WorkspaceID), not sandbox input. A matched-run upload from a
-// run that is NOT a governed scan run (nil WorkspaceID) fails closed (403) — an
-// ordinary run has no business uploading scan facts.
+// TestUploadScanResult_NonScanRunRejected: the run→workspace/source linkage is
+// TRUSTED server state (run.WorkspaceID/SourceID), not sandbox input. A
+// matched-run upload from a run that is NOT governed at all (neither id set)
+// fails closed (403) — an ordinary run has no business uploading scan facts.
 func TestUploadScanResult_NonScanRunRejected(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
 	tok := h.mintRunToken(t, runID)
 	// Same identity as the token, but a Store returning an ordinary run (no
-	// WorkspaceID), so the not-a-scan-run guard is reachable.
-	srv := New(baseTestConfig(h, scanRunStore{run: types.AgentRun{ID: runID}})) // WorkspaceID == nil
+	// WorkspaceID/SourceID), so the not-a-scan-run guard is reachable.
+	srv := New(baseTestConfig(h, scanRunStore{run: types.AgentRun{ID: runID}}))
 	w := do(t, srv, http.MethodPut,
 		"/api/v1/internal/scan-results/"+runID.String(), tok, `{"has_devcontainer":true}`)
 	if w.Code != http.StatusForbidden {
@@ -58,55 +58,56 @@ func TestUploadScanResult_NonScanRunRejected(t *testing.T) {
 	}
 }
 
-// scanUploadStore is the full happy-path store: a governed scan run (Task
-// "workspace scan" + WorkspaceID) plus the workspace row the handler updates. It
-// captures the persisted workspace so tests can assert on the derived profile.
-type scanUploadStore struct {
-	store.Store
-	run   types.AgentRun
-	ws    types.Workspace
-	saved *types.Workspace
-}
-
-func (s *scanUploadStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
-	return s.run, nil
-}
-func (s *scanUploadStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
-	return s.ws, nil
-}
-func (s *scanUploadStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace) (types.Workspace, error) {
-	s.saved = &ws
-	return ws, nil
-}
-
-// SetWorkspaceScanResult is the scoped, slot-releasing profile write the upload
-// handler now uses instead of the full-row UpdateWorkspace: it captures the
-// derived profile, flips status=scanned, and clears the active-run pointer.
-func (s *scanUploadStore) SetWorkspaceScanResult(_ context.Context, _ uuid.UUID, profile json.RawMessage, _ uuid.UUID) (types.Workspace, bool, error) {
-	ws := s.ws
-	ws.Profile = profile
-	ws.Status = types.WorkspaceScanned
-	ws.ActiveRunID = nil
-	s.saved = &ws
-	return ws, true, nil
-}
-
-// newScanUploadSrv wires a Server over a scanUploadStore with the given advisor
-// seam (nil = feature off) and returns a valid run token for the scan run.
-func newScanUploadSrv(t *testing.T, adv func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile) (*Server, *scanUploadStore, string, uuid.UUID) {
-	t.Helper()
+// TestUploadScanResult_WorkspaceTaskRejected pins the narrowed task gate: a
+// "workspace scan" run — impossible in production since the three-tier
+// retarget (every scan run now carries a SourceID and the task "source
+// scan") — is refused here too instead of being silently routed to what used
+// to be a dead workspace lane.
+func TestUploadScanResult_WorkspaceTaskRejected(t *testing.T) {
 	h := newHarness(t)
 	wsID, runID := uuid.New(), uuid.New()
-	st := &scanUploadStore{
-		run: types.AgentRun{ID: runID, Task: "workspace scan", WorkspaceID: &wsID},
-		// active_run_id == the scan run: the upload handler's fence requires the run
-		// to still own the workspace's import-step slot.
-		ws: types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanning, ActiveRunID: &runID},
+	srv := New(baseTestConfig(h, scanRunStore{run: types.AgentRun{ID: runID, Task: "workspace scan", WorkspaceID: &wsID}}))
+	tok := h.mintRunToken(t, runID)
+	w := do(t, srv, http.MethodPut,
+		"/api/v1/internal/scan-results/"+runID.String(), tok, `{"has_devcontainer":true}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("workspace-task scan upload: code = %d, want 403 (task gate is source scan only); body=%s", w.Code, w.Body.String())
 	}
+}
+
+// sourceScanUploadStore is the full happy-path store for the SOURCE lane: a
+// governed scan run (Task "source scan" + SourceID) plus the fenced
+// SetSourceScanResult write uploadSourceScanResult uses. Captures the
+// persisted profile so tests can assert on it.
+type sourceScanUploadStore struct {
+	store.Store
+	run    types.AgentRun
+	saved  json.RawMessage
+	status types.WorkspaceStatus
+}
+
+func (s *sourceScanUploadStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return s.run, nil
+}
+
+func (s *sourceScanUploadStore) SetSourceScanResult(_ context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, _ uuid.UUID, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	s.saved = profile
+	s.status = status
+	return types.Source{ID: id, Status: status}, nil
+}
+
+// newSourceScanUploadSrv wires a Server over a sourceScanUploadStore with the
+// given advisor seam (nil = feature off) and returns a valid run token for
+// the scan run.
+func newSourceScanUploadSrv(t *testing.T, adv func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile) (*Server, *sourceScanUploadStore, string) {
+	t.Helper()
+	h := newHarness(t)
+	sourceID, runID := uuid.New(), uuid.New()
+	st := &sourceScanUploadStore{run: types.AgentRun{ID: runID, Task: "source scan", SourceID: &sourceID}}
 	cfg := baseTestConfig(h, st)
 	cfg.ScanAIAdvisor = adv
 	srv := New(cfg)
-	return srv, st, h.mintRunToken(t, runID), wsID
+	return srv, st, h.mintRunToken(t, runID)
 }
 
 // facts that make ShouldAdvise() true (an unrecognized build sample) yet also
@@ -117,7 +118,7 @@ const scanAdviseFacts = `{"manifests_found":[{"path":"go.mod","marker":"go.mod"}
 func auditAI(t *testing.T, evs []types.AuditEvent) (ran, changed bool) {
 	t.Helper()
 	for _, ev := range evs {
-		if ev.Action != "workspace.scan" || ev.Outcome != "success" {
+		if ev.Action != "source.scan" || ev.Outcome != "success" {
 			continue
 		}
 		var d struct {
@@ -129,31 +130,30 @@ func auditAI(t *testing.T, evs []types.AuditEvent) (ran, changed bool) {
 		}
 		return d.AIAdvisor, d.AIChanged
 	}
-	t.Fatalf("no workspace.scan success audit event in %d events", len(evs))
+	t.Fatalf("no source.scan success audit event in %d events", len(evs))
 	return
 }
 
 // (a) DISABLED (nil advisor) => the persisted profile is byte-identical to the
 // deterministic DeriveProfile and no advisor runs (ai_advisor=false).
 func TestUploadScanResult_AIDisabled_ByteIdentical(t *testing.T) {
-	srv, st, tok, wsID := newScanUploadSrv(t, nil)
-	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusNoContent {
-		t.Fatalf("upload code = %d, want 204; body=%s", w.Code, w.Body.String())
+	srv, st, tok := newSourceScanUploadSrv(t, nil)
+	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusOK {
+		t.Fatalf("upload code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	var facts workspacescan.ScanFacts
 	_ = json.Unmarshal([]byte(scanAdviseFacts), &facts)
 	want := mustJSON(workspacescan.DeriveProfile(facts))
-	if st.saved == nil || string(st.saved.Profile) != string(want) {
-		t.Fatalf("disabled profile not byte-identical to deterministic derive\n got=%s\nwant=%s", st.saved.Profile, want)
+	if st.saved == nil || string(st.saved) != string(want) {
+		t.Fatalf("disabled profile not byte-identical to deterministic derive\n got=%s\nwant=%s", st.saved, want)
 	}
 	if ran, _ := auditAI(t, srv.cfg.Audit.(*recRecorder).events); ran {
 		t.Fatalf("ai_advisor=true with the advisor disabled")
 	}
-	_ = wsID
 }
 
 // (b) ENABLED + advisor FAILS OPEN (returns base unchanged, as AdviseProfile does
-// on any error) => upload still 204, profile unchanged, ai_advisor=true but
+// on any error) => upload still 200, profile unchanged, ai_advisor=true but
 // ai_changed=false.
 func TestUploadScanResult_AIFailOpen(t *testing.T) {
 	invoked := false
@@ -161,17 +161,17 @@ func TestUploadScanResult_AIFailOpen(t *testing.T) {
 		invoked = true
 		return base // fail-open: base returned unchanged
 	}
-	srv, st, tok, _ := newScanUploadSrv(t, adv)
-	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusNoContent {
-		t.Fatalf("upload code = %d, want 204; body=%s", w.Code, w.Body.String())
+	srv, st, tok := newSourceScanUploadSrv(t, adv)
+	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusOK {
+		t.Fatalf("upload code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	if !invoked {
 		t.Fatal("advisor was not invoked though enabled + ShouldAdvise")
 	}
 	var facts workspacescan.ScanFacts
 	_ = json.Unmarshal([]byte(scanAdviseFacts), &facts)
-	if want := mustJSON(workspacescan.DeriveProfile(facts)); string(st.saved.Profile) != string(want) {
-		t.Fatalf("fail-open must leave profile unchanged\n got=%s\nwant=%s", st.saved.Profile, want)
+	if want := mustJSON(workspacescan.DeriveProfile(facts)); string(st.saved) != string(want) {
+		t.Fatalf("fail-open must leave profile unchanged\n got=%s\nwant=%s", st.saved, want)
 	}
 	ran, changed := auditAI(t, srv.cfg.Audit.(*recRecorder).events)
 	if !ran || changed {
@@ -193,12 +193,12 @@ func TestUploadScanResult_AIAdditions(t *testing.T) {
 		}
 		return out
 	}
-	srv, st, tok, _ := newScanUploadSrv(t, adv)
-	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusNoContent {
-		t.Fatalf("upload code = %d, want 204; body=%s", w.Code, w.Body.String())
+	srv, st, tok := newSourceScanUploadSrv(t, adv)
+	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusOK {
+		t.Fatalf("upload code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	var got workspacescan.WorkspaceProfile
-	if err := json.Unmarshal(st.saved.Profile, &got); err != nil {
+	if err := json.Unmarshal(st.saved, &got); err != nil {
 		t.Fatalf("persisted profile: %v", err)
 	}
 	if len(got.Tools) != 1 || got.Tools[0] != "bazel" {
@@ -212,47 +212,5 @@ func TestUploadScanResult_AIAdditions(t *testing.T) {
 	}
 	if ran, changed := auditAI(t, srv.cfg.Audit.(*recRecorder).events); !ran || !changed {
 		t.Fatalf("audit ai_advisor/ai_changed = %v/%v, want true/true", ran, changed)
-	}
-}
-
-// a scan upload whose run no longer owns the workspace's import-step slot
-// (active_run_id points at a DIFFERENT run) is fenced with 409 and writes nothing —
-// a superseded / lagging scan can never clobber a fresher profile. Mirrors the
-// verify lane's superseded-run fence.
-func TestUploadScanResult_SupersededRunFenced(t *testing.T) {
-	h := newHarness(t)
-	wsID, runID, other := uuid.New(), uuid.New(), uuid.New()
-	st := &scanUploadStore{
-		run: types.AgentRun{ID: runID, Task: "workspace scan", WorkspaceID: &wsID},
-		ws:  types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanning, ActiveRunID: &other},
-	}
-	srv := New(baseTestConfig(h, st))
-	tok := h.mintRunToken(t, runID)
-	w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+runID.String(), tok, `{"has_devcontainer":true}`)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("superseded scan upload: code = %d, want 409; body=%s", w.Code, w.Body.String())
-	}
-	if st.saved != nil {
-		t.Errorf("a fenced upload must persist nothing, got %+v", st.saved)
-	}
-}
-
-// a successful scan upload RELEASES the import-step slot (clears
-// active_run_id) so the scan-run reconcile self-heal correctly no-ops once the
-// profile has landed — otherwise the slot leaks and reconcile can later mark a
-// successfully-scanned workspace `error`.
-func TestUploadScanResult_SuccessClearsActiveRun(t *testing.T) {
-	srv, st, tok, _ := newScanUploadSrv(t, nil)
-	if w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts); w.Code != http.StatusNoContent {
-		t.Fatalf("upload code = %d, want 204; body=%s", w.Code, w.Body.String())
-	}
-	if st.saved == nil {
-		t.Fatal("success must persist the derived profile")
-	}
-	if st.saved.Status != types.WorkspaceScanned {
-		t.Errorf("success status = %q, want scanned", st.saved.Status)
-	}
-	if st.saved.ActiveRunID != nil {
-		t.Errorf("success must release the import-step slot (active_run_id cleared), got %v", st.saved.ActiveRunID)
 	}
 }
