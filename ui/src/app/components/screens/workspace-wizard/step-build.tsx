@@ -31,13 +31,24 @@ function elapsedLabel(startedAt?: string): string {
 // debugging story, so it stays up once the build stops.
 function BuildLogPane({ log }: { log: string[] }) {
   const ref = React.useRef<HTMLDivElement>(null);
+  // Follow the tail unless the operator scrolled up to read earlier output —
+  // otherwise a new line would yank them back down mid-read. Starts true
+  // (nothing to disagree with yet, and it's what makes the FIRST render land
+  // on the newest line rather than the top); onScroll re-evaluates it any
+  // time the pane moves, whether the operator scrolled or this effect did.
+  const autoFollow = React.useRef(true);
+  const onScroll = () => {
+    const el = ref.current;
+    if (el) autoFollow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
   React.useEffect(() => {
     const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && autoFollow.current) el.scrollTop = el.scrollHeight;
   }, [log.length]);
   return (
     <div
       ref={ref}
+      onScroll={onScroll}
       data-testid="build-log"
       className="scroll-thin h-56 overflow-y-auto rounded-md border border-border bg-surface-1/60 p-2"
     >

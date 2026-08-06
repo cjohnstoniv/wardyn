@@ -114,7 +114,8 @@ export function LLMCredFields({
 // onboarding form's llm_cred is create-only (the server ignores it on a
 // generic PUT /workspaces/{id}), so changing it post-create goes through
 // api.setWorkspaceLLMCred instead. `workspace` null => closed. Exported for
-// the same reason AddWorkspaceDialog is (direct test coverage / reuse).
+// direct test coverage / reuse, the same reason other standalone dialogs in
+// this codebase are (e.g. AddSecretDialog).
 export function WorkspaceLLMCredDialog({
   workspace,
   onOpenChange,

@@ -43,6 +43,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
@@ -353,8 +354,13 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	if logSink == nil {
 		logSink = b.DefaultLogSink
 	}
+	var streamDone chan struct{}
 	if logSink != nil {
-		go b.streamLogs(ctx, containerID, logSink)
+		streamDone = make(chan struct{})
+		go func() {
+			defer close(streamDone)
+			b.streamLogs(ctx, containerID, logSink)
+		}()
 	}
 
 	// Wait for the container to exit. v29 folds the old (status, error) channel
@@ -376,6 +382,12 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		if resp.StatusCode != 0 {
 			return "", fmt.Errorf("envbuild: build failed with exit code %d", resp.StatusCode)
 		}
+	}
+
+	// Join before finalize writes the same sink below (else the two race);
+	// ContainerLogs closes on its own once the container stops, so this can't hang.
+	if streamDone != nil {
+		<-streamDone
 	}
 
 	// envbuilder has pushed the base image to the registry. Layer Wardyn's runner
@@ -404,9 +416,8 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 // Fails closed if the tools dir is unconfigured/incomplete, the base is
 // unpullable, or the base carries ONBUILD triggers.
 //
-// logSink, when non-nil, receives the wrap build's output instead of
-// Builder.DefaultLogSink — mirrors runBuildAndFinalize's own nil fallback
-// (this path bypasses that function, so it needs the same one-liner here).
+// logSink nil falls back to Builder.DefaultLogSink (this path bypasses
+// runBuildAndFinalize's own fallback, so it needs its own).
 func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
@@ -703,8 +714,10 @@ func buildEnv(spec BuildSpec, cacheRepo string) []string {
 }
 
 // streamLogs attaches to the build container's log stream and copies to w.
-// Errors are silently swallowed; log streaming is best-effort and must not
-// affect the build result.
+// Best-effort: errors are silently swallowed. No TTY means ContainerLogs
+// multiplexes stdout/stderr behind an 8-byte frame header per chunk (same
+// shape session.go's exec attach demuxes); stdcopy strips it so w gets clean
+// text, not binary garbage — both streams interleave into the same w.
 func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Writer) {
 	rc, err := b.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
@@ -715,7 +728,7 @@ func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Write
 		return
 	}
 	defer rc.Close()
-	_, _ = io.Copy(w, rc)
+	_, _ = stdcopy.StdCopy(w, w, rc)
 }
 
 // ensureImage pulls ref if not already present locally. Fail closed: never

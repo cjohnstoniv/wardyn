@@ -150,6 +150,16 @@ describe("isSourceShapeValid / toSourceInput", () => {
       target: DEFAULT_TARGET,
     });
   });
+  // H1: writable must round-trip through toSourceInput -> sourceRowsFromWorkspace
+  // -> toSourceInput without silently downgrading to read-only.
+  it("toSourceInput emits writable:true for a checked local_dir row (H1)", () => {
+    const row: SourceRow = { ...newSourceRow("local_dir"), path: "/srv/payments", writable: true };
+    expect(toSourceInput(row, [row])).toMatchObject({ writable: true });
+  });
+  it("toSourceInput omits writable (undefined, not false) when unchecked", () => {
+    const row: SourceRow = { ...newSourceRow("local_dir"), path: "/srv/payments" };
+    expect(toSourceInput(row, [row]).writable).toBeUndefined();
+  });
 });
 
 describe("credFlags — warn-never-block credential-shaped-line detection", () => {
@@ -311,6 +321,25 @@ describe("sourceRowsFromWorkspace — edit hydration, the inverse of toSourceInp
     const rows = sourceRowsFromWorkspace(fixtureWorkspace({ sources: undefined }));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ type: "ephemeral", seeded: true });
+  });
+
+  // H1: a stored local_dir source's writable flag used to have nowhere to
+  // land on SourceRow — hydration silently dropped it, so a round-trip save
+  // with zero operator edits downgraded a writable mount to read-only (and,
+  // since the server compares the whole Sources row, tripped sourcesChanged
+  // and wiped the reviewed contract as a side effect).
+  it("reads writable off a stored local_dir source (H1)", () => {
+    const rows = sourceRowsFromWorkspace(
+      fixtureWorkspace({ sources: [{ type: "local_dir", path: "/srv/a", target: "/w", writable: true }] }),
+    );
+    expect(rows[0].writable).toBe(true);
+  });
+
+  it("defaults writable to false when the stored source omits it", () => {
+    const rows = sourceRowsFromWorkspace(
+      fixtureWorkspace({ sources: [{ type: "local_dir", path: "/srv/a", target: "/w" }] }),
+    );
+    expect(rows[0].writable).toBe(false);
   });
 });
 

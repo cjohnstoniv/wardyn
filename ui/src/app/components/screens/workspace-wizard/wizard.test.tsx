@@ -377,3 +377,120 @@ describe("WorkspaceWizard — Done's primary action follows `origin`", () => {
     expect(onOpenWorkspace).toHaveBeenCalledWith("ws-1");
   });
 });
+
+describe("WorkspaceWizard — no-edit edit-mode saves send the verbatim baseline, not an invented value (H2)", () => {
+  it("Continue on Base image with zero source edits sends initial.sources byte-for-byte (target '' stays '')", async () => {
+    const ws = editableWorkspace({
+      status: "scanned",
+      image_ref: "",
+      sources: [{ type: "local_dir", path: "/srv/payments", target: "" }],
+    });
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+    await screen.findByText("Recommended — built for this workspace");
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledTimes(1));
+    // Sent EXACTLY what was hydrated — toSourceInput would have invented
+    // target: "/home/agent/work" for an empty stored target, which is
+    // precisely the false "edit" this must not manufacture.
+    expect(updateWorkspaceMock.mock.calls[0][1].sources).toEqual([
+      { type: "local_dir", path: "/srv/payments", target: "" },
+    ]);
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorkspaceWizard — an edited Sources save PUTs first, then scans, and the profile survives the next save (H3)", () => {
+  it("sends the EDITED value (not the stale hydrated one), PUTs before scanning, and a later Base-image save doesn't re-trigger sourcesChanged", async () => {
+    const ws = editableWorkspace({
+      status: "pending_scan",
+      image_ref: "",
+      sources: [{ type: "local_dir", path: "/srv/old", target: "" }],
+    });
+    const scanned = { ...ws, status: "scanned" as const, profile: { languages: ["Go"] } };
+    updateWorkspaceMock
+      .mockReset()
+      .mockResolvedValue({ ...ws, sources: [{ type: "local_dir", path: "/srv/new", target: "" }] });
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(scanned);
+
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+    // pending_scan -> lands on Sources, hydrated path pre-filled.
+    fireEvent.change(screen.getByPlaceholderText("/home/me/projects/payments"), {
+      target: { value: "/srv/new" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(scanWorkspaceMock).toHaveBeenCalledTimes(1));
+    // PUT before scan — the old order scanned the server's stale composition
+    // first and PUT the edit only later, from continueFromImage.
+    expect(updateWorkspaceMock.mock.invocationCallOrder[0]).toBeLessThan(
+      scanWorkspaceMock.mock.invocationCallOrder[0],
+    );
+    // The edit itself reached the server — a single local_dir source's
+    // target defaults to DEFAULT_TARGET, not the stale "/srv/old".
+    expect(updateWorkspaceMock.mock.calls[0][1].sources).toEqual([
+      { type: "local_dir", path: "/srv/new", target: "/home/agent/work" },
+    ]);
+
+    // The scan (against the RIGHT composition) landed a profile; Base image
+    // Phase B renders off it.
+    await screen.findByText("Recommended — built for this workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledTimes(2));
+    // Same sources sent again (nothing changed since) — this must NOT be a
+    // sourcesChanged edge the server would wipe the just-produced profile
+    // over. (initialSources stays null once touched, so this is a fresh
+    // derivation both times — deliberately identical here since nothing
+    // changed between the two saves.)
+    expect(updateWorkspaceMock.mock.calls[1][1].sources).toEqual([
+      { type: "local_dir", path: "/srv/new", target: "/home/agent/work" },
+    ]);
+  });
+});
+
+describe("WorkspaceWizard — Back-to-Sources preserves operator_set lanes when sources are untouched (M4)", () => {
+  it("restores the hydrated requirements instead of {} once sources are confirmed unchanged", async () => {
+    const ws = editableWorkspace({
+      status: "scanned",
+      image_ref: "",
+      requirements: {
+        "egress:manually-added.example.com": { level: "required", provenance: "operator_set" },
+      },
+    });
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(ws);
+    updateWorkspaceMock.mockReset().mockResolvedValue(ws);
+    setRequirementsMock.mockResolvedValue(ws);
+
+    render(<WorkspaceWizard initial={ws} onClose={vi.fn()} />);
+    await screen.findByText("Recommended — built for this workspace"); // lands on Base image
+
+    // Back triggers the RESCAN_DESTROYS-style confirm (hasScanned is true);
+    // confirming with sources UNTOUCHED must restore requirements, not wipe
+    // them — the old unconditional {} here downgraded every operator_set
+    // lane back to scan defaults on the next full-replace requirements PUT.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+    expect(await screen.findByLabelText("Name")).toBeInTheDocument();
+
+    // Forward again with zero edits.
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText("Recommended — built for this workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText("Image ready");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(C.S3_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    expect(setRequirementsMock.mock.calls[0][1]).toMatchObject({
+      "egress:manually-added.example.com": { level: "required", provenance: "operator_set" },
+    });
+  });
+});

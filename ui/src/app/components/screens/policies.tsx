@@ -448,7 +448,7 @@ function PolicyEditor({
 }) {
   // Every entry point that opens this editor is already gated (New policy /
   // row Edit / PolicyDetail's Edit policy), but Save is gated too — the same
-  // defense-in-depth as AddSecretDialog/AddWorkspaceDialog.
+  // defense-in-depth as AddSecretDialog and the workspace wizard.
   const operator = useOperator();
   const [name, setName] = React.useState("");
   const [specText, setSpecText] = React.useState("");

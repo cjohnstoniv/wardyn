@@ -45,6 +45,7 @@ function sourcesOf(ws: Workspace): SourceRow[] {
       source: s.source ?? "",
       ref: s.ref ?? "",
       target: s.target ?? "",
+      writable: s.writable ?? false,
     }));
   }
   // Pre-composition workspace (single legacy kind/source/ref) — synthesize the
@@ -60,6 +61,7 @@ function sourcesOf(ws: Workspace): SourceRow[] {
       source: kind === "repo" ? ws.source : "",
       ref: ws.ref ?? "",
       target: ws.default_target ?? "",
+      writable: ws.writable ?? false,
     },
   ];
 }

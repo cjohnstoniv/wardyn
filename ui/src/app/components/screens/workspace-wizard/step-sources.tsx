@@ -195,6 +195,39 @@ function SourceRowCard({
                 onChange={(e) => onUpdate({ target: e.target.value })}
               />
             </Field>
+            {/* Read-only is the safe default (WorkspaceSource.Writable).
+                Without this opt-in an imported workspace can never be
+                written, so an agent cannot install deps, build, or edit a
+                file — the whole point of onboarding it. Granting it is
+                real: changes land on the host. This is the only UI that can
+                set it (the legacy AddWorkspaceDialog had the equivalent
+                checkbox before it was retired). */}
+            <label className="flex items-start gap-2.5 rounded-lg border border-border p-3 text-xs">
+              <input
+                type="checkbox"
+                checked={row.writable}
+                onChange={(e) => onUpdate({ writable: e.target.checked })}
+                className="mt-0.5 size-3.5 shrink-0 accent-primary"
+              />
+              <span>
+                <span className="font-medium text-foreground">Let agents write to this directory</span>
+                <span className="block text-[0.6875rem] leading-snug text-muted-foreground">
+                  Required to install dependencies, build, or have an agent change code. Leave
+                  unticked and the workspace mounts read-only — <span className="font-mono">install</span>{" "}
+                  and <span className="font-mono">build</span> steps will fail.
+                </span>
+              </span>
+            </label>
+            {row.writable && (
+              <p className="rounded-md bg-warning-subtle px-2 py-1.5 text-[0.6875rem] leading-snug text-warning">
+                The agent&apos;s changes persist to the host directory{" "}
+                <span className="font-mono">{row.path.trim() || "…"}</span>. Point this at a
+                disposable clone, not a working tree you care about. If your Docker runtime
+                runs inside a VM (Rancher Desktop / Colima / Docker Desktop on macOS), the
+                stronger barriers may still deny writes here regardless of host permissions —
+                see docs/adoption.
+              </p>
+            )}
           </>
         )}
 

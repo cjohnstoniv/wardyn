@@ -6,6 +6,7 @@
 package envbuild
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,6 +188,45 @@ func TestBuild_SuccessPath(t *testing.T) {
 	// Build container must be removed after success.
 	if !f.removed {
 		t.Error("build container must be removed after success")
+	}
+}
+
+// TestBuild_StreamLogsDemuxesMultiplexedFrames pins the review fix (M5): the
+// build container runs with no TTY, so a real ContainerLogs response
+// multiplexes stdout/stderr behind an 8-byte frame header per chunk (see
+// dockerFrame in fake_test.go) — a bare io.Copy fed those header bytes
+// straight into the log sink as binary garbage. streamLogs must demux with
+// stdcopy instead, so the sink only ever sees clean text.
+func TestBuild_StreamLogsDemuxesMultiplexedFrames(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.logsBody = append(
+		dockerFrame(1, "cloning repo\n"),
+		dockerFrame(2, "warning: shallow clone\n")...,
+	)
+	b := newPushBuilder(t, f)
+	var logSink bytes.Buffer
+	b.DefaultLogSink = &logSink
+
+	spec := BuildSpec{RepoURL: "https://github.com/example/repo", OutputImageTag: "wardyn-ws:log"}
+	// L8: runBuildAndFinalize now joins the streaming goroutine before
+	// finalize starts writing to the same sink, so by the time Build
+	// returns the demuxed container log is guaranteed to already be here —
+	// no sleep/poll needed to avoid a race in this assertion.
+	if _, err := b.Build(t.Context(), spec); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got := logSink.String()
+	if !strings.Contains(got, "cloning repo") || !strings.Contains(got, "warning: shallow clone") {
+		t.Fatalf("log sink = %q, want both demuxed lines present", got)
+	}
+	// The raw frame header (stream-type byte + 3 zero padding bytes) must
+	// never appear in the sink — that's exactly the garbage a bare io.Copy
+	// would have let through.
+	for _, header := range [][]byte{{1, 0, 0, 0}, {2, 0, 0, 0}} {
+		if bytes.Contains([]byte(got), header) {
+			t.Fatalf("log sink = %q, contains a raw Docker frame header %v — stdcopy demux did not run", got, header)
+		}
 	}
 }
 

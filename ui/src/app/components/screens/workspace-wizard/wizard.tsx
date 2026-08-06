@@ -72,6 +72,7 @@ import {
   type WizardOrigin,
   type WizardStepId,
   type WorkspaceRequirementsMap,
+  type WorkspaceSourceInput,
   type WorkspaceSourceKind,
   setRequirementLane,
 } from "./wizard-types";
@@ -82,6 +83,18 @@ interface WizardState {
   step: WizardStepId;
   name: string;
   sources: SourceRow[];
+  // The exact wire-shape sources array this wizard was hydrated with (edit
+  // mode only) — nulled the instant the operator touches sources, and
+  // always null for a fresh create flow. A no-edit save sends this VERBATIM
+  // instead of re-deriving through toSourceInput, which can invent a
+  // concrete target ("/home/agent/work") for a row whose stored target was
+  // "" — turning a click-through-with-zero-edits save into a spurious
+  // sourcesChanged on the server that wipes the reviewed contract
+  // (Requirements/Profile/ApprovedEgress). NEVER omit `sources` from a PUT
+  // to "leave it unchanged" instead — an absent sources array decodes
+  // server-side to a single ephemeral source, which is catastrophic, not a
+  // no-op.
+  initialSources: WorkspaceSourceInput[] | null;
   secretNames: string[];
   githubApp: boolean;
   // The whole setup status, kept so the requirements step can offer the
@@ -114,6 +127,7 @@ function initialState(initial?: Workspace): WizardState {
     step: initial ? initialStepFor(initial) : "sources",
     name: initial?.name ?? "",
     sources: initial ? sourceRowsFromWorkspace(initial) : seedFloor(),
+    initialSources: initial?.sources ?? null,
     secretNames: [],
     githubApp: false,
     setupStatus: null,
@@ -207,7 +221,11 @@ export function WorkspaceWizard({
   const close = () => onClose();
 
   // ---------- Sources (step ①) ----------
-  const addSource = (type: WorkspaceSourceKind) => patch({ sources: [...s.sources, newSourceRow(type)] });
+  // Every mutator below nulls initialSources — the instant the operator
+  // touches sources at all, the "send the verbatim baseline" no-edit path
+  // (H2) no longer applies and a fresh toSourceInput derivation takes over.
+  const addSource = (type: WorkspaceSourceKind) =>
+    patch({ sources: [...s.sources, newSourceRow(type)], initialSources: null });
   // Attach a tier-1 LIBRARY entry: resolve it into a prefilled row. The server
   // upsert dedupes on canonical identity, so create lands the attachment on
   // the SAME library row — contract, scan and all.
@@ -222,10 +240,11 @@ export function WorkspaceWizard({
           ref: src.ref ?? "",
         },
       ],
+      initialSources: null,
     });
   const updateSource = (id: string, p: Partial<SourceRow>) =>
-    patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)) });
-  const removeSourceRow = (id: string) => patch({ sources: removeSource(s.sources, id) });
+    patch({ sources: s.sources.map((r) => (r.id === id ? { ...r, ...p } : r)), initialSources: null });
+  const removeSourceRow = (id: string) => patch({ sources: removeSource(s.sources, id), initialSources: null });
   const onSecretStored = (name: string) => patch({ secretNames: [...s.secretNames, name] });
 
   // ---------- Scan orchestration (Sources -> Base image) ----------
@@ -295,10 +314,30 @@ export function WorkspaceWizard({
   const continueFromSources = async () => {
     if (!s.name.trim()) return;
     if (s.workspace) {
-      // Already created (e.g. the operator went back and forward again) —
-      // re-source edits beyond the first pass aren't re-sent (updateWorkspace
-      // doesn't accept `sources` yet); just re-scan what exists server-side.
-      void startScan(s.workspace);
+      // Edit-mode re-entry (e.g. the operator went back and forward again,
+      // or is walking the "Edit workspace…" flow from Sources): PUT the
+      // current sources/base_image FIRST, THEN scan the result. The old
+      // order scanned the server's stale, unedited composition and PUT the
+      // edit only afterward (in continueFromImage) — so that later PUT could
+      // detect sourcesChanged against the very scan that just ran, wiping
+      // the fresh profile back to null and stranding the rail behind it
+      // (the reqs/verify rail steps gate on `profile` being truthy). PUTting
+      // first means the scan that follows is against the RIGHT composition.
+      // updateWorkspace DOES accept `sources` — always has, same
+      // composition-shape PUT continueFromImage below already uses.
+      patch({ creating: true });
+      try {
+        const updated = await workspacesApi.updateWorkspace(s.workspace.id, {
+          name: s.name.trim(),
+          sources: s.initialSources ?? s.sources.map((r) => toSourceInput(r, s.sources)),
+          base_image: toBaseImageInput(s.baseImage, detectedChips),
+        });
+        patch({ creating: false, workspace: updated });
+        void startScan(updated);
+      } catch (e) {
+        patch({ creating: false });
+        toast.error("Failed to save the edited sources", { description: getErrorMessage(e) });
+      }
       return;
     }
     patch({ creating: true });
@@ -337,7 +376,16 @@ export function WorkspaceWizard({
     patch({
       step: "sources",
       confirmBackToSources: false,
-      requirements: {},
+      // An edit session where sources are still exactly the hydrated
+      // baseline (initialSources non-null — nothing touched yet) restores
+      // the ORIGINAL requirements instead of wiping them: the underlying
+      // composition hasn't actually changed, so there is nothing for a
+      // rescan to legitimately re-derive, and the old unconditional {} here
+      // downgraded every operator_set lane back to scan_seeded defaults (or
+      // dropped it entirely) on the very next full-replace requirements PUT.
+      // Once sources ARE edited (initialSources nulled), the composition
+      // genuinely changed, so the old wipe-and-reseed-from-profile applies.
+      requirements: s.initialSources ? (initial?.requirements ?? {}) : {},
       requirementsSeeded: false,
       scans: {},
       partial: false,
@@ -384,7 +432,13 @@ export function WorkspaceWizard({
     try {
       const updated = await workspacesApi.updateWorkspace(s.workspace.id, {
         name: s.name || s.workspace.name,
-        sources: s.sources.map((r) => toSourceInput(r, s.sources)),
+        // s.initialSources ?? ...: an edit session that reaches this step
+        // with sources still untouched sends the VERBATIM hydrated baseline
+        // rather than a fresh toSourceInput derivation, which can invent a
+        // concrete target ("/home/agent/work") for a row whose stored
+        // target was "" — a zero-edit save must not look like a sources
+        // edit to the server (sourcesChanged wipes the reviewed contract).
+        sources: s.initialSources ?? s.sources.map((r) => toSourceInput(r, s.sources)),
         base_image: toBaseImageInput(s.baseImage, detectedChips),
       });
       patch({ workspace: updated, savingImage: false, step: "integrations" });

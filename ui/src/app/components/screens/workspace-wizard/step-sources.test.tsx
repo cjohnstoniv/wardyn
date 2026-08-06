@@ -103,6 +103,39 @@ describe("StepSources — a composed multi-source workspace", () => {
   });
 });
 
+// H1: the legacy AddWorkspaceDialog had a "let agents write to this
+// directory" checkbox; the wizard's own Sources step needs the same
+// affordance now that it's the ONE surface for setting it (nothing else in
+// the UI can flip SourceRow.writable).
+describe("StepSources — local_dir writable checkbox (H1)", () => {
+  it("defaults unchecked, with no warning note, and toggling it updates the row", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: /local directory/i }));
+
+    const checkbox = screen.getByRole("checkbox", { name: /let agents write to this directory/i });
+    expect(checkbox).not.toBeChecked();
+    expect(screen.queryByText(/point this at a\s*disposable clone/i)).toBeNull();
+
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText(/point this at a/i)).toBeInTheDocument();
+  });
+
+  it("is absent for repo and ephemeral rows — writable is local_dir-only", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: /add repository/i }));
+    // Only the floor's ephemeral row + the fresh repo row exist; neither is
+    // local_dir, so no writable checkbox anywhere yet.
+    expect(screen.queryByRole("checkbox", { name: /let agents write to this directory/i })).toBeNull();
+  });
+
+  it("hydrating a row with writable already true starts checked", () => {
+    const rows: SourceRow[] = [{ ...newSourceRow("local_dir"), path: "/srv/payments", writable: true }];
+    render(<Harness initialSources={rows} />);
+    expect(screen.getByRole("checkbox", { name: /let agents write to this directory/i })).toBeChecked();
+  });
+});
+
 describe("StepSources — the SSH hard gate blocks only its own row", () => {
   const rows: SourceRow[] = [
     { ...newSourceRow("repo"), source: "git@ghes.corp.internal:acme/payments.git" },
