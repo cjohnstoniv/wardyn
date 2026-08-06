@@ -331,11 +331,16 @@ workspace attaching the same repo. The SAME destination is where **Promote
 to approved egress** now writes too (`handlePromoteRecordEgress`,
 `internal/api/record.go`) — an operator reviewing an OPEN recording's
 observed-and-allowed hosts and promoting some or all of them, outside any
-approval flow. The legacy `approved_egress` list is read-only from here on:
-still unioned into a confined replay's allowlist for whatever it already
-held, but nothing writes a NEW entry to it — both the hold-approval
-write-back and Promote land on the requirements contract instead, one
-destination for what used to be two.
+approval flow. The legacy `approved_egress` list is not read-only. The
+hold-approval write-back and Promote no longer write here — both now land
+on the requirements contract instead, one destination for what used to be
+two — but the record pane's own per-host **Approve** button, on a blocked
+or pending-approval host under "Off-policy attempts caught," still calls
+`PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`,
+`internal/api/workspaces.go`) directly and appends the new host — a live
+write path this migration left untouched. Whatever `approved_egress`
+already holds, from that button or from before this migration, is still
+unioned into a confined replay's allowlist.
 
 ## `eligible_grants[]` — `GrantSpec`
 

@@ -188,9 +188,11 @@ host, write access to a directory, a named integration — is a row with ONE
 axis: **Required** rides along with every run that attaches the workspace,
 **Optional** is a per-run opt-in. `PUT /api/v1/workspaces/{id}/requirements`
 writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`,
-`internal/api/workspaces.go`) from three real UI surfaces — the wizard's
-Requirements step, the workspace detail page's requirements editor, and its
-detected-candidates card. Launch and preflight both read
+`internal/api/workspaces.go`) from four real UI surfaces — the wizard's
+Requirements step, the wizard's Integrations step (which persists the
+integration picks as `integration:<id>` rows before Build reads them), the
+workspace detail page's requirements editor, and its detected-candidates
+card. Launch and preflight both read
 `effectiveRequirements(ws)` — the same fold — so Review can never predict
 something launch won't do. A `scan_seeded` requirement can never auto-grant a
 secret on its own — the scanner reads untrusted repo content, so only an
@@ -205,12 +207,18 @@ behalf — not only a model provider or a git host. `types.Integration`
 one system: where it lives (`Hosts`), what credential it takes, how that
 credential reaches the request (`Header`/`Format`, resolved through the same
 proxy-side injection every other `api_key` grant uses), and what it powers.
-`Type` is an open slug (`"anthropic"`, `"bedrock"`, `"github"`, …) — a
-provider Wardyn has never heard of is just a new string, no schema change —
-but `Category` is closed to a fixed set: `ai_provider` · `scm_host` ·
+`Category` is closed to a fixed set of twelve: `ai_provider` · `scm_host` ·
 `package_feed` · `container_registry` · `cloud_provider` · `data_store` ·
 `mcp_server` · `work_tracking` · `observability` · `other_service` (the
-catch-all for anything else).
+catch-all for anything else) — plus two more the next paragraph excludes
+from this page's picker: `artifact_mirror` and `host_proxy` (network
+topology, not a named account). For `ai_provider` and `scm_host`, `Type` is
+closed too — `anthropic_api_key`, `anthropic_subscription`, `bedrock`,
+`openai_api_key`, `azure_openai` for the former; `github_app`, `git_host`
+for the latter — `capabilitiesFor` switches on it, so a new one is a code
+change. For every other category `Type` is an open slug (`"jira"`,
+`"pagerduty"`, …) validated for shape only — a provider Wardyn has never
+heard of is just a new string, no schema change.
 
 The Integrations page (`/integrations`) is the one surface for these — rows
 are DERIVED from what already exists (stored secret names, site config,
@@ -236,7 +244,11 @@ entry has to be there regardless — and a header-delivering integration
 authors one `api_key` grant per host through the ordinary proxy-side
 injection path. An operator with fifty integrations configured and a
 workspace that names none of them gets a run whose spec is byte-identical to
-having none at all.
+having none at all — true for this `integration:<id>` fold, but not for
+**model access** specifically: absent a more specific binding, an
+`ai_provider` integration marked `DefaultFor: agent_runs` still folds into
+the run — even one with no workspace at all (`resolveRunIntegration`,
+`internal/api/llmcred.go`; see "Model access resolves" below).
 
 That fold degrades silently by design — a workspace may state an
 `integration:<id>` requirement before the integration exists, and a missing
@@ -269,8 +281,12 @@ A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):
 
 1. an explicit integration named on the run (`integration_id`);
-2. else the primary workspace's `LLMCred.IntegrationRef` binding;
-3. else the operator's `DefaultFor: agent_runs` integration — the one
+2. else, for a **compose** run only, `use_subscription` — a deprecated
+   alias for "the default `agent_runs` integration of a subscription
+   type". A plain create-run never sets this (`foldRunIntegration`
+   hardcodes `false` here); compose does (`internal/api/compose.go`);
+3. else the primary workspace's `LLMCred.IntegrationRef` binding;
+4. else the operator's `DefaultFor: agent_runs` integration — the one
    stored integration marked as the site-wide default for agent runs, of
    any `ai_provider` type.
 
@@ -280,21 +296,24 @@ the site-wide default; that would be a credential surprise, not a
 convenience. Launch and preflight resolve this identically
 (`foldRunIntegration`), so Review cannot preview access the run won't get.
 
-**When none of the three tiers resolves, that is not the same as no
+**When none of the four tiers resolves, that is not the same as no
 access.** Below the Integration system, dispatch's own transport resolution
 (`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`) still
 credentials the run from whatever GLOBAL provider config exists, independent
 of any integration or workspace binding: a Wardyn-managed subscription
 connected via `wardyn subscription connect` (`managedInjectReady`,
-`internal/api/harnesscred.go` — checks only that a captured token exists,
-never that any integration names it) injects proxy-side, and a global
-Bedrock config (`WARDYN_BEDROCK_REGION`+`WARDYN_BEDROCK_MODEL`, see
-[ENV.md](ENV.md)) still credentials Bedrock calls when no
-workspace/integration selection overrides it (`resolveBedrockAuth`,
-`internal/api/runs_bedrock.go` — a selection wins only the fields it sets;
-the global config is the fallback for the rest). See [TRY-IT.md](TRY-IT.md)
-→ "Model auth: three ways" for the full transport precedence (subscription →
-Bedrock → api-key) once a run reaches dispatch.
+`internal/api/harnesscred.go` — checks that the run's agent is
+`claude-code` and a captured token exists, never that any integration names
+it) injects proxy-side, and a global Bedrock config
+(`WARDYN_BEDROCK_REGION`+`WARDYN_BEDROCK_MODEL`, see [ENV.md](ENV.md)) still
+credentials Bedrock calls when no workspace/integration selection overrides
+it (`resolveBedrockAuth`, `internal/api/runs_bedrock.go` — a selection wins
+only the fields it sets; the global config is the fallback for the rest).
+The `agent == "claude-code"` gate means the managed-subscription fallback is
+not universal: a `codex-cli` run with a connected managed subscription and
+no integration gets no model access via this lane. See
+[TRY-IT.md](TRY-IT.md) → "Model auth: three ways" for the full transport
+precedence (subscription → Bedrock → api-key) once a run reaches dispatch.
 
 ## Corporate network: upstream proxy and egress redirects
 
@@ -524,9 +543,14 @@ longer does: a workspace run gets exactly the groups its attached sources'
 scans detected — the Go group only when a scan found Go, the JVM group only
 when it found Maven/Gradle, the union across every attached source
 (`buildBaseSandboxEnv`, `internal/api/runs_dispatch.go`). A run with no
-workspace context at all — ad-hoc, BYO image, scan, login, or composer runs
-— keeps the full set: nothing was scanned and nothing declared, so
-"unknown" must not silently break those lanes.
+workspace attached at all — ad-hoc, a bare `--image` override, scan, login,
+or composer runs — keeps the full set: nothing was scanned and nothing
+declared, so "unknown" must not silently break those lanes. A workspace
+whose OWN base image is registry/custom/BYO is not this lane: the workspace
+stays attached (`req.Image` is set from it without leaving `wsRefs`,
+`internal/api/runs_create.go`), so `runToolchainNeeds` still narrows to
+what that workspace's scan found — only a workspace with no attachment at
+all, or one lacking a decodable scan profile, falls back to the full set.
 
 `GOTMPDIR` needs one more thing besides the env var: the directory has to
 exist, and unlike `GOCACHE` the go tool refuses to create it — `go test`
