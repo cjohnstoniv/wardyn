@@ -11,7 +11,9 @@
 // optional = a run opts in) — one name, and the hosts and credential ride
 // along instead of being restated on every workspace.
 import * as React from "react";
+import { toast } from "sonner";
 import { integrationsApi, type IntegrationRow as AiScmRow } from "../../../lib/api/integrations";
+import { getErrorMessage } from "../../../lib/format";
 import type { SetupStatus } from "../../../lib/types";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
@@ -91,17 +93,18 @@ export function StepIntegrations({
     };
   }, []);
 
-  // A DERIVED legacy row (the client-side view of pre-entity config) carries
-  // a synthetic colon id — not a stored Integration, so a contract row naming
-  // it could never resolve at dispatch, and the server rightly refuses it
-  // ("invalid integration id"). Those rows are FACTS here: they already power
-  // runs through the model-access ladder (run override → workspace pin →
-  // server default) without a contract row. Adopting one into a real entity
-  // happens on the Integrations page; only stored rows are nameable.
-  const nameable = (id: string) => !id.includes(":");
+  // Contracts name SERVER-side integration ids. A derived legacy row's
+  // serverId is adoptable (POST /integrations/{id}/adopt persists it verbatim
+  // — "already stored" counts as done), after which naming it is ordinary.
+  // Adding one here is therefore ALWAYS an explicit act: nothing is in the
+  // contract until "Use in this workspace" is clicked, and "Not used" removes
+  // it — connection status alone never writes a row. A row with no server
+  // identity at all renders as a plain fact.
+  const contractId = (row: AiScmRow) => row.serverId ?? (row.id.includes(":") ? undefined : row.id);
 
   const rowFor = (row: AiScmRow) => {
-    if (!nameable(row.id)) {
+    const sid = contractId(row);
+    if (!sid) {
       return (
         <div key={row.id} className="flex flex-wrap items-center gap-2 p-2.5">
           <div className="min-w-0 flex-1">
@@ -114,15 +117,28 @@ export function StepIntegrations({
         </div>
       );
     }
-    const key = requirementKey("integration", row.id);
+    const key = requirementKey("integration", sid);
+    const needsAdopt = !!row.serverId && row.id !== row.serverId;
     return (
       <NamedRow
         key={row.id}
-        id={row.id}
+        id={sid}
         name={row.name}
         typeLabel={row.typeLabel}
         level={requirements[key]?.level}
-        onLane={(l) => setLane(key, l)}
+        onLane={(l) => {
+          if (needsAdopt) {
+            // Adopt-then-name: the contract can only reference a STORED
+            // integration; adoption persists the derived row under the same
+            // id (409 already-stored = the goal state already holds).
+            void integrationsApi
+              .adoptIntegration(sid)
+              .then(() => setLane(key, l))
+              .catch((e) => toast.error("Couldn't adopt the integration", { description: getErrorMessage(e) }));
+            return;
+          }
+          setLane(key, l);
+        }}
         onClear={() => clear(key)}
       />
     );

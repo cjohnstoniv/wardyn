@@ -15,11 +15,18 @@ import userEvent from "@testing-library/user-event";
 import type { WorkspaceRequirementsMap } from "./wizard-types";
 
 const listIntegrationsMock = vi.fn();
+const adoptIntegrationMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/integrations")>(
     "../../../lib/api/integrations",
   );
-  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+  return {
+    ...actual,
+    integrationsApi: {
+      list: (...a: unknown[]) => listIntegrationsMock(...a),
+      adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a),
+    },
+  };
 });
 
 import { StepIntegrations } from "./step-integrations";
@@ -43,13 +50,17 @@ function Harness({ initial = {} }: { initial?: WorkspaceRequirementsMap }) {
 }
 
 beforeEach(() => {
+  adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
   listIntegrationsMock.mockReset().mockResolvedValue({
     ai: [
       { id: "ai-anthropic", name: "Anthropic API key", typeLabel: "anthropic · api key" },
-      // A DERIVED legacy row (synthetic colon id): a fact, never nameable —
-      // the server refuses integration:<colon-id> rows outright, and it
-      // already powers runs via the model-access ladder.
-      { id: "ai:anthropic_subscription:managed", name: "Claude subscription (managed)", typeLabel: "anthropic · managed login" },
+      // A DERIVED legacy row: carries its SERVER id, adoptable on first use.
+      {
+        id: "ai:anthropic_subscription:managed",
+        serverId: "anthropic_subscription:managed",
+        name: "Claude subscription (managed)",
+        typeLabel: "anthropic · managed login",
+      },
     ],
     scm: [{ id: "scm-ghes", name: "GHES", typeLabel: "ghes.corp.internal" }],
   });
@@ -76,16 +87,29 @@ describe("StepIntegrations", () => {
 
     await screen.findByRole("button", { name: /not used/i });
     await user.click(screen.getByRole("button", { name: /not used/i }));
+    // All three rows (slug ai + adoptable subscription + scm) offer the toggle.
     await waitFor(() =>
-      expect(screen.getAllByRole("button", { name: /use in this workspace/i }).length).toBe(2),
+      expect(screen.getAllByRole("button", { name: /use in this workspace/i }).length).toBe(3),
     );
   });
 
-  it("a derived legacy row (colon id) is a fact, not a toggle — no invalid contract row possible", async () => {
+  it("a derived legacy row ADOPTS on first use, then names its SERVER id — an explicit act, removable", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(<Harness />);
     expect(await screen.findByText("Claude subscription (managed)")).toBeInTheDocument();
-    expect(screen.getByText(/connected — runs use it via model access/i)).toBeInTheDocument();
-    // Exactly the two REAL rows are nameable (the ai slug row + the scm row).
-    expect(screen.getAllByRole("button", { name: /use in this workspace/i })).toHaveLength(2);
+    // Every row with a server identity is a choice — including the derived
+    // subscription row (connection status alone never writes a contract row).
+    const useButtons = screen.getAllByRole("button", { name: /use in this workspace/i });
+    expect(useButtons).toHaveLength(3);
+
+    // Click the subscription row's button (it renders last in the ai list).
+    await user.click(useButtons[1]);
+    await waitFor(() => expect(adoptIntegrationMock).toHaveBeenCalledWith("anthropic_subscription:managed"));
+    // Named under the SERVER id — and removable like any other.
+    expect(await screen.findByRole("button", { name: /not used/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /not used/i }));
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: /use in this workspace/i })).toHaveLength(3),
+    );
   });
 });

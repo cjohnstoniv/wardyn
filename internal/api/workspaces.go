@@ -11,6 +11,7 @@ package api
 
 import (
 	"github.com/go-chi/chi/v5"
+	"regexp"
 
 	"context"
 	"fmt"
@@ -548,6 +549,12 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 		})
 }
 
+// integrationRefRE is the contract-side integration reference grammar:
+// operator-authored slugs (secretNameRE's charset) plus up to three
+// colon-joined qualifier segments — the shapes Wardyn's own legacy adoption
+// mints and stores verbatim. 128-char cap matches the id rule.
+var integrationRefRE = regexp.MustCompile(`^[a-z0-9._-]{1,128}(:[a-z0-9._-]{1,64}){0,3}$`)
+
 // maxWorkspaceRequirements bounds the requirements-contract map a single PUT
 // may set — a sane ceiling against a hostile/misbehaving request, not a sizing
 // of any real contract.
@@ -596,13 +603,20 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 			return fmt.Sprintf("requirement %q: invalid secret name", key)
 		}
 	case "integration":
-		// Shape only — an integration id is the same identifier secret names
-		// use (validateIntegrationWrite). EXISTENCE is deliberately not checked
-		// here: a workspace may name an integration before it is configured
-		// (the contract states an intent), and the fold degrades silently to
-		// "opens nothing" until the row exists. Requiring it to exist first
-		// would make ordering the operator's problem.
-		if !secretNameRE.MatchString(rest) {
+		// Shape only. EXISTENCE is deliberately not checked here: a workspace
+		// may name an integration before it is configured (the contract states
+		// an intent), and the fold degrades silently to "opens nothing" until
+		// the row exists. Requiring it to exist first would make ordering the
+		// operator's problem.
+		//
+		// The ref grammar is WIDER than an operator-authored id
+		// (validateIntegrationWrite's secretNameRE): Wardyn itself mints
+		// colon-qualified ids for ADOPTED legacy rows
+		// ("anthropic_subscription:managed", "git_host:<host>",
+		// "artifact_mirror:<host>") and stores them verbatim — a contract must
+		// be able to name what the store holds. Split on the FIRST colon at
+		// the key layer keeps this unambiguous.
+		if !integrationRefRE.MatchString(rest) {
 			return fmt.Sprintf("requirement %q: invalid integration id", key)
 		}
 	case "egress":

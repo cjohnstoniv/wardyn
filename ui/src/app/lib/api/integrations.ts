@@ -30,7 +30,7 @@ import {
   type IntegrationTypeMeta,
 } from "../integration-catalog";
 import type { WireIntegration } from "../types/setup";
-import { wfetch, errText } from "./core";
+import { HttpError, wfetch, errText } from "./core";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
 import { secrets as secretsApi } from "./secrets";
@@ -57,6 +57,11 @@ export type Posture =
 
 export interface IntegrationRow {
   id: string;
+  /** The SERVER-side integration id this row corresponds to — stored, or
+   *  adoptable via POST /integrations/{serverId}/adopt. Client row ids are a
+   *  display namespace ("ai:…"); contracts must name THIS one. Absent when the
+   *  row has no server-side identity to adopt. */
+  serverId?: string;
   category: IntegrationCategory;
   name: string;
   /** Mono sub-line under the name, e.g. "anthropic · api key" or a host. */
@@ -177,6 +182,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (hasSecret(present, "anthropic-api-key")) {
     rows.push({
       id: "ai:anthropic_api_key",
+      serverId: "anthropic_api_key",
       category: "ai_provider",
       name: aiRowName("anthropic_api_key"),
       typeLabel: AI_TYPE_LABEL.anthropic_api_key,
@@ -192,6 +198,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (claude?.logged_in && claude.auth_mode === "subscription") {
     rows.push({
       id: "ai:anthropic_subscription:host",
+      serverId: "anthropic_subscription:resident_host",
       category: "ai_provider",
       name: aiRowName("anthropic_subscription", true),
       typeLabel: subscriptionTypeLabel(true),
@@ -210,6 +217,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (managed) {
     rows.push({
       id: "ai:anthropic_subscription:managed",
+      serverId: "anthropic_subscription:managed",
       category: "ai_provider",
       name: aiRowName("anthropic_subscription", false),
       typeLabel: subscriptionTypeLabel(false),
@@ -243,6 +251,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
     }
     rows.push({
       id: "ai:bedrock",
+      serverId: "bedrock",
       category: "ai_provider",
       name: aiRowName("bedrock"),
       typeLabel: AI_TYPE_LABEL.bedrock,
@@ -260,6 +269,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   if (hasSecret(present, "openai-api-key")) {
     rows.push({
       id: "ai:openai_api_key",
+      serverId: "openai_api_key",
       category: "ai_provider",
       name: aiRowName("openai_api_key"),
       typeLabel: AI_TYPE_LABEL.openai_api_key,
@@ -433,6 +443,14 @@ export function blastRadius(row: IntegrationRow, opts: { isDefaultAgent?: boolea
 }
 
 export const integrationsApi = {
+  // POST /api/v1/integrations/{id}/adopt — persist a DERIVED legacy row so it
+  // becomes a real stored Integration (verbatim, same id). 409 = already
+  // stored, which callers treat as success (the goal state holds).
+  async adoptIntegration(serverId: string): Promise<void> {
+    const res = await wfetch(`/integrations/${encodeURIComponent(serverId)}/adopt`, { method: "POST" });
+    if (!res.ok && res.status !== 409) throw new HttpError(res.status, await errText(res));
+  },
+
   // W5: GET /api/v1/integrations doesn't exist yet — compose the three real
   // endpoints and derive rows client-side until it does.
   async list(): Promise<IntegrationsData> {
