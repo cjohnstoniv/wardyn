@@ -130,6 +130,13 @@ materialize_managed_claude_config() {
     fi
     # Onboarding-complete marker so an interactive managed session doesn't prompt.
     [[ -f "${HOME}/.claude.json" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "${HOME}/.claude.json" 2>/dev/null || true
+    # Claude v1 reads $HOME/.claude.json; v2 with CLAUDE_CONFIG_DIR set keeps its
+    # state file INSIDE the config dir — with only the v1 marker, v2 declared the
+    # install brand-new and showed the login picker without ever reading the
+    # sentinel beside it. Fill-missing only: prepare_claude_config_dir may have
+    # copied a RESIDENT $HOME/.claude.json here already, and a state file claude
+    # itself wrote must never be clobbered.
+    [[ -f "${cfg}/.claude.json" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "${cfg}/.claude.json" 2>/dev/null || true
 }
 
 # ── Artifact-registry redirect config ────────────────────────────────────────
