@@ -229,9 +229,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Model access resolves** instead of being configured per run: an explicit
   integration on the run, else — for a compose run only — the deprecated
   `use_subscription` alias, else the workspace's binding, else the
-  operator's site-wide default — and below all four tiers, dispatch still
-  credentials the run from a managed subscription or a global Bedrock
-  config, never nothing. See `docs/OPERATIONS.md` ("Model access resolves —
+  operator's site-wide default — and below all four tiers, dispatch can
+  still credential the run from a managed subscription or a global Bedrock
+  config where either is configured and the run's agent can use it. See
+  `docs/OPERATIONS.md` ("Model access resolves —
   it does not default to none") for the full precedence. `PUT`/`DELETE
   /integrations/{id}` and `POST /integrations/{id}/adopt` manage stored
   rows; the composer registry derives from the integration marked for
