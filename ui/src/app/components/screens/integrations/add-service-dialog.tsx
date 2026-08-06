@@ -257,7 +257,7 @@ function ConnectPanel({
       ) : (
         <div className="rounded-lg border border-border px-3 py-2.5">
           <p className="text-[0.8125rem] leading-snug text-foreground">
-            {notbuiltWhy(type.group) ?? RESIDENCY_META[type.delivery].tooltip}
+            {notbuiltWhy(type) ?? RESIDENCY_META[type.delivery].tooltip}
           </p>
         </div>
       )}

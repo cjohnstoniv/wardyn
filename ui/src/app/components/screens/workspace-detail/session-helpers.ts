@@ -52,6 +52,22 @@ export function recordSessions(ws: Workspace): RecordSession[] {
     .map((key) => ({ key, label: results[key].label || key }));
 }
 
+// A confined result with no OPEN sibling — e.g. the workspace wizard's live
+// Verify session (verify-session.tsx posts name="verify", confined=true;
+// record.go stores it under key "verify:verify", never opening a plain
+// "verify" entry first). recordSessions only lists OPEN sessions, so an
+// orphan like this is otherwise invisible on the detail page even though
+// isRecording (below) still counts it — the exact deadlock this closes: no
+// card, no way to see or stop the run, "Start recording" stays disabled and
+// every new record POST 409s until it's killed elsewhere.
+export function orphanedVerifySessions(ws: Workspace): RecordSession[] {
+  const results = ws.record_results ?? {};
+  return Object.keys(results)
+    .filter((key) => results[key].confined && !(key.replace(/^verify:/, "") in results))
+    .sort((a, b) => (results[a].started_at ?? "").localeCompare(results[b].started_at ?? ""))
+    .map((key) => ({ key, label: results[key].label || key }));
+}
+
 // The per-key recording outcome, if a record run has been kicked for it.
 export function recordResult(ws: Workspace, key: string): RecordResult | undefined {
   return ws.record_results?.[key];

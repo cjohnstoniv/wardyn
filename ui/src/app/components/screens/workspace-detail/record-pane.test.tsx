@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ProfileObservations, RecordResult, Workspace } from "../../../lib/types";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 // The embedded terminal is heavy (xterm) and irrelevant to what this pane decides,
 // so stub it to a marker — we only assert it MOUNTS for a recording session.
@@ -62,20 +63,27 @@ function ws(over: Partial<Workspace> = {}): Workspace {
 }
 
 const noop = () => {};
-function renderPane(over: Partial<Workspace> = {}, handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}, modelReady = true) {
+function renderPane(
+  over: Partial<Workspace> = {},
+  handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {},
+  modelReady = true,
+  operator = true,
+) {
   return render(
-    <RecordPane
-      ws={ws(over)}
-      notice={null}
-      busyTask={null}
-      modelReady={modelReady}
-      onRecord={handlers.onRecord ?? noop}
-      onReplayConfined={handlers.onReplayConfined ?? noop}
-      onDoneRecording={handlers.onDoneRecording ?? noop}
-      onPromoteEgress={handlers.onPromoteEgress ?? noop}
-      onApproveHost={handlers.onApproveHost ?? noop}
-      onOpenProfile={handlers.onOpenProfile ?? noop}
-    />,
+    <OperatorProvider operator={operator}>
+      <RecordPane
+        ws={ws(over)}
+        notice={null}
+        busyTask={null}
+        modelReady={modelReady}
+        onRecord={handlers.onRecord ?? noop}
+        onReplayConfined={handlers.onReplayConfined ?? noop}
+        onDoneRecording={handlers.onDoneRecording ?? noop}
+        onPromoteEgress={handlers.onPromoteEgress ?? noop}
+        onApproveHost={handlers.onApproveHost ?? noop}
+        onOpenProfile={handlers.onOpenProfile ?? noop}
+      />
+    </OperatorProvider>,
   );
 }
 
@@ -374,5 +382,81 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     );
     expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /re-record/i })).toBeEnabled();
+  });
+});
+
+// A wizard Verify session is stored confined under key "verify:verify" with
+// no open "verify" sibling — recordSessions (open-only) can never list it, so
+// without this it was invisible here even while isRecording(ws) still counted
+// it: "Never recorded", "Start recording" disabled, no way to see or stop the
+// live run. orphanedVerifySessions + this card close that.
+describe("RecordPane — an orphaned verify:* session (no open sibling)", () => {
+  it("live: renders a stoppable card (terminal + live approvals + Done), never 'Never recorded'", async () => {
+    const onDoneRecording = vi.fn();
+    const running: RecordResult = { run_id: "vr-live", label: "verify", mode: "interactive", confined: true, status: "recording" };
+    renderPane({ record_results: { "verify:verify": running } }, { onDoneRecording });
+
+    expect(screen.queryByText(/never recorded/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-verify:verify")).toBeInTheDocument();
+    expect(screen.getByTestId("attach-terminal")).toHaveTextContent("vr-live");
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^done$/i }));
+    expect(onDoneRecording).toHaveBeenCalledWith("vr-live");
+  });
+
+  it("settled: renders the containment review (allowed/blocked), same as a named session's confined replay", () => {
+    const settled: RecordResult = {
+      run_id: "vr-done",
+      label: "verify",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: obs({
+        domains: [
+          { host: "registry.npmjs.org", allow_count: 3, deny_count: 0, pending_count: 0 },
+          { host: "evil.example.com", allow_count: 0, deny_count: 1, pending_count: 0 },
+        ],
+      }),
+    };
+    renderPane({ record_results: { "verify:verify": settled } });
+
+    expect(screen.queryByText(/never recorded/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("attach-terminal")).not.toBeInTheDocument();
+    const blocked = screen.getByTestId("verify-session-blocked");
+    expect(within(blocked).getByText("evil.example.com")).toBeInTheDocument();
+  });
+
+  it("a named session's OWN confined replay is not treated as orphaned (its open sibling exists)", () => {
+    const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    const confinedRR: RecordResult = { run_id: "vr1", label: "build & test", mode: "interactive", confined: true, status: "recorded" };
+    renderPane({ record_results: { "build-test": learning, "verify:build-test": confinedRR } });
+
+    // One session card (the named one, in its own "replayed" stage) — no
+    // second, orphan-shaped card for the same confined result.
+    expect(screen.queryByTestId("record-orphaned-sessions")).not.toBeInTheDocument();
+  });
+});
+
+// operatorOnly at the server for every control here (record/replay/approve-
+// host/promote-egress) — a viewer must see them disabled, not enabled-then-403.
+describe("RecordPane — a viewer's controls are disabled", () => {
+  it("disables the New-session field, Start recording, and a session's Replay/Re-record buttons", () => {
+    const recorded: RecordResult = { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" };
+    renderPane({ record_results: { "build-test": recorded } }, {}, true, false);
+
+    // The name field's own disabled attribute proves the fieldset gate
+    // directly — "Start recording" is also disabled by its own empty-name
+    // condition regardless, so it alone wouldn't prove much.
+    expect(screen.getByLabelText(/session name/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: /start recording/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /re-record/i })).toBeDisabled();
+  });
+
+  it("disables the orphaned session's Done button too", () => {
+    const running: RecordResult = { run_id: "vr-live", label: "verify", mode: "interactive", confined: true, status: "recording" };
+    renderPane({ record_results: { "verify:verify": running } }, {}, true, false);
+    expect(screen.getByRole("button", { name: /^done$/i })).toBeDisabled();
   });
 });

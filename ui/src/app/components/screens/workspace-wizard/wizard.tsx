@@ -302,7 +302,14 @@ export function WorkspaceWizard({
         if (gated.has(r.id)) continue;
         next[r.id] = failed ? { status: "failed", error: reason } : { status: "done" };
       }
-      patch({ workspace: finalWs, scans: next, scanning: false });
+      // `partial` (the "Continue anyway" acknowledgment) is set once and never
+      // cleared on its own — once nothing scannable is left in scanning/failed
+      // (the same condition phaseA itself renders under), it's stale: drop it
+      // so the "based on a partial scan" chips don't outlive the scan they
+      // described. A gated source stays "failed" forever, so this only clears
+      // once every source genuinely settled.
+      const stillPartial = nonEphemeral.some((r) => next[r.id]?.status === "scanning" || next[r.id]?.status === "failed");
+      patch({ workspace: finalWs, scans: next, scanning: false, ...(stillPartial ? {} : { partial: false }) });
     } catch (e) {
       toast.error("Scan failed to start", { description: getErrorMessage(e) });
       const next = { ...scans };
@@ -541,8 +548,11 @@ export function WorkspaceWizard({
               else if (id === "image" && wsExists) patch({ step: "image" });
               else if (id === "integrations" && wsExists) patch({ step: "integrations" });
               else if (id === "build" && wsExists) patch({ step: "build" });
-              else if (id === "reqs" && wsExists && profile) patch({ step: "reqs" });
-              else if (id === "verify" && wsExists && profile) patch({ step: "verify" });
+              // No `profile` gate here — the footer's own Back button reaches
+              // these two steps with none (StepRequirements/VerifyBody both
+              // render fine with profile: null), so the rail must agree.
+              else if (id === "reqs" && wsExists) patch({ step: "reqs" });
+              else if (id === "verify" && wsExists) patch({ step: "verify" });
             }}
           />
         </div>

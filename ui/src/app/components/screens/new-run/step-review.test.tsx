@@ -9,6 +9,7 @@ import type { PreflightResult, Workspace } from "../../../lib/types";
 import type { IntegrationRow } from "../../../lib/api/integrations";
 import { StepReview } from "./step-review";
 import { initialWizardState } from "./wizard-types";
+import { baseStatus } from "../setup/test-fixtures";
 
 const listIntegrationsMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async (importOriginal) => {
@@ -17,8 +18,20 @@ vi.mock("../../../lib/api/integrations", async (importOriginal) => {
 });
 listIntegrationsMock.mockResolvedValue({ ai: [], scm: [], mirror: [], proxy: [] });
 
+// resolveModelAccess's tier-3 ("server default") needs a genuinely-marked
+// DefaultFor:agent_runs row (step-access.tsx) — teamKey below IS that row by
+// default; the "nothing resolves" test overrides with an unmarked/empty status.
+const getSetupStatusMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+getSetupStatusMock.mockResolvedValue(
+  baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", default_for: ["agent_runs"] }] }),
+);
+
 const teamKey: IntegrationRow = {
   id: "int-team-key",
+  serverId: "anthropic_api_key",
   category: "ai_provider",
   name: "Team API key",
   typeLabel: "anthropic · api key",

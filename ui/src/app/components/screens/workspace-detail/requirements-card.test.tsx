@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { WorkspaceRequirementsMap } from "../../../lib/api/workspaces";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 const setRequirementsMock = vi.fn();
 const setWorkspaceLLMCredMock = vi.fn();
@@ -146,6 +148,65 @@ describe("RequirementsCard — reuses the wizard's StepRequirements and persists
       ),
     );
     await waitFor(() => expect(onWorkspaceUpdated).toHaveBeenCalledWith(updated));
+  });
+
+  // The race PUT-per-toggle used to lose: deriving each write straight from
+  // the `ws` prop (which only updates once the PREVIOUS PUT resolves) means
+  // two toggles fired before that round trip lands both read the same stale
+  // base, and the second's write silently drops the first. Local `pending`
+  // state composes them instead.
+  it("two toggles fired before the first PUT resolves both land in the SECOND write (composed, not the stale ws prop)", async () => {
+    let resolveFirst!: (w: Workspace) => void;
+    setRequirementsMock.mockImplementationOnce(
+      () => new Promise<Workspace>((resolve) => { resolveFirst = resolve; }),
+    );
+    setRequirementsMock.mockResolvedValueOnce(ws({ profile: profile as unknown as Record<string, unknown> }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <RequirementsCard
+        ws={ws({ profile: profile as unknown as Record<string, unknown> })}
+        storedSecretNames={["database-url"]}
+        onWorkspaceUpdated={vi.fn()}
+        onSecretStored={vi.fn()}
+      />,
+    );
+
+    // Toggle 1: Reach (the default tab) — flips the egress lane.
+    const reachGroup = within(screen.getByTestId("group-reach"));
+    await user.click(reachGroup.getByRole("radio", { name: "Optional" }));
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+
+    // Toggle 2, fired while call 1 is still in flight: Secrets.
+    await user.click(screen.getByRole("tab", { name: "Secrets" }));
+    const secretsGroup = within(screen.getByTestId("group-secrets"));
+    await user.click(secretsGroup.getByRole("radio", { name: "Optional" }));
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(2));
+
+    resolveFirst(ws({ profile: profile as unknown as Record<string, unknown> }));
+
+    // The SECOND call's body carries BOTH edits.
+    const secondBody = setRequirementsMock.mock.calls[1][1] as WorkspaceRequirementsMap;
+    expect(secondBody["egress:registry.npmjs.org"]).toEqual({ level: "optional", provenance: "operator_set" });
+    expect(secondBody["secret:database-url"]).toEqual({ level: "optional", provenance: "operator_set" });
+  });
+});
+
+describe("RequirementsCard — a viewer's lane toggles and Bind-model-access are disabled", () => {
+  it("disables the Reach lane radio and Bind model access for a viewer", () => {
+    const profile: WorkspaceProfile = { egress_domains: ["registry.npmjs.org"] };
+    render(
+      <OperatorProvider operator={false}>
+        <RequirementsCard
+          ws={ws({ profile: profile as unknown as Record<string, unknown> })}
+          storedSecretNames={[]}
+          onWorkspaceUpdated={vi.fn()}
+          onSecretStored={vi.fn()}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByRole("button", { name: /bind model access/i })).toBeDisabled();
+    const reachGroup = within(screen.getByTestId("group-reach"));
+    expect(reachGroup.getByRole("radio", { name: "Optional" })).toBeDisabled();
   });
 });
 

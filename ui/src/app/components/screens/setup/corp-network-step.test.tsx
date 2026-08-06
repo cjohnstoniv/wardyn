@@ -530,6 +530,38 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
     expect(await screen.findByText("Redirect not enforced")).toBeInTheDocument();
     expect(screen.queryByText("Not tested")).not.toBeInTheDocument();
   });
+
+  // The bug "Test all" hit with 2+ redirects: onProbeResult used to
+  // materialize its patch from the render-time gate.redirectProbes, so
+  // concurrent results clobbered each other and only the LAST survived — the
+  // mandatory gate could never unlock even with every row green. Both `from`
+  // keys must accumulate regardless of resolve order.
+  it("two configured redirects, both tested via 'Test all': BOTH `from` keys accumulate in the gate", async () => {
+    testRedirectMock.mockImplementation(async (from: string) => ({ state: "reached", detail: `reached ${from}` }));
+    const onGateChange = vi.fn();
+    renderStep({
+      siteConfig: {
+        egress_redirects: [
+          { from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" },
+          { from: "https://pypi.org/simple", to: "https://artifactory.corp.internal/api/pypi/simple" },
+        ],
+      },
+      onGateChange,
+    });
+    await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^test all$/i }));
+
+    await waitFor(() => expect(testRedirectMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findAllByText("Reached")).toHaveLength(2);
+
+    // The gate's LATEST accumulated state carries both — never just whichever
+    // redirect's probe happened to resolve last.
+    const lastPatch = onGateChange.mock.calls.at(-1)![0] as { redirectProbes: Record<string, unknown> };
+    expect(lastPatch.redirectProbes).toEqual({
+      "https://registry.npmjs.org": { state: "reached", detail: "reached https://registry.npmjs.org" },
+      "https://pypi.org/simple": { state: "reached", detail: "reached https://pypi.org/simple" },
+    });
+  });
 });
 
 // ------------------------------------------------------------

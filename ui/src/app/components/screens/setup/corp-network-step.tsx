@@ -770,6 +770,18 @@ export function CorpNetworkStep({
   // tab mounts EgressTab, and the bumped signal fires its testAll once up.
   const [testAllSignal, setTestAllSignal] = React.useState(0);
 
+  // Latest known redirectProbes, updated SYNCHRONOUSLY inside onProbeResult
+  // below as each result lands — never re-read from the `gate` prop after
+  // this initial seed (re-entering the step). "Test all" fires every
+  // redirect's probe concurrently; onProbeResult used to materialize its
+  // patch from gate.redirectProbes at write time, a snapshot that lags a
+  // whole batch still resolving, so the LAST result to land clobbered every
+  // other one already accumulated (onGateChange's outer merge is a shallow
+  // spread — a patch's redirectProbes key REPLACES the map wholesale, it
+  // doesn't deep-merge). This ref sidesteps that: each call composes onto
+  // whatever the ref most recently held, independent of render timing.
+  const redirectProbesRef = React.useRef(gate.redirectProbes);
+
   // Registered once; the handlers read the LATEST runTest/draft through refs,
   // so a keystroke in the custom field never re-registers anything.
   const runTestRef = React.useRef(runTest);
@@ -848,7 +860,11 @@ export function CorpNetworkStep({
           mutate={mutate}
           operator={operator}
           initialProbes={gate.redirectProbes}
-          onProbeResult={(from, result) => onGateChange({ redirectProbes: { ...gate.redirectProbes, [from]: result } })}
+          onProbeResult={(from, result) => {
+            const next = { ...redirectProbesRef.current, [from]: result };
+            redirectProbesRef.current = next;
+            onGateChange({ redirectProbes: next });
+          }}
           testAllSignal={testAllSignal}
         />
       )}

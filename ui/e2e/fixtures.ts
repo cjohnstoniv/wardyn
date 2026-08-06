@@ -46,6 +46,8 @@ export type NavLabel =
   | "Approvals"
   | "Policies"
   | "Secrets"
+  | "Integrations"
+  | "Workspaces"
   | "Audit"
   | "Recordings"
   | "Getting started";

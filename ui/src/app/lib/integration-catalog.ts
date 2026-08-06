@@ -737,9 +737,19 @@ const NOTBUILT_WHY: Partial<Record<IntegrationGroupId, string>> = {
   data: CATALOG_COPY.NOTBUILT_DATA,
 };
 
-/** Why a "notbuilt" type has no credential lane yet — stated per group. */
-export function notbuiltWhy(group: IntegrationGroupId): string | undefined {
-  return NOTBUILT_WHY[group];
+// s3compat lives in the "data" group (it sits alongside Postgres/MySQL/Redis/
+// Mongo in the mock's own section), but its gap is the CLOUD one — SigV4
+// signing, not a non-HTTP wire protocol — exactly what its own `powers` line
+// says. A per-id override, not a new group, since it's the one type whose
+// true reason disagrees with its section.
+const NOTBUILT_WHY_BY_ID: Partial<Record<string, string>> = {
+  s3compat: CATALOG_COPY.NOTBUILT_CLOUD,
+};
+
+/** Why a "notbuilt" type has no credential lane yet — stated per group, with
+ *  a per-id override for the rare type whose section doesn't match its cause. */
+export function notbuiltWhy(type: Pick<IntegrationTypeMeta, "id" | "group">): string | undefined {
+  return NOTBUILT_WHY_BY_ID[type.id] ?? NOTBUILT_WHY[type.group];
 }
 
 export function integrationTypeById(id: string): IntegrationTypeMeta | undefined {

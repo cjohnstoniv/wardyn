@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import {
   recordSessions,
+  orphanedVerifySessions,
   sessionKeyOf,
   recordResult,
   isRecording,
@@ -62,6 +63,24 @@ describe("record helpers — read the server-authored record fields", () => {
   it("verifyKeyOf prefixes the confined-replay key; policyNameFor slugs workspace+recording", () => {
     expect(verifyKeyOf("build-test")).toBe("verify:build-test");
     expect(policyNameFor("payments", "build & test")).toBe("payments-build-test");
+  });
+
+  it("orphanedVerifySessions surfaces a confined result with no open sibling (the wizard's verify:verify)", () => {
+    expect(orphanedVerifySessions(ws())).toEqual([]);
+    const w = ws({
+      record_results: {
+        // The wizard's live Verify session: stored confined under
+        // "verify:verify" with no OPEN "verify" entry to be a replay of.
+        "verify:verify": { run_id: "r1", label: "verify", mode: "interactive", confined: true, status: "recording" },
+        // A NORMAL session's confined replay — its open sibling "build-test"
+        // exists, so this must NOT be treated as orphaned.
+        "build-test": { run_id: "r2", label: "build & test", mode: "interactive", status: "recorded" },
+        "verify:build-test": { run_id: "r3", label: "build & test", mode: "interactive", confined: true, status: "recorded" },
+      },
+    });
+    expect(orphanedVerifySessions(w)).toEqual([{ key: "verify:verify", label: "verify" }]);
+    // And recordSessions (open-only) never lists either confined key.
+    expect(recordSessions(w)).toEqual([{ key: "build-test", label: "build & test" }]);
   });
 
   it("recordResult reads straight off the workspace (never derive)", () => {

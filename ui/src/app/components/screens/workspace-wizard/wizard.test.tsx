@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const createWorkspaceMock = vi.fn();
@@ -268,6 +268,71 @@ describe("WorkspaceWizard — edit hydration via the `initial` prop (Fix B)", ()
       base_image: { kind: "recommended" },
     });
     expect(createWorkspaceMock).not.toHaveBeenCalled();
+  });
+});
+
+// The rail's Requirements/Verify circles used to render enabled but silently
+// no-op whenever the workspace had no profile — the footer's own Back button
+// navigates to those same steps with no such guard.
+describe("WorkspaceWizard — rail and footer agree on reachability without a profile", () => {
+  it("the Requirements rail circle jumps back even with no profile, matching the footer's unguarded Back", async () => {
+    const noProfileWs = editableWorkspace({
+      status: "scanned",
+      image_ref: "wardyn-workspace/ws-1:abc123",
+      profile: undefined,
+    });
+    setRequirementsMock.mockResolvedValue({ ...noProfileWs, requirements: {} });
+    render(<WorkspaceWizard initial={noProfileWs} onClose={vi.fn()} />);
+
+    // Lands directly on Requirements (initialStepFor: scanned + image_ref set).
+    await screen.findByText(C.S3_BLURB);
+
+    fireEvent.click(screen.getByRole("button", { name: /save & continue/i }));
+    await screen.findByText(RD2.CARRY); // now on Verify
+
+    // The Requirements circle sits at-or-before the current (Verify) index,
+    // so it's clickable — and must actually jump, exactly like the footer's
+    // own unguarded Back button does from this same step.
+    await userEvent.setup().click(screen.getByRole("button", { name: /requirements/i }));
+    await screen.findByText(C.S3_BLURB);
+  });
+});
+
+// `partial` (the "Continue anyway"/"Continue without waiting" acknowledgment)
+// used to be set once and never cleared, so the warning chip outlived the
+// scan it described.
+describe("WorkspaceWizard — a partial-scan acknowledgment clears once the scan actually finishes", () => {
+  it("'based on a partial scan' disappears once every source lands, without a rescan", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const created = baseWorkspace({ status: "pending_scan" });
+      createWorkspaceMock.mockResolvedValue(created);
+      scanWorkspaceMock.mockResolvedValue({ async: true });
+      getWorkspaceMock
+        .mockResolvedValueOnce({ ...created, status: "scanning" })
+        .mockResolvedValueOnce(baseWorkspace({ status: "scanned" }));
+
+      render(<WorkspaceWizard onClose={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText("Name"), { target: { value: "payments" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add Local directory" }));
+      fireEvent.change(screen.getByPlaceholderText("/home/me/projects/payments"), {
+        target: { value: "/home/me/payments" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+      // Still scanning — "Continue without waiting" sets the partial ack.
+      // Base image renders the chip in more than one place (recommended card,
+      // registry card, needs header) — assert at least one, not exactly one.
+      const continueBtn = await screen.findByRole("button", { name: /continue without waiting/i });
+      fireEvent.click(continueBtn);
+      expect(screen.getAllByText("based on a partial scan").length).toBeGreaterThan(0);
+
+      // Let the poll loop run its course to the settled response.
+      await act(() => vi.advanceTimersByTimeAsync(3500));
+      await waitFor(() => expect(screen.queryAllByText("based on a partial scan")).toHaveLength(0));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

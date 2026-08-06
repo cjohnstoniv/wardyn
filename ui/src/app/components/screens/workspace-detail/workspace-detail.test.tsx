@@ -8,6 +8,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 const getWorkspaceMock = vi.fn();
 const scanWorkspaceMock = vi.fn();
@@ -91,15 +92,17 @@ function setupStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   };
 }
 
-function renderDetail(id = "ws-1") {
+function renderDetail(id = "ws-1", operator = true) {
   return render(
     <MemoryRouter initialEntries={[`/workspaces/${id}`]}>
-      <Routes>
-        <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
-        <Route path="/workspaces" element={<div>back on the list</div>} />
-        <Route path="/runs" element={<div>runs screen</div>} />
-        <Route path="/runs/:id" element={<div>run detail screen</div>} />
-      </Routes>
+      <OperatorProvider operator={operator}>
+        <Routes>
+          <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
+          <Route path="/workspaces" element={<div>back on the list</div>} />
+          <Route path="/runs" element={<div>runs screen</div>} />
+          <Route path="/runs/:id" element={<div>run detail screen</div>} />
+        </Routes>
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -248,5 +251,49 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
     await waitFor(() =>
       expect(promoteRecordEgressMock).toHaveBeenCalledWith("ws-1", "build-test", ["evil.example.com"]),
     );
+  });
+});
+
+// This screen never read useOperator at all — a viewer saw enabled Rescan /
+// Delete / Scan now / lane toggles / record controls that all 403 server-side.
+describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () => {
+  it("disables Scan now (pending_scan) and the header kebab's Edit/Rescan/Delete", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ status: "pending_scan" }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail("ws-1", false);
+
+    expect(await screen.findByRole("button", { name: /^scan now$/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /workspace actions/i }));
+    const edit = await screen.findByRole("menuitem", { name: /edit workspace/i });
+    const rescan = screen.getByRole("menuitem", { name: /rescan/i });
+    const del = screen.getByRole("menuitem", { name: /^delete/i });
+    expect(edit).toHaveAttribute("data-disabled");
+    expect(rescan).toHaveAttribute("data-disabled");
+    expect(del).toHaveAttribute("data-disabled");
+  });
+
+  it("disables Retry scan (error) too", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ status: "error" }));
+    renderDetail("ws-1", false);
+    expect(await screen.findByRole("button", { name: /^retry scan$/i })).toBeDisabled();
+  });
+
+  it("disables the Requirements card's lane toggles and the Sessions card's session controls", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        record_results: {
+          "build-test": { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" },
+        },
+      }),
+    );
+    renderDetail("ws-1", false);
+
+    await screen.findByText("Requirements");
+    // Unconfounded by any OTHER disabled condition (busyTask, empty name):
+    // proves the operator gate itself, not something else that happens to
+    // already disable the control.
+    expect(screen.getByLabelText(/session name/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: /re-record/i })).toBeDisabled();
   });
 });

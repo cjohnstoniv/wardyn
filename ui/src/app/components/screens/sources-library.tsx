@@ -267,7 +267,7 @@ export function SourcesLibrary({
       </div>
 
       {status === "loading" && <TableSkeleton rows={3} />}
-      {status === "error" && <ErrorState onRetry={load} />}
+      {status === "error" && <ErrorState onRetry={() => load()} />}
       {status === "ready" && sources.length === 0 && (
         <EmptyState
           icon={FolderOpen}

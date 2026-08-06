@@ -38,6 +38,7 @@ import { CopyButton } from "../../wardyn/copy-button";
 import {
   recordResult,
   recordSessions,
+  orphanedVerifySessions,
   isRecording,
   isEmptyCapture,
   newEgressHosts,
@@ -56,6 +57,8 @@ import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { C } from "../../../lib/workspace-copy";
+import { useOperator } from "../../wardyn/operator-context";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 export function RecordPane({
   ws,
@@ -98,7 +101,9 @@ export function RecordPane({
   // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
+  const operator = useOperator();
   const sessions = recordSessions(ws);
+  const orphans = orphanedVerifySessions(ws);
   // The record sandbox runs under the strongest class the host supports; the
   // pane's best proxy is the operator's persisted default tier (same source
   // SecurityChip uses). CC1 (Fence) is the loud case: open egress on a shared-
@@ -110,7 +115,16 @@ export function RecordPane({
   const detected = ((ws.profile ?? {}) as WorkspaceProfile).setup_commands ?? [];
 
   return (
-    <div className="space-y-4">
+    // Every control in this pane (record/replay/approve-host/promote-egress)
+    // is operatorOnly server-side; a viewer would see them all enabled and
+    // 403 on the first click. A native disabled fieldset gates the whole
+    // subtree at once — same disabled:opacity-50 every Button here already
+    // carries — instead of threading `disabled={!operator}` through
+    // SessionCard/RecordReviewCard/ConfinedReviewCard/NewSessionForm one by
+    // one. The border/padding/min-width a bare <fieldset> adds are reset so
+    // it stays visually identical to the plain <div> it replaces.
+    <fieldset disabled={!operator} className="m-0 min-w-0 border-0 p-0 space-y-4">
+      {!operator && <p className="text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       {/* No "Sessions" label here — the SectionCard wrapping this pane already
           titles it; repeating it would show the same word twice on the page. */}
       <Chip tone="info">Recommended · skippable</Chip>
@@ -189,7 +203,27 @@ export function RecordPane({
           ))}
         </div>
       )}
-      {sessions.length === 0 && (
+      {/* A confined session with no open sibling — e.g. a wizard Verify run
+          left live (or just settled) after the wizard closed. Not one of the
+          named sessions above (it has no "session" of its own to be a replay
+          of), but it's a real, stoppable run and must be reachable from here. */}
+      {orphans.length > 0 && (
+        <div className="space-y-3" data-testid="record-orphaned-sessions">
+          {orphans.map((s) => (
+            <OrphanedSessionCard
+              key={s.key}
+              ws={ws}
+              sessionKey={s.key}
+              label={s.label}
+              busy={busyTask === s.key}
+              onDoneRecording={onDoneRecording}
+              onApproveHost={onApproveHost}
+              onOpenProfile={onOpenProfile}
+            />
+          ))}
+        </div>
+      )}
+      {sessions.length === 0 && orphans.length === 0 && (
         <p className="text-xs text-muted-foreground">
           Never recorded. A session is the environment-proof: drive the workspace once in an open
           sandbox, then replay the capture confined.
@@ -200,7 +234,7 @@ export function RecordPane({
         disabled={isRecording(ws) || notice?.status === 503}
         onRecord={onRecord}
       />
-    </div>
+    </fieldset>
   );
 }
 
@@ -369,6 +403,65 @@ function SessionCard({
             {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
             Replay again
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A confined result with no open sibling (orphanedVerifySessions): unlike a
+// normal session's confined replay, there's no open half to derive a stage
+// from — it's simply live or settled. Reuses ConfinedReviewCard for the
+// settled review (the same containment breakdown a normal replay gets) and
+// the same live-terminal + LiveApprovals + Done shape SessionCard's own
+// "replaying" branch renders — no re-run affordance (there's no open session
+// to name it after); Done is the one action this card offers.
+function OrphanedSessionCard({
+  ws,
+  sessionKey,
+  label,
+  busy,
+  onDoneRecording,
+  onApproveHost,
+  onOpenProfile,
+}: {
+  ws: Workspace;
+  sessionKey: string;
+  label: string;
+  busy: boolean;
+  onDoneRecording: (runId: string) => void;
+  onApproveHost: (host: string) => void;
+  onOpenProfile: (runId: string, suggestedName?: string) => void;
+}) {
+  const rr = recordResult(ws, sessionKey);
+  if (!rr) return null;
+  const live = rr.status === "recording";
+
+  return (
+    <div className="rounded-lg border border-border p-3" data-testid={`session-${sessionKey}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        {stageChip(live ? "replaying" : rr.status === "record_failed" ? "replay_failed" : "replayed")}
+      </div>
+      {live ? (
+        <div className="mt-3 space-y-2">
+          <AuthModeLine rr={rr} />
+          <AttachTerminal runId={rr.run_id} />
+          <LiveApprovals
+            runId={rr.run_id}
+            reasonApprove="approved in replay"
+            reasonDeny="rejected in replay"
+            idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
+          />
+          <Button size="sm" variant="outline" onClick={() => onDoneRecording(rr.run_id)} disabled={busy}>
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
+            Done
+          </Button>
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
+        </div>
+      ) : (
+        <div className="mt-3">
+          <ConfinedReviewCard ws={ws} rr={rr} onApproveHost={onApproveHost} onOpenProfile={onOpenProfile} />
         </div>
       )}
     </div>

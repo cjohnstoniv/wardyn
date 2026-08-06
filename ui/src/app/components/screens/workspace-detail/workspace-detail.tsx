@@ -44,9 +44,11 @@ import {
 import { Mono } from "../../wardyn/code-block";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
-import { Chip } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { useOperator } from "../../wardyn/operator-context";
 import { KIND_META, attentionItems, sourceSubLine } from "../workspaces";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import { ProfileReview } from "../profile-review";
@@ -62,6 +64,7 @@ const POLL_MS = 2500;
 export function WorkspaceDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const operator = useOperator();
 
   const [ws, setWs] = React.useState<Workspace | null | undefined>(undefined);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -262,13 +265,13 @@ export function WorkspaceDetailScreen() {
     );
   } else if (ws.status === "error") {
     primary = (
-      <Button size="sm" onClick={() => void scan()}>
+      <Button size="sm" disabled={!operator} title={operator ? undefined : OPERATOR_ONLY_REASON} onClick={() => void scan()}>
         Retry scan
       </Button>
     );
   } else if (ws.status === "pending_scan") {
     primary = (
-      <Button size="sm" onClick={() => void scan()}>
+      <Button size="sm" disabled={!operator} title={operator ? undefined : OPERATOR_ONLY_REASON} onClick={() => void scan()}>
         Scan now
       </Button>
     );
@@ -338,11 +341,22 @@ export function WorkspaceDetailScreen() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setEditOpen(true)}>Edit workspace…</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setRescanOpen(true)}>Rescan…</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setEditOpen(true)} disabled={!operator}>
+                Edit workspace…
+                {!operator && <OperatorOnlyHint />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setRescanOpen(true)} disabled={!operator}>
+                Rescan…
+                {!operator && <OperatorOnlyHint />}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setConfirmDelete(true)}>
+              <DropdownMenuItem
+                className="text-danger focus:text-danger"
+                disabled={!operator}
+                onClick={() => setConfirmDelete(true)}
+              >
                 Delete…
+                {!operator && <OperatorOnlyHint />}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

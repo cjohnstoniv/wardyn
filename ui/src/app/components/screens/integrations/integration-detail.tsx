@@ -13,6 +13,7 @@
 import * as React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Cable, Check, MoreHorizontal, RotateCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import {
   deriveIntegrations,
   describePosture,
@@ -33,7 +34,8 @@ import {
   type BedrockLane,
   type CapabilityRow,
 } from "../../../lib/integrations";
-import type { SetupStatus } from "../../../lib/types";
+import type { SetupStatus, WireIntegration } from "../../../lib/types";
+import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Switch } from "../../ui/switch";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
@@ -46,7 +48,7 @@ import { useOperator } from "../../wardyn/operator-context";
 import { AddSecretDialog } from "../secrets";
 import { HarnessLoginPane } from "../setup/harness-login-pane";
 import { CheckRow } from "../setup/step-bodies";
-import { canRotateInline, deleteIntegration, primarySecretName } from "./actions";
+import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor, type DefaultForMark } from "./actions";
 
 const AGENT_SLOT = /Claude Code|Codex/;
 const FEATURES_SLOT = /^Wardyn features/;
@@ -55,6 +57,22 @@ const POSTURE_CLASS: Record<"success" | "warning" | "muted", string> = {
   warning: "text-warning",
   muted: "text-muted-foreground",
 };
+
+// Overlays the REAL default_for state onto the type's static capability
+// preview: `def` (the "default" chip) and `makeDefault` (whether the button
+// offers to change it) both flip on live state once a server identity backs
+// the row, instead of the static per-type guess the preview ships with. A row
+// with no server identity yet (no `wire`) keeps the static preview verbatim —
+// there's nothing to write to regardless of what it claims.
+function liveCapRows(rows: CapabilityRow[], wire: WireIntegration | undefined, defAgent: boolean, defFeat: boolean): CapabilityRow[] {
+  if (!wire) return rows;
+  return rows.map((r) => {
+    if (!r.on) return r;
+    if (AGENT_SLOT.test(r.label)) return { ...r, def: defAgent, makeDefault: !defAgent };
+    if (FEATURES_SLOT.test(r.label)) return { ...r, def: defFeat, makeDefault: !defFeat };
+    return r;
+  });
+}
 
 function Region({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -67,9 +85,22 @@ function Region({ label, children }: { label: string; children: React.ReactNode 
 
 // Same fixed disabled-Switch-or-fact-text shape as the Add dialog's preview —
 // a capability row is a FACT about the credential type, not a per-instance
-// setting anything here can persist. "Make default" mirrors the mock's own
-// noop handlers (ponytail: no backend concept of a per-capability default yet).
-export function CapabilityTable({ rows }: { rows: CapabilityRow[] }) {
+// setting anything here can persist. "Make default" is real (wired via
+// onMakeDefault) once a stored/adoptable row backs it; `onMakeDefault` is
+// absent for a row still being CREATED (add-integration-dialog.tsx's preview
+// panel), which is exactly what hides the button there — no second fork of
+// this component.
+export function CapabilityTable({
+  rows,
+  onMakeDefault,
+  operator = true,
+}: {
+  rows: CapabilityRow[];
+  onMakeDefault?: (row: CapabilityRow) => void;
+  /** Viewer gate for the (real, wired) Make-default button — irrelevant while
+   *  onMakeDefault is absent (the create-context preview has no button to gate). */
+  operator?: boolean;
+}) {
   return (
     <div className="divide-y divide-border rounded-lg border border-border">
       {rows.map((r, i) => (
@@ -82,8 +113,14 @@ export function CapabilityTable({ rows }: { rows: CapabilityRow[] }) {
                   default
                 </Chip>
               )}
-              {r.makeDefault && (
-                <button type="button" className="text-[0.6875rem] text-primary hover:underline">
+              {r.makeDefault && onMakeDefault && (
+                <button
+                  type="button"
+                  className="text-[0.6875rem] text-primary hover:underline disabled:pointer-events-none disabled:no-underline disabled:opacity-50"
+                  disabled={!operator}
+                  title={operator ? undefined : OPERATOR_ONLY_REASON}
+                  onClick={() => onMakeDefault(r)}
+                >
                   Make default
                 </button>
               )}
@@ -258,8 +295,24 @@ export function IntegrationDetailScreen() {
 
   const resMeta = RESIDENCY_META[row.residency];
   const rotateTarget = primarySecretName(row);
-  const defAgent = row.chips.some((c) => !c.muted && AGENT_SLOT.test(c.label) && c.label.includes("· default"));
-  const defFeat = row.chips.some((c) => !c.muted && FEATURES_SLOT.test(c.label) && c.label.includes("· default"));
+  // The effective wire row (status.integrations, by serverId) — the REAL
+  // default_for, not a guess. Absent when the row has no server identity yet.
+  const wire: WireIntegration | undefined = row.serverId
+    ? status.integrations?.find((w) => w.id === row.serverId)
+    : undefined;
+  const defAgent = !!wire?.default_for?.includes("agent_runs");
+  const defFeat = !!wire?.default_for?.includes("wardyn_features");
+
+  const handleMakeDefault = async (r: CapabilityRow) => {
+    if (!wire) return;
+    const mark: DefaultForMark = AGENT_SLOT.test(r.label) ? "agent_runs" : "wardyn_features";
+    try {
+      await setDefaultFor(wire, mark, true);
+      load();
+    } catch (e) {
+      toast.error("Couldn't update the default", { description: getErrorMessage(e) });
+    }
+  };
 
   return (
     <div className="mx-auto max-w-[1100px] space-y-6 px-6 py-6">
@@ -320,7 +373,11 @@ export function IntegrationDetailScreen() {
 
       {row.aiType && (
         <Region label="What this powers">
-          <CapabilityTable rows={AI_TYPES[row.aiType].capabilityPreview(row.hostCli)} />
+          <CapabilityTable
+            rows={liveCapRows(AI_TYPES[row.aiType].capabilityPreview(row.hostCli), wire, defAgent, defFeat)}
+            onMakeDefault={wire ? handleMakeDefault : undefined}
+            operator={operator}
+          />
         </Region>
       )}
 

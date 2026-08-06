@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { baseStatus } from "../setup/test-fixtures";
 import { T } from "../../../lib/integrations";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
@@ -42,6 +43,19 @@ vi.mock("../../../lib/api/harness-auth", () => ({
   },
 }));
 
+// The default-for write path (actions.ts's setDefaultFor) calls these two —
+// everything else this screen needs from the module stays real.
+const adoptIntegrationMock = vi.fn();
+const putIntegrationMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return {
+    ...actual,
+    integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
+    genericIntegrationsApi: { ...actual.genericIntegrationsApi, put: (...a: unknown[]) => putIntegrationMock(...a) },
+  };
+});
+
 import { IntegrationDetailScreen } from "./integration-detail";
 
 function renderDetail(id: string) {
@@ -62,7 +76,16 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
   });
 
   it("Delete integration lists the computed blast radius, then really deletes the backing secret", async () => {
-    getSetupStatusMock.mockResolvedValue(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        secrets: { present: ["anthropic-api-key"], github_app: false },
+        // Genuinely marked the default — the blast radius's "first model call
+        // fails" line is real state now (default_for), not a per-type guess.
+        integrations: [
+          { id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", source: "legacy", default_for: ["agent_runs"] },
+        ],
+      }),
+    );
     getSiteConfigMock.mockResolvedValue({});
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -145,5 +168,93 @@ describe("IntegrationDetailScreen — blast-radius confirm", () => {
 
     expect(screen.getByText(/Unknown/)).toBeInTheDocument();
     expect(screen.getByText(T.CACHE_CAVEAT)).toBeInTheDocument();
+  });
+});
+
+// The "Make default" button used to be a bare <button> with no onClick at
+// all (hardening-review) — mirroring the mock's noop handlers from back when
+// there was no backend concept of a per-capability default. Now real.
+describe("IntegrationDetailScreen — Make default is wired", () => {
+  beforeEach(() => {
+    adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
+    putIntegrationMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("clicking Make default next to Claude Code adopts, PUTs agent_runs, and the row re-renders as the live default", async () => {
+    const row = {
+      id: "anthropic_api_key",
+      name: "Anthropic API key",
+      category: "ai_provider",
+      type: "anthropic_api_key",
+      source: "legacy" as const,
+      credentials: { api_key: "anthropic-api-key" },
+    };
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [row] }),
+    );
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({
+        secrets: { present: ["anthropic-api-key"], github_app: false },
+        integrations: [{ ...row, source: "stored", default_for: ["agent_runs"] }],
+      }),
+    );
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    renderDetail("ai:anthropic_api_key");
+    await screen.findByRole("heading", { name: "Anthropic (API key)" });
+
+    // Scoped to the Claude Code capability row (label + chip + button share
+    // one flex container) — Wardyn features renders its own, separate button.
+    const claudeRow = within(screen.getByText("Claude Code").closest("div")!);
+    expect(claudeRow.queryByText("default")).not.toBeInTheDocument();
+    await user.click(claudeRow.getByRole("button", { name: /make default/i }));
+
+    await waitFor(() => expect(adoptIntegrationMock).toHaveBeenCalledWith("anthropic_api_key"));
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith(
+        "anthropic_api_key",
+        expect.objectContaining({ default_for: ["agent_runs"] }),
+      ),
+    );
+
+    // Reload lands the server's real state: the chip appears, the button (now
+    // redundant) is gone — never a locally-guessed "still offering to set it".
+    await waitFor(() => expect(within(screen.getByText("Claude Code").closest("div")!).getByText("default")).toBeInTheDocument());
+    expect(within(screen.getByText("Claude Code").closest("div")!).queryByRole("button", { name: /make default/i })).not.toBeInTheDocument();
+  });
+
+  it("hides Make default for a viewer (disabled, with the operator-only hint) instead of letting it 403", async () => {
+    const row = {
+      id: "anthropic_api_key",
+      name: "Anthropic API key",
+      category: "ai_provider",
+      type: "anthropic_api_key",
+      source: "legacy" as const,
+      credentials: { api_key: "anthropic-api-key" },
+    };
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [row] }),
+    );
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+
+    render(
+      <MemoryRouter initialEntries={["/integrations/ai:anthropic_api_key"]}>
+        <OperatorProvider operator={false}>
+          <Routes>
+            <Route path="/integrations/:id" element={<IntegrationDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("heading", { name: "Anthropic (API key)" });
+
+    const claudeRow = within(screen.getByText("Claude Code").closest("div")!);
+    const button = claudeRow.getByRole("button", { name: /make default/i });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringMatching(/operator/i));
   });
 });

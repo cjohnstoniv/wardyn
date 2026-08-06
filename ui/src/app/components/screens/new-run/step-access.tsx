@@ -54,7 +54,8 @@ import {
 } from "../../../lib/api/integrations";
 import { IMPOSSIBLE, RESIDENCY_META, type AiCapability } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
-import type { Workspace } from "../../../lib/types";
+import { setup as setupApi } from "../../../lib/api/setup";
+import type { WireIntegration, Workspace } from "../../../lib/types";
 
 export function StepAccess({
   state,
@@ -271,9 +272,19 @@ export function resolveModelAccess(
   integrationId: string | undefined,
   primaryWorkspace: Workspace | undefined,
   ai: IntegrationRow[],
+  // The effective wire rows (SetupStatus.integrations), only needed for the
+  // tier-3 "server default" claim below — absent (or not yet loaded) just
+  // means nothing can be genuinely marked yet, which correctly falls through.
+  integrations?: WireIntegration[],
 ): ResolvedModelAccess | null {
   const capability = agentCapability(agent);
   const compatible = (r: IntegrationRow) => !incompatibleReason(r, capability);
+  // The server's tier-4 resolves only a row actually marked
+  // DefaultFor:agent_runs (internal/api/llmcred.go) — never merely "the first
+  // compatible row in list order". Matching that here means the client can
+  // never name an integration the launch itself will not use.
+  const isServerDefault = (r: IntegrationRow) =>
+    !!r.serverId && !!integrations?.find((w) => w.id === r.serverId)?.default_for?.includes("agent_runs");
 
   if (integrationId) {
     const row = ai.find((r) => r.id === integrationId);
@@ -286,7 +297,7 @@ export function resolveModelAccess(
     const pinned = ai.find((r) => r.id === ref);
     if (pinned) return { row: pinned, because: "this workspace pins it." };
   }
-  const fallback = ai.find(compatible);
+  const fallback = ai.find((r) => compatible(r) && isServerDefault(r));
   if (fallback) return { row: fallback, because: "it's the server default for agent runs." };
   return null;
 }
@@ -303,6 +314,7 @@ function ModelAccessCard({
   onPatch: (p: Partial<WizardState>) => void;
 }) {
   const [ai, setAi] = React.useState<IntegrationRow[]>([]);
+  const [integrations, setIntegrations] = React.useState<WireIntegration[] | undefined>(undefined);
   const [peekOpen, setPeekOpen] = React.useState(false);
   // Self-fetched (not threaded through wizard.tsx as a new prop) so every
   // existing StepAccess call site keeps working unchanged; only the id of the
@@ -329,8 +341,26 @@ function ModelAccessCard({
     };
   }, []);
 
+  // Which compatible row is genuinely marked DefaultFor:agent_runs — the same
+  // fact resolveModelAccess's tier-3 now requires, not merely "first in list
+  // order". A second fetch (integrationsApi.list() derives its rows from the
+  // same three endpoints but discards the raw status), same self-fetch idiom
+  // as `ai` above.
+  React.useEffect(() => {
+    let alive = true;
+    setupApi
+      .getSetupStatus()
+      .then((status) => {
+        if (alive) setIntegrations(status.integrations);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const primaryWorkspace = workspaces.find((w) => w.id === primaryWorkspaceId);
-  const resolved = resolveModelAccess(agent, integrationId, primaryWorkspace, ai);
+  const resolved = resolveModelAccess(agent, integrationId, primaryWorkspace, ai, integrations);
 
   return (
     <div className="rounded-xl border border-border bg-card p-3.5">

@@ -344,30 +344,34 @@ export function EgressTab({
   // Seeded once at mount only (the lazy-initializer form runs exactly once) —
   // same rationale as HostProxyTab's `test` state and the file's existing
   // seededRef pattern: a later reload must never stomp in-progress state.
-  const [testStates, setTestStates] = React.useState<Record<number, ProbeUiState>>(() => {
-    const seeded: Record<number, ProbeUiState> = {};
-    redirects.forEach((r, i) => {
+  // Keyed by `from` — the same identity redirectProbes/initialProbes already
+  // use — not array index: an index is positional, so removing a redirect
+  // shifts every LATER row into the slot the deleted row's verdict still
+  // occupies, showing the wrong row as tested.
+  const [testStates, setTestStates] = React.useState<Record<string, ProbeUiState>>(() => {
+    const seeded: Record<string, ProbeUiState> = {};
+    redirects.forEach((r) => {
       const prior = initialProbes[r.from];
-      if (prior) seeded[i] = { kind: "done", result: prior };
+      if (prior) seeded[r.from] = { kind: "done", result: prior };
     });
     return seeded;
   });
 
   const setRedirects = (next: EgressRedirect[]) => mutate({ ...(siteConfig ?? {}), egress_redirects: next }, "Failed to save the egress redirect");
 
-  const runTest = async (i: number, r: EgressRedirect) => {
-    setTestStates((s) => ({ ...s, [i]: { kind: "running", elapsedSec: 0 } }));
+  const runTest = async (r: EgressRedirect) => {
+    setTestStates((s) => ({ ...s, [r.from]: { kind: "running", elapsedSec: 0 } }));
     try {
       const result = await healthApi.testRedirect(r.from, r.to);
-      setTestStates((s) => ({ ...s, [i]: { kind: "done", result } }));
+      setTestStates((s) => ({ ...s, [r.from]: { kind: "done", result } }));
       onProbeResult(r.from, result);
     } catch (e) {
       // See the proxy tab's runTest: a failed request is not a "blocked" verdict.
       toast.error(`Could not test the ${r.from} redirect`, { description: getErrorMessage(e) });
-      setTestStates((s) => ({ ...s, [i]: { kind: "idle" } }));
+      setTestStates((s) => ({ ...s, [r.from]: { kind: "idle" } }));
     }
   };
-  const testAll = () => redirects.forEach((r, i) => runTest(i, r));
+  const testAll = () => redirects.forEach((r) => runTest(r));
   // The footer's gate action lands as a bumped counter: the step switches to
   // this tab and increments, and the freshly-mounted tab fires the sweep.
   const firedSignal = React.useRef(0);
@@ -407,9 +411,9 @@ export function EgressTab({
                 <div key={i} className={i > 0 ? "border-t border-border" : undefined}>
                   <TickingRow
                     r={r}
-                    testState={testStates[i] ?? { kind: "idle" }}
+                    testState={testStates[r.from] ?? { kind: "idle" }}
                     onExpand={() => setExpandedIdx(i)}
-                    onTest={() => runTest(i, r)}
+                    onTest={() => runTest(r)}
                     onRemove={() => setRedirects(redirects.filter((_, j) => j !== i))}
                     operator={operator}
                   />

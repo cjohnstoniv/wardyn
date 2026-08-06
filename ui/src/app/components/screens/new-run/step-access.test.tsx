@@ -17,6 +17,7 @@ import { StepAccess } from "./step-access";
 import { initialWizardState } from "./wizard-types";
 import { T } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
+import { baseStatus } from "../setup/test-fixtures";
 import type { IntegrationRow } from "../../../lib/api/integrations";
 
 const listIntegrationsMock = vi.fn();
@@ -30,12 +31,24 @@ vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
 }));
 
+const getSetupStatusMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+
 // Module-level (not per-describe) so every block shares one reset — these two
 // mocks are call-count-sensitive in the "never fetches for a governed command"
 // case, and vitest does not clear mocks between tests by default.
 beforeEach(() => {
   listIntegrationsMock.mockReset();
   listWorkspacesMock.mockReset();
+  getSetupStatusMock.mockReset();
+  // Default: teamKey below IS the genuinely-marked server default — matches
+  // the "server default" wording pinned throughout this file. Tests that care
+  // about the unmarked case override this per-test.
+  getSetupStatusMock.mockResolvedValue(
+    baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key", default_for: ["agent_runs"] }] }),
+  );
 });
 
 function integrations(ai: IntegrationRow[]) {
@@ -44,6 +57,7 @@ function integrations(ai: IntegrationRow[]) {
 
 const teamKey: IntegrationRow = {
   id: "int-team-key",
+  serverId: "anthropic_api_key",
   category: "ai_provider",
   name: "Team API key",
   typeLabel: "anthropic · api key",
@@ -115,6 +129,21 @@ describe("StepAccess — model access resolution card", () => {
     listWorkspacesMock.mockResolvedValue([]);
     renderStep({ state: { ...initialWizardState(), runType: "command" } });
     expect(listIntegrationsMock).not.toHaveBeenCalled();
+    expect(getSetupStatusMock).not.toHaveBeenCalled();
+  });
+
+  // The server's tier-4 resolves only a row actually marked
+  // DefaultFor:agent_runs — the first COMPATIBLE row in list order is not
+  // enough, even though it's the only configured integration.
+  it("a compatible row that is NOT genuinely marked default falls through to the honest none-line", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([teamKey]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key" }] }),
+    );
+    renderStep();
+    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+    expect(screen.queryByText("Team API key")).not.toBeInTheDocument();
   });
 });
 

@@ -39,6 +39,12 @@ export type DemoStepId = (typeof DEMO_STEP_IDS)[number];
 // 9 -> 10: `corp_network` comes BACK as its own step, right before
 // `integrations` — see corp-network-step.tsx and the PHASES comment below for
 // why the ORDER, not a banner, is the actual fix.
+//
+// 10 -> 12: the tier-1/2/3 library split gave Directories & repos and Base
+// images their own steps (`sources`, `images`) alongside `workspaces` under
+// "Your work" — previously just the one. Current total: 12 (3 essentials + 4
+// demos + 3 your-work + 2 finish — PHASES below is the count to trust, not
+// this history).
 export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "sources" | "images" | "workspaces" | "review" | "launch";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'

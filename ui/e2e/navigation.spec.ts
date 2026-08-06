@@ -33,6 +33,8 @@ const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Approvals", heading: "Approvals", blurb: /nothing privileged happens without one/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
+  { label: "Integrations", heading: "Integrations", blurb: /named connections to systems outside wardyn/i },
+  { label: "Workspaces", heading: "Workspaces", blurb: /three tiers: directories & repos configured once/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
   { label: "Recordings", heading: "Recordings", blurb: /Captured terminal sessions, replayed byte-for-byte/i },
 ];
@@ -44,6 +46,8 @@ const SIDEBAR_LABELS: NavLabel[] = [
   "Approvals",
   "Policies",
   "Secrets",
+  "Integrations",
+  "Workspaces",
   "Audit",
   "Recordings",
   "Getting started",

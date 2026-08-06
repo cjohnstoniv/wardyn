@@ -19,6 +19,7 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { Cable, GitBranch, MoreHorizontal, Network, Plus, RotateCw, Sparkles, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import {
   deriveIntegrations,
   describePosture,
@@ -32,7 +33,8 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { health } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { T, type AiType, type IntegrationCategory } from "../../../lib/integrations";
-import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import type { SetupStatus, SiteConfig, WireIntegration } from "../../../lib/types";
+import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import {
@@ -52,7 +54,7 @@ import { RESIDENCY_META } from "../../../lib/integrations";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { AddSecretDialog } from "../secrets";
-import { canRotateInline, deleteIntegration, primarySecretName } from "./actions";
+import { canRotateInline, deleteIntegration, primarySecretName, setDefaultFor, type DefaultForMark } from "./actions";
 import { AddIntegrationDialog, type AddIntegrationTarget } from "./add-integration-dialog";
 import { AddServiceDialog } from "./add-service-dialog";
 import { GenericSections } from "./generic-sections";
@@ -157,9 +159,22 @@ export function IntegrationsScreen({
   const generic = genericIntegrations(status);
   const totalRows = data.ai.length + data.scm.length + generic.length;
   const showBanner = proxyBannerNeeded(status, siteConfig);
+  // The EFFECTIVE wire row behind a derived IntegrationRow (by its serverId) —
+  // where a real default_for lives. Looked up once per render, not per row.
+  const wireById = new Map((status.integrations ?? []).map((w) => [w.id, w]));
 
   const requestDelete = (row: IntegrationRow) => setToDelete(row);
   const runDelete = async () => deleteIntegration(toDelete!);
+  const setDefault = async (row: IntegrationRow, mark: DefaultForMark, on: boolean) => {
+    const wire = row.serverId ? wireById.get(row.serverId) : undefined;
+    if (!wire) return;
+    try {
+      await setDefaultFor(wire, mark, on);
+      load();
+    } catch (e) {
+      toast.error("Couldn't update the default", { description: getErrorMessage(e) });
+    }
+  };
 
   return (
     <div className={wrapperClass}>
@@ -240,6 +255,8 @@ export function IntegrationsScreen({
                 onRotate={setRotateName}
                 onReCheck={load}
                 onDelete={requestDelete}
+                wireById={wireById}
+                onSetDefault={setDefault}
               />
               <CategorySection
                 category="scm_host"
@@ -250,6 +267,8 @@ export function IntegrationsScreen({
                 onRotate={setRotateName}
                 onReCheck={load}
                 onDelete={requestDelete}
+                wireById={wireById}
+                onSetDefault={setDefault}
               />
               <GenericSections rows={generic} operator={operator} onAdd={() => setAddServiceOpen(true)} onChanged={load} />
             </>
@@ -358,6 +377,8 @@ function CategorySection({
   onRotate,
   onReCheck,
   onDelete,
+  wireById,
+  onSetDefault,
 }: {
   category: IntegrationCategory;
   label: string;
@@ -367,6 +388,8 @@ function CategorySection({
   onRotate: (secretName: string) => void;
   onReCheck: () => void;
   onDelete: (row: IntegrationRow) => void;
+  wireById: Map<string, WireIntegration>;
+  onSetDefault: (row: IntegrationRow, mark: DefaultForMark, on: boolean) => void;
 }) {
   const Icon = CATEGORY_ICON[category];
   return (
@@ -390,6 +413,8 @@ function CategorySection({
               onRotate={onRotate}
               onReCheck={onReCheck}
               onDelete={onDelete}
+              wire={row.serverId ? wireById.get(row.serverId) : undefined}
+              onSetDefault={onSetDefault}
             />
           ))}
         </div>
@@ -407,6 +432,8 @@ function RowKebab({
   onRotate,
   onReCheck,
   onDelete,
+  wire,
+  onSetDefault,
 }: {
   row: IntegrationRow;
   operator: boolean;
@@ -414,15 +441,24 @@ function RowKebab({
   onRotate: (secretName: string) => void;
   onReCheck: () => void;
   onDelete: (row: IntegrationRow) => void;
+  /** The row's effective wire row (status.integrations, by serverId) — where
+   *  the REAL default_for lives. Absent when the row has no server identity
+   *  yet (e.g. an Azure OpenAI row before a composer backend names one). */
+  wire?: WireIntegration;
+  onSetDefault: (row: IntegrationRow, mark: DefaultForMark, on: boolean) => void;
 }) {
   const rotateTarget = primarySecretName(row);
   // AI capabilities only — the mock never offers a default checkbox on an SCM
   // row (its kebab passes no canAgent/canFeat at all); row.aiType is undefined
-  // there, so these fall out false with no extra branching needed here.
-  const canAgent = row.aiType && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label));
-  const canFeat = row.aiType && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features"));
-  const defAgent = row.aiType && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label) && c.label.includes("· default"));
-  const defFeat = row.aiType && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features") && c.label.includes("· default"));
+  // there, so these fall out false with no extra branching needed here. Also
+  // requires a server identity to write to (`wire`) — nothing to adopt/PUT
+  // without one.
+  const canAgent = !!(row.aiType && wire && row.chips.some((c) => !c.muted && /Claude Code|Codex/.test(c.label)));
+  const canFeat = !!(row.aiType && wire && row.chips.some((c) => !c.muted && c.label.startsWith("Wardyn features")));
+  // The REAL persisted mark, not a guess — reflects whatever the last write
+  // (from here, or the detail page) actually landed.
+  const defAgent = !!wire?.default_for?.includes("agent_runs");
+  const defFeat = !!wire?.default_for?.includes("wardyn_features");
 
   return (
     <DropdownMenu>
@@ -443,13 +479,21 @@ function RowKebab({
           </DropdownMenuItem>
         )}
         {canAgent && (
-          <DropdownMenuCheckboxItem disabled={!operator} checked={!!defAgent} onCheckedChange={() => {}}>
+          <DropdownMenuCheckboxItem
+            disabled={!operator}
+            checked={defAgent}
+            onCheckedChange={(v) => onSetDefault(row, "agent_runs", v)}
+          >
             Set as default for agent runs
             {!operator && <OperatorOnlyHint />}
           </DropdownMenuCheckboxItem>
         )}
         {canFeat && (
-          <DropdownMenuCheckboxItem disabled={!operator} checked={!!defFeat} onCheckedChange={() => {}}>
+          <DropdownMenuCheckboxItem
+            disabled={!operator}
+            checked={defFeat}
+            onCheckedChange={(v) => onSetDefault(row, "wardyn_features", v)}
+          >
             Set as default for Wardyn features
             {!operator && <OperatorOnlyHint />}
           </DropdownMenuCheckboxItem>
@@ -477,6 +521,8 @@ function Row({
   onRotate,
   onReCheck,
   onDelete,
+  wire,
+  onSetDefault,
 }: {
   row: IntegrationRow;
   first: boolean;
@@ -485,6 +531,8 @@ function Row({
   onRotate: (secretName: string) => void;
   onReCheck: () => void;
   onDelete: (row: IntegrationRow) => void;
+  wire?: WireIntegration;
+  onSetDefault: (row: IntegrationRow, mark: DefaultForMark, on: boolean) => void;
 }) {
   const res = RESIDENCY_META[row.residency];
   return (
@@ -516,7 +564,16 @@ function Row({
         <Posture row={row} />
       </div>
       <div>
-        <RowKebab row={row} operator={operator} onOpen={onOpen} onRotate={onRotate} onReCheck={onReCheck} onDelete={onDelete} />
+        <RowKebab
+          row={row}
+          operator={operator}
+          onOpen={onOpen}
+          onRotate={onRotate}
+          onReCheck={onReCheck}
+          onDelete={onDelete}
+          wire={wire}
+          onSetDefault={onSetDefault}
+        />
       </div>
     </div>
   );

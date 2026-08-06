@@ -61,11 +61,22 @@ describe("integration catalog", () => {
   it("keeps cloud and data stores on 'egress only' with a stated reason", () => {
     for (const t of [...typesInGroup("cloud"), ...typesInGroup("data")]) {
       expect(t.delivery, `${t.id}`).toBe("notbuilt");
-      expect(notbuiltWhy(t.group), `${t.id} states why`).toBeTruthy();
+      expect(notbuiltWhy(t), `${t.id} states why`).toBeTruthy();
       expect(t.header, `${t.id} claims no header lane`).toBeUndefined();
     }
     expect(RESIDENCY_META.notbuilt.label).toBe("egress only");
     expect(RESIDENCY_META.notbuilt.tone).toBe("warning");
+  });
+
+  // s3compat sits in the "data" section (alongside Postgres/MySQL/Redis/
+  // Mongo) but its gap is the CLOUD one (SigV4 signing) — its own `powers`
+  // line says so. The group-keyed default would wrongly hand it the
+  // datastore reason; pin the override.
+  it("gives s3compat the CLOUD reason, not its section's datastore one", () => {
+    const s3compat = integrationTypeById("s3compat")!;
+    expect(s3compat.group).toBe("data");
+    expect(notbuiltWhy(s3compat)).toBe(notbuiltWhy(integrationTypeById("aws")!));
+    expect(notbuiltWhy(s3compat)).not.toBe(notbuiltWhy(integrationTypeById("postgres")!));
   });
 
   // A generic-lane type is written straight through PUT /integrations, so it

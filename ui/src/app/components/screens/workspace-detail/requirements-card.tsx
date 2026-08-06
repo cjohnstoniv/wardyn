@@ -26,6 +26,8 @@ import { StepRequirements } from "../workspace-wizard/step-requirements";
 import type { PowerSource, SourceRow } from "../workspace-wizard/wizard-types";
 import { WorkspaceLLMCredDialog, llmCredLabel, llmCredTone } from "../workspace-llm-cred";
 import { SectionCard } from "./section-card";
+import { useOperator } from "../../wardyn/operator-context";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 // Boundary-local typed cast-read for the composition-model fields the shared
 // Workspace type doesn't carry yet — same idiom lib/api/workspaces.ts and
@@ -91,6 +93,7 @@ export function RequirementsCard({
   onWorkspaceUpdated: (w: Workspace) => void;
   onSecretStored: (name: string) => void;
 }) {
+  const operator = useOperator();
   // The integrations a workspace may name (StepRequirements renders the
   // section). Fetched here rather than threaded from the page: this card is the
   // only consumer, and a failed fetch simply means the section doesn't render.
@@ -110,10 +113,22 @@ export function RequirementsCard({
   const recipe = profile?.setup_commands ?? [];
 
   const [saving, setSaving] = React.useState(false);
+  // Local, optimistic copy of the requirements map — seeded once (this card
+  // remounts per workspace; the detail page's loading gate tears the whole
+  // subtree down on every id change). PUT-per-toggle used to derive `next`
+  // straight from the `ws` PROP, which only updates once the PREVIOUS PUT
+  // resolves: two toggles fired inside one round trip both read the same
+  // stale base, and the second's write silently discards the first (PUT is a
+  // full replace). Composing on this local copy instead means each toggle
+  // always builds on the one just applied, regardless of the server's timing.
+  const [pending, setPending] = React.useState<WorkspaceRequirementsMap>(() => requirementsOf(ws));
   const persist = async (next: WorkspaceRequirementsMap) => {
+    setPending(next);
     setSaving(true);
     try {
-      onWorkspaceUpdated(await workspacesApi.setRequirements(ws.id, next));
+      const updated = await workspacesApi.setRequirements(ws.id, next);
+      setPending(requirementsOf(updated));
+      onWorkspaceUpdated(updated);
     } catch (e) {
       toast.error("Failed to save requirements", { description: getErrorMessage(e) });
     } finally {
@@ -125,32 +140,45 @@ export function RequirementsCard({
     <SectionCard
       title="Requirements"
       subtitle="What this workspace carries into every run — and what a run has to ask for."
-      right={saving ? <span className="text-[0.6875rem] text-muted-foreground">Saving…</span> : undefined}
+      right={
+        saving ? (
+          <span className="text-[0.6875rem] text-muted-foreground">Saving…</span>
+        ) : !operator ? (
+          <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>
+        ) : undefined
+      }
     >
-      <ModelAccessGroup ws={ws} onSaved={onWorkspaceUpdated} />
+      {/* Every control below (model-access bind, lane toggles, holding-block
+          approve) is operatorOnly server-side. A native disabled fieldset
+          gates the whole subtree at once, same as the rest of the console's
+          Buttons already render when disabled — `contents` keeps it out of
+          the box model since there's no existing wrapper div to repurpose here. */}
+      <fieldset disabled={!operator} className="contents">
+        <ModelAccessGroup ws={ws} onSaved={onWorkspaceUpdated} />
 
-      {recipe.length > 0 && (
-        <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-          Detected build recipe:{" "}
-          {recipe.map((c, i) => (
-            <React.Fragment key={`${c.command}-${i}`}>
-              <Mono className="text-[0.6875rem] text-foreground">{c.command}</Mono>
-              {i < recipe.length - 1 ? " · " : ""}
-            </React.Fragment>
-          ))}{" "}
-          — written into AGENTS.md; Wardyn never runs these.
-        </p>
-      )}
-      <StepRequirements
-        profile={profile}
-        sources={sourcesOf(ws)}
-        requirements={requirementsOf(ws)}
-        onChange={(next) => void persist(next)}
-        storedSecretNames={storedSecretNames}
-        onSecretStored={onSecretStored}
-        powerSource={resolvedPowerSource(ws)}
-        status={setupStatus}
-      />
+        {recipe.length > 0 && (
+          <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            Detected build recipe:{" "}
+            {recipe.map((c, i) => (
+              <React.Fragment key={`${c.command}-${i}`}>
+                <Mono className="text-[0.6875rem] text-foreground">{c.command}</Mono>
+                {i < recipe.length - 1 ? " · " : ""}
+              </React.Fragment>
+            ))}{" "}
+            — written into AGENTS.md; Wardyn never runs these.
+          </p>
+        )}
+        <StepRequirements
+          profile={profile}
+          sources={sourcesOf(ws)}
+          requirements={pending}
+          onChange={(next) => void persist(next)}
+          storedSecretNames={storedSecretNames}
+          onSecretStored={onSecretStored}
+          powerSource={resolvedPowerSource(ws)}
+          status={setupStatus}
+        />
+      </fieldset>
     </SectionCard>
   );
 }

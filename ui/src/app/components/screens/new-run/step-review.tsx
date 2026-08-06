@@ -25,7 +25,8 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
 import { RESIDENCY_META } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
-import type { PreflightResult, RunPolicy, Workspace } from "../../../lib/types";
+import { setup as setupApi } from "../../../lib/api/setup";
+import type { PreflightResult, RunPolicy, WireIntegration, Workspace } from "../../../lib/types";
 import { firstUseLabel } from "../../../lib/types";
 import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
 
@@ -87,9 +88,25 @@ export function StepReview({
       alive = false;
     };
   }, []);
+  // The effective wire rows — resolveModelAccess's tier-3 needs this to tell a
+  // genuinely-marked DefaultFor:agent_runs row from merely the first
+  // compatible one, same as step-access.tsx's own card.
+  const [integrations, setIntegrations] = React.useState<WireIntegration[] | undefined>(undefined);
+  React.useEffect(() => {
+    let alive = true;
+    setupApi
+      .getSetupStatus()
+      .then((status) => {
+        if (alive) setIntegrations(status.integrations);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   const resolved = isGovernedCommand
     ? null
-    : resolveModelAccess(state.agent, state.integrationId, primaryWorkspace, ai);
+    : resolveModelAccess(state.agent, state.integrationId, primaryWorkspace, ai, integrations);
   // A resident credential (a "warning"-toned residency, e.g. a host-CLI
   // subscription mount) means reduced isolation — surfaced the same way
   // regardless of WHICH integration ended up resolved.

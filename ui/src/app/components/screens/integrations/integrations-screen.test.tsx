@@ -47,6 +47,20 @@ vi.mock("../../../lib/api/harness-auth", () => ({
   },
 }));
 
+// The default-for write path (actions.ts's setDefaultFor) calls these two —
+// everything else this screen needs from the module (deriveIntegrations,
+// describePosture, ...) stays real.
+const adoptIntegrationMock = vi.fn();
+const putIntegrationMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return {
+    ...actual,
+    integrationsApi: { ...actual.integrationsApi, adoptIntegration: (...a: unknown[]) => adoptIntegrationMock(...a) },
+    genericIntegrationsApi: { ...actual.genericIntegrationsApi, put: (...a: unknown[]) => putIntegrationMock(...a) },
+  };
+});
+
 import { IntegrationsScreen } from "./integrations-screen";
 
 function renderScreen(operator = true) {
@@ -312,5 +326,109 @@ describe("IntegrationsScreen — the Add handoff seam", () => {
 
     expect(screen.queryByText(AI_TYPES.anthropic_subscription.title)).not.toBeInTheDocument();
     expect(screen.queryByText(T.CAT_AI)).not.toBeInTheDocument();
+  });
+});
+
+// The default-for kebab checkboxes used to be onCheckedChange={() => {}}
+// no-ops (hardening-review). Wired: adopt-if-needed, PUT the round-tripped
+// row plus the toggled mark, then reload and render whatever the server
+// actually landed — never a locally-guessed checked state.
+describe("IntegrationsScreen — default-for controls issue the write and render the new state", () => {
+  beforeEach(() => {
+    adoptIntegrationMock.mockReset().mockResolvedValue(undefined);
+    putIntegrationMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("checking 'Set as default for agent runs' adopts the legacy row, PUTs it, and re-renders checked", async () => {
+    const legacyRow = {
+      id: "anthropic_api_key",
+      name: "Anthropic API key",
+      category: "ai_provider",
+      type: "anthropic_api_key",
+      source: "legacy" as const,
+      credentials: { api_key: "anthropic-api-key" },
+    };
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [legacyRow] }),
+    );
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({
+        secrets: { present: ["anthropic-api-key"], github_app: false },
+        integrations: [{ ...legacyRow, source: "stored", default_for: ["agent_runs"] }],
+      }),
+    );
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    renderScreen();
+    await screen.findByText("Anthropic (API key)");
+
+    await user.click(screen.getByRole("button", { name: /Anthropic \(API key\) actions/i }));
+    const item = await screen.findByRole("menuitemcheckbox", { name: /set as default for agent runs/i });
+    expect(item).toHaveAttribute("aria-checked", "false");
+
+    await user.click(item);
+
+    await waitFor(() => expect(adoptIntegrationMock).toHaveBeenCalledWith("anthropic_api_key"));
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith(
+        "anthropic_api_key",
+        expect.objectContaining({
+          name: "Anthropic API key",
+          category: "ai_provider",
+          type: "anthropic_api_key",
+          credentials: { api_key: "anthropic-api-key" },
+          default_for: ["agent_runs"],
+        }),
+      ),
+    );
+
+    // Reopen: the reload landed the server's real state, not a guessed toggle.
+    await user.click(screen.getByRole("button", { name: /Anthropic \(API key\) actions/i }));
+    expect(await screen.findByRole("menuitemcheckbox", { name: /set as default for agent runs/i })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("unchecking clears the mark with an empty default_for — no adopt needed for an already-stored row", async () => {
+    const storedRow = {
+      id: "anthropic_api_key",
+      name: "Anthropic API key",
+      category: "ai_provider",
+      type: "anthropic_api_key",
+      source: "stored" as const,
+      credentials: { api_key: "anthropic-api-key" },
+      default_for: ["agent_runs"],
+    };
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false }, integrations: [storedRow] }),
+    );
+    getSetupStatusMock.mockResolvedValueOnce(
+      baseStatus({
+        secrets: { present: ["anthropic-api-key"], github_app: false },
+        integrations: [{ ...storedRow, default_for: [] }],
+      }),
+    );
+    getSiteConfigMock.mockResolvedValue({});
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    renderScreen();
+    await screen.findByText("Anthropic (API key)");
+
+    await user.click(screen.getByRole("button", { name: /Anthropic \(API key\) actions/i }));
+    const item = await screen.findByRole("menuitemcheckbox", { name: /set as default for agent runs/i });
+    expect(item).toHaveAttribute("aria-checked", "true");
+
+    await user.click(item);
+
+    await waitFor(() =>
+      expect(putIntegrationMock).toHaveBeenCalledWith("anthropic_api_key", expect.objectContaining({ default_for: [] })),
+    );
+    expect(adoptIntegrationMock).not.toHaveBeenCalled();
   });
 });
