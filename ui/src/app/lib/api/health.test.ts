@@ -42,6 +42,46 @@ describe("health.logout()", () => {
   });
 });
 
+// HIGH fix: GET /site-config echoes the stored `integrations` array, and every
+// writer in this codebase (setup-screen.tsx, add-integration-dialog.tsx)
+// spreads that GET response straight into a PUT body to patch one field — but
+// the server hard-400s any PUT carrying a non-empty `integrations`
+// (internal/api/site_config.go's handlePutSiteConfig), so every save broke as
+// soon as one integration was stored. Pin the round-trip: whatever GET
+// returns, the PUT body must never carry `integrations`.
+describe("health — site-config integrations round-trip", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("strips integrations from a GET response spread straight into putSiteConfig", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ scm_hosts: ["github.com"], integrations: [{ id: "anthropic_api_key" }] }), {
+        status: 200,
+      }),
+    );
+    const got = await health.getSiteConfig();
+    expect(got.integrations).toEqual([{ id: "anthropic_api_key" }]); // sanity: GET really carried it
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
+    // The exact "patch one field" idiom every real caller uses.
+    await health.putSiteConfig({ ...got, scm_hosts: ["github.com", "gitlab.com"] });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, putInit] = fetchMock.mock.calls[1];
+    const body = JSON.parse(putInit!.body as string);
+    expect(body).not.toHaveProperty("integrations");
+    expect(body.scm_hosts).toEqual(["github.com", "gitlab.com"]);
+  });
+});
+
 // testProxy's optional url — the escape for a host with no public internet
 // (see health.ts's doc comment). No url must keep sending a bare POST (the
 // default multi-target check); a url must be the ONLY thing in the body.

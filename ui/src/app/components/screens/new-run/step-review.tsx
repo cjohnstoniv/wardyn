@@ -193,27 +193,19 @@ export function StepReview({
         />
         {/* Was mislabeled "Repo" with a local dir leaking through as the
             synthetic run.repo="local:<basename>" wire label — the primary
-            onboarded workspace is the truth: its own name/kind/source, or
-            "Base image" for a container (an image, not a mount). */}
+            onboarded workspace is the truth: its own name/kind/source. */}
         {primaryWorkspace ? (
-          primaryWorkspace.kind === "container" ? (
-            <Summary
-              label="Base image"
-              value={<Mono className="text-foreground">{primaryWorkspace.source}</Mono>}
-            />
-          ) : (
-            <Summary
-              label="Workspace"
-              value={
-                <div>
-                  <div className="text-foreground">{primaryWorkspace.name}</div>
-                  <div className="text-[0.6875rem] text-muted-foreground">
-                    {primaryWorkspace.kind === "repo" ? "repo" : "local dir"} · {primaryWorkspace.source}
-                  </div>
+          <Summary
+            label="Workspace"
+            value={
+              <div>
+                <div className="text-foreground">{primaryWorkspace.name}</div>
+                <div className="text-[0.6875rem] text-muted-foreground">
+                  {primaryWorkspace.kind === "repo" ? "repo" : "local dir"} · {primaryWorkspace.source}
                 </div>
-              }
-            />
-          )
+              </div>
+            }
+          />
         ) : (
           <Summary label="Workspace" value="none (ephemeral scratch)" />
         )}
@@ -299,7 +291,6 @@ export function StepReview({
                         <Mono className="text-foreground">
                           {w?.name ?? sel.workspaceId} ({w?.source ?? "unresolved"})
                           {w?.kind === "local_dir" && mount && ` — ${mount.read_only ? "ro" : "rw"}`}
-                          {w?.kind === "container" && " — image"}
                         </Mono>
                         {/* Surface scan status so a still-pending / errored workspace isn't
                             attached silently at the final gate. */}

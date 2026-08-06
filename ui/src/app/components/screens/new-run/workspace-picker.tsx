@@ -282,15 +282,7 @@ function SelectedWorkspaceCard({
         </div>
       )}
 
-      {ws?.kind === "container" ? (
-        // A container isn't mounted — it's the run's base image, so a mount
-        // target / write mode don't apply. The run inherits this environment's
-        // bound model/harness access.
-        <p className="mt-2.5 border-t border-border pl-[26px] pt-2.5 text-[0.6875rem] text-muted-foreground">
-          Runs as this environment&apos;s sandbox image — the run inherits its model access.
-        </p>
-      ) : (
-        <div className="mt-2.5 space-y-2.5 border-t border-border pl-[26px] pt-2.5">
+      <div className="mt-2.5 space-y-2.5 border-t border-border pl-[26px] pt-2.5">
           {ws && summary && (
             <div className="space-y-1.5">
               <div className="flex items-center gap-2">
@@ -413,7 +405,6 @@ function SelectedWorkspaceCard({
             </div>
           </div>
         </div>
-      )}
     </div>
   );
 }

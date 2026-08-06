@@ -10,9 +10,7 @@
 // validateWorkspaceSources, the un-bypassable server-side gate this UI mirrors.
 import type { ProfileObservations } from "./profile";
 
-// "container" is a bring-your-own base IMAGE onboarded as a named execution
-// environment: `source` is an image ref (e.g. "ubuntu:24.04"), no host mount.
-export type WorkspaceKind = "local_dir" | "repo" | "container";
+export type WorkspaceKind = "local_dir" | "repo" | "ephemeral";
 // The scan lifecycle. The import-pipeline stages a retired "Import v2" wave
 // had widened this with (building/build_error/verifying/verify_failed/ready)
 // are gone — the server collapsed every stored row back to this set — so a
@@ -221,10 +219,6 @@ export interface Workspace {
   // Optional default in-container mount/clone target; a run selection may
   // override it. Omitted => the server's convention default.
   default_target?: string;
-  // Operator opt-in: mount this workspace READ-WRITE in the import flow's
-  // Record/Verify runs. Omitted/false => read-only (the safe default). When true,
-  // a sandboxed agent's changes PERSIST to the host directory.
-  writable?: boolean;
   // Opaque to the UI — internal/workspacescan owns the shape
   // (WorkspaceProfile: languages, package managers, egress domains, …).
   // Kept loosely typed; the needs panel does a typed cast-read (WorkspaceProfile).

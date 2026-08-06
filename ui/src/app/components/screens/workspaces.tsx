@@ -7,9 +7,9 @@ import * as React from "react";
 import { isFixtureLeak } from "./workspace-wizard/wizard-types";
 import { useNavigate } from "react-router-dom";
 import {
-  Box,
   FolderGit2,
   FolderOpen,
+  Hourglass,
   MoreHorizontal,
   Plus,
   RotateCw,
@@ -55,13 +55,13 @@ import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 
-// Icon + label for the three onboardable kinds. "container" has no host mount
-// (source is an image ref), so it gets its own icon rather than reusing the
-// local-dir folder.
+// Icon + label for the three onboardable kinds. "ephemeral" is scratch space
+// discarded after the run, so it gets an hourglass rather than reusing the
+// local-dir folder (matches step-sources.tsx's own ephemeral-source icon).
 export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: string }> = {
   local_dir: { Icon: FolderOpen, label: "local dir" },
   repo: { Icon: FolderGit2, label: "repo" },
-  container: { Icon: Box, label: "container" },
+  ephemeral: { Icon: Hourglass, label: "ephemeral" },
 };
 
 // The list's "Workspace" column sub-line: a multi-source composition summary

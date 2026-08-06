@@ -9,7 +9,6 @@
 // the mock's three words. Pure TS — no React, no fetch, no DOM.
 
 import type { Workspace, WorkspaceStatus } from "./types";
-import { C } from "./workspace-copy";
 
 export type StatusWord = "Setting up" | "Usable" | "Scan failed";
 
@@ -50,8 +49,7 @@ export function statusTone(status: WorkspaceStatus): StatusToneInfo {
 }
 
 // The one-line story under a workspace's name (mockup's storyFor), verbatim
-// where the mock defines it — container images skip scanning entirely, so
-// they get C.IMAGE_ENV appended exactly as the mock does.
+// where the mock defines it.
 export function storySentence(ws: Workspace): string {
   const word = statusWord(ws.status);
   if (word === "Scan failed") {
@@ -62,7 +60,7 @@ export function storySentence(ws: Workspace): string {
       ? "Scanning the source now."
       : "Not scanned yet — runs can attach it, nothing is attached automatically.";
   }
-  return ws.kind === "container" ? `Runs can attach this now. ${C.IMAGE_ENV}` : "Runs can attach this now.";
+  return "Runs can attach this now.";
 }
 
 // isUsable is the ONE predicate for "this workspace is done enough to attach".

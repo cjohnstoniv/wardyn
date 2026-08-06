@@ -3,15 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Integrations — GET /api/v1/integrations does not exist yet (a later wave
-// adds it). Until it does, this is a thin adapter: `list()` composes the
-// three endpoints that DO exist (setup status, site config, secret names) and
-// `deriveIntegrations` reshapes them into rows, exactly the discipline
-// lib/scm-provider.ts already established for the SCM Provider step (a
-// "provider row" there is not a backend entity either). No invented server
-// concepts: every field on IntegrationRow traces back to a real response
-// field, named in the comment next to it. When the real endpoint lands, only
-// `list()`'s body should need to change — every caller keeps working.
+// Integrations — GET /api/v1/integrations exists (server.go registers it,
+// returning the same effective-integration-plus-capabilities rows
+// SetupStatus.integrations carries). This module still derives the two
+// LEGACY categories (AI provider, SCM host) client-side from setup status +
+// site config + secret names instead of reading that endpoint directly,
+// exactly the discipline lib/scm-provider.ts already established for the SCM
+// Provider step (a "provider row" there is not a backend entity either):
+// the wire row is a flat credential record with no posture (captured/aging/
+// reconnect-soon), no per-lane breakdown (ssh vs. pat vs. app), and no
+// capability CHIPS — only the raw matrix — none of which the server derives
+// for these two categories the way `deriveAiRows`/`deriveScmRows` below do.
+// The eight GENERIC categories have no such legacy derivation (see
+// genericIntegrations further down) and read the wire row as-is. No invented
+// server concepts: every field on IntegrationRow traces back to a real
+// response field, named in the comment next to it.
 //
 // W5: marks every seam that's a deliberate stand-in for something a later
 // wave should replace with a real field/endpoint (GitHub ref-confinement,
@@ -332,6 +338,13 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
             .filter((n) => present.includes(n));
       return {
         id: `scm:${r.host}`,
+        // The server-side adoptable id for this host (internal/api/
+        // integrations.go): the GitHub App row is minted as the fixed id
+        // "github_app" (:517), every other git host as "git_host:<host>"
+        // (:660) — even github.com gets that id when the app lane isn't the
+        // one present. Without this, an SCM host can never be adopted/named
+        // in a workspace requirements contract the way every AI row already can.
+        serverId: isGithubApp ? "github_app" : `git_host:${r.host}`,
         category: "scm_host" as const,
         name: r.brand,
         typeLabel: r.host,
@@ -436,8 +449,10 @@ export const integrationsApi = {
     if (!res.ok && res.status !== 409) throw new HttpError(res.status, await errText(res));
   },
 
-  // W5: GET /api/v1/integrations doesn't exist yet — compose the three real
-  // endpoints and derive rows client-side until it does.
+  // GET /api/v1/integrations exists, but returns the flat wire row (see the
+  // module header above) — no posture, no SCM lane breakdown, no capability
+  // chips — so this composes the three endpoints that carry those facts and
+  // derives rows client-side, same as it always has.
   async list(): Promise<IntegrationsData> {
     const [status, siteConfig, secretNames] = await Promise.all([
       setupApi.getSetupStatus(),
@@ -515,16 +530,31 @@ export function genericSections(rows: GenericIntegrationRow[]): { group: Integra
     .filter((s) => s.rows.length > 0);
 }
 
-/** The body PUT /integrations/{id} takes — every operator-settable field. */
+/** The body PUT /integrations/{id} takes — every operator-settable field.
+ *  REPLACE semantics, not a merge (putIntegrationRequest's own doc comment):
+ *  a field omitted here is written back as its zero value, silently wiping
+ *  whatever the stored row had. Round-trip a GET and spread onto it before
+ *  changing one field, same discipline as SiteConfig's PUT. */
 export interface IntegrationWrite {
   name: string;
   category: string;
   type: string;
+  disabled?: boolean;
   hosts?: string[];
   header?: string;
   format?: string;
   docs?: string;
   credentials?: Record<string, string>;
+  /** Type-specific knobs (e.g. "lane", "ecosystems") — arbitrary JSON, mirrors
+   *  the server's json.RawMessage (putIntegrationRequest.Config). */
+  config?: Record<string, unknown>;
+  /** Capability ids the operator turned off individually, overriding what the
+   *  live matrix would otherwise report. */
+  disabled_capabilities?: string[];
+  /** What this integration is the operator-chosen default for (e.g.
+   *  "agent_runs"). RADIO semantics server-side: naming a mark here clears it
+   *  from every OTHER stored row in the same write. */
+  default_for?: string[];
 }
 
 export const genericIntegrationsApi = {

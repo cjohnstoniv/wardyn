@@ -48,8 +48,16 @@ export const health = {
   // first and spread onto the current value to avoid clobbering fields they
   // don't intend to change. Admin-gated server-side: a non-admin human gets a
   // 403, which surfaces here as an HttpError (via asJson) like any other write.
+  //
+  // HIGH fix: every writer in this codebase gets its starting `cfg` from a
+  // GET (see SiteConfig.integrations' doc comment) and spreads onto it, so a
+  // stored integration would otherwise ride along into the PUT body and hit
+  // the server's hard 400 ("integrations are managed through their own
+  // endpoints, not PUT /site-config") on every save. Strip it here, once, so
+  // no caller has to remember to.
   async putSiteConfig(cfg: SiteConfig): Promise<void> {
-    const res = await wfetch("/site-config", { method: "PUT", body: JSON.stringify(cfg) });
+    const { integrations: _integrations, ...body } = cfg;
+    const res = await wfetch("/site-config", { method: "PUT", body: JSON.stringify(body) });
     await asJson<SiteConfig>(res);
   },
 

@@ -138,8 +138,7 @@ describe("StepReview — preflight surfacing", () => {
 
 // A local directory used to leak through as "Repo: local:<basename>" — the
 // synthetic wire label, not a fact about the workspace. The primary onboarded
-// workspace is the truth: its own name + kind + source, or "Base image" for a
-// container (an image, not a mount).
+// workspace is the truth: its own name + kind + source.
 describe("StepReview — Workspace label (fixing the local:<basename> leak)", () => {
   function localDirWorkspace(): Workspace {
     return {
@@ -166,30 +165,6 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
     expect(screen.getByText("local dir · /home/me/payments")).toBeInTheDocument();
     expect(screen.queryByText("Repo")).toBeNull();
     expect(screen.queryByText(/local:payments-service/)).toBeNull();
-  });
-
-  it("renders a container (base-image-only) workspace as 'Base image'", () => {
-    const container = {
-      id: "ws-2",
-      name: "ubuntu-24.04",
-      kind: "container",
-      source: "ubuntu:24.04",
-      status: "scanned",
-      created_at: "",
-      updated_at: "",
-    } as Workspace;
-    render(
-      <StepReview
-        state={{ ...initialWizardState("CC2"), workspaces: [{ workspaceId: "ws-2" }] }}
-        patch={() => {}}
-        workspaces={[container]}
-      />,
-    );
-    expect(screen.getByText("Base image")).toBeInTheDocument();
-    // The ref renders twice by design — as the row's value and again in the
-    // policy JSON below it — so assert on the count, not on uniqueness.
-    expect(screen.getAllByText("ubuntu:24.04").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Workspace")).toBeNull();
   });
 
   it("shows 'none (ephemeral scratch)' with no workspace attached", () => {

@@ -156,6 +156,19 @@ export interface SCMPosture {
   netrc: boolean;
 }
 
+// One cell of the server's live capability matrix (internal/api.Capability,
+// integrations.go:73-78) — NOTE: that Go struct carries no json struct tags,
+// so the wire keys are the bare Go field names (ID/State/Reason/Residency),
+// not the snake_case convention the rest of this payload uses. Typed to match
+// what's actually on the wire, not the tidier shape a snake_case reader would
+// expect.
+export interface WireCapability {
+  ID: string;
+  State: string;
+  Reason?: string;
+  Residency?: string;
+}
+
 // An integration exactly as the server returns it (internal/api.SetupIntegration
 // over types.Integration): where it lives, what credential it takes, how that
 // credential reaches the request, and what it powers. `source` discriminates a
@@ -174,6 +187,23 @@ export interface WireIntegration {
   credentials?: Record<string, string>;
   default_for?: string[];
   source?: "stored" | "legacy" | (string & {});
+  // The server's live per-capability matrix for this row
+  // (integrationsWithCapabilities) — not read client-side yet; CAPS in
+  // lib/integrations.ts hand-mirrors the same facts as a SECOND derivation,
+  // pending consolidation onto this field. Optional for the same
+  // fixture-compat reason as SetupStatus.bedrock below.
+  capabilities?: WireCapability[];
+}
+
+// One row of the static coding-agent harness catalog (internal/api.
+// SetupHarnessTool, setupHarnessTools()) — which tools Wardyn knows how to
+// run, mirrors SetupStatus.harnesses below.
+export interface SetupHarnessTool {
+  id: string;
+  display: string;
+  has_gateway: boolean;
+  has_login: boolean;
+  no_managed_auth?: boolean;
 }
 
 export interface SetupStatus {
@@ -216,6 +246,12 @@ export interface SetupStatus {
   // lib/api/integrations.ts derives client-side for the two legacy categories.
   // Optional for the same fixture-compat reason as `bedrock`.
   integrations?: WireIntegration[];
+  // The STATIC coding-agent harness catalog (harnessCatalog, harness.go) —
+  // which tools Wardyn knows how to run and whether it can wire each one a
+  // managed model credential or a container-login subscription. Distinct
+  // from `harness` above (a CAPTURED credential's live readiness). Optional
+  // for the same fixture-compat reason as `bedrock`.
+  harnesses?: SetupHarnessTool[];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —

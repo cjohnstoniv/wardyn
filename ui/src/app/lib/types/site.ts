@@ -45,4 +45,15 @@ export interface SiteConfig {
   // The operator's outbound redirect list — see EgressRedirect.
   egress_redirects?: EgressRedirect[];
   scm_hosts?: string[];
+  // RESPONSE-ONLY, never-PUT: the stored Integrations, echoed on every GET so
+  // a caller CAN see them, but PUT /site-config hard-400s any body that
+  // carries a non-empty `integrations` (internal/api/site_config.go's
+  // handlePutSiteConfig) — they're written through their own /integrations
+  // endpoints instead. health.putSiteConfig strips this field before every
+  // write, so spreading a GET response straight into a PUT body (the natural
+  // "patch one field" idiom every SiteConfig writer here uses) can't
+  // resurrect the 400. Loosely typed: nothing client-side reads this array
+  // today (see lib/types/setup.ts's WireIntegration for the shape a caller
+  // that DOES need to read integrations should use instead).
+  readonly integrations?: unknown[];
 }

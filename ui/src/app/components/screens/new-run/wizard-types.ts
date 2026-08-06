@@ -473,15 +473,7 @@ export function buildSpec(
     const w = resolveWorkspace(sel, workspaces);
     if (!w) return; // stale selection — defensively skip rather than dangle
     const target = sel.target?.trim() || w.default_target?.trim() || undefined;
-    if (w.kind === "container") {
-      // A container workspace is the run's base IMAGE, not a mount. The backend
-      // resolves it back to this onboarded workspace by image ref
-      // (GetWorkspaceBySource) to inherit its bound model/harness creds —
-      // emitting it as a workspace_mount would fail the onboarded-mount gate (an
-      // image ref is not an onboarded local_dir source). An explicit BYO image
-      // (the Sandbox image field) still wins if the operator set one.
-      if (!run.image) run.image = w.source;
-    } else if (w.kind === "repo") {
+    if (w.kind === "repo") {
       hasRepoSelection = true;
       const entry: WorkspaceRepo = { repo: w.source };
       if (target) entry.target = target;
@@ -501,10 +493,8 @@ export function buildSpec(
       });
     }
     if (i === 0) {
-      // Synthetic repo label so the run row reads meaningfully. A container has
-      // no repo/mount source — it rides run.image — so it carries no label.
-      run.repo =
-        w.kind === "repo" ? w.source : w.kind === "container" ? "" : `local:${basename(w.source)}`;
+      // Synthetic repo label so the run row reads meaningfully.
+      run.repo = w.kind === "repo" ? w.source : `local:${basename(w.source)}`;
     }
   });
 

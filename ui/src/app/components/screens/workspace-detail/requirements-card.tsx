@@ -4,8 +4,8 @@
  */
 
 // The workspace detail page's durable Requirements editor. Model access is
-// the FIRST group (a container's only configurable thing), followed by the
-// SAME contract groups the wizard's Requirements step renders — reused
+// the FIRST group, followed by the SAME contract groups the wizard's
+// Requirements step renders — reused
 // directly from workspace-wizard/step-requirements.tsx (StepRequirements) so
 // the two surfaces can never disagree about the copy or the lane control.
 // Unlike the wizard (which stages edits until "Accept & finish"), every lane
@@ -52,7 +52,6 @@ function sourcesOf(ws: Workspace): SourceRow[] {
   // one source StepRequirements needs to know about (its write-access group
   // keys off a local_dir's path).
   const kind = ws.kind;
-  if (kind === "container") return [];
   return [
     {
       id: "src-legacy",
@@ -61,7 +60,10 @@ function sourcesOf(ws: Workspace): SourceRow[] {
       source: kind === "repo" ? ws.source : "",
       ref: ws.ref ?? "",
       target: ws.default_target ?? "",
-      writable: ws.writable ?? false,
+      // Workspace.writable isn't a real response field (the API never sends
+      // it — see lib/types/workspaces.ts) — read the primary attachment's
+      // own writability instead, the actual source of truth.
+      writable: ws.attachments?.[0]?.writable ?? false,
     },
   ];
 }
@@ -104,7 +106,6 @@ export function RequirementsCard({
     };
   }, []);
 
-  const isContainer = ws.kind === "container";
   const profile = (ws.profile ?? null) as WorkspaceProfile | null;
   const recipe = profile?.setup_commands ?? [];
 
@@ -123,50 +124,41 @@ export function RequirementsCard({
   return (
     <SectionCard
       title="Requirements"
-      subtitle={isContainer ? undefined : "What this workspace carries into every run — and what a run has to ask for."}
+      subtitle="What this workspace carries into every run — and what a run has to ask for."
       right={saving ? <span className="text-[0.6875rem] text-muted-foreground">Saving…</span> : undefined}
     >
       <ModelAccessGroup ws={ws} onSaved={onWorkspaceUpdated} />
 
-      {isContainer ? (
+      {recipe.length > 0 && (
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-          {C.IMAGE_ENV} Its model access is the one thing you configure here.
+          Detected build recipe:{" "}
+          {recipe.map((c, i) => (
+            <React.Fragment key={`${c.command}-${i}`}>
+              <Mono className="text-[0.6875rem] text-foreground">{c.command}</Mono>
+              {i < recipe.length - 1 ? " · " : ""}
+            </React.Fragment>
+          ))}{" "}
+          — written into AGENTS.md; Wardyn never runs these.
         </p>
-      ) : (
-        <>
-          {recipe.length > 0 && (
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
-              Detected build recipe:{" "}
-              {recipe.map((c, i) => (
-                <React.Fragment key={`${c.command}-${i}`}>
-                  <Mono className="text-[0.6875rem] text-foreground">{c.command}</Mono>
-                  {i < recipe.length - 1 ? " · " : ""}
-                </React.Fragment>
-              ))}{" "}
-              — written into AGENTS.md; Wardyn never runs these.
-            </p>
-          )}
-          <StepRequirements
-            profile={profile}
-            sources={sourcesOf(ws)}
-            requirements={requirementsOf(ws)}
-            onChange={(next) => void persist(next)}
-            storedSecretNames={storedSecretNames}
-            onSecretStored={onSecretStored}
-            powerSource={resolvedPowerSource(ws)}
-            status={setupStatus}
-          />
-        </>
       )}
+      <StepRequirements
+        profile={profile}
+        sources={sourcesOf(ws)}
+        requirements={requirementsOf(ws)}
+        onChange={(next) => void persist(next)}
+        storedSecretNames={storedSecretNames}
+        onSecretStored={onSecretStored}
+        powerSource={resolvedPowerSource(ws)}
+        status={setupStatus}
+      />
     </SectionCard>
   );
 }
 
-// Model access — the FIRST group in the Requirements card (and, for a
-// container, the only configurable thing). Reuses the existing, already-wired
-// WorkspaceLLMCredDialog (PUT /workspaces/{id}/llm-cred) rather than the
-// wizard's not-yet-wired PowerSource concept (wizard-types.ts's own header
-// comment: "deliberately NOT wired to a real llm_cred write yet").
+// Model access — the FIRST group in the Requirements card. Reuses the
+// existing, already-wired WorkspaceLLMCredDialog (PUT /workspaces/{id}/llm-cred)
+// rather than the wizard's not-yet-wired PowerSource concept (wizard-types.ts's
+// own header comment: "deliberately NOT wired to a real llm_cred write yet").
 function ModelAccessGroup({
   ws,
   onSaved,

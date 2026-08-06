@@ -43,7 +43,7 @@ describe("integrations — T canon sentinel pins", () => {
   // started). Retired copy is DELETED, and asserting `in` pins each deletion.
   it("pins the consolidation copy (changed + new), and confirms the retired lines are deleted", () => {
     expect(T.LEDE).toBe(
-      "Named connections to systems outside Wardyn — model providers and git hosts. Wardyn runs without any of them.",
+      "Named connections to systems outside Wardyn — model providers, git hosts, package feeds, container registries, cloud providers, data stores, MCP servers, work tracking, observability, or anything else as an Other service. Wardyn runs without any of them.",
     );
     expect(T.PROXY_BANNER).toBe(
       "A corporate proxy was detected and isn't configured — set it up under Corporate network in Getting started, where the connectivity probe proves it.",

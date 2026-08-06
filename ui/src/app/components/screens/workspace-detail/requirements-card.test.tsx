@@ -95,22 +95,6 @@ describe("RequirementsCard — model access is the first group", () => {
   });
 });
 
-describe("RequirementsCard — container workspaces skip the contract, keep model access", () => {
-  it("shows the image-is-the-environment note instead of contract groups", () => {
-    render(
-      <RequirementsCard
-        ws={ws({ kind: "container", source: "ubuntu:24.04", ref: undefined })}
-        storedSecretNames={[]}
-        onWorkspaceUpdated={vi.fn()}
-        onSecretStored={vi.fn()}
-      />,
-    );
-    expect(screen.getByText(/image is the environment/i)).toBeInTheDocument();
-    expect(screen.getByText("Model access")).toBeInTheDocument();
-    expect(screen.queryByText("Network egress")).not.toBeInTheDocument();
-  });
-});
-
 describe("RequirementsCard — reuses the wizard's StepRequirements and persists edits immediately", () => {
   const profile: WorkspaceProfile = {
     required_secrets: [{ name: "DATABASE_URL", kind: "postgres" }],

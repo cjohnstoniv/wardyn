@@ -18,7 +18,7 @@
 
 // ============================ COPY CANON (verbatim) ============================
 export const T = {
-  LEDE: "Named connections to systems outside Wardyn — model providers and git hosts. Wardyn runs without any of them.",
+  LEDE: "Named connections to systems outside Wardyn — model providers, git hosts, package feeds, container registries, cloud providers, data stores, MCP servers, work tracking, observability, or anything else as an Other service. Wardyn runs without any of them.",
   // One exception now, not three: the Host proxy / Egress redirection Test
   // buttons left this page with their categories — Corporate network owns both,
   // and its gate is where a redirect proves itself (T.CORP_POINTER).
@@ -175,28 +175,10 @@ export const EGRESS_SUGGEST: ReadonlyArray<readonly [url: string, ecosystem: str
   ["https://ghcr.io", "container images"],
 ];
 
-// The public registry each ecosystem redirects AWAY from — the `from` half of
-// an ecosystem-tier EgressRedirect. MIRRORS internal/api/site_config.go's
-// `ecosystemPublicURL` byte for byte (which migration 0030 also copies into
-// SQL, since Postgres can't call Go); all three must stay in sync. Distinct
-// from EGRESS_SUGGEST above: that list is what an operator BROWSES (several
-// hosts per ecosystem, no trailing slashes), this is the single canonical
-// origin the server folds a legacy artifact_overrides entry onto, so a
-// redirect written here and one written by the fold dedupe as the same row.
-export const ECOSYSTEM_PUBLIC_URL: Readonly<Record<string, string>> = {
-  npm: "https://registry.npmjs.org/",
-  pip: "https://pypi.org/simple/",
-  cargo: "https://index.crates.io/",
-  maven: "https://repo.maven.apache.org/maven2/",
-  go: "https://proxy.golang.org",
-  nuget: "https://api.nuget.org/v3/index.json",
-};
-
 // The per-tool config file an ecosystem-tier redirect generates at run start
 // (the mock's cfgFor) — display-only, for the expanded row's "Runs also get a
-// generated <file> pointing at the mirror" line. A `from` outside
-// ECOSYSTEM_PUBLIC_URL has no entry and renders the network-only tip instead
-// (T.NET_ONLY_TIP).
+// generated <file> pointing at the mirror" line. A `from` outside this set
+// has no entry and renders the network-only tip instead (T.NET_ONLY_TIP).
 export const ECOSYSTEM_CONFIG_FILE: Readonly<Record<string, string>> = {
   npm: ".npmrc",
   pip: "pip.conf",

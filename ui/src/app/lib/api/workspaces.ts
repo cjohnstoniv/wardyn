@@ -133,8 +133,10 @@ export const workspaces = {
   // PUT /api/v1/workspaces/{id}/requirements  { requirements } -> the updated
   // workspace. FULL replacement, like setApprovedEgress above: send the whole
   // desired contract, not a delta. Keys are "secret:<name>" | "egress:<host>" |
-  // "write:<host-path>" (Workspace.Requirements' grammar); the server 400s on
-  // anything else (internal/api/workspace_requirements_test.go).
+  // "write:<host-path>" | "integration:<id>" (Workspace.Requirements' grammar
+  // — integration:<id> is the one key that makes a non-AI integration
+  // reachable at runtime); the server 400s on anything else
+  // (internal/api/workspace_requirements_test.go).
   async setRequirements(id: string, requirements: WorkspaceRequirementsMap): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/requirements`, {
       method: "PUT",

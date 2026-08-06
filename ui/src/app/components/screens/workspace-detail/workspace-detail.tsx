@@ -240,7 +240,6 @@ export function WorkspaceDetailScreen() {
     );
   }
 
-  const isContainer = ws.kind === "container";
   const kindMeta = KIND_META[ws.kind] ?? KIND_META.local_dir;
   const tone = statusTone(ws.status);
   const attention = attentionItems(ws, secretNames);
@@ -267,7 +266,7 @@ export function WorkspaceDetailScreen() {
         Retry scan
       </Button>
     );
-  } else if (!isContainer && ws.status === "pending_scan") {
+  } else if (ws.status === "pending_scan") {
     primary = (
       <Button size="sm" onClick={() => void scan()}>
         Scan now
@@ -312,11 +311,9 @@ export function WorkspaceDetailScreen() {
               </Mono>
               <CopyButton text={ws.source} iconClassName="size-3" className="size-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground" />
             </div>
-            {!isContainer && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                <strong className="text-foreground">Comes with:</strong> {comesWith}
-              </p>
-            )}
+            <p className="mt-2 text-xs text-muted-foreground">
+              <strong className="text-foreground">Comes with:</strong> {comesWith}
+            </p>
             {attention.length > 0 && (
               <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                 {attention.map((a, i) => (
@@ -342,7 +339,7 @@ export function WorkspaceDetailScreen() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setEditOpen(true)}>Edit workspace…</DropdownMenuItem>
-              {!isContainer && <DropdownMenuItem onClick={() => setRescanOpen(true)}>Rescan…</DropdownMenuItem>}
+              <DropdownMenuItem onClick={() => setRescanOpen(true)}>Rescan…</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-danger focus:text-danger" onClick={() => setConfirmDelete(true)}>
                 Delete…
@@ -355,29 +352,27 @@ export function WorkspaceDetailScreen() {
       <div className="mt-4 flex flex-col gap-4">
         <RequirementsCard ws={ws} storedSecretNames={secretNames} onWorkspaceUpdated={setWs} onSecretStored={(n) => setSecretNames((s) => [...s, n])} />
 
-        {!isContainer && <DetectedCard ws={ws} onWorkspaceUpdated={setWs} />}
+        <DetectedCard ws={ws} onWorkspaceUpdated={setWs} />
 
-        {!isContainer && (
-          <SectionCard title="Sessions" subtitle="Learn what it really uses: record a live session in an open sandbox, promote what it reached, replay it confined.">
-            <RecordPane
-              ws={ws}
-              notice={recordNotice}
-              busyTask={recordBusyTask}
-              modelReady={llmReady}
-              onRecord={(name) => void doRecord(name, false)}
-              onReplayConfined={(name) => void doRecord(name, true)}
-              onDoneRecording={(runId) => void doneRecording(runId)}
-              onPromoteEgress={requestPromoteEgress}
-              onApproveHost={requestApproveHost}
-              onOpenProfile={(runId, suggested) => {
-                setProfileRunId(runId);
-                setProfileName(suggested);
-              }}
-            />
-          </SectionCard>
-        )}
+        <SectionCard title="Sessions" subtitle="Learn what it really uses: record a live session in an open sandbox, promote what it reached, replay it confined.">
+          <RecordPane
+            ws={ws}
+            notice={recordNotice}
+            busyTask={recordBusyTask}
+            modelReady={llmReady}
+            onRecord={(name) => void doRecord(name, false)}
+            onReplayConfined={(name) => void doRecord(name, true)}
+            onDoneRecording={(runId) => void doneRecording(runId)}
+            onPromoteEgress={requestPromoteEgress}
+            onApproveHost={requestApproveHost}
+            onOpenProfile={(runId, suggested) => {
+              setProfileRunId(runId);
+              setProfileName(suggested);
+            }}
+          />
+        </SectionCard>
 
-        {!isContainer && <EnvAsCodeCard ws={ws} />}
+        <EnvAsCodeCard ws={ws} />
       </div>
 
       {editOpen && (

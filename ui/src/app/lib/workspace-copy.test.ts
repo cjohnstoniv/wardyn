@@ -13,7 +13,6 @@ import { C, V2C, RD } from "./workspace-copy";
 describe("workspace-copy — sentinel byte-exact pins", () => {
   it("pins C entries verbatim, em-dashes included", () => {
     expect(C.DECLARED).toBe("Declared by workspace files (untrusted) — names only, values are never read.");
-    expect(C.IMAGE_ENV).toBe("Container images aren't scanned — the image is the environment.");
     expect(C.REPO_RO).toBe(
       "Repos are cloned fresh into the sandbox — nothing on your machine is touched, so there's nothing to protect with read-only.",
     );

@@ -218,21 +218,6 @@ describe("WorkspaceDetailScreen — all four cards for a non-container workspace
   });
 });
 
-describe("WorkspaceDetailScreen — a container workspace only carries Requirements", () => {
-  it("skips Detected/Sessions/Env-as-code and the Rescan kebab item", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ kind: "container", source: "ubuntu:24.04", ref: undefined }));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderDetail();
-    expect(await screen.findByText("Requirements")).toBeInTheDocument();
-    expect(screen.queryByText("Detected, not required")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
-    expect(screen.queryByText("Env as code")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /workspace actions/i }));
-    expect(screen.queryByRole("menuitem", { name: /rescan/i })).not.toBeInTheDocument();
-  });
-});
-
 // Ported from the retired import-panel.test.tsx's "egress approvals confirm
 // before applying" coverage — a session's one-click "Approve N observed
 // hosts" is untrusted-content-derived (a run's own observed traffic, not

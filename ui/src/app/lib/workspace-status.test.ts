@@ -5,7 +5,6 @@
 
 import { describe, it, expect } from "vitest";
 import { statusWord, statusTone, storySentence } from "./workspace-status";
-import { C } from "./workspace-copy";
 import type { Workspace, WorkspaceStatus } from "./types";
 
 const ws = (over: Partial<Workspace> = {}): Workspace => ({
@@ -66,9 +65,4 @@ describe("storySentence", () => {
     );
     expect(storySentence(ws({ status: "scanned" }))).toBe("Runs can attach this now.");
   });
-
-  it("appends C.IMAGE_ENV for a container-kind workspace, exactly like the mock", () => {
-    expect(storySentence(ws({ status: "scanned", kind: "container" }))).toBe(`Runs can attach this now. ${C.IMAGE_ENV}`);
-  });
-
 });

@@ -26,7 +26,6 @@ export const C = {
   UNMET_OK: "Runs will start without it; whatever needs it will fail at that point.",
   MODEL_INJECT:
     "The key is injected proxy-side at use time — it is never written into the sandbox, and the API never returns it.",
-  IMAGE_ENV: "Container images aren't scanned — the image is the environment.",
   SERVICES:
     "Wardyn doesn't start these. They're recorded here and written into AGENTS.md so a run knows what it expects to find.",
   HOLDING: "These came from file CONTENT, which is untrusted. Approve one to add it as a requirement.",
