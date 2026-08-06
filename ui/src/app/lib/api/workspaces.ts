@@ -242,10 +242,14 @@ export const workspaces = {
   // this host. LOCAL-DIR ONLY: a repo/ephemeral-only workspace has no host path
   // to write into — the server 422s and that surfaces via HttpError's message
   // (regenerate + commit yourself via getEnvAsCode above instead).
-  async writeEnvAsCode(id: string): Promise<Record<string, string>> {
+  // skipped names a file writeEnvAsCode refused to overwrite because it
+  // already existed (today, exactly ".devcontainer/Dockerfile" when an
+  // operator's own file is there) — written is filtered server-side so it
+  // names only what was actually written.
+  async writeEnvAsCode(id: string): Promise<{ written: Record<string, string>; skipped: string[] }> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/env-as-code/write`, { method: "POST" });
-    const body = await asJson<{ written_files?: Record<string, string> }>(res);
-    return body.written_files ?? {};
+    const body = await asJson<{ written_files?: Record<string, string>; skipped_files?: string[] }>(res);
+    return { written: body.written_files ?? {}, skipped: body.skipped_files ?? [] };
   },
 
   // DELETE /api/v1/workspaces/{id} -> 204.

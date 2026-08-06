@@ -8,7 +8,7 @@
 // No React, no fetch, no DOM — component files import from here so the same
 // derivation can be unit-tested without rendering anything, matching the
 // convention new-run/wizard-types.ts already established for that wizard.
-import type { Workspace, WorkspaceProfile } from "../../../lib/types";
+import type { WireIntegration, Workspace, WorkspaceProfile } from "../../../lib/types";
 import type {
   RequirementLevel,
   WorkspaceBaseImageInput,
@@ -382,6 +382,43 @@ export function splitRequirementKey(key: string): { type: string; rest: string }
   const i = key.indexOf(":");
   if (i <= 0 || i === key.length - 1) return null;
   return { type: key.slice(0, i), rest: key.slice(i + 1) };
+}
+
+// Agent-CLI bake honesty (step ②'s "Carries", step ④ Build, Verify's carry
+// card): mirrors internal/workspacescan.AgentToolsForIntegrationTypes's
+// prefix rule exactly (gen.go) — NOT canDriveClaudeCode/IMPOSSIBLE above,
+// which answers a different question (run-time auth compatibility — bedrock
+// CAN drive an already-baked claude-code) and would show a chip for a binary
+// the server never bakes. A named `anthropic_*` integration type is the only
+// thing that ever bakes: codex-cli has no verified install lane and is never
+// emitted server-side (AgentToolsForIntegrationTypes no longer maps
+// openai_* at all), so the result is always exactly ["claude-code"] or [].
+export function agentToolsCarried(
+  requirements: WorkspaceRequirementsMap,
+  integrations: WireIntegration[],
+): string[] {
+  const byId = new Map(integrations.map((w) => [w.id, w]));
+  for (const key of Object.keys(requirements)) {
+    const split = splitRequirementKey(key);
+    if (split?.type === "integration" && byId.get(split.rest)?.type?.startsWith("anthropic_")) {
+      return ["claude-code"];
+    }
+  }
+  return [];
+}
+
+// Mirrors internal/api/workspace_run.go's repoOwnDevcontainerURL's four
+// conditions exactly (minus the actual clone-URL parse, which the client has
+// no use for): a repo PRIMARY source carrying its own devcontainer wins over
+// the recommended/generated build entirely — resolveWorkspaceImage builds
+// that devcontainer AS-IS, so nothing gen.go would bake ever reaches the
+// image. Named integrations still ride along in the requirements contract,
+// but agentToolsCarried's claim must be withheld wherever this is true (step
+// ②'s preview included — not just Build's own post-hoc `detail` caveat,
+// which doesn't exist yet at that point in the wizard).
+export function repoOwnDevcontainerWins(sources: SourceRow[], profile: WorkspaceProfile | null): boolean {
+  const primary = sources[0];
+  return !!primary && primary.type === "repo" && !!profile?.has_devcontainer && !isSshRemote(primary);
 }
 
 // Seeds a requirements map from the scanned profile — the "Defaults below

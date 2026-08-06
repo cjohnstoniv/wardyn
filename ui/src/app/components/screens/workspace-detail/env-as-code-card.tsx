@@ -40,6 +40,11 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
   const [error, setError] = React.useState<string | null>(null);
   const [writing, setWriting] = React.useState(false);
   const [written, setWritten] = React.useState(false);
+  // Names a file writeEnvAsCode refused to overwrite (today, only ever
+  // ".devcontainer/Dockerfile" when the operator already has one) — the
+  // operator must learn it was PRESERVED, not silently overwritten or
+  // silently dropped.
+  const [skipped, setSkipped] = React.useState<string[]>([]);
 
   const generate = async () => {
     setLoading(true);
@@ -56,9 +61,12 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
   const write = async () => {
     setWriting(true);
     try {
-      await workspacesApi.writeEnvAsCode(ws.id);
+      const result = await workspacesApi.writeEnvAsCode(ws.id);
       setWritten(true);
-      toast.success("Written into the directory");
+      setSkipped(result.skipped);
+      toast.success("Written into the directory", {
+        description: result.skipped.length > 0 ? "Your existing .devcontainer/Dockerfile was left alone — see below." : undefined,
+      });
     } catch (e) {
       toast.error("Failed to write env-as-code", { description: getErrorMessage(e) });
     } finally {
@@ -111,7 +119,15 @@ export function EnvAsCodeCard({ ws }: { ws: Workspace }) {
                 </Chip>
               )}
             </div>
-          ) : (
+          ) : null}
+          {written && skipped.length > 0 && (
+            <p className="text-[0.6875rem] leading-snug text-warning">
+              {skipped.includes(".devcontainer/Dockerfile")
+                ? "Left your existing .devcontainer/Dockerfile alone — the devcontainer.json we wrote points build.dockerfile at it, so it won't include the agent CLI unless you add that yourself."
+                : `Left ${skipped.join(", ")} alone — already existed.`}
+            </p>
+          )}
+          {!hasLocalDirSource(ws) && (
             <p className="text-xs text-muted-foreground">Copy these and commit them — Wardyn doesn&apos;t push.</p>
           )}
         </div>

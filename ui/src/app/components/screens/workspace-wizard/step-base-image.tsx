@@ -244,11 +244,17 @@ function stopPropagation(e: React.MouseEvent) {
 
 export function ImageCards({
   detectedChips,
+  agentTools = [],
   partial,
   state,
   onChange,
 }: {
   detectedChips: string[];
+  /** What the RECOMMENDED build actually bakes (agentToolsCarried) — named
+   *  here, not folded into detectedChips, because it is true ONLY of that one
+   *  card: catalog/registry/BYO/custom images are never inspected, so they
+   *  never get this chip (the tools-not-AI law this whole section follows). */
+  agentTools?: string[];
   partial: boolean;
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
@@ -276,7 +282,7 @@ export function ImageCards({
           <Chip tone="primary">recommended</Chip>
           {partial && <Chip tone="warning">based on a partial scan</Chip>}
         </div>
-        <Carries tools={detectedChips} />
+        <Carries tools={[...detectedChips, ...agentTools]} />
         <p className="text-[0.6875rem] leading-snug text-muted-foreground">{V2C.REC_SUB}</p>
       </ImageCard>
 
@@ -373,6 +379,7 @@ export function StepBaseImage({
   onEditSource,
   onRescan,
   detectedChips,
+  agentTools,
   state,
   onChange,
 }: {
@@ -383,6 +390,7 @@ export function StepBaseImage({
   onEditSource: () => void;
   onRescan: () => void;
   detectedChips: string[];
+  agentTools?: string[];
   state: BaseImageState;
   onChange: (patch: Partial<BaseImageState>) => void;
 }) {
@@ -410,6 +418,7 @@ export function StepBaseImage({
 
       <ImageCards
         detectedChips={detectedChips}
+        agentTools={agentTools}
         partial={partial}
         state={state}
         onChange={onChange}

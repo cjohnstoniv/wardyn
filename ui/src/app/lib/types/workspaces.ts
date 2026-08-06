@@ -67,7 +67,7 @@ export interface WorkspaceProfile {
   build_memory_mib?: number;
   // CONTENT-FREE suspected committed secrets: path/kind/line ONLY — there is NEVER
   // a value field. `kind` is a detector id ("aws-access-key" | "github-token" | …).
-  leak_findings?: { path: string; kind: string; line?: number }[];
+  leak_findings?: { path: string; kind: string; line?: number; source?: string }[];
   // Scanner-DETECTED setup commands (build/install/test), proposed to the operator
   // in the import flow for approval/edit before they run in a verify.
   setup_commands?: SetupCommand[];

@@ -10,6 +10,7 @@ import type { IntegrationRow } from "../../../lib/api/integrations";
 import { StepReview } from "./step-review";
 import { initialWizardState } from "./wizard-types";
 import { baseStatus } from "../setup/test-fixtures";
+import { RD } from "../../../lib/workspace-copy";
 
 const listIntegrationsMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async (importOriginal) => {
@@ -227,5 +228,38 @@ describe("StepReview — Model access (resolved from integrations)", () => {
       />,
     );
     expect(screen.getByText(/Governed command — no model access is wired/)).toBeInTheDocument();
+  });
+
+  // Belt-and-suspenders on top of resolveModelAccess's own global-provider
+  // carve-out (step-access.test.tsx): even if nothing resolves client-side,
+  // the Summary must never contradict a preflight that already says
+  // llm_access is satisfied — the same rule the warning box above it follows.
+  it("does not contradict a satisfied preflight llm_access item even when nothing resolves client-side", async () => {
+    listIntegrationsMock.mockResolvedValueOnce({ ai: [], scm: [], mirror: [], proxy: [] });
+    render(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight({
+          setup_items: [
+            {
+              // Distinct from the Summary's own "Model access" label below —
+              // this is realistic checklist copy for the Bedrock carve-out
+              // (preflight.go:170-179's Note), not a text-collision risk.
+              id: "llm_access",
+              kind: "llm_access",
+              label: "Amazon Bedrock configured",
+              required_by: "the agent",
+              status: "satisfied",
+            },
+          ],
+        })}
+        preflightStatus="idle"
+      />,
+    );
+    await screen.findByText("Model access");
+    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-no-model-access")).not.toBeInTheDocument();
+    expect(screen.getByText("Provisioned — see the checklist above.")).toBeInTheDocument();
   });
 });

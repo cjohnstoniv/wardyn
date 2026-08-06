@@ -62,7 +62,7 @@ describe("EnvAsCodeCard — generate", () => {
 describe("EnvAsCodeCard — write into the directory (local_dir only)", () => {
   it("offers Write into the directory for a local_dir workspace and calls the write endpoint", async () => {
     getEnvAsCodeMock.mockResolvedValue({ "AGENTS.md": "# env" });
-    writeEnvAsCodeMock.mockResolvedValue({ "AGENTS.md": "# env" });
+    writeEnvAsCodeMock.mockResolvedValue({ written: { "AGENTS.md": "# env" }, skipped: [] });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(<EnvAsCodeCard ws={ws({ kind: "local_dir" })} />);
 
@@ -71,6 +71,30 @@ describe("EnvAsCodeCard — write into the directory (local_dir only)", () => {
     await user.click(screen.getByRole("button", { name: /write into the directory/i }));
     await waitFor(() => expect(writeEnvAsCodeMock).toHaveBeenCalledWith("ws-1"));
     expect(await screen.findByText("written")).toBeInTheDocument();
+    // Nothing was skipped — no preserved-file note.
+    expect(screen.queryByText(/left your existing/i)).not.toBeInTheDocument();
+  });
+
+  // R5 (ca73050): writeEnvAsCode now refuses to clobber a hand-authored
+  // .devcontainer/Dockerfile and reports it back — the operator must learn
+  // it was PRESERVED, not silently overwritten or silently dropped.
+  it("names a preserved .devcontainer/Dockerfile instead of silently overwriting or silently ignoring it", async () => {
+    getEnvAsCodeMock.mockResolvedValue({ "devcontainer.json": "{}" });
+    writeEnvAsCodeMock.mockResolvedValue({
+      written: { "devcontainer.json": "{}" },
+      skipped: [".devcontainer/Dockerfile"],
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<EnvAsCodeCard ws={ws({ kind: "local_dir" })} />);
+
+    await user.click(screen.getByRole("button", { name: /generate files/i }));
+    await screen.findByText("devcontainer.json");
+    await user.click(screen.getByRole("button", { name: /write into the directory/i }));
+    await waitFor(() => expect(writeEnvAsCodeMock).toHaveBeenCalledWith("ws-1"));
+    expect(await screen.findByText("written")).toBeInTheDocument();
+    expect(
+      screen.getByText(/left your existing \.devcontainer\/Dockerfile alone/i),
+    ).toBeInTheDocument();
   });
 
   it("omits Write into the directory for a repo-only workspace, saying copy-and-commit instead", async () => {

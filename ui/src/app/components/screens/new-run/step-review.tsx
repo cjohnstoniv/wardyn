@@ -242,6 +242,14 @@ export function StepReview({
                 <span className="text-foreground">{resolved.row.name}</span>
                 <Mono className="text-muted-foreground">{resolved.row.typeLabel}</Mono>
               </div>
+            ) : !noLlmCred ? (
+              // resolveModelAccess found nothing to NAME, but the server's
+              // preflight — the AUTHORITATIVE check, launch's own resolver —
+              // says llm_access is satisfied anyway (the checklist above says
+              // how). Never contradict it: showing RD.NONE_LINE here would be
+              // the exact bug the warning box above this already refuses to
+              // repeat.
+              <span className="text-muted-foreground">Provisioned — see the checklist above.</span>
             ) : (
               <span className="text-warning">{RD.NONE_LINE}</span>
             )

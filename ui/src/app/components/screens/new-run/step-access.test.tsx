@@ -145,6 +145,64 @@ describe("StepAccess — model access resolution card", () => {
     expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
     expect(screen.queryByText("Team API key")).not.toBeInTheDocument();
   });
+
+  // ok=false at the DefaultFor tier is NOT "no model access" — the managed-
+  // subscription and global-Bedrock carve-outs credential a run with no
+  // marked (or even stored) integration at all (llmcred.go's
+  // resolveRunIntegration doc; preflight.go:161-179). Both show up here only
+  // as the two fixed-id derived rows, never an ordinary unmarked row (pinned
+  // above), so this can't regress back into the pre-item-8 "guess the first
+  // row" defect.
+  it("an unmarked install still resolves via the managed-subscription global carve-out, not the honest-none warning", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    const managedSubscription: IntegrationRow = {
+      id: "ai:anthropic_subscription:managed",
+      serverId: "anthropic_subscription:managed",
+      category: "ai_provider",
+      name: "Claude subscription (managed)",
+      typeLabel: "anthropic · subscription",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "anthropic_subscription",
+      checkIds: [],
+    };
+    listIntegrationsMock.mockResolvedValue(integrations([managedSubscription]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        integrations: [{ id: "anthropic_subscription:managed", category: "ai_provider", type: "anthropic_subscription" }],
+      }),
+    );
+    renderStep();
+    expect(await screen.findByText("Claude subscription (managed)")).toBeInTheDocument();
+    expect(screen.getByText(/Applies because: the server's global provider config applies\./)).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+  });
+
+  it("an unmarked install still resolves via the global-Bedrock carve-out", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    const bedrock: IntegrationRow = {
+      id: "ai:bedrock",
+      serverId: "bedrock",
+      category: "ai_provider",
+      name: "AWS Bedrock",
+      typeLabel: "bedrock",
+      chips: [],
+      residency: "proxy_injected",
+      posture: { kind: "configured" },
+      secretNames: [],
+      aiType: "bedrock",
+      checkIds: [],
+    };
+    listIntegrationsMock.mockResolvedValue(integrations([bedrock]));
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ integrations: [{ id: "bedrock", category: "ai_provider", type: "bedrock" }] }),
+    );
+    renderStep();
+    expect(await screen.findByText("AWS Bedrock")).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE)).not.toBeInTheDocument();
+  });
 });
 
 describe("StepAccess — Override for this run peek", () => {

@@ -51,6 +51,7 @@ import { StepDone, type DoneVariant } from "./step-done";
 import {
   isFixtureLeak,
   WIZARD_STEPS,
+  agentToolsCarried,
   baseImageStateFromWorkspace,
   canDriveClaudeCode,
   defaultBaseImageState,
@@ -60,6 +61,7 @@ import {
   newSourceRow,
   parseRepoSource,
   removeSource,
+  repoOwnDevcontainerWins,
   seedFloor,
   sourceRowsFromWorkspace,
   suggestedRegistryImage,
@@ -283,6 +285,10 @@ export function WorkspaceWizard({
     try {
       const { async } = await workspacesApi.scanWorkspace(ws.id);
       let finalWs = ws;
+      // Whether the scan genuinely reached a terminal state — false when the
+      // 40x1.5s poll exhausts without one, meaning the scan is still running
+      // server-side and neither "done" nor `partial: false` is true yet.
+      let settled = !async;
       if (!async) {
         finalWs = (await workspacesApi.getWorkspace(ws.id)) ?? ws;
       } else {
@@ -291,6 +297,7 @@ export function WorkspaceWizard({
           const polled = await workspacesApi.getWorkspace(ws.id);
           if (polled && polled.status !== "scanning" && polled.status !== "pending_scan") {
             finalWs = polled;
+            settled = true;
             break;
           }
         }
@@ -302,15 +309,21 @@ export function WorkspaceWizard({
       const next = { ...scans };
       for (const r of nonEphemeral) {
         if (gated.has(r.id)) continue;
-        next[r.id] = failed ? { status: "failed", error: reason } : { status: "done" };
+        // A poll timeout is not a settled outcome — leave the row "scanning"
+        // rather than falsely stamping "done" on a scan that is still running.
+        next[r.id] = failed ? { status: "failed", error: reason } : settled ? { status: "done" } : { status: "scanning" };
       }
       // `partial` (the "Continue anyway" acknowledgment) is set once and never
       // cleared on its own — once nothing scannable is left in scanning/failed
       // (the same condition phaseA itself renders under), it's stale: drop it
       // so the "based on a partial scan" chips don't outlive the scan they
       // described. A gated source stays "failed" forever, so this only clears
-      // once every source genuinely settled.
-      const stillPartial = nonEphemeral.some((r) => next[r.id]?.status === "scanning" || next[r.id]?.status === "failed");
+      // once every source genuinely settled. A poll TIMEOUT is the opposite
+      // case — the scan genuinely did not finish — so `!settled` forces
+      // stillPartial regardless of the per-source stamps above, leaving
+      // `partial` exactly as the operator left it instead of erasing the
+      // honesty chip out from under an ack they already made.
+      const stillPartial = !settled || nonEphemeral.some((r) => next[r.id]?.status === "scanning" || next[r.id]?.status === "failed");
       patch({ workspace: finalWs, scans: next, scanning: false, ...(stillPartial ? {} : { partial: false }) });
     } catch (e) {
       toast.error("Scan failed to start", { description: getErrorMessage(e) });
@@ -372,6 +385,21 @@ export function WorkspaceWizard({
   const phaseA = s.step === "image" && (anyScanning || anyFailed) && !s.partial;
   const profile = profileOf(s.workspace);
   const detectedChips = detectedChipsFor(profile);
+  // What the RECOMMENDED/envbuilt build carries — computed unconditionally so
+  // step ②'s recommended CARD can describe itself regardless of which card is
+  // currently selected. Withheld entirely when the primary source's own
+  // devcontainer would win instead (repoOwnDevcontainerWins) — that lane
+  // builds the repo's devcontainer as-is and never bakes anything named here
+  // (workspace_run.go's repoDevcontainerToolCaveat is the same fact,
+  // surfaced post-hoc once a build exists; this is the pre-build preview).
+  // Build and Verify describe the actual resolved outcome instead, so they
+  // only see this when "recommended" is what's actually chosen (catalog/BYO/
+  // registry/custom images are never inspected — a chip there would claim a
+  // binary Wardyn didn't put in them).
+  const bakedAgentTools = repoOwnDevcontainerWins(s.sources, profile)
+    ? []
+    : agentToolsCarried(s.requirements, s.setupStatus?.integrations ?? []);
+  const carriedAgentTools = s.baseImage.choice === "recommended" ? bakedAgentTools : [];
 
   // ---------- Back-to-Sources gate (C.RESCAN_DESTROYS-style warning) ----------
   const goToSources = () => {
@@ -572,7 +600,17 @@ export function WorkspaceWizard({
               if (id === "sources") goToSources();
               else if (id === "image" && wsExists) patch({ step: "image" });
               else if (id === "integrations" && wsExists) patch({ step: "integrations" });
-              else if (id === "build" && wsExists) patch({ step: "build" });
+              else if (id === "build" && wsExists && !s.savingIntegrations) {
+                // Same persist-then-navigate hop the footer's own Continue
+                // uses (continueFromIntegrations) — a bare step patch here
+                // would let the rail reach Build without the integration pick
+                // the operator just made ever reaching the server, which is
+                // the exact defect that function exists to close. Guarded by
+                // the same `savingIntegrations` flag as the footer button, so
+                // a rail click mid-save can't race past it either.
+                if (s.step === "integrations") void continueFromIntegrations();
+                else patch({ step: "build" });
+              }
               // No `profile` gate here — the footer's own Back button reaches
               // these two steps with none (StepRequirements/VerifyBody both
               // render fine with profile: null), so the rail must agree.
@@ -606,6 +644,7 @@ export function WorkspaceWizard({
               onEditSource={() => goToSources()}
               onRescan={() => s.workspace && void startScan(s.workspace)}
               detectedChips={detectedChips}
+              agentTools={bakedAgentTools}
               state={s.baseImage}
               onChange={(p) => patch({ baseImage: { ...s.baseImage, ...p } })}
             />
@@ -623,13 +662,18 @@ export function WorkspaceWizard({
             />
           )}
           {s.step === "build" && s.workspace && (
-            <StepBuild workspaceId={s.workspace.id} onStateChange={(b) => patch({ buildState: b })} />
+            <StepBuild
+              workspaceId={s.workspace.id}
+              onStateChange={(b) => patch({ buildState: b })}
+              agentTools={carriedAgentTools}
+            />
           )}
           {s.step === "verify" && s.workspace && (
             <VerifyBody
               requirements={s.requirements}
               powerSource={powerSource}
               carryImage={carryImage}
+              carryTools={carriedAgentTools}
               onOpenReach={() => patch({ step: "reqs" })}
               verifyPanel={
                 <WizardVerifySession

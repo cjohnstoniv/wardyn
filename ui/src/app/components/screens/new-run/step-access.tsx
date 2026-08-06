@@ -297,8 +297,24 @@ export function resolveModelAccess(
     const pinned = ai.find((r) => r.id === ref);
     if (pinned) return { row: pinned, because: "this workspace pins it." };
   }
-  const fallback = ai.find((r) => compatible(r) && isServerDefault(r));
-  if (fallback) return { row: fallback, because: "it's the server default for agent runs." };
+  const marked = ai.find((r) => compatible(r) && isServerDefault(r));
+  if (marked) return { row: marked, because: "it's the server default for agent runs." };
+  // Nothing carries the DefaultFor:agent_runs mark — but ok=false there is NOT
+  // "no model access" (internal/api/llmcred.go's resolveRunIntegration doc
+  // calls it "the global-provider-config fallback"): dispatch still
+  // credentials the run off two purely-global carve-outs that need no marked
+  // (or even stored) integration row at all — a managed subscription
+  // (managedInjectReady) and the global Bedrock config
+  // (resolveBedrockAuth(…, nil)) — exactly what preflight.go:161-179 folds in
+  // so the checklist "stop[s] telling an operator with working Bedrock access
+  // that they have none." Both are visible here ONLY as the two fixed-id
+  // derived rows integrations.go synthesizes precisely when each is ready
+  // (anthropic_subscription:managed, bedrock) — never an ordinary
+  // stored-but-unmarked row, which genuinely still needs the mark.
+  const globalFallback = ai.find(
+    (r) => compatible(r) && (r.serverId === "anthropic_subscription:managed" || r.serverId === "bedrock"),
+  );
+  if (globalFallback) return { row: globalFallback, because: "the server's global provider config applies." };
   return null;
 }
 

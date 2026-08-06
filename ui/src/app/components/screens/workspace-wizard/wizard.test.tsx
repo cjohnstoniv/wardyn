@@ -228,6 +228,60 @@ describe("WorkspaceWizard — leaving Integrations persists the pick before Buil
     expect(screen.getByText(INTEGRATIONS_BLURB)).toBeInTheDocument();
     expect(buildWorkspaceMock).not.toHaveBeenCalled();
   });
+
+  // Item 2 (reconcile-wave4.md): the rail's Build circle used to bypass
+  // continueFromIntegrations with a bare `patch({step:"build"})`, reaching
+  // Build without the just-toggled pick ever reaching the server. Two lines
+  // of defense now close it: StepIndicator's own clickable gate (i <=
+  // currentIdx) already refuses a FORWARD jump — Build sits one step ahead
+  // of Integrations, so its circle is disabled while viewing Integrations,
+  // full stop — and onJump's own routing (this describe block's real fix)
+  // is the second layer for whichever caller/future change ever makes it
+  // reachable some other way. `disabled` genuinely blocks the click here
+  // (verified: fireEvent.click on a disabled button never invokes onClick).
+  it("the rail's Build circle is disabled while viewing Integrations — the sibling bypass has no click to take", async () => {
+    const ws = baseWorkspace();
+    createWorkspaceMock.mockResolvedValue(ws);
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(ws);
+
+    render(<WorkspaceWizard onClose={vi.fn()} />);
+    await driveToBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+    await screen.findByText(INTEGRATIONS_BLURB);
+
+    expect(screen.getByRole("button", { name: /build/i })).toBeDisabled();
+    // Confirms it stays inert even if something WAS clicked: no persistence,
+    // no build kick.
+    expect(setRequirementsMock).not.toHaveBeenCalled();
+    expect(buildWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  it("jumping to Build via the rail from a LATER step (genuinely reachable — behind current) doesn't needlessly re-persist", async () => {
+    const ws = baseWorkspace();
+    createWorkspaceMock.mockResolvedValue(ws);
+    scanWorkspaceMock.mockResolvedValue({ async: false });
+    getWorkspaceMock.mockResolvedValue(ws);
+    setRequirementsMock.mockResolvedValue(ws);
+
+    render(<WorkspaceWizard onClose={vi.fn()} />);
+    await driveToBaseImage();
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" })); // -> integrations
+    await screen.findByText(INTEGRATIONS_BLURB);
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" })); // -> build (persists once)
+    await screen.findByText("Image ready");
+    fireEvent.click(screen.getByRole("button", { name: "Continue →" })); // -> reqs
+    await screen.findByText(C.S3_BLURB);
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+
+    // Requirements (idx4) sits AHEAD of Build (idx3), so the rail's Build
+    // circle is genuinely clickable from here — this is the `else` branch
+    // of the fix (s.step !== "integrations"), which must NOT call
+    // continueFromIntegrations a second time for no reason.
+    await userEvent.setup().click(screen.getByRole("button", { name: /build/i }));
+    await screen.findByText("Image ready");
+    expect(setRequirementsMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("WorkspaceWizard — close semantics", () => {
@@ -387,6 +441,47 @@ describe("WorkspaceWizard — a partial-scan acknowledgment clears once the scan
       vi.useRealTimers();
     }
   });
+
+  // Item 3 (reconcile-wave3.md): the timeout path used to clear `partial`
+  // right alongside the settled path — so a scan that was STILL running
+  // after the full 40x1.5s poll silently lost the "based on a partial scan"
+  // chip in exactly the case (a slow scan, acknowledged) where it mattered
+  // most.
+  it(
+    "stays 'based on a partial scan' when the poll exhausts without settling — the scan genuinely didn't finish",
+    { timeout: 20000 },
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const created = baseWorkspace({ status: "pending_scan" });
+        createWorkspaceMock.mockResolvedValue(created);
+        scanWorkspaceMock.mockResolvedValue({ async: true });
+        // Every poll comes back still "scanning" — the loop exhausts all 40
+        // iterations without ever finding a terminal status.
+        getWorkspaceMock.mockResolvedValue({ ...created, status: "scanning" });
+
+        render(<WorkspaceWizard onClose={vi.fn()} />);
+        fireEvent.change(screen.getByLabelText("Name"), { target: { value: "payments" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add Local directory" }));
+        fireEvent.change(screen.getByPlaceholderText("/home/me/projects/payments"), {
+          target: { value: "/home/me/payments" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Continue →" }));
+
+        const continueBtn = await screen.findByRole("button", { name: /continue without waiting/i });
+        fireEvent.click(continueBtn);
+        expect(screen.getAllByText("based on a partial scan").length).toBeGreaterThan(0);
+
+        // Exhaust the whole 40x1.5s poll (60s) — it never settles.
+        await act(() => vi.advanceTimersByTimeAsync(61000));
+        // The scan never finished — the honesty chip must survive the
+        // timeout, not be silently erased by it.
+        expect(screen.getAllByText("based on a partial scan").length).toBeGreaterThan(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe("WorkspaceWizard — going back to Sources after a scan warns first", () => {

@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 const listIntegrationsMock = vi.fn();
 vi.mock("../../../lib/api/integrations", async () => {
@@ -80,11 +80,12 @@ describe("StepBaseImage — Phase A scan progress", () => {
 
 // A small stateful wrapper so the four cards + editor behave like they will
 // under wizard.tsx (controlled state + patch), without pulling wizard.tsx in.
-function CardsHarness({ initial }: { initial?: Partial<BaseImageState> }) {
+function CardsHarness({ initial, agentTools }: { initial?: Partial<BaseImageState>; agentTools?: string[] }) {
   const [state, setState] = React.useState<BaseImageState>({ ...defaultBaseImageState(), ...initial });
   return (
     <ImageCards
       detectedChips={["Go 1.22", "Node 20"]}
+      agentTools={agentTools}
       partial={false}
       state={state}
       onChange={(patch) => setState((s) => ({ ...s, ...patch }))}
@@ -150,13 +151,28 @@ describe("ImageCards — inventory, never consequence (the tools-not-AI law)", (
   // The image doesn't decide whether or which AI is used — the workspace's
   // requirements do. A card may NAME a tool it carries; only the requirements
   // and run surfaces say what a tool is for.
-  it("recommended card's Carries lists exactly what the scan detected — never the agent CLI", () => {
+  it("recommended card's Carries renders detectedChips verbatim — no agent CLI claimed when none is named", () => {
     render(<CardsHarness />);
-    // The recommended build is generated from the profile; it never bakes
-    // claude-code, so no card may claim it does. The agent CLI arrives at run
-    // time as a tool choice, not as base-image inventory.
+    // Carries renders exactly what it's given (detectedChips + agentTools).
+    // CardsHarness passes no agentTools here (nothing named an anthropic
+    // integration), so nothing claims the agent CLI is baked.
     expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
     expect(screen.getAllByText("Go 1.22").length).toBeGreaterThan(0);
+  });
+
+  // 342da88 made the bake real (live-proven: `claude --version` inside the
+  // built image) — a named anthropic_* integration now genuinely puts
+  // claude-code in the recommended build, so the card may say so. Only that
+  // card: catalog/BYO/registry images are never inspected and must never
+  // pick up the same claim.
+  it("recommended card's Carries shows claude-code once a named integration bakes it — the registry card never does", () => {
+    render(<CardsHarness agentTools={["claude-code"]} />);
+    const recommended = screen.getByTestId("image-card-recommended");
+    expect(within(recommended).getByText("claude-code")).toBeInTheDocument();
+    const registry = screen.getByTestId("image-card-registry");
+    expect(within(registry).queryByText("claude-code")).not.toBeInTheDocument();
+    // The detected chips still render on both, unaffected.
+    expect(screen.getAllByText("Go 1.22").length).toBeGreaterThan(1);
   });
 
   it("the registry card carries no warning — no card states an AI consequence", () => {
