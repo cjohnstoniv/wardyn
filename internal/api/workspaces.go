@@ -10,6 +10,8 @@
 package api
 
 import (
+	"github.com/go-chi/chi/v5"
+
 	"context"
 	"fmt"
 	"net/http"
@@ -293,6 +295,56 @@ func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.W
 		return "SSH source needs the " + secretName + " secret first — store your private key via setup's SCM import or `wardyn secret set " + secretName + "`"
 	}
 	return ""
+}
+
+// mountWorkspaceRoutes registers the tier-3 WORKSPACE routes (plus, via
+// mountLibraryRoutes, tiers 1-2). Workspace management is gated to
+// authenticated humans (SSO session or admin token); every MUTATING route is
+// additionally operator-only, so with WARDYN_OIDC_OPERATOR_EMAILS set a
+// signed-in human outside that list can list/read workspaces but cannot CRUD
+// them or widen what a run may do. UNSET (the default) is the disclosed
+// status quo — ANY authenticated human in OIDC mode can CRUD workspaces — and
+// full per-user RBAC remains future work (ROADMAP.md). Create/update validate
+// sources the same way policy WorkspaceMounts do (runner.ValidateMount /
+// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
+// repoCloneURL); writes are audited.
+func (s *Server) mountWorkspaceRoutes(r chi.Router, operatorOnly chi.Router) {
+	// Tier-1 source library + tier-2 base-image catalog — same posture.
+	s.mountLibraryRoutes(r, operatorOnly)
+
+	operatorOnly.Post("/workspaces", s.handleCreateWorkspace)
+	r.Get("/workspaces", s.handleListWorkspaces)
+	r.Get("/workspaces/{id}", s.handleGetWorkspace)
+	operatorOnly.Put("/workspaces/{id}", s.handleUpdateWorkspace)
+	operatorOnly.Delete("/workspaces/{id}", s.handleDeleteWorkspace)
+	operatorOnly.Post("/workspaces/{id}/scan", s.handleScanWorkspace)
+	// The wizard's BUILD step: kick the image build asynchronously and
+	// follow it — a session launch then hits the cache and starts fast.
+	r.Get("/workspaces/{id}/build", s.handleGetWorkspaceBuild)
+	operatorOnly.Post("/workspaces/{id}/build", s.handleBuildWorkspace)
+	// Operator-owned egress approvals (promotion of the scanner's
+	// content-derived suggestions; see handleSetApprovedEgress).
+	operatorOnly.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+	// Bind (or clear) the workspace/container's model/harness creds — a run
+	// that picks it inherits them (applyWorkspaceCreds). Scoped write.
+	operatorOnly.Put("/workspaces/{id}/llm-cred", s.handleSetWorkspaceLLMCred)
+	// Requirements contract (secrets/egress/write-access a run against
+	// this workspace needs); folded into a run's resolved policy by
+	// runs_create.go's applyWorkspaceRequirements. Scoped write.
+	operatorOnly.Put("/workspaces/{id}/requirements", s.handleSetWorkspaceRequirements)
+	// Least-privilege telemetry: egress hosts runs using this workspace
+	// were denied — promotion candidates (see handleObservedEgress).
+	r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
+	// Verify sessions: launch one named session (see handleRecordWorkspace),
+	// then promote the observed-allowed hosts into the contract (one-click).
+	operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+	operatorOnly.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
+	// Committable env-as-code (devcontainer.json/AGENTS.md) from the
+	// scanned profile. GET re-generates it any time (repo workspaces have
+	// no host path to write into); the write route is local-dir-only and
+	// writes it into the host source dir (see handleWriteEnvAsCode).
+	r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
+	operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 }
 
 // handleCreateWorkspace validates the request and onboards a new workspace in
