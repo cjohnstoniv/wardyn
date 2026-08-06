@@ -90,11 +90,14 @@ test.describe("New Run wizard", () => {
     await next(dlg); // → Egress
     await next(dlg); // → Barrier
     await next(dlg); // → Review
-    // With no workspace, the Review's Repo field renders the em-dash placeholder
-    // (step-review.tsx: `run.repo || "—"`), proving buildSpec left repo empty.
-    await expect(dlg.getByText("Repo")).toBeVisible();
-    // exact:true — the preflight checklist's prose also contains em-dashes.
-    await expect(dlg.getByText("—", { exact: true })).toBeVisible();
+    // With no workspace the Review says so in words rather than leaving an
+    // em-dash to be read: step-review.tsx renders
+    // `<Summary label="Workspace" value="none (ephemeral scratch)" />`. The old
+    // "Repo" summary is gone — it was the synthetic `local:<basename>` wire
+    // label leaking into a field the operator never set.
+    // exact:true — the attached-sources block below is labelled "Workspaces".
+    await expect(dlg.getByText("Workspace", { exact: true })).toBeVisible();
+    await expect(dlg.getByText("none (ephemeral scratch)")).toBeVisible();
   });
 
   test("autonomous mode requires a task before advancing", async ({ page }) => {
@@ -233,7 +236,11 @@ test.describe("New Run wizard", () => {
     // exact:true — the preflight checklist rows also mention "claude-code".
     await expect(dlg.getByText("claude-code", { exact: true })).toBeVisible();
     await expect(dlg.getByText("Interactive", { exact: true })).toBeVisible();
-    await expect(dlg.getByText("local:payments")).toBeVisible();
+    // The Workspace summary is the workspace itself — its name over its own
+    // kind + source — not the synthetic `local:<basename>` wire label that
+    // still travels on the run (see the runs-list assertion further down).
+    await expect(dlg.getByText("payments", { exact: true })).toBeVisible();
+    await expect(dlg.getByText("local dir · /home/me/projects/payments")).toBeVisible();
 
     // The verbatim inline_policy JSON is rendered and includes the denied domain,
     // the min_confinement_class wire field, and the default allowed domain.

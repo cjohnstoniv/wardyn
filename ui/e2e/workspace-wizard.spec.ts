@@ -3,13 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The "Add workspace" wizard (Sources -> Base image -> Requirements -> Done) —
-// the single front door onto the Workspace Composition model (migration 0029),
-// replacing the old 6-step import dialog.
+// The "Add workspace" wizard — the single front door onto the Workspace
+// Composition model (migration 0029), replacing the old 6-step import dialog.
+//
+// The rail is SEVEN steps (wizard-types.ts's WIZARD_STEPS):
+//   Sources · Base image · Integrations · Build · Requirements · Verify · Done
+// Integrations and Build sit between the image and the contract, and Verify
+// between the contract and Done — so "one Continue past the image" lands on
+// Integrations, not Requirements.
 //
 // Source of truth read before writing selectors:
 //   src/app/components/screens/workspace-wizard/{wizard,step-sources,
-//     step-base-image,step-requirements,step-done,wizard-types}.tsx
+//     step-base-image,step-integrations,step-build,step-requirements,
+//     verify-session,step-done,wizard-types}.tsx
 //   src/app/components/screens/workspaces.tsx (the "Add workspace" entry
 //     points + the empty-state CTA + the list's status chip)
 //   src/app/components/screens/workspace-detail/{workspace-detail,
@@ -107,11 +113,15 @@ test.describe("Add workspace wizard", () => {
     // Two sources now exist (the ephemeral floor + this one), so the target
     // placeholder is NOT the bare default — it's namespaced by the source's own
     // base name (wizard-types.ts's defaultTargetFor/baseNameOf).
-    await expect(row.getByPlaceholder("/home/agent/work/reports")).toBeVisible();
+    const target = row.getByLabel("Mount target");
+    await expect(target).toHaveAttribute("placeholder", "/home/agent/work/reports");
 
-    // Typing an explicit target always wins over the derived suggestion.
-    await row.getByPlaceholder("/home/agent/work/reports").fill("/home/agent/custom-mount");
-    await expect(row.getByPlaceholder("/home/agent/work/reports")).toHaveValue("/home/agent/custom-mount");
+    // Typing an explicit target always wins over the derived suggestion — and
+    // defaultTargetFor returns the TYPED value once there is one, so the
+    // placeholder becomes the typed target too. Hold the field by its label:
+    // re-finding it by the original placeholder finds nothing after the fill.
+    await target.fill("/home/agent/custom-mount");
+    await expect(target).toHaveValue("/home/agent/custom-mount");
 
     // Nothing was created — leave cleanly.
     await dlg.getByRole("button", { name: "Cancel" }).click();
@@ -235,7 +245,19 @@ test.describe("Add workspace wizard", () => {
     // than any specific timing.
     await expect(dlg.getByRole("radiogroup", { name: "Base image" })).toBeVisible({ timeout: 30_000 });
 
+    // Step 3 — Integrations (INTEGRATIONS_BLURB). Nothing to pick against the
+    // seeded backend; it's a real step on the way to the contract now.
     await dlg.getByRole("button", { name: "Continue →" }).click();
+    await expect(dlg.getByText(/Pick what this workspace connects through/)).toBeVisible();
+
+    // Step 4 — Build (BUILD_BLURB). It auto-kicks a build on mount and never
+    // hard-blocks: the primary reads "Continue without waiting" while one is
+    // running and "Continue →" otherwise, so match either.
+    await dlg.getByRole("button", { name: "Continue →" }).click();
+    await expect(dlg.getByText(/This builds it now — visibly/)).toBeVisible();
+    await dlg.getByRole("button", { name: /^Continue/ }).click();
+
+    // Step 5 — Requirements (C.S3_BLURB).
     await expect(
       dlg.getByText("Set what this workspace always carries, and what a run has to ask for."),
     ).toBeVisible();
@@ -248,7 +270,13 @@ test.describe("Add workspace wizard", () => {
     await egressGroup.getByRole("radio", { name: "Optional" }).click();
     await expect(egressGroup.getByRole("radio", { name: "Optional" })).toBeChecked();
 
-    await dlg.getByRole("button", { name: /accept & finish/i }).click();
+    // Requirements PUTs the map on its own primary — "Save & continue →",
+    // not the retired "Accept & finish" — and lands on Verify, which is its
+    // own step before Done.
+    await dlg.getByRole("button", { name: /^Save & continue/ }).click();
+    await expect(dlg.getByText(/Drive the workspace for real/)).toBeVisible();
+    await dlg.getByRole("button", { name: "Finish" }).click();
+
     await expect(dlg.getByText(`${name} is usable.`)).toBeVisible();
 
     await dlg.getByRole("button", { name: new RegExp(`^Open ${name}`) }).click();
@@ -261,7 +289,7 @@ test.describe("Add workspace wizard", () => {
     await expect(detailEgressGroup.getByRole("radio", { name: "Optional" })).toBeChecked();
   });
 
-  test("closing mid-flow keeps the workspace — it lists as \"Setting up\"", async ({ page }) => {
+  test("closing mid-flow keeps the workspace — it survives in the list, not silently dropped", async ({ page }) => {
     const name = uniqueName("close-midflow");
     const dlg = await openAddWorkspaceWizard(page);
     await dlg.getByLabel("Name").fill(name);
@@ -276,12 +304,16 @@ test.describe("Add workspace wizard", () => {
     await dlg.getByRole("button", { name: "Close" }).click();
     await expect(dialog(page)).not.toBeVisible();
 
-    // It survives, incomplete (no Requirements step reached, so no scan wired
-    // in beyond the automatic floor pass) — "Setting up", not an error and not
-    // silently dropped.
+    // It survives, incomplete (no Requirements step reached) — the point of
+    // the test. Its status word is "Usable", NOT "Setting up": this workspace
+    // is ephemeral-only, and handleScanWorkspace's own contract is that "an
+    // ephemeral-only composition reads scanned with an empty profile straight
+    // from the hydrate pass" — scanned maps to Usable (lib/workspace-status.ts
+    // :: statusWord). There is nothing left to scan, so claiming otherwise
+    // would be the dishonest reading.
     await page.goto("/workspaces");
     const row = page.getByRole("row", { name: new RegExp(name) });
     await expect(row).toBeVisible();
-    await expect(row.getByText("Setting up")).toBeVisible();
+    await expect(row.getByText("Usable")).toBeVisible();
   });
 });

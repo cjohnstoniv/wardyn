@@ -80,15 +80,16 @@ async function openDescribe(page: Page): Promise<Locator> {
 // Attach the seeded onboarded workspace ("payments", a local_dir seeded by
 // scripts/e2e-backend.sh) via the WorkspacePicker combobox — the same idiom the
 // wizard's Basics step uses (ui/e2e/wizard.spec.ts fillValidBasics). Options render
-// in a portal OUTSIDE the dialog. A local dir mounts read-WRITE by default (which
-// grades the mount HIGH); pass { readOnly: true } to flip the picker's Read-only
-// switch so the mount grades LOW and an otherwise-MEDIUM proposal stays off the
-// high-risk gate.
-async function selectWorkspace(
-  page: Page,
-  dlg: Locator,
-  opts: { readOnly?: boolean } = {},
-): Promise<void> {
+// in a portal OUTSIDE the dialog.
+//
+// Attaching it mounts the dir read-WRITE, which grades the run HIGH ("read-WRITE
+// local workspace: the agent's changes persist to the host directory …"). There
+// is NO read-only toggle to flip: the picker's only write control is a
+// "write to the directory" switch (workspace-picker.tsx) that renders solely
+// when the workspace's requirements contract offers write as an OPTIONAL lane,
+// and the seeded "payments" workspace has no contract at all. So a test that
+// wants a non-HIGH proposal must attach no workspace — see compose() below.
+async function selectWorkspace(page: Page, dlg: Locator): Promise<void> {
   await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
   await page.getByRole("option", { name: /payments/ }).click();
   await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
@@ -98,16 +99,26 @@ async function selectWorkspace(
   // seeded "payments" workspace has no requirements contract, so it reads the
   // honest empty-contract fallback.
   await expect(dlg.getByText("Comes with:")).toBeVisible();
-  if (opts.readOnly) await dlg.getByRole("switch", { name: "Read-only" }).click();
 }
 
-// Type a prompt, attach the seeded onboarded workspace read-only (a read-only mount
-// keeps the default proposal MEDIUM), and Compose, landing on the "Proposed setup"
-// review. A workspace is OPTIONAL now (empty => ephemeral); we attach one so the
-// composed run carries a concrete workspace (repo local:payments).
-async function compose(page: Page, dlg: Locator, prompt: string): Promise<void> {
+// Type a prompt and Compose with NO workspace attached, landing on the "Proposed
+// setup" review. A workspace is OPTIONAL now (empty => ephemeral scratch dir),
+// and leaving it empty is what keeps the default proposal MEDIUM: there is no
+// host mount to grade, so no HIGH item and no acknowledgment gate. Tests that
+// need a concrete workspace on the run attach one themselves and pay the HIGH
+// gate (composeWithWorkspace).
+async function compose(dlg: Locator, prompt: string): Promise<void> {
   await dlg.getByLabel("Describe your task").fill(prompt);
-  await selectWorkspace(page, dlg, { readOnly: true });
+  await dlg.getByRole("button", { name: "Compose" }).click();
+  await expect(dlg.getByRole("heading", { name: "Proposed setup" })).toBeVisible();
+}
+
+// As compose(), but attaching the seeded onboarded workspace — the composed run
+// then carries it (repo local:payments) at the cost of a read-WRITE host mount,
+// so the review lands HIGH behind the acknowledgment gate.
+async function composeWithWorkspace(page: Page, dlg: Locator, prompt: string): Promise<void> {
+  await dlg.getByLabel("Describe your task").fill(prompt);
+  await selectWorkspace(page, dlg);
   await dlg.getByRole("button", { name: "Compose" }).click();
   await expect(dlg.getByRole("heading", { name: "Proposed setup" })).toBeVisible();
 }
@@ -118,8 +129,10 @@ test.describe("AI Run Composer — Describe your task", () => {
   }) => {
     const dlg = await openDescribe(page);
 
-    // The provider picker is a Radix Select (role="combobox") labelled "Provider".
-    const provider = dlg.getByLabel("Provider");
+    // The picker is a Radix Select (role="combobox") whose Field label is
+    // "Which integration analyzes your task" (compose-form.tsx) — it names the
+    // job, not a wire word; there has been no "Provider" label to grab.
+    const provider = dlg.getByLabel("Which integration analyzes your task");
     await expect(provider).toBeVisible();
     // The default backend (fake-claude) is preselected and marked "(default)".
     await expect(provider).toContainText("fake-claude");
@@ -140,7 +153,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
-    await compose(page, dlg, "Triage the failing CI and open a PR with a fix.");
+    await compose(dlg, "Triage the failing CI and open a PR with a fix.");
 
     // The model's rationale is collapsed by default (it is the wordiest block and
     // answers "why", asked last) — expand "Why this setup" to read it. The fake
@@ -180,7 +193,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
-    await compose(page, dlg, "Add a unit test for the date parser.");
+    await compose(dlg, "Add a unit test for the date parser.");
 
     // No high-risk section, no acknowledgment checkbox (needsAck = highItems > 0).
     await expect(page.locator('[data-testid="high-risk-section"]')).toHaveCount(0);
@@ -202,7 +215,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     // Attach the seeded local dir, left read-WRITE (the picker default) — the
     // operator's workspace choice adds a host mount (applyWorkspaces) that the
     // deterministic grader marks HIGH.
-    await selectWorkspace(page, dlg); // read-WRITE (no Read-only toggle)
+    await selectWorkspace(page, dlg); // read-WRITE — the composer picker has no read-only option
     await dlg.getByRole("button", { name: "Compose" }).click();
     await expect(dlg.getByRole("heading", { name: "Proposed setup" })).toBeVisible();
 
@@ -223,12 +236,12 @@ test.describe("AI Run Composer — Describe your task", () => {
     // fake-risky proposes CC1 (the Fence — weakest isolation), graded HIGH, so
     // the separated high-risk section appears and launch is gated.
     const dlg = await openDescribe(page);
-    const provider = dlg.getByLabel("Provider");
+    const provider = dlg.getByLabel("Which integration analyzes your task");
     await provider.click();
     await page.getByRole("listbox").getByRole("option", { name: /fake-risky/ }).click();
     await expect(provider).toContainText("fake-risky");
 
-    await compose(page, dlg, "Run something that needs the weakest isolation tier.");
+    await compose(dlg, "Run something that needs the weakest isolation tier.");
 
     // Overall HIGH; the barrier renders as "Fence" — never a CCx wire code in
     // any VISIBLE text (collapsed raw-JSON is excluded from innerText). Match the
@@ -251,7 +264,7 @@ test.describe("AI Run Composer — Describe your task", () => {
 
   test("Cancel on the review screen closes the dialog without creating a run", async ({ page }) => {
     const dlg = await openDescribe(page);
-    await compose(page, dlg, "Refactor the logging module.");
+    await compose(dlg, "Refactor the logging module.");
 
     let createFired = false;
     page.on("request", (req) => {
@@ -267,7 +280,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
-    await compose(page, dlg, "Investigate the flaky integration test.");
+    await composeWithWorkspace(page, dlg, "Investigate the flaky integration test.");
 
     await dlg.getByRole("button", { name: "Edit in wizard" }).click();
 
@@ -319,13 +332,13 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
-    const provider = dlg.getByLabel("Provider");
+    const provider = dlg.getByLabel("Which integration analyzes your task");
     await provider.click();
     await page.getByRole("listbox").getByRole("option", { name: /fake-interview/ }).click();
     await expect(provider).toContainText("fake-interview");
 
     await dlg.getByLabel("Describe your task").fill("Ship a feature and open a PR.");
-    await selectWorkspace(page, dlg, { readOnly: true });
+    await selectWorkspace(page, dlg);
     await dlg.getByRole("button", { name: "Compose" }).click();
 
     // The clarify step appears (the dialog retitles to "A few questions").
@@ -340,7 +353,7 @@ test.describe("AI Run Composer — Describe your task", () => {
 
   test("Skip questions mode proposes one-shot even for an interview backend", async ({ page }) => {
     const dlg = await openDescribe(page);
-    const provider = dlg.getByLabel("Provider");
+    const provider = dlg.getByLabel("Which integration analyzes your task");
     await provider.click();
     await page.getByRole("listbox").getByRole("option", { name: /fake-interview/ }).click();
 
@@ -349,7 +362,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     await page.getByRole("listbox").getByRole("option", { name: /Skip questions/ }).click();
 
     await dlg.getByLabel("Describe your task").fill("Just propose it.");
-    await selectWorkspace(page, dlg, { readOnly: true });
+    await selectWorkspace(page, dlg);
     await dlg.getByRole("button", { name: "Compose" }).click();
 
     // No questions — straight to the proposal review.
@@ -360,9 +373,14 @@ test.describe("AI Run Composer — Describe your task", () => {
   // Mutating test LAST (declaration order): it creates a run.
   test("Approve & launch creates a run that then appears in the runs list", async ({ page }) => {
     const dlg = await openDescribe(page);
-    await compose(page, dlg, "Bump the dependency and run the test suite.");
+    // Attach the workspace so the created run carries it (asserted below) —
+    // which mounts it read-WRITE and therefore lands HIGH, so clear the
+    // acknowledgment gate before launching.
+    await composeWithWorkspace(page, dlg, "Bump the dependency and run the test suite.");
 
     const launch = dlg.getByRole("button", { name: /Approve & launch/ });
+    await expect(launch).toBeDisabled();
+    await dlg.getByRole("checkbox").check();
     await expect(launch).toBeEnabled();
 
     // The launch fires a create POST /api/v1/runs.
@@ -392,7 +410,7 @@ test.describe("AI Run Composer — Describe your task", () => {
     page,
   }) => {
     const dlg = await openDescribe(page);
-    await compose(page, dlg, "Wire up a small script.");
+    await compose(dlg, "Wire up a small script.");
 
     // The fake-claude proposal wants api.anthropic.com; the seeded operator
     // ceiling (examples/policies/demo.json) doesn't allow it and no

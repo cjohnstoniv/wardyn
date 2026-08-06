@@ -243,7 +243,15 @@ function FromCombobox({ value, onChange }: { value: string; onChange: (v: string
           <CommandList>
             <CommandEmpty>Or type anything — a full URL, a bare host, or an IP. It&apos;s redirected exactly as entered.</CommandEmpty>
             {isNovel && (
-              <CommandGroup>
+              // forceMount on the GROUP too, not just the item: cmdk counts only
+              // items its filter SCORES, and a forced item scores nothing — so a
+              // group left to the filter collapses to display:none and takes the
+              // forced item down with it. Without this the typed host is in the
+              // DOM but unclickable, and the CommandEmpty copy right above
+              // ("type anything … redirected exactly as entered") is a promise
+              // the UI cannot keep. The `isNovel &&` guard means the group only
+              // exists when there IS a typed value, so nothing empty is forced.
+              <CommandGroup forceMount>
                 {/* forceMount + a value cmdk's filter always keeps: the typed
                     string must stay selectable even when it matches nothing. */}
                 <CommandItem key="__custom" value={typed} forceMount onSelect={() => pick(typed)} className="font-mono">

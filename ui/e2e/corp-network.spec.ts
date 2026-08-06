@@ -57,6 +57,14 @@ function main(page: Page): Locator {
   return page.getByRole("main");
 }
 
+// The step PANEL only — <main> also holds the phase rail (<aside>, whose
+// per-step badge mirrors that step's own gate word, so "Blocked" appears twice
+// on the page once the probe fails). Assertions about what the panel itself
+// renders scope here; this is strictly narrower than `main`, never looser.
+function panel(page: Page): Locator {
+  return main(page).locator("aside + div");
+}
+
 // Fresh tour every test (matches getting-started.spec.ts): walks Environment
 // -> Corporate network (one Next click) and returns the step body's `main`
 // landmark, Host proxy tab active (the default).
@@ -80,7 +88,8 @@ test.describe("Corporate network step", () => {
     await expect(m.getByRole("button", { name: /^test connectivity$/i })).toBeVisible();
 
     await m.getByRole("tab", { name: "Egress redirection" }).click();
-    await expect(m.getByText(/point outbound traffic at an internal mirror/i)).toBeVisible();
+    // T.EGRESS_DESC (lib/integrations.ts) — the tab's own lede.
+    await expect(m.getByText(/must fetch through an internal mirror or appliance/i)).toBeVisible();
     await expect(m.getByRole("button", { name: /\+ add redirect/i })).toBeVisible();
 
     await m.getByRole("tab", { name: "Host proxy" }).click();
@@ -127,7 +136,10 @@ test.describe("Corporate network step", () => {
 
     await field.fill("http://ops-egress:secret123@proxy.corp.acme.com:8080");
     await expect(field).toHaveAttribute("type", "password");
-    await expect(m.getByText(/username and password/i)).toBeVisible();
+    // T.CRED_URL_NOTE, matched on its opening clause: the field's standing hint
+    // (T.PROXY_URL_HINT) ends "…unless it carries a username and password", so
+    // the bare phrase matches both the hint and the warning.
+    await expect(m.getByText(/this url has a username and password in it/i)).toBeVisible();
     await expect(m.getByText(/write-only/i)).toBeVisible();
 
     // The unit suite mocks secretsApi.setSecret entirely; only an e2e proves
@@ -150,20 +162,24 @@ test.describe("Corporate network step", () => {
     );
 
     const m = await openCorpNetworkStep(page);
+    // The verdict chip is the PANEL's — the rail badge beside it carries the
+    // same word for the same gate, so scope to the panel to assert on the one
+    // this test is about (see panel()).
+    const p = panel(page);
 
     // While unproven the ONE launch point is the footer's gate button.
     await m.getByRole("button", { name: /^test connectivity$/i }).click();
-    await expect(m.getByText("Reached · via proxy", { exact: true })).toBeVisible();
-    await expect(m.getByText(/42ms round trip/)).toBeVisible();
+    await expect(p.getByText("Reached · via proxy", { exact: true })).toBeVisible();
+    await expect(p.getByText(/42ms round trip/)).toBeVisible();
 
     // Gate satisfied: the footer moved on to Next, and the panel's own button
     // returned as "Test again" — that is where a re-test lives now.
     state = "blocked";
     await m.getByRole("button", { name: /^test again$/i }).click();
-    await expect(m.getByText("Blocked", { exact: true })).toBeVisible();
-    await expect(m.getByText(/connection refused/i)).toBeVisible();
+    await expect(p.getByText("Blocked", { exact: true })).toBeVisible();
+    await expect(p.getByText(/connection refused/i)).toBeVisible();
     // Proves the chip actually re-rendered rather than just appending.
-    await expect(m.getByText("Reached · via proxy", { exact: true })).toHaveCount(0);
+    await expect(p.getByText("Reached · via proxy", { exact: true })).toHaveCount(0);
   });
 
   // The gate's pure ladder (steps.ts's corpNetworkGate) is exhaustively
@@ -210,7 +226,10 @@ test.describe("Corporate network step", () => {
 
     const m = await openCorpNetworkStep(page);
     await m.getByRole("tab", { name: "Egress redirection" }).click();
-    await expect(m.getByText("None. Outbound traffic goes to the public endpoints.")).toBeVisible();
+    // T.EGRESS_SEEN_EMPTY — the quiet fact shown while no redirect exists.
+    await expect(
+      m.getByText("Nothing redirected on this host — add one above if a run ever has to fetch through a mirror."),
+    ).toBeVisible();
 
     // A recognized ecosystem source (npm) — gets a per-tool config file too,
     // so it must NOT carry the "network only" chip.
@@ -243,8 +262,17 @@ test.describe("Corporate network step", () => {
     // This is the newly-fixed capability the header comment used to say was
     // impossible.
     await m.getByRole("combobox").click();
-    await m.getByPlaceholder(/https:\/\/…, host, or IP/i).fill("telemetry.vendor-sdk.io");
-    await m.getByText("use as typed", { exact: true }).click();
+    // The combobox's list is a Radix Popover — it renders in a PORTAL, outside
+    // <main>, so its CommandInput and items are reached from `page` (same as
+    // the suggestion picks above). Only the "To" field below is in the panel.
+    // pressSequentially, not fill: cmdk filters against the value each item was
+    // registered with, and a one-shot fill lands the whole search string in the
+    // same tick the custom item's own value prop changes — cmdk scores it
+    // against the stale value, hides it (forceMount keeps it in the DOM but not
+    // visible) and renders CommandEmpty instead. Typing is also what the
+    // behavior under test actually is.
+    await page.getByPlaceholder(/https:\/\/…, host, or IP/i).pressSequentially("telemetry.vendor-sdk.io");
+    await page.getByRole("option", { name: /telemetry\.vendor-sdk\.io/ }).click();
     await m.getByPlaceholder(/artifactory\.corp\.internal/i).fill("https://egress.corp.internal/telemetry-proxy");
     await m.getByRole("button", { name: /\+ add redirect/i }).click();
 
