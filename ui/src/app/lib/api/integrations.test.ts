@@ -7,7 +7,6 @@ import { describe, it, expect } from "vitest";
 import { baseStatus } from "../../components/screens/setup/test-fixtures";
 import { T } from "../integrations";
 import {
-  allRows,
   deriveIntegrations,
   proxyBannerNeeded,
   describePosture,
@@ -130,7 +129,7 @@ describe("deriveIntegrations — network topology is not an integration", () => 
       ],
     };
     const data = deriveIntegrations(baseStatus(), siteConfig, []);
-    expect(allRows(data)).toHaveLength(0);
+    expect([...data.ai, ...data.scm]).toHaveLength(0);
     expect(Object.keys(data).sort()).toEqual(["ai", "scm"]);
   });
 
@@ -138,7 +137,8 @@ describe("deriveIntegrations — network topology is not an integration", () => 
     const siteConfig: SiteConfig = {
       artifact_overrides: { npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" } },
     };
-    expect(allRows(deriveIntegrations(baseStatus(), siteConfig, []))).toHaveLength(0);
+    const data = deriveIntegrations(baseStatus(), siteConfig, []);
+    expect([...data.ai, ...data.scm]).toHaveLength(0);
   });
 });
 

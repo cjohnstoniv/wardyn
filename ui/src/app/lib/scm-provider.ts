@@ -13,6 +13,7 @@
 // host to test-connect to it. Pure TS — no React, no fetch, no DOM.
 
 import { CAPABILITY } from "../components/wardyn/copy";
+import type { ResidencyKind } from "./integrations";
 
 // The three ways a run can end up with a credential for a host.
 export type Lane = "app" | "pat" | "ssh";
@@ -38,9 +39,7 @@ export function slugHost(host: string): string {
   return host
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9.]+/g, "-")
-    .replace(/\./g, "-")
-    .replace(/-+/g, "-")
+    .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }
 
@@ -87,6 +86,8 @@ export interface LaneMeta {
   /** Chip tooltip: the honesty canon for this lane, verbatim. */
   tooltip: string;
   tone: ChipTone;
+  /** Where this lane's credential actually lives (integrations.ts's ResidencyKind). */
+  residency: ResidencyKind;
 }
 
 // Lane copy is the product's honesty canon (wardyn-frames.js:613-615): what
@@ -100,9 +101,9 @@ export interface LaneMeta {
 // LANE_RESIDENT). Importing it means the two surfaces can't drift apart; a
 // hand-retyped copy here could.
 export const LANE_META: Record<Lane, LaneMeta> = {
-  app: { label: "App · brokered", tooltip: CAPABILITY.brokerLine, tone: "success" },
-  pat: { label: "PAT · in-sandbox", tooltip: CAPABILITY.gitPatLine, tone: "info" },
-  ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning" },
+  app: { label: "App · brokered", tooltip: CAPABILITY.brokerLine, tone: "success", residency: "brokered_mint" },
+  pat: { label: "PAT · in-sandbox", tooltip: CAPABILITY.gitPatLine, tone: "info", residency: "resident_env" },
+  ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning", residency: "resident_mount" },
 };
 
 // Pre-convention secret names from before the git-pat-<slug> / ssh-key-<slug>

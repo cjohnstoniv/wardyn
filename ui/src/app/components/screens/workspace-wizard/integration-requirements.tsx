@@ -13,7 +13,8 @@
 // with a separately-named secret that nothing ties to them.
 import * as React from "react";
 import { genericIntegrations, type GenericIntegrationRow } from "../../../lib/api/integrations";
-import { CATALOG_COPY, DELIVERY_META } from "../../../lib/integration-catalog";
+import { CATALOG_COPY } from "../../../lib/integration-catalog";
+import { RESIDENCY_META } from "../../../lib/integrations";
 import type { SetupStatus } from "../../../lib/types";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
@@ -141,7 +142,7 @@ function IntegrationRow({
   onLane: (level: RequirementLevel) => void;
   onClear: () => void;
 }) {
-  const delivery = DELIVERY_META[row.delivery];
+  const delivery = RESIDENCY_META[row.delivery];
   return (
     <div className="flex flex-wrap items-center gap-2 p-2.5">
       <div className="min-w-0">
@@ -154,7 +155,7 @@ function IntegrationRow({
         </p>
       </div>
       <span className="ml-auto" />
-      <Chip tone={delivery.tone} title={delivery.line}>
+      <Chip tone={delivery.tone} title={delivery.tooltip}>
         {delivery.label}
       </Chip>
       {level ? (

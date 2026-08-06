@@ -190,21 +190,15 @@ export interface WorkspaceRequirement {
 }
 export type WorkspaceRequirementsMap = Record<string, WorkspaceRequirement>;
 
-// A workspace's stance on one requirement key an attached source declares:
-// "off" refuses it for THIS workspace (never edits the shared source);
-// "optional"/"required" re-lane it.
-export type AttachmentOverride = "off" | "optional" | "required";
-
 // One attachment in the three-tier model: this workspace mounts a shared
 // library source (source_id) — or an inline ephemeral scratch row — at
-// `target`, with per-ATTACHMENT writability and requirement overrides.
+// `target`, with per-ATTACHMENT writability.
 // Ordering is load-bearing: attachments[0] is the primary.
 export interface WorkspaceAttachment {
   source_id?: string;
   ephemeral?: boolean;
   target?: string;
   writable?: boolean;
-  overrides?: Record<string, AttachmentOverride>;
 }
 
 // The contract a run against `ws` is actually held to: the server's fold of
@@ -270,7 +264,7 @@ export interface Workspace {
   // read-only, recomputed at every read.
   effective_requirements?: WorkspaceRequirementsMap;
   // The three-tier attachment list (shared library sources + inline ephemeral
-  // rows, with per-attachment writability and requirement overrides).
+  // rows, with per-attachment writability).
   attachments?: WorkspaceAttachment[];
   created_at: string;
   updated_at: string;

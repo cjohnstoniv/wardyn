@@ -31,17 +31,6 @@ export const sourcesApi = {
     return asJson<Source>(res);
   },
 
-  // PUT /api/v1/sources/{id}/requirements — full replacement of the source's
-  // OWN contract (the same grammar as a workspace's, minus integration: keys,
-  // which are tier-3-only).
-  async setSourceRequirements(id: string, requirements: WorkspaceRequirementsMap): Promise<Source> {
-    const res = await wfetch(`/sources/${encodeURIComponent(id)}/requirements`, {
-      method: "PUT",
-      body: JSON.stringify({ requirements }),
-    });
-    return asJson<Source>(res);
-  },
-
   // POST /api/v1/sources/{id}/scan — dir inline (200 + profile), repo as a
   // governed run (202 + scan_run_id). Shape varies; callers refetch the list.
   async scanSource(id: string): Promise<unknown> {

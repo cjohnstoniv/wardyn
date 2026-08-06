@@ -18,9 +18,9 @@ import {
 } from "./integrations";
 
 // Sentinel byte-exact pins against the approved mock export
-// (mockup2/wardyn-integrations.js `T`/`CAPS`/`EGRESS_SUGGEST`) — em-dashes, the
-// curly single quotes in BLAST[1], and the middle dot in CAPS.azure()'s label
-// are all significant and easy to flatten by hand-retyping. Full deep-equal +
+// (mockup2/wardyn-integrations.js `T`/`CAPS`/`EGRESS_SUGGEST`) — em-dashes and
+// the middle dot in CAPS.azure()'s label are all significant and easy to
+// flatten by hand-retyping. Full deep-equal +
 // key-set verification against the mock's own literal lives in a one-off
 // scratchpad script (real TS compile + eval, not a re-typed copy) — these
 // sentinels are the fast, in-repo tripwire for the same class of drift.
@@ -163,12 +163,6 @@ describe("integrations — T canon sentinel pins", () => {
     expect(EGRESS_SUGGEST[10]).toEqual(["https://ghcr.io", "container images"]);
     expect(EGRESS_SUGGEST.filter(([, eco]) => eco === "container images")).toHaveLength(2);
   });
-
-  it("pins BLAST verbatim, including the curly quotes around 'Describe your task'", () => {
-    expect(T.BLAST).toHaveLength(4);
-    expect(T.BLAST[1]).toBe("Wardyn's Composer loses its backend — ‘Describe your task’ disappears from New Run.");
-    expect(T.BLAST[3]).toBe("The stored secret anthropic-api-key is not deleted — remove it under Secrets.");
-  });
 });
 
 describe("integrations — CAPS capability-line notes", () => {
@@ -224,13 +218,14 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
     expect(SUBSCRIPTION_LANE_META.resident_host.tooltip).toBe(T.HOSTCLI_LINE);
   });
 
-  it("RESIDENCY_META covers all six kinds with a label + tone + tooltip", () => {
+  it("RESIDENCY_META covers all seven kinds with a label + tone + tooltip", () => {
     for (const kind of [
       "proxy_injected",
       "brokered_mint",
       "resident_mount",
       "resident_env",
       "control_plane",
+      "notbuilt",
       "varies",
     ] as const) {
       expect(RESIDENCY_META[kind].label).toBeTruthy();

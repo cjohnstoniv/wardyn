@@ -25,7 +25,6 @@ import type { SetupStatus, SiteConfig } from "../types";
 import {
   INTEGRATION_GROUPS,
   integrationTypeById,
-  type DeliveryMode,
   type IntegrationGroup,
   type IntegrationTypeMeta,
 } from "../integration-catalog";
@@ -88,10 +87,6 @@ export interface IntegrationRow {
 export interface IntegrationsData {
   ai: IntegrationRow[];
   scm: IntegrationRow[];
-}
-
-function hasSecret(present: string[], name: string): boolean {
-  return present.includes(name);
 }
 
 // ---- AI providers ----------------------------------------------------------
@@ -171,7 +166,7 @@ function activeBedrockLane(status: SetupStatus): BedrockLane | undefined {
 
 function bedrockSecretNames(lane: BedrockLane | undefined, present: string[]): string[] {
   if (lane === "bearer") return ["bedrock-api-key"];
-  if (lane === "static") return ["aws-access-key-id", "aws-secret-access-key", "aws-session-token"].filter((n) => hasSecret(present, n));
+  if (lane === "static") return ["aws-access-key-id", "aws-secret-access-key", "aws-session-token"].filter((n) => present.includes(n));
   return []; // sso is a harness credential; aws_dir is boot config — neither is a secret-store entry
 }
 
@@ -179,7 +174,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   const rows: IntegrationRow[] = [];
   const claude = status.providers.find((p) => p.tool === "claude");
 
-  if (hasSecret(present, "anthropic-api-key")) {
+  if (present.includes("anthropic-api-key")) {
     rows.push({
       id: "ai:anthropic_api_key",
       serverId: "anthropic_api_key",
@@ -266,7 +261,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
     });
   }
 
-  if (hasSecret(present, "openai-api-key")) {
+  if (present.includes("openai-api-key")) {
     rows.push({
       id: "ai:openai_api_key",
       serverId: "openai_api_key",
@@ -287,12 +282,12 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   // signal; the conventional secret name is the fallback so a key stored
   // ahead of a composer config still surfaces as an integration.
   const azureBackend = status.composer.backends.find((b) => b.provider === "azure");
-  if (azureBackend || hasSecret(present, "azure-openai-key")) {
+  if (azureBackend || present.includes("azure-openai-key")) {
     const secretName = azureBackend?.key_secret ?? "azure-openai-key";
     // key_resolved is composer's own "was this present at boot" verdict for
     // THIS backend's key — more direct than re-checking the general secret
     // list, which is what it's for (see ComposerBackendReadiness's doc comment).
-    const resolved = azureBackend ? azureBackend.key_resolved : hasSecret(present, secretName);
+    const resolved = azureBackend ? azureBackend.key_resolved : present.includes(secretName);
     rows.push({
       id: "ai:azure_openai",
       category: "ai_provider",
@@ -317,14 +312,8 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
 // resident for a written key/token. A host with zero lanes isn't a stored
 // connection yet (just an egress-allowlist entry from the SCM Provider step),
 // so it's not "an integration" on this screen.
-const LANE_RESIDENCY: Record<Lane, ResidencyKind> = {
-  app: "brokered_mint",
-  pat: "resident_env",
-  ssh: "resident_mount",
-};
-
 function scmResidency(lanes: Lane[]): ResidencyKind {
-  const kinds = new Set(lanes.map((l) => LANE_RESIDENCY[l]));
+  const kinds = new Set(lanes.map((l) => LANE_META[l].residency));
   return kinds.size === 1 ? [...kinds][0] : "varies";
 }
 
@@ -340,7 +329,7 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
         : r.lanes
             .filter((l) => l !== "app")
             .map((l) => (l === "ssh" ? `ssh-key-${slug}` : `git-pat-${slug}`))
-            .filter((n) => hasSecret(present, n));
+            .filter((n) => present.includes(n));
       return {
         id: `scm:${r.host}`,
         category: "scm_host" as const,
@@ -389,12 +378,8 @@ export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig |
   };
 }
 
-export function allRows(data: IntegrationsData): IntegrationRow[] {
-  return [...data.ai, ...data.scm];
-}
-
 export function findRow(data: IntegrationsData, id: string): IntegrationRow | undefined {
-  return allRows(data).find((r) => r.id === id);
+  return [...data.ai, ...data.scm].find((r) => r.id === id);
 }
 
 // ---- Posture -> display text/tone -------------------------------------------
@@ -483,7 +468,7 @@ export interface GenericIntegrationRow {
   name: string;
   hosts: string[];
   /** Stated fact, derived from the row itself — never an operator's choice. */
-  delivery: DeliveryMode;
+  delivery: ResidencyKind;
 }
 
 /** category -> group, so a wire row finds the section it belongs in. */
@@ -494,9 +479,9 @@ const GROUP_BY_CATEGORY = new Map(INTEGRATION_GROUPS.map((g) => [g.category as s
 // proxy-injected, and anything else honestly has no lane. The catalog's own
 // delivery is the fallback for the types with bespoke lanes (varies, brokered)
 // that a generic row never has.
-function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): DeliveryMode {
-  if (wire.header && wire.credentials?.token) return "proxy";
-  if (meta && meta.delivery !== "proxy") return meta.delivery;
+function deliveryForRow(wire: WireIntegration, meta?: IntegrationTypeMeta): ResidencyKind {
+  if (wire.header && wire.credentials?.token) return "proxy_injected";
+  if (meta && meta.delivery !== "proxy_injected") return meta.delivery;
   return "notbuilt";
 }
 

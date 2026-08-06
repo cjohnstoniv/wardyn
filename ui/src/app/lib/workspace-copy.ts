@@ -17,10 +17,8 @@ export const C = {
   DECLARED: "Declared by workspace files (untrusted) — names only, values are never read.",
   LOCATION_ONLY:
     "Only the location and detector are flagged — the secret value itself is never shown or stored.",
-  WRITE_ONLY: "The value is write-only — it can be replaced or removed, never read back.",
   BLIND_SPOT:
     "Detected from committed files only — runtime hosts hidden behind env-var defaults, secrets mentioned only in docs, and files deeper than 4 levels are not visible to the scan.",
-  SUGGESTS: "The scan only suggests a starting point — you set what's required.",
   REQ_DEF: "Required — attached to every run that uses this workspace, no prompting.",
   OPT_DEF: "Optional — off by default; a run can switch it on when it needs it.",
   SEEDED: "Defaults below came from the scan. You decide.",
@@ -28,7 +26,6 @@ export const C = {
   UNMET_OK: "Runs will start without it; whatever needs it will fail at that point.",
   MODEL_INJECT:
     "The key is injected proxy-side at use time — it is never written into the sandbox, and the API never returns it.",
-  MODEL_INHERIT: "Runs that use this image inherit this access.",
   IMAGE_ENV: "Container images aren't scanned — the image is the environment.",
   SERVICES:
     "Wardyn doesn't start these. They're recorded here and written into AGENTS.md so a run knows what it expects to find.",
@@ -36,8 +33,6 @@ export const C = {
   CLOSE_KEEPS: "Closing keeps this workspace — you can pick up from its page any time.",
   NO_CONTRACT:
     "No contract yet — the scan hasn't produced a profile. Runs can attach this workspace; nothing will be attached automatically.",
-  CONTINUE_ANYWAY:
-    "The workspace exists either way — runs can attach it. Without a scan there's no contract, so nothing is attached automatically.",
   SESSION_SURVIVES:
     "This session keeps running until you click Done — even if you navigate away. You can also stop it from Runs.",
   RESCAN_DESTROYS:
@@ -45,20 +40,12 @@ export const C = {
   ENV_CAVEAT:
     "Generated from the scanned profile as it is right now — regenerate after a rescan or a requirements change.",
   DIR_HELPER: "Mounted into the sandbox at run time. Wardyn reads it from this host — it is never uploaded anywhere.",
-  IMG_HELPER: "A tag or digest, pulled as the sandbox's base image. Nothing is mounted — there's no path to give.",
   IMG_NO_SCAN:
     "Wardyn doesn't inspect the image. There are no committed files to scan; what's inside is whatever you built into it.",
-  SCAN_DIR:
-    "Languages, package managers, declared secret names, and the hosts a build would need. Names and hosts only — values are never read.",
   SCAN_REPO:
     "A confined, throwaway run clones the repo and reads its committed files. Nothing is written back, and no file contents leave that sandbox.",
   SSH_GATE:
     "An SSH source needs its key stored first. Wardyn writes the private key into the sandbox at clone time, so it has to exist before this workspace can be created.",
-  LIST_LEAD:
-    "Add the directories, repos and images your runs may attach. Run creation only ever offers what's added here — a free-text host path is never accepted.",
-  STEP_LEAD:
-    "A run attaches an added directory, repo or image — never a raw host path. Adding one scans it and makes it attachable straight away. Recording sessions, env-as-code and model access are optional, and live on each workspace's own page.",
-  S1_BLURB: "Register a source your runs may attach. Wardyn scans it once and reuses that profile for every run.",
   S3_BLURB:
     "Set what this workspace always carries, and what a run has to ask for. The scan read the directory the way a run would mount it — gitignored files included; none of it has run.",
   EMPTY_SCAN: "The scan found nothing this workspace needs. No secrets, no hosts beyond the auto-allowed set.",
@@ -92,14 +79,7 @@ export const V2C = {
 // picker (model access RESOLVES: run override → workspace pin → server default
 // → honest none; it is never configured on these surfaces).
 export const RD = {
-  RECORD_HINT:
-    "Nothing resolves for this image's agent tool — an agent-driven verify session needs model access. Set it on the Base image step, or verify in a terminal instead.",
-  EGRESS_TIP: "Managed by the resolved integration; change it on the Base image step.",
-  // Superseded on the requirements step by RD2 (the S3 record-last redesign);
-  // kept because New Run's Access step still uses the two lines above verbatim.
-  SECRET_TIP: "Managed by the resolved integration — not edited here.",
   ADVISORY: "This is advisory only — it never gets the run's credentials.",
-  PIN_NOTE: "Picking one pins it to this workspace.",
   NONE_LINE: "No integration can drive Claude Code. This run launches; its first model call fails.",
   EXEC_LINE: "Governed command — no model access is wired, and nothing suggests otherwise.",
 };
@@ -110,11 +90,6 @@ export const RD = {
 // clause in JSX; this module carries the plain text only (no React) — flattened
 // into one string per variant so the words stay byte-exact regardless of how a
 // later page chooses to style them.
-export const POWER_LINE_NONE =
-  "Agent runs here use: nothing yet — this image's agent won't have model access.";
-export const POWER_LINE_PINNED = "Agent runs here use: Team API key — pinned to this workspace.";
-export const POWER_LINE_DEFAULT = "Agent runs here use: server default — Anthropic (API key)";
-
 // ============================ S3 record-last canon (verbatim) ============================
 // mockup/wardyn-workspaces.js's `RD2` — the requirements step's dependency-order
 // redesign: Reach · Secrets · Files & services · Verify. Verify consumes what
@@ -126,16 +101,9 @@ export const POWER_LINE_DEFAULT = "Agent runs here use: server default — Anthr
 export const RD2 = {
   REACH_LEAD:
     "Everything outside the sandbox this workspace touches. Named systems first — an integration is the reason a host is on the allowlist at all.",
-  POWER_ORDER:
-    "Resolves: run override → workspace pin → server default → honest none. Verify sessions and every agent run here read it; nothing re-asks.",
-  RIDE: "Its hosts and its credential ride along — nothing extra to allow.",
   EGRESS_TIP: "Managed by the resolved integration; change it on the power-source line above.",
   SECRET_TIP: "Managed by the resolved integration — not edited here.",
-  OPEN_NET:
-    "A run that reaches a host not listed here is held at the door and asks. Nothing on this tab opens the open internet.",
   ESCAPE: "Not sure what it needs? Verify with a session first →",
-  PAIR: "api.stripe.com is in your egress — likely needs a Stripe credential.",
-  PAIR_SUB: "Paired against the hosts on Reach. A suggestion, not a requirement — you set what's required.",
   CARRY: "What a verify session will carry",
   CARRY_FROM: "Derived from the contract as it stands — Reach, Secrets and Files & services, as of now.",
   RECORD_LEAD:

@@ -125,6 +125,12 @@ describe("LANE_META — honesty canon", () => {
     expect(LANE_META.pat.tone).toBe("info");
     expect(LANE_META.ssh.tone).toBe("warning");
   });
+
+  it("pins each lane's residency — the fact a stored credential can actually produce", () => {
+    expect(LANE_META.app.residency).toBe("brokered_mint");
+    expect(LANE_META.pat.residency).toBe("resident_env");
+    expect(LANE_META.ssh.residency).toBe("resident_mount");
+  });
 });
 
 describe("LEGACY_NAMES", () => {

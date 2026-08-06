@@ -162,13 +162,7 @@ export const runs = {
     // Mirror createRun's body exactly, so preflight's verdict matches the real launch.
     if (input.image) body.image = input.image;
     if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
-    // Composition-model pass-through. This whitelist has dropped a wizard field
-    // on the floor once before (image/task_mode, above) — a selection the
-    // operator made, silently discarded between the form and the wire. These
-    // two carry the per-run half of the requirements contract (which optional
-    // requirements this run enables, and any read-only narrowing) and the
-    // explicit model-access override, so dropping them would launch a run the
-    // Review screen did not describe.
+    // Same rationale as createRun's identical whitelist above — see its comment.
     if (input.workspaces?.length) body.workspaces = input.workspaces;
     if (input.integration_id) body.integration_id = input.integration_id;
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body) });

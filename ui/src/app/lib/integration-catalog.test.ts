@@ -10,13 +10,13 @@ import { describe, it, expect } from "vitest";
 import {
   INTEGRATION_GROUPS,
   INTEGRATION_TYPES,
-  DELIVERY_META,
-  CATALOG_COPY,
+  notbuiltWhy,
   integrationTypeById,
   typesInGroup,
   searchIntegrationTypes,
   integrationGroup,
 } from "./integration-catalog";
+import { RESIDENCY_META } from "./integrations";
 
 describe("integration catalog", () => {
   it("carries all ten sections, each mapped to a real wire category", () => {
@@ -33,7 +33,7 @@ describe("integration catalog", () => {
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of INTEGRATION_TYPES) {
       expect(integrationGroup(t.group).id, `${t.id} names a real group`).toBe(t.group);
-      expect(DELIVERY_META[t.delivery], `${t.id} has delivery meta`).toBeDefined();
+      expect(RESIDENCY_META[t.delivery], `${t.id} has delivery meta`).toBeDefined();
       expect(t.powers.length, `${t.id} says what it powers`).toBeGreaterThan(0);
     }
   });
@@ -61,11 +61,11 @@ describe("integration catalog", () => {
   it("keeps cloud and data stores on 'egress only' with a stated reason", () => {
     for (const t of [...typesInGroup("cloud"), ...typesInGroup("data")]) {
       expect(t.delivery, `${t.id}`).toBe("notbuilt");
-      expect(t.why, `${t.id} states why`).toBeTruthy();
+      expect(notbuiltWhy(t.group), `${t.id} states why`).toBeTruthy();
       expect(t.header, `${t.id} claims no header lane`).toBeUndefined();
     }
-    expect(DELIVERY_META.notbuilt.label).toBe("egress only");
-    expect(DELIVERY_META.notbuilt.tone).toBe("warning");
+    expect(RESIDENCY_META.notbuilt.label).toBe("egress only");
+    expect(RESIDENCY_META.notbuilt.tone).toBe("warning");
   });
 
   // A generic-lane type is written straight through PUT /integrations, so it
@@ -95,14 +95,5 @@ describe("integration catalog", () => {
     expect(integrationTypeById("other")?.addLane).toBe("generic");
     // Capped at the mock's own cut-off.
     expect(searchIntegrationTypes("a").length).toBeLessThanOrEqual(7);
-  });
-
-  it("keeps the copy canon that states what an integration is", () => {
-    expect(CATALOG_COPY.LEDE).toContain("Named connections to the systems outside Wardyn");
-    expect(CATALOG_COPY.MOUNT_CAVEAT).toContain("not automatically secret-free");
-    // The topology line: the rule that keeps Corporate network and this page apart.
-    expect(CATALOG_COPY.CORP_POINTER).toContain("network topology");
-    // No test-connect, and one named exception.
-    expect(CATALOG_COPY.FOOTNOTE).toContain("doesn't test-connect");
   });
 });

@@ -57,7 +57,7 @@ describe("genericIntegrations", () => {
 
   it("states delivery from the ROW, not from the type's ideal", () => {
     // A header naming a stored secret is proxy-injected...
-    expect(rowsFrom([FEED])[0].delivery).toBe("proxy");
+    expect(rowsFrom([FEED])[0].delivery).toBe("proxy_injected");
     // ...and the same type WITHOUT one cannot be, however it usually works.
     const naked = { ...FEED, header: undefined, credentials: undefined };
     expect(rowsFrom([naked])[0].delivery).toBe("notbuilt");

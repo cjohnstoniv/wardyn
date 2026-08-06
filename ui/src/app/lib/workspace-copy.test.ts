@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { C, V2C, RD, POWER_LINE_NONE, POWER_LINE_PINNED, POWER_LINE_DEFAULT } from "./workspace-copy";
+import { C, V2C, RD } from "./workspace-copy";
 
 // Sentinel byte-exact pins against the approved mock export
 // (mockup/wardyn-workspaces.js `C`/`V2C`, mockup/wardyn-rundeltas.js `RD`) — a
@@ -35,14 +35,6 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
     expect(RD.NONE_LINE).toBe("No integration can drive Claude Code. This run launches; its first model call fails.");
     expect(RD.EXEC_LINE).toBe("Governed command — no model access is wired, and nothing suggests otherwise.");
   });
-
-  it("pins the three power-line variants verbatim", () => {
-    expect(POWER_LINE_NONE).toBe(
-      "Agent runs here use: nothing yet — this image's agent won't have model access.",
-    );
-    expect(POWER_LINE_PINNED).toBe("Agent runs here use: Team API key — pinned to this workspace.");
-    expect(POWER_LINE_DEFAULT).toBe("Agent runs here use: server default — Anthropic (API key)");
-  });
 });
 
 // Every string here is user-facing copy — "harness" is internal jargon (see
@@ -51,16 +43,9 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
 // tool"/"AI integration" instead). This catches a future string regressing
 // back to the internal term.
 describe("workspace-copy — no exported string leaks the word 'harness'", () => {
-  it("checks every C, V2C, and RD value, plus the power-line consts", () => {
-    const allStrings = [
-      ...Object.values(C),
-      ...Object.values(V2C),
-      ...Object.values(RD),
-      POWER_LINE_NONE,
-      POWER_LINE_PINNED,
-      POWER_LINE_DEFAULT,
-    ];
-    expect(allStrings.length).toBeGreaterThan(40); // sanity: didn't accidentally test an empty set
+  it("checks every C, V2C, and RD value", () => {
+    const allStrings = [...Object.values(C), ...Object.values(V2C), ...Object.values(RD)];
+    expect(allStrings.length).toBeGreaterThan(30); // sanity: didn't accidentally test an empty set
     for (const s of allStrings) {
       expect(s.toLowerCase()).not.toContain("harness");
     }

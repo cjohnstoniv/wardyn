@@ -16,13 +16,14 @@ import * as React from "react";
 import { Search } from "lucide-react";
 import {
   CATALOG_COPY,
-  DELIVERY_META,
   INTEGRATION_GROUPS,
   integrationGroup,
+  notbuiltWhy,
   searchIntegrationTypes,
   typesInGroup,
   type IntegrationTypeMeta,
 } from "../../../lib/integration-catalog";
+import { RESIDENCY_META } from "../../../lib/integrations";
 import { genericIntegrationsApi } from "../../../lib/api/integrations";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../ui/dialog";
@@ -151,7 +152,7 @@ function PickPanel({ onPick }: { onPick: (t: IntegrationTypeMeta) => void }) {
                   {t.hosts.length > 0 ? ` · ${t.hosts[0]}` : ""}
                 </span>
               </span>
-              <Chip tone={DELIVERY_META[t.delivery].tone}>{DELIVERY_META[t.delivery].label}</Chip>
+              <Chip tone={RESIDENCY_META[t.delivery].tone}>{RESIDENCY_META[t.delivery].label}</Chip>
             </button>
           ))}
         </div>
@@ -187,7 +188,7 @@ function ConnectPanel({
     .split("\n")
     .map((h) => h.trim())
     .filter(Boolean);
-  const delivery = DELIVERY_META[takesHeader && secret.trim() ? "proxy" : type.delivery];
+  const delivery = RESIDENCY_META[takesHeader && secret.trim() ? "proxy_injected" : type.delivery];
 
   const save = async () => {
     setSaving(true);
@@ -256,7 +257,7 @@ function ConnectPanel({
       ) : (
         <div className="rounded-lg border border-border px-3 py-2.5">
           <p className="text-[0.8125rem] leading-snug text-foreground">
-            {type.why ?? DELIVERY_META[type.delivery].line}
+            {notbuiltWhy(type.group) ?? RESIDENCY_META[type.delivery].tooltip}
           </p>
         </div>
       )}

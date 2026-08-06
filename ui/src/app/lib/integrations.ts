@@ -139,7 +139,6 @@ export const T = {
   LAW: "A tool is what the image carries. An integration is what it connects through. Wardyn never installs tools into your image — it only wires them at run time.",
   CACHE_CAVEAT: "Answers are cached for 5 minutes — Re-check may return the cached one.",
   WRITE_ONLY: "The store is write-only: the value can't be read back.",
-  KEY_FIELD_HINT: "write-only — it can be replaced or removed, never read back",
   MANAGED_LINE: "One login in a sandbox; the token is injected proxy-side and the sandbox holds only an inert sentinel.",
   HOSTCLI_LINE: "Uses the ~/.claude login on this host, mounted read-only into the run.",
   SEALED_NOTE:
@@ -150,12 +149,6 @@ export const T = {
     "You're a viewer — everything here is readable; adding, rotating, defaults and deletion need an operator.",
   STEP_LEDE:
     "Optional. Wardyn runs governed commands, interactive runs, and recordings with nothing connected. Add an integration when a run or a Wardyn feature needs one.",
-  BLAST: [
-    "Agent runs that resolve the server default lose model access — their first model call fails.",
-    "Wardyn's Composer loses its backend — ‘Describe your task’ disappears from New Run.",
-    "3 workspaces pin this integration; their runs fall back to the server default.",
-    "The stored secret anthropic-api-key is not deleted — remove it under Secrets.",
-  ],
   CAT_AI: "Powers a coding agent's model calls, or Wardyn's own AI features. Skip if you run governed commands or drive runs yourself.",
   CAT_SCM: "Lets runs clone from a git host. Skip if your repos are public.",
   TY_KEY: "Drives Claude Code, direct API calls, and Wardyn's features. Never resident.",
@@ -353,6 +346,7 @@ export type ResidencyKind =
   | "resident_mount"
   | "resident_env"
   | "control_plane"
+  | "notbuilt"
   | "varies";
 
 export interface ResidencyMeta {
@@ -386,6 +380,12 @@ export const RESIDENCY_META: Record<ResidencyKind, ResidencyMeta> = {
     label: "control-plane side",
     tone: "neutral",
     tooltip: "Called from Wardyn's control plane only — no sandbox lane exists for it.",
+  },
+  notbuilt: {
+    label: "egress only",
+    tone: "warning",
+    tooltip:
+      "Wardyn can open the path to the host — which is the difference between a run reaching it and not reaching it at all. Delivering this system's credential into the sandbox isn't built yet, and the row says so rather than showing an empty field.",
   },
   varies: {
     label: "varies by lane",

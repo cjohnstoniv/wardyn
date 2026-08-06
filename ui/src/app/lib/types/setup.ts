@@ -156,14 +156,6 @@ export interface SCMPosture {
   netrc: boolean;
 }
 
-/** One capability cell as the server computes it (internal/api.Capability). */
-export interface WireCapability {
-  ID: string;
-  State: "available" | "off" | "needs_setup" | "impossible";
-  Reason?: string;
-  Residency?: string;
-}
-
 // An integration exactly as the server returns it (internal/api.SetupIntegration
 // over types.Integration): where it lives, what credential it takes, how that
 // credential reaches the request, and what it powers. `source` discriminates a
@@ -182,7 +174,6 @@ export interface WireIntegration {
   credentials?: Record<string, string>;
   default_for?: string[];
   source?: "stored" | "legacy" | (string & {});
-  capabilities?: WireCapability[] | null;
 }
 
 export interface SetupStatus {

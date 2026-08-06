@@ -15,7 +15,8 @@
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { genericSections, genericIntegrationsApi, type GenericIntegrationRow } from "../../../lib/api/integrations";
-import { CATALOG_COPY, DELIVERY_META } from "../../../lib/integration-catalog";
+import { CATALOG_COPY } from "../../../lib/integration-catalog";
+import { RESIDENCY_META } from "../../../lib/integrations";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
@@ -120,7 +121,7 @@ function GenericRow({
   operator: boolean;
   onDelete: () => void;
 }) {
-  const delivery = DELIVERY_META[row.delivery];
+  const delivery = RESIDENCY_META[row.delivery];
   return (
     <div className={`flex items-start gap-3 px-4 py-3 ${first ? "" : "border-t border-border"}`}>
       <div className="min-w-0 flex-1">
@@ -138,7 +139,7 @@ function GenericRow({
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {/* Delivery is a stated fact, not a setting — the title carries the why. */}
-        <Chip tone={delivery.tone} title={delivery.line}>
+        <Chip tone={delivery.tone} title={delivery.tooltip}>
           {delivery.label}
         </Chip>
         {operator && (
