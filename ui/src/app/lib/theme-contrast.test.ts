@@ -130,6 +130,12 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   it("--placeholder-foreground is >= 4.5:1 on the TIGHTEST real field and >= 3:1 separated from filled-value text", () => {
     const tightestField = fieldBackdrop(token, BUILD_STEPS_PANES);
     expect(ratio(token("placeholder-foreground"), tightestField)).toBeGreaterThanOrEqual(4.5);
+    // The other 56 fields DO sit on --input-background. Clearing the tinted one
+    // only implies clearing them while that token stays the lighter of the two —
+    // which is a coincidence in this theme, not a law (dark already separates
+    // --input-background from --background). Assert it, so giving light inputs a
+    // fill can't put 56 fields under AA with this gate still green.
+    expect(ratio(token("placeholder-foreground"), token("input-background"))).toBeGreaterThanOrEqual(4.5);
     expect(ratio(token("placeholder-foreground"), token("foreground"))).toBeGreaterThanOrEqual(3);
   });
 
