@@ -47,11 +47,11 @@ const (
 // are the input surface (generated files vs. a git URL) and the delivery of
 // that input (a read-safe host bind-mount vs. envbuilder's own clone).
 //
-// UNDER-VERIFIED SEAM (documented in the report): the git-free local-context
-// build is exercised here through the same create/start/wait-for-exit lifecycle
-// Build uses, but envbuilder's build-then-exit behaviour on a real daemon is
-// only smoke-tested for the git path (integration_test.go, WARDYN_TEST_DOCKER=1).
-// A sibling real-daemon smoke test for this path is the remaining verification.
+// The git-free local-context build's real-daemon behaviour is smoke-tested by
+// its own sibling, not just borrowed from the git path's coverage:
+// TestBuildFromDevcontainerFiles_BakesAgentCLI (agent_tool_integration_test.go,
+// WARDYN_TEST_DOCKER=1) drives this exact function end to end against a real
+// daemon and execs the delivered image's claude binary.
 //
 // logSink, when non-nil, receives this build's output; nil falls back to
 // Builder.DefaultLogSink (runBuildAndFinalize's own fallback — see there).

@@ -197,11 +197,23 @@ type capturedBuild struct {
 // (the cache-hit assertion).
 type capturingImageBuilder struct {
 	fakeImageBuilder
-	calls []capturedBuild
+	calls      []capturedBuild
+	repoBuilds []capturedRepoBuild
 }
 
 func (b *capturingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, files map[string]string, tag string, _ io.Writer) (string, error) {
 	b.calls = append(b.calls, capturedBuild{files: files, tag: tag})
+	return "built/" + tag, nil
+}
+
+// capturedRepoBuild is one BuildDevcontainer call capturingImageBuilder
+// recorded (the repo-own-devcontainer lane).
+type capturedRepoBuild struct {
+	repoURL, ref, tag string
+}
+
+func (b *capturingImageBuilder) BuildDevcontainer(_ context.Context, repoURL, ref, tag string, _ io.Writer) (string, error) {
+	b.repoBuilds = append(b.repoBuilds, capturedRepoBuild{repoURL: repoURL, ref: ref, tag: tag})
 	return "built/" + tag, nil
 }
 
@@ -325,6 +337,120 @@ func TestResolveWorkspaceImage_CacheKeyFoldsNamedIntegration(t *testing.T) {
 		}
 		if len(builder.calls) != 1 {
 			t.Errorf("want exactly one rebuild when the cached hash predates the named tool, got %d", len(builder.calls))
+		}
+	})
+}
+
+// TestResolveWorkspaceImage_RepoOwnDevcontainerNeverBakesButIsVisible pins the
+// R5 medium fix: a workspace whose PRIMARY source is a repo carrying its OWN
+// devcontainer builds that devcontainer AS-IS — resolveWorkspaceImage must
+// never rewrite it to layer in the generated Dockerfile (gen.go's package
+// comment: neither mechanism that could add a RUN without rewriting the
+// operator's own devcontainer survived a real build), so a named
+// integration's agent CLI is not baked here. That must not be SILENT: this
+// pins the "recorded" half (repoOwnDevcontainerURL/AgentToolsForIntegrationTypes
+// agree with what resolveWorkspaceImage actually does) and the "visible" half
+// (resolveBuildView's caveat, both pre-build and immediately post-build).
+func TestResolveWorkspaceImage_RepoOwnDevcontainerNeverBakesButIsVisible(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+		HasDevcontainer: true,
+	}
+	sc := types.SiteConfig{Integrations: []types.Integration{
+		{ID: "acme-claude", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"},
+	}}
+	reqs := map[string]types.WorkspaceRequirement{
+		"integration:acme-claude": {Level: "optional", Provenance: "operator_set"},
+	}
+
+	t.Run("named integration: repo build wins, generator never runs, caveat visible before and after", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{
+			ID:           uuid.New(),
+			Sources:      []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "https://github.com/acme/widgets", Ref: "main"}},
+			Profile:      mustJSON(profile),
+			Requirements: reqs,
+		}
+
+		// Pre-build: resolveBuildView must already warn, before anyone clicks Build.
+		if d := srv.resolveBuildView(context.Background(), ws).Detail; d == "" || !strings.Contains(d, "does not add") {
+			t.Errorf("pre-build Detail = %q, want the repo-own-devcontainer caveat", d)
+		}
+
+		built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+		if !ok {
+			t.Fatal("resolveWorkspaceImage failed")
+		}
+		if len(builder.repoBuilds) != 1 || builder.repoBuilds[0].repoURL != "https://github.com/acme/widgets" {
+			t.Fatalf("repoBuilds = %+v, want exactly one BuildDevcontainer call for the repo's own devcontainer", builder.repoBuilds)
+		}
+		if len(builder.calls) != 0 {
+			t.Errorf("a repo-own-devcontainer build must never ALSO call the generator (that would bake claude-code into a DIFFERENT image nothing points at): got %d generator calls", len(builder.calls))
+		}
+
+		// Post-build: the in-memory tracker now knows about this build (exactly
+		// what handleBuildWorkspace's goroutine does on success) — the caveat
+		// must still be visible in the "done" state, not just pre-build "none".
+		srv.builds.finish(ws.ID, built, "")
+		view := srv.resolveBuildView(context.Background(), ws)
+		if view.State != "done" {
+			t.Fatalf("state = %q, want done", view.State)
+		}
+		if !strings.Contains(view.Detail, "does not add") || !strings.Contains(view.Detail, "claude-code") {
+			t.Errorf("done Detail = %q, want the repo-own-devcontainer caveat naming claude-code", view.Detail)
+		}
+	})
+
+	t.Run("no named integration: repo build wins, no caveat (nothing was going to be baked anyway)", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{
+			ID:      uuid.New(),
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "https://github.com/acme/widgets"}},
+			Profile: mustJSON(profile),
+		}
+		if d := srv.resolveBuildView(context.Background(), ws).Detail; d != "" {
+			t.Errorf("Detail = %q, want none — no named integration means nothing was going to be baked anyway", d)
+		}
+		if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); !ok {
+			t.Fatal("resolveWorkspaceImage failed")
+		}
+		if len(builder.repoBuilds) != 1 {
+			t.Fatalf("repoBuilds = %+v, want exactly one BuildDevcontainer call", builder.repoBuilds)
+		}
+	})
+
+	t.Run("SSH source falls through to the generator instead, so no caveat applies", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{
+			ID:           uuid.New(),
+			Sources:      []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "git@github.com:acme/widgets.git"}},
+			Profile:      mustJSON(profile),
+			Requirements: reqs,
+		}
+		// The image builder cannot clone an SSH source (no minted key in this
+		// lane) — resolveWorkspaceImage falls through to the generator, which
+		// DOES bake the named tool, so no "not baked" caveat may fire here.
+		if d := srv.resolveBuildView(context.Background(), ws).Detail; d != "" {
+			t.Errorf("Detail = %q, want none — an SSH source falls through to the generated (tool-baking) path", d)
+		}
+		if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); !ok {
+			t.Fatal("resolveWorkspaceImage failed")
+		}
+		if len(builder.repoBuilds) != 0 {
+			t.Errorf("an SSH source must never reach BuildDevcontainer: %+v", builder.repoBuilds)
+		}
+		if len(builder.calls) != 1 {
+			t.Errorf("an SSH source must fall through to the generator exactly once, got %d", len(builder.calls))
 		}
 	})
 }

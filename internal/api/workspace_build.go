@@ -214,7 +214,13 @@ func (s *Server) resolveBuildView(ctx context.Context, ws types.Workspace) build
 	case st.Error != "":
 		return buildResponse{State: "failed", Detail: st.Error, Log: st.Log}
 	case st.Image != "":
-		return buildResponse{State: "done", Image: st.Image, Log: st.Log}
+		// st.Image only ever comes from THIS process's own resolveWorkspaceImage
+		// call, and the persisted cache-hit branch below is unreachable for a
+		// repo-own-devcontainer image (that lane never calls
+		// SetWorkspaceBuiltImage) — so re-deriving the caveat against ws's
+		// CURRENT sources/profile is safe: a "done" backed by that lane can only
+		// be this one.
+		return buildResponse{State: "done", Image: st.Image, Detail: s.repoDevcontainerToolCaveat(ctx, ws), Log: st.Log}
 	}
 	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" {
 		tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(ctx, ws))
@@ -225,6 +231,9 @@ func (s *Server) resolveBuildView(ctx context.Context, ws types.Workspace) build
 	if s.cfg.ImageBuilder == nil {
 		return buildResponse{State: "none",
 			Detail: "devcontainer builds are not enabled on this host — sessions boot the stock agent image"}
+	}
+	if caveat := s.repoDevcontainerToolCaveat(ctx, ws); caveat != "" {
+		return buildResponse{State: "none", Detail: caveat}
 	}
 	return buildResponse{State: "none"}
 }

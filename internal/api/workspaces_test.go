@@ -270,7 +270,7 @@ func TestWriteEnvAsCode_RefusesSymlinkEscape(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	err := writeEnvAsCode(root, map[string]string{"AGENTS.md": "generated content"})
+	_, err := writeEnvAsCode(root, map[string]string{"AGENTS.md": "generated content"})
 
 	if err == nil {
 		t.Error("writeEnvAsCode must REFUSE to write through a symlink escaping the workspace")
@@ -285,15 +285,23 @@ func TestWriteEnvAsCode_RefusesSymlinkEscape(t *testing.T) {
 }
 
 // TestWriteEnvAsCode_WritesNestedFiles keeps the fix honest: the containment
-// guard must not break the normal emit (a nested .devcontainer/ path).
+// guard must not break the normal emit (a nested .devcontainer/ path), and a
+// FRESH directory (nothing pre-existing) gets the full emit including the
+// generated Dockerfile — the O_EXCL guard below must not turn into a
+// never-write.
 func TestWriteEnvAsCode_WritesNestedFiles(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
 		".devcontainer/devcontainer.json": `{"name":"x"}`,
+		".devcontainer/Dockerfile":        "FROM mcr.microsoft.com/devcontainers/base:ubuntu\n",
 		"AGENTS.md":                       "# agents",
 	}
-	if err := writeEnvAsCode(root, files); err != nil {
+	skipped, err := writeEnvAsCode(root, files)
+	if err != nil {
 		t.Fatalf("writeEnvAsCode: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %v, want none — nothing pre-existed", skipped)
 	}
 	for rel, want := range files {
 		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
@@ -302,6 +310,57 @@ func TestWriteEnvAsCode_WritesNestedFiles(t *testing.T) {
 		}
 		if string(got) != want {
 			t.Errorf("%s = %q, want %q", rel, got, want)
+		}
+	}
+}
+
+// TestWriteEnvAsCode_PreservesExistingDockerfile pins the R5 high-severity
+// fix: 342da88 added a generated .devcontainer/Dockerfile to EmitEnvAsCode's
+// output, and writeEnvAsCode used to O_TRUNC every emitted key unconditionally
+// — silently destroying an operator's own hand-authored Dockerfile the first
+// time they clicked "Write into the directory". A pre-existing Dockerfile is
+// now left alone and reported in the skipped list; every OTHER emitted key
+// (Wardyn's own regenerate-on-demand output) still refreshes as before, so the
+// fix does not turn the whole feature into a first-write-only no-op.
+func TestWriteEnvAsCode_PreservesExistingDockerfile(t *testing.T) {
+	root := t.TempDir()
+	const operatorDockerfile = "FROM my-own-base:latest\n# hand-authored, do not touch\n"
+	if err := os.MkdirAll(filepath.Join(root, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".devcontainer", "Dockerfile"), []byte(operatorDockerfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string]string{
+		".devcontainer/devcontainer.json": `{"build":{"dockerfile":"Dockerfile"}}`,
+		".devcontainer/Dockerfile":        "FROM mcr.microsoft.com/devcontainers/base:ubuntu\n# wardyn generated\n",
+		"AGENTS.md":                       "# agents",
+	}
+	skipped, err := writeEnvAsCode(root, files)
+	if err != nil {
+		t.Fatalf("writeEnvAsCode: %v", err)
+	}
+	if len(skipped) != 1 || skipped[0] != ".devcontainer/Dockerfile" {
+		t.Fatalf("skipped = %v, want exactly [.devcontainer/Dockerfile]", skipped)
+	}
+	got, err := os.ReadFile(filepath.Join(root, ".devcontainer", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != operatorDockerfile {
+		t.Errorf("operator's Dockerfile was overwritten: got %q, want preserved %q", got, operatorDockerfile)
+	}
+	// Every other key still refreshes — the guard is Dockerfile-specific, not
+	// a blanket "never overwrite" that would defeat the card's own documented
+	// "regenerate after a rescan" contract.
+	for _, rel := range []string{".devcontainer/devcontainer.json", "AGENTS.md"} {
+		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if string(got) != files[rel] {
+			t.Errorf("%s = %q, want %q (still regenerated)", rel, got, files[rel])
 		}
 	}
 }

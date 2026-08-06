@@ -69,6 +69,18 @@ const genDevcontainerPath = ".devcontainer/devcontainer.json"
 // `build` block resolves `dockerfile` against.
 const genDockerfilePath = ".devcontainer/Dockerfile"
 
+// EnvAsCodeDockerfilePath exports genDockerfilePath for callers outside this
+// package that need to single the generated Dockerfile out from
+// EmitEnvAsCode's output — namely internal/api/workspaces.go's
+// writeEnvAsCode, which refuses to overwrite a PRE-EXISTING file at this path.
+// Unlike every other emitted key (devcontainer.json/AGENTS.md/the artifact
+// redirect stubs, all Wardyn's own narrow, regenerate-on-demand output), a
+// Dockerfile at .devcontainer/Dockerfile is exactly where an operator would
+// already have hand-authored their own, for reasons that have nothing to do
+// with Wardyn — so it is the one emitted file "write into the directory" must
+// not silently clobber.
+const EnvAsCodeDockerfilePath = genDockerfilePath
+
 // genBaseImage is the universal devcontainer base. Language toolchains are
 // layered on as features rather than by swapping the base, which keeps the
 // output deterministic and additive regardless of how many languages a profile

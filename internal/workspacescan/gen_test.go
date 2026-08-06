@@ -67,12 +67,13 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 `,
 		},
 		{
-			// The honesty case: codex-cli has no first-party feature to bake it
-			// with (genAgentToolFeatures), so naming it must bake NOTHING —
-			// never a guessed URL or a third-party install script. The output is
-			// byte-identical to a plain Go profile with no tools at all, which
-			// is exactly why AgentToolsForIntegrationTypes never emits it.
-			name:  "codex-cli named -> nothing bakeable, no extra feature",
+			// The honesty case: codex-cli has no verified native-download bake
+			// lane (genAgentToolInstalls has no "codex-cli" entry), so naming it
+			// must bake NOTHING — never a guessed URL or a third-party install
+			// script. The output is byte-identical to a plain Go profile with no
+			// tools at all, which is exactly why AgentToolsForIntegrationTypes
+			// never emits it.
+			name:  "codex-cli named -> nothing bakeable, no extra bake",
 			prof:  WorkspaceProfile{Languages: []string{"Go"}},
 			tools: []string{"codex-cli"},
 			want: `{

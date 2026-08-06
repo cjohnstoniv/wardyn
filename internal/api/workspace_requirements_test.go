@@ -220,17 +220,23 @@ func TestSetWorkspaceRequirements_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract pins the h4
-// server guard (local/hardening-0.4.5/h4-design.md §3, HANDOFF-2026-08-06.md
-// §4 moving part 3): the wizard's step ③ now persists a named integration
-// through THIS endpoint on every "Continue", so naming one must not cost the
-// operator their scan profile, approved egress, recordings, or build cache —
-// the wipe handleUpdateWorkspace's sourcesChanged branch legitimately does
-// for a genuinely NEW composition (see its own doc comment) would be a
-// regression here, since this scoped write never touches those columns at
-// all. Verified true today (SetWorkspaceRequirements only ever sets the
-// requirements column); this test pins it so a future refactor that widens
-// the write can't reintroduce the wipe silently.
+// TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract pins the
+// HANDLER half of the h4 server guard (local/hardening-0.4.5/h4-design.md §3,
+// HANDOFF-2026-08-06.md §4 moving part 3): the wizard's step ③ now persists a
+// named integration through THIS endpoint on every "Continue", so
+// handleSetWorkspaceRequirements/scopedWorkspaceWrite must forward whatever
+// row the store hands back into the JSON response VERBATIM — not
+// reconstruct/prune it — so naming an integration doesn't ALSO cost the
+// operator their scan profile, approved egress, recordings, or build cache in
+// the response the wizard reads.
+//
+// This test uses a FAKE store (requirementsStoreFake), so it can only catch
+// the handler dropping/blanking a field on the way to the response — it
+// CANNOT catch the real SQL UPDATE widening to clobber a column, since the
+// fake's SetWorkspaceRequirements just mutates one field of the struct it was
+// seeded with and hands the whole thing back. That SQL-level guarantee is
+// what TestPG_SetWorkspaceRequirements_AntiClobber (internal/store/store_workspace_pg_test.go)
+// pins, against a real Postgres.
 func TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract(t *testing.T) {
 	h := newHarness(t)
 	id := uuid.New()

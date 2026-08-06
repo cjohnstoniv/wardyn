@@ -794,13 +794,21 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if werr := writeEnvAsCode(localDirs[0].Path, files); werr != nil {
+	skipped, werr := writeEnvAsCode(localDirs[0].Path, files)
+	if werr != nil {
 		writeError(w, http.StatusInternalServerError, "write env-as-code: "+werr.Error())
 		return
 	}
+	// written_files must name only what was actually written — a skipped key
+	// (an operator file writeEnvAsCode refused to clobber) staying in this map
+	// would tell the caller it was overwritten when it was not.
+	for _, rel := range skipped {
+		delete(files, rel)
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"workspace.envcode.write", id.String(), "success", mustJSON(map[string]any{"files": len(files)})))
-	writeJSON(w, http.StatusOK, map[string]any{"written_files": files})
+		"workspace.envcode.write", id.String(), "success",
+		mustJSON(map[string]any{"files": len(files), "skipped": len(skipped)})))
+	writeJSON(w, http.StatusOK, map[string]any{"written_files": files, "skipped_files": skipped})
 }
 
 // envAsCodeFor generates the committable env-as-code for a workspace from its
@@ -858,8 +866,9 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"emitted_files": files})
 }
 
-// writeEnvAsCode writes generated env-as-code files under root. Paths are the
-// fixed, safe outputs of EmitEnvAsCode (.devcontainer/devcontainer.json,
+// writeEnvAsCode writes generated env-as-code files under root, returning the
+// subset of keys it left untouched because they already existed. Paths are
+// the fixed, safe outputs of EmitEnvAsCode (.devcontainer/devcontainer.json,
 // AGENTS.md, plus any artifact-redirect config like .npmrc/.cargo/config.toml).
 //
 // Every write goes through os.Root, which resolves each path component INSIDE
@@ -869,38 +878,58 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // write to, so `<root>/AGENTS.md -> ~/.bashrc` would otherwise be FOLLOWED and
 // truncate an operator file, wardynd running as the operator in host mode. The
 // lexical check stays as a cheap first gate against a `..` in a generated key.
-func writeEnvAsCode(rootPath string, files map[string]string) error {
+//
+// workspacescan.EnvAsCodeDockerfilePath is special-cased O_EXCL: every OTHER
+// emitted key is Wardyn's own narrow, regenerate-on-demand output (the card's
+// own copy promises "regenerate after a rescan or a requirements change" for
+// devcontainer.json/AGENTS.md, and the artifact-redirect stubs are one-line
+// registry pointers with no plausible hand-authored equivalent) — but
+// .devcontainer/Dockerfile is exactly where an operator using devcontainers
+// already puts their OWN hand-written Dockerfile, unrelated to Wardyn. A
+// pre-existing file there is left alone and reported back instead of
+// truncated.
+func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
 	root, err := os.OpenRoot(cleanRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer root.Close()
+	var skipped []string
 	for rel, content := range files {
 		dst := filepath.Join(cleanRoot, filepath.FromSlash(rel))
 		if !strings.HasPrefix(dst, cleanRoot+string(filepath.Separator)) {
-			return fmt.Errorf("refusing to write outside workspace: %s", rel)
+			return nil, fmt.Errorf("refusing to write outside workspace: %s", rel)
 		}
 		relPath := filepath.FromSlash(rel)
 		if dir := filepath.Dir(relPath); dir != "." {
 			if err := root.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("refusing to write %s: %w", rel, err)
+				return nil, fmt.Errorf("refusing to write %s: %w", rel, err)
 			}
 		}
-		f, err := root.OpenFile(relPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+		if rel == workspacescan.EnvAsCodeDockerfilePath {
+			flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+		}
+		f, err := root.OpenFile(relPath, flag, 0o644)
 		if err != nil {
-			return fmt.Errorf("refusing to write %s: %w", rel, err)
+			if os.IsExist(err) {
+				skipped = append(skipped, rel)
+				continue
+			}
+			return nil, fmt.Errorf("refusing to write %s: %w", rel, err)
 		}
 		_, werr := f.WriteString(content)
 		cerr := f.Close()
 		if werr != nil {
-			return werr
+			return nil, werr
 		}
 		if cerr != nil {
-			return cerr
+			return nil, cerr
 		}
 	}
-	return nil
+	slices.Sort(skipped)
+	return skipped, nil
 }
 
 // handleDeleteWorkspace removes a workspace. Returns 404 when unknown, 204 on success.

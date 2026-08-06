@@ -254,6 +254,20 @@ func (p WorkspaceProfile) ProfileHash() string {
 // wider fingerprint. No collision risk: ProfileHash and this digest are
 // distinct hashes of distinct preimages, and the no-tools case is precisely
 // the case the old key already covered.
+//
+// KNOWN GAP, deliberately not closed: this formula cannot distinguish a
+// c39f591-era image (an inert devcontainer onCreateCommand, baking nothing —
+// see gen.go's package comment) from a 342da88-era one (a real Dockerfile
+// RUN) for the SAME tools=["claude-code"] input — both hash identically, so a
+// workspace built in that window would read as a cache HIT forever. No
+// migration/version bump ships for it: both commits landed the same day,
+// entirely inside CHANGELOG.md's [Unreleased] section (never a tagged/dated
+// release), so the only images that could exist in that state are from an
+// in-campaign dev build within that ~2-hour window. A version-salt bump also
+// could not target just those rows — c39f591 and 342da88 produce the exact
+// same preimage by construction, so bumping the key would invalidate every
+// CURRENT, correctly-built tools row too: pure churn for a window nothing
+// released ever shipped.
 func (p WorkspaceProfile) CacheKey(tools []string) string {
 	if len(tools) == 0 {
 		return p.ProfileHash()

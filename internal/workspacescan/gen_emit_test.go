@@ -88,11 +88,11 @@ func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	}
 }
 
-// TestEmitEnvAsCode_AgentToolFeature mirrors GenerateDevcontainer's tool-bake
+// TestEmitEnvAsCode_AgentToolBake mirrors GenerateDevcontainer's tool-bake
 // wiring for the exported/committable devcontainer path, so an exported
 // workspace and the one Wardyn itself builds never drift on what they claim
 // to carry.
-func TestEmitEnvAsCode_AgentToolFeature(t *testing.T) {
+func TestEmitEnvAsCode_AgentToolBake(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"JavaScript"}, Confidence: "high", Source: "deterministic"}
 	files, err := EmitEnvAsCode(p, nil, []string{"claude-code"})
 	if err != nil {
@@ -115,10 +115,11 @@ func TestEmitEnvAsCode_AgentToolFeature(t *testing.T) {
 	}
 }
 
-// TestEmitEnvAsCode_NoToolsNoAgentFeature pins the negative case: no named
-// tools must add no agent-CLI feature, and no path emits a lifecycle command
-// (which would bake nothing into the pushed image anyway).
-func TestEmitEnvAsCode_NoToolsNoAgentFeature(t *testing.T) {
+// TestEmitEnvAsCode_NoToolsNoAgentBake pins the negative case: no named
+// tools must add no agent-CLI bake (no generated Dockerfile), and no path
+// emits a lifecycle command (which would bake nothing into the pushed image
+// anyway).
+func TestEmitEnvAsCode_NoToolsNoAgentBake(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
 	files, err := EmitEnvAsCode(p, nil, nil)
 	if err != nil {

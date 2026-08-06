@@ -10,6 +10,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -140,21 +141,29 @@ func TestPG_WorkspaceCRUD_CompositionRoundTrip(t *testing.T) {
 
 // TestPG_SetWorkspaceRequirements_AntiClobber proves SetWorkspaceRequirements
 // is a scoped single-column write: it must not disturb a concurrently-set
-// operator-owned column (approved_egress), and — the other direction — a later
-// write to that OTHER column must not revert the requirements this call just
-// set. Mirrors the anti-clobber proof style of
-// TestPG_ClaimAndClearActiveRunCAS / TestPG_RecordResultUpsertAndStatusCAS.
+// operator-owned column (approved_egress) OR the scan-owned columns a
+// requirements-only write has no business touching (profile, record_results,
+// image_ref/built_profile_hash — the R5 h4 guard's actual contract, api's
+// TestSetWorkspaceRequirements_IntegrationOnlyPreservesContract pins only the
+// handler's passthrough of whatever this call returns, not the SQL itself),
+// and — the other direction — a later write to that OTHER column must not
+// revert the requirements this call just set. Mirrors the anti-clobber proof
+// style of TestPG_ClaimAndClearActiveRunCAS / TestPG_RecordResultUpsertAndStatusCAS.
 func TestPG_SetWorkspaceRequirements_AntiClobber(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 
 	now := time.Now().UTC()
+	const wantProfile = `{"languages":["Go"]}`
+	const wantRecordResults = `{"smoke":{"status":"recorded"}}`
 	created, err := pg.CreateWorkspace(ctx, types.Workspace{
 		ID:      uuid.New(),
 		Name:    "ws-reqs-" + uuid.NewString(),
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
-		Status:  types.WorkspacePendingScan, CreatedAt: now, UpdatedAt: now,
+		Status:  types.WorkspaceScanned, CreatedAt: now, UpdatedAt: now,
+		Profile: json.RawMessage(wantProfile), RecordResults: json.RawMessage(wantRecordResults),
+		ImageRef: "wardyn-workspace/w:abc123", BuiltProfileHash: "deadbeef",
 	})
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -166,6 +175,28 @@ func TestPG_SetWorkspaceRequirements_AntiClobber(t *testing.T) {
 		t.Fatalf("set approved egress: %v", err)
 	}
 
+	// wantEgress is a PARAMETER, not fixed: SetWorkspaceApprovedEgress's own
+	// writes legitimately change it later in this test (the "reverse
+	// direction" check below) — this helper only pins that SetWorkspaceRequirements
+	// itself never touches it, or the scan-owned columns beside it.
+	assertContractPreserved := func(t *testing.T, ws types.Workspace, wantEgress []string) {
+		t.Helper()
+		if !reflect.DeepEqual(ws.ApprovedEgress, wantEgress) {
+			t.Errorf("approved_egress = %v, want %v", ws.ApprovedEgress, wantEgress)
+		}
+		// jsonb round-trips through Postgres with its own canonical whitespace
+		// (a space after ":"/","), so these compare parsed, not as raw bytes.
+		if !jsonEqual(t, ws.Profile, []byte(wantProfile)) {
+			t.Errorf("profile = %s, want preserved %s", ws.Profile, wantProfile)
+		}
+		if !jsonEqual(t, ws.RecordResults, []byte(wantRecordResults)) {
+			t.Errorf("record_results = %s, want preserved %s", ws.RecordResults, wantRecordResults)
+		}
+		if ws.ImageRef != "wardyn-workspace/w:abc123" || ws.BuiltProfileHash != "deadbeef" {
+			t.Errorf("image cache = (%q,%q), want preserved", ws.ImageRef, ws.BuiltProfileHash)
+		}
+	}
+
 	wantReqs := map[string]types.WorkspaceRequirement{
 		"secret:acme-anthropic-key": {Level: "required", Provenance: "operator_set"},
 	}
@@ -173,9 +204,7 @@ func TestPG_SetWorkspaceRequirements_AntiClobber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("set requirements: %v", err)
 	}
-	if len(got.ApprovedEgress) != 1 || got.ApprovedEgress[0] != "api.github.com" {
-		t.Errorf("SetWorkspaceRequirements clobbered approved_egress: %v", got.ApprovedEgress)
-	}
+	assertContractPreserved(t, got, []string{"api.github.com"})
 	if len(got.Requirements) != 1 || got.Requirements["secret:acme-anthropic-key"] != wantReqs["secret:acme-anthropic-key"] {
 		t.Errorf("requirements = %+v, want %+v", got.Requirements, wantReqs)
 	}
@@ -192,10 +221,27 @@ func TestPG_SetWorkspaceRequirements_AntiClobber(t *testing.T) {
 	if len(final.Requirements) != 1 || final.Requirements["secret:acme-anthropic-key"] != wantReqs["secret:acme-anthropic-key"] {
 		t.Errorf("a later SetWorkspaceApprovedEgress clobbered requirements: %+v", final.Requirements)
 	}
+	assertContractPreserved(t, final, []string{"api.github.com", "pypi.org"})
 
 	// Missing workspace: scanWorkspace's ErrNoRows mapping still applies to
 	// this scoped writer.
 	if _, err := pg.SetWorkspaceRequirements(ctx, uuid.New(), wantReqs); err != store.ErrNotFound {
 		t.Errorf("set requirements on unknown id: err = %v, want ErrNotFound", err)
 	}
+}
+
+// jsonEqual compares two JSON documents by VALUE, not by byte content —
+// Postgres's jsonb round-trips through its own canonical whitespace (a space
+// after ":" and ","), so a raw string/byte compare against a compact
+// json.RawMessage literal fails on formatting alone, not on content.
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		t.Fatalf("jsonEqual: unmarshal %s: %v", a, err)
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		t.Fatalf("jsonEqual: unmarshal %s: %v", b, err)
+	}
+	return reflect.DeepEqual(va, vb)
 }
