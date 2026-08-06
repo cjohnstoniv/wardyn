@@ -84,15 +84,30 @@ make_ephemeral_dirs() {
 }
 
 # ── Toolchain temp dirs ───────────────────────────────────────────────────────
-# Dispatch points GOTMPDIR at the exec-allowed HOME for EVERY run (the sandbox
-# mounts /tmp noexec — runs_dispatch.go's sandboxEnv), and unlike GOCACHE the
-# go tool REFUSES to create GOTMPDIR itself ("stat …/.gotmp: no such file or
-# directory" on the first build). The full image bakes the dir at build time,
-# but an envbuilt or BYO image has no reason to know that contract — so create
-# it here from the env var itself (no second copy of the path), best-effort:
-# a read-only HOME leaves the same clear go error this exists to prevent.
+# Dispatch points GOTMPDIR at the exec-allowed HOME when the workspace's scans
+# detected Go (runs_dispatch.go's sandboxEnv — the sandbox mounts /tmp noexec),
+# and unlike GOCACHE the go tool REFUSES to create GOTMPDIR itself ("stat
+# …/.gotmp: no such file or directory" on the first build). The full image
+# bakes the dir at build time, but an envbuilt or BYO image has no reason to
+# know that contract — so create it here from the env var itself (no second
+# copy of the path), best-effort: a read-only HOME leaves the same clear go
+# error this exists to prevent.
 make_toolchain_dirs() {
     [[ -n "${GOTMPDIR:-}" ]] && mkdir -p "$GOTMPDIR" 2>/dev/null || true
+}
+
+# ── Mounted-repo git trust ────────────────────────────────────────────────────
+# A dir-mounted workspace keeps its HOST ownership (uid 1000), while the
+# session may run as whatever user the image declares (root in many envbuilt
+# images) — git then refuses the repo with "detected dubious ownership" (exit
+# 128), which also kills go's VCS stamping ("error obtaining VCS status").
+# safe.directory '*' is the right call INSIDE the sandbox: the ownership check
+# defends multi-user hosts against planted .git dirs, but everything mounted
+# here is exactly what the operator onboarded, and the config dies with the
+# container. Keep in lockstep with attachShell (runner/docker/session.go),
+# which applies the same trust for shells that open before prep finishes.
+trust_mounted_repos() {
+    command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null || true
 }
 
 # ── Managed subscription (proxy-injected, compose mode) ───────────────────────

@@ -28,14 +28,24 @@ import (
 // already exists) attach to it — the bash arg is ignored on attach, so the
 // session persists exactly as first created.
 //
-// The GOTMPDIR mkdir first: dispatch's platform env points it at a dir the go
-// tool refuses to create itself, and agent-run's session prep creates it only
-// after slower steps (a measured 18s on a live session) — an attach shell
-// opens the instant the container runs, so the operator's first command can
-// win that race. Creating it HERE, from the run's own env, keeps the
-// accommodation runtime-and-requirements-driven: nothing toolchain-specific
-// is baked into any image, and a run whose env doesn't set it does nothing.
-var attachShell = []string{"/bin/sh", "-c", `[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
+// Two prep guards run first — agent-run's session prep does the same work,
+// but only after slower steps (a measured 18s on a live session), while an
+// attach shell opens the instant the container runs, so the operator's first
+// command can win that race. Both are runtime-and-requirements-driven (from
+// the run's own env / the operator's own mounts), so nothing
+// toolchain-specific is ever baked into an image:
+//   - GOTMPDIR mkdir: dispatch points it at a dir the go tool refuses to
+//     create itself; a run whose env doesn't set it does nothing.
+//   - git safe.directory '*': a dir-mounted workspace keeps its HOST
+//     ownership while the session may run as another uid — git's
+//     dubious-ownership refusal (exit 128) breaks git AND go's VCS stamping.
+//     Everything mounted here is what the operator onboarded, and the config
+//     dies with the container. Lockstep: trust_mounted_repos, agent-run-lib.sh.
+var attachShell = []string{"/bin/sh", "-c",
+	`[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; ` +
+		`command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null; ` +
+		`if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; ` +
+		`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
 
 // Attach opens a NEW interactive exec (an interactive shell) inside the running
 // sandbox ref and returns a live PTY runner.Session. It mirrors Exec's

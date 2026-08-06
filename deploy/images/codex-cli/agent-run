@@ -86,6 +86,7 @@ if [[ "${1:-}" == "--idle" ]]; then
     mkdir -p "$workdir"
     make_ephemeral_dirs  # scratch sources: no host mount, created in the sandbox
     make_toolchain_dirs  # GOTMPDIR from the platform env — go will not create it
+    trust_mounted_repos  # host-owned mounts: git dubious-ownership refusal breaks git + go VCS stamping
     configure_git_broker_insteadof  # route granted GitHub repos through the git-broker
     dispatch_repo_clones
     resolve_workdir  # prefer the cloned repo dir as the attach landing dir
@@ -124,6 +125,7 @@ workdir="${HOME}/work"
 mkdir -p "$workdir"
 make_ephemeral_dirs  # scratch sources: no host mount, created in the sandbox
 make_toolchain_dirs  # GOTMPDIR from the platform env — go will not create it
+trust_mounted_repos  # host-owned mounts: git dubious-ownership refusal breaks git + go VCS stamping
 
 # Clone the run's repo(s) into the workspace (WARDYN_REPOS preferred, legacy
 # WARDYN_REPO_URL fallback) — see clone_one/dispatch_repo_clones in
