@@ -19,7 +19,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 			{Stage: "test", Command: "go test ./..."},
 		},
 	}
-	files, err := EmitEnvAsCode(p, nil)
+	files, err := EmitEnvAsCode(p, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 
 func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Java"}, PackageManagers: []string{"maven"}}
-	files, err := EmitEnvAsCode(p, nil)
+	files, err := EmitEnvAsCode(p, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,5 +85,40 @@ func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	}
 	if strings.Contains(agents, "GOTMPDIR") {
 		t.Errorf("AGENTS.md should not mention GOTMPDIR for a non-Go workspace: %s", agents)
+	}
+}
+
+// TestEmitEnvAsCode_AgentToolInstall mirrors GenerateDevcontainer's tool-install
+// wiring for the exported/committable devcontainer path, so an exported
+// workspace and the one Wardyn itself builds never drift on what they claim
+// to carry.
+func TestEmitEnvAsCode_AgentToolInstall(t *testing.T) {
+	p := WorkspaceProfile{Languages: []string{"JavaScript"}, Confidence: "high", Source: "deterministic"}
+	files, err := EmitEnvAsCode(p, nil, []string{"claude-code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		OnCreateCommand string `json:"onCreateCommand"`
+	}
+	if err := json.Unmarshal([]byte(files[".devcontainer/devcontainer.json"]), &parsed); err != nil {
+		t.Fatalf("devcontainer.json not valid JSON: %v", err)
+	}
+	want := "set -eu\nnpm install -g @anthropic-ai/claude-code"
+	if parsed.OnCreateCommand != want {
+		t.Errorf("onCreateCommand = %q, want %q", parsed.OnCreateCommand, want)
+	}
+}
+
+// TestEmitEnvAsCode_NoToolsNoOnCreateCommand pins the negative case: no named
+// tools must emit no onCreateCommand at all, not an empty one.
+func TestEmitEnvAsCode_NoToolsNoOnCreateCommand(t *testing.T) {
+	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
+	files, err := EmitEnvAsCode(p, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(files[".devcontainer/devcontainer.json"], "onCreateCommand") {
+		t.Errorf("no named tools must emit no onCreateCommand: %s", files[".devcontainer/devcontainer.json"])
 	}
 }

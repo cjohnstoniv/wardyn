@@ -159,14 +159,20 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		}
 	}
 
-	hash := p.ProfileHash()
-	// Reuse a cached generated image when the profile is unchanged.
+	// tools: the agent CLIs this workspace's NAMED integrations imply (gen.go's
+	// AgentToolsForIntegrationTypes) — folded into the cache key below so
+	// toggling an integration actually triggers a rebuild, and passed to the
+	// generator so the built image actually carries what it will claim to.
+	tools := workspacescan.AgentToolsForIntegrationTypes(s.namedIntegrationTypes(ctx, primary))
+	hash := p.CacheKey(tools)
+	// Reuse a cached generated image when the profile+tools are unchanged.
 	if primary.ImageRef != "" && primary.BuiltProfileHash == hash {
 		return primary.ImageRef, true
 	}
 
-	// Generate a devcontainer for the detected toolchain and build it.
-	files, gerr := workspacescan.GenerateDevcontainer(p)
+	// Generate a devcontainer for the detected toolchain (+ any named agent
+	// tool) and build it.
+	files, gerr := workspacescan.GenerateDevcontainer(p, tools)
 	if gerr != nil {
 		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": gerr.Error()})
 		return "", false

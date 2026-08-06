@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"strings"
 )
 
 // Confidence buckets how much a WorkspaceProfile can be trusted without a
@@ -221,6 +222,29 @@ func (p WorkspaceProfile) ProfileHash() string {
 		return ""
 	}
 	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:])
+}
+
+// CacheKey returns the SHA-256 hex digest that keys a workspace's BUILT image
+// cache (Workspace.BuiltProfileHash), folding the derived agent-tool set
+// (AgentToolsForIntegrationTypes' output — gen.go) in alongside the profile:
+// two workspaces with an identical scanned profile but a different named AI
+// integration must build (and cache) DIFFERENT images, because the generated
+// devcontainer's onCreateCommand differs — without this, toggling an
+// integration would never trigger a rebuild. tools is the closed small set
+// AgentToolsForIntegrationTypes returns ({claude-code, codex-cli} today), so
+// joining it verbatim carries no escaping risk. Sorted so the caller's slice
+// order never changes the hash.
+//
+// This changes what ProfileHash()-only callers used to compute (an empty
+// tools set still appends a "|tools=" suffix), so every already-cached
+// workspace misses ONCE on first use after this ships — the same accepted
+// one-time-churn category as ContextHash riding into ProfileHash above; no
+// migration, BuiltProfileHash just gets recomputed on the next build.
+func (p WorkspaceProfile) CacheKey(tools []string) string {
+	sorted := slices.Clone(tools)
+	slices.Sort(sorted)
+	sum := sha256.Sum256([]byte(p.ProfileHash() + "|tools=" + strings.Join(sorted, ",")))
 	return hex.EncodeToString(sum[:])
 }
 

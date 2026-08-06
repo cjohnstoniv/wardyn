@@ -22,6 +22,7 @@ package workspacescan
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -67,27 +68,133 @@ func featuresFor(langs []string) map[string]map[string]any {
 	return features
 }
 
+// AgentToolsForIntegrationTypes derives the agent CLIs implied by naming
+// integration TYPES (types.Integration.Type values, e.g. "anthropic_api_key"/
+// "anthropic_subscription"/"openai_api_key") on a workspace, so its
+// recommended build can bake them in — inventory honesty: "Carries:
+// claude-code" becomes true only once the server actually bakes it, never the
+// reverse. Prefix-only and deliberately narrow: "bedrock"/"azure_openai" and
+// every other unrecognized type stay unmapped and contribute nothing — this
+// decides what gen.go BAKES into an image, a different question from
+// run-time auth compatibility (ui/lib/integrations.ts's canDriveClaudeCode
+// says bedrock CAN drive an already-baked claude-code at run time — not
+// whether the image should bake one for it). Sorted + deduped so the result
+// is a stable devcontainer/cache-key input regardless of call order.
+func AgentToolsForIntegrationTypes(integrationTypes []string) []string {
+	seen := map[string]bool{}
+	for _, t := range integrationTypes {
+		switch {
+		case strings.HasPrefix(t, "anthropic_"):
+			seen["claude-code"] = true
+		case strings.HasPrefix(t, "openai_"):
+			seen["codex-cli"] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// claudeCodeNativeInstall is the checksum-verified native-binary install lane
+// for claude-code when no npm/Node runtime is in the profile — the same
+// downloads.claude.ai + manifest.json sha256 pattern as
+// deploy/images/claude-code/Dockerfile's CLAUDE_INSTALL=native RUN block,
+// adapted for a devcontainer onCreateCommand: a plain shell script, so the
+// Dockerfile's host-staged-binary branch (needs a build-context COPY) drops
+// out, and architecture comes from `dpkg --print-architecture` at container
+// run time rather than a buildx TARGETARCH. "stable" resolves to a concrete
+// version the same way the Dockerfile's default ARG CLAUDE_CODE_VERSION=stable
+// does. Reachable because the generated devcontainer only ever builds with
+// WARDYN_ENVBUILD_BUILD_NETWORK=host (deploy/compose); air-gapped is a
+// documented limitation, not special-cased here.
+const claudeCodeNativeInstall = `case "$(dpkg --print-architecture)" in
+  amd64) plat=linux-x64 ;;
+  arm64) plat=linux-arm64 ;;
+  *) echo "unsupported architecture for native claude-code install" >&2; exit 1 ;;
+esac
+base=https://downloads.claude.ai/claude-code-releases
+ver="$(curl -fsSL "$base/stable")"
+curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json
+sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"
+[ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }
+curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude
+echo "$sum  /usr/local/bin/claude" | sha256sum -c -
+chmod 0755 /usr/local/bin/claude
+rm -f /tmp/claude-manifest.json`
+
+// genAgentToolInstall returns the onCreateCommand shell script that installs
+// tools (AgentToolsForIntegrationTypes' output) into the image being built,
+// so "Carries: X" is true of the image rather than a run-time credential with
+// nothing to authenticate. hasNode picks npm (fast, uses the ecosystem the
+// profile's own Node feature already installs) over the native lane, keyed on
+// the SAME signal genLangFeatures uses for the node feature
+// (slices.Contains(p.Languages, "JavaScript")).
+//
+// codex-cli has NO Wardyn-verified public native-download contract
+// (deploy/images/codex-cli/Dockerfile: native install is staged-only, "fails
+// loudly... rather than guessing a URL"). When hasNode is false, codex-cli is
+// silently DROPPED from the script rather than guessing a URL — the image is
+// simply built without it, never with a false claim that it's there.
+//
+// The script starts "set -eu" so a failed install fails the BUILD, not just
+// the tool: an image that silently failed to install a tool it claims to
+// carry would violate the inventory-honesty this whole feature exists to
+// uphold. Returns "" when nothing in tools is installable in this lane
+// (including "no tools" and "codex-cli alone with hasNode=false") — callers
+// must leave OnCreateCommand unset rather than emit an empty one.
+func genAgentToolInstall(tools []string, hasNode bool) string {
+	var blocks []string
+	for _, t := range tools {
+		switch t {
+		case "claude-code":
+			if hasNode {
+				blocks = append(blocks, "npm install -g @anthropic-ai/claude-code")
+			} else {
+				blocks = append(blocks, claudeCodeNativeInstall)
+			}
+		case "codex-cli":
+			if hasNode {
+				blocks = append(blocks, "npm install -g @openai/codex")
+			}
+		}
+	}
+	if len(blocks) == 0 {
+		return ""
+	}
+	return "set -eu\n" + strings.Join(blocks, "\n")
+}
+
 // genDevcontainer is the minimal devcontainer.json shape we emit. Struct field
-// order controls JSON key order (image, features, then containerEnv); the
-// features/containerEnv maps' own keys are sorted by encoding/json, so the
-// whole document is deterministic. ContainerEnv is only populated by
-// EmitEnvAsCode (GenerateDevcontainer leaves it unset — the envbuilder-built
-// image's runs already get the fidelity env from dispatch's sandboxEnv, so it
-// would be a no-op there). No postCreateCommand: Wardyn has no verify step to
-// prove a detected install/build command actually works, so it is documented
-// in AGENTS.md as prose (genAgentsMD) rather than auto-run, unattended, at
-// container create.
+// order controls JSON key order (image, features, onCreateCommand, then
+// containerEnv); the features/containerEnv maps' own keys are sorted by
+// encoding/json, so the whole document is deterministic. ContainerEnv is only
+// populated by EmitEnvAsCode (GenerateDevcontainer leaves it unset — the
+// envbuilder-built image's runs already get the fidelity env from dispatch's
+// sandboxEnv, so it would be a no-op there).
+//
+// OnCreateCommand is a DIFFERENT trust class from postCreateCommand, which we
+// still never emit: it runs INSIDE the envbuilder build and is baked into the
+// pushed image (docs/ENVBUILD.md "Build sandbox" lists onCreate/updateContent
+// alongside Dockerfile RUN as build-time-executed), so it carries ONLY
+// genAgentToolInstall's checksum-verified agent-CLI install — never a
+// scan-DETECTED, never-verified SetupCommand. Those stay prose-only in
+// AGENTS.md (genAgentsMD): Wardyn has no verify step to prove a detected
+// install/build command actually works, so nothing UNVERIFIED is ever
+// auto-run, unattended, at container create.
 type genDevcontainer struct {
-	Image        string                    `json:"image"`
-	Features     map[string]map[string]any `json:"features,omitempty"`
-	ContainerEnv map[string]string         `json:"containerEnv,omitempty"`
+	Image           string                    `json:"image"`
+	Features        map[string]map[string]any `json:"features,omitempty"`
+	OnCreateCommand string                    `json:"onCreateCommand,omitempty"`
+	ContainerEnv    map[string]string         `json:"containerEnv,omitempty"`
 }
 
 // EmitEnvAsCode produces committable environment-as-code from a scanned
-// profile: a devcontainer.json (base + language features + artifact-registry
-// redirects) and an AGENTS.md documenting the DETECTED toolchain and setup
-// commands (profile.SetupCommands, a scan-time heuristic — never verified) as
-// prose, for a human/agent to run deliberately. Returned as path -> content.
+// profile: a devcontainer.json (base + language features + agent-tool
+// install + artifact-registry redirects) and an AGENTS.md documenting the
+// DETECTED toolchain and setup commands (profile.SetupCommands, a scan-time
+// heuristic — never verified) as prose, for a human/agent to run
+// deliberately. Returned as path -> content.
 //
 // artifactBases maps an artifact ecosystem (npm|pip|cargo|maven|go|nuget) to the
 // operator's corporate registry base URL (from the persisted site-config,
@@ -98,11 +205,16 @@ type genDevcontainer struct {
 // matching per-tool config files (and go's containerEnv) are merged in so a
 // committed workspace pulls from the corporate mirror; pass nil when no
 // redirect is configured.
-func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string) (map[string]string, error) {
+//
+// tools is AgentToolsForIntegrationTypes' output (the caller derives it from
+// the workspace's named integrations) — see genAgentToolInstall for the
+// install-lane rule; pass nil when nothing is named.
+func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, tools []string) (map[string]string, error) {
 	dc := genDevcontainer{Image: genBaseImage}
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
+	dc.OnCreateCommand = genAgentToolInstall(tools, slices.Contains(p.Languages, "JavaScript"))
 	// GOTMPDIR: dispatch's sandboxEnv (runs_dispatch.go) sets this for every
 	// Wardyn-governed run because the sandbox /tmp is noexec and `go test`
 	// compiles+execs its test binaries into $TMPDIR. Workspace-folder-relative
@@ -287,18 +399,21 @@ func genAgentsMD(p WorkspaceProfile) string {
 
 // GenerateDevcontainer produces a minimal, deterministic .devcontainer/devcontainer.json
 // for the profile: the universal base image plus one official devcontainer
-// feature per detected, feature-supported language. The returned map is
-// path -> file content (a single entry); it is safe to feed straight to the
-// envbuilder local-context build (BuildFromDevcontainerFiles).
+// feature per detected, feature-supported language, plus tools' agent-CLI
+// install (see genAgentToolInstall). The returned map is path -> file content
+// (a single entry); it is safe to feed straight to the envbuilder
+// local-context build (BuildFromDevcontainerFiles).
 //
 // Pure: no I/O, no clock, no randomness. p.Languages is already sorted+deduped
 // by DeriveProfile, so iterating it and letting encoding/json sort the features
-// map yields identical bytes for identical profiles.
-func GenerateDevcontainer(p WorkspaceProfile) (files map[string]string, err error) {
+// map yields identical bytes for identical profiles. tools is
+// AgentToolsForIntegrationTypes' output; pass nil when nothing is named.
+func GenerateDevcontainer(p WorkspaceProfile, tools []string) (files map[string]string, err error) {
 	dc := genDevcontainer{Image: genBaseImage}
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
+	dc.OnCreateCommand = genAgentToolInstall(tools, slices.Contains(p.Languages, "JavaScript"))
 
 	b, err := json.MarshalIndent(dc, "", "  ")
 	if err != nil {

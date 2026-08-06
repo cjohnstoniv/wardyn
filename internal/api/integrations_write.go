@@ -19,10 +19,12 @@ import (
 // integrations.go, split out (scripts/check-file-size.sh) once the file grew
 // past the 1000-line gate: validateIntegrationWrite backs the write endpoints
 // (setup_integrations.go); resolveIntegrationRef/defaultAgentRunsIntegration
-// back the run-time resolution ladder (llmcred.go); WardynFeaturesBackend
-// backs the composer-registry boot derivation (cmd/wardynd/composer.go).
-// Everything here builds ON TOP of effectiveIntegrations/capabilitiesFor
-// (integrations.go) without changing either.
+// back the run-time resolution ladder (llmcred.go); namedIntegrationTypes
+// backs gen.go's agent-tool-bake derivation (workspace_run.go/workspaces.go);
+// WardynFeaturesBackend backs the composer-registry boot derivation
+// (cmd/wardynd/composer.go). Everything here builds ON TOP of
+// effectiveIntegrations/capabilitiesFor (integrations.go) without changing
+// either.
 
 // knownIntegrationTypes is the closed type set PER CATEGORY a write may name —
 // a hand-kept mirror of capabilitiesFor's switch above (frozen; see this
@@ -271,6 +273,29 @@ func (s *Server) resolveIntegrationRef(ctx context.Context, ref string) (types.I
 		}
 	}
 	return types.Integration{}, false
+}
+
+// namedIntegrationTypes returns the .Type of every integration ws's
+// EFFECTIVE requirements contract names via an "integration:<id>" key, at ANY
+// level (required or optional) — naming one, even optionally, is already a
+// deliberate operator act (validateWorkspaceRequirement's own comment on the
+// "integration" requirement kind makes the same call: no existence gate
+// either, since a contract may name an integration before it's configured).
+// Feeds workspacescan.AgentToolsForIntegrationTypes so the recommended build
+// bakes the matching agent CLI (gen.go). Best-effort: a ref that resolves to
+// nothing (named before the integration exists) is skipped, not an error.
+func (s *Server) namedIntegrationTypes(ctx context.Context, ws types.Workspace) []string {
+	var out []string
+	for key := range effectiveRequirements(ws) {
+		typ, rest, ok := splitRequirementKey(key)
+		if !ok || typ != "integration" {
+			continue
+		}
+		if in, ok := s.resolveIntegrationRef(ctx, rest); ok {
+			out = append(out, in.Type)
+		}
+	}
+	return out
 }
 
 // defaultAgentRunsIntegration returns the STORED ai_provider integration

@@ -332,3 +332,37 @@ func TestProfileHash(t *testing.T) {
 		t.Errorf("hash length = %d, want 64 (sha256 hex)", got)
 	}
 }
+
+// TestCacheKey pins the build-cache-key contract CacheKey adds on top of
+// ProfileHash: naming an integration (a different tools set) must change the
+// key — the whole reason CacheKey exists, or toggling an integration would
+// never trigger a rebuild — while staying deterministic and independent of
+// the caller's slice order, and never letting an equal tools set collapse
+// two different profiles into the same key.
+func TestCacheKey(t *testing.T) {
+	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: ConfidenceHigh, Source: SourceDeterministic}
+	if got := len(p.CacheKey(nil)); got != 64 {
+		t.Errorf("hash length = %d, want 64 (sha256 hex)", got)
+	}
+
+	noTools := p.CacheKey(nil)
+	withClaude := p.CacheKey([]string{"claude-code"})
+	if withClaude == noTools {
+		t.Error("naming a tool must change the cache key, or toggling an integration never rebuilds")
+	}
+	withBoth := p.CacheKey([]string{"claude-code", "codex-cli"})
+	if withBoth == withClaude {
+		t.Error("adding a second tool must change the cache key")
+	}
+	if got := p.CacheKey([]string{"codex-cli", "claude-code"}); got != withBoth {
+		t.Error("CacheKey must be independent of the caller's tools slice order")
+	}
+	if got := p.CacheKey([]string{"claude-code"}); got != withClaude {
+		t.Error("CacheKey must be deterministic for identical inputs")
+	}
+
+	other := WorkspaceProfile{Languages: []string{"Python"}, Confidence: ConfidenceHigh, Source: SourceDeterministic}
+	if other.CacheKey([]string{"claude-code"}) == withClaude {
+		t.Error("different profiles with the same tools must still hash differently")
+	}
+}

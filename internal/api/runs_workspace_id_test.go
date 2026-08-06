@@ -5,12 +5,16 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // TestSeedRequestWorkspace pins the three things `workspace_id` has to get right:
@@ -157,4 +161,160 @@ func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.
 	if !ok || image != "ghcr.io/acme/base:1" {
 		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the workspace's BaseImage verbatim, unconditionally", image, ok)
 	}
+}
+
+// resolveImageStoreFake is a minimal store.Store for resolveWorkspaceImage's
+// generate-devcontainer path: GetSiteConfig (integration resolution, via
+// namedIntegrationTypes/resolveIntegrationRef) and SetWorkspaceBuiltImage
+// (the cache write on a successful build) — every other method panics if a
+// test here ever starts needing it (embedded interface, nil by default).
+type resolveImageStoreFake struct {
+	store.Store
+	sc types.SiteConfig
+}
+
+func (s *resolveImageStoreFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.sc, nil
+}
+func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string) (types.Workspace, error) {
+	return types.Workspace{}, nil
+}
+
+// capturedBuild is one BuildFromDevcontainerFiles call capturingImageBuilder
+// recorded.
+type capturedBuild struct {
+	files map[string]string
+	tag   string
+}
+
+// capturingImageBuilder wraps fakeImageBuilder (byoi_test.go) to record every
+// BuildFromDevcontainerFiles call, so a test can assert on the emitted
+// devcontainer.json content and on how many times a build actually happened
+// (the cache-hit assertion).
+type capturingImageBuilder struct {
+	fakeImageBuilder
+	calls []capturedBuild
+}
+
+func (b *capturingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, files map[string]string, tag string, _ io.Writer) (string, error) {
+	b.calls = append(b.calls, capturedBuild{files: files, tag: tag})
+	return "built/" + tag, nil
+}
+
+// TestResolveWorkspaceImage_NamedIntegrationBakesAgentTool pins moving part 1
+// of the "integration bakes the CLI" wave end to end through
+// resolveWorkspaceImage: a workspace that names an anthropic integration in
+// its requirements must have claude-code's install baked into the generated
+// devcontainer's onCreateCommand; a workspace that names nothing must not.
+func TestResolveWorkspaceImage_NamedIntegrationBakesAgentTool(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go", "JavaScript"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	sc := types.SiteConfig{Integrations: []types.Integration{
+		{ID: "acme-claude", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"},
+	}}
+
+	t.Run("named anthropic integration bakes claude-code", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile), Requirements: map[string]types.WorkspaceRequirement{
+			"integration:acme-claude": {Level: "optional", Provenance: "operator_set"},
+		}}
+		if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); !ok {
+			t.Fatal("resolveWorkspaceImage failed")
+		}
+		if len(builder.calls) != 1 {
+			t.Fatalf("want exactly one build, got %d", len(builder.calls))
+		}
+		dc := builder.calls[0].files[".devcontainer/devcontainer.json"]
+		if !strings.Contains(dc, "onCreateCommand") || !strings.Contains(dc, "@anthropic-ai/claude-code") {
+			t.Errorf("a named anthropic integration must bake claude-code's install into onCreateCommand: %s", dc)
+		}
+	})
+
+	t.Run("no named integration bakes nothing", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile)}
+		if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); !ok {
+			t.Fatal("resolveWorkspaceImage failed")
+		}
+		if len(builder.calls) != 1 {
+			t.Fatalf("want exactly one build, got %d", len(builder.calls))
+		}
+		dc := builder.calls[0].files[".devcontainer/devcontainer.json"]
+		if strings.Contains(dc, "onCreateCommand") {
+			t.Errorf("no named integration must bake no onCreateCommand: %s", dc)
+		}
+	})
+}
+
+// TestResolveWorkspaceImage_CacheKeyFoldsNamedIntegration pins moving part 2:
+// the cached BuiltProfileHash must be TRUSTED only when it already reflects
+// the workspace's current named-tool set, or toggling an integration would
+// never trigger a rebuild (and, symmetrically, an unchanged tool set must
+// still hit the cache — this feature must not force a rebuild on every run).
+func TestResolveWorkspaceImage_CacheKeyFoldsNamedIntegration(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go", "JavaScript"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	sc := types.SiteConfig{Integrations: []types.Integration{
+		{ID: "acme-claude", Category: types.IntegrationAIProvider, Type: "anthropic_api_key"},
+	}}
+	reqs := map[string]types.WorkspaceRequirement{
+		"integration:acme-claude": {Level: "optional", Provenance: "operator_set"},
+	}
+	tools := workspacescan.AgentToolsForIntegrationTypes([]string{"anthropic_api_key"})
+	hashWithTool := profile.CacheKey(tools)
+	hashNoTool := profile.CacheKey(nil)
+	if hashWithTool == hashNoTool {
+		t.Fatal("test setup invalid: CacheKey must differ with/without the named tool for this test to mean anything")
+	}
+
+	t.Run("cache holds when the stored hash already reflects the named tool", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{
+			ID: uuid.New(), Profile: mustJSON(profile), Requirements: reqs,
+			ImageRef: "wardyn-workspace/cached:abc", BuiltProfileHash: hashWithTool,
+		}
+		image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+		if !ok || image != "wardyn-workspace/cached:abc" {
+			t.Fatalf("resolveWorkspaceImage = (%q, %v), want the cached image reused", image, ok)
+		}
+		if len(builder.calls) != 0 {
+			t.Errorf("want no build when the cache already reflects the named tool, got %d", len(builder.calls))
+		}
+	})
+
+	t.Run("a stale hash predating the named integration busts the cache", func(t *testing.T) {
+		builder := &capturingImageBuilder{}
+		cfg := baseTestConfig(h, &resolveImageStoreFake{sc: sc})
+		cfg.ImageBuilder = builder
+		srv := New(cfg)
+		ws := types.Workspace{
+			ID: uuid.New(), Profile: mustJSON(profile), Requirements: reqs,
+			// Cached BEFORE the integration was named: the stale hash must not
+			// be trusted once the tool set has changed.
+			ImageRef: "wardyn-workspace/stale:abc", BuiltProfileHash: hashNoTool,
+		}
+		image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+		if !ok {
+			t.Fatal("resolveWorkspaceImage failed")
+		}
+		if image == "wardyn-workspace/stale:abc" {
+			t.Error("must not reuse the stale-hash image once the named integration changes the tool set")
+		}
+		if len(builder.calls) != 1 {
+			t.Errorf("want exactly one rebuild when the cached hash predates the named tool, got %d", len(builder.calls))
+		}
+	})
 }
