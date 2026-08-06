@@ -8,6 +8,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **A named Anthropic integration bakes the `claude-code` CLI into a
+  workspace's recommended build.** `AgentToolsForIntegrationTypes` maps any
+  `anthropic_*`-typed integration on the workspace to `claude-code`, and a
+  generated `.devcontainer/Dockerfile` installs it via the same
+  checksum-verified native-binary lane the full toolchain image uses,
+  running as root before any devcontainer feature so it depends on none.
+  The tool set is also the build-cache key's input, so connecting or
+  removing the integration invalidates the cached image and the next build
+  reflects it. `codex-cli` is deliberately never baked — no Wardyn-verified
+  public native-download contract, and its npm lane would need a Node
+  runtime this build stage doesn't carry — so an OpenAI integration bakes
+  nothing. A workspace whose repo ships its own `.devcontainer` bypasses
+  the generator (and the bake) entirely: Wardyn builds that file as-is and
+  never modifies it, on disk or in the image, so a repo that wants the CLI
+  has to add it itself. Live-proven against a real daemon: a built image's
+  `claude --version` reports a real binary, not the inert no-op an earlier
+  attempt silently shipped.
+
 ### Fixed
 
 - **The wizard's Build step showed only a bare spinner — the real image-build
@@ -60,9 +80,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   excluded by CHECK constraint, not convention). A workspace is now an ordered
   list of attachments plus an optional catalog image, and its effective
   contract is a single pure fold of its sources' contracts under its own
-  overlay — with per-attachment **overrides** so an aggregate can disable or
-  re-lane any requirement a shared source declares (mount a repo read-only to
-  read its code, without inheriting its build secrets). The fold is
+  overlay — the fold already honors per-attachment **overrides** server-side,
+  letting a stored attachment disable or re-lane any requirement a shared
+  source declares (mount a repo read-only to read its code, without
+  inheriting its build secrets) — though no operator-reachable surface can
+  set one yet: no wire field, endpoint, CLI flag, or wizard control. That
+  surface lands with the per-source Requirements regroup. The fold is
   fail-closed where it matters: a source's `write:` rows apply only to paths
   the source itself owns, and a scan-seeded contributor anywhere in the merge
   poisons auto-granting for that key. Everything shipped expand-only
@@ -72,9 +95,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   upserts into the library and attaches — and reads return the same derived
   `sources`/`base_image`/`profile`/`status` fields, now computed from the
   attached rows at the store's hydrate pass. New endpoints: `GET/POST
-  /api/v1/sources`, `GET/PUT/DELETE /api/v1/sources/{id}`, `PUT
-  /api/v1/sources/{id}/requirements`, `POST /api/v1/sources/{id}/scan`,
-  `GET/POST /api/v1/base-images`, `GET/DELETE /api/v1/base-images/{id}`.
+  /api/v1/sources`, `GET/PUT/DELETE /api/v1/sources/{id}`, `POST
+  /api/v1/sources/{id}/scan`, `GET/POST /api/v1/base-images`, `GET/DELETE
+  /api/v1/base-images/{id}`.
   Deleting a source or image that workspaces still use answers 409 *naming
   them* (`?force=1` detaches — for an image that honestly means "fall back to
   the derived recommended build"; for a source it un-mounts code, which is why
@@ -164,14 +187,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Log in" as though nothing had happened. A capture from an earlier session
   shows as "Already connected — captured 3d ago", presence and age, never a
   live check.
-- **The Requirements step reads in dependency order — Record is last, and it
-  opens with what it will carry.** The tab strip was Record · Egress · Secrets
-  · Files & services, leading with the one tab that consumes everything the
-  others declare. It now reads Reach · Secrets · Files & services · Record:
+- **The Requirements step reads in dependency order, and Verify is what
+  closes it.** The tab strip was Record · Egress · Secrets · Files &
+  services, leading with the one tab that consumes everything the others
+  declare. It now reads Reach · Secrets · Files & services · Verify — though
+  the wizard shows only the first three, since Verify is its own rail step
+  there; the fourth tab lives on the workspace detail page's copy of this
+  strip:
   Reach headlines the integrations (an integration is the reason a host is on
   the allowlist at all) under a display-only power-source card stating what
   agent runs here resolve to — the choice itself lives where it always really
-  did, on the workspace page's binding dialog — and Record closes the walk as
+  did, on the workspace page's binding dialog — and Verify closes the walk as
   "prove & discover", opening with the power source, riding secrets and egress
   posture the contract grants it. With nothing resolving, the agent-record
   button is absent rather than disabled, the stated fact points at Reach, and
@@ -264,7 +290,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   never auto-grant a secret — the scanner reads untrusted repo content, so only
   an operator's direct declaration attaches a credential.
 - **Integrations** — one surface for the systems outside Wardyn: model
-  providers, git hosts, artifact mirrors, the corporate proxy. Rows are
+  providers, git hosts, package feeds, and more. Rows are
   DERIVED from what already exists (stored secret names, site config, setup
   status), so an operator who never opens the page keeps identical behavior and
   one who does can adopt a row to edit it. Each row states what it powers,
@@ -278,10 +304,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   /integrations/{id}` and `POST /integrations/{id}/adopt` manage stored rows;
   the composer registry derives from the integration marked for Wardyn's own
   features, with `WARDYN_COMPOSER_CONFIG` still winning outright when set.
-- **A single Add-workspace wizard** — Sources → Base image → Requirements →
-  Done — replacing three inconsistent entry points and the six-step import
-  dialog. Custom image builds accept Dockerfile steps, and a credential-shaped
-  line warns (naming the line and detector, never the value) without blocking.
+- **A single Add-workspace wizard** — Sources · Base image · Integrations ·
+  Build · Requirements · Verify · Done — replacing three inconsistent entry
+  points and the six-step import dialog. Custom image builds accept
+  Dockerfile steps, and a credential-shaped line warns (naming the line and
+  detector, never the value) without blocking.
 - **A workspace detail page** at `/workspaces/:id`: the requirements editor,
   the candidates Wardyn noticed but hasn't given to any run, recorded sessions
   and their confined replays, and env-as-code.
@@ -301,8 +328,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   in-sandbox consumers were already env-driven no-ops when a key is absent.
 - **A workspace's Model access binding names an Integration everywhere the UI
   touches it.** The workspace list chip, the detail page's Model access group,
-  its edit dialog, and the create form all speak the Integration-based binding
-  now (`llm_cred.integration_ref`) — the picker lists the AI-provider
+  and its edit dialog all speak the Integration-based binding now
+  (`llm_cred.integration_ref`) — the picker lists the AI-provider
   Integrations the server actually knows instead of a mode radio whose
   `api_key`/`bedrock` fields the server had already stopped storing, which
   made "Save" silently clear the binding. The New Run access step's
@@ -328,13 +355,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy `artifact_overrides` body for one release, since `PUT /site-config` is
   a whole-document replace and an operator applying a config file saved in the
   old shape would otherwise silently erase their proxy and every redirect.
-- **The workspace Requirements step is four tabs** — Record · Egress · Secrets
-  · Files & services — matching the approved design. Record leads, because the
-  honest answer to "what does this workspace need?" is usually "drive it once
-  and find out."
-- The Integrations page's **Artifact mirror** category is now **Egress
-  redirection**, with the same compact `from → to` rows, the `network only`
-  chip, and per-row Test as the Corporate network step.
 - **Network topology has exactly one home, and it is Corporate network.** The
   Integrations page used to carry Host proxy and Egress redirection as two of
   its four categories — the same stored rows the Corporate network step
@@ -413,11 +433,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   server-rejected custom URL now renders inline where it was typed, with the
   server's own message, instead of vanishing into a toast.
 
-- **Getting started is nine steps, not thirteen.** The model-provider, host-
-  proxy, SCM-provider, artifact-registry and credentials steps were five rail
-  entries for one activity; they are now one optional Integrations step. The
-  dependency their ORDER used to encode — you cannot reach a model provider
-  through an unconfigured corporate proxy — is now a banner that says so.
+- **Getting started is twelve steps, not thirteen.** The model-provider,
+  host-proxy, SCM-provider, artifact-registry and credentials steps were five
+  rail entries for one activity; they collapsed into one optional
+  Integrations step. Corporate network came back as its own step, right
+  before Integrations — the dependency their ORDER used to encode (you
+  cannot reach a model provider through an unconfigured corporate proxy) is
+  fixed by that placement itself, not a banner — and the source-library split
+  gave Directories & repos and Base images their own steps under Your work.
   Readiness reads the same derived rows the Integrations page renders, so the
   funnel and that page cannot disagree.
 - Workspace status collapsed to `pending_scan → scanning → scanned | error`
@@ -441,9 +464,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Fixed
 
 - **`go build` works in every image, not just the full toolchain image.** The
-  platform env points `GOTMPDIR` at the agent's home for every run (the
-  sandbox mounts `/tmp` noexec, and `go test` executes what it compiles
-  there), but unlike `GOCACHE` the go tool refuses to create `GOTMPDIR`
+  platform env points `GOTMPDIR` at the agent's home for a run whose
+  workspace scans call for Go (the sandbox mounts `/tmp` noexec, and `go
+  test` executes what it compiles there), but unlike `GOCACHE` the go tool
+  refuses to create `GOTMPDIR`
   itself — and only the full image baked the directory, so the first Go
   command in a recommended-built or BYO image failed with
   `stat /home/agent/.gotmp: no such file or directory`. Two runtime guards,
@@ -494,9 +518,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`make setup` asks which folder Wardyn may onboard.** `WARDYN_WORKSPACES_ROOT`
   had to be exported by hand on every setup run or local-directory onboarding
   failed against the sealed daemon. The containerized front door now prompts
-  for it (default: the previous answer, else the current directory), refuses
-  `$HOME` outright, remembers the choice in deploy/compose/.env, and an
-  explicit env var still wins silently for scripts and CI.
+  for it (default: the previous answer, else **sealed** — a bare Enter
+  exposes nothing), refuses `$HOME` outright, remembers the choice in
+  deploy/compose/.env, and an explicit env var still wins silently for
+  scripts and CI.
 - **The base-image cards stopped claiming tools they never carry.** The
   Recommended card appended a `claude-code` chip whenever an AI integration
   existed — but the recommended build is generated from the scan profile and
@@ -582,15 +607,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   was blocking them and sent them to debug a working firewall. That inverts the
   reason these buttons are permitted at all. Failed requests now surface as
   themselves and the control returns to Not tested.
-- **The Integrations page showed nothing for a proxy or redirect saved through
-  the new Corporate network step** — its row derivation still read only the
-  legacy `artifact_overrides` map and the secret-ref-only proxy field, so the
-  two surfaces disagreed about the same stored config.
+- **The Integrations page's proxy-detected banner kept nagging even after a
+  plain, non-secret `upstream_proxy_url` was configured** — its suppression
+  check read only the secret-ref proxy field. It now counts either field.
+  (The page itself derives no row for a proxy or redirect at all — that
+  surface lives on Corporate network alone; see Changed, "Network topology
+  has exactly one home.")
 - **The Add-integration dialog's registry redirect could not save twice.** Its
   step body still wrote the deprecated `artifact_overrides` map while sending
   the whole document back, and the server refuses a body that sets both shapes
   rather than guessing which one wins — so the second save always 400'd, citing
-  a field the operator never typed. It writes `egress_redirects` now.
+  a field the operator never typed. Fixed to write `egress_redirects`; that
+  step body has since moved out of this dialog entirely, folded into the
+  Corporate network step's own editor (`corp-network-egress.tsx`).
 
 - A confined replay of a multi-repo workspace silently omitted the clone host
   of every non-GitHub repo past the first (the helper read the single-source
@@ -698,7 +727,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **`WARDYN_OIDC_OPERATOR_EMAILS` — a minimal viewer/operator gate** (flag
   `-oidc-operator-emails`), the first authorization tier on the control plane,
-  now covering 25 routes. List the operators and every other signed-in human
+  now covering 35 routes. List the operators and every other signed-in human
   becomes a **viewer**: reads everything and can launch/kill runs, but is
   403'd on configuring the deployment (managed harness credential, policies,
   workspaces, `PUT /site-config`), writing/deleting secrets, deciding an
