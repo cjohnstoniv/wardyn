@@ -221,3 +221,27 @@ func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
 			policy.WorkspaceMounts, policy.WorkspaceRepos)
 	}
 }
+
+// TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget pins the
+// reconcile-wave1 fix: an ephemeral source never passes through
+// ValidateMount (there is no mount, just WARDYN_EPHEMERAL_DIRS -> mkdir -p
+// inside the sandbox), so wireWorkspaceSource is the only gate standing
+// between a legacy row's target and the sandbox. A target outside
+// allowedTargetPrefixes must be dropped, not surfaced for dispatch.
+func TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget(t *testing.T) {
+	var run types.AgentRun
+	var policy types.RunPolicySpec
+	ws := types.Workspace{
+		ID: uuid.New(),
+		Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeEphemeral, Target: "/root/.ssh"},          // outside allowedTargetPrefixes
+			{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"}, // valid
+		},
+	}
+
+	_, ephemeralDirs := wireWorkspaceSource(&run, &policy, ws)
+
+	if want := []string{"/home/agent/scratch"}; !slices.Equal(ephemeralDirs, want) {
+		t.Errorf("ephemeralDirs = %v, want %v (the out-of-allowlist target must be dropped, not surfaced for WARDYN_EPHEMERAL_DIRS)", ephemeralDirs, want)
+	}
+}

@@ -150,8 +150,8 @@ type ScanFacts struct {
 // and to hand to run-creation for egress/grant/image decisions (A6, a later
 // wave).
 type WorkspaceProfile struct {
-	Languages       []string   `json:"languages,omitempty"`
-	PackageManagers []string   `json:"package_managers,omitempty"`
+	Languages       []string `json:"languages,omitempty"`
+	PackageManagers []string `json:"package_managers,omitempty"`
 	// (ToolchainNeeds below reads these two — the dispatch env derives from
 	// what the scan actually detected, never from a platform-wide guess.)
 	EgressDomains   []string   `json:"egress_domains,omitempty"`

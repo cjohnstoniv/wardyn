@@ -99,10 +99,13 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}
 
-	if run != nil {
-		if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
-			slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
-		}
+	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
+	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
+	// — the envbuild orphan-build sweep needs only an ImageBuilder, which a
+	// `-runner none -envbuild` headless-API deployment still configures. Gating
+	// this call on run left that deployment's build containers never swept.
+	if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
+		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 	}
 }
 

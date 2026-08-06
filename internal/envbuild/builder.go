@@ -133,7 +133,7 @@ var requiredTools = []string{
 // repository into a local workspace image.
 type Builder struct {
 	// cli is the Docker API client; set by New / newWithClient.
-	cli envbuilderDockerAPI
+	cli        envbuilderDockerAPI
 	liveBuilds liveBuildTracker // in-flight build container IDs; see reaper.go
 
 	// EnvbuilderImage is the envbuilder OCI image reference to use.

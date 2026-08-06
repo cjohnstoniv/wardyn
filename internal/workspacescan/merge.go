@@ -25,19 +25,30 @@ import (
 // largest build-memory hint, fold ContextHash into a digest-of-digests, and
 // take the LOWEST confidence (one ambiguous source makes the whole
 // workspace's profile suspect). HasDevcontainer/HasDockerfile come from the
-// PRIMARY (profiles[0]) source ONLY — unioning them would let a devcontainer
-// that lives in a non-primary source get built as if it were the primary
-// repo's own. identities[i] names profiles[i]'s source (its locator, unique
-// per source); LeakFinding.Path and SecretFilesPresent entries are prefixed
-// "identity: path" so a merged finding still says which source it came from.
-// Empty input returns the zero profile; a single profile is returned
-// unchanged (nothing ambiguous to resolve for one source).
-func MergeProfiles(profiles []WorkspaceProfile, identities []string) WorkspaceProfile {
+// PRIMARY source ONLY — unioning them would let a devcontainer that lives in
+// a non-primary source get built as if it were the primary repo's own.
+// primaryIdentity names that source (matched against identities, NOT
+// profiles[0] — the caller's attachment order and this function's scan order
+// can diverge whenever the first attachment is ephemeral or not yet scanned;
+// see hydrateWorkspace in internal/store/store_sources.go, which derives it
+// from the exact same ws.Sources[0] the consumer reads as "primary"). A
+// primaryIdentity matching no profile (primary is ephemeral or unscanned)
+// yields false/false, never another source's values. identities[i] names
+// profiles[i]'s source (its locator, unique per source); LeakFinding.Path and
+// SecretFilesPresent entries are prefixed "identity/path" so a merged finding
+// still says which source it came from — "/" rather than ": " so the prefixed
+// form still starts a path segment the client's TEST_PATH_RE fixture
+// classifier (ui/.../wizard-types.ts) can match (testdata/fixtures/__tests__).
+// Empty input returns the zero profile.
+func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIdentity string) WorkspaceProfile {
 	if len(profiles) == 0 {
 		return WorkspaceProfile{}
 	}
+	hasDevcontainer, hasDockerfile := primaryBuildFacts(profiles, identities, primaryIdentity)
 	if len(profiles) == 1 {
-		return profiles[0]
+		p := profiles[0]
+		p.HasDevcontainer, p.HasDockerfile = hasDevcontainer, hasDockerfile
+		return p
 	}
 	langs, pkgMgrs, egress, tools := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	services, suggested, secretFiles := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
@@ -121,8 +132,8 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string) WorkspacePr
 		EgressDomains:      sortedSetKeys(egress),
 		Tools:              sortedSetKeys(tools),
 		GitRemotes:         GitRemotes{GitHub: sortedSetKeys(github), OtherHosts: sortedSetKeys(otherHosts)},
-		HasDevcontainer:    profiles[0].HasDevcontainer,
-		HasDockerfile:      profiles[0].HasDockerfile,
+		HasDevcontainer:    hasDevcontainer,
+		HasDockerfile:      hasDockerfile,
 		RequiredSecrets:    requiredSecrets,
 		ServicesNeeded:     sortedSetKeys(services),
 		SuggestedEgress:    sortedSetKeys(suggested),
@@ -137,17 +148,43 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string) WorkspacePr
 	}
 }
 
+// primaryBuildFacts returns the HasDevcontainer/HasDockerfile of the profile
+// whose identity equals primaryIdentity — i.e. the SAME attachment
+// hydrateWorkspace put at ws.Sources[0], which resolveWorkspaceImage
+// (internal/api/workspace_run.go) reads as "primary". Deliberately NOT
+// profiles[0]: identities/profiles only contain attachments that actually
+// decoded a profile, in scan order, which can diverge from attachment order.
+// No match (the primary attachment is ephemeral or unscanned) returns
+// false/false — a devcontainer belonging to some OTHER attached source must
+// never be attributed to a primary we know nothing about.
+func primaryBuildFacts(profiles []WorkspaceProfile, identities []string, primaryIdentity string) (hasDevcontainer, hasDockerfile bool) {
+	for i, id := range identities {
+		if i >= len(profiles) {
+			break
+		}
+		if id == primaryIdentity {
+			return profiles[i].HasDevcontainer, profiles[i].HasDockerfile
+		}
+	}
+	return false, false
+}
+
 // attributePath prefixes a per-source-root-relative path with its source's
 // identity so a merged finding still says which attached source it came
 // from — two sources' identical relative paths ("config/.env") would
-// otherwise be indistinguishable once concatenated. Empty identity leaves
-// path as-is (unreachable via hydrateWorkspace, which always has a source
-// locator, but fail-safe rather than producing a stray leading ": ").
+// otherwise be indistinguishable once concatenated. "/" is the separator
+// (not ": ") so the result still STARTS a path segment: the client's fixture
+// classifier (ui/.../wizard-types.ts TEST_PATH_RE) anchors on `(^|/)` before
+// testdata|__tests__|fixtures, which a "identity: testdata/x" prefix breaks
+// but "identity/testdata/x" does not — and it doubles as a plausible full
+// path (source root / file). Empty identity leaves path as-is (unreachable
+// via hydrateWorkspace, which always has a source locator, but fail-safe
+// rather than producing a stray leading "/").
 func attributePath(identity, path string) string {
 	if identity == "" {
 		return path
 	}
-	return identity + ": " + path
+	return identity + "/" + path
 }
 
 // mergeContextHash folds N sources' own ContextHash digests into ONE: sorted

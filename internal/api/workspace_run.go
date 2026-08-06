@@ -540,8 +540,14 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 				Source: src.Path, Target: target, ReadOnly: &ro,
 			})
 		case types.WorkspaceSourceTypeEphemeral:
-			// No policy entry — it's a mkdir inside the sandbox, not a mount/clone.
-			if src.Target != "" {
+			// No policy entry — it's a mkdir inside the sandbox, not a mount/clone —
+			// which also means it never passes through ValidateMount at CreateSandbox
+			// time the way a repo/local_dir target does. Re-validate it here against
+			// the same deny-list runner.ValidateTarget applies at onboarding, mirroring
+			// seedRequestWorkspace's identical guard (runs_create.go): a row written
+			// before that check existed must not ride straight past the gate onto a
+			// path outside allowedTargetPrefixes.
+			if src.Target != "" && runner.ValidateTarget(src.Target) == nil {
 				ephemeralDirs = append(ephemeralDirs, src.Target)
 			}
 		}

@@ -172,10 +172,9 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 	// workspace attach landing after a caller's own WorkspacesAttaching probe
 	// can never slip a delete through — the exact orphaning the doc above
 	// refuses. Zero rows affected means either "still attached" or "no such
-	// id"; both read as ErrConflict here (mirrors ClaimSourceActiveRun's
-	// zero-rows convention) — the caller already has the id from the request
-	// path, so a 409 naming zero attaching workspaces on a bad id is a
-	// harmless edge case, not a silent miss.
+	// id" — the DELETE has already refused either way, so a follow-up
+	// existence probe cannot reopen the TOCTOU it closed; it only picks which
+	// honest error to report (a genuinely-absent id must still 404, not 409).
 	tag, err := s.Pool.Exec(ctx, `
 		DELETE FROM sources WHERE id=$1 AND NOT EXISTS (
 			SELECT 1 FROM workspaces
@@ -185,6 +184,13 @@ func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 		return fmt.Errorf("store: delete source: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		var exists bool
+		if perr := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sources WHERE id=$1)`, id).Scan(&exists); perr != nil {
+			return fmt.Errorf("store: probe source existence: %w", perr)
+		}
+		if !exists {
+			return ErrNotFound
+		}
 		return ErrConflict
 	}
 	return nil
@@ -218,10 +224,10 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	return nil
 }
 
-// SetSourceScanResult persists a scan outcome FENCED on the claiming run —
-// SetWorkspaceScanResult's shape one table over: only the run that holds
-// active_run_id may write, so a stale upload from a superseded run can never
-// clobber a fresher result. `seed` is the scan's requirement discovery for
+// SetSourceScanResult persists a scan outcome FENCED on the claiming run:
+// only the run that holds active_run_id may write, so a stale upload from a
+// superseded run can never clobber a fresher result. `seed` is the scan's
+// requirement discovery for
 // the SOURCE's OWN contract, applied fill-missing-only in the same statement:
 // jsonb `||` lets the RIGHT side win, so an existing row — an operator's
 // edit, or an earlier scan's — is never overwritten by a re-scan.
@@ -326,19 +332,46 @@ func (s PG) WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]strin
 // DeleteBaseImage removes a catalog row; detach=true first drops every
 // workspace reference (those workspaces fall back to the derived recommended
 // build — NULL is the marker, so "detach" is honest, not destructive).
+// detach=false refuses in ONE atomic statement — mirrors DeleteSource: the
+// in-use check and the delete can never split into two round trips a
+// concurrent attach could land between (before this, that race surfaced as a
+// raw Postgres foreign-key-violation 500 instead of a clean 409).
 func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
 		if _, err := s.Pool.Exec(ctx,
 			`UPDATE workspaces SET base_image_id=NULL, updated_at=now() WHERE base_image_id=$1`, id); err != nil {
 			return fmt.Errorf("store: detach base image: %w", err)
 		}
+		tag, err := s.Pool.Exec(ctx, `DELETE FROM base_images WHERE id=$1`, id)
+		if err != nil {
+			return fmt.Errorf("store: delete base image: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
 	}
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM base_images WHERE id=$1`, id)
+	// Non-force: NOT EXISTS is evaluated atomically WITH the DELETE, the same
+	// guarantee DeleteSource makes. Zero rows affected means either "still in
+	// use" or "no such id" — the DELETE has already refused either way, so a
+	// follow-up existence probe cannot reopen the TOCTOU; it only picks which
+	// honest error to report (a genuinely-absent id must still 404, not 409).
+	tag, err := s.Pool.Exec(ctx, `
+		DELETE FROM base_images WHERE id=$1 AND NOT EXISTS (
+			SELECT 1 FROM workspaces WHERE base_image_id=$1
+		)`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete base image: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+		var exists bool
+		if perr := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM base_images WHERE id=$1)`, id).Scan(&exists); perr != nil {
+			return fmt.Errorf("store: probe base image existence: %w", perr)
+		}
+		if !exists {
+			return ErrNotFound
+		}
+		return ErrConflict
 	}
 	return nil
 }
@@ -501,6 +534,24 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	}
 	ws.Sources = derived
 
+	// primaryIdentity names the source behind ws.Sources[0] — derived the SAME
+	// way resolveWorkspaceImage (internal/api/workspace_run.go) reads "primary"
+	// (primary.Sources[0]), so MergeProfiles attributes HasDevcontainer/
+	// HasDockerfile from that exact attachment rather than merely the first one
+	// that happened to scan (profiles[0]/identities[0] can name a DIFFERENT,
+	// later attachment when the first is ephemeral or not yet scanned). Empty
+	// when Sources[0] is ephemeral or there are no sources at all — matches no
+	// identity, which MergeProfiles reads as "primary has no devcontainer".
+	var primaryIdentity string
+	if len(derived) > 0 {
+		switch derived[0].Type {
+		case types.WorkspaceSourceTypeLocalDir:
+			primaryIdentity = derived[0].Path
+		case types.WorkspaceSourceTypeRepo:
+			primaryIdentity = derived[0].Source
+		}
+	}
+
 	// Profile: the merge of scanned attached sources — same field, same shape,
 	// so list badges and pollers are none the wiser. An EPHEMERAL-ONLY
 	// composition derives the deterministic empty profile (high confidence —
@@ -509,7 +560,7 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	// Requirements tabs never mounted on the default scratch-floor path.
 	switch {
 	case len(profiles) > 0:
-		merged := workspacescan.MergeProfiles(profiles, identities)
+		merged := workspacescan.MergeProfiles(profiles, identities, primaryIdentity)
 		if b, err := json.Marshal(merged); err == nil {
 			ws.Profile = b
 		}

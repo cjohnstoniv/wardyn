@@ -10,21 +10,60 @@ import (
 	"testing"
 )
 
-// TestMergeProfiles_EmptyAndSingle pins the two short-circuits: no profiles
-// merges to the zero value, and ONE profile is returned completely unchanged
+// TestMergeProfiles_EmptyAndSingle pins the empty short-circuit and the
+// single-profile case: no profiles merges to the zero value; ONE profile
+// whose identity IS primaryIdentity is returned completely unchanged
 // (including its own Source, which the N>1 path always overwrites to
-// SourceDeterministic) — there is nothing ambiguous to resolve for one source.
+// SourceDeterministic) — nothing ambiguous to resolve when the lone scanned
+// source is also primary. When the lone profile is NOT primary (Sources[0]
+// is a different, unscanned/ephemeral attachment), HasDevcontainer/
+// HasDockerfile must not ride along unchanged — the exact reconcile-wave1
+// regression, which lived in this len==1 shortcut.
 func TestMergeProfiles_EmptyAndSingle(t *testing.T) {
-	if got := MergeProfiles(nil, nil); !reflect.DeepEqual(got, WorkspaceProfile{}) {
+	if got := MergeProfiles(nil, nil, ""); !reflect.DeepEqual(got, WorkspaceProfile{}) {
 		t.Errorf("MergeProfiles(nil) = %+v, want the zero profile", got)
 	}
 	solo := WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: ConfidenceMedium, Source: SourceAIAssisted,
 		LeakFindings: []LeakFinding{{Path: "x/.env", Kind: "aws-access-key"}},
 	}
-	got := MergeProfiles([]WorkspaceProfile{solo}, []string{"only-source"})
+	got := MergeProfiles([]WorkspaceProfile{solo}, []string{"only-source"}, "only-source")
 	if !reflect.DeepEqual(got, solo) {
-		t.Errorf("MergeProfiles(one profile) = %+v, want it returned byte-identical (incl. Source=%q, unprefixed paths)", got, solo.Source)
+		t.Errorf("MergeProfiles(one profile, primary) = %+v, want it returned byte-identical (incl. Source=%q, unprefixed paths)", got, solo.Source)
+	}
+
+	// The lone SCANNED source is NOT primary: e.g. Sources[0] is a second,
+	// unscanned attachment, so primaryIdentity names a source this profiles
+	// slice has no entry for.
+	withDC := WorkspaceProfile{Languages: []string{"Go"}, HasDevcontainer: true, HasDockerfile: true, Confidence: ConfidenceHigh}
+	notPrimary := MergeProfiles([]WorkspaceProfile{withDC}, []string{"secondary-source"}, "primary-but-unscanned")
+	if notPrimary.HasDevcontainer || notPrimary.HasDockerfile {
+		t.Errorf("MergeProfiles(one profile, NOT primary): HasDevcontainer=%v HasDockerfile=%v, want false/false — a non-primary source's devcontainer must not be attributed to an unscanned primary",
+			notPrimary.HasDevcontainer, notPrimary.HasDockerfile)
+	}
+	if want := []string{"Go"}; !reflect.DeepEqual(notPrimary.Languages, want) {
+		t.Errorf("Languages = %v, want %v (everything else about the lone profile still applies)", notPrimary.Languages, want)
+	}
+}
+
+// TestMergeProfiles_PrimaryByIdentityNotSliceOrder pins the reconcile-wave1
+// fix in the N>1 merge path: primary is matched by identity against
+// primaryIdentity, never profiles[0]/identities[0]. Feeds the same shape of
+// two profiles as TestMergeProfiles_FieldByField's a/b but with the NON-
+// primary one first in both slices — if primary were still slice-order
+// based this would (wrongly) read the first entry as primary.
+func TestMergeProfiles_PrimaryByIdentityNotSliceOrder(t *testing.T) {
+	a := WorkspaceProfile{HasDevcontainer: true, HasDockerfile: false, Confidence: ConfidenceHigh, Source: SourceDeterministic}
+	b := WorkspaceProfile{HasDevcontainer: false, HasDockerfile: true, Confidence: ConfidenceHigh, Source: SourceDeterministic}
+
+	// b (NOT primary) is profiles[0]/identities[0] here — deliberately the
+	// reverse of attachment/primary order.
+	got := MergeProfiles([]WorkspaceProfile{b, a}, []string{"repoB", "repoA"}, "repoA")
+	if !got.HasDevcontainer {
+		t.Error("HasDevcontainer = false, want true (repoA's own value) — slice position 0 (repoB) must not win over primaryIdentity")
+	}
+	if got.HasDockerfile {
+		t.Error("HasDockerfile = true, want false (repoA's own value) — repoB's must not bleed in just because it is profiles[0]")
 	}
 }
 
@@ -74,7 +113,7 @@ func TestMergeProfiles_FieldByField(t *testing.T) {
 		Source:      SourceAIAssisted, // merged Source must always read SourceDeterministic
 	}
 
-	got := MergeProfiles([]WorkspaceProfile{a, b}, []string{"repoA", "repoB"})
+	got := MergeProfiles([]WorkspaceProfile{a, b}, []string{"repoA", "repoB"}, "repoA")
 
 	if want := []string{"go", "python", "ts"}; !reflect.DeepEqual(got.Languages, want) {
 		t.Errorf("Languages = %v, want %v (union, sorted)", got.Languages, want)
@@ -108,15 +147,15 @@ func TestMergeProfiles_FieldByField(t *testing.T) {
 	if want := []string{"s1.example", "s2.example"}; !reflect.DeepEqual(got.SuggestedEgress, want) {
 		t.Errorf("SuggestedEgress = %v, want %v", got.SuggestedEgress, want)
 	}
-	if want := []string{"repoA: .env", "repoB: .env"}; !reflect.DeepEqual(got.SecretFilesPresent, want) {
+	if want := []string{"repoA/.env", "repoB/.env"}; !reflect.DeepEqual(got.SecretFilesPresent, want) {
 		t.Errorf("SecretFilesPresent = %v, want %v (identity-prefixed so the same relative path from two sources stays distinguishable)", got.SecretFilesPresent, want)
 	}
 	if got.BuildMemoryMiB != 1024 {
 		t.Errorf("BuildMemoryMiB = %d, want 1024 (largest)", got.BuildMemoryMiB)
 	}
 	wantLeaks := []LeakFinding{
-		{Path: "repoA: config/.env", Kind: "aws-access-key", Line: 3},
-		{Path: "repoB: config/.env", Kind: "aws-access-key", Line: 3},
+		{Path: "repoA/config/.env", Kind: "aws-access-key", Line: 3},
+		{Path: "repoB/config/.env", Kind: "aws-access-key", Line: 3},
 	}
 	if !reflect.DeepEqual(got.LeakFindings, wantLeaks) {
 		t.Errorf("LeakFindings = %+v, want %+v (identity-prefixed, both kept — different sources, same relative path)", got.LeakFindings, wantLeaks)
@@ -158,7 +197,7 @@ func TestMergeProfiles_LeakFindingsRecapped(t *testing.T) {
 	pa, ia := mk("repoA", maxLeakFindings)
 	pb, ib := mk("repoB", maxLeakFindings)
 
-	got := MergeProfiles([]WorkspaceProfile{pa, pb}, []string{ia, ib})
+	got := MergeProfiles([]WorkspaceProfile{pa, pb}, []string{ia, ib}, ia)
 	if len(got.LeakFindings) != maxLeakFindings {
 		t.Errorf("LeakFindings = %d entries, want capped at %d (each source alone was already at the per-source bound)",
 			len(got.LeakFindings), maxLeakFindings)

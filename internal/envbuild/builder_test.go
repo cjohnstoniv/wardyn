@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 )
@@ -611,6 +612,48 @@ func TestSweepOrphanedBuilds_NoneLabeled(t *testing.T) {
 	}
 	if len(f.removedIDs) != 0 {
 		t.Errorf("removedIDs = %v, want none", f.removedIDs)
+	}
+}
+
+// TestSweepOrphanedBuilds_YoungOrphanSurvives pins the age gate: an untracked
+// labeled container can be a build a DIFFERENT wardynd on the same docker
+// daemon just started (or this process's own, moments before
+// liveBuilds.track landed — ContainerCreate returns before that deferred
+// call runs), so liveBuilds absence alone must not be reaped on. A container
+// well inside the grace window (2x the build timeout) must survive even
+// though it is untracked here.
+func TestSweepOrphanedBuilds_YoungOrphanSurvives(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.listItems = []container.Summary{
+		{ID: "young", Labels: map[string]string{envbuildContainerLabel: "wardyn-workspace/aaa:devcontainer"},
+			Created: time.Now().Add(-5 * time.Minute).Unix()},
+	}
+	b := newWithClient(f, "envbuilder:test", "registry.example.com/wardyn-cache")
+
+	if err := b.SweepOrphanedBuilds(t.Context()); err != nil {
+		t.Fatalf("SweepOrphanedBuilds: %v", err)
+	}
+	if len(f.removedIDs) != 0 {
+		t.Errorf("removedIDs = %v, want none — 5m old is well inside the grace window (2x defaultBuildTimeout=30m=60m)", f.removedIDs)
+	}
+}
+
+// TestSweepOrphanedBuilds_OldOrphanReaped is the flip side of the age gate:
+// past twice the build timeout, no build — this process's or another
+// instance's — could still legitimately own the container, so it IS reaped.
+func TestSweepOrphanedBuilds_OldOrphanReaped(t *testing.T) {
+	f := newFakeEnvbuilderDocker()
+	f.listItems = []container.Summary{
+		{ID: "stale", Labels: map[string]string{envbuildContainerLabel: "wardyn-workspace/bbb:devcontainer"},
+			Created: time.Now().Add(-61 * time.Minute).Unix()},
+	}
+	b := newWithClient(f, "envbuilder:test", "registry.example.com/wardyn-cache")
+
+	if err := b.SweepOrphanedBuilds(t.Context()); err != nil {
+		t.Fatalf("SweepOrphanedBuilds: %v", err)
+	}
+	if !slices.Equal(f.removedIDs, []string{"stale"}) {
+		t.Errorf("removedIDs = %v, want exactly [\"stale\"] (61m old, past the 60m grace window)", f.removedIDs)
 	}
 }
 

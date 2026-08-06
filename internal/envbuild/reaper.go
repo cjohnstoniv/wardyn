@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/moby/moby/client"
 )
@@ -62,16 +63,27 @@ var _ envbuilderListerAPI = (*client.Client)(nil)
 
 // SweepOrphanedBuilds force-removes every build container carrying
 // envbuildContainerLabel that this process has no live build tracked for
-// (liveBuilds) — the residue of a wardynd crash or restart mid-build. A cli
-// that doesn't implement envbuilderListerAPI (a narrower test fake) is simply
-// not swept.
+// (liveBuilds) AND is older than twice the build timeout — the residue of a
+// wardynd crash or restart mid-build. A cli that doesn't implement
+// envbuilderListerAPI (a narrower test fake) is simply not swept.
 //
 // Meant to be called once at boot, before this process has started any build
 // of its own — wired into api.Server.ReconcileOnBoot via the optional
-// api.ImageBuildSweeper capability (see cmd/wardynd/envbuild_docker.go) — so
-// in practice every labeled container found here is an orphan; liveBuilds is
-// still consulted so a concurrent or future call can never tear down a build
-// this process is itself running.
+// api.ImageBuildSweeper capability (see cmd/wardynd/envbuild_docker.go).
+//
+// liveBuilds ALONE is not enough to prove a labeled container is safe to
+// destroy: the label is written by every wardynd sharing this docker daemon
+// (a supported configuration, docs/ENV.md), whose in-flight builds this
+// process's liveBuilds has no entry for — and even for this process,
+// ContainerCreate lands the container on the daemon before the caller's
+// `defer b.liveBuilds.track(id)()` runs. The age gate is the actual safety
+// net, mirroring undispatchedGrace's reasoning (internal/api/reconcile.go):
+// only a container older than any build could legitimately still be running
+// is assumed abandoned. There is no cheap per-process identity in the
+// container metadata today (the label VALUE is the output tag, not an
+// instance id) to additionally skip a different-but-still-alive instance's
+// young builds — which is exactly what the age gate already does, so age
+// alone is the guard, not merely the must-have half of one.
 func (b *Builder) SweepOrphanedBuilds(ctx context.Context) error {
 	lister, ok := b.cli.(envbuilderListerAPI)
 	if !ok {
@@ -84,10 +96,25 @@ func (b *Builder) SweepOrphanedBuilds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("envbuild: list containers for orphan sweep: %w", err)
 	}
+	timeout := b.BuildTimeout
+	if timeout <= 0 {
+		timeout = defaultBuildTimeout
+	}
+	// Doubling timeout is the same deliberately blunt margin undispatchedGrace
+	// uses: a build container's age at sweep time can already approach timeout
+	// on the happy path (create -> pull -> run), so a bare 1x window risks
+	// reaping a build that is merely slow, whether that build is this process's
+	// own (started moments before a crash) or another instance's. Being late
+	// costs one more grace period of a stray container; being early tears down
+	// a live one.
+	cutoff := time.Now().Add(-2 * timeout)
 	var errs []error
 	for _, c := range res.Items {
 		if b.liveBuilds.isLive(c.ID) {
 			continue
+		}
+		if time.Unix(c.Created, 0).After(cutoff) {
+			continue // too young to call orphaned yet
 		}
 		if _, rerr := b.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); rerr != nil {
 			errs = append(errs, fmt.Errorf("envbuild: remove orphaned build container %s: %w", c.ID, rerr))

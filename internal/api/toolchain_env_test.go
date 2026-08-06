@@ -78,6 +78,16 @@ func TestRunToolchainNeeds(t *testing.T) {
 	if got := runToolchainNeeds([]types.Workspace{wsWith(workspacescan.WorkspaceProfile{PackageManagers: []string{"gradle"}})}); got == nil || !got.jvmTools {
 		t.Fatalf("gradle profile: want jvmTools, got %+v", got)
 	}
+	// MIXED: one scanned workspace + one unscanned workspace. The unscanned
+	// one must dominate the whole set to UNKNOWN (nil) — dropping it from the
+	// union (as if it declared nothing) would ship a Go-only env for a run
+	// that also attached a workspace nobody has scanned yet.
+	if got := runToolchainNeeds([]types.Workspace{
+		wsWith(workspacescan.WorkspaceProfile{Languages: []string{"Go"}}),
+		{}, // no profile: unattached/unscanned/malformed
+	}); got != nil {
+		t.Fatalf("mixed scanned+unscanned attachment: want UNKNOWN (nil), got %+v", got)
+	}
 }
 
 // TestApplyEphemeralDirsEnv is the dispatch-level assertion for audit row 56:
