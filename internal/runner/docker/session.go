@@ -27,7 +27,15 @@ import (
 // `new-session -A -s wardyn bash`: create the session running bash, or (if it
 // already exists) attach to it — the bash arg is ignored on attach, so the
 // session persists exactly as first created.
-var attachShell = []string{"/bin/sh", "-c", "if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi"}
+//
+// The GOTMPDIR mkdir first: dispatch's platform env points it at a dir the go
+// tool refuses to create itself, and agent-run's session prep creates it only
+// after slower steps (a measured 18s on a live session) — an attach shell
+// opens the instant the container runs, so the operator's first command can
+// win that race. Creating it HERE, from the run's own env, keeps the
+// accommodation runtime-and-requirements-driven: nothing toolchain-specific
+// is baked into any image, and a run whose env doesn't set it does nothing.
+var attachShell = []string{"/bin/sh", "-c", `[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
 
 // Attach opens a NEW interactive exec (an interactive shell) inside the running
 // sandbox ref and returns a live PTY runner.Session. It mirrors Exec's

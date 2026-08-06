@@ -435,10 +435,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   there), but unlike `GOCACHE` the go tool refuses to create `GOTMPDIR`
   itself — and only the full image baked the directory, so the first Go
   command in a recommended-built or BYO image failed with
-  `stat /home/agent/.gotmp: no such file or directory`. `agent-run` now
-  creates the directory from the env var itself at session prep, next to the
-  ephemeral-dirs step, covering interactive verify sessions and task runs on
-  every image. (Found live by the Verify step doing exactly its job.)
+  `stat /home/agent/.gotmp: no such file or directory`. Two runtime guards,
+  both reading the env var itself (nothing toolchain-specific is baked into
+  any image — what an image carries stays a workspace-requirements matter):
+  `agent-run` creates the directory at session prep next to the
+  ephemeral-dirs step, and the attach shell's exec wrapper creates it before
+  the prompt renders — session prep was measured taking 18s to reach the
+  mkdir while the attach terminal opens instantly, so a fast operator's
+  first command could still lose the race. (Found live by the Verify step
+  doing exactly its job, twice.)
 - **Scan-seeded secret rows now use storable names — one scanned source no
   longer wedges the Requirements save.** A scan honestly reports the env-var
   name the code reads (`AWS_DEFAULT_REGION`), but a `secret:` contract row
