@@ -29,6 +29,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 )
 
 // Confidence buckets how much a WorkspaceProfile can be trusted without a
@@ -150,6 +151,8 @@ type ScanFacts struct {
 type WorkspaceProfile struct {
 	Languages       []string   `json:"languages,omitempty"`
 	PackageManagers []string   `json:"package_managers,omitempty"`
+	// (ToolchainNeeds below reads these two — the dispatch env derives from
+	// what the scan actually detected, never from a platform-wide guess.)
 	EgressDomains   []string   `json:"egress_domains,omitempty"`
 	Tools           []string   `json:"tools,omitempty"`
 	GitRemotes      GitRemotes `json:"git_remotes,omitempty"`
@@ -219,4 +222,24 @@ func (p WorkspaceProfile) ProfileHash() string {
 	}
 	sum := sha256.Sum256(canon)
 	return hex.EncodeToString(sum[:])
+}
+
+// ToolchainNeeds reports which toolchain-fidelity accommodations a run over
+// these profiles actually needs. The dispatch env (runs_dispatch.go's
+// buildBaseSandboxEnv) is requirements-driven, never platform-wide — the
+// owner's rule: what's in a container follows from the workspace's ACTUAL
+// requirements. Go's tempdir/cache redirect applies only when a scan detected
+// Go; the Maven/Gradle JVM proxy sysprops only when the matching package
+// manager was detected (the same signals gen.go's devcontainer emission and
+// deriveSetupCommands already key on).
+func ToolchainNeeds(profiles ...WorkspaceProfile) (goNeeded, jvmNeeded bool) {
+	for _, p := range profiles {
+		if slices.Contains(p.Languages, "Go") {
+			goNeeded = true
+		}
+		if slices.Contains(p.PackageManagers, "maven") || slices.Contains(p.PackageManagers, "gradle") {
+			jvmNeeded = true
+		}
+	}
+	return goNeeded, jvmNeeded
 }

@@ -468,6 +468,9 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		SSHGrants:          sshGrants,
 		Injections:         injections,
 		Interactive:        interactive,
+		// A record/verify session runs ONE workspace — its scans decide the
+		// toolchain env, same rule as an ordinary workspace run.
+		Toolchains: runToolchainNeeds([]types.Workspace{ws}),
 	}), weakCC, nil
 }
 

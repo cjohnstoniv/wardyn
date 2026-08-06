@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // dispatchParams carries the per-run inputs the create / workspace handlers
@@ -37,6 +38,13 @@ type dispatchParams struct {
 	TaskMode           string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	BedrockRef         *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
 	ExtraEnv           map[string]string          // extra NON-SECRET sandbox env: WARDYN_COMPOSE_* for a compose run, the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login
+	// Toolchains is the requirements-driven subset of the toolchain-fidelity
+	// env this run needs (runToolchainNeeds over its workspaces' profiles).
+	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
+	// runs): nothing was scanned and nothing declared, so dispatch keeps the
+	// full accommodation set — "unknown" must not break the proven CI and
+	// ad-hoc lanes. Non-nil = only what the scans actually detected lands.
+	Toolchains *toolchainNeeds
 	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
 	// ephemeral workspace source(s) declare — no host mount, no clone; the
 	// sandbox just needs the directory to exist. Surfaced as
@@ -131,7 +139,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// when forwarding internal API calls from inside the sandbox.
 	// Per-run proxy sidecar (docker hostname) unless the config overrides it.
 	proxyURL := cmp.Or(s.cfg.ProxyURL, "http://wardyn-proxy:3128")
-	sandboxEnv := buildBaseSandboxEnv(run, proxyURL)
+	sandboxEnv := buildBaseSandboxEnv(run, proxyURL, p.Toolchains)
 	// The withheld ssh_key / git_pat hosts are NEVER silent: the operator asked for
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
@@ -546,15 +554,39 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	return resolved
 }
 
+// toolchainNeeds is dispatchParams.Toolchains' shape: which of the two
+// toolchain-fidelity env groups this run's workspace scans actually detected.
+type toolchainNeeds struct{ goTools, jvmTools bool }
+
+// runToolchainNeeds derives a run's toolchainNeeds from its resolved
+// workspaces: the union of every attached profile's detections
+// (workspacescan.ToolchainNeeds — the same signals the devcontainer emission
+// keys on). No workspaces at all → nil (unknown; dispatch keeps the full
+// set). Workspaces whose scan detected neither → empty needs: a workspace
+// run's env states what its requirements ground, nothing more.
+func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
+	if len(wsRefs) == 0 {
+		return nil
+	}
+	profiles := make([]workspacescan.WorkspaceProfile, 0, len(wsRefs))
+	for _, ws := range wsRefs {
+		if p, ok := workspaceProfile(ws); ok {
+			profiles = append(profiles, p)
+		}
+	}
+	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
+	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
+}
+
 // buildBaseSandboxEnv assembles dispatchWithVerify's baseline non-secret sandbox
 // env (invariant 1: the run token never appears here): proxy routing, the
-// toolchain-fidelity proxy config Maven/Gradle need (they ignore HTTP(S)_PROXY),
-// and git commit attribution carrying the sub/act delegation chain. Every later
+// toolchain-fidelity env the run's workspaces actually need (needs — Go's
+// tempdir/cache redirect, the JVM proxy sysprops Maven/Gradle need because
+// they ignore HTTP(S)_PROXY; nil needs = no workspace context, full set), and
+// git commit attribution carrying the sub/act delegation chain. Every later
 // phase in dispatchWithVerify only adds to this map, never removes from it.
-// Extracted verbatim from dispatchWithVerify — pure construction, no branches
-// that affect control flow.
-func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string {
-	return map[string]string{
+func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNeeds) map[string]string {
+	env := map[string]string{
 		"WARDYN_RUN_ID":    run.ID.String(),
 		"WARDYN_PROXY_URL": proxyURL,
 		// Standard proxy env: agents using HTTP_PROXY-aware clients route
@@ -563,31 +595,6 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 		"HTTPS_PROXY": proxyURL,
 		// Exclude the proxy itself and loopback from proxy traversal.
 		"NO_PROXY": "wardyn-proxy,localhost,127.0.0.1,::1",
-		// Toolchain-fidelity env (PLATFORM-wide, every image — not just the fat
-		// full toolchain image). These were found across the cross-language toolchains:
-		//   GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles+EXECS
-		//     its test binaries in $TMPDIR → "permission denied". Point it at the
-		//     agent's exec-allowed HOME. (Plain env survives a shell; only PATH is
-		//     reset by a login shell.)
-		//   MAVEN_OPTS: Maven ALONE ignores HTTP(S)_PROXY (npm/pip/cargo/go/git
-		//     honor it) → "Unknown host repo.maven.apache.org". The JVM proxy
-		//     sysprops route Maven through wardyn-proxy. (The fat image also bakes
-		//     a settings.xml <proxy> as belt-and-braces.)
-		//   GRADLE_OPTS: Gradle is the same JVM-networking case as Maven — it
-		//     resolves dependencies via java.net's proxy selector, which reads the
-		//     standard -Dhttp(s).proxyHost/-port/-DnonProxyHosts sysprops (Gradle's
-		//     own docs point at these same properties, normally set in
-		//     gradle.properties — GRADLE_OPTS is the env-expressible equivalent, so
-		//     it's the exact same JVM opts string as MAVEN_OPTS). Reused verbatim.
-		//   NOT covered here (need image/build-time FILE config, not env, so out of
-		//     scope for this platform-env pass): apt (/etc/apt/apt.conf.d/*.conf)
-		//     and a per-project gradle.properties/init.d script for repos that
-		//     don't launch via the gradle/gradlew wrapper JVM. npm/pip/cargo/go/git
-		//     already honor HTTP(S)_PROXY above and need nothing further.
-		"GOTMPDIR":    "/home/agent/.gotmp",
-		"GOCACHE":     "/home/agent/.cache/go-build",
-		"MAVEN_OPTS":  mavenProxyOpts(proxyURL),
-		"GRADLE_OPTS": mavenProxyOpts(proxyURL),
 		// Git commit attribution: carry the sub/act delegation chain into the commit
 		// graph so an agent's commits are traceable to the governed run — AUTHOR is
 		// the human who authorized the run (sub), COMMITTER is the agent run (act).
@@ -599,6 +606,34 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string) map[string]string 
 		"GIT_COMMITTER_NAME":  "wardyn-agent:" + run.Agent,
 		"GIT_COMMITTER_EMAIL": run.ID.String() + "@agent.wardyn.local",
 	}
+	// Toolchain-fidelity env — REQUIREMENTS-DRIVEN, never platform-wide: a
+	// workspace run gets exactly what its scans detected (needs), and only a
+	// run with no workspace context at all (needs == nil: ad-hoc/BYO/scan/
+	// login/composer) keeps the full set, because nothing was scanned and
+	// nothing declared. The runtime consumers are env-driven no-ops when a
+	// key is absent (agent-run's make_toolchain_dirs, the attach shell guard).
+	if needs == nil || needs.goTools {
+		// GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles+EXECS
+		// its test binaries in $TMPDIR → "permission denied". Point it (and the
+		// build cache) at the agent's exec-allowed HOME. (Plain env survives a
+		// shell; only PATH is reset by a login shell.)
+		env["GOTMPDIR"] = "/home/agent/.gotmp"
+		env["GOCACHE"] = "/home/agent/.cache/go-build"
+	}
+	if needs == nil || needs.jvmTools {
+		// MAVEN_OPTS: Maven ALONE ignores HTTP(S)_PROXY (npm/pip/cargo/go/git
+		// honor it) → "Unknown host repo.maven.apache.org". The JVM proxy
+		// sysprops route Maven through wardyn-proxy. (The fat image also bakes
+		// a settings.xml <proxy> as belt-and-braces.)
+		// GRADLE_OPTS: Gradle is the same JVM-networking case — java.net's proxy
+		// selector reads the same sysprops, so the exact same opts string.
+		// NOT covered here (need image/build-time FILE config, not env): apt
+		// and a per-project gradle.properties for repos that don't launch via
+		// the gradle/gradlew wrapper JVM.
+		env["MAVEN_OPTS"] = mavenProxyOpts(proxyURL)
+		env["GRADLE_OPTS"] = mavenProxyOpts(proxyURL)
+	}
+	return env
 }
 
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars

@@ -259,6 +259,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			TaskMode:           req.TaskMode,
 			BedrockRef:         bedrockRef,
 			EphemeralDirs:      ephemeralDirs,
+			Toolchains:         runToolchainNeeds(wsRefs),
 		})
 		// Re-read so the response reflects the post-dispatch state.
 		created = s.refreshRun(ctx, runID, created)

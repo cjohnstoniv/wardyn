@@ -288,6 +288,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The toolchain-fidelity env is requirements-driven, not platform-wide.**
+  Dispatch used to set `GOTMPDIR`/`GOCACHE` and the Maven/Gradle JVM proxy
+  sysprops (`MAVEN_OPTS`/`GRADLE_OPTS`) for every run on every image. A
+  workspace run now gets exactly what its sources' scans detected — the Go
+  group only when a scan found Go, the JVM group only when it found
+  Maven/Gradle, the union across attached sources — because what a sandbox
+  carries follows from the workspace's actual requirements, never from a
+  platform guess. Runs with no workspace context at all (ad-hoc, BYO image,
+  scan and login runs) keep the full set: nothing was scanned and nothing
+  declared, and "unknown" must not break the proven CI and ad-hoc lanes. The
+  in-sandbox consumers were already env-driven no-ops when a key is absent.
 - **A workspace's Model access binding names an Integration everywhere the UI
   touches it.** The workspace list chip, the detail page's Model access group,
   its edit dialog, and the create form all speak the Integration-based binding
