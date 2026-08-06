@@ -122,7 +122,10 @@ async function driveToBaseImage() {
 }
 
 describe("WorkspaceWizard — the happy path end to end", () => {
-  it("creates the workspace, scans it, seeds requirements from the profile, and lands on a usable Done screen", async () => {
+  // The suite's longest walk (all 7 steps, real userEvent on Radix tabs) —
+  // ~3s under coverage+load, which grazes vitest's 5s default and flakes the
+  // full `make ci` run while passing isolated. Room, not speed, is the fix.
+  it("creates the workspace, scans it, seeds requirements from the profile, and lands on a usable Done screen", { timeout: 15000 }, async () => {
     const ws = baseWorkspace();
     createWorkspaceMock.mockResolvedValue(ws);
     scanWorkspaceMock.mockResolvedValue({ async: false });

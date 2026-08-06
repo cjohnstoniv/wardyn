@@ -429,6 +429,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`go build` works in every image, not just the full toolchain image.** The
+  platform env points `GOTMPDIR` at the agent's home for every run (the
+  sandbox mounts `/tmp` noexec, and `go test` executes what it compiles
+  there), but unlike `GOCACHE` the go tool refuses to create `GOTMPDIR`
+  itself — and only the full image baked the directory, so the first Go
+  command in a recommended-built or BYO image failed with
+  `stat /home/agent/.gotmp: no such file or directory`. `agent-run` now
+  creates the directory from the env var itself at session prep, next to the
+  ephemeral-dirs step, covering interactive verify sessions and task runs on
+  every image. (Found live by the Verify step doing exactly its job.)
 - **Scan-seeded secret rows now use storable names — one scanned source no
   longer wedges the Requirements save.** A scan honestly reports the env-var
   name the code reads (`AWS_DEFAULT_REGION`), but a `secret:` contract row

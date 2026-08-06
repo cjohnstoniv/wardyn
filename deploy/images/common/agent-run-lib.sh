@@ -83,6 +83,18 @@ make_ephemeral_dirs() {
     done
 }
 
+# ── Toolchain temp dirs ───────────────────────────────────────────────────────
+# Dispatch points GOTMPDIR at the exec-allowed HOME for EVERY run (the sandbox
+# mounts /tmp noexec — runs_dispatch.go's sandboxEnv), and unlike GOCACHE the
+# go tool REFUSES to create GOTMPDIR itself ("stat …/.gotmp: no such file or
+# directory" on the first build). The full image bakes the dir at build time,
+# but an envbuilt or BYO image has no reason to know that contract — so create
+# it here from the env var itself (no second copy of the path), best-effort:
+# a read-only HOME leaves the same clear go error this exists to prevent.
+make_toolchain_dirs() {
+    [[ -n "${GOTMPDIR:-}" ]] && mkdir -p "$GOTMPDIR" 2>/dev/null || true
+}
+
 # ── Managed subscription (proxy-injected, compose mode) ───────────────────────
 # In managed mode there is NO host ~/.claude to mount (the compose control plane
 # is distroless). Dispatch instead delivers an inert SENTINEL .credentials.json
