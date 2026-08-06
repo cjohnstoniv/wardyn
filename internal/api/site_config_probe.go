@@ -92,8 +92,8 @@ var proxyProbeHosts = func() []string {
 // scheme but keeps the path, because a payload claim is about the full
 // endpoint, not just its host.
 func stripURLScheme(u string) string {
-	if i := strings.Index(u, "://"); i >= 0 {
-		return u[i+3:]
+	if _, after, ok := strings.Cut(u, "://"); ok {
+		return after
 	}
 	return u
 }
@@ -227,20 +227,14 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	// leave an orphaned identity/row (same rationale as RunClaudeCompose).
 	launchCtx := context.WithoutCancel(ctx)
 	runID := uuid.New()
-	id, err := s.cfg.Identity.MintRunIdentity(launchCtx, runID, actor, actor, internalAudience)
-	if err != nil {
-		return runID, probeRunResult{}, fmt.Errorf("mint run identity: %w", err)
-	}
 	// Read-only, ephemeral, holds no credentials -- the operator's floor still
 	// governs, exactly like launchSourceScanRun's rationale (source_scan.go).
 	cc := s.defaultFloorClass()
-	now := s.cfg.Now().UTC()
-	run := types.AgentRun{
-		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: "claude-code", Task: script,
-		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget:     s.cfg.RunnerTarget,
-		AutoStopAfterSec: siteConfigProbeIdleCapSec,
+	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, func(run *types.AgentRun) {
+		run.AutoStopAfterSec = siteConfigProbeIdleCapSec
+	})
+	if err != nil {
+		return runID, probeRunResult{}, err
 	}
 	created, err := s.cfg.Store.CreateRun(launchCtx, run)
 	if err != nil {
@@ -249,7 +243,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	}
 
 	s.dispatchRun(launchCtx, created, dispatchParams{
-		RunToken: id.Token,
+		RunToken: token,
 		Image:    agentImage("claude-code", s.cfg.AgentImages),
 		Policy: types.RunPolicySpec{
 			MinConfinementClass: cc,

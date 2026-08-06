@@ -294,7 +294,6 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	if ws != nil {
 		region = cmp.Or(strings.TrimSpace(ws.Region), region)
 		model = cmp.Or(strings.TrimSpace(ws.Model), model)
-		profile = cmp.Or(strings.TrimSpace(ws.AWSProfile), profile)
 	}
 	if !modelRun || subscriptionActive || runAgent != "claude-code" ||
 		region == "" || model == "" || s.cfg.Secrets == nil {

@@ -181,28 +181,22 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 		return cause
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
-	if err != nil {
-		return types.AgentRun{}, release(fmt.Errorf("mint run identity: %w", err))
-	}
 	cc := s.defaultFloorClass()
-	now := s.cfg.Now().UTC()
 	srcID := src.ID
-	run := types.AgentRun{
-		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: "claude-code", Task: "source scan",
-		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget:     s.cfg.RunnerTarget,
-		SourceID:         &srcID,
-		Repo:             src.Locator,
-		AutoStopAfterSec: scanIdleCapSec,
+	run, token, err := s.newStepRun(ctx, runID, actor, "source scan", cc, func(run *types.AgentRun) {
+		run.SourceID = &srcID
+		run.Repo = src.Locator
+		run.AutoStopAfterSec = scanIdleCapSec
+	})
+	if err != nil {
+		return types.AgentRun{}, release(err)
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}
 
-	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, now, url)
+	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, run.CreatedAt, url)
 	if gerr != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan clone grants: %w", gerr))
 	}
@@ -212,7 +206,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 		AutoStopAfterSec:    scanIdleCapSec,
 	}
 	return s.dispatchAndSettle(ctx, created, dispatchParams{
-		RunToken:           id.Token,
+		RunToken:           token,
 		Image:              agentImage("claude-code", s.cfg.AgentImages),
 		Policy:             scanPolicy,
 		FirstGitHubGrantID: ghGrantID,

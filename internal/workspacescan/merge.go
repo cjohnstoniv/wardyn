@@ -4,8 +4,8 @@
 package workspacescan
 
 import (
+	"maps"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -104,10 +104,5 @@ func MergeProfiles(profiles []WorkspaceProfile) WorkspaceProfile {
 // sortedSetKeys returns a set's keys sorted — deterministic merges so equal
 // inputs marshal byte-equal.
 func sortedSetKeys(m map[string]struct{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }

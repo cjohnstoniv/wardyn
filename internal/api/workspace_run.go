@@ -214,25 +214,36 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 	}, nil
 }
 
-// newWorkspaceStepRun mints the run identity and builds the run row every
-// workspace step run (scan/verify/record) shares: PENDING, claude-code, and
-// linked to ws through WorkspaceID — the TRUSTED linkage each step's upload
-// authorises on, never sandbox input. Callers set only what differs (Repo,
-// Interactive, AutoStopAfterSec) and take run.CreatedAt as the launch clock.
-func (s *Server) newWorkspaceStepRun(ctx context.Context, runID uuid.UUID, actor, task string, ws types.Workspace, cc types.ConfinementClass) (types.AgentRun, string, error) {
+// newStepRun mints the run identity and builds the run row every
+// server-launched step/probe run (scan/verify/record/probe) shares: PENDING,
+// claude-code, State/SPIFFEID/RunnerTarget set. set customizes what differs
+// (the trusted linkage, Task specifics, AutoStopAfterSec) before the row is
+// returned; callers take run.CreatedAt as the launch clock.
+func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task string, cc types.ConfinementClass, set func(*types.AgentRun)) (types.AgentRun, string, error) {
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}
 	now := s.cfg.Now().UTC()
-	wsID := ws.ID
-	return types.AgentRun{
+	run := types.AgentRun{
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
 		Agent: "claude-code", Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget,
-		WorkspaceID:  &wsID,
-	}, id.Token, nil
+	}
+	if set != nil {
+		set(&run)
+	}
+	return run, id.Token, nil
+}
+
+// newWorkspaceStepRun is newStepRun linked to ws through WorkspaceID — the
+// TRUSTED linkage each step's upload authorises on, never sandbox input.
+func (s *Server) newWorkspaceStepRun(ctx context.Context, runID uuid.UUID, actor, task string, ws types.Workspace, cc types.ConfinementClass) (types.AgentRun, string, error) {
+	wsID := ws.ID
+	return s.newStepRun(ctx, runID, actor, task, cc, func(run *types.AgentRun) {
+		run.WorkspaceID = &wsID
+	})
 }
 
 // defaultFloorClass is the operator's configured confinement floor (CC1 when

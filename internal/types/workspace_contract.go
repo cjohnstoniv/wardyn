@@ -4,7 +4,8 @@
 package types
 
 import (
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -228,10 +229,5 @@ func mergeRequirement(a, b WorkspaceRequirement) WorkspaceRequirement {
 // equal inputs always produce byte-equal marshalled output (the goldens
 // compare bytes).
 func sortedRequirementKeys(m map[string]WorkspaceRequirement) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }

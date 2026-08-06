@@ -42,7 +42,7 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 	if img == "" {
 		return "image is required"
 	}
-	if strings.ContainsAny(img, " \t\r\n") || strings.ContainsFunc(img, func(r rune) bool { return r < 0x20 }) {
+	if !repoFieldSafe(img) {
 		return "image must not contain whitespace or control characters"
 	}
 	if len(b.Steps) > maxBaseImageSteps {

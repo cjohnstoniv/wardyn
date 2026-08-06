@@ -79,7 +79,11 @@ func TestIntegrationSetupItem(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			it := integrationSetupItem("corp-artifactory", "payments", c.integ, c.present)
+			var integ types.Integration
+			if c.integ != nil {
+				integ = *c.integ
+			}
+			it := integrationSetupItem("corp-artifactory", "payments", integ, c.integ != nil, c.present)
 			if it.Status != c.wantStatus {
 				t.Errorf("status = %q, want %q (detail: %s)", it.Status, c.wantStatus, it.Detail)
 			}

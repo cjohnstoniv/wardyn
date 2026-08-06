@@ -22,10 +22,11 @@ import (
 
 // setupTestStore is a minimal store.Store for deriveSetupItems tests: it embeds
 // the interface (nil — any other method would panic if called) and overrides
-// ONLY ListWorkspaces, which is what referencedWorkspaces + findWorkspaceBySource
-// both build their (kind,source)->workspace index from (workspace_refs.go's
-// indexWorkspacesBySource, scanning every workspace's Sources) now that a
-// workspace is a composition rather than one row per kind+source.
+// ONLY ListWorkspaces, which is what referencedWorkspaces + the primary-repo
+// lookup in deriveSetupItems both build their (kind,source)->workspace index
+// from (workspace_refs.go's indexWorkspacesBySource, scanning every
+// workspace's Sources) now that a workspace is a composition rather than one
+// row per kind+source.
 type setupTestStore struct {
 	store.Store
 	all []types.Workspace

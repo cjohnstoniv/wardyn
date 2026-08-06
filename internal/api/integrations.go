@@ -371,8 +371,6 @@ func gatedCap(id, ref string, env capEnv, residency string) Capability {
 // map[string]any takes after a JSON round-trip).
 func stringSlice(v any) []string {
 	switch vv := v.(type) {
-	case []string:
-		return vv
 	case []any:
 		out := make([]string, 0, len(vv))
 		for _, e := range vv {

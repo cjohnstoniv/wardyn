@@ -48,6 +48,10 @@ func scanSource(row pgx.Row) (types.Source, error) {
 	return src, nil
 }
 
+// sourceRequirementsParam marshals a requirements map for a jsonb param, or
+// nil on empty/error — callers COALESCE nil back to '{}' in the SQL. Shared by
+// the explicit-requirements writers below and the scan-seed fill (seed and a
+// source's own requirements are the same concrete type).
 func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
 	if len(m) == 0 {
 		return nil
@@ -92,37 +96,21 @@ func (s PG) GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT `+sourceCols+` FROM sources WHERE id = ANY($1)`, ids)
+	srcs, err := collect(ctx, s.Pool, "list", "sources by id",
+		`SELECT `+sourceCols+` FROM sources WHERE id = ANY($1)`, []any{ids}, scanSource)
 	if err != nil {
-		return nil, fmt.Errorf("store: list sources by id: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		src, serr := scanSource(rows)
-		if serr != nil {
-			return nil, serr
-		}
+	for _, src := range srcs {
 		out[src.ID] = src
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListSources returns the whole library, newest first.
 func (s PG) ListSources(ctx context.Context) ([]types.Source, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT `+sourceCols+` FROM sources ORDER BY created_at DESC, id DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("store: list sources: %w", err)
-	}
-	defer rows.Close()
-	out := []types.Source{}
-	for rows.Next() {
-		src, serr := scanSource(rows)
-		if serr != nil {
-			return nil, serr
-		}
-		out = append(out, src)
-	}
-	return out, rows.Err()
+	return collect(ctx, s.Pool, "list", "sources",
+		`SELECT `+sourceCols+` FROM sources ORDER BY created_at DESC, id DESC`, nil, scanSource)
 }
 
 // UpdateSourceConfig replaces a source's operator-editable fields (name +
@@ -141,23 +129,18 @@ func (s PG) UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, r
 // code and turn runs into unexplained 422s at the mount gate, so DELETE
 // refuses with these names rather than orphaning.
 func (s PG) WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error) {
-	rows, err := s.Pool.Query(ctx, `
+	return collect(ctx, s.Pool, "list", "workspaces attaching", `
 		SELECT name FROM workspaces
 		WHERE attachments @> jsonb_build_array(jsonb_build_object('source_id', $1::text))
-		ORDER BY name`, id.String())
-	if err != nil {
-		return nil, fmt.Errorf("store: workspaces attaching: %w", err)
-	}
-	defer rows.Close()
-	var names []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, err
-		}
-		names = append(names, n)
-	}
-	return names, rows.Err()
+		ORDER BY name`, []any{id.String()}, scanName)
+}
+
+// scanName scans a single "name" column — the shape of the two
+// delete-in-use existence checks (WorkspacesAttaching, WorkspacesUsingBaseImage).
+func scanName(row pgx.Row) (string, error) {
+	var n string
+	err := row.Scan(&n)
+	return n, err
 }
 
 // DeleteSource removes a library source. detach=true first strips every
@@ -215,19 +198,6 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	return nil
 }
 
-// seedParam marshals a scan's seed rows for the requirements-fill SQL below.
-// nil/empty => '{}' (no-op under ||).
-func seedParam(seed map[string]types.WorkspaceRequirement) []byte {
-	if len(seed) == 0 {
-		return []byte("{}")
-	}
-	b, err := json.Marshal(seed)
-	if err != nil {
-		return []byte("{}")
-	}
-	return b
-}
-
 // SetSourceScanResult persists a scan outcome FENCED on the claiming run —
 // SetWorkspaceScanResult's shape one table over: only the run that holds
 // active_run_id may write, so a stale upload from a superseded run can never
@@ -238,11 +208,11 @@ func seedParam(seed map[string]types.WorkspaceRequirement) []byte {
 func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
 		UPDATE sources
-		SET profile=$1, status=$2, requirements=$5::jsonb || COALESCE(requirements, '{}'::jsonb),
+		SET profile=$1, status=$2, requirements=COALESCE($5::jsonb, '{}'::jsonb) || COALESCE(requirements, '{}'::jsonb),
 		    active_run_id=NULL, updated_at=now()
 		WHERE id=$3 AND active_run_id=$4
 		RETURNING `+sourceCols,
-		profile, string(status), id, runID, seedParam(seed)))
+		profile, string(status), id, runID, sourceRequirementsParam(seed)))
 }
 
 // SetSourceScanResultUnfenced persists a SYNCHRONOUS (inline local_dir) scan,
@@ -252,10 +222,10 @@ func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byt
 func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return scanSource(s.Pool.QueryRow(ctx, `
 		UPDATE sources
-		SET profile=$1, status=$2, requirements=$4::jsonb || COALESCE(requirements, '{}'::jsonb),
+		SET profile=$1, status=$2, requirements=COALESCE($4::jsonb, '{}'::jsonb) || COALESCE(requirements, '{}'::jsonb),
 		    updated_at=now()
 		WHERE id=$3 RETURNING `+sourceCols,
-		profile, string(status), id, seedParam(seed)))
+		profile, string(status), id, sourceRequirementsParam(seed)))
 }
 
 // ─── Base images (tier 2) ───────────────────────────────────────────────────
@@ -303,38 +273,14 @@ func (s PG) GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntr
 
 // ListBaseImages returns the whole catalog, newest first.
 func (s PG) ListBaseImages(ctx context.Context) ([]types.BaseImageEntry, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT `+baseImageCols+` FROM base_images ORDER BY created_at DESC, id DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("store: list base images: %w", err)
-	}
-	defer rows.Close()
-	out := []types.BaseImageEntry{}
-	for rows.Next() {
-		b, serr := scanBaseImage(rows)
-		if serr != nil {
-			return nil, serr
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+	return collect(ctx, s.Pool, "list", "base images",
+		`SELECT `+baseImageCols+` FROM base_images ORDER BY created_at DESC, id DESC`, nil, scanBaseImage)
 }
 
 // WorkspacesUsingBaseImage is the catalog's delete-in-use check.
 func (s PG) WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT name FROM workspaces WHERE base_image_id=$1 ORDER BY name`, id)
-	if err != nil {
-		return nil, fmt.Errorf("store: workspaces using base image: %w", err)
-	}
-	defer rows.Close()
-	var names []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, err
-		}
-		names = append(names, n)
-	}
-	return names, rows.Err()
+	return collect(ctx, s.Pool, "list", "workspaces using base image",
+		`SELECT name FROM workspaces WHERE base_image_id=$1 ORDER BY name`, []any{id}, scanName)
 }
 
 // DeleteBaseImage removes a catalog row; detach=true first drops every
@@ -542,15 +488,18 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	deriveWorkspaceMirrors(ws)
 }
 
+// statusRank orders the scan lifecycle for worseWorkspaceStatus: error >
+// scanning > pending_scan > scanned.
+var statusRank = map[types.WorkspaceStatus]int{
+	types.WorkspaceError: 3, types.WorkspaceScanning: 2,
+	types.WorkspacePendingScan: 1, types.WorkspaceScanned: 0,
+}
+
 // worseWorkspaceStatus orders the scan lifecycle: error > scanning >
 // pending_scan > scanned. "Worse" wins so a workspace never reads readier
 // than its least-ready attached source.
 func worseWorkspaceStatus(a, b types.WorkspaceStatus) types.WorkspaceStatus {
-	rank := map[types.WorkspaceStatus]int{
-		types.WorkspaceError: 3, types.WorkspaceScanning: 2,
-		types.WorkspacePendingScan: 1, types.WorkspaceScanned: 0,
-	}
-	if rank[b] > rank[a] {
+	if statusRank[b] > statusRank[a] {
 		return b
 	}
 	return a

@@ -774,10 +774,6 @@ cmd_reset_all() {
   # up looking healthy and sandbox egress is silently unconfigured.
   if [ -n "${_ra_volumes}" ]; then
     printf '  [destroy] site-config + secrets (upstream proxy, artifact mirrors, SCM hosts) — they live in the Postgres volume.\n'
-    # Name a command that EXISTS on the flagship path: containerized setup ships
-    # no host-side wardyn binary (it lives in the wardynd image), and nothing in
-    # the Makefile builds bin/. Telling operators to run a bare `wardyn` sends
-    # them looking for a binary they never installed.
     # Name a command that EXISTS and RESOLVES on the flagship path. Two traps:
     # containerized setup ships no host-side wardyn binary (it lives in the
     # wardynd image, and nothing in the Makefile builds bin/), and this box may

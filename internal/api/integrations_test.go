@@ -334,7 +334,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			name: "artifact_mirror: token present, two ecosystems",
 			v: integrationView{Type: "artifact_mirror",
 				Credentials: map[string]string{"token": "artifactory-token"},
-				Config:      map[string]any{"ecosystems": []string{"npm", "pip"}},
+				Config:      map[string]any{"ecosystems": []any{"npm", "pip"}},
 			},
 			env: capEnv{SecretPresent: secretSet("artifactory-token")},
 			want: []Capability{
@@ -345,7 +345,7 @@ func TestCapabilitiesFor(t *testing.T) {
 		{
 			name: "artifact_mirror: no token — degrades to config-only, never needs_setup",
 			v: integrationView{Type: "artifact_mirror",
-				Config: map[string]any{"ecosystems": []string{"npm"}},
+				Config: map[string]any{"ecosystems": []any{"npm"}},
 			},
 			env: capEnv{SecretPresent: secretSet()},
 			want: []Capability{

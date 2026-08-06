@@ -100,9 +100,11 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	// synthetic values applyWorkspaces sets for the OTHER two workspace kinds
 	// ("local:<dir>", "ephemeral") so this lookup only ever fires for a real repo
 	// slug/URL.
-	if run.Repo != "" && run.Repo != "ephemeral" && !strings.HasPrefix(run.Repo, "local:") {
-		if ws, ok := s.findWorkspaceBySource(ctx, types.WorkspaceSourceTypeRepo, run.Repo); ok {
-			workspaces = append([]types.Workspace{ws}, workspaces...)
+	if run.Repo != "" && run.Repo != "ephemeral" && !strings.HasPrefix(run.Repo, "local:") && s.cfg.Store != nil {
+		if all, err := s.cfg.Store.ListWorkspaces(ctx); err == nil {
+			if ws, ok := indexWorkspacesBySource(all).repo[run.Repo]; ok {
+				workspaces = append([]types.Workspace{ws}, workspaces...)
+			}
 		}
 	}
 	items = append(items, setupWorkspaceItems(workspaces)...)
@@ -672,19 +674,10 @@ func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, workspaces 
 			})
 			break
 		}
-		items = append(items, integrationSetupItem(id, requiredBy[id], s.resolveIntegrationRefWith(ctx, id), presentSecrets))
+		integ, ok := s.resolveIntegrationRef(ctx, id)
+		items = append(items, integrationSetupItem(id, requiredBy[id], integ, ok, presentSecrets))
 	}
 	return items
-}
-
-// resolveIntegrationRefWith is resolveIntegrationRef's checklist-facing form:
-// the same effective-set lookup (stored ∪ legacy-derived), returning a pointer
-// so "not configured" is representable.
-func (s *Server) resolveIntegrationRefWith(ctx context.Context, id string) *types.Integration {
-	if integ, ok := s.resolveIntegrationRef(ctx, id); ok {
-		return &integ
-	}
-	return nil
 }
 
 // integrationSetupItem states what a run will ACTUALLY get from one required
@@ -692,7 +685,7 @@ func (s *Server) resolveIntegrationRefWith(ctx context.Context, id string) *type
 // anything less is "missing" with a Detail naming precisely which half is
 // absent, because "the path opens but the credential doesn't ride" and "this
 // doesn't exist at all" are different problems with different fixes.
-func integrationSetupItem(id, wsName string, integ *types.Integration, presentSecrets map[string]bool) SetupItem {
+func integrationSetupItem(id, wsName string, integ types.Integration, ok bool, presentSecrets map[string]bool) SetupItem {
 	it := SetupItem{
 		Kind:       "workspace_integration",
 		ID:         "workspace_integration:" + id,
@@ -701,7 +694,7 @@ func integrationSetupItem(id, wsName string, integ *types.Integration, presentSe
 		Status:     "missing",
 	}
 	switch {
-	case integ == nil:
+	case !ok:
 		it.Detail = "No integration named " + id + " is configured, so this workspace's requirement opens nothing. Add it under Integrations."
 		return it
 	case integ.Disabled:

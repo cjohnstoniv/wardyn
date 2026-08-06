@@ -259,7 +259,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 	case "anthropic_subscription":
 		// Both lanes (managed / resident_host) displace a competing api-key
 		// grant and ensure Anthropic egress — the part common to the old
-		// WorkspaceLLMCredManaged case. The resident_host lane ADDITIONALLY
+		// pre-Integration managed-mode case. The resident_host lane ADDITIONALLY
 		// needs the ceiling mount; the caller applies that via
 		// applyLLMCredMount (THE single subscription gate) since only it
 		// knows the ceiling — this function only ever sees the resolved spec.
@@ -305,33 +305,6 @@ func (s *Server) foldIntegration(ctx context.Context, spec *types.RunPolicySpec,
 	return kind, bedrockRef
 }
 
-// resolveWorkspaceIntegration resolves a workspace's LLMCred.IntegrationRef
-// against the EFFECTIVE integration set (stored ∪ legacy-derived —
-// effectiveIntegrations, integrations.go) into the concrete ai_provider
-// Integration it names. ok=false — today's honest "no binding" outcome — for
-// an empty ref, a ref naming nothing at all, or a ref naming something
-// non-ai_provider: a dangling/miscategorized ref falls back silently rather
-// than cascading to the site default (tier 4) or erroring, since the operator
-// who bound THIS workspace explicitly chose a SPECIFIC integration, and a
-// stale binding silently promoting to a different one is a credential
-// surprise, not a convenience.
-//
-// This is precedence tier 3 of the full run-integration resolution order (see
-// resolveRunIntegration below for tiers 1-2 and the tier-4 cascade) — kept as
-// its own function because applyWorkspaceCreds (shared with preflight.go,
-// which has no createRunRequest at its call site) needs exactly this tier
-// alone.
-func (s *Server) resolveWorkspaceIntegration(ctx context.Context, ref string) (types.Integration, bool) {
-	if ref == "" {
-		return types.Integration{}, false
-	}
-	in, ok := s.resolveIntegrationRef(ctx, ref)
-	if !ok || in.Category != types.IntegrationAIProvider {
-		return types.Integration{}, false
-	}
-	return in, true
-}
-
 // resolveRunIntegration resolves the FULL run-level integration precedence:
 //
 //  1. integrationID (run-explicit: createRunRequest.IntegrationID /
@@ -343,8 +316,14 @@ func (s *Server) resolveWorkspaceIntegration(ctx context.Context, ref string) (t
 //     createRunRequest carries no such field, so a plain create-run always
 //     passes false here): "the default agent_runs integration of a
 //     subscription type".
-//  3. workspaceRef — the primary workspace's LLMCred.IntegrationRef
-//     (resolveWorkspaceIntegration).
+//  3. workspaceRef — the primary workspace's LLMCred.IntegrationRef, when it
+//     names an ai_provider integration. ok=false — today's honest "no
+//     binding" outcome — for an empty ref, a ref naming nothing at all, or a
+//     ref naming something non-ai_provider: a dangling/miscategorized ref
+//     falls back silently rather than cascading to tier 4 or erroring, since
+//     the operator who bound THIS workspace explicitly chose a SPECIFIC
+//     integration, and a stale binding silently promoting to a different one
+//     is a credential surprise, not a convenience.
 //  4. the operator's DefaultFor:agent_runs default (any ai_provider type).
 //
 // ok=false is today's honest no-model-access / global-provider-config
@@ -362,8 +341,10 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 			return in, true
 		}
 	}
-	if in, ok := s.resolveWorkspaceIntegration(ctx, workspaceRef); ok {
-		return in, true
+	if workspaceRef != "" {
+		if in, ok := s.resolveIntegrationRef(ctx, workspaceRef); ok && in.Category == types.IntegrationAIProvider {
+			return in, true
+		}
 	}
 	return s.defaultAgentRunsIntegration(ctx, "")
 }
@@ -402,10 +383,12 @@ func (s *Server) applyPrimaryWorkspaceCreds(ctx context.Context, runID uuid.UUID
 // kind == "" means nothing was bound (no integration resolved, a non-LLM
 // agent, or a resolved integration whose fold applied nothing).
 func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) (types.Integration, string, *types.WorkspaceBedrockRef) {
-	primary := s.primaryWorkspace(ctx, req, wsRefs)
+	// The run's PRIMARY workspace is wsRefs[0] when the spec references any —
+	// shared with preflight (which calls this same function) so the two
+	// cannot disagree about whose credential binding a run inherits.
 	var workspaceRef string
-	if primary != nil && primary.LLMCred != nil {
-		workspaceRef = primary.LLMCred.IntegrationRef
+	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
+		workspaceRef = wsRefs[0].LLMCred.IntegrationRef
 	}
 	if _, ok := agentLLMProvider(req.Agent); !ok {
 		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
@@ -416,23 +399,6 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	}
 	kind, bedrockRef := s.foldIntegration(ctx, spec, integ, req.Agent)
 	return integ, kind, bedrockRef
-}
-
-// primaryWorkspace resolves the run's PRIMARY workspace — wsRefs[0] when the
-// spec references any. Shared by launch (applyPrimaryWorkspaceCreds) and
-// preflight so the two cannot disagree about whose credential binding a run
-// inherits. ctx/req are accepted (rather than a bare []types.Workspace param)
-// so both call sites keep the same shape; neither is read today.
-//
-// The old req.Image-matched CONTAINER-kind lookup (GetWorkspaceBySource) is
-// GONE: base_image now lives directly on the workspace row a workspace_id
-// launch already resolves (seedRequestWorkspace), so there is no more
-// separate "find the container workspace this image ref happens to name" path.
-func (s *Server) primaryWorkspace(ctx context.Context, req createRunRequest, wsRefs []types.Workspace) *types.Workspace {
-	if len(wsRefs) > 0 {
-		return &wsRefs[0]
-	}
-	return nil
 }
 
 // secretPresent reports whether a secret name exists in the store (best-effort;

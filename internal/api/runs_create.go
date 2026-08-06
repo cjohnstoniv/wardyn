@@ -282,7 +282,7 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 //   - secret:<NAME>  Required+operator_set mints the SAME api_key-style grant
 //     shape the pre-Integration applyWorkspaceCreds used for a workspace's
 //     api_key binding (git history: `git show ecc1903~1:internal/api/llmcred.go`,
-//     the WorkspaceLLMCredAPIKey case), scoped to the run's agent's own
+//     the pre-Integration api_key case), scoped to the run's agent's own
 //     model-provider host (applyRequiredSecretGrant). Required+scan_seeded
 //     NEVER auto-grants — see the TRUST BOUNDARY comment below. An optional
 //     secret follows the identical rule, gated additionally on the run's
@@ -401,7 +401,7 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 // an exact egress allowlist entry — the SAME grant/injection/egress shape the
 // pre-Integration applyWorkspaceCreds used for a workspace's api_key binding
 // (git history: `git show ecc1903~1:internal/api/llmcred.go`,
-// WorkspaceLLMCredAPIKey case), scoped to the run's AGENT's own
+// pre-Integration api_key case), scoped to the run's AGENT's own
 // model-provider host (agentLLMProvider) — the only host this generic
 // requirement key has any deterministic binding to. ok=false — no grant, no
 // mutation — when: the agent has no LLM-provider convention (nothing to bind

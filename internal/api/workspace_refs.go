@@ -29,8 +29,8 @@ var systemMountTargets = map[string]bool{
 // composed of Sources needs, in place of the old single kind+source store
 // query (store.GetWorkspaceBySource, removed: a workspace is no longer one
 // row per kind+source). Built by scanning every workspace's Sources once;
-// callers resolving several sources at once (referencedWorkspaces) should
-// build one index rather than calling findWorkspaceBySource in a loop.
+// callers resolving several sources at once (referencedWorkspaces) build one
+// index rather than listing per source.
 type workspaceSourceIndex struct {
 	localDir map[string]types.Workspace // Path -> owning workspace
 	repo     map[string]types.Workspace // Source (slug/URL) -> owning workspace
@@ -50,27 +50,6 @@ func indexWorkspacesBySource(all []types.Workspace) workspaceSourceIndex {
 		}
 	}
 	return idx
-}
-
-// findWorkspaceBySource looks up ONE onboarded workspace by a local_dir Path or
-// repo Source, listing+indexing on demand. Best-effort: a store error or no
-// match returns ok=false. Prefer indexWorkspacesBySource directly when
-// resolving several sources at once.
-func (s *Server) findWorkspaceBySource(ctx context.Context, typ types.WorkspaceSourceType, value string) (types.Workspace, bool) {
-	if s.cfg.Store == nil || value == "" {
-		return types.Workspace{}, false
-	}
-	all, err := s.cfg.Store.ListWorkspaces(ctx)
-	if err != nil {
-		return types.Workspace{}, false
-	}
-	idx := indexWorkspacesBySource(all)
-	if typ == types.WorkspaceSourceTypeLocalDir {
-		ws, ok := idx.localDir[value]
-		return ws, ok
-	}
-	ws, ok := idx.repo[value]
-	return ws, ok
 }
 
 // validateWorkspaceSources fails a run closed (422) when any USER-workspace mount

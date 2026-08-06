@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -271,14 +272,10 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 // lastPathSegment names a source from its locator when the caller didn't:
 // the trailing path/slug segment, or the locator itself when there is none.
 func lastPathSegment(locator string) string {
-	trimmed := strings.TrimRight(locator, "/")
-	if i := strings.LastIndex(trimmed, "/"); i >= 0 && i+1 < len(trimmed) {
-		return trimmed[i+1:]
-	}
-	if trimmed == "" {
+	if locator == "" {
 		return locator
 	}
-	return trimmed
+	return path.Base(locator)
 }
 
 // upsertAndAttach turns a request's embedded sources + base image into the

@@ -38,21 +38,6 @@ const (
 	WorkspaceKindContainer WorkspaceKind = "container"
 )
 
-// WorkspaceLLMCredMode selected how a run that picks this workspace/container
-// was credentialed for model/harness access, pre-Integration. WorkspaceLLMCred
-// no longer has a Mode field (it names an Integration instead); this type is
-// retained only because internal/api's mode-specific dispatch switches on it —
-// a later wave that folds that dispatch into the Integration model can retire
-// it.
-type WorkspaceLLMCredMode string
-
-const (
-	WorkspaceLLMCredNone    WorkspaceLLMCredMode = ""
-	WorkspaceLLMCredManaged WorkspaceLLMCredMode = "managed" // Wardyn-managed Claude subscription (setup-token), proxy-injected
-	WorkspaceLLMCredAPIKey  WorkspaceLLMCredMode = "api_key" // a named secret, proxy-injected as an api_key grant
-	WorkspaceLLMCredBedrock WorkspaceLLMCredMode = "bedrock" // AWS Bedrock (region/model/profile)
-)
-
 // WorkspaceLLMCred is the OPERATOR-owned model/harness credential BINDING on a
 // workspace: a run that picks this workspace inherits this model access via
 // the named Integration (IntegrationCategory=ai_provider) — the generalized
@@ -91,9 +76,8 @@ func (c *WorkspaceLLMCred) UnmarshalJSON(b []byte) error {
 // WorkspaceBedrockRef is a workspace's Bedrock model selection (non-secret; the
 // AWS credentials themselves come from the store / mounted ~/.aws, unchanged).
 type WorkspaceBedrockRef struct {
-	Region     string `json:"region,omitempty"`
-	Model      string `json:"model,omitempty"`
-	AWSProfile string `json:"aws_profile,omitempty"`
+	Region string `json:"region,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 // WorkspaceStatus is the onboarding/scan lifecycle of a Workspace. The
