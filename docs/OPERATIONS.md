@@ -528,7 +528,14 @@ fetches in one sandbox — the mirror (`to`) through the normal path, then the
 public endpoint (`from`) again with the proxy deliberately bypassed — to
 catch a redirect that's configured but not enforced.
 
-Both return `200` with `{"state", "detail", "elapsed_ms"}`:
+Both return `200` with `{"state", "detail", "elapsed_ms"}`, plus three
+qualifiers so a client never has to string-match `detail` to pick a
+treatment: `via` (`proxy` or `direct` — which path the probe actually
+traversed), `intercepted` (`blocked`'s captive-portal flavor — something
+answered, just not with the endpoint's published payload, rendered apart
+from a plain connection failure), and `custom` (the probe hit a
+caller-named URL with no known payload, so a `reached` here is the weaker
+"request completed" claim, never "payloads matched"):
 
 | `state` | Means |
 |---|---|

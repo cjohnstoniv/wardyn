@@ -76,9 +76,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   workspaces; base images became a shared **catalog** ("recommended" stays a
   per-workspace derived build). Shipped expand-only and wire-compatible
   (existing clients keep sending `sources[]`), and a source's own re-scan
-  only fills missing contract rows, never overwrites an operator's edit. See
-  `docs/OPERATIONS.md` ("Workspaces: three tiers") for the new endpoints,
-  CLI, fold precedence, delete-in-use behavior, and overrides' reachability.
+  only fills missing contract rows, never overwrites an operator's edit. The
+  tiers are first-class in the console too: the Workspaces page carries a
+  Directories & repos · Base images · Workspaces tab strip, the
+  Getting-started rail carries the same three, in that order, as dedicated
+  "Your work" steps, and the Add-workspace wizard composes from them —
+  attaching a library source or picking a catalog image instead of
+  re-declaring either. See `docs/OPERATIONS.md` ("Workspaces: three tiers")
+  for the new endpoints, CLI, fold precedence, delete-in-use behavior, and
+  overrides' reachability.
 - **Record's verify loop closes: approving a held host writes the contract row,
   immediately, on the right tier.** A confined verify session now holds an
   off-policy host at the door; approving it durably writes an `egress:<host>`
@@ -221,11 +227,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   it. A **Tools** tab names the other half: a tool is what the image carries,
   an integration is what it connects through.
 - **Model access resolves** instead of being configured per run: an explicit
-  integration on the run, else the workspace's binding, else the operator's
-  site-wide default, else nothing (unchanged honest path). `PUT`/`DELETE
-  /integrations/{id}` and `POST /integrations/{id}/adopt` manage stored rows;
-  the composer registry derives from the integration marked for Wardyn's own
-  features, with `WARDYN_COMPOSER_CONFIG` still winning outright when set.
+  integration on the run, else — for a compose run only — the deprecated
+  `use_subscription` alias, else the workspace's binding, else the
+  operator's site-wide default — and below all four tiers, dispatch still
+  credentials the run from a managed subscription or a global Bedrock
+  config, never nothing. See `docs/OPERATIONS.md` ("Model access resolves —
+  it does not default to none") for the full precedence. `PUT`/`DELETE
+  /integrations/{id}` and `POST /integrations/{id}/adopt` manage stored
+  rows; the composer registry derives from the integration marked for
+  Wardyn's own features, with `WARDYN_COMPOSER_CONFIG` still winning
+  outright when set.
 - **A single Add-workspace wizard** — Sources · Base image · Integrations ·
   Build · Requirements · Verify · Done — replacing three inconsistent entry
   points and the six-step import dialog. Custom image builds accept
@@ -306,8 +317,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   connectivity, `Reached · direct`, Next). While the gate is locked, the
   footer's own button becomes the fix; a blocked probe can be retried against a
   URL you name, for internal-only and air-gapped hosts. See `docs/TRY-IT.md`
-  ("Corporate network") for the `no_runner` exception and `docs/OPERATIONS.md`
-  ("Testing it: two probes, not a courtesy button").
+  for the `no_runner` exception and `docs/OPERATIONS.md` ("Testing it: two
+  probes, not a courtesy button").
 - **Probe verdicts say what was actually established, at every altitude.** An
   interception now renders apart from a plain connection failure — a reply
   that arrives but doesn't match the expected payload is a different problem
