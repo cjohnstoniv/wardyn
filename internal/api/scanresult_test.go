@@ -82,6 +82,7 @@ func TestUploadScanResult_WorkspaceTaskRejected(t *testing.T) {
 type sourceScanUploadStore struct {
 	store.Store
 	run    types.AgentRun
+	fenced bool // SetSourceScanResult answers ErrNotFound (superseded run)
 	saved  json.RawMessage
 	status types.WorkspaceStatus
 }
@@ -91,6 +92,12 @@ func (s *sourceScanUploadStore) GetRun(context.Context, uuid.UUID) (types.AgentR
 }
 
 func (s *sourceScanUploadStore) SetSourceScanResult(_ context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, _ uuid.UUID, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	if s.fenced {
+		// Mirrors the real store: a stale upload from a superseded run finds
+		// active_run_id no longer matches and the fenced UPDATE affects zero
+		// rows (store_sources.go's SetSourceScanResult).
+		return types.Source{}, store.ErrNotFound
+	}
 	s.saved = profile
 	s.status = status
 	return types.Source{ID: id, Status: status}, nil
@@ -212,5 +219,22 @@ func TestUploadScanResult_AIAdditions(t *testing.T) {
 	}
 	if ran, changed := auditAI(t, srv.cfg.Audit.(*recRecorder).events); !ran || !changed {
 		t.Fatalf("audit ai_advisor/ai_changed = %v/%v, want true/true", ran, changed)
+	}
+}
+
+// TestUploadScanResult_SupersededSourceFenced is the LIVE source lane's
+// re-homing of the deleted workspace lane's TestUploadScanResult_SupersededRunFenced:
+// a stale upload from a superseded run (SetSourceScanResult's active_run_id
+// fence no longer matches, store.ErrNotFound) is refused with 409 and writes
+// nothing — a superseded / lagging scan can never clobber a fresher profile.
+func TestUploadScanResult_SupersededSourceFenced(t *testing.T) {
+	srv, st, tok := newSourceScanUploadSrv(t, nil)
+	st.fenced = true
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/scan-results/"+st.run.ID.String(), tok, scanAdviseFacts)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("superseded scan upload: code = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if st.saved != nil {
+		t.Errorf("a fenced upload must persist nothing, got %s", st.saved)
 	}
 }

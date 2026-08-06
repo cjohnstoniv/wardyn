@@ -302,7 +302,7 @@ func TestRequireOperator_AdminTokenAlwaysOperator(t *testing.T) {
 // this is the allowlist that keeps that assertion from also demanding those
 // intentionally-ungated routes be gated.
 var launchARunAllowlist = map[string]bool{
-	http.MethodPost + " /api/v1/runs":               true,
+	http.MethodPost + " /api/v1/runs":                true,
 	http.MethodPost + " /api/v1/runs/preflight":      true,
 	http.MethodPost + " /api/v1/runs/compose":        true,
 	http.MethodPost + " /api/v1/runs/compose/assist": true,

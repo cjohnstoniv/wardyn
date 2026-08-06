@@ -115,6 +115,14 @@ func TestComposeRun_IntegrationID_UsesBedrockRegionOverride(t *testing.T) {
 	if resp.Proposed.BedrockRef == nil || resp.Proposed.BedrockRef.Region != region || resp.Proposed.BedrockRef.Model != model {
 		t.Errorf("Proposed.BedrockRef = %+v, want region=%s model=%s", resp.Proposed.BedrockRef, region, model)
 	}
+	// The regression this item pins: reconcileLLMAccess only recognizes the
+	// anthropic/openai api_key shape, and a bedrock fold deliberately adds no
+	// such grant — so without the compose.go override this read provisioned=false
+	// ("no model access"), contradicting the run itself (launch re-resolves
+	// Bedrock auth from integration_id independently of any grant).
+	if resp.LLMAccess == nil || !resp.LLMAccess.Provisioned {
+		t.Errorf("LLMAccess = %+v, want provisioned=true (a pinned Bedrock integration IS model access)", resp.LLMAccess)
+	}
 }
 
 // TestComposeRun_IntegrationID_NonAIProviderIs400 pins the shared rule

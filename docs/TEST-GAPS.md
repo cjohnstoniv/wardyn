@@ -17,9 +17,9 @@ Refresh: `make cover-check` (+ `make test-report-pg` for the PG cross-check), th
 
 | Bucket | Exported funcs at 0.0% in the union |
 |---|---:|
-| **PG-gated** (proven covered by `ci test-pg`) | 48 |
+| **PG-gated** (proven covered by `ci test-pg`) | 77 |
 | **Docker-gated** (needs `WARDYN_TEST_DOCKER=1`) | 5 |
-| **Untested** (no test reaches it) | 159 |
+| **Untested** (no test reaches it) | 130 |
 | Total 0.0% exported | 212 |
 | _(of 493 exported funcs in the union)_ | |
 
@@ -29,7 +29,7 @@ The real backlog: exported funcs no lane covers. PG-package funcs appear here
 only when the Postgres lane ALSO leaves them at 0.0%.
 
 - **cmd/wardyn**: Error
-- **cmd/wardynd**: BuildDevcontainer, BuildFromDevcontainerFiles, Decide, FinalizeBase, Get, IsRevoked, List, ListApprovalsPage, ListRunningWithPolicy, Record, Record, Request, RevokeJTI, RevokeRun, StopRun, SweepOrphanedBuilds, Write
+- **cmd/wardynd**: BuildDevcontainer, BuildFromDevcontainerFiles, Decide, FinalizeBase, Get, IsRevoked, List, ListApprovalsPage, ListRunningWithPolicy, Request, RevokeJTI, RevokeRun, StopRun, SweepOrphanedBuilds, Write
 - **internal/api**: Peek, RunClaudeCompose, StartDrain, WardynFeaturesBackend
 - **internal/audit/sinks**: Name, Name, Name, ParseSinks
 - **internal/auth/oidc**: EmailFromContext
@@ -41,14 +41,14 @@ only when the Postgres lane ALSO leaves them at 0.0%.
 - **internal/composer/backends/sandbox**: New, Propose, SetRunClaude
 - **internal/composer/backends/transport**: LookupIP
 - **internal/contentscan**: BlocksOnError, InspectForwardEgress, Name, Name, Name, Name, Name, Name, Scan
-- **internal/db**: AuditDDLProtected, TryAdvisoryLock
+- **internal/db**: AuditDDLProtected
 - **internal/dockerutil**: PullImage
 - **internal/egress/evaluatortest**: RunConformance
 - **internal/egress/proxy**: Addr, Addr, LookupIP, Name, Read
 - **internal/identity**: Names, New, Register
 - **internal/identity/identitytest**: RunConformance
 - **internal/lifecycle**: Run
-- **internal/recording**: Names, NewPGStore, OpenCast, SaveCast, SaveCastNamed, Sweep
+- **internal/recording**: Names, Sweep
 - **internal/recording/recordingtest**: RunConformance
 - **internal/runner/orchestrator**: AgentStatus, Attach, Status, Wait
 - **internal/runner/substrate**: Names, New, Register
@@ -56,7 +56,7 @@ only when the Postgres lane ALSO leaves them at 0.0%.
 - **internal/secretstore/pg**: Name
 - **internal/secretstore/secretstoretest**: RunConformance
 - **internal/setup**: DetectSCMPosture, VaultKVMDetail
-- **internal/store**: ClaimSourceActiveRun, ClaimStaleRunWatchers, ClearSourceActiveRun, ConsumeAttachTicket, DeleteBaseImage, DeleteSource, DeleteWorkspace, DiscardComposeResult, GetBaseImage, GetBaseImagesByIDs, GetSource, GetSourcesByIDs, HeartbeatRunWatcher, IsZero, Keep, LatestAuditEventByAction, ListBaseImages, ListSources, ListWorkspaces, ListWorkspacesPage, Matches, MergeWorkspaceRequirements, MintAttachTicket, PutComposeResult, QueryAuditEvents, QueryAuditEventsFilteredPage, QueryRecentAuditEvents, QueryRecentAuditEventsPage, Record, SetRunImage, SetSandboxRef, SetSourceScanResult, SetSourceScanResultUnfenced, SetWorkspaceApprovedEgress, SetWorkspaceBuiltImage, SetWorkspaceImportState, SetWorkspaceLLMCred, SetWorkspaceRequirements, TakeComposeResult, UpdateSourceConfig, UpdateWorkspace, UpsertBaseImage, UpsertSource, WorkspacesAttaching, WorkspacesUsingBaseImage
+- **internal/store**: ClearSourceActiveRun, GetBaseImage, GetSource, IsZero, Keep, LatestAuditEventByAction, ListBaseImages, ListSources, ListWorkspaces, ListWorkspacesPage, Matches, QueryAuditEvents, QueryAuditEventsFilteredPage, QueryRecentAuditEvents, QueryRecentAuditEventsPage, Record, SetRunImage, SetSandboxRef, SetWorkspaceBuiltImage, SetWorkspaceImportState, SetWorkspaceLLMCred, UpdateSourceConfig, UpdateWorkspace
 - **internal/types**: Clone, RaisesApproval
 - **internal/workspacescan**: PublicRegistryHosts, ToolchainNeeds
 - **pkg/client**: ConnectManagedSubscription, CreateSource, CreateWorkspace, DeleteSource, DeleteWorkspace, DisconnectManagedSubscription, GetSiteConfig, GetSource, GetWorkspace, Healthz, ListSources, ListWorkspaces, Me, New, Preflight, PutSiteConfig, RecentAuditEvents, RecordWorkspaceTask, ScanSource, ScanWorkspace, SetupStatus, SynthesizeProfile, UpdateWorkspace
@@ -67,10 +67,12 @@ only when the Postgres lane ALSO leaves them at 0.0%.
 0.0% in the enforced union (which can't set WARDYN_TEST_PG) but >0% in
 `test/reports/go/pg`. Exercised on the `ci test-pg` job / `make test-report-pg`.
 
+- **cmd/wardynd**: Record, Record
 - **internal/broker**: Begin, Commit, Exec, MintedJTIs, NewPgxStore, QueryRow, Rollback, Scan
-- **internal/db**: Connect, Migrate
+- **internal/db**: Connect, Migrate, TryAdvisoryLock
+- **internal/recording**: NewPGStore, OpenCast, SaveCast, SaveCastNamed
 - **internal/secretstore/pg**: Delete, Get, List, Put
-- **internal/store**: ClaimWorkspaceActiveRun, ClearWorkspaceActiveRun, CreateApproval, CreateGrant, CreatePolicy, CreateRun, CreateWorkspace, DecideApproval, DeletePolicy, DeleteRef, GetApproval, GetPolicy, GetRef, GetRun, GetSiteConfig, GetWorkspace, InsertAuditEvent, ListApprovals, ListApprovalsPage, ListGrantsByRun, ListPolicies, ListPoliciesPage, ListRuns, ListRunsPage, NewPG, PutRef, PutSiteConfig, QueryAuditEventsPage, SetRunAgentExecID, SetWorkspaceRecordResult, TouchRun, UpdatePolicy, UpdateRunStateIf, UpdateRunStateIfIdle
+- **internal/store**: ClaimSourceActiveRun, ClaimStaleRunWatchers, ClaimWorkspaceActiveRun, ClearWorkspaceActiveRun, ConsumeAttachTicket, CreateApproval, CreateGrant, CreatePolicy, CreateRun, CreateWorkspace, DecideApproval, DeleteBaseImage, DeletePolicy, DeleteRef, DeleteSource, DeleteWorkspace, DiscardComposeResult, GetApproval, GetBaseImagesByIDs, GetPolicy, GetRef, GetRun, GetSiteConfig, GetSourcesByIDs, GetWorkspace, HeartbeatRunWatcher, InsertAuditEvent, ListApprovals, ListApprovalsPage, ListGrantsByRun, ListPolicies, ListPoliciesPage, ListRuns, ListRunsPage, MergeWorkspaceRequirements, MintAttachTicket, NewPG, PutComposeResult, PutRef, PutSiteConfig, QueryAuditEventsPage, SetRunAgentExecID, SetSourceScanResult, SetSourceScanResultUnfenced, SetWorkspaceApprovedEgress, SetWorkspaceRecordResult, SetWorkspaceRequirements, TakeComposeResult, TouchRun, UpdatePolicy, UpdateRunStateIf, UpdateRunStateIfIdle, UpsertBaseImage, UpsertSource, WorkspacesAttaching, WorkspacesUsingBaseImage
 
 ## Docker-gated — need a live daemon (WARDYN_TEST_DOCKER=1)
 

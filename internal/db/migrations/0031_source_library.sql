@@ -61,10 +61,54 @@ ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS attachments JSONB;
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS base_image_id UUID REFERENCES base_images(id);
 ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS source_id UUID;
 
+-- Repo-locator canonicalization for steps 4 and 5 below, mirroring
+-- canonicalRepoLocator (internal/api/sources.go): lowercase ONLY the
+-- scheme+host of a `://` URL (userinfo, if any, and the whole path survive
+-- verbatim) or the host of an scp-form `user@host:path` locator; a bare
+-- "<org>/<name>" slug has no host component and passes through untouched.
+-- Local to this migration (dropped again once step 5 is done with it) so the
+-- one-time backfill and every post-migration Go write agree on identity —
+-- disagreement here is exactly what mints a duplicate library row on
+-- re-POST, the bug this replaces (the old `lower(source)`, which
+-- case-mangled the whole locator, path included).
+CREATE FUNCTION mig0031_canon_repo_locator(source text) RETURNS text AS $$
+DECLARE
+    m text[];
+    at_pos int;
+    tail text;
+    colon_pos int;
+BEGIN
+    IF source IS NULL THEN
+        RETURN NULL;
+    END IF;
+    -- scheme://[userinfo@]host[:port][/path...]
+    m := regexp_match(source, '^([A-Za-z][A-Za-z0-9+.-]*)://([^/?#@]*@)?([^/?#]*)');
+    IF m IS NOT NULL AND m[3] <> '' THEN
+        RETURN lower(m[1]) || '://' || COALESCE(m[2], '') || lower(m[3])
+            || substring(source FROM char_length(m[1]) + char_length(COALESCE(m[2], '')) + char_length(m[3]) + 4);
+    END IF;
+    IF source LIKE '%://%' THEN
+        RETURN source; -- "://" present but not a parseable scheme+host: verbatim, mirrors url.Parse failure/empty-host
+    END IF;
+    -- scp-form user@host:path (no scheme) — lowercase only the host between
+    -- '@' and the following ':'.
+    at_pos := position('@' IN source);
+    IF at_pos > 0 THEN
+        tail := substring(source FROM at_pos + 1);
+        colon_pos := position(':' IN tail);
+        IF colon_pos > 0 THEN
+            RETURN left(source, at_pos) || lower(substring(tail FOR colon_pos - 1)) || substring(tail FROM colon_pos);
+        END IF;
+    END IF;
+    RETURN source; -- bare slug or anything else: no host component to normalize
+END;
+$$ LANGUAGE plpgsql;
+
 -- 4) Extract the library from every workspace's embedded sources[], deduped
 -- by the identity triple. Canonicalization: dirs lose trailing slashes (but
--- "/" itself survives), repo locators lowercase, refs trim. name = the last
--- path/slug segment. jsonb_build_* does all escaping (0029's idiom).
+-- "/" itself survives), repo locators lowercase ONLY their scheme+host
+-- (mig0031_canon_repo_locator above), refs trim. name = the last path/slug
+-- segment. jsonb_build_* does all escaping (0029's idiom).
 INSERT INTO sources (id, kind, locator, ref, name, status, created_at, updated_at)
 SELECT gen_random_uuid(),
        e->>'type',
@@ -77,7 +121,7 @@ FROM workspaces w,
      LATERAL (SELECT
         CASE WHEN e->>'type' = 'local_dir'
              THEN CASE WHEN e->>'path' = '/' THEN '/' ELSE rtrim(e->>'path', '/') END
-             ELSE lower(e->>'source') END AS locator,
+             ELSE mig0031_canon_repo_locator(e->>'source') END AS locator,
         CASE WHEN e->>'type' = 'repo' THEN btrim(COALESCE(e->>'ref','')) ELSE '' END AS ref
      ) AS ident
 WHERE e->>'type' IN ('local_dir','repo')
@@ -110,11 +154,13 @@ FROM (
           AND s.kind = e->>'type'
           AND s.locator = CASE WHEN e->>'type' = 'local_dir'
                                THEN CASE WHEN e->>'path' = '/' THEN '/' ELSE rtrim(e->>'path','/') END
-                               ELSE lower(e->>'source') END
+                               ELSE mig0031_canon_repo_locator(e->>'source') END
           AND s.ref = CASE WHEN e->>'type' = 'repo' THEN btrim(COALESCE(e->>'ref','')) ELSE '' END
     GROUP BY w2.id
 ) att
 WHERE att.wid = w.id;
+
+DROP FUNCTION mig0031_canon_repo_locator(text);
 
 -- A workspace with no sources rows at all (unreachable — sources is NOT NULL
 -- and never empty — but cheap to make impossible): empty attachments array.

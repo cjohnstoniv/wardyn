@@ -115,6 +115,19 @@ cmd_up() {
       die "Postgres container '${PG_CONTAINER}' not ready on :55432. Start it (docker run ... postgres), or unset WARDYN_E2E_PG_CONTAINER to let 'scripts/up.sh pg' self-provision the default."
     fi
   fi
+  # wardynd CONNECTS via DSN's host:port, but every seed/reset call below goes
+  # through `docker exec ${PG_CONTAINER}` — a plain container exec, which is
+  # blind to DSN and always reaches whatever THAT container serves on ITS OWN
+  # published port. A caller who repoints DSN's port (run-ui-e2e.sh's
+  # WARDYN_E2E_PG_HOSTPORT) without repointing PG_CONTAINER to match would
+  # otherwise silently serve one database while seeding another. Loud and early
+  # beats that silent split: fail closed rather than run a spec suite against
+  # data it never actually seeded.
+  dsn_port="$(printf '%s' "${DSN}" | sed -E 's#^[a-zA-Z]+://[^/]*:([0-9]+)/.*#\1#')"
+  container_port="$(docker port "${PG_CONTAINER}" 5432/tcp 2>/dev/null | head -1 | sed -E 's#.*:##')"
+  if [[ -n "${dsn_port}" && -n "${container_port}" && "${dsn_port}" != "${container_port}" ]]; then
+    die "DSN port ${dsn_port} != '${PG_CONTAINER}' published port ${container_port} — wardynd would SERVE ${dsn_port} while every seed/reset below hits ${container_port}. Point both at the same Postgres (match WARDYN_E2E_PG_HOSTPORT to the container's real port, or set WARDYN_E2E_PG_CONTAINER to the container actually listening on ${dsn_port})."
+  fi
   # THE one place the e2e database gets created (callers used to each hand-copy
   # this line). up.sh pg only precreates the default wardyn_e2e, so a custom
   # WARDYN_E2E_PG_DBNAME — screenshots.sh's wardyn_shots, the per-screen fanout —

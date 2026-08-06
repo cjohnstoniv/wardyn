@@ -67,9 +67,14 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 	repo := map[string]any{"type": "repo", "source": "ACME/Widgets", "ref": "main", "target": "/work/w"}
 	eph := map[string]any{"type": "ephemeral", "target": "/scratch"}
 
-	// Three workspaces sharing the same repo (case/slash variants included) —
-	// must collapse to ONE sources row. One multi-source (order matters), one
-	// single-source with a profile (carry), one repo-only sharing identity.
+	// Three repo-only workspaces exercise the two identity rules
+	// canonicalRepoLocator draws: a bare "<org>/<name>" slug has no host
+	// component, so it dedupes byte-for-byte (case is part of its identity,
+	// no collapse) while a `://` clone URL dedupes case-INSENSITIVELY on
+	// scheme+host only, path case preserved. One multi-source (order
+	// matters), one single-source with a profile (carry), one repo-only
+	// sharing the "multi" slug in a DIFFERENT case (its own row), one
+	// repo-only as a mixed-case clone URL (host folds, path doesn't).
 	multi := insertPre0031Workspace(t, pool, "multi", []any{eph, dir, repo}, nil,
 		map[string]any{"languages": []string{"go"}}, "scanned")
 	single := insertPre0031Workspace(t, pool, "single", []any{map[string]any{
@@ -79,6 +84,9 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 	_ = insertPre0031Workspace(t, pool, "repo-twin", []any{map[string]any{
 		"type": "repo", "source": "acme/widgets", "ref": " main ",
 	}}, map[string]any{"kind": "custom", "image": "ubuntu:24.04", "steps": []string{"RUN apt-get update"}}, nil, "pending_scan")
+	_ = insertPre0031Workspace(t, pool, "url-repo", []any{map[string]any{
+		"type": "repo", "source": "https://Git.Corp.Example/MyGroup/MyRepo.git",
+	}}, nil, nil, "pending_scan")
 	recommended := insertPre0031Workspace(t, pool, "rec", []any{eph},
 		map[string]any{"kind": "recommended"}, nil, "scanned")
 
@@ -94,13 +102,16 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 
 	execMigrationFile(t, pool, sourceLibraryMigration)
 
-	// Dedupe: /home/me/payments (slash-trimmed) + acme/widgets@main (case/trim-
-	// canonicalized) + /home/me/solo + /home/me/shared = exactly 4 library rows.
+	// Dedupe: /home/me/payments (slash-trimmed) + ACME/Widgets@main (bare slug,
+	// path case SURVIVES, no host to fold) + acme/widgets@main (a DIFFERENT
+	// case spelling of that slug: its own row, never merged) + the url-repo
+	// clone URL (scheme+host folded, path case survives) + /home/me/solo +
+	// /home/me/shared = exactly 6 library rows.
 	var nSources int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sources`).Scan(&nSources); err != nil {
 		t.Fatal(err)
 	}
-	if nSources != 4 {
+	if nSources != 6 {
 		rows, _ := pool.Query(ctx, `SELECT kind, locator, ref FROM sources`)
 		defer rows.Close()
 		for rows.Next() {
@@ -108,15 +119,29 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 			_ = rows.Scan(&k, &l, &r)
 			t.Logf("source: %s %s %q", k, l, r)
 		}
-		t.Fatalf("sources = %d, want 4 (dedupe on identity)", nSources)
+		t.Fatalf("sources = %d, want 6 (dedupe on identity — a bare slug's case IS part of that identity)", nSources)
 	}
-	var repoCount int
+	var mixedCaseSlug, lowerSlug, urlRepo int
 	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM sources WHERE kind='repo' AND locator='acme/widgets' AND ref='main'`).Scan(&repoCount); err != nil {
+		`SELECT count(*) FROM sources WHERE kind='repo' AND locator='ACME/Widgets' AND ref='main'`).Scan(&mixedCaseSlug); err != nil {
 		t.Fatal(err)
 	}
-	if repoCount != 1 {
-		t.Errorf("canonicalized repo rows = %d, want exactly 1 (lowercase + trimmed ref collapse)", repoCount)
+	if mixedCaseSlug != 1 {
+		t.Errorf("mixed-case slug rows = %d, want exactly 1 (a bare slug's path case must SURVIVE migration, matching canonicalRepoLocator)", mixedCaseSlug)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM sources WHERE kind='repo' AND locator='acme/widgets' AND ref='main'`).Scan(&lowerSlug); err != nil {
+		t.Fatal(err)
+	}
+	if lowerSlug != 1 {
+		t.Errorf("lowercase-spelled slug rows = %d, want exactly 1 (a different case spelling of a bare slug is its own row — no host to fold on)", lowerSlug)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM sources WHERE kind='repo' AND locator='https://git.corp.example/MyGroup/MyRepo.git' AND ref=''`).Scan(&urlRepo); err != nil {
+		t.Fatal(err)
+	}
+	if urlRepo != 1 {
+		t.Errorf("clone-URL rows = %d, want exactly 1 with scheme+host lowercased and the path (MyGroup/MyRepo.git) preserved", urlRepo)
 	}
 
 	// Attachments: order preserved (eph, dir, repo), writable/target carried.
@@ -210,8 +235,8 @@ func TestMigration0031_SourceLibraryExtraction(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workspaces WHERE sources IS NOT NULL`).Scan(&legacyIntact); err != nil {
 		t.Fatal(err)
 	}
-	if legacyIntact != 6 {
-		t.Errorf("embedded sources column rows = %d, want all 6 intact (expand-only)", legacyIntact)
+	if legacyIntact != 7 {
+		t.Errorf("embedded sources column rows = %d, want all 7 intact (expand-only)", legacyIntact)
 	}
 }
 

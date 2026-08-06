@@ -134,7 +134,11 @@ func (s *Server) handleGetBaseImage(w http.ResponseWriter, r *http.Request) {
 // handleDeleteBaseImage removes a catalog row. In use → 409 naming the
 // workspaces; ?force=1 detaches them, which is HONEST here rather than
 // destructive: a detached workspace's base_image_id goes NULL, and NULL means
-// the derived recommended build — a working state, stated as such.
+// the derived recommended build — a working state, stated as such. The in-use
+// gate and the delete are ONE atomic statement in the store (DeleteBaseImage):
+// WorkspacesUsingBaseImage here only names who's using it for the 409 body,
+// it does not decide the outcome, so a workspace attaching between this call
+// and the delete can never slip through.
 //
 //	DELETE /api/v1/base-images/{id}[?force=1]
 func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
@@ -148,13 +152,13 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "check base image use: "+err.Error())
 		return
 	}
-	if len(names) > 0 && !force {
-		writeError(w, http.StatusConflict, fmt.Sprintf(
-			"base image is used by %d workspace(s): %s — repoint them first, or pass ?force=1 (they fall back to the derived recommended build)",
-			len(names), strings.Join(names, ", ")))
-		return
-	}
 	if err := s.cfg.Store.DeleteBaseImage(r.Context(), id, force); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"base image is used by %d workspace(s): %s — repoint them first, or pass ?force=1 (they fall back to the derived recommended build)",
+				len(names), strings.Join(names, ", ")))
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "no such base image")
 			return

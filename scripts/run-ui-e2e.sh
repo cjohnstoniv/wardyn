@@ -31,8 +31,12 @@ wardyn_pick_docker_host
 PORT="${WARDYN_E2E_ADDR:-:8088}"; PORT="${PORT#*:}"
 DB="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 # Overridable PG host:port (the default may be held by a foreign container on a
-# shared box); the database name stays coupled to WARDYN_E2E_PG_DBNAME — the
-# seed/reset path keys on it, and a mismatched pair splits served from seeded.
+# shared box); the database name stays coupled to WARDYN_E2E_PG_DBNAME. The
+# seed/reset path (e2e-backend.sh) still goes through `docker exec
+# WARDYN_E2E_PG_CONTAINER`, blind to this port — pairing a non-default
+# WARDYN_E2E_PG_HOSTPORT with a container that doesn't actually publish it
+# would silently serve one database while seeding another, so e2e-backend.sh's
+# cmd_up fails loudly on that mismatch before touching anything.
 PG_HOSTPORT="${WARDYN_E2E_PG_HOSTPORT:-localhost:55432}"
 export WARDYN_E2E_ADDR=":${PORT}"
 export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/${DB}?sslmode=disable"

@@ -331,3 +331,78 @@ func TestPG_DeleteSourceInUse(t *testing.T) {
 		t.Errorf("attachments must be stripped on force delete, still: %v", left)
 	}
 }
+
+// A genuinely-absent id must read as NotFound, not Conflict: the atomic
+// `DELETE ... WHERE NOT EXISTS` predicate's RowsAffected()==0 alone can't tell
+// "no such row" from "still attached", so DeleteSource probes existence to
+// report the honest verdict once the delete has already refused.
+func TestPG_DeleteSourceUnknownIDIs404(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+	if err := s.DeleteSource(ctx, uuid.New(), false); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete unknown id (non-force) = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteSource(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete unknown id (force) = %v, want ErrNotFound", err)
+	}
+}
+
+// Delete-in-use is loud for the catalog too — the base-image twin of
+// TestPG_DeleteSourceInUse: refuses (Conflict) while referenced, names the
+// referencing workspaces, force detaches (base_image_id -> NULL, the derived
+// recommended build) and deletes.
+func TestPG_DeleteBaseImageInUse(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+	img, err := s.UpsertBaseImage(ctx, types.BaseImageEntry{
+		ID: uuid.New(), Kind: "custom", Name: "img", Image: "ubuntu:24.04",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("upsert base image: %v", err)
+	}
+	for _, name := range []string{"ws-a", "ws-b"} {
+		if _, err := s.CreateWorkspace(ctx, types.Workspace{
+			ID: uuid.New(), Name: name, Status: types.WorkspacePendingScan,
+			Sources:     []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral}},
+			BaseImageID: &img.ID,
+			CreatedAt:   time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	names, err := s.WorkspacesUsingBaseImage(ctx, img.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || names[0] != "ws-a" || names[1] != "ws-b" {
+		t.Fatalf("using = %v, want both names, sorted", names)
+	}
+	if err := s.DeleteBaseImage(ctx, img.ID, false); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("non-force delete while in use = %v, want ErrConflict", err)
+	}
+	// Force-detach then delete: references cleared, catalog row gone.
+	if err := s.DeleteBaseImage(ctx, img.ID, true); err != nil {
+		t.Fatalf("force delete: %v", err)
+	}
+	left, err := s.WorkspacesUsingBaseImage(ctx, img.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("references must be stripped on force delete, still: %v", left)
+	}
+}
+
+// A genuinely-absent id must read as NotFound, not Conflict — the base-image
+// twin of TestPG_DeleteSourceUnknownIDIs404.
+func TestPG_DeleteBaseImageUnknownIDIs404(t *testing.T) {
+	s := hydrateStore(t)
+	ctx := context.Background()
+	if err := s.DeleteBaseImage(ctx, uuid.New(), false); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete unknown id (non-force) = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteBaseImage(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete unknown id (force) = %v, want ErrNotFound", err)
+	}
+}

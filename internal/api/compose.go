@@ -500,6 +500,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	managedForVerdict := managedSub ||
 		(prop.Run.Agent == "claude-code" && !subscribed && s.managedInjectReady(prop.Run.Agent))
 	var bedrockRef *types.WorkspaceBedrockRef
+	var integCredKind string
 	if hasInteg && integ.Type != "anthropic_subscription" {
 		// Any pinned NON-subscription integration (api_key/openai_api_key/
 		// bedrock/azure_openai) overrides ensureLLMGrant's provider-DEFAULT
@@ -512,7 +513,11 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 		// into the proposal below instead of discarded — the same ref launch
 		// carries to dispatch (dispatchParams.BedrockRef, runs.go) once the
 		// operator approves and creates the real run from this preview.
-		_, bedrockRef = s.applyIntegrationCreds(ctx, &prop.InlinePolicy, integ, prop.Run.Agent)
+		// integCredKind (also no longer discarded) is what the llm_access verdict
+		// below uses to recognize a bedrock pin as provisioned — reconcileLLMAccess
+		// only understands the anthropic/openai api_key shape, and the bedrock
+		// fold deliberately REMOVES rather than adds one (llmcred.go's bedrock case).
+		integCredKind, bedrockRef = s.applyIntegrationCreds(ctx, &prop.InlinePolicy, integ, prop.Run.Agent)
 	} else {
 		ensureLLMGrant(&prop.InlinePolicy, prop.Run.Agent, presentSecrets, subscribed || managedSub)
 	}
@@ -574,6 +579,23 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	var llmAccess *composeLLMAccess
 	if note, provisioned := reconcileLLMAccess(&clamped, prop.Run.Agent, presentSecrets, s.subscriptionInjectEnabled(), managedForVerdict); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
+	}
+	// reconcileLLMAccess only recognizes the anthropic/openai api_key shape, so a
+	// pinned Bedrock integration — which deliberately carries NO api_key grant —
+	// always reads as "no model access" there, contradicting the run this
+	// proposal previews (launch re-resolves Bedrock auth from integration_id
+	// independently of any grant). A non-empty, non-api_key fold kind means the
+	// integration itself IS the provisioned credential; teach the verdict that
+	// directly instead of asking reconcileLLMAccess to model a transport it has
+	// no branch for.
+	if (llmAccess == nil || !llmAccess.Provisioned) &&
+		integCredKind != "" && integCredKind != "anthropic_api_key" && integCredKind != "openai_api_key" {
+		note := fmt.Sprintf("model access provisioned for agent %q: the pinned %s integration is applied", prop.Run.Agent, integCredKind)
+		if bedrockRef != nil {
+			note += fmt.Sprintf(" (region %s, model %s)", bedrockRef.Region, bedrockRef.Model)
+		}
+		note += " — dispatch resolves its credentials at launch; no per-run API key is needed."
+		llmAccess = &composeLLMAccess{Provisioned: true, Note: note}
 	}
 	wsWarns, code, werr := applyWorkspaces(&run, &clamped, req.Workspaces)
 	if werr != nil {

@@ -25,6 +25,7 @@ type sourcesEndpointFake struct {
 	store.Store
 	lib      sourceLibraryFake
 	attached []string // WorkspacesAttaching answer
+	notFound bool     // DeleteSource answer for a genuinely-absent id
 	deleted  *uuid.UUID
 	detached bool
 }
@@ -44,6 +45,9 @@ func (s *sourcesEndpointFake) WorkspacesAttaching(context.Context, uuid.UUID) ([
 	return s.attached, nil
 }
 func (s *sourcesEndpointFake) DeleteSource(_ context.Context, id uuid.UUID, detach bool) error {
+	if s.notFound {
+		return store.ErrNotFound
+	}
 	if !detach && len(s.attached) > 0 {
 		// Mirrors the real store's atomic NOT EXISTS guard: a non-force
 		// delete while something is attached never reaches the delete.
@@ -122,6 +126,27 @@ func TestSources_DeleteInUseIsLoud(t *testing.T) {
 	}
 	if fake.deleted == nil || !fake.detached {
 		t.Error("force=1 must detach-and-delete")
+	}
+}
+
+// A genuinely-absent id must 404, not read as "in use" (409) — the atomic
+// delete-in-use store predicate can't tell "no such row" from "still
+// attached" from RowsAffected() alone, so the store's ErrNotFound must reach
+// the handler as a 404 on BOTH the plain and ?force=1 paths.
+func TestSources_DeleteUnknownIDIs404(t *testing.T) {
+	h := newHarness(t)
+	fake := &sourcesEndpointFake{notFound: true}
+	srv := New(baseTestConfig(h, fake))
+	id := uuid.New()
+
+	w := do(t, srv, http.MethodDelete, "/api/v1/sources/"+id.String(), adminToken, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown id: code = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+
+	forced := do(t, srv, http.MethodDelete, "/api/v1/sources/"+id.String()+"?force=1", adminToken, "")
+	if forced.Code != http.StatusNotFound {
+		t.Fatalf("unknown id force=1: code = %d, want 404; body=%s", forced.Code, forced.Body.String())
 	}
 }
 

@@ -563,7 +563,7 @@ func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, 
 // advance status + the in-flight run pointer without a full-row read-modify-
 // write.
 //
-// FENCED (mirrors SetWorkspaceScanResult): the write is conditional on the
+// FENCED (same shape as ClaimSourceActiveRun / SetSourceScanResult): the write is conditional on the
 // import-step slot still holding expectedActive, so a caller that decided what
 // to write from a STALE read cannot land it. Every caller here does check-then-
 // act (read the workspace, decide, write), and this was the only unfenced
