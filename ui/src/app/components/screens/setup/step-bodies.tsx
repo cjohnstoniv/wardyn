@@ -222,7 +222,7 @@ export function useSiteConfigStep(
 // ------------------------------------------------------------
 // Workspaces step — onboard the local dirs/repos a run may attach. Recommended,
 // not required: the composer's ephemeral path still launches with none. Reuses
-// AddWorkspaceDialog + the /workspaces status vocabulary so the two can't drift.
+// WorkspaceWizard + the /workspaces status vocabulary so the two can't drift.
 // ------------------------------------------------------------
 // One-line "what the scan found" summary for a ready workspace row, e.g.
 // "2 languages · 3 secrets needed · postgres, redis". "needed" counts only the

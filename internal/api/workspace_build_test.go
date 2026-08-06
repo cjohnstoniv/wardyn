@@ -4,6 +4,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -96,5 +97,67 @@ func TestBuildLogWriter_SplitsCompleteLinesOnly(t *testing.T) {
 	}
 	if got := tr.get(id).Log; len(got) != 2 || got[1] != "world" {
 		t.Fatalf("Log after completing the line = %v, want [hello world] (blank line dropped)", got)
+	}
+}
+
+// TestBuildLogWriter_StripsANSIEscapes pins the M5 guard: color/cursor CSI
+// codes a build tool emits must not land in the stored line verbatim — the
+// pane renders plain text, not a terminal.
+func TestBuildLogWriter_StripsANSIEscapes(t *testing.T) {
+	var tr buildTracker
+	id := uuid.New()
+	tr.begin(id, time.Now())
+	w := &buildLogWriter{t: &tr, id: id}
+
+	if _, err := w.Write([]byte("\x1b[32mgreen text\x1b[0m\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got := tr.get(id).Log
+	if len(got) != 1 || got[0] != "green text" {
+		t.Fatalf("Log = %v, want [green text] (ANSI/CSI escapes stripped)", got)
+	}
+}
+
+// TestBuildLogWriter_ClampsOversizedLine pins M6: one absurdly long line must
+// not bloat the ring or the /build response payload.
+func TestBuildLogWriter_ClampsOversizedLine(t *testing.T) {
+	var tr buildTracker
+	id := uuid.New()
+	tr.begin(id, time.Now())
+	w := &buildLogWriter{t: &tr, id: id}
+
+	long := strings.Repeat("x", maxBuildLogLineLen+100)
+	if _, err := w.Write([]byte(long + "\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got := tr.get(id).Log
+	if len(got) != 1 {
+		t.Fatalf("Log = %d lines, want exactly 1", len(got))
+	}
+	if len(got[0]) != maxBuildLogLineLen {
+		t.Fatalf("stored line length = %d, want clamped to %d", len(got[0]), maxBuildLogLineLen)
+	}
+}
+
+// TestBuildLogWriter_FlushesUnterminatedOverflow pins M6's other half: a
+// chunk with NO newline at all (pathological or binary output) must not grow
+// buildLogWriter.buf without bound — past maxBuildLogBufBytes it flushes as
+// its own (clamped) line and resets, rather than accumulating forever.
+func TestBuildLogWriter_FlushesUnterminatedOverflow(t *testing.T) {
+	var tr buildTracker
+	id := uuid.New()
+	tr.begin(id, time.Now())
+	w := &buildLogWriter{t: &tr, id: id}
+
+	huge := strings.Repeat("y", maxBuildLogBufBytes+1)
+	if _, err := w.Write([]byte(huge)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(w.buf) != 0 {
+		t.Fatalf("buf len = %d after overflow flush, want reset to 0", len(w.buf))
+	}
+	got := tr.get(id).Log
+	if len(got) != 1 || len(got[0]) != maxBuildLogLineLen {
+		t.Fatalf("Log = %v, want exactly one clamped line", got)
 	}
 }

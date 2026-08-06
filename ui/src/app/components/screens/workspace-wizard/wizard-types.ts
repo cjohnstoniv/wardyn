@@ -84,13 +84,18 @@ export interface SourceRow {
   source: string;
   ref: string;
   target: string;
+  // local_dir only (WorkspaceSourceInput's own "field relevance by kind"
+  // rule below) — mounted read-only until explicitly opted into read-write.
+  // Always a definite boolean (never undefined) so the checkbox never needs
+  // a `!!` guard.
+  writable: boolean;
   // True only for the auto-seeded floor row (V2C.FLOOR copy instead of the
   // generic ephemeral description) — never set by newSourceRow() callers.
   seeded?: boolean;
 }
 
 export function newSourceRow(type: WorkspaceSourceKind, seeded = false): SourceRow {
-  return { id: newSourceId(), type, path: "", source: "", ref: "", target: "", seeded };
+  return { id: newSourceId(), type, path: "", source: "", ref: "", target: "", writable: false, seeded };
 }
 
 // A fresh wizard's floor: one seeded ephemeral row. The >=1-source floor is
@@ -175,12 +180,17 @@ export function isSshRemote(row: SourceRow): boolean {
 
 export function toSourceInput(row: SourceRow, rows: SourceRow[]): WorkspaceSourceInput {
   const target = defaultTargetFor(row, rows);
-  if (row.type === "local_dir") return { type: "local_dir", path: row.path.trim(), target };
+  // Threaded uniformly (not just for local_dir): a repo/ephemeral row's own
+  // `writable` is always false from the UI, but emitting it unconditionally
+  // means a round-trip through sourceRowsFromWorkspace never silently drops
+  // whatever the server actually stored, whatever the row's kind (H1).
+  const writable = row.writable || undefined;
+  if (row.type === "local_dir") return { type: "local_dir", path: row.path.trim(), target, writable };
   if (row.type === "repo") {
     const ref = row.ref.trim();
-    return { type: "repo", source: row.source.trim(), ref: ref || undefined, target };
+    return { type: "repo", source: row.source.trim(), ref: ref || undefined, target, writable };
   }
-  return { type: "ephemeral", target };
+  return { type: "ephemeral", target, writable };
 }
 
 // ============================ Edit hydration (opening the wizard on an EXISTING workspace) ============================
@@ -199,6 +209,7 @@ export function sourceRowsFromWorkspace(ws: Workspace): SourceRow[] {
     source: src.source ?? "",
     ref: src.ref ?? "",
     target: src.target ?? "",
+    writable: src.writable ?? false,
   }));
 }
 
@@ -286,10 +297,17 @@ export function toBaseImageInput(state: BaseImageState, detectedChips: string[] 
 // The inverse of toBaseImageInput(), for edit hydration. A "catalog" pick
 // (base_image_id set) is intentionally NOT reconstructed into a CatalogPick —
 // that needs a name plus a catalog fetch this hydration doesn't do — it
-// degrades to its own kind's plain card (registry/custom/byo) instead, which
-// round-trips fine through toBaseImageInput above. ponytail: no catalog-
-// identity round-trip; add a catalog lookup if editing a catalog-backed
-// workspace needs to keep pointing at the same shared row.
+// degrades to its own kind's plain card (registry/custom/byo) instead.
+// byo/custom round-trip byte-for-byte (the ref/steps are carried forward
+// verbatim below). "registry" does NOT: BaseImageState has no field for the
+// exact stored image ref, so a no-edit continue re-derives it via
+// toBaseImageInput -> suggestedRegistryImage(detectedChips) instead of
+// carrying ws.base_image.image forward — usually the same ref (the heuristic
+// is deterministic off the same detected chips), but not guaranteed if the
+// chips changed since the original pick. ponytail: no registryRef carried on
+// BaseImageState, no catalog-identity round-trip either; add a registryRef
+// field (or a catalog lookup) if an edit session silently re-picking the
+// image turns out to matter in practice.
 export function baseImageStateFromWorkspace(ws: Workspace): BaseImageState {
   const base = defaultBaseImageState();
   const b = ws.base_image;

@@ -6,7 +6,9 @@
 package envbuild
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"iter"
 	"strconv"
@@ -69,6 +71,11 @@ type fakeEnvbuilderDocker struct {
 	// buildErr, when non-empty, makes ImageBuild's response stream report a build
 	// error (simulating e.g. a COPY-source failure).
 	buildErr string
+
+	// logsBody, when non-nil, is returned verbatim by ContainerLogs — a test
+	// sets this to a properly Docker-multiplexed byte stream (dockerFrame
+	// below) to exercise stdcopy demuxing. nil keeps the old plain-text default.
+	logsBody []byte
 
 	// lastEnv records the Env slice given to ContainerCreate.
 	lastEnv []string
@@ -196,7 +203,25 @@ func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ cli
 }
 
 func (f *fakeEnvbuilderDocker) ContainerLogs(_ context.Context, _ string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
-	return io.NopCloser(strings.NewReader("build log output\n")), nil
+	f.mu.Lock()
+	body := f.logsBody
+	f.mu.Unlock()
+	if body == nil {
+		return io.NopCloser(strings.NewReader("build log output\n")), nil
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
+}
+
+// dockerFrame builds one Docker log-stream frame: a real (non-TTY)
+// ContainerLogs response multiplexes stdout/stderr behind this 8-byte
+// header (1-byte stream type, 3 bytes zeroed, 4-byte big-endian payload
+// length) per chunk — see stdcopy.StdCopy, the demuxer that must strip it.
+func dockerFrame(streamType byte, payload string) []byte {
+	buf := make([]byte, 8+len(payload))
+	buf[0] = streamType
+	binary.BigEndian.PutUint32(buf[4:8], uint32(len(payload)))
+	copy(buf[8:], payload)
+	return buf
 }
 
 func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ client.ContainerWaitOptions) client.ContainerWaitResult {

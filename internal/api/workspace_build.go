@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -92,10 +93,27 @@ func (t *buildTracker) finish(id uuid.UUID, image, errMsg string) {
 	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg, Log: log}
 }
 
-// maxBuildLogLines bounds each build's in-memory log ring: oldest lines drop
-// once output exceeds it. Generous enough to carry a real failure's context,
-// small enough that a runaway build can't grow the tracker unbounded.
-const maxBuildLogLines = 500
+const (
+	// maxBuildLogLines bounds each build's in-memory log ring: oldest lines
+	// drop once output exceeds it. Generous enough to carry a real failure's
+	// context, small enough that a runaway build can't grow the tracker
+	// unbounded.
+	maxBuildLogLines = 500
+	// maxBuildLogLineLen clamps one STORED line — a single absurdly long
+	// line (or non-line-oriented output) must not bloat the ring or the
+	// /build response payload.
+	maxBuildLogLineLen = 500
+	// maxBuildLogBufBytes bounds buildLogWriter's internal partial-line
+	// buffer: a chunk this large with no newline yet is flushed as its own
+	// line and the buffer reset, rather than growing without bound.
+	maxBuildLogBufBytes = 8 << 10 // 8KiB
+)
+
+// ansiCSI matches a CSI escape sequence (ESC '[' params final-byte) — the
+// color/cursor codes build tools commonly emit (colorized compiler output,
+// progress redraws). A cheap guard, not a full ANSI parser: good enough to
+// keep them out of a plain-text log pane.
+var ansiCSI = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 
 // appendLog bounds-appends one line to id's ring, under the tracker's own
 // lock (buildState carries no lock of its own — see the package doc).
@@ -133,13 +151,26 @@ func (w *buildLogWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		line := strings.TrimSpace(string(w.buf[:i]))
+		w.emit(w.buf[:i])
 		w.buf = w.buf[i+1:]
-		if line != "" {
-			w.t.appendLog(w.id, line)
-		}
+	}
+	if len(w.buf) > maxBuildLogBufBytes {
+		w.emit(w.buf)
+		w.buf = w.buf[:0]
 	}
 	return len(p), nil
+}
+
+// emit stores one line: ANSI/CSI escapes stripped, trimmed, and clamped so
+// one absurd line can't bloat the ring or the /build response payload.
+func (w *buildLogWriter) emit(raw []byte) {
+	line := strings.TrimSpace(ansiCSI.ReplaceAllString(string(raw), ""))
+	if len(line) > maxBuildLogLineLen {
+		line = line[:maxBuildLogLineLen]
+	}
+	if line != "" {
+		w.t.appendLog(w.id, line)
+	}
 }
 
 var _ io.Writer = (*buildLogWriter)(nil)
