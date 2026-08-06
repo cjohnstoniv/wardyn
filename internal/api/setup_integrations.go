@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"github.com/go-chi/chi/v5"
@@ -157,9 +158,21 @@ type putIntegrationRequest struct {
 // semantics: naming a mark here CLEARS it from every OTHER stored row in the
 // SAME write (applyDefaultForRadio) — never a 409, per the approved spec.
 //
-//	PUT /api/v1/integrations/{id}
-func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
+// integrationIDParam reads the {id} route param UNESCAPED: chi hands handlers
+// the raw path segment, and adopted legacy ids legitimately contain colons
+// ("anthropic_subscription:managed") which clients percent-encode — without
+// this, the lookup sees "…%3Amanaged" and honestly-but-wrongly 404s.
+func integrationIDParam(r *http.Request) string {
 	id := chi.URLParam(r, "id")
+	if dec, err := url.PathUnescape(id); err == nil {
+		return dec
+	}
+	return id
+}
+
+// PUT /api/v1/integrations/{id}
+func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
+	id := integrationIDParam(r)
 	var req putIntegrationRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -217,7 +230,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 //
 //	DELETE /api/v1/integrations/{id}
 func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := integrationIDParam(r)
 	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
@@ -254,7 +267,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 //
 //	POST /api/v1/integrations/{id}/adopt
 func (s *Server) handleAdoptIntegration(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := integrationIDParam(r)
 	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
