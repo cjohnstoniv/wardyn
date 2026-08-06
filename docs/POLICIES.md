@@ -323,6 +323,20 @@ required `egress:` rows into its allowlist (`confinedEgressDomains`), so it
 does not hold on that host again; a plain run's hold widens only its own run
 and writes nothing durable.
 
+Both write-backs land on the workspace's own overlay row, never a shared
+source: a source can be attached to many workspaces (see
+[OPERATIONS.md](OPERATIONS.md) → "Workspaces: three tiers"), and approving a
+host for one aggregate must not leak the approval into every other
+workspace attaching the same repo. The SAME destination is where **Promote
+to approved egress** now writes too (`handlePromoteRecordEgress`,
+`internal/api/record.go`) — an operator reviewing an OPEN recording's
+observed-and-allowed hosts and promoting some or all of them, outside any
+approval flow. The legacy `approved_egress` list is read-only from here on:
+still unioned into a confined replay's allowlist for whatever it already
+held, but nothing writes a NEW entry to it — both the hold-approval
+write-back and Promote land on the requirements contract instead, one
+destination for what used to be two.
+
 ## `eligible_grants[]` — `GrantSpec`
 
 | Field | Type | Default | What it does |

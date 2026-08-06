@@ -112,6 +112,190 @@ are v0.5+ ([ROADMAP.md](../ROADMAP.md); `threatmodel/THREAT-MODEL.md`
 residual #14). Wardyn's operator boundary is still "everyone with a login is
 trusted staff".
 
+## Workspaces: three tiers
+
+A workspace is not one unit of configuration. Wardyn splits it into three:
+
+1. **Source** (tier 1) — a repo or local directory configured ONCE, in a
+   shared library: its own requirements contract, its own scan profile and
+   status, deduplicated by canonical identity (locator + ref). `GET/POST
+   /api/v1/sources`, `GET/PUT/DELETE /api/v1/sources/{id}`, `POST
+   /api/v1/sources/{id}/scan` (`mountLibraryRoutes`,
+   `internal/api/sources.go`) — there is no separate
+   `/sources/{id}/requirements` route; a source's own contract rides the
+   plain `PUT /sources/{id}` body (`handleUpdateSource`).
+2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
+   "Recommended" is never a catalog kind — it is a per-workspace DERIVED
+   build, excluded by a database CHECK constraint, not by convention.
+   `GET/POST /api/v1/base-images`, `GET/DELETE /api/v1/base-images/{id}`.
+3. **Workspace** (tier 3) — an ordered list of attachments (library sources,
+   or inline ephemeral scratch dirs) plus an optional catalog image.
+   Attachment order is load-bearing: `attachments[0]` is the primary, the
+   same rule a single `sources[0]` carried before the split. The floor is
+   one attachment — an ephemeral scratch dir, seeded structurally so the
+   invalid empty state cannot be built.
+
+`wardyn source list|create|scan|rm` manages tier 1 from the CLI;
+`wardyn workspace create --attach SOURCE-ID[@target][:ro|:rw]` composes a
+workspace from already-configured sources. Deleting a source or image that
+workspaces still use answers `409` naming every workspace attaching it
+(`handleDeleteSource` / `handleDeleteBaseImage`); `?force=1` detaches them
+instead of refusing — for an image that means "fall back to the derived
+recommended build", for a source it un-mounts code, which is why the refusal
+is the default rather than something silently tolerated.
+
+### The effective contract is one pure fold
+
+A workspace's effective requirements come from `FoldWorkspaceContract`
+(`internal/types/workspace_contract.go`) over its attachments, the attached
+sources' own contracts, and the workspace's own overlay rows — computed at
+the store's hydrate pass, never stored duplicated. Precedence, in order:
+
+- each attachment contributes its source's contract, in attachment order;
+- a `write:<path>` row is DROPPED unless `<path>` is that source's own
+  locator — a shared source cannot declare write access to a path it
+  doesn't own and silently widen a sibling mount in every workspace that
+  attaches it;
+- when two attachments contribute the same key, the merge is fail-closed:
+  the LEVEL takes the strongest contributor (required beats optional), but
+  the PROVENANCE takes the weakest (`scan_seeded` beats `operator_set`) — so
+  if any contributor's row came from reading untrusted repo content, the
+  merged row never auto-grants a credential, even when another contributor
+  declared the same key as a direct operator act;
+- the workspace's own overlay rows replace the merged value outright — an
+  overlay cannot REMOVE a key (a per-attachment override does that, next).
+
+With no attachments, or all-ephemeral ones, the fold is exactly the overlay —
+which is what makes migration `0031` (extracting attachments out of the
+pre-split embedded columns) provably behavior-identical for every workspace
+that predates it.
+
+### Per-attachment overrides are modeled but not yet operator-reachable
+
+`WorkspaceAttachment.Overrides` lets a workspace disable (`off`) or re-lane
+(`optional`/`required`) a requirement key ONE of its attached sources
+declares — mount a repo read-only to read its code without inheriting its
+build secrets, for example — and the fold above honors it. **There is no
+write path to it yet**: no field on the workspace write endpoints, no CLI
+flag, no wizard control sets `Overrides`. Every attachment Wardyn builds
+today carries `SourceID`/`Target`/`Writable` only. Treat it as modeled and
+folded, not as something an operator can reach, until a write surface ships.
+
+### The requirements contract: Required or Optional, nothing else
+
+Every control a source or workspace can carry — a secret by name, an egress
+host, write access to a directory, a named integration — is a row with ONE
+axis: **Required** rides along with every run that attaches the workspace,
+**Optional** is a per-run opt-in. `PUT /api/v1/workspaces/{id}/requirements`
+writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`,
+`internal/api/workspaces.go`) from three real UI surfaces — the wizard's
+Requirements step, the workspace detail page's requirements editor, and its
+detected-candidates card. Launch and preflight both read
+`effectiveRequirements(ws)` — the same fold — so Review can never predict
+something launch won't do. A `scan_seeded` requirement can never auto-grant a
+secret on its own — the scanner reads untrusted repo content, so only an
+operator's direct declaration attaches a credential (the fail-closed
+provenance rule above).
+
+## Integrations
+
+An integration is any named external system Wardyn talks to on a run's
+behalf — not only a model provider or a git host. `types.Integration`
+(`internal/types/workspace.go`) is one row that answers four questions about
+one system: where it lives (`Hosts`), what credential it takes, how that
+credential reaches the request (`Header`/`Format`, resolved through the same
+proxy-side injection every other `api_key` grant uses), and what it powers.
+`Type` is an open slug (`"anthropic"`, `"bedrock"`, `"github"`, …) — a
+provider Wardyn has never heard of is just a new string, no schema change —
+but `Category` is closed to a fixed set: `ai_provider` · `scm_host` ·
+`package_feed` · `container_registry` · `cloud_provider` · `data_store` ·
+`mcp_server` · `work_tracking` · `observability` · `other_service` (the
+catch-all for anything else).
+
+The Integrations page (`/integrations`) is the one surface for these — rows
+are DERIVED from what already exists (stored secret names, site config,
+setup status), so an operator who never opens the page keeps identical run
+behavior, and one who does can adopt a row to edit it. Host proxy and Egress
+redirection are deliberately NOT part of this taxonomy: that configuration
+lives under **Corporate network** (below), on the same `SiteConfig` document
+but its own step and its own tabs, so there is exactly one place to
+configure network topology instead of two. A **Tools** tab on the same page
+names the other half of the distinction: a tool is what the image carries,
+an integration is what it connects through.
+
+### Nothing is ambient
+
+Configuring an integration grants nothing by itself. A run gets one only
+when a workspace's requirements name it by key — `integration:<id>`,
+alongside `secret:`/`egress:`/`write:` — and that workspace is what the run
+attaches (`applyIntegrationRequirement`,
+`internal/api/integrations_run.go`). Once granted, its hosts join the run's
+egress allowlist unconditionally, even under `allow_all_egress` — the
+proxy's credential injector does not honor allow-all, so the exact-host
+entry has to be there regardless — and a header-delivering integration
+authors one `api_key` grant per host through the ordinary proxy-side
+injection path. An operator with fifty integrations configured and a
+workspace that names none of them gets a run whose spec is byte-identical to
+having none at all.
+
+That fold degrades silently by design — a workspace may state an
+`integration:<id>` requirement before the integration exists, and a missing
+one must never brick a run — so the create-run preflight checklist carries
+an explicit row for it instead (`setupWorkspaceIntegrationItems`,
+`internal/api/compose_setup.go`): "no integration named `<id>` is
+configured, add it under Integrations", or "turned off", or "names no
+hosts", stated as config state (amber, not the destructive red reserved for
+a missing credential) with the requiring workspace named. Optional
+requirements are never rowed there — only what a run cannot avoid needing.
+
+### A header credential needs a bare exact host
+
+An integration's `Hosts` entries may carry a leading `*.` wildcard or a
+`:port` qualifier UNLESS the integration also sets `Header` (delivers a
+credential proxy-side). Write-time validation (`validateIntegrationHosts`,
+`internal/api/integrations_write.go`) then requires every host to be a bare
+exact hostname, because proxy-side injection resolves through
+`Policy.AllowedExactHost`, which consults the exact-host set only. A
+wildcard would open the path and silently never present the credential; a
+port-qualified host is worse — the injector refuses to build a rule for it,
+which is a hard proxy startup failure. Both are rejected at write time, by
+name, before either can happen. Neither restriction applies to an
+integration that delivers no header (a data store reachable on
+`db.corp.internal:5432`, egress only, is exactly the shape this is for).
+
+### Model access resolves — it does not default to none
+
+A Claude run's model access is not configured per run. It resolves, in order
+(`resolveRunIntegration`, `internal/api/llmcred.go`):
+
+1. an explicit integration named on the run (`integration_id`);
+2. else the primary workspace's `LLMCred.IntegrationRef` binding;
+3. else the operator's `DefaultFor: agent_runs` integration — the one
+   stored integration marked as the site-wide default for agent runs, of
+   any `ai_provider` type.
+
+A workspace binding that names something — even something stale or
+miscategorized — is the operator's SPECIFIC choice and does not cascade to
+the site-wide default; that would be a credential surprise, not a
+convenience. Launch and preflight resolve this identically
+(`foldRunIntegration`), so Review cannot preview access the run won't get.
+
+**When none of the three tiers resolves, that is not the same as no
+access.** Below the Integration system, dispatch's own transport resolution
+(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`) still
+credentials the run from whatever GLOBAL provider config exists, independent
+of any integration or workspace binding: a Wardyn-managed subscription
+connected via `wardyn subscription connect` (`managedInjectReady`,
+`internal/api/harnesscred.go` — checks only that a captured token exists,
+never that any integration names it) injects proxy-side, and a global
+Bedrock config (`WARDYN_BEDROCK_REGION`+`WARDYN_BEDROCK_MODEL`, see
+[ENV.md](ENV.md)) still credentials Bedrock calls when no
+workspace/integration selection overrides it (`resolveBedrockAuth`,
+`internal/api/runs_bedrock.go` — a selection wins only the fields it sets;
+the global config is the fallback for the rest). See [TRY-IT.md](TRY-IT.md)
+→ "Model auth: three ways" for the full transport precedence (subscription →
+Bedrock → api-key) once a run reaches dispatch.
+
 ## Corporate network: upstream proxy and egress redirects
 
 One more piece of operator-wide config lives in Postgres alongside everything
@@ -151,15 +335,29 @@ from one to the other, but don't rely on it; clear whichever you're not using.
 
 ### Egress redirects: two tiers
 
-`egress_redirects` is a list of `{from, to, token_secret_ref, ecosystem}`
-entries. Each substitutes a public/upstream URL or host for a
-corporate-internal one in every run's egress, with an optional token injected
-proxy-side as a Bearer credential for `to`'s host (the sandbox never holds
-it). This replaced the old `artifact_overrides` map (one entry per package
-ecosystem) because a corporate estate redirects container registries and
-internal appliances too, not only package managers — the shape generalized
-from "one entry per ecosystem" to "a list of From → To pairs over any URL,
-host, or IP".
+`egress_redirects` is a list of `{from, to, token_secret_ref,
+token_integration_ref, ecosystem}` entries. Each substitutes a
+public/upstream URL or host for a corporate-internal one in every run's
+egress, with an optional token injected proxy-side as a Bearer credential
+for `to`'s host (the sandbox never holds it). This replaced the old
+`artifact_overrides` map (one entry per package ecosystem) because a
+corporate estate redirects container registries and internal appliances
+too, not only package managers — the shape generalized from "one entry per
+ecosystem" to "a list of From → To pairs over any URL, host, or IP".
+
+The token can come from either of two places, mutually exclusive — a row
+setting both is rejected. `token_secret_ref` names a bare secret directly.
+`token_integration_ref` instead names an **Integration** (see
+**Integrations** above) to take the token from — a private registry is
+genuinely both a system you authenticate to and sometimes the destination a
+public endpoint reroutes to, and this is the seam that keeps the two from
+duplicating each other: the integration owns the system and its credential,
+the redirect owns rerouting a public endpoint to it. Pointing at an
+integration carries more than its secret name — its `Header` and `Format`
+come with it, so a feed authenticating with something other than
+`Authorization: Bearer` (the bare-secret path's hardcoded shape) finally
+can. There is no UI control for picking an integration here yet; the seam
+is usable today via `PUT /site-config` and `wardyn site-config apply`.
 
 What you get depends on whether `ecosystem` is set:
 
@@ -317,6 +515,89 @@ Both return `200` with `{"state", "detail", "elapsed_ms"}`:
 
 A probe is bounded well under a minute and reclaims (kills) its sandbox if the
 run doesn't finish in time, so a wedged probe can never hold one open.
+
+## Toolchain-fidelity environment
+
+Dispatch used to set `GOTMPDIR`/`GOCACHE` and the Maven/Gradle JVM proxy
+sysprops (`MAVEN_OPTS`/`GRADLE_OPTS`) on every run, on every image. It no
+longer does: a workspace run gets exactly the groups its attached sources'
+scans detected — the Go group only when a scan found Go, the JVM group only
+when it found Maven/Gradle, the union across every attached source
+(`buildBaseSandboxEnv`, `internal/api/runs_dispatch.go`). A run with no
+workspace context at all — ad-hoc, BYO image, scan, login, or composer runs
+— keeps the full set: nothing was scanned and nothing declared, so
+"unknown" must not silently break those lanes.
+
+`GOTMPDIR` needs one more thing besides the env var: the directory has to
+exist, and unlike `GOCACHE` the go tool refuses to create it — `go test`
+compiles and EXECS its test binaries there, and the sandbox mounts `/tmp`
+noexec, so the first Go command in an image that never pre-baked the
+directory failed with `stat ...: no such file or directory`. Nothing
+toolchain-specific is baked into any image for this; instead two runtime
+guards create the directory from the env var alone, so a workspace's actual
+requirements — not the image — decide whether it exists:
+
+- `agent-run`'s session prep (`make_toolchain_dirs`,
+  `deploy/images/common/agent-run-lib.sh`), a no-op when `GOTMPDIR` is unset;
+- the attach shell's exec wrapper (`internal/runner/docker/session.go`),
+  which runs the same `mkdir -p "$GOTMPDIR"` guard before the prompt
+  renders — session prep was measured taking 18s to reach its own mkdir,
+  while an attach shell opens instantly, so an operator typing a fast first
+  command could otherwise still lose the race.
+
+## Recommended builds on compose
+
+"Recommended — built for this workspace" (a devcontainer build via
+`internal/envbuild`, see [ENVBUILD.md](ENVBUILD.md) for the build mechanism
+itself) works out of the box on the compose stack. Four things that used to
+need hand-set knobs, or didn't work at all, ship pre-wired:
+
+- a loopback OCI registry sidecar (`WARDYN_ENVBUILD_CACHE_REPO` defaults to
+  `127.0.0.1:5010/wardyn/devcontainers` — Docker exempts `127.0.0.1`
+  registries from TLS, so no daemon config is needed, and it is not
+  reachable off-host);
+- builds default ON (`WARDYN_ENVBUILD` defaults to `true` on compose; the
+  bare-binary/host-mode default is still off);
+- the build context is delivered as a tar streamed into the build
+  container, not a bind mount by path — the earlier path was staged in the
+  control plane's own filesystem, which the host Docker daemon can't see,
+  so it built an empty workspace;
+- the build container's capability drop grants exactly the file-ownership
+  set an image builder needs instead of dropping everything, which used to
+  break rootfs extraction for any featureful build.
+
+### A named Anthropic integration bakes the claude-code CLI; nothing bakes codex-cli
+
+A workspace whose requirements name an `anthropic_*`-type integration gets
+`claude-code` baked into its GENERATED recommended image as a real layer: a
+`.devcontainer/Dockerfile` the emitted `devcontainer.json` points
+`build.dockerfile` at, carrying a checksum-verified native install
+(architecture-detected, sha256-checked against the release manifest) that
+runs as root, before every devcontainer feature, inside the hardened build
+container (`AgentToolsForIntegrationTypes` folded into `GenerateDevcontainer`,
+`internal/workspacescan/gen.go`; proven with a gated integration test that
+runs the built image and checks `claude --version`). An `openai_*`
+integration bakes nothing — codex-cli has no Wardyn-verified native-download
+contract, and its npm lane would need a Node runtime the bake stage doesn't
+carry, so `AgentToolsForIntegrationTypes` never names it: the image is built
+without it, never with a guessed URL or a false claim that it's there. A
+devcontainer's own `onCreateCommand`/`postCreateCommand` cannot be used for
+this either way: envbuilder runs lifecycle commands AFTER the image is
+already pushed, so they never reach the delivered image, and they would run
+as the base image's unprivileged user besides.
+
+**This only applies to Wardyn's OWN generated devcontainer.** When the
+workspace's primary source is a repo carrying its own devcontainer file
+(and it is HTTPS-cloneable — an SSH source falls through to the generated
+path instead, since the image builder has no SSH-clone wiring),
+`resolveWorkspaceImage` (`internal/api/workspace_run.go`) builds that
+devcontainer AS-IS via `ImageBuilder.BuildDevcontainer` — cloned and built
+verbatim, never routed through `GenerateDevcontainer`/
+`AgentToolsForIntegrationTypes` at all. A named integration's agent CLI is
+therefore silently absent from that image unless the repo's own devcontainer
+happens to install it — the same workspace behaves differently depending on
+whether its primary repo carries a `.devcontainer/` of its own, which is
+easy to miss when only the no-devcontainer case has been tried.
 
 ## The age key has no rotation path
 

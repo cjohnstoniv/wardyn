@@ -21,7 +21,11 @@ network path works — chains the sandbox proxy through your proxy and
 redirects package registries
 (or any other host: a container registry, an internal appliance) at an
 internal mirror, each with a live probe that actually tests the path (see
-[OPERATIONS.md](OPERATIONS.md)). **Integrations** (the same page as
+[OPERATIONS.md](OPERATIONS.md)) — and only a passing probe unlocks **Next**.
+Nothing on the step has to be configured; on an open network, Test
+connectivity then Next is the whole visit. Whatever IS configured, though,
+has to prove itself before you can move past it.
+**Integrations** (the same page as
 `/integrations`) is where you then name the systems outside Wardyn a run has to
 reach — a model provider, GitHub Enterprise / Azure DevOps (see
 [`docs/adoption/`](adoption/)), a private package feed, a container registry, an
