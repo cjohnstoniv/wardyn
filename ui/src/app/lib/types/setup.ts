@@ -156,12 +156,9 @@ export interface SCMPosture {
   netrc: boolean;
 }
 
-// One cell of the server's live capability matrix (internal/api.Capability,
-// integrations.go:73-78) — NOTE: that Go struct carries no json struct tags,
-// so the wire keys are the bare Go field names (ID/State/Reason/Residency),
-// not the snake_case convention the rest of this payload uses. Typed to match
-// what's actually on the wire, not the tidier shape a snake_case reader would
-// expect.
+// One cell of the server's live capability matrix (internal/api.Capability),
+// which ships snake_case json keys like every other DTO on this payload.
+// `reason` and `residency` are omitempty server-side, hence optional here.
 export interface WireCapability {
   id: string;
   state: string;
