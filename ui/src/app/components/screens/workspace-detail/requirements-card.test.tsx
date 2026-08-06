@@ -244,6 +244,7 @@ describe("RequirementsCard — pending reconciles with the server", () => {
     const withContract = ws({
       profile: profile as unknown as Record<string, unknown>,
       requirements: { "secret:database-url": { level: "optional", provenance: "operator_set" } },
+      updated_at: "2025-01-01T00:00:00.000000Z",
     });
     const { rerender } = render(
       <RequirementsCard ws={withContract} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
@@ -257,15 +258,74 @@ describe("RequirementsCard — pending reconciles with the server", () => {
     );
 
     // Same component instance (no remount) — a fresh `ws` prop with the
-    // contract reset to empty, exactly what load(false) hands back after an
-    // Edit-workspace close that changed sources.
-    const resetWs = ws({ profile: profile as unknown as Record<string, unknown>, requirements: {} });
+    // contract reset to empty and a NEWER updated_at, exactly what load(false)
+    // hands back after an Edit-workspace close that changed sources (the
+    // server bumps updated_at on every write, the reset included) — this must
+    // win over the locally-pending contract.
+    const resetWs = ws({
+      profile: profile as unknown as Record<string, unknown>,
+      requirements: {},
+      updated_at: "2025-01-01T00:00:05.000000Z",
+    });
     rerender(
       <RequirementsCard ws={resetWs} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
     );
 
     await waitFor(() =>
       expect(within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Required" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      ),
+    );
+  });
+
+  // reconcile-wave5.md's medium finding: the `saving` guard only covers the
+  // write's OWN round trip. workspace-detail.tsx polls every 2.5s while
+  // scanning/recording, so a GET issued BEFORE a PUT can still resolve AFTER
+  // it, carrying a pre-write snapshot — `saving` has already gone false by
+  // then. Without the updated_at guard, that stale snapshot reverts `pending`
+  // right back, and the operator's NEXT toggle then PUTs a full-replace map
+  // that silently drops the change that had actually landed.
+  it("a stale poll snapshot (older updated_at) landing after a successful write does not revert pending", async () => {
+    const before = ws({
+      profile: profile as unknown as Record<string, unknown>,
+      requirements: {},
+      updated_at: "2025-01-01T00:00:00.000000Z",
+    });
+    const afterWrite = ws({
+      profile: profile as unknown as Record<string, unknown>,
+      requirements: { "secret:database-url": { level: "optional", provenance: "operator_set" } },
+      updated_at: "2025-01-01T00:00:05.000000Z",
+    });
+    setRequirementsMock.mockResolvedValueOnce(afterWrite);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { rerender } = render(
+      <RequirementsCard ws={before} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+    await openTab("Secrets");
+    await user.click(within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Optional" }));
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+
+    // The write lands — the parent's `ws` prop advances too (onWorkspaceUpdated -> setWs).
+    rerender(
+      <RequirementsCard ws={afterWrite} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+    await waitFor(() =>
+      expect(within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Optional" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      ),
+    );
+
+    // A GET that was already in flight before the toggle resolves now, with
+    // the PRE-write snapshot: same (older) updated_at, reverted requirements.
+    rerender(
+      <RequirementsCard ws={before} storedSecretNames={["database-url"]} onWorkspaceUpdated={vi.fn()} onSecretStored={vi.fn()} />,
+    );
+
+    // pending must NOT revert — the toggle stays Optional.
+    await waitFor(() =>
+      expect(within(screen.getByTestId("group-secrets")).getByRole("radio", { name: "Optional" })).toHaveAttribute(
         "aria-checked",
         "true",
       ),

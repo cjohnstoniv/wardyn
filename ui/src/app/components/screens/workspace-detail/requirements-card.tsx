@@ -129,9 +129,19 @@ export function RequirementsCard({
   // (sourcesChanged resets it — internal/api/workspaces.go) without
   // remounting this card. Skipped while a write of OUR OWN is in flight, so
   // an in-progress optimistic edit doesn't get clobbered by a `ws` snapshot
-  // that predates it.
+  // that predates it — but `saving` only bounds the write's OWN round trip.
+  // workspace-detail.tsx polls every 2.5s while scanning/recording, so a GET
+  // issued BEFORE that write started can still resolve AFTER it, carrying a
+  // pre-write snapshot; `saving` has already gone false by then, so it alone
+  // would revert `pending` right back. Gate on `updated_at` (server-stamped
+  // on every write, untouched by a plain GET) actually advancing past the
+  // last snapshot this card accepted — a pre-write timestamp is skipped, a
+  // genuinely newer one (like the requirements-nulling edit above) still wins.
+  const lastReconciledAt = React.useRef(ws.updated_at);
   React.useEffect(() => {
-    if (!saving) setPending(requirementsOf(ws));
+    if (saving || Date.parse(ws.updated_at) <= Date.parse(lastReconciledAt.current)) return;
+    lastReconciledAt.current = ws.updated_at;
+    setPending(requirementsOf(ws));
   }, [ws, saving]);
   const persist = async (next: WorkspaceRequirementsMap) => {
     setPending(next);

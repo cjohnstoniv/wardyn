@@ -14,8 +14,8 @@
 //
 // Source of truth read before writing selectors:
 //   src/app/components/screens/workspace-wizard/{wizard,step-sources,
-//     step-base-image,step-integrations,step-build,step-requirements,
-//     verify-session,step-done,wizard-types}.tsx
+//     step-base-image,step-integrations,integration-requirements,step-build,
+//     step-requirements,verify-session,step-done,wizard-types}.tsx
 //   src/app/components/screens/workspaces.tsx (the "Add workspace" entry
 //     points + the empty-state CTA + the list's status chip)
 //   src/app/components/screens/workspace-detail/{workspace-detail,
@@ -229,6 +229,26 @@ test.describe("Add workspace wizard", () => {
     page,
   }) => {
     const name = uniqueName("egress-flip");
+
+    // Step 3 (Integrations) needs a real, nameable row to prove
+    // continueFromIntegrations (wizard.tsx) actually PERSISTS a pick — the
+    // seeded backend stores no integration of its own. Inject one generic row
+    // into every /setup/status response for THIS page only (the real payload,
+    // augmented — never a real PUT /integrations/{id}): the shared backend
+    // never resets between specs (see the file header), so a real write here
+    // would accumulate forever across CI runs. Unique per run, so it can never
+    // collide with a row an earlier run left behind.
+    const feedName = uniqueName("feed");
+    await page.route("**/api/v1/setup/status", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.integrations = [
+        ...(body.integrations ?? []),
+        { id: feedName, name: feedName, category: "package_feed", type: "package_feed", hosts: ["registry.example.com"] },
+      ];
+      await route.fulfill({ response: res, json: body });
+    });
+
     const dlg = await openAddWorkspaceWizard(page);
     await dlg.getByLabel("Name").fill(name);
 
@@ -245,16 +265,29 @@ test.describe("Add workspace wizard", () => {
     // than any specific timing.
     await expect(dlg.getByRole("radiogroup", { name: "Base image" })).toBeVisible({ timeout: 30_000 });
 
-    // Step 3 — Integrations (INTEGRATIONS_BLURB). Nothing to pick against the
-    // seeded backend; it's a real step on the way to the contract now.
+    // Step 3 — Integrations (INTEGRATIONS_BLURB). Pick the injected feed row
+    // for real: "Add to this workspace" defaults a generic row to Required
+    // (IntegrationRow, integration-requirements.tsx), so the Continue below
+    // has an actual pick to persist, not just a blurb to read past.
     await dlg.getByRole("button", { name: "Continue →" }).click();
     await expect(dlg.getByText(/Pick what this workspace connects through/)).toBeVisible();
+    const integrationsSection = dlg.locator('[data-testid="integration-requirements"]');
+    await expect(integrationsSection.getByText(feedName)).toBeVisible();
+    await integrationsSection.getByRole("button", { name: "Add to this workspace" }).click();
+    const feedLane = dlg.getByRole("radiogroup", { name: `${feedName} lane` });
+    await expect(feedLane.getByRole("radio", { name: "Required" })).toBeChecked();
 
-    // Step 4 — Build (BUILD_BLURB). It auto-kicks a build on mount and never
-    // hard-blocks: the primary reads "Continue without waiting" while one is
-    // running and "Continue →" otherwise, so match either.
+    // Step 4 — Build (BUILD_BLURB). It auto-kicks a build on mount.
+    // scripts/e2e-backend.sh builds wardynd without -tags docker and passes no
+    // -envbuild flag, so ImageBuilder is nil server-side and resolveBuildView
+    // (workspace_build.go) deterministically settles on state "none" — the
+    // honest reachable outcome here, never "building"/"done" (those need the
+    // real docker driver this binary doesn't have).
     await dlg.getByRole("button", { name: "Continue →" }).click();
     await expect(dlg.getByText(/This builds it now — visibly/)).toBeVisible();
+    await expect(
+      dlg.getByText("devcontainer builds are not enabled on this host — sessions boot the stock agent image"),
+    ).toBeVisible();
     await dlg.getByRole("button", { name: /^Continue/ }).click();
 
     // Step 5 — Requirements (C.S3_BLURB).
@@ -275,6 +308,18 @@ test.describe("Add workspace wizard", () => {
     // own step before Done.
     await dlg.getByRole("button", { name: /^Save & continue/ }).click();
     await expect(dlg.getByText(/Drive the workspace for real/)).toBeVisible();
+
+    // Step 6 — Verify. -runner none hard-503s a record/verify launch before
+    // any session exists (handleRecordWorkspace's Runner==nil gate,
+    // internal/api/record.go:265) — no live session is reachable under this
+    // e2e binary. "Verify with a session" is hidden too (nothingResolves: no
+    // AI integration was named), leaving only "Verify in a terminal" — click
+    // it and assert the honest failure the launch actually reports, rather
+    // than asserting nothing about what the button does.
+    const verifyLaunch = dlg.locator('[data-testid="verify-session-launch"]');
+    await verifyLaunch.getByRole("button", { name: "Verify in a terminal" }).click();
+    await expect(verifyLaunch.getByText(/record needs a configured runner/)).toBeVisible();
+
     await dlg.getByRole("button", { name: "Finish" }).click();
 
     await expect(dlg.getByText(`${name} is usable.`)).toBeVisible();
@@ -287,6 +332,12 @@ test.describe("Add workspace wizard", () => {
     const detailEgressGroup = page.getByRole("radiogroup", { name: "registry.npmjs.org lane" });
     await expect(detailEgressGroup).toBeVisible();
     await expect(detailEgressGroup.getByRole("radio", { name: "Optional" })).toBeChecked();
+
+    // ...and the Integrations-step pick survived the round trip too — a fresh
+    // GET on a freshly mounted page, not the wizard's own optimistic state.
+    const detailFeedLane = page.getByRole("radiogroup", { name: `${feedName} lane` });
+    await expect(detailFeedLane).toBeVisible();
+    await expect(detailFeedLane.getByRole("radio", { name: "Required" })).toBeChecked();
   });
 
   test("closing mid-flow keeps the workspace — it survives in the list, not silently dropped", async ({ page }) => {
