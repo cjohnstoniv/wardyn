@@ -44,7 +44,13 @@ function Harness({ initial = {} }: { initial?: WorkspaceRequirementsMap }) {
 
 beforeEach(() => {
   listIntegrationsMock.mockReset().mockResolvedValue({
-    ai: [{ id: "ai-anthropic", name: "Anthropic API key", typeLabel: "anthropic · api key" }],
+    ai: [
+      { id: "ai-anthropic", name: "Anthropic API key", typeLabel: "anthropic · api key" },
+      // A DERIVED legacy row (synthetic colon id): a fact, never nameable —
+      // the server refuses integration:<colon-id> rows outright, and it
+      // already powers runs via the model-access ladder.
+      { id: "ai:anthropic_subscription:managed", name: "Claude subscription (managed)", typeLabel: "anthropic · managed login" },
+    ],
     scm: [{ id: "scm-ghes", name: "GHES", typeLabel: "ghes.corp.internal" }],
   });
 });
@@ -73,5 +79,13 @@ describe("StepIntegrations", () => {
     await waitFor(() =>
       expect(screen.getAllByRole("button", { name: /use in this workspace/i }).length).toBe(2),
     );
+  });
+
+  it("a derived legacy row (colon id) is a fact, not a toggle — no invalid contract row possible", async () => {
+    render(<Harness />);
+    expect(await screen.findByText("Claude subscription (managed)")).toBeInTheDocument();
+    expect(screen.getByText(/connected — runs use it via model access/i)).toBeInTheDocument();
+    // Exactly the two REAL rows are nameable (the ai slug row + the scm row).
+    expect(screen.getAllByRole("button", { name: /use in this workspace/i })).toHaveLength(2);
   });
 });

@@ -91,7 +91,29 @@ export function StepIntegrations({
     };
   }, []);
 
+  // A DERIVED legacy row (the client-side view of pre-entity config) carries
+  // a synthetic colon id — not a stored Integration, so a contract row naming
+  // it could never resolve at dispatch, and the server rightly refuses it
+  // ("invalid integration id"). Those rows are FACTS here: they already power
+  // runs through the model-access ladder (run override → workspace pin →
+  // server default) without a contract row. Adopting one into a real entity
+  // happens on the Integrations page; only stored rows are nameable.
+  const nameable = (id: string) => !id.includes(":");
+
   const rowFor = (row: AiScmRow) => {
+    if (!nameable(row.id)) {
+      return (
+        <div key={row.id} className="flex flex-wrap items-center gap-2 p-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-foreground">{row.name}</p>
+            {row.typeLabel && <Mono className="text-[0.6875rem] text-muted-foreground">{row.typeLabel}</Mono>}
+          </div>
+          <span className="text-[0.6875rem] text-muted-foreground">
+            connected — runs use it via model access; no contract row needed
+          </span>
+        </div>
+      );
+    }
     const key = requirementKey("integration", row.id);
     return (
       <NamedRow
