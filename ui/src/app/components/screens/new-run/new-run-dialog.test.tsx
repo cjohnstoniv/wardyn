@@ -232,6 +232,39 @@ describe("NewRunDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  // Stage 2 (workspace identity on the AI path): the compose proposal echoes
+  // back whatever workspace_selections the request carried (server-side,
+  // composeProposed.WorkspaceSelections) — approveLaunch must forward that
+  // verbatim as createRun's `workspaces`, the SAME field the manual wizard
+  // uses for enabled_optional/read_only, so a composed launch folds a
+  // workspace's Optional contract rows exactly like a manual one.
+  it("forwards the proposal's echoed workspace_selections as createRun's workspaces", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    composeMock.mockResolvedValue(
+      composeResult({
+        proposed: {
+          ...composeResult().proposed,
+          workspace_selections: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"] }],
+        },
+      }),
+    );
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+    await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+    expect(await screen.findByText(/proposed setup/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox")); // high-risk ack gate
+    await user.click(screen.getByRole("button", { name: /approve & launch/i }));
+
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    expect(createRunMock.mock.calls[0][0]).toMatchObject({
+      workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"] }],
+    });
+  });
+
   it("a launch failure keeps the proposal open, shows the error INLINE, and offers to add a missing secret", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     composeMock.mockResolvedValue(composeResult());

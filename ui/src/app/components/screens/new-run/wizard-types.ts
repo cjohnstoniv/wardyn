@@ -410,6 +410,25 @@ export interface RunWorkspaceSelectionWire {
   read_only?: boolean;
 }
 
+// toRunWorkspacesWire converts per-workspace selections to the wire shape
+// above, emitting an entry ONLY for a selection that opts into something —
+// an all-defaults selection is a no-op the server doesn't need to see (a
+// Required entry never needs one; it applies automatically). Shared by
+// buildSpec (the manual wizard) and the AI Run Composer's approveLaunch
+// (new-run-dialog.tsx) so the two paths can't drift on what counts as
+// "non-default".
+export function toRunWorkspacesWire(selections: RunWorkspaceSelection[]): RunWorkspaceSelectionWire[] {
+  const out: RunWorkspaceSelectionWire[] = [];
+  for (const sel of selections) {
+    if (!sel.enabledOptional?.length && sel.readOnly === undefined) continue;
+    const entry: RunWorkspaceSelectionWire = { workspace_id: sel.workspaceId };
+    if (sel.enabledOptional?.length) entry.enabled_optional = sel.enabledOptional;
+    if (sel.readOnly !== undefined) entry.read_only = sel.readOnly;
+    out.push(entry);
+  }
+  return out;
+}
+
 // CreateRunInput (lib/types/runs.ts) doesn't carry `workspaces`/`integration_id`
 // yet — same stopgap as the WorkspaceRequirementsMap import above: extend
 // locally rather than widen the shared type out from under whoever else is
@@ -501,17 +520,8 @@ export function buildSpec(
   // --- per-workspace requirements-contract options (CreateRunRequest.Workspaces)
   // --- additive to the mounts/repos above: a selection here does nothing unless
   // its workspace is already attached via one of those (see WorkspaceSelection's
-  // doc comment on the Go side). Only emitted for a selection that actually opts
-  // into something — an all-defaults selection is a no-op the server doesn't need
-  // to see.
-  const runWorkspaces: RunWorkspaceSelectionWire[] = [];
-  state.workspaces.forEach((sel) => {
-    if (!sel.enabledOptional?.length && sel.readOnly === undefined) return;
-    const entry: RunWorkspaceSelectionWire = { workspace_id: sel.workspaceId };
-    if (sel.enabledOptional?.length) entry.enabled_optional = sel.enabledOptional;
-    if (sel.readOnly !== undefined) entry.read_only = sel.readOnly;
-    runWorkspaces.push(entry);
-  });
+  // doc comment on the Go side).
+  const runWorkspaces = toRunWorkspacesWire(state.workspaces);
   if (runWorkspaces.length) run.workspaces = runWorkspaces;
 
   // --- eligible grants ---

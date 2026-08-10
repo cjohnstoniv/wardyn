@@ -78,6 +78,10 @@ export const composer = {
     } else {
       body.workspace = req.workspace ?? { kind: "ephemeral" };
     }
+    // Per-workspace requirements-contract opt-ins (see ComposeRequest.
+    // workspaceOptions) — sent verbatim; the server only echoes it back on the
+    // proposal for approveLaunch to forward at launch.
+    if (req.workspaceOptions?.length) body.workspace_selections = req.workspaceOptions;
     if (req.attachments?.length) body.attachments = req.attachments;
     if (req.sources?.length) body.sources = req.sources;
     if (req.backend) body.backend = req.backend;

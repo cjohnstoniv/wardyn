@@ -26,7 +26,6 @@ import type {
   ComposeResult,
   ComposerBackend,
   SetupItem,
-  WorkspaceSelection,
 } from "../../../lib/types";
 import { composer as composerApi } from "../../../lib/api/compose";
 import { runs as runsApi } from "../../../lib/api/runs";
@@ -54,7 +53,12 @@ import { PermissionWizard } from "./wizard";
 import { WorkspaceWizard } from "../workspace-wizard/wizard";
 import { AddSecretDialog } from "../secrets";
 import { surfaceRunWarnings, useAddSecretFix } from "./run-warnings";
-import { wizardStateFromProposal, type WizardState } from "./wizard-types";
+import {
+  toRunWorkspacesWire,
+  wizardStateFromProposal,
+  type RunWorkspaceSelection,
+  type WizardState,
+} from "./wizard-types";
 import { isUsable } from "../../../lib/workspace-status";
 
 type Mode = "choose" | "describe" | "clarify" | "review" | "wizard";
@@ -87,7 +91,10 @@ export function NewRunDialog({
   const [prompt, setPrompt] = React.useState("");
   // Onboarded-workspace multi-select (mirrors the manual wizard's Basics step).
   // Empty => ephemeral; composerApi.compose() resolves these against `workspaces`.
-  const [workspaceSelections, setWorkspaceSelections] = React.useState<WorkspaceSelection[]>([]);
+  // Typed RunWorkspaceSelection (not the bare WorkspaceSelection ComposeForm's
+  // picker is still limited to — see its optionalRequirementsEnabled={false})
+  // so enabledOptional already has somewhere to live once that flag flips.
+  const [workspaceSelections, setWorkspaceSelections] = React.useState<RunWorkspaceSelection[]>([]);
   const [attachments, setAttachments] = React.useState<ComposeAttachment[]>([]);
   const [sources, setSources] = React.useState<string[]>([]);
   const [backend, setBackend] = React.useState("");
@@ -229,6 +236,13 @@ export function NewRunDialog({
         {
           prompt: prompt.trim(),
           workspaceSelections,
+          // Per-workspace optional-requirement opt-ins / read-only narrowing —
+          // same wire shape and same "non-default only" filter as the manual
+          // wizard's buildSpec (toRunWorkspacesWire). Always empty today
+          // (ComposeForm's picker has optionalRequirementsEnabled={false}
+          // until Stage 4 wires the checkbox), but a read-only pick already
+          // reaches it now.
+          workspaceOptions: toRunWorkspacesWire(workspaceSelections),
           attachments,
           sources,
           backend: backend || undefined,
@@ -303,6 +317,13 @@ export function NewRunDialog({
         // conversation that produced it (absent when the dialog never entered
         // describe mode, e.g. a straight-to-wizard launch has no session).
         compose_session_id: sessionId || undefined,
+        // The proposal's echoed workspace_selections (composeRequest.
+        // WorkspaceSelections, forwarded unchanged from what submitCompose
+        // sent) — so this composed launch goes through the SAME
+        // seedRequestWorkspace + resolveWorkspaceSelections fold a manual
+        // wizard launch does, instead of silently discarding every optional
+        // opt-in and read-only narrowing the operator made.
+        workspaces: result.proposed.workspace_selections,
       });
       setLaunching(false);
       onOpenChange(false);

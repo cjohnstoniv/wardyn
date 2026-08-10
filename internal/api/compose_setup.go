@@ -93,20 +93,11 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	}
 	items = append(items, setupSecretItems(spec, presentSecrets)...)
 
+	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
+	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
+	// separate run.Repo-keyed lookup needed here. One derivation, shared with
+	// the real create-run path's own wsRefs (runs.go).
 	workspaces := s.referencedWorkspaces(ctx, spec)
-	// The primary GIT workspace never lands in spec.WorkspaceRepos — applyWorkspaces
-	// (compose.go) only sets run.Repo for it, adding to WorkspaceRepos ONLY for
-	// index>0 repos — so referencedWorkspaces alone can't see it. Guard the
-	// synthetic values applyWorkspaces sets for the OTHER two workspace kinds
-	// ("local:<dir>", "ephemeral") so this lookup only ever fires for a real repo
-	// slug/URL.
-	if run.Repo != "" && run.Repo != "ephemeral" && !strings.HasPrefix(run.Repo, "local:") && s.cfg.Store != nil {
-		if all, err := s.cfg.Store.ListWorkspaces(ctx); err == nil {
-			if ws, ok := indexWorkspacesBySource(all).repo[run.Repo]; ok {
-				workspaces = append([]types.Workspace{ws}, workspaces...)
-			}
-		}
-	}
 	items = append(items, setupWorkspaceItems(workspaces)...)
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
 	items = append(items, s.setupWorkspaceIntegrationItems(ctx, workspaces, presentSecrets)...)

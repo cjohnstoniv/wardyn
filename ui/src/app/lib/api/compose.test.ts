@@ -447,4 +447,30 @@ describe("composer.compose() — workspaces[] wire shape", () => {
     expect(body.workspace).toEqual({ kind: "ephemeral" });
     expect(body.workspaces).toBeUndefined();
   });
+
+  // Stage 2: workspaceOptions carries the onboarded id + optional-requirement
+  // opt-ins (client.WorkspaceSelection's wire shape) SEPARATELY from the
+  // resolved {kind,path,repo} `workspaces` source list above — the server only
+  // echoes it back on the proposal (see composeProposed.WorkspaceSelections)
+  // so approveLaunch can forward it to createRun without re-deriving it.
+  it("sends workspaceOptions verbatim as workspace_selections", async () => {
+    await composer.compose(
+      {
+        prompt: "fix CI",
+        workspaceSelections: [{ workspaceId: "ws-repo" }],
+        workspaceOptions: [{ workspace_id: "ws-repo", enabled_optional: ["egress:api.stripe.com"] }],
+      },
+      [repoWs],
+    );
+    const body = lastBody();
+    expect(body.workspace_selections).toEqual([
+      { workspace_id: "ws-repo", enabled_optional: ["egress:api.stripe.com"] },
+    ]);
+  });
+
+  it("omits workspace_selections when workspaceOptions is empty/absent", async () => {
+    await composer.compose({ prompt: "fix CI", workspaceSelections: [{ workspaceId: "ws-repo" }] }, [repoWs]);
+    const body = lastBody();
+    expect(body.workspace_selections).toBeUndefined();
+  });
 });

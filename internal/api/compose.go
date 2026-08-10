@@ -24,145 +24,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// composeRequest is the POST /api/v1/runs/compose body: a natural-language task
-// description plus optional uploaded attachment TEXT and source-URL HINTS, and an
-// optional backend name (empty = the registry default). The control plane NEVER
-// fetches the sources — they are passed to the analyzer as hints only, adding no
-// new egress/SSRF surface.
-type composeRequest struct {
-	Prompt string `json:"prompt"`
-	// Workspace is the legacy single operator-chosen workspace; Workspaces is the
-	// multi-select form (onboarded dirs + repos). When Workspaces is set it wins,
-	// and Workspace is normalized to its first entry (the PRIMARY) so the analyzer /
-	// git-detect / grounding operate on it; every entry is mounted/cloned.
-	Workspace   composer.Workspace    `json:"workspace"`
-	Workspaces  []composer.Workspace  `json:"workspaces,omitempty"`
-	Attachments []composer.Attachment `json:"attachments,omitempty"`
-	Sources     []string              `json:"sources,omitempty"`
-	Backend     string                `json:"backend,omitempty"`
-
-	// Interactive clarify-step fields. Mode is "auto" (default; the model decides
-	// whether to ask), "always" (force at least round 0), or "skip" (one-shot —
-	// straight to a proposal). Transcript carries the prior Q&A (the UI accumulates
-	// and resends it each round; the server holds no session). Round is the 0-based
-	// clarify round.
-	Mode       string        `json:"mode,omitempty"`
-	Transcript []composer.QA `json:"transcript,omitempty"`
-	Round      int           `json:"round,omitempty"`
-
-	// Interactive is the operator's UPFRONT run-mode choice (true = interactive:
-	// the sandbox comes up idle for `wardyn attach`; false = background: the agent
-	// runs the task unattended). This is the OPERATOR's decision, not the model's —
-	// it is enforced deterministically on the proposal below, overriding any guess.
-	Interactive bool `json:"interactive,omitempty"`
-
-	// UseSubscription is the operator's EXPLICIT PER-RUN opt-in to Claude
-	// subscription mode: the ceiling's operator-blessed ~/.claude credential
-	// mounts are injected into the proposal (post-clamp, deterministic server
-	// code — never the model) so the agent talks to api.anthropic.com directly
-	// on the operator's subscription instead of a brokered api_key. Per-run
-	// consent is deliberate: a ceiling blessing alone is control-plane-wide, and
-	// silently mounting a long-lived OAuth credential into EVERY composed run
-	// would over-share it. Default false = the more governed api-key path (key
-	// never resident in the sandbox, proxy-injected, 1h TTL).
-	UseSubscription bool `json:"use_subscription,omitempty"`
-
-	// ConfinementFloor is the operator's Getting Started DEFAULT tier, sent per-run
-	// as a raise-only MINIMUM. The server raises the policy confinement floor to it
-	// for this compose, but only up to the strongest class THIS host can enforce
-	// (capped server-side — the dialog sends the raw pick with no health probe), so
-	// a stronger-than-available floor degrades instead of 422ing at launch. Weaker
-	// than the proposal ⇒ no-op; empty ⇒ the policy minimum stands.
-	ConfinementFloor types.ConfinementClass `json:"confinement_floor,omitempty"`
-
-	// SessionID is the client-owned stable id for this compose SESSION (mirrors
-	// composer.ComposeRequest.SessionID — see there for why: Decision 1 keeps the
-	// server stateless, so persistence is via this id correlating the audit trail
-	// across rounds, not a session store). Validated as a UUID by ValidateRequest.
-	SessionID string `json:"session_id,omitempty"`
-
-	// IntegrationID, when set, pins the proposal's model/harness credential to
-	// a SPECIFIC ai_provider Integration (see client.CreateRunRequest.
-	// IntegrationID — same field, same rule: a non-ai_provider id is a 400).
-	// It supersedes UseSubscription for deciding WHICH transport a Claude
-	// proposal previews (resident_host mount vs. managed vs. a named api-key
-	// secret); UseSubscription alone remains a DEPRECATED ALIAS for "the
-	// default agent_runs integration of a subscription type" when no
-	// IntegrationID is given (resolveRunIntegration, llmcred.go).
-	IntegrationID string `json:"integration_id,omitempty"`
-}
-
-// composeModeSkip / composeModeAlways select the clarify behavior; "" / anything
-// else is auto (the model decides).
-const (
-	composeModeSkip   = "skip"
-	composeModeAlways = "always"
-)
-
-// clarifyResponse is the discriminated "the analyzer needs answers" response: the
-// UI shows these questions, collects answers, and re-POSTs with the answers
-// appended to the transcript. It carries NO proposal and NO authority.
-type clarifyResponse struct {
-	Kind        string              `json:"kind"` // always "questions"
-	Questions   []composer.Question `json:"questions"`
-	Assumptions []string            `json:"assumptions,omitempty"`
-	Notes       string              `json:"notes,omitempty"`
-	Round       int                 `json:"round"`
-}
-
 // composerWorkspaceTarget is the in-sandbox path a local-directory workspace is
 // bind-mounted at — the agent's working dir (matches the New Run wizard).
 const composerWorkspaceTarget = "/home/agent/work"
 
-// composeProposed is the proposed setup in the EXACT shape the New Run wizard's
-// buildSpec emits, so the UI launches it via the unchanged createRun path.
-type composeProposed struct {
-	Run          composer.RunInput   `json:"run"`
-	InlinePolicy types.RunPolicySpec `json:"inline_policy"`
-	// BedrockRef is the pinned integration's region/model override, when this
-	// proposal resolved a bedrock ai_provider integration with one (nil
-	// otherwise). Advisory only, like the rest of this payload: the real run
-	// created from this proposal re-resolves its own bedrockRef from
-	// integration_id at launch (applyPrimaryWorkspaceCreds, runs.go) — this
-	// field lets the review surface show which region/model that will be
-	// instead of only the AllowedDomains side effect.
-	BedrockRef *types.WorkspaceBedrockRef `json:"bedrock_ref,omitempty"`
-}
-
-// composeResponse is advisory output for human review: the proposed setup, Wardyn's
-// DETERMINISTIC risk assessment (never the LLM's self-assessment), a summary, and
-// any warnings (including every clamp Wardyn applied to fit operator policy).
-type composeResponse struct {
-	Kind           string              `json:"kind"` // always "proposal"
-	Proposed       composeProposed     `json:"proposed"`
-	RiskAssessment []composer.RiskItem `json:"risk_assessment"`
-	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
-	Summary        string              `json:"summary"`
-	// Warnings are DETERMINISTIC policy actions (clamp/ground/workspace/confinement) —
-	// what the engine actually DID to the proposal. Shown as "Tightened by policy:".
-	Warnings []string `json:"warnings,omitempty"`
-	// ModelNotes are the LLM's OWN advisory remarks (prop.Warnings). Kept SEPARATE from
-	// Warnings so untrusted model prose is never displayed as an enforced policy action (M7).
-	ModelNotes []string `json:"model_notes,omitempty"`
-	// LLMAccess is the deterministic FINAL-state model-access verdict for a composed
-	// LLM run (reconcileLLMAccess). Provisioned=false means the run will launch but its
-	// first model call 404s — the review surfaces this as its OWN distinct destructive
-	// banner (non-blocking), separate from the benign clamp notices in Warnings. Absent
-	// for a non-LLM agent (nothing to verify).
-	LLMAccess *composeLLMAccess `json:"llm_access,omitempty"`
-	// SetupItems is the deterministic setup checklist (deriveSetupItems,
-	// compose_setup.go): what this proposal needs configured vs. what actually
-	// is, so the review UI can guide the operator through fixing gaps.
-	SetupItems []SetupItem `json:"setup_items,omitempty"`
-}
-
-// composeLLMAccess is the structured no-model-access signal so the review UI need
-// never prose-sniff a warning to tell "this run will do nothing" from "tightened by
-// policy".
-type composeLLMAccess struct {
-	Provisioned bool   `json:"provisioned"`
-	Note        string `json:"note"`
-}
+// The compose wire DTOs (composeRequest, clarifyResponse, composeProposed,
+// composeResponse, composeLLMAccess) and the composeModeSkip/composeModeAlways
+// constants live in compose_types.go — split out to keep this file (the
+// pipeline + its helpers) under the repo's file-size gate.
 
 // handleComposeRun is the AI Run Composer endpoint. It is advisory only: it
 // returns a PROPOSED run setup for a human to review and approve through the
@@ -663,10 +532,14 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// backend used and the overall graded risk for the trail.
 	emit(composer.ComposeEvent{Type: composer.EvStage, Stage: "assemble"})
 	backend := cmp.Or(req.Backend, s.cfg.Composer.Default())
+	// Built ONCE and reused below for both the audit blob and the response, so
+	// the two can never drift apart (echoes req.WorkspaceSelections verbatim —
+	// see composeRequest.WorkspaceSelections' doc comment).
+	proposed := composeProposed{Run: run, InlinePolicy: clamped, BedrockRef: bedrockRef, WorkspaceSelections: req.WorkspaceSelections}
 	// The proposal is serialized+capped as ONE text blob (not embedded as nested
 	// JSON): CapAuditText can cut mid-object, so storing the possibly-truncated
 	// result as a plain string is what keeps the OUTER audit Data valid JSON.
-	proposedJSON, _ := json.Marshal(composeProposed{Run: run, InlinePolicy: clamped, BedrockRef: bedrockRef})
+	proposedJSON, _ := json.Marshal(proposed)
 	auditData, _ := json.Marshal(map[string]any{
 		"backend": backend, "overall_risk": string(overall),
 		"workspace": string(req.Workspace.Kind), "correlation_id": correlationID,
@@ -688,7 +561,7 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	}
 	resp := composeResponse{
 		Kind:           "proposal",
-		Proposed:       composeProposed{Run: run, InlinePolicy: clamped, BedrockRef: bedrockRef},
+		Proposed:       proposed,
 		RiskAssessment: items,
 		OverallRisk:    overall,
 		Summary:        prop.Summary,
@@ -801,13 +674,21 @@ func applyWorkspaces(run *composer.RunInput, spec *types.RunPolicySpec, wss []co
 			if !repoFieldSafe(repo) {
 				return nil, http.StatusBadRequest, errors.New("invalid git repo (contains control/whitespace characters)")
 			}
-			// The first git repo drives the legacy run.Repo clone; additional repos
-			// ride the WorkspaceRepos list (multi-repo WARDYN_REPOS clone).
+			// EVERY git repo — index 0 included — rides WorkspaceRepos, mirroring
+			// seedRequestWorkspace's identical convention for the manual/workspace_id
+			// path (runs_create.go: "the FIRST repo source also sets req.Repo ...
+			// the gate + wsRefs read WorkspaceRepos"). Without this the PRIMARY git
+			// workspace was invisible to referencedWorkspaces (only spec.WorkspaceMounts/
+			// WorkspaceRepos are scanned, never run.Repo) and to validateWorkspaceSources'
+			// onboarding gate — both bugs, not just the checklist's. The first repo
+			// ADDITIONALLY drives the legacy run.Repo label (run-row display only);
+			// buildRepoRecords (runs_scm.go) dedupes the resulting legacyRepo +
+			// WorkspaceRepos[0] pair by their shared default clone dest, so this is
+			// still exactly ONE clone, not two.
 			if i == 0 {
 				run.Repo = repo
-			} else {
-				spec.WorkspaceRepos = append(spec.WorkspaceRepos, types.WorkspaceRepo{Repo: repo})
 			}
+			spec.WorkspaceRepos = append(spec.WorkspaceRepos, types.WorkspaceRepo{Repo: repo})
 			gitCount++
 		case composer.WorkspaceEphemeral:
 			// Ephemeral only defines the workspace when it is the SOLE selection;

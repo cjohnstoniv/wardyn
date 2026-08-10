@@ -46,8 +46,11 @@ func TestApplyWorkspaces_Multi(t *testing.T) {
 	}
 }
 
-// TestApplyWorkspaces_GitPrimary: when the first selection is a git repo, it drives
-// the legacy run.Repo clone and only later repos ride WorkspaceRepos.
+// TestApplyWorkspaces_GitPrimary: when the first selection is a git repo, it
+// ADDITIONALLY drives the legacy run.Repo label — but, like every other git
+// selection, it also rides WorkspaceRepos (the corrected contract: the primary
+// git workspace must resolve via referencedWorkspaces/wsRefs, which reads
+// WorkspaceRepos and never run.Repo — see applyWorkspaces' WorkspaceGit case).
 func TestApplyWorkspaces_GitPrimary(t *testing.T) {
 	var run composer.RunInput
 	var spec types.RunPolicySpec
@@ -61,7 +64,9 @@ func TestApplyWorkspaces_GitPrimary(t *testing.T) {
 	if run.Repo != "octocat/Hello-World" {
 		t.Errorf("run.Repo = %q, want octocat/Hello-World", run.Repo)
 	}
-	if len(spec.WorkspaceRepos) != 1 || spec.WorkspaceRepos[0].Repo != "octocat/Spoon-Knife" {
-		t.Errorf("WorkspaceRepos = %+v, want [Spoon-Knife]", spec.WorkspaceRepos)
+	if len(spec.WorkspaceRepos) != 2 ||
+		spec.WorkspaceRepos[0].Repo != "octocat/Hello-World" ||
+		spec.WorkspaceRepos[1].Repo != "octocat/Spoon-Knife" {
+		t.Errorf("WorkspaceRepos = %+v, want [Hello-World, Spoon-Knife] (the primary included)", spec.WorkspaceRepos)
 	}
 }

@@ -186,10 +186,11 @@ func TestDeriveSetupItems_WorkspaceStatuses(t *testing.T) {
 	}
 }
 
-// The primary GIT workspace never lands in spec.WorkspaceRepos (applyWorkspaces
-// only sets run.Repo for it) — deriveSetupItems must still surface it by
-// looking it up directly via run.Repo.
-func TestDeriveSetupItems_PrimaryGitWorkspaceResolvedFromRunRepo(t *testing.T) {
+// applyWorkspaces (compose.go) now puts the PRIMARY git repo into
+// spec.WorkspaceRepos too (not just run.Repo) — deriveSetupItems must surface
+// it through the ORDINARY referencedWorkspaces resolution, with no special
+// run.Repo-keyed lookup involved.
+func TestDeriveSetupItems_PrimaryGitWorkspaceResolvedFromWorkspaceRepos(t *testing.T) {
 	primary := types.Workspace{
 		ID:      uuid.New(),
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World"}},
@@ -197,26 +198,35 @@ func TestDeriveSetupItems_PrimaryGitWorkspaceResolvedFromRunRepo(t *testing.T) {
 	}
 	srv := newSetupTestServer(primary)
 	run := composer.RunInput{Agent: "claude-code", Repo: "octocat/Hello-World"}
-	// No WorkspaceMounts/WorkspaceRepos: applyWorkspaces never adds the PRIMARY
-	// git repo to WorkspaceRepos, so referencedWorkspaces alone would see nothing.
-	items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
+	// Mirrors what the FIXED applyWorkspaces now produces for a git-primary
+	// selection: the repo lands in WorkspaceRepos, not just the run.Repo label.
+	spec := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: "octocat/Hello-World"}}}
+	items := srv.deriveSetupItems(context.Background(), run, spec, secretsWith(), nil, nil, composeSubscriptionState{})
 	got, ok := findItem(items, "workspace:"+primary.ID.String())
 	if !ok || got.Status != "satisfied" {
-		t.Errorf("primary git workspace = %+v (ok=%v), want a satisfied row resolved from run.Repo", got, ok)
+		t.Errorf("primary git workspace = %+v (ok=%v), want a satisfied row resolved from spec.WorkspaceRepos", got, ok)
 	}
 }
 
-// The synthetic run.Repo values applyWorkspaces sets for the OTHER two
-// workspace kinds ("local:<dir>", "ephemeral") must NEVER be treated as a real
-// repo slug and looked up.
-func TestDeriveSetupItems_SyntheticRunRepoGuarded(t *testing.T) {
-	srv := newSetupTestServer() // empty store: any lookup at all would 404 harmlessly, but assert none is attempted via len(items)
-	for _, repo := range []string{"local:proj", "ephemeral"} {
+// One derivation, not two: deriveSetupItems must trust spec.WorkspaceRepos/
+// WorkspaceMounts ALONE for its workspace rows — never a fallback keyed on
+// run.Repo (the fixup this pins the removal of). A bare spec must show no
+// workspace row even when run.Repo names a slug that WOULD resolve if such a
+// fallback still existed — the exact regression a resurrected fixup would
+// reintroduce.
+func TestDeriveSetupItems_WorkspaceRowsComeOnlyFromSpec(t *testing.T) {
+	primary := types.Workspace{
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World"}},
+		Name:    "Hello-World", Status: types.WorkspaceScanned,
+	}
+	srv := newSetupTestServer(primary)
+	for _, repo := range []string{"octocat/Hello-World", "local:proj", "ephemeral"} {
 		run := composer.RunInput{Agent: "claude-code", Repo: repo}
 		items := srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil, composeSubscriptionState{})
 		for _, it := range items {
 			if it.Kind == "workspace" {
-				t.Errorf("repo=%q must not produce a workspace row (synthetic value), got %+v", repo, it)
+				t.Errorf("repo=%q with an EMPTY spec must not produce a workspace row, got %+v", repo, it)
 			}
 		}
 	}

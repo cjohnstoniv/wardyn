@@ -60,6 +60,19 @@ export interface ComposeRequest {
   // internal/api/compose.go's ComposeRequest.Workspaces). An empty/absent list
   // falls back to the legacy singular `workspace` (ephemeral by default).
   workspaceSelections?: WorkspaceSelection[];
+  // Per-workspace requirements-contract opt-ins for the onboarded workspaces
+  // named by workspaceSelections above — the SAME wire shape
+  // CreateRunRequest.Workspaces carries (workspace_id + enabled_optional +
+  // read_only; see RunWorkspaceSelectionWire in new-run/wizard-types.ts, which
+  // this module stays agnostic of — a component-level type — so the shape is
+  // inlined here instead, matching api.createRun/preflightRun's own
+  // `workspaces` param). Sent as `workspace_selections` (distinct from the
+  // resolved {kind,path,repo} `workspaces` wire array above, which loses the
+  // onboarded id). The server never acts on it during compose — it only
+  // echoes it back on the proposal (ComposeResponse.proposed.
+  // workspace_selections) so approveLaunch can forward it to createRun
+  // unchanged, the same way the rest of Proposed already launches verbatim.
+  workspaceOptions?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
   attachments?: ComposeAttachment[];
   sources?: string[];
   backend?: string;
@@ -144,6 +157,11 @@ export interface ComposeResponse {
   proposed: {
     run: ComposeRunProposal;
     inline_policy: RunPolicySpec;
+    // ComposeRequest.workspaceOptions echoed back verbatim (see its doc
+    // comment) — approveLaunch forwards this straight to createRun's own
+    // `workspaces` param, matching how run/inline_policy already launch
+    // exactly what was proposed.
+    workspace_selections?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
   };
   risk_assessment: RiskItem[];
   overall_risk: RiskLevel;
