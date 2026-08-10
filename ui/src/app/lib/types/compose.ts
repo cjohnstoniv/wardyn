@@ -251,11 +251,17 @@ export interface SetupItem {
 // deterministic checklist the composer Review shows (deriveSetupItems);
 // enforced_confinement_class is the class the run will ACTUALLY run at after the
 // policy floor + blast-radius CC3 raise (may exceed the operator's pick when the
-// run holds write-capable credentials). Advisory only — rendered on the wizard's
-// Review step, never gating.
+// run holds write-capable credentials). risk_assessment/overall_risk are the
+// SAME composer.Grade/OverallLevel output the AI Run Composer's Review renders
+// (N1 fix) — optional for older-server tolerance, same pattern as setup_items:
+// an absent value renders no risk panel and no acknowledgment gate rather than
+// crashing. Advisory only — rendered on the wizard's Review step, never gating
+// Review itself (only Launch, and only for a HIGH grade — see RiskPanel).
 export interface PreflightResult {
   setup_items: SetupItem[];
   enforced_confinement_class: ConfinementClass;
+  risk_assessment?: RiskItem[];
+  overall_risk?: RiskLevel;
 }
 
 // POST /api/v1/runs/compose/assist — the ESCALATION-only help agent. ADVISORY:

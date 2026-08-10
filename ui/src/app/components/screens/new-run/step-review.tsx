@@ -20,7 +20,8 @@ import { buildSpec, comesWithLine, type WizardState } from "./wizard-types";
 // card computes, so Review can't disagree with Access about what this run's
 // model access resolves to.
 import { resolveModelAccess } from "./step-access";
-import { SetupChecklist } from "./compose-review";
+import { RiskPanel, SetupChecklist } from "./compose-review";
+import { whyRisky } from "./compose-quick-review";
 import { CC_META } from "../../wardyn/cc-meta";
 import { integrationsApi, type IntegrationRow } from "../../../lib/api/integrations";
 import { RESIDENCY_META } from "../../../lib/integrations";
@@ -37,6 +38,8 @@ export function StepReview({
   attachedPolicy,
   preflight = null,
   preflightStatus = "idle",
+  acknowledged = false,
+  onAcknowledge = () => {},
   onAddSecret,
   onFixWorkspace,
 }: {
@@ -55,6 +58,13 @@ export function StepReview({
   // Review — while loading we show "Checking…", on error a quiet one-liner.
   preflight?: PreflightResult | null;
   preflightStatus?: "idle" | "loading" | "error";
+  // The HIGH-risk acknowledgment (N1 fix): the wizard OWNS this bit (resets it
+  // whenever a fresh preflight lands, since a stale ack must never survive a
+  // spec change) and also reads it to gate the Launch button — StepReview only
+  // renders the checkbox. Optional/defaulted so a caller with no risk data
+  // (older preflight fixture, or a test) never has to thread it through.
+  acknowledged?: boolean;
+  onAcknowledge?: (v: boolean) => void;
   onAddSecret?: (name: string) => void;
   onFixWorkspace?: (workspaceId: string) => void;
 }) {
@@ -134,6 +144,17 @@ export function StepReview({
   const enforced = preflight?.enforced_confinement_class;
   const raised = !!enforced && enforced !== state.confinementClass;
 
+  // Deterministic risk grade (N1 fix): the SAME derivation compose-review.tsx's
+  // ComposeReview does from its (always-present) risk_assessment, here off the
+  // OPTIONAL preflight field — absent/older-server preflight ⇒ empty inputs ⇒
+  // needsAck false ⇒ RiskPanel renders nothing below (never a fake gate).
+  const highItems = React.useMemo(
+    () => preflight?.risk_assessment?.filter((r) => r.risk_level === "high") ?? [],
+    [preflight],
+  );
+  const needsAck = highItems.length > 0;
+  const why = React.useMemo(() => whyRisky(preflight?.risk_assessment ?? []), [preflight]);
+
   const egressValue = inline_policy.allow_all_egress
     ? `Allow all (deny-list only)${
         inline_policy.denied_domains?.length
@@ -183,7 +204,8 @@ export function StepReview({
       )}
       {preflightStatus === "error" && (
         <p className="text-xs text-muted-foreground" data-testid="preflight-unavailable">
-          Preflight unavailable — you can still launch.
+          Preflight unavailable — the setup checklist and risk grade couldn&apos;t be
+          computed for this spec. You can still launch.
         </p>
       )}
       {raised && enforced && (
@@ -357,6 +379,30 @@ export function StepReview({
         </Label>
         <YamlBlock value={inline_policy} className="mt-1.5" />
       </div>
+
+      {/* --- deterministic risk grade + HIGH-only acknowledgment gate (D8) — the
+          SAME RiskPanel the AI Run Composer's Review renders, fed by THIS
+          preflight response. N1's fix: "Edit in wizard" hands its spec to
+          THIS step, which already preflights it — so closing the gap here
+          closes the bypass there too, with no separate wiring. Preflight is
+          advisory: absent/failed (or an older server with no risk_assessment)
+          renders no panel and no gate, the same non-blocking degrade the
+          setup checklist above already has — a preflight outage must never
+          itself block Review. --- */}
+      {preflight && preflight.risk_assessment && preflight.risk_assessment.length > 0 && (
+        <RiskPanel
+          // Fallback direction matters: a response carrying items but no
+          // overall must degrade toward the items' own worst grade, never
+          // toward a rosier "low" badge above a red HIGH list.
+          overallRisk={preflight.overall_risk ?? (highItems.length > 0 ? "high" : "low")}
+          why={why}
+          highItems={highItems}
+          needsAck={needsAck}
+          acknowledged={acknowledged}
+          onAcknowledge={onAcknowledge}
+          attribution="Graded deterministically by Wardyn's rules."
+        />
+      )}
 
       {/* Hidden when the run is already based on a recorded profile — re-saving the
           same spec as a new policy is redundant. */}

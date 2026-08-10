@@ -213,3 +213,62 @@ func TestPreflight_UnknownSecret422Passthrough(t *testing.T) {
 		t.Fatalf("preflight unknown secret: code=%d, want 422; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// TestPreflight_RiskAssessment_HighItem is the N1 regression test: preflight
+// must carry the SAME deterministic risk grade the AI Run Composer's Review
+// renders, so the manual wizard's Review can gate launch behind the identical
+// HIGH-only acknowledgment (compose-review.tsx's RiskPanel). allow_all_egress
+// is an unambiguous single HIGH trigger (risk.go:124-126).
+func TestPreflight_RiskAssessment_HighItem(t *testing.T) {
+	h := newHarness(t)
+	body := `{"agent":"claude-code","repo":"ephemeral","interactive":true,"inline_policy":{` +
+		`"min_confinement_class":"CC2","allow_all_egress":true}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight allow-all-egress: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if resp.OverallRisk != "high" {
+		t.Errorf("overall_risk = %q, want high; risk_assessment=%+v", resp.OverallRisk, resp.RiskAssessment)
+	}
+	found := false
+	for _, it := range resp.RiskAssessment {
+		if it.Field == "allow_all_egress" && it.Level == "high" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("risk_assessment must carry a HIGH allow_all_egress item; got %+v", resp.RiskAssessment)
+	}
+}
+
+// TestPreflight_RiskAssessment_DefaultsNoHighItems asserts a defaults-shaped
+// body — the manual wizard's initial state: interactive, Wall/CC2, baseline
+// egress only, no grants, never-reap (expected for an interactive run) —
+// grades with NO high item, so the new ack gate stays silent for the common
+// case and fires only for a genuinely risky spec.
+func TestPreflight_RiskAssessment_DefaultsNoHighItems(t *testing.T) {
+	h := newHarness(t)
+	body := `{"agent":"claude-code","repo":"ephemeral","interactive":true,"inline_policy":{` +
+		`"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
+		`"first_use_approval":"deny_with_review","auto_stop_after_sec":-1}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight defaults-shaped body: code=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if resp.OverallRisk == "high" {
+		t.Errorf("overall_risk = high for a defaults-shaped body; risk_assessment=%+v", resp.RiskAssessment)
+	}
+	for _, it := range resp.RiskAssessment {
+		if it.Level == "high" {
+			t.Errorf("unexpected HIGH item in a defaults-shaped body: %+v", it)
+		}
+	}
+}

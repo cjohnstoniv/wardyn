@@ -110,6 +110,16 @@ export function PermissionWizard({
   const [preflightStatus, setPreflightStatus] = React.useState<"idle" | "loading" | "error">(
     "idle",
   );
+  // The HIGH-risk acknowledgment (N1 fix): owned here, not in StepReview, so
+  // the Launch button below (in THIS component's footer, not StepReview's
+  // render) can gate on it too. Reset whenever a FRESH preflight is requested
+  // (runPreflight, below) — a stale ack must never survive a spec change — and
+  // again on dialog open (the effect below). needsAck mirrors StepReview's own
+  // derivation (risk_assessment has a "high" item); preflight
+  // absent/failed/pre-N1-server ⇒ risk_assessment is undefined ⇒ needsAck false
+  // ⇒ no gate — a preflight outage must never itself block launch.
+  const [acknowledged, setAcknowledged] = React.useState(false);
+  const needsAck = !!preflight?.risk_assessment?.some((r) => r.risk_level === "high");
   // A launch failure that names a not-yet-stored secret (H1: the stored/default
   // policy path now 422s on this too, same as inline) — offers the same
   // one-click fix the composer review panel does.
@@ -181,6 +191,7 @@ export function PermissionWizard({
     setLaunching(false);
     setPreflight(null);
     setPreflightStatus("idle");
+    setAcknowledged(false);
     mergedWs.current = new Set();
     if (initialState) {
       setState(initialState);
@@ -302,12 +313,26 @@ export function PermissionWizard({
   // policy through the real chokepoint (real 4xx errors), returns the setup
   // checklist + the enforced confinement class, and mints/persists nothing. Any
   // failure is swallowed to a quiet "preflight unavailable" — it NEVER blocks Review.
+  // Monotonic guard: only the LATEST request may land. Without it, a slow
+  // response fired before a workspace-fix rescan can resolve after the fresh
+  // one and silently replace a HIGH grade (and its ack gate) with a stale
+  // pre-fix verdict — the gate must never be droppable by response ordering.
+  const preflightSeq = React.useRef(0);
   const runPreflight = React.useCallback(async () => {
+    const seq = ++preflightSeq.current;
     setPreflightStatus("loading");
+    // A fresh preflight means the spec may have changed since the last one
+    // (edit-then-back-to-Review, or a workspace fix re-triggering it below) —
+    // any acknowledgment given for the PRIOR risk grade is stale the instant a
+    // new one is requested, not only once it resolves.
+    setAcknowledged(false);
     try {
-      setPreflight(await runsApi.preflightRun(runRequest()));
+      const res = await runsApi.preflightRun(runRequest());
+      if (seq !== preflightSeq.current) return;
+      setPreflight(res);
       setPreflightStatus("idle");
     } catch {
+      if (seq !== preflightSeq.current) return;
       setPreflight(null);
       setPreflightStatus("error");
     }
@@ -438,6 +463,8 @@ export function PermissionWizard({
                 attachedPolicy={attachedPolicy}
                 preflight={preflight}
                 preflightStatus={preflightStatus}
+                acknowledged={acknowledged}
+                onAcknowledge={setAcknowledged}
                 onAddSecret={(name) => secretFix.openManual(name)}
                 onFixWorkspace={(id) => {
                   // Re-run preflight once the scan settles so the checklist
@@ -463,6 +490,22 @@ export function PermissionWizard({
             >
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <p>{stepError}</p>
+            </div>
+          )}
+
+          {/* The ack gate's own why-is-Launch-grey line (same no-silent-grey rule
+              as stepError above): the checkbox lives at the bottom of Review's
+              scroll, below the policy JSON, while the disabled Launch button sits
+              in this fixed footer — without this the gate is invisible from the
+              button that enforces it. */}
+          {step.id === "review" && needsAck && !acknowledged && (
+            <div
+              className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning"
+              aria-live="polite"
+              data-testid="wizard-ack-notice"
+            >
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              <p>This configuration graded high-risk — acknowledge the items in the risk panel above to launch.</p>
             </div>
           )}
 
@@ -494,7 +537,10 @@ export function PermissionWizard({
                 <ArrowLeft className="size-4" /> Back
               </Button>
               {isLast ? (
-                <Button onClick={launch} disabled={launching}>
+                // N1: gated the SAME way ComposeReview's Approve & launch is
+                // (compose-review.tsx's launchDisabled) — only a HIGH grade
+                // demands the checkbox; Medium/Low launch with no gate.
+                <Button onClick={launch} disabled={launching || (needsAck && !acknowledged)}>
                   {launching ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (

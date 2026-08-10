@@ -15,15 +15,27 @@ import (
 
 // preflightResponse is the POST /api/v1/runs/preflight body: the deterministic
 // setup checklist deriveSetupItems produces (the SAME rows the compose Review
-// panel shows), plus the confinement class this run will ACTUALLY enforce after
-// the policy floor + blast-radius raise. The manual wizard fires this when the
-// operator enters Review so the checklist (secrets/workspaces/backend/egress)
-// and the silent-CC3 raise the composer already surfaces are visible on the
-// manual path too. Advisory only — the UI renders any error as a quiet
-// "preflight unavailable" and never blocks Review.
+// panel shows), the confinement class this run will ACTUALLY enforce after the
+// policy floor + blast-radius raise, and the deterministic risk grade. The
+// manual wizard fires this when the operator enters Review so the checklist
+// (secrets/workspaces/backend/egress), the silent-CC3 raise, and the risk
+// assessment the composer already surfaces are all visible on the manual path
+// too. Advisory only — the UI renders any error as a quiet "preflight
+// unavailable" and never blocks Review.
 type preflightResponse struct {
 	SetupItems               []SetupItem            `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+	// RiskAssessment/OverallRisk are composer.Grade/OverallLevel run on this run's
+	// resolved spec — the IDENTICAL grader compose.go runs for the AI Run
+	// Composer's Review (composeResponse carries the same two fields under the
+	// same wire names). The manual wizard's Review renders the SAME RiskPanel +
+	// HIGH-only acknowledgment gate from these, so the manual path can never show
+	// a rosier picture than the AI Review would for the same spec — before this,
+	// it showed no risk data at all, and "Edit in wizard" silently walked the
+	// operator around the composer's HIGH-risk ack gate (pass2-coherence-report
+	// finding N1).
+	RiskAssessment []composer.RiskItem `json:"risk_assessment"`
+	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -145,6 +157,26 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		DevcontainerRepo: req.DevcontainerRepo,
 	}
 
+	// Deterministic risk grade (N1 fix): the SAME composer.Grade/OverallLevel
+	// call compose.go runs for the AI Run Composer's Review, on the SAME
+	// resolved spec deriveSetupItems sees below — NOT the llmSpec copy just
+	// below (that copy exists only so reconcileLLMAccess sees a droppable clone
+	// of EligibleGrants; grading it would silently diverge from what the
+	// checklist below is judging). Computed here, after both folds above, so a
+	// workspace's requirements contract (egress/mounts) is graded exactly like
+	// launch will enforce it — never before, never off a rosier snapshot.
+	//
+	// Graded on a copy whose MinConfinementClass is the ENFORCED class — the
+	// grader reads spec.MinConfinementClass, not RunInput.ConfinementClass, and
+	// compose.go achieves the same by mutating the clamped spec before grading
+	// (its blast-radius raise). Grading the pre-raise floor printed "HIGH:
+	// Fence, the weakest tier" on the same screen whose raise banner says the
+	// run launches at Vault.
+	gspec := spec
+	gspec.MinConfinementClass = enforced
+	riskItems := composer.Grade(runInput, gspec)
+	overallRisk := composer.OverallLevel(riskItems)
+
 	// LLM-access verdict on a COPY: reconcileLLMAccess drops orphaned grants in
 	// place, but the manual-wizard launch (handleCreateRun) persists every grant on
 	// the resolved spec, so the checklist must see the FULL spec — mutating a copy
@@ -182,5 +214,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess, nil, composeSubscriptionState{})
-	writeJSON(w, http.StatusOK, preflightResponse{SetupItems: items, EnforcedConfinementClass: enforced})
+	writeJSON(w, http.StatusOK, preflightResponse{
+		SetupItems:               items,
+		EnforcedConfinementClass: enforced,
+		RiskAssessment:           riskItems,
+		OverallRisk:              overallRisk,
+	})
 }

@@ -75,6 +75,19 @@ async function next(dlg: Locator) {
   await dlg.getByRole("button", { name: "Next" }).click();
 }
 
+// N1: the seeded backend's `-runner none` reports NO confinement classes at
+// all (see the file header above), so EVERY wizard run below floors to
+// Fence/CC1 — which grades HIGH unconditionally (risk.go:108-110), regardless
+// of anything else the operator picked. Every Review reached through the
+// default flow in this file therefore carries a HIGH item and needs this SAME
+// acknowledgment before Launch un-gates — the identical RiskPanel gate the AI
+// Run Composer's Review already enforces (compose-review.tsx), now shared
+// verbatim by the manual wizard's Review (step-review.tsx). Locator .click()
+// auto-waits, so callers don't need their own wait for preflight to resolve.
+async function ackHighRisk(dlg: Locator): Promise<void> {
+  await dlg.getByRole("checkbox").click();
+}
+
 test.describe("New Run wizard", () => {
   test("opens from the shell and shows the 5-step indicator", async ({ page }) => {
     const dlg = await openWizard(page);
@@ -342,6 +355,11 @@ test.describe("New Run wizard", () => {
     page.on("request", (req) => {
       if (req.method() === "POST" && /\/api\/v1\/runs$/.test(req.url())) createFired = true;
     });
+    // N1: Launch is now ALSO gated behind the HIGH-risk acknowledgment (this
+    // seeded backend's forced Fence/CC1 grades HIGH unconditionally) —
+    // independent of, and orthogonal to, this test's own save-as-profile
+    // validation below.
+    await ackHighRisk(dlg);
     await dlg.getByRole("button", { name: "Launch run" }).click();
     await expect(dlg.getByText("Name the profile, or turn off save-as-profile.")).toBeVisible();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -358,6 +376,9 @@ test.describe("New Run wizard", () => {
     await next(dlg); // → Review
 
     await expect(dlg.getByRole("button", { name: "Launch run" })).toBeVisible();
+    // N1: this defaults-shaped launch still needs the acknowledgment — the
+    // seeded backend's forced Fence/CC1 grades HIGH unconditionally.
+    await ackHighRisk(dlg);
 
     const createResp = page.waitForResponse(
       (r) => r.request().method() === "POST" && /\/api\/v1\/runs$/.test(r.url()),
@@ -376,6 +397,50 @@ test.describe("New Run wizard", () => {
     // carrying the primary workspace's synthetic repo label.
     await page.goto(`/runs/${created.id}`);
     await expect(page.getByText("local:payments").first()).toBeVisible();
+  });
+
+  // N1: "Edit in wizard" used to hand a HIGH-graded proposal to a manual path
+  // with no risk grade and no ack gate at all — this is the manual-wizard
+  // NATIVE version of the same gap: reach a HIGH grade without ever touching
+  // the AI composer. Autonomous + the untouched default never-stop lifecycle
+  // is independently HIGH (risk.go:179-181, "Never-reap on a NON-interactive
+  // run"); the seeded backend's forced Fence/CC1 (risk.go:108-110) also
+  // contributes here, same as every other test in this file — either alone
+  // would gate, so this only proves the checkbox is load-bearing, not that
+  // this particular trigger is the sole cause.
+  test("Review gates Launch behind an acknowledgment when the config grades HIGH (N1)", async ({
+    page,
+  }) => {
+    const dlg = await openWizard(page);
+    await fillValidBasics(dlg);
+
+    // Autonomous needs a task (validateStep basics) — the never-stop lifecycle
+    // (Confinement, step 4) is left at its default, untouched.
+    await dlg.getByRole("radio", { name: "Autonomous" }).click();
+    await dlg.getByPlaceholder("Describe what the agent should accomplish…").fill("Run the audit");
+    await next(dlg); // → Access
+    await next(dlg); // → Egress
+    await next(dlg); // → Barrier
+
+    const preflight = page.waitForResponse(
+      (r) => r.request().method() === "POST" && /\/api\/v1\/runs\/preflight$/.test(r.url()),
+    );
+    await next(dlg); // → Review
+    await preflight;
+
+    const launchBtn = dlg.getByRole("button", { name: "Launch run" });
+    await expect(dlg.getByText(/high-risk configuration/i)).toBeVisible();
+    await expect(launchBtn).toBeDisabled();
+
+    await dlg.getByRole("checkbox").click();
+    await expect(launchBtn).toBeEnabled();
+
+    const createResp = page.waitForResponse(
+      (r) => r.request().method() === "POST" && /\/api\/v1\/runs$/.test(r.url()),
+    );
+    await launchBtn.click();
+    await createResp;
+    await expect(page.getByRole("button", { name: "Launch run" })).toHaveCount(0);
   });
 });
 

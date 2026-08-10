@@ -476,4 +476,86 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     await goToConfinementStep(user);
     expect(screen.queryByText(/checking…/i)).not.toBeInTheDocument();
   });
+
+  // N1: the manual wizard used to have no risk grade — and so no ack gate — at
+  // all, so "Edit in wizard" from a HIGH-graded composer proposal silently
+  // walked the operator around the acknowledgment compose-review.tsx enforces
+  // for the identical spec. Preflight now carries risk_assessment/overall_risk
+  // (preflight.go/preflight_test.go) and StepReview renders the SAME RiskPanel
+  // (its own rendering rules are covered by step-review.test.tsx); this block
+  // covers the WIZARD's half — gating Launch, and never letting a stale
+  // acknowledgment survive a fresh preflight.
+  const highRiskPreflight = {
+    setup_items: [],
+    enforced_confinement_class: "CC2",
+    risk_assessment: [
+      {
+        field: "allow_all_egress",
+        value: "true",
+        risk_level: "high",
+        rationale: "Reaches almost any public host.",
+      },
+    ],
+    overall_risk: "high",
+  };
+
+  it("gates Launch behind the acknowledgment checkbox when preflight grades HIGH (N1)", async () => {
+    preflightRunMock.mockResolvedValue(highRiskPreflight);
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToLastStep(user);
+    const launchBtn = await screen.findByRole("button", { name: /launch run/i });
+    await waitFor(() => expect(launchBtn).toBeDisabled());
+    expect(screen.getByTestId("high-risk-section")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox"));
+    await waitFor(() => expect(launchBtn).toBeEnabled());
+
+    await user.click(launchBtn);
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("resets the acknowledgment when a fresh preflight lands, so a stale ack can't survive re-entering Review (N1)", async () => {
+    preflightRunMock.mockResolvedValue(highRiskPreflight);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToLastStep(user);
+    const launchBtn = await screen.findByRole("button", { name: /launch run/i });
+    await waitFor(() => expect(launchBtn).toBeDisabled());
+    await user.click(screen.getByRole("checkbox"));
+    await waitFor(() => expect(launchBtn).toBeEnabled());
+
+    // Leave Review and come back — a fresh preflight is requested, and the
+    // prior acknowledgment must not carry over even though the mocked
+    // response is byte-identical: the reset fires on "a new preflight was
+    // asked for" (runPreflight), not on detecting a diff.
+    await user.click(screen.getByRole("button", { name: /back/i }));
+    await user.click(await screen.findByRole("button", { name: /^next$/i }));
+    await waitFor(() => expect(preflightRunMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: /launch run/i })).toBeDisabled());
+  });
+
+  it("shows no ack gate and Launch stays enabled when preflight carries no risk_assessment (advisory degrade)", async () => {
+    // beforeEach's default preflightRunMock response predates risk_assessment
+    // entirely (an older-server shape) — Launch must behave exactly as before
+    // this batch: no panel, no gate, never blocked by a preflight that has
+    // nothing to say about risk.
+    createRunMock.mockResolvedValue(createdRun);
+    render(
+      <PermissionWizard open onOpenChange={() => {}} onCreated={() => {}} initialState={readyState()} />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await goToLastStep(user);
+    await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: /launch run/i })).toBeEnabled();
+    expect(screen.queryByTestId("high-risk-section")).toBeNull();
+  });
 });

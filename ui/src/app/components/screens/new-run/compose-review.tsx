@@ -375,13 +375,18 @@ export function ComposeReview({
 // acknowledgment, not by the raw grade (see `tone` below, §5) — the high items
 // list the grader's plain-language rationales (never the raw wire field /
 // invariant ref — D4).
-function RiskPanel({
+// Exported so the manual wizard's Review step can render the SAME panel from
+// its preflight response (POST /runs/preflight risk_assessment/overall_risk) —
+// one grader, one panel, across both the composer and manual paths (N1: the
+// manual path used to have no risk grade — and so no ack gate — at all).
+export function RiskPanel({
   overallRisk,
   why,
   highItems,
   needsAck,
   acknowledged,
   onAcknowledge,
+  attribution = RISK_ATTRIBUTION,
 }: {
   overallRisk: RiskLevel;
   why: string[];
@@ -389,6 +394,10 @@ function RiskPanel({
   needsAck: boolean;
   acknowledged: boolean;
   onAcknowledge: (v: boolean) => void;
+  // The composer default ("…not the model") is load-bearing on the AI path;
+  // the manual wizard consulted no model, so it passes its own path-neutral
+  // sentence instead of implying one existed.
+  attribution?: string;
 }) {
   // Tone by whether it needs YOU, not by grade (§5) — a Medium default (the
   // typical CC2 host) used to paint itself amber on every run, training
@@ -412,7 +421,7 @@ function RiskPanel({
           has more HIGH triggers (weakest barrier tier, never-reap, …) and this
           copy must never claim to enumerate them. */}
       <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-        {RISK_ATTRIBUTION} High-graded choices — such as the weakest barrier tier, allow-all
+        {attribution} High-graded choices — such as the weakest barrier tier, allow-all
         egress, host-writable mounts, or write-capable credentials — require an explicit
         acknowledgment before launch.
       </p>

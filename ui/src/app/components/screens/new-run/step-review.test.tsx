@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { PreflightResult, Workspace } from "../../../lib/types";
 import type { IntegrationRow } from "../../../lib/api/integrations";
 import { StepReview } from "./step-review";
@@ -165,6 +166,82 @@ describe("StepReview — preflight surfacing", () => {
     expect(banner).toHaveTextContent(/Connect a provider under Integrations/);
     expect(banner).not.toHaveTextContent(/pick a stored key/i);
     expect(banner).not.toHaveTextContent(/go back to access/i);
+  });
+});
+
+// N1: the manual wizard used to have no risk grade at all, so "Edit in
+// wizard" silently walked the operator around the composer's HIGH-only
+// acknowledgment gate. StepReview renders the SAME RiskPanel compose-review.tsx
+// does (compose-review.test.tsx covers the panel's own rendering rules in
+// full — badge, attribution, tone, rationale list); these tests cover only
+// StepReview's OWN wiring: when it renders the panel at all, and that the
+// acknowledgment callback reaches the caller (the wizard, which owns the bit
+// and gates Launch on it — see wizard.test.tsx for that half).
+describe("StepReview — risk panel (N1)", () => {
+  it("renders the RiskPanel with its ack gate when preflight carries a HIGH item, and forwards the checkbox click", async () => {
+    const onAcknowledge = vi.fn();
+    render(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight({
+          risk_assessment: [
+            {
+              field: "allow_all_egress",
+              value: "true",
+              risk_level: "high",
+              rationale: "Reaches almost any public host.",
+            },
+          ],
+          overall_risk: "high",
+        })}
+        preflightStatus="idle"
+        acknowledged={false}
+        onAcknowledge={onAcknowledge}
+      />,
+    );
+    expect(screen.getByText(/^Risk:$/)).toBeInTheDocument();
+    expect(screen.getByTestId("high-risk-section")).toBeInTheDocument();
+    expect(screen.getByText(/Reaches almost any public host/)).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole("checkbox"));
+    expect(onAcknowledge).toHaveBeenCalledWith(true);
+  });
+
+  it("renders a neutral panel with no ack gate when preflight's risk_assessment has no HIGH item", () => {
+    render(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight({
+          risk_assessment: [
+            {
+              field: "min_confinement_class",
+              value: "CC2",
+              risk_level: "medium",
+              rationale: "Wall (the default tier — a gVisor sandbox).",
+            },
+          ],
+          overall_risk: "medium",
+        })}
+        preflightStatus="idle"
+      />,
+    );
+    expect(screen.getByText(/^Risk:$/)).toBeInTheDocument();
+    expect(screen.queryByTestId("high-risk-section")).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("renders no risk panel at all when preflight carries no risk_assessment (older server, or preflight unavailable)", () => {
+    render(
+      <StepReview
+        state={initialWizardState("CC2")}
+        patch={() => {}}
+        preflight={preflight()}
+        preflightStatus="idle"
+      />,
+    );
+    expect(screen.queryByText(/^Risk:$/)).toBeNull();
   });
 });
 
