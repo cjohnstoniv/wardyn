@@ -711,7 +711,6 @@ export function WorkspaceWizard({
               requirements={s.requirements}
               storedSecretNames={s.secretNames}
               leakCount={leakCount}
-              powerSource={powerSource}
               onOpenDetail={() => {
                 if (s.workspace) onOpenWorkspace?.(s.workspace.id);
               }}

@@ -8,29 +8,23 @@
 import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
-import {
-  summarizeRequirements,
-  unmetRequiredSecrets,
-  type PowerSource,
-  type WorkspaceRequirementsMap,
-} from "./wizard-types";
+import { summarizeRequirements, unmetRequiredSecrets, type WorkspaceRequirementsMap } from "./wizard-types";
 
 export type DoneVariant = "usable" | "scanning" | "failed";
 
-const STRENGTHEN_CARDS: { focus: "record" | "env" | "model"; title: string; desc: string }[] = [
+// Both cards HARDEN the workspace — that is what "make it stronger" promises.
+// Model access deliberately isn't one: binding a provider is configuration, not
+// hardening; it already has step ③ Integrations and the workspace's own page;
+// and access RESOLVES down a four-tier ladder, so most workspaces should never
+// pin anything at all.
+const STRENGTHEN_CARDS: { focus: "record" | "env"; title: string; desc: string }[] = [
   {
     focus: "record",
     title: "Verify with a session",
     desc: "Drive it once; approve what it asks for at the door, adjust, retry — then save.",
   },
   { focus: "env", title: "Env as code", desc: "Generate a devcontainer.json / AGENTS.md you can commit." },
-  { focus: "model", title: "Model access", desc: "Bind a model this workspace's runs use." },
 ];
-
-function modelAccessDesc(powerSource: PowerSource): string {
-  if (powerSource.kind === "pinned") return `Bound: ${powerSource.name}. Change it any time on its page.`;
-  return "Bind a model this workspace's runs use.";
-}
 
 export function StepDone({
   name,
@@ -38,7 +32,6 @@ export function StepDone({
   requirements,
   storedSecretNames,
   leakCount,
-  powerSource,
   onOpenDetail,
   onRescan,
 }: {
@@ -47,8 +40,7 @@ export function StepDone({
   requirements: WorkspaceRequirementsMap;
   storedSecretNames: string[];
   leakCount: number;
-  powerSource: PowerSource;
-  onOpenDetail: (focus?: "record" | "env" | "model") => void;
+  onOpenDetail: (focus?: "record" | "env") => void;
   onRescan: () => void;
 }) {
   const scanning = variant === "scanning";
@@ -73,8 +65,6 @@ export function StepDone({
       );
     }
   }
-
-  const cards = STRENGTHEN_CARDS.map((c) => (c.focus === "model" ? { ...c, desc: modelAccessDesc(powerSource) } : c));
 
   return (
     <div className="space-y-4">
@@ -147,7 +137,7 @@ export function StepDone({
           Make it stronger — optional
         </p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          {cards.map((c) => (
+          {STRENGTHEN_CARDS.map((c) => (
             <button
               key={c.focus}
               type="button"

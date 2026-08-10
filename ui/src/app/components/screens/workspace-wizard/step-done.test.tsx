@@ -23,7 +23,6 @@ describe("StepDone — usable (happy path)", () => {
         requirements={REQS}
         storedSecretNames={["DATABASE_URL"]}
         leakCount={0}
-        powerSource={{ kind: "default" }}
         onOpenDetail={vi.fn()}
         onRescan={vi.fn()}
       />,
@@ -45,7 +44,6 @@ describe("StepDone — usable (happy path)", () => {
         requirements={REQS}
         storedSecretNames={[]}
         leakCount={2}
-        powerSource={{ kind: "default" }}
         onOpenDetail={vi.fn()}
         onRescan={vi.fn()}
       />,
@@ -54,7 +52,7 @@ describe("StepDone — usable (happy path)", () => {
     expect(screen.getByText(/2 suspected committed secrets/)).toBeInTheDocument();
   });
 
-  it("the three strengthen cards deep-link with a focus hint, and Model access reflects a pinned power source", () => {
+  it("offers exactly the two hardening cards — model access is not one of them", () => {
     const onOpenDetail = vi.fn();
     render(
       <StepDone
@@ -63,18 +61,18 @@ describe("StepDone — usable (happy path)", () => {
         requirements={{}}
         storedSecretNames={[]}
         leakCount={0}
-        powerSource={{ kind: "pinned", integrationId: "ai:anthropic_api_key", name: "Anthropic (API key)" }}
         onOpenDetail={onOpenDetail}
         onRescan={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Bound: Anthropic \(API key\)/)).toBeInTheDocument();
     fireEvent.click(screen.getByText("Verify with a session"));
     expect(onOpenDetail).toHaveBeenCalledWith("record");
     fireEvent.click(screen.getByText("Env as code"));
     expect(onOpenDetail).toHaveBeenCalledWith("env");
-    fireEvent.click(screen.getByText("Model access"));
-    expect(onOpenDetail).toHaveBeenCalledWith("model");
+    // Binding a provider is configuration, not hardening: it lives on step ③
+    // Integrations and the workspace's own page, and access resolves down a
+    // four-tier ladder, so most workspaces never pin anything.
+    expect(screen.queryByText("Model access")).not.toBeInTheDocument();
   });
 });
 
@@ -87,7 +85,6 @@ describe("StepDone — scan-still-running variant", () => {
         requirements={REQS}
         storedSecretNames={[]}
         leakCount={1}
-        powerSource={{ kind: "default" }}
         onOpenDetail={vi.fn()}
         onRescan={vi.fn()}
       />,
@@ -109,7 +106,6 @@ describe("StepDone — scan-failed variant", () => {
         requirements={{}}
         storedSecretNames={[]}
         leakCount={0}
-        powerSource={{ kind: "none" }}
         onOpenDetail={vi.fn()}
         onRescan={onRescan}
       />,
