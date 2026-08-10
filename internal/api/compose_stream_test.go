@@ -52,7 +52,14 @@ func newStreamComposerHarness(t *testing.T) *harness {
 // none) and the admin token, returning the recorded response.
 func streamComposePOST(t *testing.T, srv *Server, accept string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/compose", strings.NewReader(trackAComposeBody))
+	return streamComposePOSTBody(t, srv, accept, trackAComposeBody)
+}
+
+// streamComposePOSTBody is streamComposePOST with an explicit request body, for
+// cases that need the pipeline to FAIL rather than propose.
+func streamComposePOSTBody(t *testing.T, srv *Server, accept, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/compose", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+adminToken)
 	if accept != "" {
 		r.Header.Set("Accept", accept)
@@ -210,5 +217,54 @@ func TestTrackAComposeSSEMatchesBuffer(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ssePayload, bufPayload) {
 		t.Errorf("SSE result payload != buffer body\nSSE:    %#v\nbuffer: %#v", ssePayload, bufPayload)
+	}
+}
+
+// TestComposeSSEErrorFrameCarriesBufferStatus is the ERROR half of the
+// buffer/SSE equivalence guarantee: one failure must be reported identically by
+// both transports. The stream has already flushed 200 by the time the pipeline
+// fails, so the frame cannot BE the status — it CARRIES it.
+//
+// Without the carried status the client had to invent one and hardcoded 502, so
+// every post-flush refusal reached the operator as "the composer backend failed
+// to respond … try again" (new-run-dialog.tsx's composeErrorMessage) — blaming a
+// backend that had answered correctly and advising a retry that could never
+// clear a deterministic 422. A git workspace is the natural probe: it engages
+// validateWorkspaceSources, which refuses (422) rather than failing.
+func TestComposeSSEErrorFrameCarriesBufferStatus(t *testing.T) {
+	h := newStreamComposerHarness(t)
+	const body = `{"prompt":"tidy the README","workspace":{"kind":"git","repo":"acme/payments"},"mode":"skip"}`
+
+	// Buffer transport: the real HTTP status + message (the reference).
+	buf := streamComposePOSTBody(t, h.srv, "application/json", body)
+	if buf.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("buffer code = %d, want 422 (a refusal, not a backend failure); body=%s", buf.Code, buf.Body.String())
+	}
+	var bufErr struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(buf.Body.Bytes(), &bufErr); err != nil {
+		t.Fatalf("decode buffer error body: %v", err)
+	}
+
+	// SSE transport: 200 header, then a terminal error frame carrying the SAME
+	// status and message.
+	sse := streamComposePOSTBody(t, h.srv, "text/event-stream", body)
+	if sse.Code != http.StatusOK {
+		t.Fatalf("sse code = %d, want 200 (the status flushed before the failure); body=%s", sse.Code, sse.Body.String())
+	}
+	events := streamParseSSE(t, sse.Body.String())
+	if len(events) == 0 {
+		t.Fatalf("no SSE frames parsed")
+	}
+	last := events[len(events)-1]
+	if last.Type != composer.EvError {
+		t.Fatalf("last frame type = %q, want a terminal error frame (events=%+v)", last.Type, events)
+	}
+	if last.Status != buf.Code {
+		t.Errorf("error frame status = %d, want %d (the status the buffer transport returns for the SAME failure)", last.Status, buf.Code)
+	}
+	if last.Error != bufErr.Error {
+		t.Errorf("error frame message = %q, want %q (both transports report one failure identically)", last.Error, bufErr.Error)
 	}
 }

@@ -192,28 +192,40 @@ func twoBackendRegistry(t *testing.T, result composer.Proposal) *composer.Regist
 
 // ─── raw HTTP helpers (no SDK compose method exists) ──────────────────────────
 
-// postCompose drives POST /api/v1/runs/compose with the admin token and returns
-// the raw status + body so callers can decode 2xx or assert a 4xx/413.
-// onboardLocalDir onboards a local-dir workspace so a compose/run that mounts it
-// clears the onboarding gate (validateWorkspaceSources). Onboarding a local dir
-// does not require the path to exist on disk. (These compose tests predate the
-// onboarding gate; they never ran in CI, so they went stale — now that the apie2e
-// suite runs per-PR they onboard first, exercising the real onboard→compose flow.)
-func onboardLocalDir(t *testing.T, baseURL, path string) {
+// onboardWorkspace onboards ONE workspace of the given kind so a compose/run
+// that names its source clears the onboarding gate (validateWorkspaceSources).
+// Onboarding validates the source string only — a local_dir path need not exist
+// on disk and a repo is never cloned — so it is a pure record write here.
+// (These compose tests predate the onboarding gate; they never ran in CI, so
+// they went stale — now that the apie2e suite runs per-PR they onboard first,
+// exercising the real onboard→compose flow.)
+func onboardWorkspace(t *testing.T, baseURL, kind, source string) {
 	t.Helper()
 	body, err := json.Marshal(map[string]string{
 		"name":   "ws-" + uuid.NewString(), // unique so a shared DB / re-run can't collide on the name
-		"kind":   "local_dir",
-		"source": path,
+		"kind":   kind,
+		"source": source,
 	})
 	if err != nil {
 		t.Fatalf("marshal workspace: %v", err)
 	}
 	if st, raw := doAdmin(t, http.MethodPost, baseURL+"/api/v1/workspaces", body); st != http.StatusCreated {
-		t.Fatalf("onboard local dir %q: %d %s", path, st, raw)
+		t.Fatalf("onboard %s %q: %d %s", kind, source, st, raw)
 	}
 }
 
+func onboardLocalDir(t *testing.T, baseURL, path string) {
+	t.Helper()
+	onboardWorkspace(t, baseURL, "local_dir", path)
+}
+
+func onboardRepo(t *testing.T, baseURL, slug string) {
+	t.Helper()
+	onboardWorkspace(t, baseURL, "repo", slug)
+}
+
+// postCompose drives POST /api/v1/runs/compose with the admin token and returns
+// the raw status + body so callers can decode 2xx or assert a 4xx/413.
 func postCompose(t *testing.T, baseURL string, body composeReq) (int, []byte) {
 	t.Helper()
 	// A workspace is required; default to ephemeral so cases that don't exercise
@@ -355,8 +367,14 @@ func TestCompose_ClampsAndGrades(t *testing.T) {
 
 // TestCompose_WorkspaceApplied asserts the operator's REQUIRED workspace choice
 // is applied to the proposal (the LLM never chooses it): ephemeral => no mount,
-// git => repo set, local => a host mount at /home/agent/work (read-write grades
-// HIGH); an invalid path and a missing workspace are 400.
+// git => repo set (ONBOARDED repos only), local => a host mount at
+// /home/agent/work (read-write grades HIGH); an invalid path and a missing
+// workspace are 400, an un-onboarded source is 422.
+//
+// EVERY postCompose here checks its status. Two calls used to discard it, and a
+// discarded status decodes a 422 error body into a ZERO-VALUED proposal, so the
+// case failed as a puzzling `repo = ""` instead of naming the refusal — the
+// exact way the onboarding-gate change below stayed hidden.
 func TestCompose_WorkspaceApplied(t *testing.T) {
 	reg := twoBackendRegistry(t, safeProposal())
 	h := newHarness(t, harnessOpts{composer: reg})
@@ -374,11 +392,43 @@ func TestCompose_WorkspaceApplied(t *testing.T) {
 		t.Errorf("ephemeral must have no mounts, got %+v", cr.Proposed.InlinePolicy.WorkspaceMounts)
 	}
 
-	// git: operator repo wins.
-	_, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceGit, Repo: "acme/payments"}})
+	// git, NOT onboarded: REFUSED (422). Asserted BEFORE the onboarded case so a
+	// stray onboarding cannot mask it.
+	//
+	// This pins the behaviour 7a91993 established, and it is the CORRECT one. The
+	// gate (validateWorkspaceSources) reads spec.WorkspaceRepos, so while the
+	// PRIMARY git repo rode only the scalar run.Repo it was invisible to the gate
+	// — yet buildRepoRecords (runs_scm.go) clones that scalar too. A compose
+	// naming ONLY a primary git repo therefore cloned an UN-ONBOARDED repo into a
+	// sandbox, while a compose naming a second repo was gated: the old behaviour
+	// gated by POSITION, which is a bug, not a feature. Onboarded-only is the
+	// product law ("Run creation only ever offers what's added here — a free-text
+	// host path is never accepted", docs/design/workspace-setup-redesign-prompt.md)
+	// and what the manual workspace_id path (seedRequestWorkspace) always did.
+	// The UI cannot even express this request — resolveComposeWorkspace resolves
+	// picks against the onboarded list — so this 422 is the API/CLI backstop.
+	st, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceGit, Repo: "acme/not-onboarded"}})
+	if st != http.StatusUnprocessableEntity {
+		t.Fatalf("un-onboarded git repo must be refused 422, got %d %s", st, raw)
+	}
+	if !strings.Contains(string(raw), "acme/not-onboarded") || !strings.Contains(string(raw), "not an onboarded repository") {
+		t.Errorf("refusal must NAME the repo and say it is not onboarded, got %s", raw)
+	}
+
+	// git, ONBOARDED: operator repo wins — and it rides workspace_repos, which is
+	// what makes it visible to the gate, to wsRefs' contract fold at launch, and
+	// to the review checklist (one derivation, not three).
+	onboardRepo(t, h.srv.URL, "acme/payments")
+	st, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceGit, Repo: "acme/payments"}})
+	if st != http.StatusOK {
+		t.Fatalf("onboarded git repo: %d %s", st, raw)
+	}
 	cr = decodeCompose(t, raw)
 	if cr.Proposed.Run.Repo != "acme/payments" {
 		t.Errorf("git repo = %q, want acme/payments", cr.Proposed.Run.Repo)
+	}
+	if got := cr.Proposed.InlinePolicy.WorkspaceRepos; len(got) != 1 || got[0].Repo != "acme/payments" {
+		t.Errorf("primary git repo must also ride workspace_repos, got %+v", got)
 	}
 	if len(cr.Proposed.InlinePolicy.WorkspaceMounts) != 0 {
 		t.Errorf("git must have no host mounts, got %+v", cr.Proposed.InlinePolicy.WorkspaceMounts)
@@ -413,7 +463,10 @@ func TestCompose_WorkspaceApplied(t *testing.T) {
 	}
 
 	// local read-only: mount read_only=true.
-	_, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceLocal, Path: projDir}})
+	st, raw = postCompose(t, h.srv.URL, composeReq{Prompt: "x", Workspace: composer.Workspace{Kind: composer.WorkspaceLocal, Path: projDir}})
+	if st != http.StatusOK {
+		t.Fatalf("local ro: %d %s", st, raw)
+	}
 	cr = decodeCompose(t, raw)
 	ms = cr.Proposed.InlinePolicy.WorkspaceMounts
 	if len(ms) != 1 || ms[0].ReadOnly == nil || !*ms[0].ReadOnly {

@@ -80,9 +80,28 @@ describe("composer.compose() — SSE streaming path", () => {
         'data: {"type":"error","error":"backend exploded"}\n\n',
       ]),
     );
+    // No status on the frame => 502, the backend-failure fallback.
     await expect(composer.compose({ prompt: "x" }, [], () => {})).rejects.toMatchObject({
       status: 502,
       message: "backend exploded",
+    });
+  });
+
+  it("keeps the status the error frame carries instead of calling every failure a 502", async () => {
+    // A post-flush REFUSAL (422 — e.g. an un-onboarded workspace) is not a backend
+    // failure: the backend answered, and retrying can never clear it. The stream
+    // already sent 200, so the server puts the status it would have returned on the
+    // buffer transport ON the frame; flattening it to 502 here made new-run-dialog's
+    // composeErrorMessage say "the composer backend failed to respond … try again".
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'data: {"type":"stage","stage":"check"}\n\n',
+        'data: {"type":"error","status":422,"error":"workspace: repo \\"acme/payments\\" is not an onboarded repository"}\n\n',
+      ]),
+    );
+    await expect(composer.compose({ prompt: "x" }, [], () => {})).rejects.toMatchObject({
+      status: 422,
+      message: 'workspace: repo "acme/payments" is not an onboarded repository',
     });
   });
 

@@ -260,6 +260,16 @@ type ComposeEvent struct {
 	Stage  string           `json:"stage,omitempty"`
 	Result any              `json:"result,omitempty"`
 	Error  string           `json:"error,omitempty"`
+	// Status is the HTTP status this failure WOULD have carried on the buffer
+	// transport (EvError only). The SSE stream already flushed 200, so it cannot
+	// be the real status — but the client still needs to tell a refusal (422:
+	// un-onboarded workspace, invalid clamped policy) from a backend failure
+	// (502) and a bad request (400), because only the last two are worth
+	// retrying. Without it the client had to invent one, and hardcoded 502 — so
+	// a 422 refusal reached the operator as "the composer backend failed to
+	// respond … try again", blaming a backend that had answered correctly and
+	// advising a retry that could never succeed.
+	Status int `json:"status,omitempty"`
 }
 
 // ValidateRequest enforces the input size caps. It is called by the endpoint

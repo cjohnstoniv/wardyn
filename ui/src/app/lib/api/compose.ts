@@ -148,10 +148,17 @@ export const composer = {
           stage?: string;
           result?: ComposeResult;
           error?: string;
+          status?: number;
         };
         if (ev.type === "stage" && ev.stage) onStage(ev.stage);
         else if (ev.type === "result" && ev.result) result = ev.result;
-        else if (ev.type === "error") throw new HttpError(502, ev.error || "compose failed");
+        // Use the status the server put ON the frame — the same one the
+        // non-streaming transport returns for this failure. Hardcoding 502 here
+        // told the operator "the composer backend failed to respond … try again"
+        // for a deterministic 422 refusal (e.g. an un-onboarded workspace): the
+        // backend HAD responded, and no retry could ever clear it. 502 remains
+        // the fallback for a frame with no status (a real backend failure).
+        else if (ev.type === "error") throw new HttpError(ev.status || 502, ev.error || "compose failed");
       }
       if (done) break;
     }

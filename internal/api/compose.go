@@ -163,7 +163,11 @@ func (s *Server) handleComposeRun(w http.ResponseWriter, r *http.Request) {
 		close(stop)
 		hbWG.Wait() // no writes to w after the handler returns
 		if cerr != nil {
-			emit(composer.ComposeEvent{Type: composer.EvError, Error: cerr.msg})
+			// Carry cerr.status too: the frame is post-flush so it cannot BE the
+			// status, but it is the SAME status the buffer transport writes below,
+			// so both transports report one failure identically instead of the
+			// stream silently downgrading every refusal to a backend failure.
+			emit(composer.ComposeEvent{Type: composer.EvError, Error: cerr.msg, Status: cerr.status})
 		}
 		return
 	}
