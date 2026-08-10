@@ -498,6 +498,19 @@ func TestDeriveSetupItems_ConfigPairSubscriptionMount(t *testing.T) {
 	if !ok || it.Status != "missing" || it.Detail != reason {
 		t.Errorf("degraded config_pair = %+v (ok=%v), want missing + detail == reused reason %q", it, ok, reason)
 	}
+
+	// M6: a MANAGED-subscription pin nothing can deliver (no setup-token
+	// connected) is the SAME shape (Requested && !Injected && !Managed) —
+	// pinned with compose.go's own exact wording so a future rewrite of that
+	// message can't silently drift from what this row actually renders.
+	managedReason := "this run's resolved integration is a managed Claude subscription, but no setup-token is " +
+		"connected — falling back to a brokered API key; connect it in Getting Started."
+	items = srv.deriveSetupItems(context.Background(), run, types.RunPolicySpec{}, secretsWith(), nil, nil,
+		composeSubscriptionState{Requested: true, Injected: false, Warnings: []string{managedReason}})
+	it, ok = findItem(items, "config_pair:use_subscription:claude_cred_mount")
+	if !ok || it.Status != "missing" || it.Detail != managedReason {
+		t.Errorf("managed-pin-not-delivered config_pair = %+v (ok=%v), want missing + detail == %q", it, ok, managedReason)
+	}
 }
 
 // ── residency (F3) ───────────────────────────────────────────────────────────

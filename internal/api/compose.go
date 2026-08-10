@@ -306,10 +306,11 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 
 	// Clamp to the operator's policy ceiling (this strips any host mount the
 	// model emitted), THEN apply the operator's trusted choices — the workspace
-	// and, on explicit per-run opt-in, the ceiling-blessed Claude credential
-	// mounts — THEN validate the final spec through the same path inline policies
-	// take. Applying mounts after the clamp is what makes operator-authored
-	// entries the ONLY mount sources — the LLM can never introduce one.
+	// and, when the run's resolved integration asks for it, the ceiling-blessed
+	// Claude credential mounts — THEN validate the final spec through the same
+	// path inline policies take. Applying mounts after the clamp is what makes
+	// operator-authored entries the ONLY mount sources — the LLM can never
+	// introduce one.
 	run := prop.Run
 	// Ground GitHub grants on the LOCAL workspace's DETECTED git remotes BEFORE the
 	// clamp (so the operator's repo ceiling still intersects): scope any
@@ -330,46 +331,50 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 	// reaches no model. Add it BEFORE the clamp (secret-aware + non-breaking); the
 	// truthful "did model access survive?" warning is emitted AFTER the clamp below.
 	presentSecrets := s.presentSecretNames(ctx)
-	// Resolve an explicit run-level integration choice (run-explicit
-	// integration_id, or use_subscription's DEPRECATED-ALIAS meaning: "the
-	// default agent_runs integration of a subscription type") BEFORE the
-	// legacy subscribed/managedSub computation below, so an operator-pinned
-	// Integration steers the SAME two booleans that already drive
-	// ensureLLMGrant/applyLLMCredMount/reconcileLLMAccess — no new pipeline
-	// stage, no change to clamp ordering. Compose has no onboarded-workspace
-	// concept (composer.Workspace is a raw source, never a types.Workspace
-	// id), so the workspace tier of the order never applies here (see
-	// runs_create.go's applyPrimaryWorkspaceCreds for the full 4-tier chain a
-	// real create-run resolves). hasInteg is always false with zero configured
-	// integrations, and subscriptionRequested/managedByChoice then equal
-	// req.UseSubscription exactly — so every line below degrades to TODAY's
-	// behavior whenever nothing is configured.
-	integ, hasInteg := s.resolveRunIntegration(ctx, req.IntegrationID, req.UseSubscription, "")
-	subscriptionRequested, managedByChoice := req.UseSubscription, req.UseSubscription
+	// Resolve the run-level integration precedence (run-explicit
+	// integration_id → the PRIMARY workspace's LLMCred.IntegrationRef → the
+	// operator's DefaultFor:agent_runs default — resolveRunIntegration,
+	// llmcred.go) BEFORE the legacy subscribed/managedSub computation below,
+	// so an operator-pinned Integration steers the SAME two booleans that
+	// already drive ensureLLMGrant/applyLLMCredMount/reconcileLLMAccess — no
+	// new pipeline stage, no change to clamp ordering. primaryWorkspaceLLMRef
+	// resolves req.Workspaces — raw source descriptors, never types.Workspace
+	// ids — against the onboarded workspace list the same way
+	// referencedWorkspaces resolves ITS OWN primary (see its doc comment for
+	// the exact mirror), so a workspace pinned to a subscription previews here
+	// exactly as launch will grant it (foldRunIntegration resolves the
+	// identical ref from the real onboarded workspace). hasInteg is always
+	// false with zero configured integrations and no workspace binding, and
+	// subscriptionRequested/managedByChoice then stay false — so every line
+	// below degrades to the api-key-only path whenever nothing is configured.
+	integ, hasInteg := s.resolveRunIntegration(ctx, req.IntegrationID, s.primaryWorkspaceLLMRef(ctx, req.Workspaces))
+	subscriptionRequested, managedByChoice := false, false
 	if hasInteg {
 		subscriptionRequested = integ.Type == "anthropic_subscription" && subscriptionLane(integ) == "resident_host"
 		managedByChoice = integ.Type == "anthropic_subscription" && subscriptionLane(integ) != "resident_host"
 	}
-	// Subscription transport engages only on the EXPLICIT per-run opt-in AND a
-	// ceiling-blessed cred mount AND a Claude agent; otherwise api-key (the more
-	// governed default: key never resident, proxy-injected, 1h TTL).
+	// Subscription transport engages only when the run's resolved integration IS
+	// a resident_host subscription AND a ceiling-blessed cred mount AND a Claude
+	// agent; otherwise api-key (the more governed default: key never resident,
+	// proxy-injected, 1h TTL).
 	subscribed := subscriptionRequested && prop.Run.Agent == "claude-code" &&
 		ceilingBlessesClaudeCreds(s.cfg.DefaultPolicy)
-	// Managed subscription: opted in, Claude, no ceiling-blessed mount, but a
+	// Managed subscription: the resolved integration is a managed (non-
+	// resident_host) subscription, Claude, no ceiling-blessed mount, but a
 	// Wardyn-managed setup-token IS connected — the compose-mode path (no host
 	// ~/.claude to stage). Treated like subscription for grant purposes (egress
 	// only, no api-key grant); dispatch injects it proxy-side.
 	managedSub := managedByChoice && prop.Run.Agent == "claude-code" &&
 		!subscribed && s.managedInjectReady(prop.Run.Agent)
 	// MOUNT GATING and the MODEL-ACCESS VERDICT are different questions, and
-	// conflating them produced a false blocker. managedSub stays opt-in-gated above
+	// conflating them produced a false blocker. managedSub stays gated above
 	// because it also gates applyLLMCredMount (the MOUNT path). But a managed
-	// subscription needs NO mount and NO per-run opt-in: dispatch's
-	// resolveLLMTransport injects it proxy-side for ANY eligible claude-code run
-	// (precedence: host mount > managed > bedrock > api-key). Gating the verdict on
-	// the opt-in made the Review checklist announce "no model access — this run will
+	// subscription needs NO mount at all: dispatch's resolveLLMTransport
+	// injects it proxy-side for ANY eligible claude-code run (precedence: host
+	// mount > managed > bedrock > api-key). Gating the verdict on managedSub
+	// alone made the Review checklist announce "no model access — this run will
 	// do nothing" for a run dispatch would happily credential (observed with a
-	// connected setup-token and the wizard toggle off).
+	// connected setup-token and no ceiling-blessed mount).
 	managedForVerdict := managedSub ||
 		(prop.Run.Agent == "claude-code" && !subscribed && s.managedInjectReady(prop.Run.Agent))
 	var bedrockRef *types.WorkspaceBedrockRef
@@ -425,10 +430,10 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 		}
 	}
 	// Operator-blessed Claude credential mounts (post-clamp, like applyWorkspace;
-	// gated on the per-run opt-in). Then the honest FINAL-state model-access check
-	// (after the clamp may have stripped the grant or its egress entry): one
-	// warning, always true to what dispatch will do. May also drop an orphaned
-	// grant to keep the run from hard-failing at startup.
+	// gated on the run's resolved integration). Then the honest FINAL-state
+	// model-access check (after the clamp may have stripped the grant or its
+	// egress entry): one warning, always true to what dispatch will do. May
+	// also drop an orphaned grant to keep the run from hard-failing at startup.
 	// Managed subscription needs no mount (the token is injected proxy-side from
 	// the store), so skip applyLLMCredMount entirely — otherwise it would emit the
 	// misleading "stage credentials" warning for a run that IS credentialed.
@@ -438,13 +443,23 @@ func (s *Server) runComposePipeline(ctx context.Context, req composeRequest, pri
 		injectedCreds, credWarns = applyLLMCredMount(&clamped, s.cfg.DefaultPolicy, prop.Run.Agent, subscriptionRequested)
 		clampWarns = append(clampWarns, credWarns...)
 	}
-	// The use_subscription <-> credential-mount PAIR's reconciled verdict, threaded
-	// into the setup checklist (setupSubscriptionMountItem) verbatim — reused, never
-	// recomputed, so that row can never disagree with the Warnings bullets above.
-	// subscriptionRequested carries an explicit integration_id's equivalent
-	// "ask" too (see above), so this checklist row reflects it exactly like
-	// req.UseSubscription always did.
-	subState := composeSubscriptionState{Requested: subscriptionRequested, Injected: injectedCreds, Managed: managedSub, Warnings: credWarns}
+	// A managed-subscription PIN nothing can actually deliver (managedByChoice,
+	// but no ceiling-blessed mount AND no connected Wardyn-managed setup-token)
+	// used to disappear silently: Requested below stayed false, so
+	// setupSubscriptionMountItem rendered no row at all while ensureLLMGrant
+	// quietly fell back to api-key underneath. Name it instead of hiding it.
+	if managedByChoice && !managedSub && !subscribed {
+		credWarns = append(credWarns, "this run's resolved integration is a managed Claude subscription, but no "+
+			"setup-token is connected — falling back to a brokered API key; connect it in Getting Started.")
+	}
+	// The subscription-request <-> credential-mount PAIR's reconciled verdict,
+	// threaded into the setup checklist (setupSubscriptionMountItem) verbatim —
+	// reused, never recomputed, so that row can never disagree with the Warnings
+	// bullets above. Requested also covers a managed pin (managedByChoice) so the
+	// degrade case above gets its own row too, not just the resident_host case.
+	subState := composeSubscriptionState{
+		Requested: subscriptionRequested || managedByChoice, Injected: injectedCreds, Managed: managedSub, Warnings: credWarns,
+	}
 	// Structured model-access verdict (not folded into Warnings): a no-access result
 	// is a "this run will do nothing" blocker the review must gate on, not one bullet
 	// among benign clamp notices. reconcileLLMAccess still mutates the spec (drops
@@ -659,6 +674,57 @@ func auditWorkspaceRefs(wss []composer.Workspace) []auditWorkspaceRef {
 		out[i] = ref
 	}
 	return out
+}
+
+// primaryWorkspaceLLMRef mirrors referencedWorkspaces' PRIMARY selection
+// (workspace_run.go) one step earlier, against the compose request's RAW
+// source descriptors (wss) instead of the already-applied spec. Launch's
+// primary is referencedWorkspaces[0], which resolves EVERY spec.WorkspaceMounts
+// entry (in order) before ANY spec.WorkspaceRepos entry; applyWorkspaces
+// (compose.go) buckets each wss entry into Mounts (local) or Repos (git) by
+// kind, preserving wss' relative order WITHIN each bucket. So the primary here
+// is NOT wss[0] — it is the first LOCAL descriptor that resolves to an
+// onboarded workspace, or (only when no local descriptor resolves) the first
+// GIT descriptor that resolves. Descriptors are matched against the onboarded
+// workspace list via the same workspaceSourceIndex referencedWorkspaces uses
+// (workspace_refs.go); an empty Path/Repo (a multi-source workspace's
+// single-source mirror fields are blank once it has more than one source) is
+// skipped rather than looked up as "". Returns "" when the store is unset,
+// nothing resolves, or the resolved workspace carries no LLMCred binding —
+// resolveRunIntegration then falls through to the operator's site-wide default
+// exactly like an unbound workspace always has.
+func (s *Server) primaryWorkspaceLLMRef(ctx context.Context, wss []composer.Workspace) string {
+	if s.cfg.Store == nil {
+		return ""
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return ""
+	}
+	idx := indexWorkspacesBySource(all)
+	firstMatch := func(kind composer.WorkspaceKind, key func(composer.Workspace) string, lookup map[string]types.Workspace) (types.Workspace, bool) {
+		for _, ws := range wss {
+			if ws.Kind != kind {
+				continue
+			}
+			k := key(ws)
+			if k == "" {
+				continue
+			}
+			if match, ok := lookup[k]; ok {
+				return match, true
+			}
+		}
+		return types.Workspace{}, false
+	}
+	match, ok := firstMatch(composer.WorkspaceLocal, func(w composer.Workspace) string { return w.Path }, idx.localDir)
+	if !ok {
+		match, ok = firstMatch(composer.WorkspaceGit, func(w composer.Workspace) string { return w.Repo }, idx.repo)
+	}
+	if !ok || match.LLMCred == nil {
+		return ""
+	}
+	return match.LLMCred.IntegrationRef
 }
 
 // applyWorkspace applies the OPERATOR's trusted workspace choice to the proposed

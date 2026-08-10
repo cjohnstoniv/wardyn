@@ -31,6 +31,7 @@ const listWorkspacesMock = vi.fn();
 const getSetupStatusMock = vi.fn();
 const scanWorkspaceMock = vi.fn();
 const setSecretMock = vi.fn();
+const listIntegrationsMock = vi.fn();
 
 // Re-export the real HttpError so the orchestrator's status-based error mapping
 // still type-matches.
@@ -69,6 +70,12 @@ vi.mock("../../../lib/api/policies", () => ({
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
+// Describe-mode's ComposeForm renders ModelAccessCard (step-access.tsx), which
+// self-fetches integrations — same mock pattern step-access.test.tsx uses.
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+});
 
 import { NewRunDialog } from "./new-run-dialog";
 import { HttpError } from "../../../lib/api/core";
@@ -183,12 +190,14 @@ beforeEach(() => {
   getSetupStatusMock.mockReset();
   scanWorkspaceMock.mockReset();
   setSecretMock.mockReset();
+  listIntegrationsMock.mockReset();
   healthMock.mockResolvedValue({ confinement_classes: ["CC1", "CC2", "CC3"] });
   listSecretsMock.mockResolvedValue([]);
   listWorkspacesMock.mockResolvedValue([]);
   createRunMock.mockResolvedValue(createdRun);
   getSetupStatusMock.mockResolvedValue(readySetupStatus());
   scanWorkspaceMock.mockResolvedValue({ async: false });
+  listIntegrationsMock.mockResolvedValue({ ai: [], scm: [], mirror: [], proxy: [] });
 });
 
 describe("NewRunDialog", () => {
@@ -675,20 +684,31 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
         ],
       }),
     );
-    listWorkspacesMock
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: "ws-1",
-          name: "payments",
-          kind: "repo",
-          source: "acme/payments",
-          status: "scanned",
-          created_at: "now",
-          updated_at: "now",
-        },
-      ]);
-    scanWorkspaceMock.mockResolvedValue({ async: false });
+    // Keyed off scan state, not call count: describe-mode's ComposeForm now
+    // also mounts ModelAccessCard, which independently calls listWorkspaces()
+    // via its own self-fetch (step-access.tsx) — a mockResolvedValueOnce chain
+    // sized for "exactly 2 calls" silently drifts out of sync with that extra,
+    // unrelated caller.
+    let scanned = false;
+    scanWorkspaceMock.mockImplementation(async () => {
+      scanned = true;
+      return { async: false };
+    });
+    listWorkspacesMock.mockImplementation(async () =>
+      scanned
+        ? [
+            {
+              id: "ws-1",
+              name: "payments",
+              kind: "repo",
+              source: "acme/payments",
+              status: "scanned",
+              created_at: "now",
+              updated_at: "now",
+            },
+          ]
+        : [],
+    );
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 

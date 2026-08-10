@@ -110,10 +110,11 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// OPT-OUT (do NOT override an explicit api-key choice): managed is the FALLBACK
 	// when nothing else credentials the run — NOT a silent replacement for an
 	// operator who chose api-key. An anthropic api-key grant already present in
-	// `injections` (compose's ensureLLMGrant on UseSubscription=false, or a direct
-	// api-key run) means the operator opted for api-key; letting managed fire would
-	// drop that grant below and silently bill the subscription instead, while the
-	// compose review said "api-key". So require no pre-existing anthropic injection.
+	// `injections` (compose's ensureLLMGrant when no subscription integration
+	// resolved, or a direct api-key run) means the operator opted for api-key;
+	// letting managed fire would drop that grant below and silently bill the
+	// subscription instead, while the compose review said "api-key". So require
+	// no pre-existing anthropic injection.
 	// A zero-egress policy (no allow-all, empty allow-list — e.g. a sealed demo
 	// sandbox) suppresses the fallback entirely: managed injection APPENDS
 	// api.anthropic.com to the allow-list below, and a fallback must not silently

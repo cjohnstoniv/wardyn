@@ -119,7 +119,8 @@ func modelProviderEgress(ceiling types.RunPolicySpec) []string {
 // ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude
 // credential mount (a WorkspaceMount targeting /home/agent/.claude). Only the
 // operator authors ceiling mounts, so this is the control-plane-level half of the
-// subscription consent; the per-run half is composeRequest.UseSubscription.
+// subscription consent; the run half is the resolved integration (resident_host
+// anthropic_subscription).
 func ceilingBlessesClaudeCreds(ceiling types.RunPolicySpec) bool {
 	return specHasMountTarget(&ceiling, claudeCredTarget)
 }
@@ -157,7 +158,7 @@ func specHasMountTarget(spec *types.RunPolicySpec, target string) bool {
 // and the ceiling's resolved ReadOnly).
 //
 // It injects ONLY when every gate holds, and explains itself when one doesn't:
-//   - the human explicitly opted in on THIS request (use_subscription);
+//   - the run half is the resolved integration (resident_host anthropic_subscription);
 //   - the agent is Claude (there is no Codex/OpenAI subscription-mount path);
 //   - the ceiling blesses the /home/agent/.claude mount (operator staged creds);
 //   - the final egress allows api.anthropic.com — mounting a resident OAuth
@@ -299,23 +300,19 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 //     an ai_provider integration (validated at request time with a 400; see
 //     decodeAndValidateCreateRun / handleComposeRun) or this tier yields
 //     nothing rather than guessing.
-//  2. useSubscription (DEPRECATED ALIAS — composeRequest.UseSubscription;
-//     createRunRequest carries no such field, so a plain create-run always
-//     passes false here): "the default agent_runs integration of a
-//     subscription type".
-//  3. workspaceRef — the primary workspace's LLMCred.IntegrationRef, when it
+//  2. workspaceRef — the primary workspace's LLMCred.IntegrationRef, when it
 //     names an ai_provider integration. ok=false — today's honest "no
 //     binding" outcome — for an empty ref, a ref naming nothing at all, or a
 //     ref naming something non-ai_provider: a dangling/miscategorized ref
-//     falls back silently rather than cascading to tier 4 or erroring, since
+//     falls back silently rather than cascading to tier 3 or erroring, since
 //     the operator who bound THIS workspace explicitly chose a SPECIFIC
 //     integration, and a stale binding silently promoting to a different one
 //     is a credential surprise, not a convenience.
-//  4. the operator's DefaultFor:agent_runs default (any ai_provider type).
+//  3. the operator's DefaultFor:agent_runs default (any ai_provider type).
 //
 // ok=false is today's honest no-model-access / global-provider-config
 // fallback, carried through every tier unchanged.
-func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string, useSubscription bool, workspaceRef string) (types.Integration, bool) {
+func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string, workspaceRef string) (types.Integration, bool) {
 	if integrationID != "" {
 		in, ok := s.resolveIntegrationRef(ctx, integrationID)
 		if !ok || in.Category != types.IntegrationAIProvider {
@@ -323,16 +320,11 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		}
 		return in, true
 	}
-	if useSubscription {
-		if in, ok := s.defaultAgentRunsIntegration(ctx, "anthropic_subscription"); ok {
-			return in, true
-		}
-	}
 	if workspaceRef != "" {
 		// A SET workspace ref that fails to resolve to an ai_provider row
 		// (dangling, or naming something else entirely) is the honest "no
 		// binding" outcome — return here rather than falling through to tier
-		// 4: the operator who bound THIS workspace chose a SPECIFIC
+		// 3: the operator who bound THIS workspace chose a SPECIFIC
 		// integration, and cascading a stale/miscategorized ref to the
 		// site-wide default would be the exact credential surprise this
 		// tier's doc above says it refuses.
@@ -392,7 +384,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	if _, ok := agentLLMProvider(req.Agent); !ok {
 		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
 	}
-	integ, ok := s.resolveRunIntegration(ctx, req.IntegrationID, false, workspaceRef)
+	integ, ok := s.resolveRunIntegration(ctx, req.IntegrationID, workspaceRef)
 	if !ok {
 		return types.Integration{}, "", nil
 	}
@@ -426,13 +418,14 @@ func (s *Server) secretPresent(ctx context.Context, name string) bool {
 // this (observed: a "no network needed" static-site task proposed zero grants and
 // the agent silently produced nothing).
 //
-// When the operator explicitly opted into SUBSCRIPTION mode for this request
-// (subscribed=true: use_subscription + a ceiling-blessed cred mount + Claude), it
+// When the run's resolved integration puts it in SUBSCRIPTION mode
+// (subscribed=true: the run half is the resolved integration — resident_host
+// anthropic_subscription — plus a ceiling-blessed cred mount plus Claude), it
 // instead proposes the subscription egress entries (*.anthropic.com + the exact
 // host) pre-clamp — the ceiling must list them verbatim to keep them (the clamp's
 // allowlist intersection is exact-string) — and adds NO api_key grant: the
-// explicit human choice of transport is respected, not silently doubled up. The
-// cred mounts themselves are injected post-clamp by applyLLMCredMount.
+// resolved transport choice is respected, not silently doubled up. The cred
+// mounts themselves are injected post-clamp by applyLLMCredMount.
 //
 // It adds BOTH the api_key grant AND its provider host as an EXACT allowlist entry:
 // the proxy's injector fails CLOSED at startup unless the injected host is exactly

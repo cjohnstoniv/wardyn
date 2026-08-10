@@ -182,7 +182,7 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionMode
 }
 
 // TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace
-// proves resolution tier 4 (the operator's site-wide default) fires even for
+// proves resolution tier 3 (the operator's site-wide default) fires even for
 // a run with NO workspace at all — new behavior an Integration-less world
 // could never offer.
 func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t *testing.T) {

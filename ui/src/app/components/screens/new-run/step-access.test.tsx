@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StepAccess } from "./step-access";
+import { StepAccess, ModelAccessCard } from "./step-access";
 import { initialWizardState } from "./wizard-types";
 import { T } from "../../../lib/integrations";
 import { RD } from "../../../lib/workspace-copy";
@@ -132,7 +132,7 @@ describe("StepAccess — model access resolution card", () => {
     expect(getSetupStatusMock).not.toHaveBeenCalled();
   });
 
-  // The server's tier-4 resolves only a row actually marked
+  // The server's tier-3 resolves only a row actually marked
   // DefaultFor:agent_runs — the first COMPATIBLE row in list order is not
   // enough, even though it's the only configured integration.
   it("a compatible row that is NOT genuinely marked default falls through to the honest none-line", async () => {
@@ -415,5 +415,67 @@ describe("StepAccess — Override for this run peek", () => {
     await user.click(within(peek).getByRole("button", { name: /cancel/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(patch).not.toHaveBeenCalled();
+  });
+});
+
+// M5/M7/M8: ModelAccessCard's first-paint loading gate and its two variants
+// when rendered with no onPatch (the compose-form usage, before a proposal
+// names a real agent) — driven directly (not through StepAccess, which always
+// supplies onPatch and so never exercises this branch).
+describe("ModelAccessCard — loading gate and no-onPatch (compose-form) variants", () => {
+  it("shows a neutral resolving line before all three self-fetches settle", () => {
+    // Never-resolving promises: assert the very FIRST paint, before any
+    // effect's .then/.finally has had a chance to run.
+    listWorkspacesMock.mockReturnValue(new Promise(() => {}));
+    listIntegrationsMock.mockReturnValue(new Promise(() => {}));
+    getSetupStatusMock.mockReturnValue(new Promise(() => {}));
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
+    expect(screen.getByText(RD.RESOLVING_LINE)).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE)).toBeNull();
+  });
+
+  it("renders the neutral agent-mismatch line (not amber) when integrations exist, onPatch is absent, and none resolve", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([teamKey]));
+    // Configured, but not marked DefaultFor:agent_runs -> nothing resolves.
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ integrations: [{ id: "anthropic_api_key", category: "ai_provider", type: "anthropic_api_key" }] }),
+    );
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
+    expect(await screen.findByText(RD.AGENT_AT_REVIEW_LINE)).toBeInTheDocument();
+    expect(screen.queryByText(RD.NONE_LINE)).toBeNull();
+  });
+
+  it("keeps the amber zero-providers line when onPatch is absent and there are genuinely no ai_provider integrations", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([]));
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
+    expect(await screen.findByText(RD.NONE_LINE)).toBeInTheDocument();
+  });
+
+  // LOW test blind spot: onPatch absent renders the workspace link (never the
+  // override button/peek), and its href degrades to the plain /workspaces list
+  // when there is no primary workspace to link to.
+  it("renders 'Change on the workspace' (never the override button) when onPatch is absent, degrading to /workspaces with no primary", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([]));
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId={undefined} />);
+    await screen.findByText(RD.NONE_LINE);
+    const link = screen.getByRole("link", { name: /change on the workspace/i });
+    expect(link).toHaveAttribute("href", "/workspaces");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(screen.queryByRole("button", { name: /override for this run/i })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("links straight to the primary workspace's page when one is set", async () => {
+    listWorkspacesMock.mockResolvedValue([]);
+    listIntegrationsMock.mockResolvedValue(integrations([]));
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    render(<ModelAccessCard agent="claude-code" primaryWorkspaceId="ws-1" />);
+    await screen.findByText(RD.NONE_LINE);
+    expect(screen.getByRole("link", { name: /change on the workspace/i })).toHaveAttribute("href", "/workspaces/ws-1");
   });
 });

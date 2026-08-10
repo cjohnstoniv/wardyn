@@ -213,7 +213,7 @@ func TestReconcileLLMAccess_UnknownAgentSilent(t *testing.T) {
 	}
 }
 
-// ── subscription mode (per-run opt-in + ceiling-blessed cred mounts) ──
+// ── subscription transport (resolved-integration gated + ceiling-blessed cred mounts) ──
 // (boolPtr comes from policy_test.go — same package.)
 
 // A ceiling that blesses the Claude credential mounts (operator-staged copies)
@@ -250,13 +250,14 @@ func TestApplyLLMCredMount_InjectsBlessedMountsOnOptIn(t *testing.T) {
 	}
 }
 
-// No opt-in => NO injection even with a fully blessed ceiling: per-run consent
-// is the whole point (ceiling blessing alone is control-plane-wide).
-func TestApplyLLMCredMount_NoOptInNoInjection(t *testing.T) {
+// requested=false (the run's resolved integration is not a resident_host
+// subscription) => NO injection even with a fully blessed ceiling: the RUN half
+// of consent is the resolved integration, not merely a control-plane-wide bless.
+func TestApplyLLMCredMount_NotRequestedNoInjection(t *testing.T) {
 	spec := types.RunPolicySpec{AllowedDomains: []string{"*.anthropic.com"}}
 	injected, warns := applyLLMCredMount(&spec, subscriptionCeiling(), "claude-code", false)
 	if injected || len(spec.WorkspaceMounts) != 0 || len(warns) != 0 {
-		t.Errorf("no opt-in must be a silent no-op; injected=%v mounts=%v warns=%v", injected, spec.WorkspaceMounts, warns)
+		t.Errorf("requested=false must be a silent no-op; injected=%v mounts=%v warns=%v", injected, spec.WorkspaceMounts, warns)
 	}
 }
 

@@ -81,6 +81,14 @@ export const RD = {
   ADVISORY: "This is advisory only — it never gets the run's credentials.",
   NONE_LINE: "No integration can drive Claude Code. This run launches; its first model call fails.",
   EXEC_LINE: "Governed command — no model access is wired, and nothing suggests otherwise.",
+  // First-paint gate (ModelAccessCard, step-access.tsx): shown until its three
+  // self-fetches (workspaces, integrations, setup status) all settle, so the
+  // amber NONE_LINE below never flashes before there's anything to conclude.
+  RESOLVING_LINE: "Resolving model access…",
+  // The compose-form usage (no onPatch, no real agent yet) when integrations
+  // exist but none match the hardcoded preview agent — a fact, not an amber
+  // accusation; NONE_LINE stays reserved for the genuinely-zero-providers case.
+  AGENT_AT_REVIEW_LINE: "Model access resolves from the proposal's agent at review.",
 };
 
 // ============================ Power-source line (verbatim, ×3 variants) ============================

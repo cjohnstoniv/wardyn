@@ -41,17 +41,6 @@ type composeRequest struct {
 	// it is enforced deterministically on the proposal below, overriding any guess.
 	Interactive bool `json:"interactive,omitempty"`
 
-	// UseSubscription is the operator's EXPLICIT PER-RUN opt-in to Claude
-	// subscription mode: the ceiling's operator-blessed ~/.claude credential
-	// mounts are injected into the proposal (post-clamp, deterministic server
-	// code — never the model) so the agent talks to api.anthropic.com directly
-	// on the operator's subscription instead of a brokered api_key. Per-run
-	// consent is deliberate: a ceiling blessing alone is control-plane-wide, and
-	// silently mounting a long-lived OAuth credential into EVERY composed run
-	// would over-share it. Default false = the more governed api-key path (key
-	// never resident in the sandbox, proxy-injected, 1h TTL).
-	UseSubscription bool `json:"use_subscription,omitempty"`
-
 	// ConfinementFloor is the operator's Getting Started DEFAULT tier, sent per-run
 	// as a raise-only MINIMUM. The server raises the policy confinement floor to it
 	// for this compose, but only up to the strongest class THIS host can enforce
@@ -69,11 +58,7 @@ type composeRequest struct {
 	// IntegrationID, when set, pins the proposal's model/harness credential to
 	// a SPECIFIC ai_provider Integration (see client.CreateRunRequest.
 	// IntegrationID — same field, same rule: a non-ai_provider id is a 400).
-	// It supersedes UseSubscription for deciding WHICH transport a Claude
-	// proposal previews (resident_host mount vs. managed vs. a named api-key
-	// secret); UseSubscription alone remains a DEPRECATED ALIAS for "the
-	// default agent_runs integration of a subscription type" when no
-	// IntegrationID is given (resolveRunIntegration, llmcred.go).
+	// Empty falls through resolveRunIntegration's remaining tiers (llmcred.go).
 	IntegrationID string `json:"integration_id,omitempty"`
 
 	// WorkspaceSelections carries the per-workspace requirements-contract
@@ -84,13 +69,13 @@ type composeRequest struct {
 	// mounts/clones, which loses the onboarded id (resolveComposeWorkspace,
 	// ui/src/app/lib/api/compose.ts flattens a picked Workspace down to its bare
 	// kind/path/repo) — this is that id riding alongside it, so it isn't
-	// discarded. Never consulted by the compose pipeline itself (compose folds
-	// no workspace requirements — that fold is real create-run/preflight's job,
-	// runs_create.go's applyWorkspaceRequirements); it is echoed back verbatim
+	// discarded. The compose pipeline itself folds it too (compose.go's own
+	// applyWorkspaceRequirements call, via selectionsByWorkspaceID) so the
+	// PREVIEW already reflects these opt-ins; it is ALSO echoed back verbatim
 	// on the proposal (composeProposed.WorkspaceSelections) so approveLaunch can
 	// forward it to POST /runs unchanged, exactly like Proposed.Run/InlinePolicy
 	// already launch verbatim, where resolveWorkspaceSelections/
-	// applyWorkspaceRequirements actually fold it.
+	// applyWorkspaceRequirements fold it again for the REAL run.
 	WorkspaceSelections []client.WorkspaceSelection `json:"workspace_selections,omitempty"`
 }
 

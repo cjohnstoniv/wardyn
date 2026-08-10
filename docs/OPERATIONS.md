@@ -286,12 +286,8 @@ A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):
 
 1. an explicit integration named on the run (`integration_id`);
-2. else, for a **compose** run only, `use_subscription` — a deprecated
-   alias for "the default `agent_runs` integration of a subscription
-   type". A plain create-run never sets this (`foldRunIntegration`
-   hardcodes `false` here); compose does (`internal/api/compose.go`);
-3. else the primary workspace's `LLMCred.IntegrationRef` binding;
-4. else the operator's `DefaultFor: agent_runs` integration — the one
+2. else the primary workspace's `LLMCred.IntegrationRef` binding;
+3. else the operator's `DefaultFor: agent_runs` integration — the one
    stored integration marked as the site-wide default for agent runs, of
    any `ai_provider` type.
 
@@ -301,7 +297,7 @@ the site-wide default; that would be a credential surprise, not a
 convenience. Launch and preflight resolve this identically
 (`foldRunIntegration`), so Review cannot preview access the run won't get.
 
-**When none of the four tiers resolves, that is not the same as no
+**When none of the three tiers resolves, that is not the same as no
 access.** Below the Integration system, dispatch's own transport resolution
 (`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`) still
 credentials the run from whatever GLOBAL provider config exists, independent

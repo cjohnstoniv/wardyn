@@ -83,12 +83,6 @@ export interface ComposeRequest {
   // for attach), false = background (agent runs the task). Authoritative — the
   // server enforces it on the proposal, overriding the model's guess.
   interactive?: boolean;
-  // Explicit PER-RUN opt-in to Claude subscription mode: the server injects the
-  // operator-staged read-only ~/.claude credential mount copies into the proposal
-  // (Claude agents only, and only when the operator ceiling blesses them —
-  // otherwise the proposal carries an honest warning naming the fix). Off = the
-  // more governed api-key path (key never resident in the sandbox).
-  useSubscription?: boolean;
   // Operator's Getting Started default tier, sent as a raise-only per-run MINIMUM
   // (the RAW persisted pick — no client clamp). The server raises the policy floor
   // to it, capped at what this host can enforce; weaker than the proposal is a
@@ -202,9 +196,10 @@ export type SetupItemKind =
   | "egress"
   // "backend": can THIS host enforce the proposal's confinement class right now
   // (setupBackendItem). "config_pair": a reconciled multi-field setting PAIR
-  // (e.g. use_subscription <-> the credential-mount bless — setupSubscriptionMountItem).
-  // Both are host/config state, not a credential absence, so a "missing" row
-  // renders amber/neutral, never destructive (unlike llm_access/secret).
+  // (e.g. resolved subscription access <-> the credential-mount bless —
+  // setupSubscriptionMountItem). Both are host/config state, not a credential
+  // absence, so a "missing" row renders amber/neutral, never destructive
+  // (unlike llm_access/secret).
   | "backend"
   | "config_pair"
   // A secret a mounted workspace's own files declare a need for. "missing" rows

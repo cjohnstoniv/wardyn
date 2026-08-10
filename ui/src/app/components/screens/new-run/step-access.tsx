@@ -286,7 +286,7 @@ export function resolveModelAccess(
 ): ResolvedModelAccess | null {
   const capability = agentCapability(agent);
   const compatible = (r: IntegrationRow) => !incompatibleReason(r, capability);
-  // The server's tier-4 resolves only a row actually marked
+  // The server's tier-3 resolves only a row actually marked
   // DefaultFor:agent_runs (internal/api/llmcred.go) — never merely "the first
   // compatible row in list order". Matching that here means the client can
   // never name an integration the launch itself will not use.
@@ -339,28 +339,34 @@ export function resolveModelAccess(
   return null;
 }
 
-function ModelAccessCard({
+export function ModelAccessCard({
   agent,
   integrationId,
   primaryWorkspaceId,
   onPatch,
 }: {
   agent: WizardState["agent"];
-  integrationId: string | undefined;
+  integrationId?: string;
   primaryWorkspaceId: string | undefined;
-  onPatch: (p: Partial<WizardState>) => void;
+  // Absent when this card is reused OUTSIDE the wizard (compose-form.tsx) — no
+  // per-run override exists there; the footer links to the workspace instead
+  // of opening OverridePeek.
+  onPatch?: (p: Partial<WizardState>) => void;
 }) {
   const [ai, setAi] = React.useState<IntegrationRow[]>([]);
+  const [aiLoaded, setAiLoaded] = React.useState(false);
   const [integrations, setIntegrations] = React.useState<WireIntegration[] | undefined>(undefined);
   const [bedrockReady, setBedrockReady] = React.useState<boolean | undefined>(undefined);
+  const [statusLoaded, setStatusLoaded] = React.useState(false);
   const [peekOpen, setPeekOpen] = React.useState(false);
   // Self-fetched (not threaded through wizard.tsx as a new prop) so every
   // existing StepAccess call site keeps working unchanged; only the id of the
   // Basics-selected primary comes from the caller (state.workspaces[0]),
   // resolved against this fetch to find its llm_cred binding. useWorkspaceList
   // does NOT fetch on its own (every other caller drives it from its own
-  // effect) — reload() here is what actually populates it.
-  const { workspaces, reload } = useWorkspaceList();
+  // effect) — reload() here is what actually populates it; its own `loading`
+  // flag is this card's THIRD loaded-gate input (below), so it isn't re-tracked.
+  const { workspaces, loading: workspacesLoading, reload } = useWorkspaceList();
 
   React.useEffect(() => {
     reload();
@@ -373,7 +379,10 @@ function ModelAccessCard({
       .then((data) => {
         if (alive) setAi(data.ai);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setAiLoaded(true);
+      });
     return () => {
       alive = false;
     };
@@ -395,7 +404,10 @@ function ModelAccessCard({
           setBedrockReady(status.bedrock?.ready);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setStatusLoaded(true);
+      });
     return () => {
       alive = false;
     };
@@ -403,6 +415,17 @@ function ModelAccessCard({
 
   const primaryWorkspace = workspaces.find((w) => w.id === primaryWorkspaceId);
   const resolved = resolveModelAccess(agent, integrationId, primaryWorkspace, ai, integrations, bedrockReady);
+  // Gates the first paint (M5): before all three self-fetches above settle —
+  // success OR failure, `.finally`/useWorkspaceList's own `loading` cover both
+  // — `resolved` is meaningless (computed off default/empty state), so it must
+  // not render as either the amber "nothing resolves" line or a false positive.
+  const loaded = !workspacesLoading && aiLoaded && statusLoaded;
+  // Neutral, not amber (M7): the compose-form usage (no onPatch — the real
+  // agent isn't known until the proposal resolves it) when integrations DO
+  // exist but simply don't match the hardcoded preview agent. The manual
+  // wizard (onPatch present) is unaffected — it keeps the amber line for every
+  // unresolved case, as it always has.
+  const neutralMismatch = loaded && !resolved && !onPatch && ai.length > 0;
 
   return (
     <div className="rounded-xl border border-border bg-card p-3.5">
@@ -410,7 +433,9 @@ function ModelAccessCard({
         <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
           Model access — resolved from integrations
         </span>
-        {resolved ? (
+        {!loaded ? (
+          <p className="text-[0.75rem] leading-snug text-muted-foreground">{RD.RESOLVING_LINE}</p>
+        ) : resolved ? (
           <>
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-sm font-medium text-foreground">{resolved.row.name}</span>
@@ -423,6 +448,8 @@ function ModelAccessCard({
               Applies because: {resolved.because}
             </p>
           </>
+        ) : neutralMismatch ? (
+          <p className="text-[0.75rem] leading-snug text-muted-foreground">{RD.AGENT_AT_REVIEW_LINE}</p>
         ) : (
           <div className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning-subtle px-2.5 py-1.5">
             <TriangleAlert className="mt-0.5 size-3 shrink-0 text-warning" aria-hidden="true" />
@@ -430,19 +457,37 @@ function ModelAccessCard({
           </div>
         )}
         <div className="flex justify-end">
-          <Button type="button" size="sm" variant="outline" onClick={() => setPeekOpen(true)}>
-            Override for this run…
-          </Button>
+          {onPatch ? (
+            <Button type="button" size="sm" variant="outline" onClick={() => setPeekOpen(true)}>
+              Override for this run…
+            </Button>
+          ) : (
+            // Plain <a>, not react-router's <Link>: same no-Router-ancestor
+            // rationale as workspace-picker.tsx's unstored-secret CTAs.
+            // target="_blank" (M8): a same-tab navigation here would leave the
+            // open dialog — and whatever the operator has already typed into it
+            // (a compose prompt, wizard fields) — destroyed with no way back.
+            <a
+              href={primaryWorkspaceId ? `/workspaces/${primaryWorkspaceId}` : "/workspaces"}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[0.6875rem] font-medium text-primary"
+            >
+              Change on the workspace
+            </a>
+          )}
         </div>
       </div>
-      <OverridePeek
-        open={peekOpen}
-        onOpenChange={setPeekOpen}
-        agent={agent}
-        ai={ai}
-        integrationId={integrationId}
-        onChoose={(id) => onPatch({ integrationId: id })}
-      />
+      {onPatch && (
+        <OverridePeek
+          open={peekOpen}
+          onOpenChange={setPeekOpen}
+          agent={agent}
+          ai={ai}
+          integrationId={integrationId}
+          onChoose={(id) => onPatch({ integrationId: id })}
+        />
+      )}
     </div>
   );
 }

@@ -214,20 +214,10 @@ describe("composer.compose() + composer.listComposerBackends()", () => {
     expect(body).not.toHaveProperty("attachments");
     expect(body).not.toHaveProperty("sources");
     expect(body).not.toHaveProperty("backend");
-    // The subscription opt-in is sent ONLY when ticked (absent = api-key default),
-    // so an old server never sees an unknown field on a default request.
+    // The old per-run subscription opt-in field no longer exists at all (model
+    // access now resolves from integrations, never a per-run toggle) — this
+    // just guards that its deletion doesn't quietly resurface.
     expect(body).not.toHaveProperty("use_subscription");
-  });
-
-  it("threads the per-run subscription opt-in as use_subscription when ticked", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(sampleResponse));
-    await composer.compose({
-      prompt: "build the site",
-      workspace: { kind: "ephemeral" },
-      useSubscription: true,
-    });
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(body.use_subscription).toBe(true);
   });
 
   it("threads the persisted default tier as confinement_floor when set", async () => {

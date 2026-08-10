@@ -13,7 +13,6 @@ import { FileText, Loader2, Sparkles, Upload, X } from "lucide-react";
 import { RUN_MODE } from "../../wardyn/copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
 import {
   Select,
@@ -24,6 +23,7 @@ import {
 } from "../../ui/select";
 import { Field } from "./step-shell";
 import { AskPopover } from "./ask-popover";
+import { ModelAccessCard } from "./step-access";
 import { WorkspacePicker } from "./workspace-picker";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
@@ -83,7 +83,6 @@ export function ComposeForm({
   backends,
   mode,
   interactive,
-  useSubscription,
   composing,
   onPromptChange,
   onWorkspaceSelectionsChange,
@@ -92,7 +91,6 @@ export function ComposeForm({
   onBackendChange,
   onModeChange,
   onInteractiveChange,
-  onUseSubscriptionChange,
   onCompose,
   error,
 }: {
@@ -118,8 +116,6 @@ export function ComposeForm({
   mode: ComposeMode;
   // Operator's run-mode choice, captured UPFRONT: true = interactive, false = background.
   interactive: boolean;
-  // Explicit PER-RUN opt-in to Claude subscription mode (see ComposeRequest.useSubscription).
-  useSubscription: boolean;
   composing: boolean;
   onPromptChange: (v: string) => void;
   onWorkspaceSelectionsChange: (s: RunWorkspaceSelection[]) => void;
@@ -128,7 +124,6 @@ export function ComposeForm({
   onBackendChange: (b: string) => void;
   onModeChange: (m: ComposeMode) => void;
   onInteractiveChange: (v: boolean) => void;
-  onUseSubscriptionChange: (v: boolean) => void;
   onCompose: () => void;
   // Persistent inline error from the LAST compose attempt (a transient toast is
   // easy to miss); shown above the footer so a failed compose never looks like
@@ -239,28 +234,10 @@ export function ComposeForm({
         </RadioGroupPrimitive.Root>
       </Field>
 
-      {/* Per-run subscription opt-in. The AGENT isn't known until the proposal
-          returns, so the toggle is always offered here; the server applies it
-          only to Claude agents with an operator-blessed ceiling, and the
-          proposal's warnings state honestly which model-access mode resulted. */}
-      <div className="flex items-center justify-between rounded-lg border border-border p-2.5">
-        <div className="flex flex-col gap-0.5 pr-3">
-          <label htmlFor="compose-use-subscription" className="text-sm font-medium text-foreground">
-            Use my Claude subscription
-          </label>
-          <span className="text-[0.6875rem] leading-snug text-muted-foreground">
-            Uses your Claude subscription for this run (Claude agents only). By default the token is
-            injected proxy-side — a live, host-refreshed token, so nothing sensitive stays resident in the
-            sandbox. Off = a brokered API key instead.
-          </span>
-        </div>
-        <Switch
-          id="compose-use-subscription"
-          checked={useSubscription}
-          onCheckedChange={onUseSubscriptionChange}
-          aria-label="Use my Claude subscription"
-        />
-      </div>
+      {/* The agent isn't known until the proposal returns — "claude-code" here
+          only narrows the tier-3 compatibility display; Review shows the
+          server's authoritative llm_access once the proposal resolves it. */}
+      <ModelAccessCard agent="claude-code" primaryWorkspaceId={workspaceSelections[0]?.workspaceId} />
 
       <Field
         label="Workspaces"

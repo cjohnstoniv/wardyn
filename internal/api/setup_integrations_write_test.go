@@ -305,7 +305,7 @@ func TestHandlePutIntegration_DefaultForRadioSemantics(t *testing.T) {
 // TestHandlePutIntegration_DefaultForClear completes the DefaultFor write-path
 // coverage (set + radio-steal are pinned above): PUT is a FULL REPLACEMENT, so
 // PUTting a row again with default_for omitted clears its own marks — the
-// third write shape the tier-4 precedence and composer-registry boot
+// third write shape the tier-3 precedence and composer-registry boot
 // derivation both need to actually be unset again through the API.
 func TestHandlePutIntegration_DefaultForClear(t *testing.T) {
 	rowA := types.Integration{

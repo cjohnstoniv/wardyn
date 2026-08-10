@@ -29,8 +29,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   real daemon: a built image's `claude --version` reports a real binary,
   not the inert no-op an earlier attempt silently shipped.
 
+### Removed
+
+- **The AI Run Composer's per-run "Use my Claude subscription" toggle and its
+  `use_subscription` wire field.** A composed run's model access now resolves
+  exactly like a manual run's, through `resolveRunIntegration`
+  (`internal/api/llmcred.go`): an explicit `integration_id`, else the primary
+  workspace's `LLMCred.IntegrationRef` binding, else the operator's
+  `DefaultFor: agent_runs` default. Pin a workspace's model access or set the
+  operator default once — there is nothing left to opt into per run.
+
 ### Fixed
 
+- **A workspace pinned to a subscription integration previewed as api-key at
+  Review, then launch silently granted the subscription instead.** The
+  compose pipeline resolved its run-level integration with an always-empty
+  workspace ref, so the proposal skipped the workspace-binding tier entirely
+  while `foldRunIntegration` read the real binding at launch — a Review↔Launch
+  divergence. `primaryWorkspaceLLMRef` (`internal/api/compose.go`) now
+  resolves the compose request's primary workspace against the onboarded
+  workspace list the same way `referencedWorkspaces` does, so Review can no
+  longer disagree with what Launch grants.
 - **The wizard's Build step showed only a bare spinner — the real image-build
   output went solely to wardynd's own log, invisible to whoever triggered
   the build.** `handleBuildWorkspace`'s goroutine now threads a bounded

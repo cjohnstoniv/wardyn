@@ -101,9 +101,9 @@ export function NewRunDialog({
   const [prompt, setPrompt] = React.useState("");
   // Onboarded-workspace multi-select (mirrors the manual wizard's Basics step).
   // Empty => ephemeral; composerApi.compose() resolves these against `workspaces`.
-  // Typed RunWorkspaceSelection (not the bare WorkspaceSelection ComposeForm's
-  // picker is still limited to — see its optionalRequirementsEnabled={false})
-  // so enabledOptional already has somewhere to live once that flag flips.
+  // Typed RunWorkspaceSelection: ComposeForm's picker has
+  // optionalRequirementsEnabled={true}, so enabledOptional is live here, not
+  // just a placeholder for a later flag flip.
   const [workspaceSelections, setWorkspaceSelections] = React.useState<RunWorkspaceSelection[]>([]);
   const [attachments, setAttachments] = React.useState<ComposeAttachment[]>([]);
   const [sources, setSources] = React.useState<string[]>([]);
@@ -128,8 +128,6 @@ export function NewRunDialog({
   const [result, setResult] = React.useState<ComposeResponse | null>(null);
   // Launch mode, seeded from the proposal and overridable in the review screen.
   const [interactive, setInteractive] = React.useState(false);
-  // Per-run Claude-subscription opt-in (threaded to compose; server-gated).
-  const [useSubscription, setUseSubscription] = React.useState(false);
   const [acknowledged, setAcknowledged] = React.useState(false);
   const [launching, setLaunching] = React.useState(false);
   // Launch (create-run) error surfaced INLINE on the review panel, not as a corner
@@ -249,17 +247,15 @@ export function NewRunDialog({
           workspaceSelections,
           // Per-workspace optional-requirement opt-ins / read-only narrowing —
           // same wire shape and same "non-default only" filter as the manual
-          // wizard's buildSpec (toRunWorkspacesWire). Always empty today
-          // (ComposeForm's picker has optionalRequirementsEnabled={false}
-          // until Stage 4 wires the checkbox), but a read-only pick already
-          // reaches it now.
+          // wizard's buildSpec (toRunWorkspacesWire). ComposeForm's picker has
+          // optionalRequirementsEnabled={true}, so a real opt-in/read-only pick
+          // reaches this field, not just an empty array.
           workspaceOptions: toRunWorkspacesWire(workspaceSelections),
           attachments,
           sources,
           backend: backend || undefined,
           mode: composeMode,
           interactive,
-          useSubscription,
           // Raw persisted default tier as a per-run floor; the server caps it.
           confinementFloor: getDefaultCc() ?? undefined,
           // Resent unchanged on every round of this describe-mode conversation
@@ -609,7 +605,6 @@ export function NewRunDialog({
               backends={backends!}
               mode={composeMode}
               interactive={interactive}
-              useSubscription={useSubscription}
               composing={composing}
               onPromptChange={setPrompt}
               onWorkspaceSelectionsChange={setWorkspaceSelections}
@@ -618,7 +613,6 @@ export function NewRunDialog({
               onBackendChange={setBackend}
               onModeChange={setComposeMode}
               onInteractiveChange={setInteractive}
-              onUseSubscriptionChange={setUseSubscription}
               onCompose={runCompose}
               error={composeError}
             />

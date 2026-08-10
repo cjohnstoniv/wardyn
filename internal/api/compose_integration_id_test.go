@@ -14,14 +14,19 @@ import (
 )
 
 // composeIntegrationStore is fakeSiteConfigStore (site_config_test.go) plus a
-// no-op ListWorkspaces: the full compose pipeline's setup-checklist stage
-// (deriveSetupItems -> referencedWorkspaces) calls Store.ListWorkspaces
-// whenever a Store is configured at all, which fakeSiteConfigStore's embedded
-// nil store.Store does not implement.
-type composeIntegrationStore struct{ fakeSiteConfigStore }
+// ListWorkspaces returning `workspaces` verbatim (nil by default — no
+// onboarded rows): the full compose pipeline's setup-checklist stage
+// (deriveSetupItems -> referencedWorkspaces) AND its model-access resolution
+// stage (primaryWorkspaceLLMRef) call Store.ListWorkspaces whenever a Store
+// is configured at all, which fakeSiteConfigStore's embedded nil store.Store
+// does not implement.
+type composeIntegrationStore struct {
+	fakeSiteConfigStore
+	workspaces []types.Workspace
+}
 
-func (composeIntegrationStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
-	return nil, nil
+func (s composeIntegrationStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return s.workspaces, nil
 }
 
 // TestComposeRun_IntegrationID_UsesNamedAPIKeySecret proves compose's new
@@ -35,7 +40,7 @@ func TestComposeRun_IntegrationID_UsesNamedAPIKeySecret(t *testing.T) {
 		InlinePolicy: types.RunPolicySpec{AllowedDomains: []string{"github.com"}},
 		Summary:      "throwaway sandbox",
 	}})
-	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
+	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
 		apiKeyIntegration("acme-anthropic", "acme-anthropic-key"),
 	}}}}
 	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
@@ -68,6 +73,58 @@ func TestComposeRun_IntegrationID_UsesNamedAPIKeySecret(t *testing.T) {
 	}
 }
 
+// TestComposeRun_PrimaryWorkspacePin_SteersProposal proves the compose-time
+// live bug fix (primaryWorkspaceLLMRef, compose.go): with NO integration_id on
+// the request, an ONBOARDED local_dir workspace's own LLMCred.IntegrationRef
+// steers the proposed grant exactly like an explicit integration_id does above
+// — a workspace pinned to a subscription now previews at Review exactly what
+// foldRunIntegration already granted at Launch, instead of silently diverging.
+func TestComposeRun_PrimaryWorkspacePin_SteersProposal(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{Result: composer.Proposal{
+		Run:          composer.RunInput{Agent: "claude-code", Task: "build a small website"},
+		InlinePolicy: types.RunPolicySpec{AllowedDomains: []string{"github.com"}},
+		Summary:      "throwaway sandbox",
+	}})
+	const wsPath = "/home/ops/acme-app"
+	h.srv.cfg.Store = &composeIntegrationStore{
+		fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
+			apiKeyIntegration("acme-anthropic", "acme-anthropic-key"),
+		}}},
+		workspaces: []types.Workspace{{
+			Name:    "acme-app",
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: wsPath}},
+			LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"},
+		}},
+	}
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
+	// Same reason as TestComposeRun_IntegrationID_UsesNamedAPIKeySecret: clampGrants
+	// matches by KIND only, so the ceiling just needs ONE api_key template.
+	h.srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantAPIKey}}
+
+	body := `{"prompt":"build a small website","workspace":{"kind":"local","path":"` + wsPath + `"},"mode":"skip"}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("compose code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp composeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	g, ok := apiKeyGrantForHost(&resp.Proposed.InlinePolicy, "api.anthropic.com")
+	if !ok {
+		t.Fatalf("expected an api_key grant for api.anthropic.com; policy=%+v", resp.Proposed.InlinePolicy)
+	}
+	var scope map[string]string
+	_ = json.Unmarshal(g.Scope, &scope)
+	if scope["secret_name"] != "acme-anthropic-key" {
+		t.Errorf("grant secret = %q, want the pinned workspace's own integration secret (acme-anthropic-key)", scope["secret_name"])
+	}
+	if resp.LLMAccess == nil || !resp.LLMAccess.Provisioned {
+		t.Errorf("LLMAccess = %+v, want provisioned=true", resp.LLMAccess)
+	}
+}
+
 // TestComposeRun_IntegrationID_UsesBedrockRegionOverride proves the compose
 // preview folds ANY pinned non-subscription ai_provider integration through
 // applyIntegrationCreds — not just the two direct-api-key types: a pinned
@@ -83,7 +140,7 @@ func TestComposeRun_IntegrationID_UsesBedrockRegionOverride(t *testing.T) {
 		InlinePolicy: types.RunPolicySpec{AllowedDomains: []string{"github.com"}},
 		Summary:      "throwaway sandbox",
 	}})
-	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
+	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
 		{ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock",
 			Config: mustJSON(map[string]any{"region": region, "model": model})},
 	}}}}
@@ -139,7 +196,7 @@ func TestComposeRun_IntegrationID_BedrockUnsetIsNotModelAccess(t *testing.T) {
 		InlinePolicy: types.RunPolicySpec{AllowedDomains: []string{"github.com"}},
 		Summary:      "throwaway sandbox",
 	}})
-	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
+	h.srv.cfg.Store = &composeIntegrationStore{fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
 		{ID: "acme-bedrock", Category: types.IntegrationAIProvider, Type: "bedrock"},
 	}}}}
 	// No global fallback either: s.cfg.BedrockRegion/Model are the other half
@@ -191,5 +248,143 @@ func TestComposeRun_IntegrationID_NonAIProviderIs400(t *testing.T) {
 	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose", adminToken, body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("compose code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestComposeRun_ResidentHostSubscriptionPin_MountsCredsAndSurfacesConfigPair
+// closes the M3 coverage gap: the compose subscription lane (a workspace pinned
+// to a resident_host anthropic_subscription integration, under a ceiling that
+// blesses the claude cred mount) had zero assertions — only the api_key/bedrock
+// lanes were pinned above. Same ceiling shape compose_llm_grant_test.go's
+// applyLLMCredMount unit tests use (subscriptionCeiling), layered onto
+// newHarness's baseline DefaultPolicy rather than replacing it wholesale.
+func TestComposeRun_ResidentHostSubscriptionPin_MountsCredsAndSurfacesConfigPair(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Composer = singleBackendRegistry(t, &composer.FakeComposer{Result: composer.Proposal{
+		Run:          composer.RunInput{Agent: "claude-code", Task: "build a small website"},
+		InlinePolicy: types.RunPolicySpec{AllowedDomains: []string{"github.com"}},
+		Summary:      "throwaway sandbox",
+	}})
+	const wsPath = "/home/ops/acme-sub-app"
+	h.srv.cfg.Store = &composeIntegrationStore{
+		fakeSiteConfigStore: fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{
+			{ID: "acme-subscription", Category: types.IntegrationAIProvider, Type: "anthropic_subscription",
+				Config: mustJSON(map[string]any{"lane": "resident_host"})},
+		}}},
+		workspaces: []types.Workspace{{
+			Name:    "acme-sub-app",
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: wsPath}},
+			LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-subscription"},
+		}},
+	}
+	h.srv.cfg.DefaultPolicy.AllowedDomains = append(h.srv.cfg.DefaultPolicy.AllowedDomains, "*.anthropic.com", "github.com")
+	h.srv.cfg.DefaultPolicy.WorkspaceMounts = append(h.srv.cfg.DefaultPolicy.WorkspaceMounts,
+		types.WorkspaceMount{Source: "/home/op/.wardyn/claude-creds/.claude", Target: claudeCredTarget, ReadOnly: boolPtr(true)},
+		types.WorkspaceMount{Source: "/home/op/.wardyn/claude-creds/.claude.json", Target: claudeCredJSONTarget, ReadOnly: boolPtr(true)},
+	)
+
+	body := `{"prompt":"build a small website","workspace":{"kind":"local","path":"` + wsPath + `"},"mode":"skip"}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/compose", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("compose code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp composeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !specHasMountTarget(&resp.Proposed.InlinePolicy, claudeCredTarget) {
+		t.Errorf("expected the claude cred mount in the proposal's inline_policy; mounts=%+v", resp.Proposed.InlinePolicy.WorkspaceMounts)
+	}
+	if _, ok := apiKeyGrantForHost(&resp.Proposed.InlinePolicy, "api.anthropic.com"); ok {
+		t.Error("subscription mode must not carry an anthropic api_key grant")
+	}
+	it, ok := findItem(resp.SetupItems, "config_pair:use_subscription:claude_cred_mount")
+	if !ok || it.Status != "satisfied" {
+		t.Errorf("config_pair setup item = %+v (ok=%v), want a satisfied config_pair:use_subscription:claude_cred_mount row", it, ok)
+	}
+}
+
+// TestPrimaryWorkspaceLLMRef_MirrorsReferencedWorkspacesPrimary is the H2 unit
+// gap: primaryWorkspaceLLMRef must resolve EXACTLY the workspace
+// referencedWorkspaces would pick as its primary at launch — every local-kind
+// descriptor before any git-kind one, regardless of the request's own
+// ordering (applyWorkspaces buckets local dirs into spec.WorkspaceMounts and
+// repos into spec.WorkspaceRepos, and referencedWorkspaces resolves ALL mounts
+// before ANY repo — see both doc comments).
+func TestPrimaryWorkspaceLLMRef_MirrorsReferencedWorkspacesPrimary(t *testing.T) {
+	const localPath = "/home/ops/local-app"
+	const repoSlug = "acme/repo-app"
+	localWS := types.Workspace{
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: localPath}},
+		LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "local-pin"},
+	}
+	repoWS := types.Workspace{
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: repoSlug}},
+		LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "repo-pin"},
+	}
+
+	tests := []struct {
+		name       string
+		workspaces []types.Workspace
+		wss        []composer.Workspace
+		want       string
+	}{
+		{
+			name:       "local-only resolves the local's pin",
+			workspaces: []types.Workspace{localWS},
+			wss:        []composer.Workspace{{Kind: composer.WorkspaceLocal, Path: localPath}},
+			want:       "local-pin",
+		},
+		{
+			// The regression case: applyWorkspaces routes the repo into
+			// WorkspaceRepos and the local into WorkspaceMounts, and
+			// referencedWorkspaces resolves ALL mounts before any repo — so
+			// launch's primary is the LOCAL even though the repo was picked first.
+			name:       "repo picked first, local second: primary is still the LOCAL",
+			workspaces: []types.Workspace{localWS, repoWS},
+			wss: []composer.Workspace{
+				{Kind: composer.WorkspaceGit, Repo: repoSlug},
+				{Kind: composer.WorkspaceLocal, Path: localPath},
+			},
+			want: "local-pin",
+		},
+		{
+			name:       "repo-only resolves the repo's pin",
+			workspaces: []types.Workspace{repoWS},
+			wss:        []composer.Workspace{{Kind: composer.WorkspaceGit, Repo: repoSlug}},
+			want:       "repo-pin",
+		},
+		{
+			name:       "an unonboarded local resolves nothing",
+			workspaces: nil,
+			wss:        []composer.Workspace{{Kind: composer.WorkspaceLocal, Path: "/not/onboarded"}},
+			want:       "",
+		},
+		{
+			name:       "an ephemeral descriptor resolves nothing",
+			workspaces: []types.Workspace{localWS},
+			wss:        []composer.Workspace{{Kind: composer.WorkspaceEphemeral}},
+			want:       "",
+		},
+		{
+			// The trivial empty-key guard: a multi-source workspace's single-source
+			// mirror fields (Path/Repo here stand in for that) can be blank — must
+			// degrade, not look up idx.localDir[""].
+			name: "an empty-path descriptor is skipped, never looked up as \"\"",
+			workspaces: []types.Workspace{{
+				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: ""}},
+				LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "should-not-resolve"},
+			}},
+			wss:  []composer.Workspace{{Kind: composer.WorkspaceLocal, Path: ""}},
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{cfg: Config{Store: &composeIntegrationStore{workspaces: tc.workspaces}}}
+			if got := s.primaryWorkspaceLLMRef(context.Background(), tc.wss); got != tc.want {
+				t.Errorf("primaryWorkspaceLLMRef = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

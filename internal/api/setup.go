@@ -443,11 +443,11 @@ func composerCeilingCheck(ceiling types.RunPolicySpec, hasAnthropicKey, hasOpenA
 	}, true
 }
 
-// claudeSubscriptionStagingCheck is the "will the per-run subscription mount
-// actually work" readiness row. It fires ONLY when a resident Claude login is
-// detected (no login => the llm_provider check already says "add one"). The gap
-// it catches: the model-access badge reads green from the HOST login, but the
-// per-run "Use my Claude subscription" mount only works after staging generates
+// claudeSubscriptionStagingCheck is the "will a resident-host Claude
+// subscription integration actually work" readiness row. It fires ONLY when a
+// resident Claude login is detected (no login => the llm_provider check
+// already says "add one"). The gap it catches: the model-access badge reads
+// green from the HOST login, but a run only reaches it after staging generates
 // the subscription ceiling (~/.wardyn/composer-dev-subscription.json) and
 // wardynd restarts onto it — a headless `make setup` (no TTY, no
 // WARDYN_STAGE_CLAUDE=1) skips staging silently. blessed mirrors run-host.sh's
@@ -461,7 +461,9 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 	if blessed {
 		return SetupCheck{
 			ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "ok",
-			Detail: "Your Claude login is staged for sandbox use — the per-run \"Use my Claude subscription\" mount is available.",
+			Detail: "Your Claude login is staged for sandbox use — a run picks it up once its resolved integration is " +
+				"a resident-host Claude subscription. Adopt the derived \"Claude subscription (resident host)\" " +
+				"integration under Integrations and mark it the agent-runs default, or pin it on a workspace's Model access.",
 		}, true
 	}
 	fix := "Run `make stage-claude` on the host — it stages the login and restarts wardynd onto the subscription ceiling."
@@ -472,7 +474,8 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 	return SetupCheck{
 		ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "warn",
 		Detail: "A resident Claude login was detected — the model-access badge is green — but it is NOT staged for " +
-			"sandbox use, so ticking \"Use my Claude subscription\" on a run won't work.",
+			"sandbox use, so a run whose resolved integration is a resident-host Claude subscription (the agent-runs " +
+			"default, or a workspace's Model access pin) can't reach it.",
 		Fix: fix,
 	}, true
 }
@@ -623,9 +626,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, chk)
 	}
 
-	// claude_subscription_staging: the login is detected, but is it STAGED for the
-	// per-run subscription mount? Catches the headless-`make setup` skip where the
-	// badge is green yet the per-run checkbox silently does nothing.
+	// claude_subscription_staging: the login is detected, but is it STAGED so a
+	// resident-host subscription integration can actually reach it? Catches the
+	// headless-`make setup` skip where the badge is green yet a run resolved to
+	// that integration gets nothing.
 	if chk, ok := claudeSubscriptionStagingCheck(hasClaudeSub, ceilingBlessesClaudeCreds(s.cfg.DefaultPolicy), claudeLoginVia); ok {
 		checks = append(checks, chk)
 	}

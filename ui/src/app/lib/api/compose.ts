@@ -101,8 +101,6 @@ export const composer = {
     if (req.round) body.round = req.round;
     // Always send the run-mode choice (false = background is meaningful, not a default).
     body.interactive = !!req.interactive;
-    // Per-run subscription opt-in (only when ticked; absent = api-key default).
-    if (req.useSubscription) body.use_subscription = true;
     // Per-run confinement floor (the operator's persisted default tier). Raw — the
     // server caps it at what the host can enforce; absent = the policy minimum.
     if (req.confinementFloor) body.confinement_floor = req.confinementFloor;

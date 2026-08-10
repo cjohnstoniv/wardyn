@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -15,6 +15,30 @@ import {
   MAX_ATTACHMENTS_COUNT,
 } from "./compose-form";
 import type { ComposeAttachment, ComposerBackend } from "../../../lib/types";
+import { baseStatus } from "../setup/test-fixtures";
+
+// ComposeForm now renders ModelAccessCard (step-access.tsx) in place of the old
+// subscription toggle — same self-fetch mocks its own tests use, so every
+// render here settles without an unhandled-rejection/act() warning.
+const listIntegrationsMock = vi.fn();
+vi.mock("../../../lib/api/integrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/integrations")>();
+  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+});
+const listWorkspacesMock = vi.fn();
+vi.mock("../../../lib/api/workspaces", () => ({
+  workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
+}));
+const getSetupStatusMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({
+  setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
+}));
+
+beforeEach(() => {
+  listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [], mirror: [], proxy: [] });
+  listWorkspacesMock.mockReset().mockResolvedValue([]);
+  getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
+});
 
 // The client-side attachment caps MUST match the server caps (internal/composer):
 // 256 KiB per file, 1 MiB total across prompt + attachments, 32 attachments. The
@@ -88,7 +112,6 @@ describe("ComposeForm — file attach enforces the size cap", () => {
       backends,
       mode: "auto" as const,
       interactive: false,
-      useSubscription: false,
       composing: false,
       onPromptChange: vi.fn(),
       onWorkspaceSelectionsChange: vi.fn(),
@@ -97,7 +120,6 @@ describe("ComposeForm — file attach enforces the size cap", () => {
       onBackendChange: vi.fn(),
       onModeChange: vi.fn(),
       onInteractiveChange: vi.fn(),
-      onUseSubscriptionChange: vi.fn(),
       onCompose: vi.fn(),
       ...overrides,
     };
@@ -202,25 +224,11 @@ describe("ComposeForm — file attach enforces the size cap", () => {
     await waitFor(() => expect(onInteractiveChange).toHaveBeenCalledWith(true));
   });
 
-  it("offers the per-run Claude-subscription opt-in, OFF by default, and reports toggling", async () => {
-    const onUseSubscriptionChange = vi.fn();
-    renderForm({ onUseSubscriptionChange });
-    // Off by default: the api-key path is the governed default; subscription is
-    // an explicit per-run choice (mirrors the server's consent model).
-    const toggle = screen.getByRole("switch", { name: /use my claude subscription/i });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    // The copy must be honest about residency: the credential lives in the
-    // sandbox for the run (vs the proxy-side api key).
-    expect(screen.getByText(/resident in the sandbox/i)).toBeInTheDocument();
-    const user = userEvent.setup();
-    await user.click(toggle);
-    expect(onUseSubscriptionChange).toHaveBeenCalledWith(true);
-  });
-
-  it("renders the subscription toggle ON when opted in", () => {
-    renderForm({ useSubscription: true });
-    expect(
-      screen.getByRole("switch", { name: /use my claude subscription/i }),
-    ).toHaveAttribute("aria-checked", "true");
+  it("renders the model-access card in place of the removed subscription toggle", () => {
+    renderForm();
+    // The card's own static label — unambiguous even before its self-fetches
+    // settle (the first-paint "Resolving model access…" line also matches a
+    // loose /model access/i, see step-access.test.tsx's loading-gate coverage).
+    expect(screen.getByText("Model access — resolved from integrations")).toBeInTheDocument();
   });
 });

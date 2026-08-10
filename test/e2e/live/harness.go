@@ -34,6 +34,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -384,16 +385,18 @@ type composeProposal struct {
 }
 
 // compose calls POST /api/v1/runs/compose (not in the SDK) and returns the
-// proposal. useSubscription drives the per-run subscription opt-in.
-func (h *harness) compose(ctx context.Context, prompt, wsPath string, useSubscription bool) (composeProposal, error) {
+// proposal. There is no per-run subscription opt-in anymore
+// (resolveRunIntegration, internal/api/llmcred.go): for a subscription-mode
+// proposal, the live box's subscription integration must be marked
+// DefaultFor:agent_runs, or the compose workspace must be pinned to it.
+func (h *harness) compose(ctx context.Context, prompt, wsPath string) (composeProposal, error) {
 	// Composer calls a real model; give it room.
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	status, raw, err := h.authedJSON(cctx, http.MethodPost, "/api/v1/runs/compose", map[string]any{
-		"prompt":           prompt,
-		"workspace":        map[string]any{"kind": "local", "path": wsPath, "read_write": true},
-		"mode":             "skip",
-		"use_subscription": useSubscription,
+		"prompt":    prompt,
+		"workspace": map[string]any{"kind": "local", "path": wsPath, "read_write": true},
+		"mode":      "skip",
 	})
 	if err != nil {
 		return composeProposal{}, err
@@ -410,6 +413,41 @@ func (h *harness) compose(ctx context.Context, prompt, wsPath string, useSubscri
 
 var classRank = map[string]int{"": 0, "CC1": 1, "CC2": 2, "CC3": 3}
 
+// composerModelAccessConfigured reports whether the box has an ai_provider
+// integration marked DefaultFor:agent_runs — the ONLY way a composed run can
+// resolve to the box's staged Claude subscription creds now that there is no
+// per-run "Use my Claude subscription" opt-in (resolveRunIntegration,
+// internal/api/llmcred.go). NOT the whole story: a box that instead stores a
+// plain anthropic-api-key secret still gets model access via the older
+// direct-secret path (ensureLLMGrant) with no integration configured at all —
+// this check is deliberately conservative (it can skip a box that would in
+// fact work) rather than let a subscription-only box silently fail, or a
+// misconfigured one silently pass by accident, with no diagnostic pointing at
+// the real cause. Uses raw HTTP: GET /api/v1/integrations has no SDK method.
+func (h *harness) composerModelAccessConfigured(ctx context.Context) bool {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	status, raw, err := h.authedJSON(cctx, http.MethodGet, "/api/v1/integrations", nil)
+	if err != nil || status != http.StatusOK {
+		return false
+	}
+	var list struct {
+		Integrations []struct {
+			Category   string   `json:"category"`
+			DefaultFor []string `json:"default_for"`
+		} `json:"integrations"`
+	}
+	if json.Unmarshal(raw, &list) != nil {
+		return false
+	}
+	for _, in := range list.Integrations {
+		if in.Category == "ai_provider" && slices.Contains(in.DefaultFor, "agent_runs") {
+			return true
+		}
+	}
+	return false
+}
+
 // launchComposer composes a proposal for the task then launches it — the human
 // "review, then approve & launch" flow, minus the human. The one operator
 // decision it makes explicit: if the composer's RISK model proposed a stronger
@@ -419,10 +457,18 @@ var classRank = map[string]int{"": 0, "CC1": 1, "CC2": 2, "CC3": 3}
 // CC1-only machine — and log it, because Wall/Vault isolation is then UNVERIFIED.
 // Returns a non-empty skipReason (instead of failing) when the composer's own
 // ANALYSIS backend (the host claude CLI) flakes — a composer-robustness issue
-// orthogonal to the sandbox boundary this suite verifies.
+// orthogonal to the sandbox boundary this suite verifies. Skips loudly (rather
+// than attempting a run doomed to a silent no-model-access degrade) when
+// composerModelAccessConfigured finds no agent-runs-default integration.
 func (h *harness) launchComposer(ctx context.Context, task Task, wsPath, bestClass string) (run types.AgentRun, p composeProposal, skipReason string) {
 	h.t.Helper()
-	p, err := h.compose(ctx, task.Prompt, wsPath, true /* use subscription on this box */)
+	if !h.composerModelAccessConfigured(ctx) {
+		h.t.Skipf("no ai_provider integration is DefaultFor:agent_runs on this box — the composer lane cannot resolve " +
+			"model access without one now that there is no per-run subscription opt-in (mark the box's Claude " +
+			"subscription/API-key integration as the agent-runs default, or pin the compose workspace to it; see " +
+			"resolveRunIntegration, internal/api/llmcred.go)")
+	}
+	p, err := h.compose(ctx, task.Prompt, wsPath)
 	if err != nil {
 		if isComposerBackendFlake(err) {
 			return run, p, err.Error()

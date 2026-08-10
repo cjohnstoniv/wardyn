@@ -62,13 +62,13 @@ type SetupFix struct {
 	WorkspaceID string `json:"workspace_id,omitempty"` // ID, not source — api.scanWorkspace takes an id
 }
 
-// composeSubscriptionState is the use_subscription <-> credential-mount PAIR's
-// reconciled verdict, computed ONCE at the runComposePipeline call site
+// composeSubscriptionState is the subscription-request <-> credential-mount
+// PAIR's reconciled verdict, computed ONCE at the runComposePipeline call site
 // (applyLLMCredMount) and threaded through here so setupSubscriptionMountItem
 // never recomputes it — the checklist row can then never disagree with the
 // Warnings panel that already carries the same Reason text.
 type composeSubscriptionState struct {
-	Requested bool     // the operator's per-run ask (composeRequest.UseSubscription)
+	Requested bool     // the resolved integration asks for the resident-host subscription transport
 	Injected  bool     // applyLLMCredMount's verdict: did the ceiling mounts land in the FINAL spec
 	Managed   bool     // no ceiling mount, but a Wardyn-managed setup-token serves this run proxy-side
 	Warnings  []string // applyLLMCredMount's own explanation, reused verbatim
@@ -156,14 +156,15 @@ func setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.Ru
 }
 
 // setupSubscriptionMountItem is the "config_pair" checklist row for the
-// use_subscription <-> credential-mount PAIR: applyLLMCredMount (compose.go)
-// already reconciles the operator's per-run ask against the control-plane-wide
-// bless (ceilingBlessesClaudeCreds) and the FINAL egress state
-// (anthropicReachable), and today silently degrades to the api-key path (or to
-// no access at all) when they disagree, with the reason buried in a generic
-// Warnings bullet. This surfaces that SAME verdict (sub.Injected/Warnings —
-// reused verbatim, never recomputed) as its own structured row. ok=false when
-// subscription mode wasn't requested this round (nothing to reconcile).
+// subscription-request <-> credential-mount PAIR: applyLLMCredMount
+// (compose.go) already reconciles the run's resolved integration against the
+// control-plane-wide bless (ceilingBlessesClaudeCreds) and the FINAL egress
+// state (anthropicReachable), and today silently degrades to the api-key path
+// (or to no access at all) when they disagree, with the reason buried in a
+// generic Warnings bullet. This surfaces that SAME verdict (sub.Injected/
+// Warnings — reused verbatim, never recomputed) as its own structured row.
+// ok=false when subscription mode wasn't requested this round (nothing to
+// reconcile).
 func setupSubscriptionMountItem(sub composeSubscriptionState) (SetupItem, bool) {
 	if !sub.Requested {
 		return SetupItem{}, false
