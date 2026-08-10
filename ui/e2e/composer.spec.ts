@@ -55,9 +55,13 @@ function dialog(page: Page): Locator {
 }
 
 // Open the shell top-bar "New run" dialog and wait for the composer-backends
-// probe to resolve BEFORE interacting with the chooser — the probe's completion
-// re-sets the dialog to "choose", so clicking a chooser card mid-probe would be
-// clobbered. Returns the dialog on the entry chooser.
+// probe to resolve BEFORE interacting with the chooser (harmless belt-and-
+// braces now — the probe only ever steers mode AWAY from the workspace-first
+// step, never clobbers a later choice). Clears the workspace-first step (Stage
+// 3) via the "No workspace — ad-hoc run" escape so every compose test below
+// still exercises ComposeForm's OWN WorkspacePicker (selectWorkspace) as a
+// separate, still-editable pick — mirrors wizard.spec.ts's openWizard. Returns
+// the dialog on the Describe/Configure entry chooser.
 async function openChooser(page: Page): Promise<Locator> {
   await gotoConsole(page);
   const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
@@ -65,6 +69,7 @@ async function openChooser(page: Page): Promise<Locator> {
   await backends;
   const dlg = dialog(page);
   await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
+  await dlg.getByRole("button", { name: /No workspace — ad-hoc run/ }).click();
   return dlg;
 }
 
@@ -124,6 +129,36 @@ async function composeWithWorkspace(page: Page, dlg: Locator, prompt: string): P
 }
 
 test.describe("AI Run Composer — Describe your task", () => {
+  // Stage 3: the workspace-first pick — made BEFORE Describe/Configure is even
+  // offered — must reach the compose request without the operator re-picking it
+  // via ComposeForm's own WorkspacePicker (selectWorkspace, used by every other
+  // test in this file after the ad-hoc escape in openChooser).
+  test("picking a workspace from the entry chooser carries it straight into the compose form", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
+    await page.getByRole("button", { name: "New run" }).click();
+    await backends;
+    const dlg = dialog(page);
+
+    const card = dlg.getByRole("button", { name: /payments/ });
+    await expect(card).toBeVisible();
+    await card.click();
+    await dlg.getByRole("button", { name: /Describe your task/ }).click();
+
+    // Already attached as the primary — no combobox interaction.
+    await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
+    await expect(dlg.getByText("Comes with:")).toBeVisible();
+
+    // The composed proposal is rooted in it (repo local:<base>), same as
+    // composeWithWorkspace's own combobox-driven pick.
+    await dlg.getByLabel("Describe your task").fill("Refactor the parser in this checkout.");
+    await dlg.getByRole("button", { name: "Compose" }).click();
+    await expect(dlg.getByRole("heading", { name: "Proposed setup" })).toBeVisible();
+    await expect(dlg.getByText("local:payments").first()).toBeVisible();
+  });
+
   test("the provider dropdown lists the configured backends with the default preselected", async ({
     page,
   }) => {

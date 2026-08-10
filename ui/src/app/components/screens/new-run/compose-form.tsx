@@ -28,13 +28,8 @@ import { WorkspacePicker } from "./workspace-picker";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { RD } from "../../../lib/workspace-copy";
-import type {
-  ComposeAttachment,
-  ComposeMode,
-  ComposerBackend,
-  Workspace,
-  WorkspaceSelection,
-} from "../../../lib/types";
+import type { ComposeAttachment, ComposeMode, ComposerBackend, Workspace } from "../../../lib/types";
+import type { RunWorkspaceSelection } from "./wizard-types";
 
 // Mirror the server caps in internal/composer (composer.go):
 //   MaxAttachmentBytes = 256 KiB per attachment
@@ -102,12 +97,14 @@ export function ComposeForm({
   error,
 }: {
   prompt: string;
-  // Onboarded-workspace multi-select selections (same WorkspaceSelection shape
-  // the manual wizard's Basics step uses — see workspace-picker.tsx). Empty =>
-  // ephemeral scratch workspace. api.compose() resolves these against
+  // Onboarded-workspace multi-select selections (same RunWorkspaceSelection
+  // shape the manual wizard's Basics step uses — see workspace-picker.tsx).
+  // Empty => ephemeral scratch workspace. api.compose() resolves these against
   // `workspaces` into the wire `workspaces[]` array; onboarded-only, by design
-  // (a raw host path is never accepted, mirroring the wizard).
-  workspaceSelections: WorkspaceSelection[];
+  // (a raw host path is never accepted, mirroring the wizard). enabledOptional
+  // now reaches the wire too (Stage 2's workspace_selections + Stage 4's
+  // optionalRequirementsEnabled=true below).
+  workspaceSelections: RunWorkspaceSelection[];
   // The onboarded workspaces (listWorkspaces()) the picker offers.
   workspaces?: Workspace[];
   workspacesLoading?: boolean;
@@ -125,7 +122,7 @@ export function ComposeForm({
   useSubscription: boolean;
   composing: boolean;
   onPromptChange: (v: string) => void;
-  onWorkspaceSelectionsChange: (s: WorkspaceSelection[]) => void;
+  onWorkspaceSelectionsChange: (s: RunWorkspaceSelection[]) => void;
   onAttachmentsChange: (a: ComposeAttachment[]) => void;
   onSourcesChange: (s: string[]) => void;
   onBackendChange: (b: string) => void;
@@ -267,7 +264,7 @@ export function ComposeForm({
 
       <Field
         label="Workspaces"
-        hint="Only onboarded local directories and repos can be attached — a raw host path is never accepted. The first one selected is the primary (drives the analyzer); leave empty to run in an ephemeral scratch directory."
+        hint="The workspace you chose when starting this run, as context for the analyzer — the first one is the primary. Attach another if this task needs it, or remove it to run in an ephemeral scratch directory instead."
       >
         <WorkspacePicker
           selections={workspaceSelections}
@@ -275,11 +272,7 @@ export function ComposeForm({
           workspaces={workspaces}
           loading={workspacesLoading}
           onAddWorkspace={onAddWorkspace}
-          // The Composer's ComposeRequest has no field to carry an optional
-          // requirement's enablement (unlike the manual wizard's
-          // CreateRunRequest.Workspaces) — never show a checkbox that would
-          // silently do nothing.
-          optionalRequirementsEnabled={false}
+          optionalRequirementsEnabled={true}
         />
       </Field>
 

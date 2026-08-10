@@ -89,6 +89,34 @@ describe("WorkspacePicker — Comes with / disclosure", () => {
     expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).toBeNull(); // never a per-run toggle
   });
+
+  // Honesty (Stage 4): applyWorkspaceRequirements' TRUST BOUNDARY auto-grants a
+  // secret ONLY from an operator_set requirement row — a scan_seeded row NEVER
+  // does, Required or not. The disclosed list must not read as "you get this
+  // automatically" for one of those.
+  it("flags a scan_seeded Required secret as not auto-granting", async () => {
+    listSecretsMock.mockResolvedValue(["DATABASE_URL"]);
+    const ws = workspace({
+      requirements: { "secret:DATABASE_URL": { level: "required", provenance: "scan_seeded" } },
+    });
+    renderPicker([{ workspaceId: "ws-1" }], [ws]);
+    await screen.findByText(/Comes with:/);
+    await userEvent.click(screen.getByRole("button", { name: "show" }));
+    expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
+    expect(screen.getByText(/won't auto-grant/i)).toBeInTheDocument();
+  });
+
+  it("does not flag an operator_set Required secret — it genuinely auto-grants", async () => {
+    listSecretsMock.mockResolvedValue(["DATABASE_URL"]);
+    const ws = workspace({
+      requirements: { "secret:DATABASE_URL": { level: "required", provenance: "operator_set" } },
+    });
+    renderPicker([{ workspaceId: "ws-1" }], [ws]);
+    await screen.findByText(/Comes with:/);
+    await userEvent.click(screen.getByRole("button", { name: "show" }));
+    expect(screen.getByText("DATABASE_URL")).toBeInTheDocument();
+    expect(screen.queryByText(/won't auto-grant/i)).toBeNull();
+  });
 });
 
 describe("WorkspacePicker — unstored-required-secret attention line", () => {

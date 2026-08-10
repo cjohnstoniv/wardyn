@@ -45,6 +45,7 @@ import {
   buildSpec,
   initialWizardState,
   validateStep,
+  type RunWorkspaceSelection,
   type WizardState,
   type WizardStepId,
 } from "./wizard-types";
@@ -54,6 +55,7 @@ export function PermissionWizard({
   onOpenChange,
   onCreated,
   initialState,
+  initialWorkspaces,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -62,6 +64,12 @@ export function PermissionWizard({
   // opens prefilled with this state instead of a clean default. The confinement-
   // class floor probe still runs, but it does NOT overwrite a prefilled state.
   initialState?: WizardState;
+  // Seeds Basics' workspace selection on a FRESH entry (the New-run dialog's
+  // workspace-first pick) WITHOUT suppressing the normal confinement-class
+  // auto-resolution a full `initialState` intentionally skips (that path — Edit
+  // in wizard — already carries its own resolved class). Ignored once
+  // `initialState` is set.
+  initialWorkspaces?: RunWorkspaceSelection[];
 }) {
   const [stepIdx, setStepIdx] = React.useState(0);
   const [state, setState] = React.useState<WizardState>(
@@ -167,7 +175,11 @@ export function PermissionWizard({
     setPreflight(null);
     setPreflightStatus("idle");
     mergedWs.current = new Set();
-    if (initialState) setState(initialState);
+    if (initialState) {
+      setState(initialState);
+    } else if (initialWorkspaces?.length) {
+      setState((s) => ({ ...s, workspaces: initialWorkspaces }));
+    }
     setAvailableClasses(null);
     let alive = true;
     // fix: healthApi.health() never rejects — it swallows a fetch/parse failure
@@ -192,7 +204,8 @@ export function PermissionWizard({
         }
         setAvailableClasses(classes);
         if (initialState) return; // keep the prefilled proposal verbatim
-        setState(initialWizardState(resolveDefaultCc(getDefaultCc(), classes as ConfinementClass[])));
+        const fresh = initialWizardState(resolveDefaultCc(getDefaultCc(), classes as ConfinementClass[]));
+        setState(initialWorkspaces?.length ? { ...fresh, workspaces: initialWorkspaces } : fresh);
       });
     };
     probe();
@@ -202,7 +215,7 @@ export function PermissionWizard({
     return () => {
       alive = false;
     };
-  }, [open, loadSecrets, reloadWorkspaces, initialState]);
+  }, [open, loadSecrets, reloadWorkspaces, initialState, initialWorkspaces]);
 
   // When a workspace is selected, load its recorded profile's egress (approved_egress
   // ∪ scanned registries) into the Egress step so a new run VISIBLY inherits the

@@ -153,6 +153,18 @@ export function unstoredRequiredSecrets(ws: Workspace, storedSecrets: string[]):
   return summarizeWorkspaceRequirements(ws).requiredSecrets.filter((n) => !storedSecrets.includes(n));
 }
 
+// Whether a workspace's `secret:<name>` requirement will actually be
+// auto-granted at run-create — the TRUST BOUNDARY in
+// internal/api/runs_create.go's applyWorkspaceRequirements: only an
+// operator_set row ever auto-mints a grant; a scan_seeded row NEVER does,
+// required or optional, stored or not (untrusted repo content must never
+// route the operator's own stored secrets into a run just by naming them).
+// A Required-and-not-auto-granting row must never be presented as "you get
+// this automatically" — see the plan's honesty constraints.
+export function secretAutoGrants(ws: Workspace, name: string): boolean {
+  return workspaceRequirements(ws)[`secret:${name}`]?.provenance === "operator_set";
+}
+
 // A multi-source workspace's composition ("2 dirs · 1 repo") instead of a
 // single kind label. Returns null for a single-source (or sources-less, i.e.
 // pre-composition) workspace, so the caller falls back to its ordinary

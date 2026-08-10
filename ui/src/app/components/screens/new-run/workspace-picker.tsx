@@ -44,6 +44,7 @@ import { statusTone, statusWord } from "../../../lib/workspace-status";
 import {
   comesWithLine,
   compositionSummary,
+  secretAutoGrants,
   summarizeWorkspaceRequirements,
   unstoredRequiredSecrets,
   type RequirementEntry,
@@ -303,6 +304,15 @@ function SelectedWorkspaceCard({
                     <div key={n} className="flex items-center gap-2">
                       <Mono className="text-[0.6875rem] text-foreground">{n}</Mono>
                       <span className="text-[0.6875rem] text-muted-foreground">secret</span>
+                      {/* TRUST BOUNDARY (wizard-types.ts's secretAutoGrants): a
+                          scan_seeded row never auto-mints a grant, Required or
+                          not — never let this list read as "you get this
+                          automatically" for one of those. */}
+                      {!secretAutoGrants(ws, n) && (
+                        <span className="text-[0.6875rem] text-warning" title={C.UNMET_OK}>
+                          won&apos;t auto-grant
+                        </span>
+                      )}
                     </div>
                   ))}
                   {summary.requiredHosts.map((h) => (

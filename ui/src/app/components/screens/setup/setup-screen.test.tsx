@@ -531,8 +531,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(
       (await screen.findAllByRole("button", { name: /^launch your first run$/i }))[0],
     );
-    // The composer is off in this build, so the dialog opens straight into the
+    // The dialog opens on the workspace-first chooser regardless of composer
+    // availability; clear it via the ad-hoc escape (no workspaces onboarded in
+    // this build) — the composer is ALSO off, so that lands straight in the
     // manual wizard — assert on its dialog description.
+    await user.click(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i }));
     expect(
       await screen.findByText(/compose the agent's permission envelope/i),
     ).toBeInTheDocument();

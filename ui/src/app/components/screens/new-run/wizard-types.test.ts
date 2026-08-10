@@ -8,6 +8,7 @@ import {
   buildSpec,
   initialWizardState,
   isValidDomain,
+  secretAutoGrants,
   validateStep,
   wizardStateFromProposal,
 } from "./wizard-types";
@@ -138,6 +139,33 @@ describe("buildSpec — write mode resolves honestly into workspace_mounts[].rea
       [ws],
     );
     expect(inline_policy.workspace_mounts?.[0].read_only).toBe(true);
+  });
+});
+
+// Honesty constraint (Stage 4): the TRUST BOUNDARY in
+// internal/api/runs_create.go's applyWorkspaceRequirements auto-grants a
+// secret ONLY off an operator_set requirement row — a scan_seeded row never
+// does, whatever its level. secretAutoGrants is the client-side read of that
+// same boundary, so a Required-secret summary can never claim "you get this
+// automatically" for one the server will actually skip.
+describe("secretAutoGrants — the scan_seeded trust boundary, read client-side", () => {
+  it("an operator_set secret requirement auto-grants", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "secret:DATABASE_URL": { level: "required", provenance: "operator_set" },
+    });
+    expect(secretAutoGrants(ws, "DATABASE_URL")).toBe(true);
+  });
+
+  it("a scan_seeded secret requirement never auto-grants, even though it's Required", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "secret:DATABASE_URL": { level: "required", provenance: "scan_seeded" },
+    });
+    expect(secretAutoGrants(ws, "DATABASE_URL")).toBe(false);
+  });
+
+  it("a name with no requirement row at all doesn't auto-grant", () => {
+    const ws = localDirWorkspace("ws-1", {});
+    expect(secretAutoGrants(ws, "NOT_DECLARED")).toBe(false);
   });
 });
 

@@ -3,14 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// NewRunDialog — the entry point for launching a run. It chooses between two
-// entry modes:
+// NewRunDialog — the entry point for launching a run. Workspace-first: it
+// always opens on "which workspace?" (an onboarded workspace, or the explicit
+// "No workspace — ad-hoc run" escape) BEFORE it ever asks how. Only then does
+// it offer:
 //   - "Describe your task"   → the AI Run Composer (compose → review → launch)
 //   - "Configure manually"   → the existing 5-step PermissionWizard
 //
-// The composer is OPTIONAL: if it's disabled (404) or has zero backends, Describe
-// mode is hidden and the dialog opens straight into the manual wizard — never a
-// crash. "Edit in wizard" hands a composer proposal to the wizard, prefilled.
+// The composer is OPTIONAL: if it's disabled (404) or has zero backends,
+// Describe mode is hidden and choosing a workspace (or ad-hoc) drops straight
+// into the manual wizard, pre-seeded with that pick — never a crash. "Edit in
+// wizard" hands a composer proposal to the wizard, prefilled (its own workspace
+// wins over the one picked here — see wizard.tsx's initialWorkspaces).
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Settings2, Sparkles, TriangleAlert } from "lucide-react";
@@ -35,6 +39,7 @@ import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { Chip } from "../../wardyn/primitives";
+import { Mono } from "../../wardyn/code-block";
 import { deriveReadiness } from "../onboarding/intro";
 import { Button } from "../../ui/button";
 import {
@@ -59,9 +64,14 @@ import {
   type RunWorkspaceSelection,
   type WizardState,
 } from "./wizard-types";
-import { isUsable } from "../../../lib/workspace-status";
+import { KIND_META } from "../workspaces";
+import { isUsable, statusTone, statusWord } from "../../../lib/workspace-status";
 
-type Mode = "choose" | "describe" | "clarify" | "review" | "wizard";
+// "workspace" is the entry mode (Stage 3: workspace-first) — the dialog opens
+// on "which workspace?" before it ever asks HOW (Describe vs Configure). Every
+// other mode is reached only after that choice (or its explicit "no
+// workspace" escape) is made.
+type Mode = "workspace" | "choose" | "describe" | "clarify" | "review" | "wizard";
 
 export function NewRunDialog({
   open,
@@ -72,7 +82,7 @@ export function NewRunDialog({
   onOpenChange: (o: boolean) => void;
   onCreated: (run: AgentRun) => void;
 }) {
-  const [mode, setMode] = React.useState<Mode>("choose");
+  const [mode, setMode] = React.useState<Mode>("workspace");
   const [backends, setBackends] = React.useState<ComposerBackend[] | null>(null);
   // Onboarded workspaces — fetched once per dialog-open. Feeds the Describe-mode
   // multi-select picker AND (for "Edit in wizard") resolves a composed
@@ -165,7 +175,7 @@ export function NewRunDialog({
   React.useEffect(() => {
     if (!open) return;
     // reset all transient state for a clean dialog each open
-    setMode("choose");
+    setMode("workspace");
     setBackends(null);
     setPrompt("");
     setWorkspaceSelections([]);
@@ -195,18 +205,19 @@ export function NewRunDialog({
       .then((bs) => {
         if (!alive) return;
         setBackends(bs);
-        if (bs.length === 0) {
-          // Composer not configured — manual is the only path.
-          setMode("wizard");
-          return;
-        }
-        setBackend(bs.find((b) => b.is_default)?.name ?? bs[0].name);
-        setMode("choose");
+        if (bs.length > 0) setBackend(bs.find((b) => b.is_default)?.name ?? bs[0].name);
+        // Never yank the operator off the workspace-first step the instant this
+        // probe resolves (typically well before they've picked anything) — only
+        // steer mode once they've already left it via chooseWorkspace(). From
+        // "choose"/"describe" onward, an empty/failed backend list still bails
+        // to the manual wizard (composer not configured — manual is the only
+        // path), matching pre-Stage-3 behaviour for that later transition.
+        setMode((m) => (m === "workspace" ? m : bs.length === 0 ? "wizard" : m));
       })
       .catch(() => {
         if (!alive) return;
         setBackends([]);
-        setMode("wizard");
+        setMode((m) => (m === "workspace" ? m : "wizard"));
       });
     // Best-effort readiness hint for the amber banner above the Describe form —
     // never blocks the chooser, never throws (getSetupStatus already degrades to
@@ -411,8 +422,25 @@ export function NewRunDialog({
     setMode("wizard");
   };
 
+  // Stage 3 — workspace-first entry: the FIRST decision in this dialog is which
+  // workspace (or none), before Describe-vs-Configure is even offered. Seeds
+  // workspaceSelections — already the AI path's own state (submitCompose reads
+  // it unchanged) — so both paths start from the identical pick; the manual
+  // path gets it via PermissionWizard's initialWorkspaces below. `sel` is null
+  // for the explicit "No workspace — ad-hoc run" escape, which must reproduce
+  // today's exact behaviour: an empty selection, nothing more, an ephemeral
+  // scratch run.
+  const chooseWorkspace = (sel: RunWorkspaceSelection | null) => {
+    setWorkspaceSelections(sel ? [sel] : []);
+    setMode(composerEnabled ? "choose" : "wizard");
+  };
+
   // Manual mode renders the existing wizard as its own Dialog. It owns its
   // chrome, so we hand off entirely (and pass the prefill when editing).
+  // initialWorkspaces seeds a FRESH entry's Basics selection from the
+  // workspace-first pick above; editInWizard's initialState (when set) already
+  // carries its own resolved workspaces and wins (wizard.tsx ignores
+  // initialWorkspaces once initialState is provided).
   if (mode === "wizard") {
     return (
       <PermissionWizard
@@ -420,6 +448,7 @@ export function NewRunDialog({
         onOpenChange={onOpenChange}
         onCreated={onCreated}
         initialState={wizardInitial}
+        initialWorkspaces={workspaceSelections}
       />
     );
   }
@@ -441,11 +470,53 @@ export function NewRunDialog({
               ? "Review Wardyn's proposed confinement before launching. Wardyn graded this deterministically — not the model."
               : mode === "clarify"
                 ? "Wardyn's composer needs a little more detail to propose a least-privilege run. Your answers shape the proposal only — Wardyn still grades and clamps it."
-                : "Describe your task and let Wardyn propose a confined run, or configure the permission envelope by hand."}
+                : mode === "workspace"
+                  ? "Start from an onboarded workspace and its policies, or run ad-hoc. Everything here stays editable in the steps that follow."
+                  : "Describe your task and let Wardyn propose a confined run, or configure the permission envelope by hand."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="scroll-thin -mx-1 flex-1 overflow-y-auto px-1 py-4">
+          {mode === "workspace" && (
+            <div className="space-y-3">
+              {workspacesLoading && workspaces.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Loading workspaces…</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {workspaces.map((w) => {
+                    const KindIcon = (KIND_META[w.kind] ?? KIND_META.local_dir).Icon;
+                    return (
+                      <OptionCard
+                        key={w.id}
+                        selected={false}
+                        onClick={() => chooseWorkspace({ workspaceId: w.id })}
+                        className="h-full"
+                        title={
+                          <span className="flex items-center gap-2">
+                            <KindIcon
+                              className="size-4 shrink-0 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                            {w.name}
+                            <Chip tone={statusTone(w.status).tone}>{statusWord(w.status)}</Chip>
+                          </span>
+                        }
+                        hint={<Mono className="text-[0.6875rem]">{w.source}</Mono>}
+                      />
+                    );
+                  })}
+                  <OptionCard
+                    selected={false}
+                    onClick={() => chooseWorkspace(null)}
+                    className="h-full"
+                    title="No workspace — ad-hoc run"
+                    hint="An empty scratch directory inside the sandbox. Nothing on your machine is reachable."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           {mode === "choose" && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <OptionCard
@@ -583,9 +654,16 @@ export function NewRunDialog({
           )}
         </div>
 
-        {mode === "describe" && (
+        {/* "choose" gets back to the workspace-first pick; "describe" gets back
+            to "choose" — so the operator can always retreat as far as the
+            workspace decision itself. */}
+        {(mode === "describe" || mode === "choose") && (
           <div className="flex items-center justify-between border-t border-border pt-4">
-            <Button variant="ghost" onClick={() => setMode("choose")} disabled={composing}>
+            <Button
+              variant="ghost"
+              onClick={() => setMode(mode === "describe" ? "choose" : "workspace")}
+              disabled={composing}
+            >
               Back
             </Button>
           </div>

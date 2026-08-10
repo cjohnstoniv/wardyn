@@ -426,4 +426,33 @@ describe("PermissionWizard — launch-error missing-secret fix (H1/H3)", { timeo
     expect(createRunMock.mock.calls[0][0].policy_id).toBeUndefined();
     expect(createRunMock.mock.calls[0][0].inline_policy).toMatchObject({ allow_all_egress: true });
   });
+
+  // Stage 3: the New-run dialog's workspace-first pick seeds a FRESH wizard
+  // entry (no initialState — that's only "Edit in wizard") via a dedicated
+  // initialWorkspaces prop, specifically so it does NOT short-circuit the
+  // confinement-class auto-resolution the way a full initialState intentionally
+  // does.
+  it("initialWorkspaces seeds Basics' selection on a fresh entry without a full initialState", async () => {
+    render(
+      <PermissionWizard
+        open
+        onOpenChange={() => {}}
+        onCreated={() => {}}
+        initialWorkspaces={[{ workspaceId: workspace.id }]}
+      />,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Basics already shows the seeded workspace as the primary — no combobox
+    // interaction needed, same card the manual multi-select would produce.
+    expect(await screen.findByText("acme-repo", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("primary", { exact: true })).toBeInTheDocument();
+
+    // The health probe still ran and resolved a real tier set (proving the
+    // "fresh entry" resolution path wasn't suppressed by initialWorkspaces the
+    // way a full initialState intentionally suppresses it): Confinement renders
+    // a real barrier choice, not stuck on "Checking…".
+    await goToConfinementStep(user);
+    expect(screen.queryByText(/checking…/i)).not.toBeInTheDocument();
+  });
 });

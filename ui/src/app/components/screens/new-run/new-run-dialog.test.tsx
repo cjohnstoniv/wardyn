@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
-import type { AgentRun, ComposeResponse, ComposerBackend } from "../../../lib/types";
+import type { AgentRun, ComposeResponse, ComposerBackend, Workspace } from "../../../lib/types";
 
 // Toast + api are mocked so the orchestrator's wiring (mode selection, compose
 // call, error toasts, launch) can be asserted without a real backend.
@@ -157,6 +157,16 @@ function renderDialog(ui: Parameters<typeof render>[0]) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 
+// Stage 3: the dialog now opens on the workspace-first chooser, ahead of
+// Describe/Configure. Every test below that only cares about compose/wizard
+// behaviour clears that step via the explicit "No workspace — ad-hoc run"
+// escape — the regression guard: it must reproduce today's exact
+// empty-selection, ephemeral-scratch behaviour, so using it here is itself
+// part of what keeps these pre-existing tests honest.
+async function chooseAdHoc(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i }));
+}
+
 // Module-level (not nested in a describe) so EVERY describe block in this file
 // shares the same reset + sane defaults — a describe-scoped beforeEach only
 // covers its own block, and this file has grown several sibling describes.
@@ -182,16 +192,31 @@ beforeEach(() => {
 });
 
 describe("NewRunDialog", () => {
-  it("offers both entry modes when the composer is enabled", async () => {
+  it("offers both entry modes when the composer is enabled, once a workspace choice is made", async () => {
     listComposerBackendsMock.mockResolvedValue(backends);
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Neither entry mode is offered yet — the FIRST screen is the workspace
+    // chooser, not Describe/Configure.
+    expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /describe your task/i })).not.toBeInTheDocument();
+
+    await chooseAdHoc(user);
     expect(await screen.findByRole("button", { name: /describe your task/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /configure manually/i })).toBeInTheDocument();
   });
 
-  it("skips straight to the manual wizard when the composer is disabled (no backends)", async () => {
+  it("skips straight to the manual wizard when the composer is disabled (no backends), once a workspace choice is made", async () => {
     listComposerBackendsMock.mockResolvedValue([]);
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Still workspace-first even with no composer — the wizard isn't reached
+    // until a workspace choice is made.
+    expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
+    await chooseAdHoc(user);
+
     // The wizard renders its step indicator with the Basics step — no Describe mode.
     expect(await screen.findByText(/compose the agent's permission envelope/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /describe your task/i })).not.toBeInTheDocument();
@@ -205,6 +230,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={onOpenChange} onCreated={onCreated} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -251,6 +277,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -278,6 +305,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={onOpenChange} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -311,7 +339,8 @@ describe("NewRunDialog", () => {
       renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
       const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-      await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+      await chooseAdHoc(user);
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
       await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
       await user.click(screen.getByRole("button", { name: /compose/i }));
 
@@ -328,6 +357,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -359,6 +389,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -395,6 +426,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "ship a feature");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -427,6 +459,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "ship a feature");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -451,6 +484,7 @@ describe("NewRunDialog", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -487,6 +521,7 @@ describe("NewRunDialog — compose-session id (decision 1/9)", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "ship a feature");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -510,6 +545,8 @@ describe("NewRunDialog — compose-session id (decision 1/9)", () => {
   it("does not send a session id for a run launched straight from the manual wizard (composer disabled)", async () => {
     listComposerBackendsMock.mockResolvedValue([]);
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await chooseAdHoc(user);
     await screen.findByText(/compose the agent's permission envelope/i);
     // No describe mode was ever entered — nothing else to assert here beyond
     // "it didn't crash wiring a session id that was never minted".
@@ -532,6 +569,7 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     const link = await screen.findByRole("link", { name: /add an integration/i });
     expect(link).toHaveAttribute("href", "/integrations");
@@ -552,6 +590,7 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await screen.findByText(/No integration powers Wardyn's own AI features yet/);
     expect(screen.queryByText(/doesn't have model access configured yet/)).not.toBeInTheDocument();
@@ -563,6 +602,7 @@ describe("NewRunDialog — pre-compose setup hint (B3/B6)", () => {
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await screen.findByLabelText(/describe your task/i);
     expect(screen.queryByRole("link", { name: /finish getting started/i })).toBeNull();
@@ -592,6 +632,7 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "load the app db");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -651,6 +692,7 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
     renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+    await chooseAdHoc(user);
     await user.click(await screen.findByRole("button", { name: /describe your task/i }));
     await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
     await user.click(screen.getByRole("button", { name: /compose/i }));
@@ -661,5 +703,156 @@ describe("NewRunDialog — setup checklist re-flip (decision 9: no recheck endpo
 
     expect(scanWorkspaceMock).toHaveBeenCalledWith("ws-1");
     await waitFor(() => expect(within(row).getByText("Configured")).toBeInTheDocument());
+  });
+});
+
+// Stage 3/4: the dialog opens on "which workspace?" before Describe/Configure,
+// the choice seeds BOTH paths' selection, and an Optional row toggled there
+// actually reaches the wire — not just the picker's local state.
+describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
+  const usableWorkspace: Workspace = {
+    id: "ws-1",
+    name: "payments",
+    kind: "repo",
+    source: "acme/payments",
+    status: "scanned",
+    created_at: "now",
+    updated_at: "now",
+  };
+  const settingUpWorkspace: Workspace = {
+    id: "ws-2",
+    name: "scratch-tool",
+    kind: "local_dir",
+    source: "/home/me/scratch-tool",
+    status: "pending_scan",
+    created_at: "now",
+    updated_at: "now",
+  };
+  // requirements isn't on the shared Workspace TS type yet (same stopgap
+  // wizard-types.ts / wizard-types.test.ts document) — cast, matching how the
+  // picker itself reads it.
+  const workspaceWithOptionalEgress = {
+    id: "ws-3",
+    name: "api-service",
+    kind: "local_dir",
+    source: "/home/me/api-service",
+    status: "scanned",
+    created_at: "now",
+    updated_at: "now",
+    requirements: { "egress:api.stripe.com": { level: "optional", provenance: "operator_set" } },
+  } as Workspace;
+
+  it("renders onboarded workspaces (name, status, source) and the ad-hoc escape", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([usableWorkspace, settingUpWorkspace]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+
+    const usableCard = await screen.findByRole("button", { name: /payments/i });
+    expect(within(usableCard).getByText("Usable")).toBeInTheDocument();
+    expect(within(usableCard).getByText("acme/payments")).toBeInTheDocument();
+
+    const settingUpCard = screen.getByRole("button", { name: /scratch-tool/i });
+    expect(within(settingUpCard).getByText("Setting up")).toBeInTheDocument();
+    expect(within(settingUpCard).getByText("/home/me/scratch-tool")).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
+    // Neither "how" option is offered until a workspace choice is made.
+    expect(screen.queryByRole("button", { name: /describe your task/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /configure manually/i })).not.toBeInTheDocument();
+  });
+
+  it("picking a workspace seeds the manual wizard's Basics selection", async () => {
+    listComposerBackendsMock.mockResolvedValue([]); // composer disabled -> straight to wizard
+    listWorkspacesMock.mockResolvedValue([usableWorkspace]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /payments/i }));
+
+    // Lands straight in the manual wizard (composer disabled), Basics already
+    // carrying the chosen workspace as its primary — no combobox interaction.
+    await screen.findByText(/compose the agent's permission envelope/i);
+    expect(await screen.findByText("payments", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("primary", { exact: true })).toBeInTheDocument();
+  });
+
+  it("picking a workspace seeds the compose request's workspaceSelections", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([usableWorkspace]);
+    composeMock.mockResolvedValue(composeResult());
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /payments/i }));
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+    await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+
+    await screen.findByText(/proposed setup/i);
+    expect(composeMock.mock.calls[0][0]).toMatchObject({
+      workspaceSelections: [{ workspaceId: "ws-1" }],
+    });
+  });
+
+  it("the ad-hoc escape reproduces today's exact empty-selection behaviour on the AI path", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    composeMock.mockResolvedValue(composeResult());
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+    await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+
+    await screen.findByText(/proposed setup/i);
+    expect(composeMock.mock.calls[0][0]).toMatchObject({ workspaceSelections: [] });
+  });
+
+  it("the ad-hoc escape reproduces today's exact empty-selection behaviour on the manual path", async () => {
+    listComposerBackendsMock.mockResolvedValue([]);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    // Straight into the wizard with NOTHING attached — the picker's own honest
+    // empty state, matching today's ephemeral-scratch behaviour exactly.
+    await screen.findByText(/compose the agent's permission envelope/i);
+    expect(await screen.findByText(/no workspace attached/i)).toBeInTheDocument();
+  });
+
+  it("an Optional row toggled on the AI path reaches enabled_optional on the wire", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([workspaceWithOptionalEgress]);
+    composeMock.mockResolvedValue(composeResult());
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /api-service/i }));
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+    await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
+
+    // Stage 4: the Composer's picker now offers the Optional toggle too
+    // (optionalRequirementsEnabled flipped true) — check it before composing.
+    const box = await screen.findByRole("checkbox", { name: /api\.stripe\.com/i });
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+
+    await screen.findByText(/proposed setup/i);
+    expect(composeMock.mock.calls[0][0]).toMatchObject({
+      workspaceOptions: [{ workspace_id: "ws-3", enabled_optional: ["egress:api.stripe.com"] }],
+    });
+  });
+
+  it("choose mode's Back returns to the workspace-first chooser", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await chooseAdHoc(user);
+    expect(await screen.findByRole("button", { name: /describe your task/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^back$/i }));
+    expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
   });
 });

@@ -33,9 +33,14 @@ function wizard(page: Page): Locator {
   return page.getByRole("dialog");
 }
 
-// Open the shell top-bar "New run" dialog. With composer backends configured
-// (scripts/e2e-backend.sh), "New run" opens the chooser and the manual wizard is
-// reached via "Configure manually".
+// Open the shell top-bar "New run" dialog. It now opens on the workspace-first
+// chooser (Stage 3) ahead of Describe/Configure; this helper clears that step
+// via the "No workspace — ad-hoc run" escape so fillValidBasics' own
+// combobox-attach below still exercises Basics' picker as a separate,
+// still-editable step (see "picks the seeded workspace directly from the
+// entry chooser" further down for the direct-seed path instead). With
+// composer backends configured (scripts/e2e-backend.sh), the manual wizard is
+// then reached via "Configure manually".
 async function openWizard(page: Page): Promise<Locator> {
   await gotoConsole(page);
   const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
@@ -43,6 +48,7 @@ async function openWizard(page: Page): Promise<Locator> {
   await backends;
   const dlg = wizard(page);
   await expect(dlg.getByRole("heading", { name: "New run" })).toBeVisible();
+  await dlg.getByRole("button", { name: /No workspace — ad-hoc run/ }).click();
   await dlg.getByRole("button", { name: /Configure manually/ }).click();
   // Step 1 is Basics — its onboarded-Workspaces field proves we're on it.
   await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
@@ -78,6 +84,49 @@ test.describe("New Run wizard", () => {
     // Cancel closes the dialog without creating anything.
     await dlg.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("dialog")).not.toBeVisible();
+  });
+
+  test("picks the seeded workspace directly from the entry chooser, and Basics arrives pre-seeded", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
+    await page.getByRole("button", { name: "New run" }).click();
+    await backends;
+    const dlg = wizard(page);
+
+    // The entry chooser shows the seeded "payments" workspace as a card
+    // (name + status + source) alongside the ad-hoc escape, BEFORE either
+    // Describe or Configure is offered.
+    const card = dlg.getByRole("button", { name: /payments/ });
+    await expect(card).toBeVisible();
+    await expect(card.getByText("/home/me/projects/payments")).toBeVisible();
+    await expect(dlg.getByRole("button", { name: /No workspace — ad-hoc run/ })).toBeVisible();
+    await expect(dlg.getByRole("button", { name: /Describe your task/ })).toHaveCount(0);
+
+    await card.click();
+    await dlg.getByRole("button", { name: /Configure manually/ }).click();
+
+    // Basics already shows it selected as the primary — no combobox needed.
+    await expect(dlg.getByText("Workspaces", { exact: true })).toBeVisible();
+    await expect(dlg.getByText("payments", { exact: true })).toBeVisible();
+    await expect(dlg.getByText("primary", { exact: true })).toBeVisible();
+  });
+
+  test("the entry chooser's Back returns from Describe/Configure to the workspace pick", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
+    await page.getByRole("button", { name: "New run" }).click();
+    await backends;
+    const dlg = wizard(page);
+
+    await dlg.getByRole("button", { name: /No workspace — ad-hoc run/ }).click();
+    await expect(dlg.getByRole("button", { name: /Configure manually/ })).toBeVisible();
+
+    await dlg.getByRole("button", { name: "Back" }).click();
+    await expect(dlg.getByRole("button", { name: /No workspace — ad-hoc run/ })).toBeVisible();
   });
 
   test("ephemeral runs need no workspace: Next is enabled and Review shows no repo", async ({ page }) => {
