@@ -160,18 +160,29 @@ function OptionalCheckbox({
   sub,
   checked,
   onCheckedChange,
+  warnUnmetOk,
 }: {
   id: string;
   label: string;
   sub?: string;
   checked: boolean;
   onCheckedChange: (c: boolean) => void;
+  // TRUST BOUNDARY (wizard-types.ts's secretAutoGrants): a scan_seeded
+  // optional secret NEVER auto-grants, checked or not — the SAME caveat the
+  // disclosed Required list already carries (below). Without it this checkbox
+  // reads as a real opt-in the server silently skips.
+  warnUnmetOk?: boolean;
 }) {
   return (
     <label htmlFor={id} className="inline-flex cursor-pointer items-center gap-2">
       <Checkbox id={id} checked={checked} onCheckedChange={(v) => onCheckedChange(v === true)} />
       <span className="text-xs text-foreground">{label}</span>
       {sub && <span className="text-[0.6875rem] text-muted-foreground">{sub}</span>}
+      {warnUnmetOk && (
+        <span className="text-[0.6875rem] text-warning" title={C.UNMET_OK}>
+          won&apos;t auto-grant
+        </span>
+      )}
     </label>
   );
 }
@@ -288,7 +299,7 @@ function SelectedWorkspaceCard({
             <div className="space-y-1.5">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-foreground">
-                  <strong className="font-semibold">Comes with:</strong> {comesWithLine(ws)}
+                  <strong className="font-semibold">Comes with:</strong> {comesWithLine(ws, sel)}
                 </span>
                 <button
                   type="button"
@@ -339,7 +350,7 @@ function SelectedWorkspaceCard({
             </div>
           )}
 
-          {hasOptional && summary && (
+          {ws && hasOptional && summary && (
             <div className="space-y-1.5">
               <span className="text-xs text-foreground">
                 <strong className="font-semibold">Available if you need it:</strong>
@@ -353,6 +364,13 @@ function SelectedWorkspaceCard({
                     sub="(secret)"
                     checked={enabledOptional.has(e.key)}
                     onCheckedChange={(c) => toggleOptional(e.key, c)}
+                    // TRUST BOUNDARY (wizard-types.ts's secretAutoGrants): a
+                    // scan_seeded optional secret NEVER auto-grants — ticking
+                    // this box is a no-op server-side (runs_create.go's
+                    // applyWorkspaceRequirements skips anything but
+                    // operator_set). Same caveat the Required list already
+                    // carries, now applied here too — regardless of level.
+                    warnUnmetOk={!secretAutoGrants(ws, e.name)}
                   />
                 ))}
                 {summary.optionalHosts.map((e: RequirementEntry) => (

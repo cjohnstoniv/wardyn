@@ -335,8 +335,10 @@ describe("composer.compose() + composer.listComposerBackends()", () => {
 
 // resolveComposeWorkspace resolves a compose-form WorkspaceSelection (from the
 // onboarded multi-select) into the compose wire shape — mirrors buildSpec's
-// per-selection resolution in wizard-types.ts. Pure so it's unit-testable
-// without mocking fetch.
+// per-selection resolution in wizard-types.ts, and (Item 1 fix) now shares
+// its resolvedMountReadOnly reader instead of a separate `!sel.readOnly`
+// derivation, so the two paths can't resolve write access differently for
+// the identical picker state. Pure so it's unit-testable without mocking fetch.
 describe("resolveComposeWorkspace", () => {
   const repoWs: Workspace = {
     id: "ws-repo",
@@ -363,18 +365,68 @@ describe("resolveComposeWorkspace", () => {
     expect(resolveComposeWorkspace(sel, available)).toEqual({ kind: "git", repo: "acme/payments" });
   });
 
-  it("resolves a local_dir selection to kind local + path source, read_write true by default", () => {
+  // Item 1 (HIGH): this used to read `read_write: !sel.readOnly`, which is
+  // `true` for BOTH the write toggle's unchecked/undefined state and its
+  // checked/false state — so a workspace with no write contract at all
+  // (no `requirements`/`effective_requirements`, exactly this fixture) got a
+  // silent read-write host mount just because it was attached. The safe
+  // baseline (mirrors wizard-types.test.ts's identical "no write requirement
+  // declared at all defaults to the safe read-only baseline" case for the
+  // manual wizard) is read-only.
+  it("resolves a local_dir selection with no write contract to a READ-ONLY mount (safe baseline)", () => {
     const sel: WorkspaceSelection = { workspaceId: "ws-local" };
     expect(resolveComposeWorkspace(sel, available)).toEqual({
       kind: "local",
       path: "/home/me/app",
-      read_write: true,
+      read_write: false,
     });
   });
 
   it("honors readOnly: true on a local selection (read_write: false)", () => {
     const sel: WorkspaceSelection = { workspaceId: "ws-local", readOnly: true };
     expect(resolveComposeWorkspace(sel, available)?.read_write).toBe(false);
+  });
+
+  // Item 1's exact reported mechanism: source_scan.go seeds an OPTIONAL
+  // write:<path> on every scanned local dir, so this — not the bare
+  // no-contract fixture above — is the realistic default shape a scanned
+  // workspace carries. Both directions of the picker's write toggle:
+  describe("an Optional write:<path> requirement (the scan-seeded common case)", () => {
+    const wsWithOptionalWrite = {
+      ...localWs,
+      requirements: { "write:/home/me/app": { level: "optional", provenance: "scan_seeded" } },
+    } as Workspace;
+
+    it("toggle OFF (no enabledOptional entry) resolves read-only on the wire", () => {
+      const sel: WorkspaceSelection = { workspaceId: "ws-local" };
+      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])?.read_write).toBe(false);
+    });
+
+    it("toggle ON (enabledOptional carries the write key) resolves read-write on the wire", () => {
+      // Mirrors workspace-picker.tsx's toggleOptionalWrite, which sets both
+      // fields in the SAME patch: enabledOptional gains the key AND readOnly
+      // clears to false.
+      const sel = {
+        workspaceId: "ws-local",
+        enabledOptional: ["write:/home/me/app"],
+        readOnly: false,
+      };
+      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])?.read_write).toBe(true);
+    });
+
+    it("a stray readOnly:false with the key NOT enabled still can't widen an un-granted default", () => {
+      const sel = { workspaceId: "ws-local", readOnly: false };
+      expect(resolveComposeWorkspace(sel, [wsWithOptionalWrite])?.read_write).toBe(false);
+    });
+  });
+
+  it("a Required write:<path> resolves read-write with no enabledOptional/readOnly set", () => {
+    const wsWithRequiredWrite = {
+      ...localWs,
+      requirements: { "write:/home/me/app": { level: "required", provenance: "operator_set" } },
+    } as Workspace;
+    const sel: WorkspaceSelection = { workspaceId: "ws-local" };
+    expect(resolveComposeWorkspace(sel, [wsWithRequiredWrite])?.read_write).toBe(true);
   });
 
   it("returns undefined for a stale selection (workspace no longer onboarded)", () => {
@@ -434,8 +486,12 @@ describe("composer.compose() — workspaces[] wire shape", () => {
       [repoWs, localWs],
     );
     const body = lastBody();
+    // localWs carries no write contract, so it resolves read-only (Item 1's
+    // safe baseline) — the point of THIS test is the array shape/ordering
+    // (both entries present, local first/primary); write-access semantics are
+    // covered exhaustively by the resolveComposeWorkspace describe block above.
     expect(body.workspaces).toEqual([
-      { kind: "local", path: "/home/me/app", read_write: true },
+      { kind: "local", path: "/home/me/app", read_write: false },
       { kind: "git", repo: "acme/payments" },
     ]);
     expect(body.workspace).toBeUndefined();

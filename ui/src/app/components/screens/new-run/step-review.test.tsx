@@ -203,6 +203,34 @@ describe("StepReview — Workspace label (fixing the local:<basename> leak)", ()
     );
     expect(screen.getByText("Comes with: 1 secret")).toBeInTheDocument();
   });
+
+  // Item 4 (found by live driving): checking an Optional row in Basics — e.g.
+  // telemetry.example.com, verified live to persist across Back/Next — never
+  // moved this line. The whole premise of workspace-first run creation is
+  // "start from the workspace and edit from there"; the final screen (Review)
+  // must show the edit, not just repeat the static Required contract.
+  it("reflects an enabled Optional row (this run's opt-in), not just the static Required contract", () => {
+    const ws = {
+      ...localDirWorkspace(),
+      requirements: {
+        "secret:DATABASE_URL": { level: "required", provenance: "operator_set" },
+        "egress:telemetry.example.com": { level: "optional", provenance: "operator_set" },
+      },
+    } as Workspace;
+    render(
+      <StepReview
+        state={{
+          ...initialWizardState("CC2"),
+          workspaces: [
+            { workspaceId: "ws-1", enabledOptional: ["egress:telemetry.example.com"] },
+          ],
+        }}
+        patch={() => {}}
+        workspaces={[ws]}
+      />,
+    );
+    expect(screen.getByText("Comes with: 1 secret · 1 opted in")).toBeInTheDocument();
+  });
 });
 
 describe("StepReview — Model access (resolved from integrations)", () => {

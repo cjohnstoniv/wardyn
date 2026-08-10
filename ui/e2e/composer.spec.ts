@@ -55,13 +55,18 @@ function dialog(page: Page): Locator {
 }
 
 // Open the shell top-bar "New run" dialog and wait for the composer-backends
-// probe to resolve BEFORE interacting with the chooser (harmless belt-and-
-// braces now — the probe only ever steers mode AWAY from the workspace-first
-// step, never clobbers a later choice). Clears the workspace-first step (Stage
-// 3) via the "No workspace — ad-hoc run" escape so every compose test below
-// still exercises ComposeForm's OWN WorkspacePicker (selectWorkspace) as a
-// separate, still-editable pick — mirrors wizard.spec.ts's openWizard. Returns
-// the dialog on the Describe/Configure entry chooser.
+// probe to resolve BEFORE interacting with the chooser. This wait is
+// load-bearing, NOT belt-and-braces: chooseWorkspace (new-run-dialog.tsx)
+// reads composerEnabled — derived from `backends` — AT CLICK TIME, so a click
+// landing inside the probe window routes straight into the manual wizard with
+// no way back to Describe/Configure, even on a control plane where the
+// composer really is enabled (the workspace-step OptionCards carry
+// `disabled={backends === null}` for exactly this reason — see
+// new-run-dialog.tsx). Clears the workspace-first step (Stage 3) via the "No
+// workspace — ad-hoc run" escape so every compose test below still exercises
+// ComposeForm's OWN WorkspacePicker (selectWorkspace) as a separate,
+// still-editable pick — mirrors wizard.spec.ts's openWizard. Returns the
+// dialog on the Describe/Configure entry chooser.
 async function openChooser(page: Page): Promise<Locator> {
   await gotoConsole(page);
   const backends = page.waitForResponse((r) => /\/composer\/backends/.test(r.url()));
@@ -87,13 +92,17 @@ async function openDescribe(page: Page): Promise<Locator> {
 // wizard's Basics step uses (ui/e2e/wizard.spec.ts fillValidBasics). Options render
 // in a portal OUTSIDE the dialog.
 //
-// Attaching it mounts the dir read-WRITE, which grades the run HIGH ("read-WRITE
-// local workspace: the agent's changes persist to the host directory …"). There
-// is NO read-only toggle to flip: the picker's only write control is a
-// "write to the directory" switch (workspace-picker.tsx) that renders solely
-// when the workspace's requirements contract offers write as an OPTIONAL lane,
-// and the seeded "payments" workspace has no contract at all. So a test that
-// wants a non-HIGH proposal must attach no workspace — see compose() below.
+// Attaching it mounts the dir READ-ONLY: the seeded "payments" workspace has no
+// requirements contract at all (never scanned — see e2e-backend.sh), so it has
+// no write:<path> entry, required or optional, and resolveComposeWorkspace
+// (lib/api/compose.ts) resolves that to the safe read-only baseline — the SAME
+// default the manual wizard's buildSpec already used (resolvedMountReadOnly,
+// wizard-types.ts). There is NO read-only toggle to flip in the OTHER
+// direction here: the picker's only write control is a "write to the
+// directory" switch (workspace-picker.tsx) that renders solely when the
+// workspace's requirements contract offers write as an OPTIONAL lane, which
+// "payments" doesn't. So a read-write / HIGH-risk proposal needs a DIFFERENT
+// trigger — see the fake-risky backend tests below, not this workspace.
 async function selectWorkspace(page: Page, dlg: Locator): Promise<void> {
   await dlg.getByRole("combobox", { name: /Add a workspace/ }).click();
   await page.getByRole("option", { name: /payments/ }).click();
@@ -109,9 +118,10 @@ async function selectWorkspace(page: Page, dlg: Locator): Promise<void> {
 // Type a prompt and Compose with NO workspace attached, landing on the "Proposed
 // setup" review. A workspace is OPTIONAL now (empty => ephemeral scratch dir),
 // and leaving it empty is what keeps the default proposal MEDIUM: there is no
-// host mount to grade, so no HIGH item and no acknowledgment gate. Tests that
-// need a concrete workspace on the run attach one themselves and pay the HIGH
-// gate (composeWithWorkspace).
+// host mount to grade at all. Tests that need a concrete workspace on the run
+// attach one themselves (composeWithWorkspace) — also MEDIUM, since the seeded
+// workspace's mount resolves read-only (see selectWorkspace's doc comment); a
+// HIGH-risk gate needs a different trigger (fake-risky's weak barrier tier).
 async function compose(dlg: Locator, prompt: string): Promise<void> {
   await dlg.getByLabel("Describe your task").fill(prompt);
   await dlg.getByRole("button", { name: "Compose" }).click();
@@ -119,8 +129,9 @@ async function compose(dlg: Locator, prompt: string): Promise<void> {
 }
 
 // As compose(), but attaching the seeded onboarded workspace — the composed run
-// then carries it (repo local:payments) at the cost of a read-WRITE host mount,
-// so the review lands HIGH behind the acknowledgment gate.
+// then carries it (repo local:payments), mounted read-only (see selectWorkspace's
+// doc comment) — so this stays a MEDIUM proposal, same as compose() with no
+// workspace at all, and launch needs no acknowledgment.
 async function composeWithWorkspace(page: Page, dlg: Locator, prompt: string): Promise<void> {
   await dlg.getByLabel("Describe your task").fill(prompt);
   await selectWorkspace(page, dlg);
@@ -241,28 +252,41 @@ test.describe("AI Run Composer — Describe your task", () => {
     await expect(launch).toBeEnabled();
   });
 
-  test("attaching an onboarded local dir read-WRITE grades HIGH + gates launch", async ({
+  // Regression for the "write toggle can't make an AI-path mount read-only"
+  // HIGH finding: resolveComposeWorkspace (lib/api/compose.ts) used to send
+  // read_write:true unconditionally, so attaching ANY local_dir workspace —
+  // including one with no write contract at all — silently mounted it
+  // read-WRITE and graded HIGH. It must instead mirror the manual wizard's
+  // resolvedMountReadOnly: no write:<path> entry (required or enabled
+  // optional) => the safe read-only default, same as every other path.
+  test("attaching an onboarded local dir with no write contract mounts read-only, not HIGH", async ({
     page,
   }) => {
     const dlg = await openDescribe(page);
     await dlg.getByLabel("Describe your task").fill("Refactor the parser in this checkout.");
 
-    // Attach the seeded local dir, left read-WRITE (the picker default) — the
-    // operator's workspace choice adds a host mount (applyWorkspaces) that the
-    // deterministic grader marks HIGH.
-    await selectWorkspace(page, dlg); // read-WRITE — the composer picker has no read-only option
+    // The seeded "payments" workspace declares no requirements contract at
+    // all (never scanned) — attaching it must NOT default to a writable host
+    // mount just because a workspace was picked.
+    await selectWorkspace(page, dlg);
     await dlg.getByRole("button", { name: "Compose" }).click();
     await expect(dlg.getByRole("heading", { name: "Proposed setup" })).toBeVisible();
 
-    // The proposal is rooted in the local dir (repo local:<base>), grades HIGH,
-    // and launch is gated behind the acknowledgment.
+    // The proposal is rooted in the local dir (repo local:<base>) but stays
+    // MEDIUM — a read-only host mount grades LOW (internal/composer/risk.go),
+    // so there is no HIGH item and no acknowledgment gate to clear.
     await expect(dlg.getByText("local:payments").first()).toBeVisible();
-    await expect(dlg.getByText("High", { exact: true }).first()).toBeVisible();
-    await expect(page.locator('[data-testid="high-risk-section"]')).toBeVisible();
+    await expect(dlg.getByText("Medium", { exact: true }).first()).toBeVisible();
+    await expect(dlg.getByText("High", { exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-testid="high-risk-section"]')).toHaveCount(0);
     const launch = dlg.getByRole("button", { name: /Approve & launch/ });
-    await expect(launch).toBeDisabled();
-    await dlg.getByRole("checkbox").check(); // the review's lone ack checkbox
     await expect(launch).toBeEnabled();
+
+    // The exact-policy escape hatch is the ultimate proof: the wire mount is
+    // genuinely read-only, not just quiet about it. YamlBlock renders exactly
+    // one <pre> in this dialog (the collapsed "exact policy" JSON/YAML).
+    await dlg.getByText("View the exact policy that will be enforced").click();
+    await expect(dlg.locator("pre")).toContainText(/read_only:\s*true/);
   });
 
   test("a HIGH-risk proposal (weakest barrier tier) shows the acknowledgment gate", async ({
@@ -408,14 +432,12 @@ test.describe("AI Run Composer — Describe your task", () => {
   // Mutating test LAST (declaration order): it creates a run.
   test("Approve & launch creates a run that then appears in the runs list", async ({ page }) => {
     const dlg = await openDescribe(page);
-    // Attach the workspace so the created run carries it (asserted below) —
-    // which mounts it read-WRITE and therefore lands HIGH, so clear the
-    // acknowledgment gate before launching.
+    // Attach the workspace so the created run carries it (asserted below). It
+    // mounts read-only (see selectWorkspace's doc comment), so this stays
+    // MEDIUM and launch needs no acknowledgment to clear.
     await composeWithWorkspace(page, dlg, "Bump the dependency and run the test suite.");
 
     const launch = dlg.getByRole("button", { name: /Approve & launch/ });
-    await expect(launch).toBeDisabled();
-    await dlg.getByRole("checkbox").check();
     await expect(launch).toBeEnabled();
 
     // The launch fires a create POST /api/v1/runs.

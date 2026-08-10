@@ -855,4 +855,83 @@ describe("NewRunDialog — workspace-first entry (Stage 3/4)", () => {
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(await screen.findByRole("button", { name: /no workspace.*ad-hoc run/i })).toBeInTheDocument();
   });
+
+  // Item 3 (medium): "Edit in wizard" used to silently drop every Optional
+  // opt-in the operator made on the AI path — wizardStateFromProposal never
+  // saw the proposal's own workspace_selections echo. Mocks the echo directly
+  // (same idiom as "forwards the proposal's echoed workspace_selections…"
+  // above) rather than round-tripping a real checkbox click, since the point
+  // here is what editInWizard DOES with an already-echoed selection.
+  it("Edit in wizard preserves an enabled Optional opt-in", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    listWorkspacesMock.mockResolvedValue([workspaceWithOptionalEgress]);
+    composeMock.mockResolvedValue(
+      composeResult({
+        proposed: {
+          ...composeResult().proposed,
+          inline_policy: {
+            ...composeResult().proposed.inline_policy,
+            workspace_mounts: [
+              { source: "/home/me/api-service", target: "/home/agent/work", read_only: true },
+            ],
+          },
+          workspace_selections: [
+            { workspace_id: "ws-3", enabled_optional: ["egress:api.stripe.com"] },
+          ],
+        },
+      }),
+    );
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("button", { name: /api-service/i }));
+    await user.click(await screen.findByRole("button", { name: /describe your task/i }));
+    await user.type(screen.getByLabelText(/describe your task/i), "fix CI");
+    await user.click(screen.getByRole("button", { name: /compose/i }));
+    await screen.findByText(/proposed setup/i);
+
+    await user.click(screen.getByRole("button", { name: /edit in wizard/i }));
+    await screen.findByText(/compose the agent's permission envelope/i);
+
+    // The wizard's Basics step renders the SAME WorkspacePicker — its Optional
+    // checkbox for the echoed host must already read checked, not reset.
+    const box = await screen.findByRole("checkbox", { name: /api\.stripe\.com/i });
+    expect(box).toBeChecked();
+  });
+
+  // Item 5 (low): chooseWorkspace routes on composerEnabled, which is false
+  // while `backends` is still null — a click landing in that window would
+  // route to the manual wizard with no way back to "Describe your task",
+  // even on a control plane where the composer really is enabled.
+  it("disables the workspace-step cards until the composer-backends probe resolves", async () => {
+    listWorkspacesMock.mockResolvedValue([usableWorkspace]);
+    let resolveBackends!: (v: ComposerBackend[]) => void;
+    listComposerBackendsMock.mockReturnValue(
+      new Promise<ComposerBackend[]>((resolve) => {
+        resolveBackends = resolve;
+      }),
+    );
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+
+    const card = await screen.findByRole("button", { name: /payments/i });
+    const adHoc = screen.getByRole("button", { name: /no workspace.*ad-hoc run/i });
+    expect(card).toBeDisabled();
+    expect(adHoc).toBeDisabled();
+
+    resolveBackends(backends);
+    await waitFor(() => expect(card).toBeEnabled());
+    expect(adHoc).toBeEnabled();
+  });
+
+  // Item 6 (low — honesty): a workspace carries a requirements CONTRACT, never
+  // an opinion on confinement class / egress mode / deny list / first-use
+  // approval — "and its policies" overclaimed that.
+  it("the workspace step's description names the requirements it comes with, not a policy claim", async () => {
+    listComposerBackendsMock.mockResolvedValue(backends);
+    renderDialog(<NewRunDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+    expect(
+      await screen.findByText(/start from an onboarded workspace and the requirements it comes with/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/start from an onboarded workspace and its policies/i)).not.toBeInTheDocument();
+  });
 });

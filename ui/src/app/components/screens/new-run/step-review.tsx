@@ -332,7 +332,11 @@ export function StepReview({
                       </div>
                       {w && (
                         <div className="pl-0.5 text-[0.6875rem] text-muted-foreground">
-                          Comes with: {comesWithLine(w)}
+                          {/* sel carries this run's enabledOptional — without it, an
+                              Optional row toggled in Basics (e.g. an egress host) never
+                              showed up here, so the one screen whose whole job is "show
+                              what you're launching" silently dropped the edit. */}
+                          Comes with: {comesWithLine(w, sel)}
                         </div>
                       )}
                     </div>

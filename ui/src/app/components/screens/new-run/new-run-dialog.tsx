@@ -417,6 +417,11 @@ export function NewRunDialog({
         { ...result.proposed.run, interactive },
         result.proposed.inline_policy,
         workspaces,
+        // Echo whatever Optional opt-ins / read-only narrowing the operator
+        // made on this composed proposal's WorkspacePicker — without this,
+        // "Edit in wizard" silently dropped every one of them (the matched
+        // selection only ever carried the mount's inferred read-only).
+        result.proposed.workspace_selections,
       ),
     );
     setMode("wizard");
@@ -471,7 +476,7 @@ export function NewRunDialog({
               : mode === "clarify"
                 ? "Wardyn's composer needs a little more detail to propose a least-privilege run. Your answers shape the proposal only — Wardyn still grades and clamps it."
                 : mode === "workspace"
-                  ? "Start from an onboarded workspace and its policies, or run ad-hoc. Everything here stays editable in the steps that follow."
+                  ? "Start from an onboarded workspace and the requirements it comes with, or run ad-hoc. Everything here stays editable in the steps that follow."
                   : "Describe your task and let Wardyn propose a confined run, or configure the permission envelope by hand."}
           </DialogDescription>
         </DialogHeader>
@@ -489,6 +494,13 @@ export function NewRunDialog({
                       <OptionCard
                         key={w.id}
                         selected={false}
+                        // The backends probe is still in flight while
+                        // backends === null — chooseWorkspace reads
+                        // composerEnabled (derived from it) AT CLICK TIME, so
+                        // a click landing inside that window would route to
+                        // the manual wizard even when the composer is really
+                        // enabled, with no way back to "Describe your task".
+                        disabled={backends === null}
                         onClick={() => chooseWorkspace({ workspaceId: w.id })}
                         className="h-full"
                         title={
@@ -507,6 +519,7 @@ export function NewRunDialog({
                   })}
                   <OptionCard
                     selected={false}
+                    disabled={backends === null}
                     onClick={() => chooseWorkspace(null)}
                     className="h-full"
                     title="No workspace — ad-hoc run"

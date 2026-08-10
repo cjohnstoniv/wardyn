@@ -6,13 +6,14 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSpec,
+  comesWithLine,
   initialWizardState,
   isValidDomain,
   secretAutoGrants,
   validateStep,
   wizardStateFromProposal,
 } from "./wizard-types";
-import type { WizardState } from "./wizard-types";
+import type { RunWorkspaceSelectionWire, WizardState } from "./wizard-types";
 import type { ComposeRunProposal, RunPolicySpec, Workspace } from "../../../lib/types";
 import { SUBSCRIPTION_OAUTH_SECRET } from "../../../lib/types";
 
@@ -169,6 +170,62 @@ describe("secretAutoGrants — the scan_seeded trust boundary, read client-side"
   });
 });
 
+// Item 4 (found by live driving): enabling an Optional row on the picker
+// produced a Review whose "Comes with:" summary never changed — the one
+// screen whose whole job is "show what you're launching" silently dropped
+// the edit. comesWithLine's second (optional) `sel` argument folds in this
+// run's actual enabled_optional set; omitting it (workspace-detail.tsx, which
+// has no per-run selection) must stay byte-identical to the old signature.
+describe("comesWithLine — reflects this run's enabled Optional rows (Item 4)", () => {
+  it("stays byte-identical to the contract-only summary when sel is omitted", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "secret:DATABASE_URL": { level: "required", provenance: "operator_set" },
+      "egress:api.stripe.com": { level: "optional", provenance: "operator_set" },
+    });
+    expect(comesWithLine(ws)).toBe("1 secret");
+  });
+
+  it("an enabled Optional HOST is counted (no trust-boundary gate on egress)", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "secret:DATABASE_URL": { level: "required", provenance: "operator_set" },
+      "egress:telemetry.example.com": { level: "optional", provenance: "scan_seeded" },
+    });
+    const unset = { workspaceId: "ws-1" };
+    const enabled = { workspaceId: "ws-1", enabledOptional: ["egress:telemetry.example.com"] };
+    expect(comesWithLine(ws, unset)).toBe("1 secret");
+    expect(comesWithLine(ws, enabled)).toBe("1 secret · 1 opted in");
+  });
+
+  // Honesty constraint the finding itself calls out: an opted-in secret that
+  // secretAutoGrants says the server will actually SKIP (scan_seeded) must
+  // never read as though it's coming along.
+  it("an enabled Optional SECRET that won't auto-grant (scan_seeded) is NOT counted", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "secret:UNVERIFIED_TOKEN": { level: "optional", provenance: "scan_seeded" },
+    });
+    const enabled = { workspaceId: "ws-1", enabledOptional: ["secret:UNVERIFIED_TOKEN"] };
+    expect(comesWithLine(ws, enabled)).toBe("nothing beyond the auto-allowed set");
+  });
+
+  it("an enabled Optional SECRET that WILL auto-grant (operator_set) IS counted", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "secret:STRIPE_KEY": { level: "optional", provenance: "operator_set" },
+    });
+    const enabled = { workspaceId: "ws-1", enabledOptional: ["secret:STRIPE_KEY"] };
+    expect(comesWithLine(ws, enabled)).toBe("1 opted in");
+  });
+
+  it("write access reflects an enabled Optional write, not just a Required one", () => {
+    const ws = localDirWorkspace("ws-1", {
+      "write:/home/me/ws-1": { level: "optional", provenance: "scan_seeded" },
+    });
+    const unset = { workspaceId: "ws-1" };
+    const enabled = { workspaceId: "ws-1", enabledOptional: ["write:/home/me/ws-1"] };
+    expect(comesWithLine(ws, unset)).toBe("nothing beyond the auto-allowed set");
+    expect(comesWithLine(ws, enabled)).toBe("write access");
+  });
+});
+
 // Ephemeral runs: a workspace is OPTIONAL. Basics gates only the batch-needs-a-task
 // rule; an interactive run with zero workspaces is valid and buildSpec degrades to
 // an empty scratch run (repo "", no workspace mounts/repos).
@@ -222,6 +279,62 @@ describe("wizardStateFromProposal — subscription sentinel recognition", () => 
     const { inline_policy } = buildSpec(wizardStateFromProposal(run, spec));
     const apiKey = (inline_policy.eligible_grants ?? []).find((g) => g.kind === "api_key");
     expect(apiKey).toBeUndefined(); // no real secret name to re-emit a grant for
+  });
+});
+
+// Item 3 (medium): "Edit in wizard" used to silently drop every Optional
+// opt-in the operator made on the AI path — the matched selection only ever
+// carried the mount's INFERRED read-only flag, never enabledOptional, because
+// wizardStateFromProposal never saw the compose proposal's OWN
+// workspace_selections echo (ComposeResponse.proposed.workspace_selections).
+describe("wizardStateFromProposal — threads the echoed workspace_selections (Item 3)", () => {
+  const ws: Workspace = {
+    id: "ws-1",
+    name: "app",
+    kind: "local_dir",
+    source: "/home/me/app",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+  };
+  const run = { agent: "claude-code", repo: "local:app", interactive: true } as ComposeRunProposal;
+  const spec: RunPolicySpec = {
+    allowed_domains: ["api.anthropic.com"],
+    first_use_approval: "deny_with_review",
+    min_confinement_class: "CC1",
+    workspace_mounts: [{ source: "/home/me/app", target: "/home/agent/work", read_only: false }],
+  };
+
+  it("merges enabled_optional from the echo onto the matched selection", () => {
+    const echoed: RunWorkspaceSelectionWire[] = [
+      { workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"] },
+    ];
+    const state = wizardStateFromProposal(run, spec, [ws], echoed);
+    expect(state.workspaces).toEqual([
+      { workspaceId: "ws-1", readOnly: false, enabledOptional: ["egress:api.stripe.com"] },
+    ]);
+  });
+
+  it("the echo's read_only wins over the workMount-inferred value when both are present", () => {
+    // workMount.read_only is false (writable) but the echo says true (this
+    // run narrowed it) — the echo IS what produced that mount in the first
+    // place, so it must win over the inferred fallback.
+    const echoed: RunWorkspaceSelectionWire[] = [{ workspace_id: "ws-1", read_only: true }];
+    const state = wizardStateFromProposal(run, spec, [ws], echoed);
+    expect(state.workspaces).toEqual([{ workspaceId: "ws-1", readOnly: true, enabledOptional: undefined }]);
+  });
+
+  it("ignores an echo entry for a different workspace id", () => {
+    const echoed: RunWorkspaceSelectionWire[] = [
+      { workspace_id: "ws-OTHER", enabled_optional: ["egress:unrelated.example.com"] },
+    ];
+    const state = wizardStateFromProposal(run, spec, [ws], echoed);
+    expect(state.workspaces).toEqual([{ workspaceId: "ws-1", readOnly: false, enabledOptional: undefined }]);
+  });
+
+  it("degrades to the workMount-inferred readOnly with no enabledOptional when nothing was echoed (older server / no match)", () => {
+    const state = wizardStateFromProposal(run, spec, [ws]); // no 4th arg — same as before Item 3
+    expect(state.workspaces).toEqual([{ workspaceId: "ws-1", readOnly: false, enabledOptional: undefined }]);
   });
 });
 

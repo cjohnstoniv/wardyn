@@ -134,8 +134,13 @@ export function summarizeWorkspaceRequirements(ws: Workspace): RequirementsSumma
 // The picker/detail "Comes with: …" line (mirrors the approved mock's
 // comesWith()): a short "N secrets · N hosts · write access" summary, or the
 // honest fallback when the contract adds nothing beyond the auto-allowed set.
-export function comesWithLine(ws: Workspace): string {
+// `sel` is OPTIONAL and additive: pass this run's selection (workspace-picker.tsx,
+// step-review.tsx) to fold in what the operator opted into for THIS run; omit it
+// (workspace-detail.tsx, which has no per-run selection) for the contract-only
+// summary — behavior is byte-identical to before when omitted.
+export function comesWithLine(ws: Workspace, sel?: RunWorkspaceSelection): string {
   const s = summarizeWorkspaceRequirements(ws);
+  const enabled = new Set(sel?.enabledOptional ?? []);
   const bits: string[] = [];
   if (s.requiredSecrets.length) {
     bits.push(`${s.requiredSecrets.length} secret${s.requiredSecrets.length > 1 ? "s" : ""}`);
@@ -143,7 +148,29 @@ export function comesWithLine(ws: Workspace): string {
   if (s.requiredHosts.length) {
     bits.push(`${s.requiredHosts.length} host${s.requiredHosts.length > 1 ? "s" : ""}`);
   }
-  if (ws.kind === "local_dir" && s.requiredWrite) bits.push("write access");
+  // Write access reflects what THIS run actually resolves to — a Required
+  // write, or an Optional one this selection enabled — the SAME reader
+  // buildSpec's mount uses (resolvedMountReadOnly), not just the static
+  // Required flag, so toggling the write switch moves this line too.
+  if (ws.kind === "local_dir" && !resolvedMountReadOnly(ws, sel ?? { workspaceId: ws.id })) {
+    bits.push("write access");
+  }
+  // Per-run opt-ins into the Optional secret/host set (workspace-picker.tsx's
+  // checkboxes) — "start from the workspace and edit from there" means an edit
+  // must show up here, not just on the picker card that made it. Honesty
+  // constraint: an opted-in SECRET whose provenance is scan_seeded is never
+  // actually granted (secretAutoGrants' trust boundary — runs_create.go's
+  // applyWorkspaceRequirements skips anything but operator_set), so it only
+  // counts here when it will really take effect; an opted-in HOST has no such
+  // gate (the "egress" case there is provenance-blind) and always counts.
+  let optedIn = 0;
+  for (const e of s.optionalSecrets) {
+    if (enabled.has(e.key) && secretAutoGrants(ws, e.name)) optedIn++;
+  }
+  for (const e of s.optionalHosts) {
+    if (enabled.has(e.key)) optedIn++;
+  }
+  if (optedIn > 0) bits.push(`${optedIn} opted in`);
   return bits.length ? bits.join(" · ") : "nothing beyond the auto-allowed set";
 }
 
@@ -405,7 +432,13 @@ function resolveWorkspace(sel: WorkspaceSelection, workspaces: Workspace[]): Wor
 // server silently rewrites later. Required (or an enabled Optional) grants
 // write by default; sel.readOnly may only narrow that to read-only, never widen
 // a not-granted default to writable (matches the Go doc comment exactly).
-function resolvedMountReadOnly(ws: Workspace, sel: RunWorkspaceSelection): boolean {
+// EXPORTED so every caller that resolves a local_dir mount's write access
+// shares this ONE reader instead of re-deriving it — lib/api/compose.ts's
+// resolveComposeWorkspace uses it for the AI Run Composer's `workspaces[]`
+// resolution, the same way buildSpec below uses it for the manual wizard's
+// workspace_mounts[]. Two derivations that can disagree is exactly the defect
+// class this function exists to close.
+export function resolvedMountReadOnly(ws: Workspace, sel: RunWorkspaceSelection): boolean {
   const s = summarizeWorkspaceRequirements(ws);
   const enabled = new Set(sel.enabledOptional ?? []);
   const grantedDefault = s.requiredWrite || s.optionalWriteKeys.some((k) => enabled.has(k));
@@ -690,10 +723,20 @@ function dedupe(xs: string[]): string[] {
 // an omitted/empty `workspaces` (a call site that hasn't loaded the
 // list yet) degrades to no workspace prefilled — a known, documented gap, not a
 // crash — the operator just re-picks it in the Basics step.
+//
+// `echoedSelections` is the compose proposal's OWN workspace_selections echo
+// (ComposeResponse.proposed.workspace_selections — the wire shape
+// RunWorkspaceSelectionWire) carrying whatever enabled_optional/read_only the
+// operator picked on the AI path's WorkspacePicker. Without it, "Edit in
+// wizard" silently dropped every Optional opt-in the operator just made — the
+// matched selection only ever carried the inferred workMount.read_only, never
+// enabledOptional at all. Absent/empty (an older server, or no match) degrades
+// to that same inferred-only behavior, never a crash.
 export function wizardStateFromProposal(
   run: ComposeRunProposal,
   spec: RunPolicySpec,
   workspaces: Workspace[] = [],
+  echoedSelections: RunWorkspaceSelectionWire[] = [],
 ): WizardState {
   const cc = (run.confinement_class ?? spec.min_confinement_class ?? "CC1") as ConfinementClass;
   const base = initialWizardState(cc);
@@ -711,8 +754,19 @@ export function wizardStateFromProposal(
   const matched = workMount
     ? workspaces.find((w) => w.kind === "local_dir" && w.source === workMount.source)
     : workspaces.find((w) => w.kind === "repo" && w.source === run.repo);
+  // The echoed entry for the matched workspace, if the proposal named one —
+  // its enabled_optional/read_only win over the workMount-inferred read-only
+  // (the echo IS what produced that mount in the first place; workMount stays
+  // the fallback for an older server that predates the echo).
+  const echoed = matched ? echoedSelections.find((s) => s.workspace_id === matched.id) : undefined;
   const workspaceSelections: RunWorkspaceSelection[] = matched
-    ? [{ workspaceId: matched.id, readOnly: workMount ? !!workMount.read_only : undefined }]
+    ? [
+        {
+          workspaceId: matched.id,
+          readOnly: echoed?.read_only ?? (workMount ? !!workMount.read_only : undefined),
+          enabledOptional: echoed?.enabled_optional,
+        },
+      ]
     : [];
 
   const githubGrant = (spec.eligible_grants ?? []).find((g) => g.kind === "github_token");

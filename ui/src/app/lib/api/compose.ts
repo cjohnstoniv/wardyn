@@ -15,9 +15,20 @@ import type {
   ComposeWorkspace,
   ComposerBackend,
   Workspace,
-  WorkspaceSelection,
 } from "../types";
 import { asJson, errText, HttpError, wfetch } from "./core";
+// resolvedMountReadOnly is the ONE shared reader for "does this run's write
+// switch actually grant write" — the manual wizard's buildSpec already uses it
+// for workspace_mounts[].read_only; reusing it here (rather than the bare
+// `!sel.readOnly` this used to read) is what makes the AI Composer's "write to
+// the directory" toggle agree with the manual wizard instead of silently
+// always granting write (source_scan.go seeds an OPTIONAL write:<path> on
+// every scanned local dir, so an un-enabled toggle is the COMMON case, not a
+// corner one).
+import {
+  resolvedMountReadOnly,
+  type RunWorkspaceSelection,
+} from "../../components/screens/new-run/wizard-types";
 
 // Resolve one WorkspaceSelection (from the compose form's onboarded multi-select)
 // against the fetched Workspace[] list into the compose wire shape. Mirrors
@@ -25,14 +36,14 @@ import { asJson, errText, HttpError, wfetch } from "./core";
 // Returns undefined for a stale selection (the workspace was deleted after it
 // was picked) — the caller skips those rather than sending a dangling reference.
 export function resolveComposeWorkspace(
-  sel: WorkspaceSelection,
+  sel: RunWorkspaceSelection,
   workspaces: Workspace[],
 ): ComposeWorkspace | undefined {
   const w = workspaces.find((x) => x.id === sel.workspaceId);
   if (!w) return undefined;
   return w.kind === "repo"
     ? { kind: "git", repo: w.source }
-    : { kind: "local", path: w.source, read_write: !sel.readOnly };
+    : { kind: "local", path: w.source, read_write: !resolvedMountReadOnly(w, sel) };
 }
 
 export const composer = {
